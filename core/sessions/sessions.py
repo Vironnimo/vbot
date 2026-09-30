@@ -494,6 +494,36 @@ class ChatSessionManager:
             )
         return deleted
 
+    async def archive_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+        """Archive bound participant Sessions after their owner has drained execution.
+
+        Their bindings stay, so the Sessions remain owner-managed provenance:
+        usage keeps its attribution and a later group delete still removes them.
+        """
+        archived = await self._store.run_async(
+            lambda: self._store.archive_temporary_group(owner_name=owner_name, group_id=group_id)
+        )
+        if archived:
+            _LOGGER.info(
+                "Temporary Sessions archived (owner=%s group=%s sessions=%d)",
+                owner_name,
+                group_id,
+                archived,
+            )
+        return archived
+
+    async def temporary_groups_async(
+        self, *, owner_name: str, after: str = "", limit: int = 100
+    ) -> builtins.list[str]:
+        """Page the ids of one owner's groups that still have live bound Sessions."""
+        return await self._store.run_async(
+            lambda: self._store.temporary_groups(owner_name=owner_name, after=after, limit=limit)
+        )
+
+    async def temporary_owners_async(self) -> builtins.list[str]:
+        """Return the names of every owner that still has live bound Sessions."""
+        return await self._store.run_async(self._store.temporary_owners)
+
     async def temporary_bindings_async(
         self,
         *,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import json
 import os
@@ -13,6 +14,7 @@ from threading import Event
 
 import pytest
 
+from core.chat import ChatSessionError
 from core.database import write_bootstrap_marker
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
@@ -767,6 +769,32 @@ def test_delete_archives_project_sessions_before_the_project_id_is_reused(
 
     assert sessions.exists(address) is False
     assert store.session_owning_agents("vbot") == []
+    sessions.close()
+
+
+def test_delete_waits_for_owner_managed_sessions_to_leave_the_project(
+    data_dir: Path, repo: Path
+) -> None:
+    sessions = ChatSessionManager(data_dir)
+    store = ProjectStore(data_dir, sessions=sessions)
+    store.create("vbot", "vBot", repo)
+    sessions.create_bound_temporary_session(
+        SessionAddress("vbot", "tmp_participant", "ses_participant"),
+        owner_name="swarm",
+        group_id="swr_group",
+        participant_id="prt_peer",
+        config={},
+    )
+
+    with pytest.raises(ChatSessionError, match=r"managed by an Extension \(swarm\)"):
+        store.delete("vbot")
+    assert store.get("vbot").display_name == "vBot"
+
+    # Archiving the group, by its owner or after the owner was removed, releases the Project.
+    asyncio.run(sessions.archive_temporary_group(owner_name="swarm", group_id="swr_group"))
+    store.delete("vbot")
+    with pytest.raises(ProjectNotFoundError):
+        store.get("vbot")
     sessions.close()
 
 

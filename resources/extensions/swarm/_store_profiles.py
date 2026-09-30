@@ -5,9 +5,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import secrets
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from core.utils.ids import new_id
@@ -349,6 +351,15 @@ def _delete_swarm(db: SwarmDatabase, swarm_id: str) -> None:
         connection.execute("DELETE FROM swarms WHERE id=?", (swarm_id,))
 
     db._write(operation)
+
+
+def _existing_swarm_ids(db: SwarmDatabase, swarm_ids: Sequence[str]) -> set[str]:
+    with db._read() as connection:
+        rows = connection.execute(
+            "SELECT id FROM swarms WHERE id IN (SELECT value FROM json_each(?))",
+            (json.dumps(list(swarm_ids)),),
+        ).fetchall()
+    return {str(row["id"]) for row in rows}
 
 
 def _get_swarm(db: SwarmDatabase, swarm_id: str) -> Json:

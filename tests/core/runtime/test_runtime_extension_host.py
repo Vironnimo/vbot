@@ -15,9 +15,10 @@ from core.extensions import ExtensionRegistrationIdentity
 from core.extensions.operations import ExtensionHost
 from core.runs import RunAdmission, RunAdmissionBlockedError, RunExecutionOwner
 from core.runtime.runtime import Runtime
-from core.sessions import ToolResultFacts, ToolResultPayload
+from core.sessions import SessionAddress, ToolResultFacts, ToolResultPayload
 from core.tools import ToolContext
 from core.tools.availability import ToolAccess
+from core.tools.terminal_manager import TerminalOwner
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import write_project_skill, write_skill
 from tests.core.sessions.history_fixtures import complete_run
@@ -289,6 +290,60 @@ async def test_owner_groups_run_observably_and_reject_completions_after_close(
             0,
             [],
         )
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_owner_pages_and_archives_only_its_own_closed_groups(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        _accept_every_model(runtime, monkeypatch)
+        closed: list[TerminalOwner] = []
+
+        async def close_scope(owner: TerminalOwner) -> None:
+            closed.append(owner)
+
+        monkeypatch.setattr(runtime.terminal_manager, "close_scope", close_scope)
+        groups = _owner_host(runtime, "swarm").temporary_agents
+        assert groups is not None
+        first = await groups.create("group-a", "peer", _participant(tmp_path))
+        second = await groups.create("group-b", "peer", _participant(tmp_path))
+        terminals = [
+            TerminalOwner(address.project_id, address.agent_id, address.session_id)
+            for address in (first.address, second.address)
+        ]
+        runtime.chat_sessions.create_bound_temporary_session(
+            SessionAddress(None, "tmp_other", "ses_other"),
+            owner_name="other",
+            group_id="group-0",
+            participant_id="peer",
+            config={},
+        )
+
+        assert await groups.groups() == ["group-a", "group-b"]
+        assert await groups.groups(after="group-a", limit=1) == ["group-b"]
+        await groups.open_group("group-a")
+        with pytest.raises(ValueError, match="group_not_closed"):
+            await groups.archive_group("group-a")
+        await groups.close_group("group-a")
+
+        assert await groups.archive_group("group-a") == 1
+        # Like an ordinary Session removal, the participants' Terminals close.
+        assert closed == terminals[:1]
+        assert await groups.groups() == ["group-b"]
+        assert await groups.list("group-a") == []
+        with pytest.raises(RunAdmissionBlockedError):
+            await groups.open_group("group-a")
+        assert await groups.archive_group("group-0") == 0  # another owner's group
+        assert await runtime.chat_sessions.temporary_groups_async(owner_name="other") == ["group-0"]
+        assert await groups.delete_group("group-b") == 1
+        assert closed == terminals
+        assert await groups.delete_group("group-a") == 1  # archived; its Terminals closed before
+        assert closed == terminals
     finally:
         await runtime.aclose()
 

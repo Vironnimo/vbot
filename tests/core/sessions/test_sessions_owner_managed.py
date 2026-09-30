@@ -413,3 +413,45 @@ async def test_group_titles_label_owned_summaries_and_leave_with_their_group(man
 
     assert await titles("fixture", "group") == {}
     assert [entry.owner_name for entry in manager.list_owned_session_summaries()] == ["other"]
+
+
+@pytest.mark.asyncio
+async def test_archived_group_leaves_live_reads_but_keeps_its_bindings(manager) -> None:
+    def bind(owner_name: str, group_id: str, participant_id: str, project_id: str | None = None):
+        return manager.create_bound_temporary_session(
+            SessionAddress(project_id, f"tmp-{owner_name}-{group_id}", participant_id),
+            owner_name=owner_name,
+            group_id=group_id,
+            participant_id=participant_id,
+            config={},
+        )
+
+    archived = [bind("fixture", "group-a", "peer", "project"), bind("fixture", "group-a", "peer-2")]
+    kept = [bind("fixture", "group-b", "peer"), bind("other", "group-a", "peer")]
+    manager.set_temporary_group_title(owner_name="fixture", group_id="group-a", title="Parser")
+
+    assert await manager.temporary_owners_async() == ["fixture", "other"]
+    assert await manager.temporary_groups_async(owner_name="fixture", limit=1) == ["group-a"]
+    assert await manager.temporary_groups_async(owner_name="fixture", after="group-a") == [
+        "group-b"
+    ]
+    with pytest.raises(ValueError):
+        await manager.temporary_groups_async(owner_name="fixture", limit=0)
+
+    assert await manager.archive_temporary_group(owner_name="fixture", group_id="group-a") == 2
+    assert await manager.archive_temporary_group(owner_name="fixture", group_id="group-a") == 0
+
+    assert await manager.temporary_groups_async(owner_name="fixture") == ["group-b"]
+    assert await manager.temporary_owners_async() == ["fixture", "other"]
+    assert [entry.address for entry in manager.list_owned_session_summaries()] == [
+        binding.address for binding in kept
+    ]
+    assert not any(manager.exists(binding.address) for binding in archived)
+    # An archived participant is never revived; its owner deletes the group instead.
+    with pytest.raises(ChatSessionError, match="archived Session"):
+        bind("fixture", "group-a", "peer")
+    assert await manager.temporary_group_titles_async(
+        owner_name="fixture", group_ids=["group-a"]
+    ) == {"group-a": "Parser"}
+    assert await manager.delete_temporary_group(owner_name="fixture", group_id="group-a") == 2
+    assert all(manager.exists(binding.address) for binding in kept)

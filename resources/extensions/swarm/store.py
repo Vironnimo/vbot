@@ -52,6 +52,7 @@ from ._store_profiles import (
     _create_swarm,
     _delete_profile,
     _delete_swarm,
+    _existing_swarm_ids,
     _get_profile,
     _get_swarm,
     _list_events,
@@ -185,6 +186,10 @@ class SwarmStore:
 
     async def get_swarm(self, swarm_id: str) -> Json:
         return await self._run(_get_swarm, swarm_id)
+
+    async def existing_swarm_ids(self, swarm_ids: Sequence[str]) -> set[str]:
+        """Return which of these ids name a Swarm in this database, in any state."""
+        return await self._run(_existing_swarm_ids, list(swarm_ids))
 
     async def apply_delivery_settings(
         self,

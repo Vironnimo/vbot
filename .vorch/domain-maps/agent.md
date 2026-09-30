@@ -28,8 +28,10 @@ Besides `format_version`, `id` is the only load-required field - every other fie
 Owner-managed temporary Agents resolve through `AgentResolver.resolve_temporary_agent` using an exact canonical Session generation. `core/agents/temporary.py` owns their immutable configuration, indexed bindings and execution groups; Identity creation, workspace seeding and roster operations are not involved. `TemporaryExecutionGroups.owned_run`/`owned_runs` inspect exact Run ids with one indexed read (ids without an owned record raise `RunNotFoundError` or are absent), and `start` detects a replayed input by its durable input id rather than scanning the group's Run history. A selected Project does not narrow the configured Tool and Skill selection (`projects.md`). Tests: `tests/core/agents/test_temporary.py` and `tests/core/projects/test_resolver_config_agent.py`.
 
 `TemporaryExecutionGroups.delete_group` requires a closed group and current
-registration, waits for draining, deletes its bound participant Sessions through
-the Session manager, and releases its in-memory group. Repeated deletion is safe;
+registration, waits for draining, closes the Terminal Sessions of its live
+participants, deletes its bound participant Sessions through the Session manager
+under a no-Run guard (`release_temporary_group`, shared with `archive_group`), and
+releases its in-memory group. Repeated deletion is safe;
 other owners and groups are outside its scope (`test_swarm_operations.py`).
 
 Temporary configurations and persisted bindings carry optional `prompt_blocks`:

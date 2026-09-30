@@ -188,6 +188,41 @@ class SwarmExtension:
         self.store = SwarmStore(database, lookup_delivery_receipt=receipt)
         await self.store.open()
         await self.store.recover_interrupted()
+        await self._archive_unknown_groups(groups)
+
+    async def _archive_unknown_groups(self, groups: Any) -> None:
+        """Archive participant Sessions of Swarms this database does not hold.
+
+        They remain when the database was restored to an older state or
+        replaced. Without their Board they can never resume, and only this
+        Extension may remove them; archiving keeps their history.
+        """
+        after = ""
+        while True:
+            # Groups are read before the Board: a Swarm's row exists before its
+            # first participant Session, so a Swarm starting now is never unknown.
+            group_ids = await groups.groups(after=after, limit=100)
+            known = await self._store().existing_swarm_ids(group_ids) if group_ids else set()
+            for group_id in group_ids:
+                if group_id in known:
+                    continue
+                try:
+                    count = await groups.archive_group(group_id)
+                except Exception:
+                    _LOGGER.warning(
+                        "Participant Sessions of an unknown Swarm kept (swarm=%s)",
+                        group_id,
+                        exc_info=True,
+                    )
+                    continue
+                _LOGGER.warning(
+                    "Participant Sessions of an unknown Swarm archived (swarm=%s sessions=%d)",
+                    group_id,
+                    count,
+                )
+            if len(group_ids) < 100:
+                return
+            after = group_ids[-1]
 
     async def close(self) -> None:
         if self.host is not None and self.host.temporary_agents is not None:

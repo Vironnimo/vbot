@@ -11,6 +11,7 @@ import pytest
 from core.extensions import InteractionButton, InteractionEvent
 from core.extensions.extensions import ExtensionRegistry
 from core.runtime.runtime import Runtime
+from core.sessions import SessionAddress
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     CAPABILITY_EXT_SOURCE,
@@ -179,6 +180,51 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
         assert type(runtime.recall_backend).__name__ != "ExtBackend"
         assert "ext_recall" not in runtime.available_recall_backends()
         assert runtime.storage.load_recall_settings()["backend"] == "ext_recall"
+    finally:
+        runtime.stop()
+
+
+def test_removed_extensions_leave_their_owner_managed_sessions_archived(
+    config: Config, tmp_path: Path
+) -> None:
+    data_dir = config.data_dir
+    extra = tmp_path / "extra"
+    extra.mkdir()
+    helper = write_extension(data_dir, "helper", tool_extension_source("helper_echo"))
+    resting = write_extension(data_dir, "resting", tool_extension_source("resting_echo"))
+    write_settings(
+        data_dir,
+        {"extension_directories": [str(extra)], "extensions": {"disabled": ["resting"]}},
+    )
+    runtime = Runtime(config)
+    runtime.start()
+    try:
+        sessions = runtime.chat_sessions
+        for owner in ("helper", "resting", "gone"):
+            sessions.create_bound_temporary_session(
+                SessionAddress("vbot", f"tmp_{owner}", "ses_participant"),
+                owner_name=owner,
+                group_id="group",
+                participant_id="peer",
+                config={},
+            )
+
+        def owners() -> list[str]:
+            return asyncio.run(sessions.temporary_owners_async())
+
+        asyncio.run(runtime.fire_extension_startup())
+        # Every installed owner keeps its Sessions, a disabled one included.
+        assert owners() == ["helper", "resting"]
+
+        helper.unlink()
+        asyncio.run(runtime.reload_extensions())
+        assert owners() == ["resting"]
+
+        # A missing Extension directory proves nothing about what is installed.
+        resting.unlink()
+        extra.rmdir()
+        asyncio.run(runtime.reload_extensions())
+        assert owners() == ["resting"]
     finally:
         runtime.stop()
 

@@ -49,16 +49,20 @@ class _DiscoveredExtension:
     entry_path: Path
 
 
-def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension]:
+def _discover_extension_paths(extensions_dir: Path) -> list[_DiscoveredExtension] | None:
+    """List one root's Extension entry points; ``None`` when the root is unavailable.
+
+    A missing or unreadable root proves nothing about which Extensions exist.
+    """
     if not extensions_dir.is_dir():
-        return []
+        return None
 
     discovered: list[_DiscoveredExtension] = []
     try:
         entries = list(extensions_dir.iterdir())
     except OSError as exc:
         _LOGGER.warning("Skipping unreadable Extension directory %s: %s", extensions_dir, exc)
-        return []
+        return None
 
     for entry in entries:
         if entry.is_file() and entry.suffix == ".py" and entry.stem != "__init__":

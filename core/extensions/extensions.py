@@ -96,6 +96,9 @@ class ExtensionRegistry:
         self._handlers: dict[str, list[RegisteredHandler]] = defaultdict(list)
         self._interaction_handlers: dict[str, RegisteredHandler] = {}
         self._records: list[ExtensionRecord] = []
+        # Set by a scan that read every root; only then does a missing name
+        # prove that its Extension is not installed.
+        self._discovery_complete = False
         self._capabilities = ExtensionCapabilityInstaller(self._records)
         self._host: ExtensionHost | None = None
         self._owner_hosts: dict[ExtensionRegistrationIdentity, ExtensionHost] = {}
@@ -304,10 +307,15 @@ class ExtensionRegistry:
         pending: list[tuple[ExtensionRecord, Any]] = []
         scan_roots = [extensions_dir, *(extra_dirs or []), bundled_dir]
         claimed: dict[str, ExtensionRecord] = {}
+        registry._discovery_complete = True
         for root in scan_roots:
             if root is None:
                 continue
-            for discovered in _discover_extension_paths(root):
+            found = _discover_extension_paths(root)
+            if found is None:
+                registry._discovery_complete = False
+                continue
+            for discovered in found:
                 winner = claimed.get(discovered.name)
                 if winner is not None:
                     registry._records.append(_overridden_record(discovered, winner))
@@ -773,6 +781,16 @@ class ExtensionRegistry:
             for prefix, entry in self._interaction_handlers.items()
             if entry[0] != extension_name
         }
+
+    def installed_names(self) -> frozenset[str] | None:
+        """Names of every discovered Extension, whatever its status.
+
+        ``None`` unless this registry scanned every Extension root: then a
+        name's absence does not prove that its Extension was removed.
+        """
+        if not self._discovery_complete:
+            return None
+        return frozenset(record.name for record in self._records)
 
     def records(self) -> list[ExtensionRecord]:
         """Return every discovered extension record in load order."""

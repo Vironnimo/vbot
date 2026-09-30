@@ -6,8 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.agents.temporary import TemporaryAgentConfig
+from core.agents.temporary import TemporaryAgentConfig, TemporaryExecutionGroups
 from core.chat import ChatMessage
+from core.extensions import ExtensionRegistrationIdentity
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
 
@@ -270,6 +271,44 @@ async def test_delete_removes_board_and_bound_sessions_but_keeps_profile_and_oth
         assert connection.execute("SELECT COUNT(*) FROM requests").fetchone()[0] == 1
     with pytest.raises(ValueError, match="swarm_not_found"):
         await board.service.operation("swarms.resume", {"swarm_id": sid, "request_id": "resume"})
+
+
+@pytest.mark.asyncio
+async def test_startup_archives_participant_sessions_of_swarms_missing_from_the_board(board):
+    # Participants of a Swarm the database no longer holds, as after a restore.
+    lost = board.groups._registry.create(
+        owner_name="swarm",
+        group_id="swr_lost",
+        participant_id="lost",
+        config=TemporaryAgentConfig(
+            model="fixture/model",
+            cwd=board.contexts[0].workspace,
+            tool_access=ToolAccess(mode="selected", allowed=()),
+            allowed_skills=[],
+            tools={},
+            name="Lost",
+        ),
+    )
+    await board.service.close()
+    await board.databases.release(ExtensionRegistrationIdentity("swarm", "registration"))
+    identity = ExtensionRegistrationIdentity("swarm", "restarted")
+    groups = TemporaryExecutionGroups(
+        board.groups._registry,
+        None,
+        lambda value: value is identity,
+        identity,
+        run_manager=board.groups._manager,
+    )
+
+    await board.operations.startup[0](
+        replace(board.host, temporary_agents=groups, open_database=board.databases.opener(identity))
+    )
+
+    assert await groups.groups() == [board.swarm["id"]]
+    assert all(board.sessions.exists(binding.address) for binding in board.bindings)
+    assert not board.sessions.exists(lost.address)
+    # Archived participants keep their history until the group is deleted.
+    assert await groups.delete_group("swr_lost") == 1
 
 
 @pytest.mark.asyncio
