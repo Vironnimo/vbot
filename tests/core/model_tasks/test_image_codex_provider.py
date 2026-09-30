@@ -26,6 +26,7 @@ from core.providers.openai import CODEX_EXTRA_HEADERS, CODEX_RESPONSES_MODE
 from core.providers.openai_subscription_auth import OPENAI_AUTH_CLAIM
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.usage import UsageRecorder
+from tests.core.usage.usage_test_support import read_ledger
 
 OPENAI_CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
 
@@ -152,7 +153,7 @@ async def test_subscription_image_records_independent_carrier_even_for_unusable_
     else:
         with pytest.raises(ProviderError):
             await client.generate("image", options={})
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     by_model = {record.model: record for record in records}
     assert len(records) == 2
     image_usage = by_model["openai/gpt-image-2"]

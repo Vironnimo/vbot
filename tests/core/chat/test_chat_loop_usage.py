@@ -26,6 +26,7 @@ from tests.core.chat.chat_loop_support import (
     session_address,
 )
 from tests.core.chat.usage_recorder_support import RecordingUsageRecorder
+from tests.core.usage.usage_test_support import read_ledger
 
 JsonObject = dict[str, Any]
 
@@ -150,7 +151,7 @@ async def test_measured_usage_reaches_the_answer_the_run_end_and_the_usage_recor
 
         # The usage record keeps only the canonical counters and outlives the Session.
         runtime.chat_sessions.delete(SESSION)
-        _, records = recorder.read_since()
+        _, records = read_ledger(recorder)
         assert [record.id for record in records] == [answer.usage["usage_call_id"]]
         assert _counters(records[0].usage) == MEASURED
         assert not {"estimated", "context_usage", "future_usage_field"} & set(records[0].usage)

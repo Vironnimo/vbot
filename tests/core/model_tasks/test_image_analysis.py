@@ -41,6 +41,7 @@ from core.utils.errors import ConfigError
 from tests.core.model_tasks.image_test_support import (
     _MissingModelTasks,
 )
+from tests.core.usage.usage_test_support import read_ledger
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +232,7 @@ async def test_empty_analysis_preserves_billed_usage_and_caller_scope(
                 group_id="group",
             ),
         )
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     record = records[0]
     assert (record.kind, record.status, record.usage["input_tokens"]) == (

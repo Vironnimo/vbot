@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 from core.statistics._projection import CALL_COLUMNS, ProjectedRows, timestamp_instant
 
 if TYPE_CHECKING:
-    from core.usage import UsageRecorder
+    from core.usage import UsagePage, UsageRecord, UsageRecorder
 
 
 ACCOUNTING_SCHEMA = f"""
@@ -55,22 +56,44 @@ class UsageSourceError(Exception):
         self.error = error
 
 
-def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> None:
-    """Apply changed requests atomically; unchanged ledger snapshots write nothing."""
-    previous = connection.execute("SELECT source_id, revision FROM stat_usage_state").fetchone()
+def _ledger_pages(recorder: UsageRecorder, revision: int) -> Iterator[UsagePage]:
+    """The recorder's pages after ``revision``; a failed read is a ``UsageSourceError``."""
     try:
-        source_id = f"{recorder.database.database_id}:{recorder.projection_epoch}"
-        revision = int(previous[1]) if previous is not None and previous[0] == source_id else 0
-        latest, records = recorder.read_since(revision)
-        reset = previous is not None and (previous[0] != source_id or latest < revision)
-        # A restored canonical snapshot can have the same database identity
-        # but a shorter revision history. Its projection must follow that source.
-        if latest < revision:
-            revision = 0
-            latest, records = recorder.read_since(0)
+        pages = iter(recorder.read_since(revision))
     except Exception as error:
         raise UsageSourceError(error) from error
-    if reset:
+    while True:
+        try:
+            page = next(pages)
+        except StopIteration:
+            return
+        except Exception as error:
+            raise UsageSourceError(error) from error
+        yield page
+
+
+def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> None:
+    """Apply changed requests atomically; unchanged ledger snapshots write nothing.
+
+    The projection continues from its revision while the recorder's
+    ``ledger_id`` is unchanged, so a restart reads only newer changes. Another
+    ledger id (a restore) or a watermark below the projected revision rebuilds
+    it from the whole ledger, streamed in bounded pages.
+    """
+    previous = connection.execute("SELECT source_id, revision FROM stat_usage_state").fetchone()
+    source_id = recorder.ledger_id
+    same_source = previous is not None and previous[0] == source_id
+    revision = int(previous[1]) if same_source else 0
+    pages = _ledger_pages(recorder, revision)
+    latest, records = next(pages)
+    # A ledger replaced outside the kernel's restore can keep its identity with
+    # a shorter revision history. Its projection must follow that source too.
+    rewound = latest < revision
+    if rewound:
+        revision = 0
+        pages = _ledger_pages(recorder, 0)
+        latest, records = next(pages)
+    if previous is not None and (not same_source or rewound):
         for table in (
             "stat_usage_state",
             "stat_usage_records",
@@ -78,8 +101,20 @@ def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> 
             "stat_usage_units",
         ):
             connection.execute(f"DELETE FROM {table}")
-    if not reset and previous is not None and previous[0] == source_id and previous[1] == latest:
+    elif same_source and latest == revision:
         return
+    _project_calls(connection, records)
+    for page in pages:
+        _project_calls(connection, page.records)
+        latest = page.revision
+    connection.execute(
+        "INSERT INTO stat_usage_state (source_id, revision) VALUES (?, ?) "
+        "ON CONFLICT(source_id) DO UPDATE SET revision = excluded.revision",
+        (source_id, latest),
+    )
+
+
+def _project_calls(connection: sqlite3.Connection, records: tuple[UsageRecord, ...]) -> None:
     for record in records:
         address = (
             record.project_id or "",
@@ -149,8 +184,3 @@ def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> 
             f"VALUES ({', '.join('?' for _ in CALL_COLUMNS.split(','))})",
             rows.calls,
         )
-    connection.execute(
-        "INSERT INTO stat_usage_state (source_id, revision) VALUES (?, ?) "
-        "ON CONFLICT(source_id) DO UPDATE SET revision = excluded.revision",
-        (source_id, latest),
-    )

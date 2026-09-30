@@ -30,6 +30,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.task_client import ProviderTaskClient
 from core.providers.token_getter import StaticTokenGetter
 from core.usage import UsageRecorder
+from tests.core.usage.usage_test_support import read_ledger
 
 BASE = "https://provider.example/api/v1"
 TASKS = (
@@ -186,7 +187,7 @@ async def test_task_services_record_consumption_before_artifacts_or_experiment_h
         finally:
             await decisions.aclose()
 
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     record = records[0]
     assert (record.model, record.kind, record.status) == (
@@ -233,7 +234,7 @@ async def test_retry_and_rejected_result_keep_separate_usage_records(
         return dict(response.json())
 
     await client.post_and_parse("/task", timeout=1, parse=parse, json={})
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert [(record.status, record.usage["input_tokens"]) for record in records] == [
         ("failed", 4),
         ("completed", 6),
@@ -256,7 +257,7 @@ async def test_video_poll_updates_create_usage_before_download_failure(
     respx.get(BASE + "/videos/job/content?index=0").respond(404)
     with pytest.raises(ProviderError):
         await client.generate("video", options={}, poll_interval=0)
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     assert records[0].usage["reported_cost_usd"] == 0.4
 
@@ -269,7 +270,7 @@ async def test_local_cancelled_attempt_stays_unknown_and_cost_projection_keeps_s
     with pytest.raises(asyncio.CancelledError):
         async with observer.attempt():
             raise asyncio.CancelledError
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     assert records[0].model == "local/tts" and records[0].status == "cancelled"
     assert "input_tokens" not in records[0].usage
@@ -324,7 +325,7 @@ async def test_embedding_result_preserves_normalized_cost_without_raw_usage(
             )
         ),
     )
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     assert records[0].usage["input_tokens"] == 9
     assert records[0].usage["output_tokens"] == 0

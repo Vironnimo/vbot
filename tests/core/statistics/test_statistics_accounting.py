@@ -11,12 +11,13 @@ from pathlib import Path
 
 import pytest
 
+from core.database import create_data_snapshot, restore_data_snapshot
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
 from core.statistics import StatisticsService
 from core.statistics._projection import CALL_COLUMNS
 from core.statistics.index import StatisticsIndex
-from core.usage import UsageRecorder
+from core.usage import UsagePage, UsageRecorder
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import complete_run
 from tests.core.statistics.statistics_test_support import (
@@ -27,6 +28,7 @@ from tests.core.statistics.statistics_test_support import (
     _run_summary,
     _write_session,
 )
+from tests.core.usage.usage_test_support import read_ledger
 
 
 @pytest.fixture
@@ -438,14 +440,20 @@ async def test_restored_ledger_revision_rebuilds_its_projection(accounting, monk
     service, _manager, recorder = accounting
     first = await recorder.start(model="task/m", kind="decision")
     await recorder.finish(first, {"input_tokens": 10, "output_tokens": 1})
-    saved_revision, saved_records = recorder.read_since()
+    saved_revision, saved_records = read_ledger(recorder)
     second = await recorder.start(model="task/m", kind="decision")
     await recorder.finish(second, {"input_tokens": 20, "output_tokens": 2})
     assert service.report().usage.totals.model_calls == 2
 
     def restored(revision=0):
-        return saved_revision, tuple(
-            record for record in saved_records if record.revision > revision
+        # The same ledger id with a shorter history, as after an outside file copy.
+        return iter(
+            [
+                UsagePage(
+                    saved_revision,
+                    tuple(record for record in saved_records if record.revision > revision),
+                )
+            ]
         )
 
     monkeypatch.setattr(recorder, "read_since", restored)
@@ -482,35 +490,60 @@ async def test_windowed_extension_activity_includes_requests_without_saved_outpu
     assert activity.last_activity == format_canonical_timestamp(BASE)
 
 
+def _models(service: StatisticsService) -> set[str]:
+    return {row.model for row in service.report().usage.models}
+
+
 @pytest.mark.asyncio
-async def test_new_recorder_lifetime_reconciles_a_restored_revision_that_caught_up(
+async def test_a_restart_continues_the_projection_and_a_restore_rebuilds_it(
     accounting, index: StatisticsIndex, statistics: StatisticsFactory, monkeypatch
 ):
-    service, _manager, recorder = accounting
+    service, manager, recorder = accounting
+    root = recorder.database.path.parent
     for model in ("task/a", "task/b"):
         call = await recorder.start(model=model, kind="decision")
         await recorder.finish(call, {"input_tokens": 10, "output_tokens": 1})
-    high, records = recorder.read_since()
-    assert {model.model for model in service.report().usage.models} == {"task/a", "task/b"}
-    epoch = recorder.projection_epoch
+    snapshot = create_data_snapshot(
+        root, reason="test", databases=(recorder.database, manager.database)
+    )
+    assert snapshot is not None
+    later = await recorder.start(model="task/c", kind="decision")
+    await recorder.finish(later, {"input_tokens": 10, "output_tokens": 1})
+    assert _models(service) == {"task/a", "task/b", "task/c"}
+    projected = read_ledger(recorder)[0]
     path = recorder.database.path
     recorder.close()
-    replacement = UsageRecorder(path)
+
+    # A restarted service over the same index reads only after its revision and
+    # leaves the unchanged projection untouched.
+    reopened = UsageRecorder(path)
     try:
-        assert replacement.projection_epoch != epoch
-        # The new Runtime's service reads the same index. A stopped-store restore
-        # retains database identity; new work can catch up numerically before
-        # its first report.
-        service = statistics(usage_recorder=replacement, index=index)
-        restored = (records[0], replace(records[1], id="restored-new", model="task/c"))
-        monkeypatch.setattr(
-            replacement,
-            "read_since",
-            lambda revision=0: (
-                high,
-                tuple(record for record in restored if record.revision > revision),
-            ),
-        )
-        assert {model.model for model in service.report().usage.models} == {"task/a", "task/c"}
+        reads: list[int] = []
+        read_since = reopened.read_since
+
+        def recorded(revision: int = 0) -> Iterator[UsagePage]:
+            reads.append(revision)
+            return read_since(revision)
+
+        monkeypatch.setattr(reopened, "read_since", recorded)
+        restarted = statistics(usage_recorder=reopened, index=index)
+        with closing(sqlite3.connect(index.index_path)) as observer:
+            before = observer.execute("PRAGMA data_version").fetchone()[0]
+            assert _models(restarted) == {"task/a", "task/b", "task/c"}
+            assert observer.execute("PRAGMA data_version").fetchone()[0] == before
+        assert reads == [projected]
     finally:
-        replacement.close()
+        reopened.close()
+
+    # The restored ledger keeps its identity, and new work catches up with the
+    # projected revision before the next report: only the restore tells them apart.
+    restore_data_snapshot(root, snapshot, names=("model_usage",))
+    restored = UsageRecorder(path)
+    try:
+        call = await restored.start(model="task/d", kind="decision")
+        await restored.finish(call, {"input_tokens": 10, "output_tokens": 1})
+        assert read_ledger(restored)[0] == projected
+        rebuilt = statistics(usage_recorder=restored, index=index)
+        assert _models(rebuilt) == {"task/a", "task/b", "task/d"}
+    finally:
+        restored.close()

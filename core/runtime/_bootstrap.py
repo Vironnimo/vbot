@@ -259,6 +259,9 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._storage.data_dir,
             store_path=runtime._storage.layout.sessions_db_path,
         )
+        # Retained Usage enters the ledger before any Agent lifecycle work or
+        # accessor can delete history. It resumes from its persisted cursor, so a
+        # normal start reads only entries written since the previous import.
         runtime._usage_recorder.import_session_history(runtime._chat_sessions)
         # One owner of the disposable Statistics index for every reader (RPC
         # reports and Extension group usage); it holds no open resources.

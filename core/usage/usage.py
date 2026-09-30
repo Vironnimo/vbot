@@ -13,11 +13,10 @@ import hashlib
 import json
 import sqlite3
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol
-from weakref import WeakSet
+from typing import Any, NamedTuple, Protocol
 
 from core.database import Database, open_database
 from core.models.pricing import TokenPricing, nonnegative_amount, price_usage, project_cost
@@ -38,6 +37,7 @@ _COUNTERS = (
 )
 _FLAGS = ("input_tokens_estimated", "output_tokens_estimated", "estimated")
 _IMPORT_NAME = "session-history-v1"
+READ_PAGE_SIZE = 1000
 
 
 class UsageHistorySource(Protocol):
@@ -68,6 +68,13 @@ class UsageRecord:
     group_id: str | None = None
 
 
+class UsagePage(NamedTuple):
+    """One bounded read of changed calls and the ledger's revision watermark at that read."""
+
+    revision: int
+    records: tuple[UsageRecord, ...]
+
+
 def _revision(connection: sqlite3.Connection) -> int:
     row = connection.execute(
         "INSERT INTO usage_revision (singleton,revision) VALUES (1,1) "
@@ -76,11 +83,14 @@ def _revision(connection: sqlite3.Connection) -> int:
     return int(row[0])
 
 
-def _import_cursor(connection: sqlite3.Connection, source_id: str, cursor: int) -> None:
+def _import_cursor(
+    connection: sqlite3.Connection, source_id: str, source_restore_id: str | None, cursor: int
+) -> None:
     connection.execute(
-        "INSERT INTO usage_imports (name,source_id,cursor) VALUES (?,?,?) "
-        "ON CONFLICT (name) DO UPDATE SET source_id=excluded.source_id,cursor=excluded.cursor",
-        (_IMPORT_NAME, source_id, cursor),
+        "INSERT INTO usage_imports (name,source_id,source_restore_id,cursor) VALUES (?,?,?,?) "
+        "ON CONFLICT (name) DO UPDATE SET source_id=excluded.source_id,"
+        "source_restore_id=excluded.source_restore_id,cursor=excluded.cursor",
+        (_IMPORT_NAME, source_id, source_restore_id, cursor),
     )
 
 
@@ -165,9 +175,7 @@ class UsageRecorder:
     ) -> None:
         self.database = open_database(usage_database_spec(path))
         self._pricing_lookup = pricing_lookup
-        self._projection_epoch = new_id("epoch")
         self._import_lock = threading.Lock()
-        self._imported_sources: WeakSet[Database] = WeakSet()
         try:
             self.database.write(self._interrupt_unfinished)
         except BaseException:
@@ -175,9 +183,16 @@ class UsageRecorder:
             raise
 
     @property
-    def projection_epoch(self) -> str:
-        """Opaque continuity token, fresh for every recorder initialization."""
-        return self._projection_epoch
+    def ledger_id(self) -> str:
+        """Opaque continuity token of this ledger for projections that follow it.
+
+        Stable across restarts. A data snapshot restore keeps the database
+        identity but can bring back older calls whose revisions new work then
+        catches up with, so the token also names the ledger's latest restore
+        (``Database.restore_id``): a projection that sees another token
+        rebuilds instead of continuing from its revision.
+        """
+        return f"{self.database.database_id}:{self.database.restore_id or ''}"
 
     @staticmethod
     def _interrupt_unfinished(connection: sqlite3.Connection) -> None:
@@ -308,46 +323,69 @@ class UsageRecorder:
 
         return self.database.write(operation)
 
-    def read_since(self, revision: int = 0) -> tuple[int, tuple[UsageRecord, ...]]:
-        """Current versions changed since a watermark, from one read snapshot."""
-        with self.database.read() as connection:
-            high = connection.execute(
-                "SELECT COALESCE(MAX(revision),0) FROM usage_revision"
-            ).fetchone()[0]
-            records = connection.execute(
-                f"SELECT {_COLUMNS} FROM usage_calls WHERE revision>? ORDER BY revision",
-                (revision,),
-            ).fetchall()
-        decoded = []
-        for row in records:
-            fields = dict(row)
-            fields["usage"] = json.loads(fields.pop("usage_json"))
-            decoded.append(UsageRecord(**fields))
-        return int(high), tuple(decoded)
+    def read_since(
+        self, revision: int = 0, *, page_size: int = READ_PAGE_SIZE
+    ) -> Iterator[UsagePage]:
+        """Current versions of the calls changed after ``revision``, in bounded pages.
+
+        Each page is one short read transaction: at most ``page_size`` calls
+        with the next higher revisions, plus the ledger's revision watermark at
+        that read. The first page arrives even when nothing changed. A call
+        that changes while pages are read reappears later with its newer
+        revision, so once the iterator is exhausted the last page's watermark
+        covers every change: reading after it continues exactly there.
+        """
+        if page_size < 1:
+            raise ValueError("Usage pages need at least one call")
+        position = revision
+        while True:
+            with self.database.read() as connection:
+                high = connection.execute(
+                    "SELECT COALESCE(MAX(revision),0) FROM usage_revision"
+                ).fetchone()[0]
+                rows = connection.execute(
+                    f"SELECT {_COLUMNS} FROM usage_calls WHERE revision>? ORDER BY revision "
+                    "LIMIT ?",
+                    (position, page_size),
+                ).fetchall()
+            records = []
+            for row in rows:
+                fields = dict(row)
+                fields["usage"] = json.loads(fields.pop("usage_json"))
+                records.append(UsageRecord(**fields))
+            yield UsagePage(int(high), tuple(records))
+            if len(records) < page_size:
+                return
+            position = records[-1].revision
 
     def import_session_history(self, sessions: UsageHistorySource) -> None:
         """Resumable named import of retained own-audit Usage, including archives.
 
-        The cursor and imported records commit together. Call ids embedded by
-        current producers enrich live recording; older rows have deterministic
-        ids scoped to their source database and entry identity. A new source
-        handle replays history because restore can rewind both keys and cursor.
+        The cursor and imported records commit together, with the identity and
+        latest restore of the Session database they were read from. Call ids
+        embedded by current producers enrich live recording; older rows have
+        deterministic ids scoped to their source database and entry identity.
+        The import resumes from the cursor while that source is unchanged; a
+        restored or another source replays history from the start, because a
+        restore can rewind the entry keys the cursor counts.
         """
         with self._import_lock:
             self._import_history(sessions)
 
     def _import_history(self, sessions: UsageHistorySource) -> None:
         source = sessions.database
-        source_id = source.database_id
+        source_id, source_restore_id = source.database_id, source.restore_id
         with self.database.read() as connection:
             row = connection.execute(
-                "SELECT source_id,cursor FROM usage_imports WHERE name=?", (_IMPORT_NAME,)
+                "SELECT source_id,source_restore_id,cursor FROM usage_imports WHERE name=?",
+                (_IMPORT_NAME,),
             ).fetchone()
-        cursor = (
-            int(row["cursor"])
-            if source in self._imported_sources and row and row["source_id"] == source_id
-            else 0
+        resumed = (
+            row is not None
+            and row["source_id"] == source_id
+            and row["source_restore_id"] == source_restore_id
         )
+        cursor = int(row["cursor"]) if resumed else 0
         while True:
             batch = sessions.usage_history(cursor, limit=1000)
             if not batch:
@@ -407,12 +445,13 @@ class UsageRecorder:
                             record["group_id"],
                         ),
                     )
-                _import_cursor(connection, source_id, batch[-1]["entry_key"])
+                _import_cursor(connection, source_id, source_restore_id, batch[-1]["entry_key"])
 
             self.database.write(operation)
             cursor = batch[-1]["entry_key"]
-        if cursor == 0:
-            # A restored empty source must reset an older persisted cursor before
-            # this handle switches to incremental imports of newly written rows.
-            self.database.write(lambda connection: _import_cursor(connection, source_id, 0))
-        self._imported_sources.add(source)
+        if not resumed and cursor == 0:
+            # A new or restored source without billable history still records
+            # its identity, so later imports resume instead of replaying.
+            self.database.write(
+                lambda connection: _import_cursor(connection, source_id, source_restore_id, 0)
+            )
