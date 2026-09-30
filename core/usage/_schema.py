@@ -34,10 +34,13 @@ CREATE TABLE usage_calls (
 CREATE UNIQUE INDEX usage_calls_by_revision ON usage_calls (revision);
 
 -- Resumable, named Session-history import: insertion and cursor move are atomic.
+-- source_restore_id is the source database's latest restore when the cursor
+-- moved (NULL: none); another one means the cursor no longer applies.
 CREATE TABLE usage_imports (
     name TEXT PRIMARY KEY,
     source_id TEXT NOT NULL,
-    cursor INTEGER NOT NULL
+    cursor INTEGER NOT NULL,
+    source_restore_id TEXT
 ) STRICT;
 """
 

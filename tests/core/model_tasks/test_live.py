@@ -43,6 +43,7 @@ from core.providers.errors import (
 )
 from core.usage import UsageRecorder
 from core.utils.errors import ConfigError
+from tests.core.usage.usage_test_support import read_ledger
 
 OFFER = "v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
 XAI_TARGET = "xai/grok-voice-think-fast-2.0::subscription"
@@ -236,7 +237,7 @@ async def test_live_cumulative_usage_is_saved_once_and_survives_lost_control(
         WireClosed(reason=None, usage=None, confirmed=False),
     )
     await call.wait_closed()
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     assert (records[0].kind, records[0].status) == ("live_voice", "failed")
     assert records[0].usage["input_tokens"] == 7
@@ -333,7 +334,7 @@ async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
 
     await asyncio.wait_for(call.wait_closed(), 1)
 
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 1
     assert records[0].status == "completed"
     assert records[0].usage["input_tokens"] == 7

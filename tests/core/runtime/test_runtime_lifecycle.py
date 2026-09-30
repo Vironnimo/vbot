@@ -45,6 +45,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager, TerminalManagerError
 from core.utils.config import Config
 from tests.core.sessions.history_fixtures import seed_history
+from tests.core.usage.usage_test_support import read_ledger
 
 # Service accessors that exist only while the Runtime is started.
 _STARTED_SERVICES = (
@@ -788,7 +789,7 @@ async def test_runtime_imports_history_and_registers_canonical_accounting(config
     runtime.start()
     recorder = runtime.usage_recorder
     try:
-        records = recorder.read_since()[1]
+        records = read_ledger(recorder)[1]
         assert len(records) == 1
         assert records[0].usage["input_tokens"] == 6
         assert recorder.database in runtime.canonical_databases()
@@ -843,7 +844,7 @@ async def test_extension_sampling_records_usage_before_returning(
             context, {"messages": [], "max_tokens": 100}
         )
         assert result["model"] == "p/m"
-        record = recorder.read_since()[1][0]
+        record = read_ledger(recorder)[1][0]
         assert record.kind == "extension_sampling"
         assert record.usage["input_tokens"] == 10
         assert record.run_id == "run"

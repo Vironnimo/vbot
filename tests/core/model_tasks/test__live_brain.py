@@ -15,6 +15,7 @@ from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_responses import normalize_responses_response
 from core.usage import UsageRecorder
+from tests.core.usage.usage_test_support import read_ledger
 
 TARGET = BrainTarget(
     provider_id="openai",
@@ -128,7 +129,7 @@ async def test_backend_usage_counts_each_retry_and_model_step(recorder: UsageRec
         usage_recorder=recorder,
     )
     assert await harness.brain.answer(DELEGATION) == "Done"
-    _, records = recorder.read_since()
+    _, records = read_ledger(recorder)
     assert len(records) == 3
     assert [record.status for record in records] == ["failed", "completed", "completed"]
     assert all(record.kind == "live_voice_backend" for record in records)

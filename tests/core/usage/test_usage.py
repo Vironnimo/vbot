@@ -13,8 +13,9 @@ from core.chat.messages import ChatMessage
 from core.database import create_data_snapshot, restore_data_snapshot, write_bootstrap_marker
 from core.models.pricing import TokenPricing, TokenRates
 from core.sessions import ChatSessionManager
-from core.usage import UsageRecorder
+from core.usage import UsagePage, UsageRecorder
 from tests.core.sessions.history_fixtures import seed_history
+from tests.core.usage.usage_test_support import read_ledger
 
 
 @pytest.fixture
@@ -32,20 +33,39 @@ def recorder(tmp_path: Path):
 async def test_cumulative_updates_retain_one_call_and_field_provenance(recorder):
     identifier = await recorder.start(model="p/model::p:api", kind="live_voice")
     first = await recorder.update(identifier, {"input_tokens": 12, "reported_cost_usd": 0.1})
-    revision, records = recorder.read_since()
+    revision, records = read_ledger(recorder)
     assert first["usage_call_id"] == identifier
     assert "output_tokens" not in records[0].usage
     assert records[0].usage["cost"] == {"amount_usd": 0.1, "source": "provider"}
     await recorder.update(identifier, {"input_tokens": 20, "output_tokens": 3})
     await recorder.finish(identifier)
-    newer, changed = recorder.read_since(revision)
+    newer, changed = read_ledger(recorder, revision)
     assert newer > revision
     assert len(changed) == 1
     assert changed[0].model == "p/model"
     assert changed[0].status == "completed"
     assert changed[0].usage["input_tokens"] == 20
     assert changed[0].usage["output_tokens"] == 3
-    assert recorder.read_since(newer) == (newer, ())
+    assert read_ledger(recorder, newer) == (newer, ())
+
+
+@pytest.mark.asyncio
+async def test_changes_stream_in_pages_whose_last_watermark_covers_concurrent_changes(recorder):
+    first, second, third = [await recorder.start(model="p/m", kind="decision") for _ in range(3)]
+    pages = recorder.read_since(page_size=2)
+    assert [record.id for record in next(pages).records] == [first, second]
+    # One delivered and one not yet delivered call change between two pages.
+    await recorder.finish(first, {"input_tokens": 1})
+    await recorder.finish(third, {"input_tokens": 3})
+    rest = list(pages)
+    assert [(record.id, record.status) for page in rest for record in page.records] == [
+        (first, "completed"),
+        (third, "completed"),
+    ]
+    latest = rest[-1].revision
+    assert latest == read_ledger(recorder)[0]
+    # Nothing changed after the watermark: exactly one empty page arrives.
+    assert list(recorder.read_since(latest)) == [UsagePage(latest, ())]
 
 
 @pytest.mark.asyncio
@@ -65,7 +85,7 @@ async def test_unknown_attempts_and_estimate_enrichment_are_not_zero_usage(recor
     measured = await recorder.update(chat, {"output_tokens": 2})
     assert "estimated" not in measured
     assert "output_tokens_estimated" not in measured
-    assert len(recorder.read_since()[1]) == 2
+    assert len(read_ledger(recorder)[1]) == 2
 
 
 @pytest.mark.asyncio
@@ -80,7 +100,7 @@ async def test_accounting_returns_but_never_stores_producer_usage_metadata(recor
     returned = await recorder.finish(identifier, usage)
     assert returned["context_usage"] == usage["context_usage"]
     assert returned["producer_extension"] == usage["producer_extension"]
-    stored = recorder.read_since()[1][0].usage
+    stored = read_ledger(recorder)[1][0].usage
     assert "context_usage" not in stored
     assert "producer_extension" not in stored
 
@@ -94,8 +114,7 @@ async def test_restart_marks_unfinished_call_interrupted_and_snapshots_cover_it(
     recorder.close()
     reopened = UsageRecorder(path)
     try:
-        assert reopened.projection_epoch != recorder.projection_epoch
-        record = reopened.read_since()[1][0]
+        record = read_ledger(reopened)[1][0]
         assert record.id == identifier
         assert record.status == "interrupted"
         assert record.usage == {}
@@ -127,7 +146,7 @@ async def test_finish_settles_reported_usage_before_repeated_cancellation(record
         release.set()
     with pytest.raises(asyncio.CancelledError):
         await pending
-    assert recorder.read_since()[1][0].usage["input_tokens"] == 8
+    assert read_ledger(recorder)[1][0].usage["input_tokens"] == 8
 
 
 @pytest.mark.asyncio
@@ -145,16 +164,53 @@ async def test_history_import_deduplicates_calls_and_retains_archive_and_fork_sp
         seed_history(fork, [ChatMessage.assistant(model="p/m", content="secret", usage=usage)])
         await sessions.archive(origin.address)
         recorder.import_session_history(sessions)
-        revision, records = recorder.read_since()
+        revision, records = read_ledger(recorder)
         assert len(records) == 2
         assert sum(record.usage.get("input_tokens", 0) for record in records) == 17
         recorder.import_session_history(sessions)
-        assert recorder.read_since(revision) == (revision, ())
+        assert read_ledger(recorder, revision) == (revision, ())
         sessions.delete(fork.address)
         recorder.import_session_history(sessions)
-        assert len(recorder.read_since()[1]) == 2
+        assert len(read_ledger(recorder)[1]) == 2
         assert "private" not in str(records) and "secret" not in str(records)
     finally:
+        sessions.close()
+
+
+def test_a_restart_keeps_the_ledger_id_and_resumes_the_import_from_its_cursor(
+    recorder, monkeypatch
+):
+    root = recorder.database.path.parent
+    sessions = ChatSessionManager(root)
+    try:
+        seed_history(
+            sessions.create("agent"),
+            [
+                ChatMessage.assistant(model="p/m", content="a", usage={"input_tokens": 2})
+                for _ in range(2)
+            ],
+        )
+        recorder.import_session_history(sessions)
+        cursor = sessions.usage_history()[-1]["entry_key"]
+    finally:
+        sessions.close()
+    path, ledger_id = recorder.database.path, recorder.ledger_id
+    recorder.close()
+    reopened, sessions = UsageRecorder(path), ChatSessionManager(root)
+    try:
+        assert reopened.ledger_id == ledger_id
+        reads: list[int] = []
+        history = sessions.usage_history
+
+        def recorded(after_entry_key: int = 0, *, limit: int = 1000):
+            reads.append(after_entry_key)
+            return history(after_entry_key, limit=limit)
+
+        monkeypatch.setattr(sessions, "usage_history", recorded)
+        reopened.import_session_history(sessions)
+        assert reads == [cursor]
+    finally:
+        reopened.close()
         sessions.close()
 
 
@@ -197,11 +253,14 @@ async def test_usage_restore_recovers_existing_call_from_newer_session(
             ],
         )
         path = recorder.database.path
+        ledger_id = recorder.ledger_id
         recorder.close()
         restore_data_snapshot(root, snapshot, names=("model_usage",))
         recovered = UsageRecorder(path)
+        # Projections of the restored ledger rebuild instead of continuing.
+        assert recovered.ledger_id != ledger_id
         recovered.import_session_history(sessions)
-        revision, records = recovered.read_since()
+        revision, records = read_ledger(recovered)
         assert len(records) == 1
         record = records[0]
         assert record.id == identifier
@@ -209,7 +268,7 @@ async def test_usage_restore_recovers_existing_call_from_newer_session(
         assert record.usage == usage
         assert record.agent_id == "agent" and record.session_id == session.id
         recovered.import_session_history(sessions)
-        assert recovered.read_since(revision) == (revision, ())
+        assert read_ledger(recovered, revision) == (revision, ())
     finally:
         if recovered is not None:
             recovered.close()
@@ -264,7 +323,7 @@ async def test_history_import_retains_stronger_measurements_cost_and_outcome(
             ],
         )
         recorder.import_session_history(sessions)
-        record = recorder.read_since()[1][0]
+        record = read_ledger(recorder)[1][0]
         assert record.status == status
         assert record.usage["input_tokens"] == 11
         assert "input_tokens_estimated" not in record.usage
@@ -324,7 +383,7 @@ def test_session_restore_replays_reused_entry_keys_and_resets_empty_cursor(
                 [ChatMessage.assistant(model="p/new-0", content="b", usage={"input_tokens": 3})],
             )
             recorder.import_session_history(sessions)
-        revision, records = recorder.read_since()
+        revision, records = read_ledger(recorder)
         expected_new = max(1, new_message_count)
         assert len(records) == 2 + expected_new
         assert {record.model for record in records} == {
@@ -334,7 +393,7 @@ def test_session_restore_replays_reused_entry_keys_and_resets_empty_cursor(
         }
         assert sum(record.usage["input_tokens"] for record in records) == 4 + 3 * expected_new
         recorder.import_session_history(sessions)
-        assert recorder.read_since(revision) == (revision, ())
+        assert read_ledger(recorder, revision) == (revision, ())
     finally:
         sessions.close()
 
@@ -364,7 +423,7 @@ def test_legacy_import_counts_compaction_and_distinct_entries_with_same_message_
         )
         seed_history(session, [answer, replace(answer, content="b"), checkpoint])
         recorder.import_session_history(sessions)
-        records = recorder.read_since()[1]
+        records = read_ledger(recorder)[1]
         assert len(records) == 3
         assert [record.kind for record in records] == ["chat", "chat", "compaction"]
         assert records[2].model == "p/summary"

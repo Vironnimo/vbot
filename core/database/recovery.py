@@ -5,7 +5,8 @@ snapshot member. The damaged bundle (database file plus sidecars) is moved to
 ``<data-dir>/quarantine/<name>/<timestamp>-<id>/`` and never deleted. Every
 restore publishes a durable incident at ``<data-dir>/incidents/<name>.json``:
 first as ``pending`` before anything is replaced, then as ``ok`` once the
-restored file verified. A crash between the two resumes on the next open.
+restored file verified. A crash between the two resumes on the next open. The
+incident id doubles as the database's restore id (``Database.restore_id``).
 
 Automatic restore runs only when opening a registered database finds it
 missing, damaged or with another identity; never for a busy or locked file,
@@ -416,6 +417,20 @@ def pending_restore(data_dir: Path, name: str) -> bool:
     """Whether an interrupted restore of ``name`` must be resumed or confirmed."""
     incident = read_incident(data_dir, name)
     return incident is not None and incident["verification"] == "pending"
+
+
+def latest_restore_id(data_dir: Path, name: str) -> str | None:
+    """The id of the latest restore recorded for ``name``, or ``None`` when none was.
+
+    Every restore (automatic, operator or update rollback) publishes a new
+    incident before anything is replaced; resuming, completing or acknowledging
+    it keeps the id, and incidents live outside data snapshots. The id
+    therefore changes whenever a restore began, including one that stopped
+    before the swap, and never otherwise. A malformed incident raises like
+    ``read_incident``.
+    """
+    incident = read_incident(data_dir, name)
+    return None if incident is None else str(incident["incident_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -962,6 +977,7 @@ __all__ = [
     "active_incidents",
     "auto_restore_if_needed",
     "incident_path",
+    "latest_restore_id",
     "pending_restore",
     "quarantine_root",
     "read_incident",

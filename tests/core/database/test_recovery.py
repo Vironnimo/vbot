@@ -585,6 +585,30 @@ def test_operator_restore_checks_the_request_and_every_selected_member_first(
     assert read_incident(data_dir, "notes") is None
 
 
+def test_the_restore_id_changes_with_each_restore_and_survives_reopening(data_dir: Path) -> None:
+    snapshot = snapshot_with_notes(data_dir, "saved")
+
+    def restore_id() -> str | None:
+        database = open_database(notes_spec(data_dir))
+        try:
+            return database.restore_id
+        finally:
+            database.close()
+
+    assert restore_id() is None
+    assert restore_id() is None
+    restore_data_snapshot(data_dir, snapshot)
+    operator = restore_id()
+    assert operator is not None
+    assert acknowledge_incident(data_dir, operator) is True
+    assert restore_id() == operator
+    # A snapshot copy carries the database identity but never the restore id.
+    notes_spec(data_dir).path.write_bytes(b"damaged")
+    automatic = restore_id()
+    assert automatic not in (None, operator)
+    assert restore_id() == automatic
+
+
 def _recovered(data_dir: Path) -> dict[str, Any]:
     snapshot_with_notes(data_dir, "saved")
     notes_spec(data_dir).path.write_bytes(b"damaged")
