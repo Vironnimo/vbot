@@ -17,7 +17,10 @@ from tests.server.rpc_test_support import StubAdapter, StubRuntime
 _READY = "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready"
 _FAILED = "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed"
 _RESET = "2026-05-11 09:00:02 [WARN] vbot.server.app - Reset"
+# Each entry carries the byte offset of its first line; the file starts with _READY.
+_FAILED_OFFSET = len(_READY) + 1
 _FAILED_ENTRY = {
+    "offset": _FAILED_OFFSET,
     "timestamp": "2026-05-11 09:00:01",
     "level": "error",
     "logger_name": "vbot.server.app",
@@ -31,7 +34,7 @@ def _log_app(tmp_path: Path) -> tuple[Any, Path]:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     log_file = logs_dir / "2026-05-11"
-    log_file.write_text(f"{_READY}\n", encoding="utf-8")
+    log_file.write_text(f"{_READY}\n", encoding="utf-8", newline="\n")
     return create_app(runtime=cast(Any, StubRuntime(tmp_path, StubAdapter()))), log_file
 
 
@@ -46,20 +49,23 @@ def test_log_websocket_streams_appends_and_resets_for_the_selected_file(tmp_path
             # A stray client frame must not end server-push delivery.
             websocket.send_text("keepalive")
 
-            log_file.write_text(f"{_READY}\n{_FAILED}\n", encoding="utf-8")
+            _append_line(log_file, _FAILED)
             append = websocket.receive_json()
-            log_file.write_text(f"{_RESET}\n", encoding="utf-8")
+            # A file that shrinks is resent from its newest entries.
+            log_file.write_text(f"{_RESET}\n", encoding="utf-8", newline="\n")
             reset = websocket.receive_json()
             websocket.close()
 
         wait_for_log_viewer_idle(app)
 
-    assert append == {"type": "append", "file": "2026-05-11", "entries": [_FAILED_ENTRY]}
+    assert append == _append_event()
     assert reset == {
         "type": "reset",
         "file": "2026-05-11",
+        "next_before": None,
         "entries": [
             {
+                "offset": 0,
                 "timestamp": "2026-05-11 09:00:02",
                 "level": "warn",
                 "logger_name": "vbot.server.app",
@@ -83,7 +89,7 @@ def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path:
         )
         cursor = read_response.json()["result"]["cursor"]
 
-        log_file.write_text(f"{_READY}\n{_FAILED}\n", encoding="utf-8")
+        _append_line(log_file, _FAILED)
 
         with client.websocket_connect(f"/ws/logs?file=2026-05-11&cursor={cursor}") as websocket:
             event = websocket.receive_json()
@@ -91,7 +97,21 @@ def test_log_websocket_replays_handoff_entries_appended_after_log_read(tmp_path:
 
         wait_for_log_viewer_idle(app)
 
-    assert event == {"type": "append", "file": "2026-05-11", "entries": [_FAILED_ENTRY]}
+    assert event == _append_event()
+
+
+def _append_line(log_file: Path, line: str) -> None:
+    with log_file.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(f"{line}\n")
+
+
+def _append_event() -> dict[str, Any]:
+    return {
+        "type": "append",
+        "file": "2026-05-11",
+        "from_offset": _FAILED_OFFSET,
+        "entries": [_FAILED_ENTRY],
+    }
 
 
 def test_log_websocket_closes_when_the_log_watcher_stops(

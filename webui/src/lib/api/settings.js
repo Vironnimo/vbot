@@ -452,6 +452,19 @@ export function readLogFile(file, options = {}) {
   return rpc('log.read', { file }, options);
 }
 
+// Reads the page of entries that start before byte offset `before` (a result's
+// `next_before`); an older page has no stream cursor.
+export function readOlderLogEntries(file, before, options = {}) {
+  requireNonEmptyString(
+    file,
+    'Log file must be a non-empty string',
+    'log.read',
+  );
+  requirePositiveInteger(before, 'Log offset', 'log.read');
+
+  return rpc('log.read', { file, before }, options);
+}
+
 export function listClients(options = {}) {
   return rpc('client.list', {}, options);
 }

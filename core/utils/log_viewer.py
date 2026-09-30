@@ -1,13 +1,17 @@
 """Read-only daily log access and live update watching.
 
 Every log-directory scan, stat, file read, parse and cursor hash runs on the
-``log-viewer`` worker pool: a watched daily log is re-read and re-parsed on each
-change, up to ten times a second while the server logs, and must never stall the
-Event Loop. Watcher state and event fan-out stay on the Event Loop.
+``log-viewer`` worker pool, and every read is bounded. A page read walks
+backwards from its end position only until it holds one page of entries. The
+live tail remembers where the file's last entry starts, so each change re-reads
+only that still-open entry plus the bytes appended since; it computes its event
+on the worker too. Watcher state and event fan-out stay on the Event Loop and do
+no per-entry work.
 
 A read cursor holds no server state: it names the bytes the read covered (their
-length and a digest bound to the file name), so any number of readers can each
-resume from their own read, in any order, as often as they like.
+length and a digest of the file name and the bytes just before that length), so
+any number of readers can each resume from their own read, in any order, as
+often as they like.
 """
 
 from __future__ import annotations
@@ -16,11 +20,11 @@ import asyncio
 import hashlib
 import os
 import re
-from collections.abc import AsyncGenerator, Iterable
+from collections.abc import AsyncGenerator, Iterable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from watchfiles import awatch
 
@@ -33,8 +37,6 @@ from core.utils.logging import (
 from core.utils.workers import BoundedWorkerPool
 
 JsonObject = dict[str, Any]
-# A subscriber queue carries events; ``None`` ends the subscriber's stream.
-_SubscriberQueue = asyncio.Queue[JsonObject | None]
 
 _LOGGER = get_logger("log_viewer")
 
@@ -45,6 +47,27 @@ UNKNOWN_LEVEL = "unknown"
 UNKNOWN_LOGGER_NAME = ""
 UNKNOWN_TIMESTAMP = ""
 WATCHER_SHUTDOWN_TIMEOUT_SECONDS = 1.0
+
+# Newest entries per page (``log.read`` and every reset). A page stays a few
+# hundred KiB of JSON and a few milliseconds of parsing, covers several screens
+# of the Logs view, and bounds what one reset or append event carries.
+LOG_PAGE_ENTRIES = 500
+# No single read of a log file reads more bytes than this, whatever the file
+# holds (a page of huge tracebacks, a long burst between two watcher ticks).
+LOG_READ_MAX_BYTES = 4 * 1024 * 1024
+# Events a subscriber may have waiting. The watcher emits at most about ten per
+# second, so this is a few seconds of backlog; a subscriber that falls further
+# behind loses its backlog and is resynchronized with one reset.
+LOG_SUBSCRIBER_QUEUE_SIZE = 32
+# A page read starts with this much of the file and doubles it until it holds a
+# page or reaches the file start or LOG_READ_MAX_BYTES.
+_PAGE_CHUNK_BYTES = 64 * 1024
+# A cursor's digest covers the file name and at most this many bytes before the
+# cursor's end. A truncated, replaced or rotated file (or another file's cursor)
+# fails that check, while issuing and checking a cursor stays one small read
+# however long the file grows; up to this size the digest covers the whole read.
+_CURSOR_WINDOW_BYTES = 64 * 1024
+
 _LOG_WORKERS = BoundedWorkerPool(name="log-viewer", max_workers=2)
 
 # ``v1.<byte length>.<sha256 hex>``; both fields are bounded, so a forged cursor
@@ -59,17 +82,61 @@ LOG_LINE_PATTERN = re.compile(
 
 
 @dataclass(slots=True)
-class _LogSnapshot:
-    exists: bool
-    size: int
+class _ParsedEntry:
+    """One entry of a parsed byte range; hidden entries are routine websocket noise."""
+
+    offset: int
+    visible: bool
+    fields: JsonObject
+
+
+@dataclass(slots=True)
+class _Page:
     entries: list[JsonObject]
+    next_before: int | None
+    # The last entry up to the page end, visible or not: where a tail starts.
+    last_start: int
+    last_entry: JsonObject | None
+
+
+@dataclass(frozen=True, slots=True)
+class _LogTail:
+    """How far one reader of a log file got.
+
+    Everything before ``open_start`` is final. The entry starting there may
+    still grow (a traceback being written, a partial last line), so the next
+    read parses the file again from that offset; ``open_entry`` is that entry
+    as the reader last saw it, or ``None`` when it is hidden or absent.
+    """
+
+    exists: bool
+    size: int = 0
     modified_ns: int | None = None
+    identity: tuple[int, int] | None = None
+    open_start: int = 0
+    open_entry: JsonObject | None = None
+
+
+_MISSING_TAIL = _LogTail(exists=False)
+
+
+@dataclass(frozen=True, slots=True)
+class _Resync:
+    """Queued instead of a subscriber's dropped backlog: reset it to ``tail``."""
+
+    tail: _LogTail
+    catalog: tuple[str, ...] | None
+
+
+# A subscriber queue carries events and resync markers; ``None`` ends the stream.
+_QueueItem = JsonObject | _Resync | None
+_SubscriberQueue = asyncio.Queue[_QueueItem]
 
 
 @dataclass(slots=True)
 class _WatcherState:
     file_name: str
-    snapshot: _LogSnapshot
+    tail: _LogTail
     catalog: tuple[str, ...]
     directory_modified_ns: int | None = None
     stop_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -89,54 +156,84 @@ class _ReadCursor:
 class _WatchRefresh:
     """What one worker read found for a watched file; ``None`` means not read."""
 
-    catalog: JsonObject | None = None
+    catalog: tuple[str, ...] | None = None
     directory_modified_ns: int | None = None
-    snapshot: _LogSnapshot | None = None
+    tail: _LogTail | None = None
+    event: JsonObject | None = None
 
 
 def parse_log_entries(text: str) -> list[JsonObject]:
-    """Parse one daily log file into structured entries."""
+    """Parse log text into its visible structured entries."""
 
-    entries: list[JsonObject] = []
-    current_entry: JsonObject | None = None
+    parsed = _parse_lines(text.encode("utf-8"), 0, skip_leading_fragment=False)
+    return [entry.fields for entry in parsed if entry.visible]
 
-    for line in text.splitlines():
-        match = LOG_LINE_PATTERN.match(line)
-        if match is not None:
-            current_entry = {
-                "timestamp": match.group("timestamp"),
-                "level": match.group("level").lower(),
-                "logger_name": match.group("logger_name"),
-                "message": match.group("message"),
-                "continuation": "",
-                "raw": line,
-            }
-            if _should_include_entry(current_entry):
-                entries.append(current_entry)
-            continue
 
-        if current_entry is None:
-            current_entry = {
+def _parse_lines(data: bytes, base: int, *, skip_leading_fragment: bool) -> list[_ParsedEntry]:
+    """Group the lines of ``data``, which starts at file offset ``base``, into entries.
+
+    ``data`` starts at a line start. A last line without its newline yet is
+    parsed like any other; the tail re-parses it once it grows. With
+    ``skip_leading_fragment`` the lines before the first header line are dropped:
+    they continue an entry whose header lies before ``base``. Undecodable bytes
+    (a torn or foreign write) show as U+FFFD instead of failing the read.
+    """
+
+    parsed: list[_ParsedEntry] = []
+    current_lines: list[str] = []
+    current_match: re.Match[str] | None = None
+    current_offset = 0
+    in_fragment = skip_leading_fragment
+
+    def finish() -> None:
+        if not current_lines:
+            return
+        raw = "\n".join(current_lines)
+        continuation = "\n".join(current_lines[1:])
+        if current_match is None:
+            fields: JsonObject = {
                 "timestamp": UNKNOWN_TIMESTAMP,
                 "level": UNKNOWN_LEVEL,
                 "logger_name": UNKNOWN_LOGGER_NAME,
-                "message": line,
-                "continuation": "",
-                "raw": line,
+                "message": current_lines[0],
             }
-            entries.append(current_entry)
-            continue
+        else:
+            fields = {
+                "timestamp": current_match.group("timestamp"),
+                "level": current_match.group("level").lower(),
+                "logger_name": current_match.group("logger_name"),
+                "message": current_match.group("message"),
+            }
+        # ``raw`` keeps the source lines verbatim so the UI can copy an entry
+        # exactly as it appears in the file.
+        fields.update(continuation=continuation, raw=raw, offset=current_offset)
+        visible = current_match is None or _should_include_entry(fields)
+        parsed.append(_ParsedEntry(offset=current_offset, visible=visible, fields=fields))
 
-        # Keep the verbatim source line(s) so the UI can copy an entry exactly as
-        # it appears in the file; continuation rows extend both the display tail
-        # and the raw block.
-        current_entry["continuation"] = _append_continuation(
-            str(current_entry["continuation"]),
-            line,
-        )
-        current_entry["raw"] = _append_continuation(str(current_entry["raw"]), line)
-
-    return entries
+    position = 0
+    length = len(data)
+    while position < length:
+        newline = data.find(b"\n", position)
+        end = length if newline < 0 else newline
+        line_bytes = data[position:end]
+        if line_bytes.endswith(b"\r"):
+            line_bytes = line_bytes[:-1]
+        line = line_bytes.decode("utf-8", errors="replace")
+        match = LOG_LINE_PATTERN.match(line)
+        if match is not None:
+            finish()
+            in_fragment = False
+            current_lines = [line]
+            current_match = match
+            current_offset = base + position
+        elif not in_fragment:
+            if not current_lines:
+                current_match = None
+                current_offset = base + position
+            current_lines.append(line)
+        position = end + 1
+    finish()
+    return parsed
 
 
 def _should_include_entry(entry: JsonObject) -> bool:
@@ -149,32 +246,317 @@ def _should_include_entry(entry: JsonObject) -> bool:
     )
 
 
-def _append_continuation(existing: str, line: str) -> str:
-    if not existing:
-        return line
-    return f"{existing}\n{line}"
+def _read_range(handle: BinaryIO, start: int, end: int) -> bytes:
+    handle.seek(start)
+    return handle.read(end - start)
 
 
-def _build_snapshot_event(
-    file_name: str,
-    previous: _LogSnapshot,
-    current: _LogSnapshot,
-) -> JsonObject | None:
-    if not current.exists:
-        return {"type": RESET_EVENT, "file": file_name, "entries": []}
+def _read_page(handle: BinaryIO, end: int, limit: int) -> _Page:
+    """Parse the newest ``limit`` visible entries that start before byte ``end``.
 
-    if not previous.exists or current.size < previous.size:
-        return {"type": RESET_EVENT, "file": file_name, "entries": current.entries}
+    ``next_before`` is the offset to page on from, or ``None`` at the file start.
+    With ``limit`` 0 only the last entry, where a tail starts, is looked for.
+    """
 
-    prefix_length = len(previous.entries)
-    if current.entries[:prefix_length] != previous.entries:
-        return {"type": RESET_EVENT, "file": file_name, "entries": current.entries}
+    size = _PAGE_CHUNK_BYTES
+    while True:
+        read_start = max(0, end - size)
+        capped = size >= LOG_READ_MAX_BYTES
+        data = _read_range(handle, read_start, end)
+        # A range that starts inside the file starts after its first newline, and
+        # its lines up to the first header continue an entry that starts earlier.
+        newline = data.find(b"\n") if read_start > 0 else -1
+        region_start = read_start + newline + 1
+        parsed = (
+            []
+            if read_start > 0 and newline < 0
+            else _parse_lines(
+                data[newline + 1 :], region_start, skip_leading_fragment=read_start > 0
+            )
+        )
+        if not parsed and read_start > 0 and capped:
+            # No entry starts within the read limit: show the range read as one
+            # entry rather than nothing, so paging still moves on.
+            region_start = read_start
+            parsed = _parse_lines(data, read_start, skip_leading_fragment=False)
+        visible = [entry.fields for entry in parsed if entry.visible]
+        found = len(visible) > limit if limit > 0 else bool(parsed)
+        if found or read_start == 0 or capped:
+            break
+        size = min(size * 2, LOG_READ_MAX_BYTES)
 
-    appended_entries = current.entries[prefix_length:]
-    if not appended_entries:
+    if len(visible) > limit:
+        entries = visible[len(visible) - limit :]
+        next_before: int | None = entries[0]["offset"] if entries else parsed[-1].offset
+    elif read_start == 0:
+        entries, next_before = visible, None
+    else:
+        entries = visible
+        next_before = parsed[0].offset if parsed else region_start
+    last = parsed[-1] if parsed else None
+    return _Page(
+        entries=entries,
+        next_before=next_before or None,
+        last_start=last.offset if last is not None else end,
+        last_entry=last.fields if last is not None and last.visible else None,
+    )
+
+
+def _tail_at(stat: os.stat_result, open_start: int, open_entry: JsonObject | None) -> _LogTail:
+    return _LogTail(
+        exists=True,
+        size=stat.st_size,
+        modified_ns=stat.st_mtime_ns,
+        identity=(stat.st_dev, stat.st_ino),
+        open_start=open_start,
+        open_entry=open_entry,
+    )
+
+
+def _reset_event(file_name: str, entries: list[JsonObject], next_before: int | None) -> JsonObject:
+    return {"type": RESET_EVENT, "file": file_name, "entries": entries, "next_before": next_before}
+
+
+def _catalog_event(file_name: str, files: Sequence[str]) -> JsonObject:
+    return {
+        "type": CATALOG_EVENT,
+        "file": file_name,
+        "files": list(files),
+        "default_file": files[0] if files else None,
+    }
+
+
+def _newest_page(
+    handle: BinaryIO, stat: os.stat_result, file_name: str
+) -> tuple[_LogTail, JsonObject]:
+    page = _read_page(handle, stat.st_size, LOG_PAGE_ENTRIES)
+    tail = _tail_at(stat, page.last_start, page.last_entry)
+    return tail, _reset_event(file_name, page.entries, page.next_before)
+
+
+def _advance_open(
+    handle: BinaryIO, stat: os.stat_result, file_name: str, tail: _LogTail
+) -> tuple[_LogTail, JsonObject | None]:
+    """Bring ``tail`` to the open file's current state and describe the change.
+
+    A shrunk, replaced or newly created file resets; so does a change too large
+    for one bounded read. Otherwise only the open entry and the appended bytes
+    are parsed, and the append event says which entries replace the reader's
+    open entry: the reader drops its entries at or after ``from_offset``.
+    """
+
+    identity = (stat.st_dev, stat.st_ino)
+    if (
+        tail.exists
+        and identity == tail.identity
+        and stat.st_size == tail.size
+        and stat.st_mtime_ns == tail.modified_ns
+    ):
+        return tail, None
+    if (
+        not tail.exists
+        or identity != tail.identity
+        or stat.st_size < tail.size
+        or stat.st_size - tail.open_start > LOG_READ_MAX_BYTES
+    ):
+        return _newest_page(handle, stat, file_name)
+
+    data = _read_range(handle, tail.open_start, stat.st_size)
+    parsed = _parse_lines(data, tail.open_start, skip_leading_fragment=False)
+    last = parsed[-1] if parsed else None
+    next_tail = _tail_at(
+        stat,
+        last.offset if last is not None else tail.open_start,
+        last.fields if last is not None and last.visible else None,
+    )
+    entries = [entry.fields for entry in parsed if entry.visible]
+    from_offset: int | None
+    if tail.open_entry is not None and entries and entries[0] == tail.open_entry:
+        entries = entries[1:]
+        from_offset = entries[0]["offset"] if entries else None
+    elif tail.open_entry is not None:
+        from_offset = tail.open_start
+    else:
+        from_offset = entries[0]["offset"] if entries else None
+    if from_offset is None:
+        return next_tail, None
+    if len(entries) > LOG_PAGE_ENTRIES:
+        # More than a page arrived at once: the newest page replaces the reader's
+        # entries instead of an unbounded append.
+        page = entries[len(entries) - LOG_PAGE_ENTRIES :]
+        return next_tail, _reset_event(file_name, page, page[0]["offset"])
+    return next_tail, {
+        "type": APPEND_EVENT,
+        "file": file_name,
+        "from_offset": from_offset,
+        "entries": entries,
+    }
+
+
+def _advance_tails(
+    file_path: Path, file_name: str, tails: Sequence[_LogTail]
+) -> list[tuple[_LogTail, JsonObject | None]]:
+    """Advance several readers of one file to the same state of that file."""
+
+    try:
+        handle = file_path.open("rb")
+    except FileNotFoundError:
+        return [
+            (_MISSING_TAIL, _reset_event(file_name, [], None) if tail.exists else None)
+            for tail in tails
+        ]
+    with handle:
+        stat = os.fstat(handle.fileno())
+        return [_advance_open(handle, stat, file_name, tail) for tail in tails]
+
+
+def _read_tail(file_path: Path) -> _LogTail:
+    """Return a tail at the file's current end without reading a page of it."""
+
+    try:
+        handle = file_path.open("rb")
+    except FileNotFoundError:
+        return _MISSING_TAIL
+    with handle:
+        stat = os.fstat(handle.fileno())
+        page = _read_page(handle, stat.st_size, 0)
+    return _tail_at(stat, page.last_start, page.last_entry)
+
+
+def _read_subscribe_start(
+    file_path: Path, file_name: str, watcher_tail: _LogTail, cursor: _ReadCursor | None
+) -> tuple[_LogTail, JsonObject | None, JsonObject | None]:
+    """Advance the watcher's tail and, for a cursor, replay what its read missed.
+
+    Returns the watcher's new tail, the catch-up event for the watcher's other
+    subscribers and the new subscriber's replay. A file that no longer starts
+    with the bytes the read covered (truncated, rotated, rewritten, or another
+    file's cursor) replays as a reset with the newest page.
+    """
+
+    try:
+        handle = file_path.open("rb")
+    except FileNotFoundError:
+        catch_up = _reset_event(file_name, [], None) if watcher_tail.exists else None
+        replay = None if cursor is None else _reset_event(file_name, [], None)
+        return _MISSING_TAIL, catch_up, replay
+    with handle:
+        stat = os.fstat(handle.fileno())
+        tail, catch_up = _advance_open(handle, stat, file_name, watcher_tail)
+        if cursor is None:
+            return tail, catch_up, None
+        read_tail = _cursor_tail(handle, stat, file_name, cursor)
+        if read_tail is None:
+            return tail, catch_up, _newest_page(handle, stat, file_name)[1]
+        return tail, catch_up, _advance_open(handle, stat, file_name, read_tail)[1]
+
+
+def _cursor_tail(
+    handle: BinaryIO, stat: os.stat_result, file_name: str, cursor: _ReadCursor
+) -> _LogTail | None:
+    """Rebuild the tail a read ended at, or ``None`` when the file no longer matches it."""
+
+    if cursor.byte_length > stat.st_size:
         return None
+    if _cursor_digest(handle, file_name, cursor.byte_length) != cursor.digest:
+        return None
+    page = _read_page(handle, cursor.byte_length, 0)
+    # The read saw this very file; its time is unknown, so the tail always re-parses.
+    return _LogTail(
+        exists=True,
+        size=cursor.byte_length,
+        identity=(stat.st_dev, stat.st_ino),
+        open_start=page.last_start,
+        open_entry=page.last_entry,
+    )
 
-    return {"type": APPEND_EVENT, "file": file_name, "entries": appended_entries}
+
+def _encode_cursor(handle: BinaryIO, file_name: str, byte_length: int) -> str:
+    return f"v1.{byte_length}.{_cursor_digest(handle, file_name, byte_length)}"
+
+
+def _parse_cursor(cursor: object) -> _ReadCursor:
+    match = _CURSOR_PATTERN.fullmatch(cursor) if isinstance(cursor, str) else None
+    if match is None:
+        raise ValueError("invalid log cursor")
+    return _ReadCursor(byte_length=int(match.group(1)), digest=match.group(2))
+
+
+def _cursor_digest(handle: BinaryIO, file_name: str, byte_length: int) -> str:
+    """Digest of the bytes just before ``byte_length``, bound to the file name.
+
+    Binding the name means a cursor never fits another file; bounding the bytes
+    to ``_CURSOR_WINDOW_BYTES`` keeps issuing and checking a cursor independent
+    of the file's size.
+    """
+
+    window = _read_range(handle, max(0, byte_length - _CURSOR_WINDOW_BYTES), byte_length)
+    digest = hashlib.sha256(os.fsencode(file_name))
+    digest.update(b"\0")
+    digest.update(window)
+    return digest.hexdigest()
+
+
+def _resync_event(file_path: Path, file_name: str, tail: _LogTail) -> JsonObject:
+    """Return the reset that brings a subscriber to ``tail``."""
+
+    if not tail.exists:
+        return _reset_event(file_name, [], None)
+    try:
+        handle = file_path.open("rb")
+    except FileNotFoundError:
+        return _reset_event(file_name, [], None)
+    with handle:
+        # A file that changed since is reset again by the watcher's next event.
+        end = min(tail.size, os.fstat(handle.fileno()).st_size)
+        page = _read_page(handle, end, LOG_PAGE_ENTRIES)
+    return _reset_event(file_name, page.entries, page.next_before)
+
+
+def _deliver(
+    queue: _SubscriberQueue,
+    events: Sequence[JsonObject],
+    tail: _LogTail,
+    catalog: tuple[str, ...],
+) -> None:
+    """Queue ``events``; a subscriber without room for them is resynchronized.
+
+    Its backlog is dropped and replaced by one ``_Resync`` to ``tail``, the state
+    the dropped events led to, so later events still apply in order.
+    """
+
+    if queue.maxsize <= 0 or queue.qsize() + len(events) <= queue.maxsize:
+        for event in events:
+            queue.put_nowait(event)
+        return
+    include_catalog = any(event["type"] == CATALOG_EVENT for event in events)
+    ended = False
+    while True:
+        try:
+            item = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+        if item is None:
+            ended = True
+        elif isinstance(item, _Resync):
+            include_catalog = include_catalog or item.catalog is not None
+        elif item.get("type") == CATALOG_EVENT:
+            include_catalog = True
+    if ended:
+        queue.put_nowait(None)
+        return
+    queue.put_nowait(_Resync(tail=tail, catalog=catalog if include_catalog else None))
+
+
+def _end_stream(queue: _SubscriberQueue) -> None:
+    """End a subscriber's stream now; its backlog no longer matters."""
+
+    while True:
+        try:
+            queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
+    queue.put_nowait(None)
 
 
 class LogViewer:
@@ -190,10 +572,22 @@ class LogViewer:
     async def list_files(self) -> JsonObject:
         return await _LOG_WORKERS.run(self._list_files)
 
-    async def read_file(self, file_name: str) -> JsonObject:
-        """Return the file's parsed entries and the cursor that resumes after them."""
-        file_path, snapshot, cursor = await _LOG_WORKERS.run(self._read_existing_file, file_name)
-        return {"file": file_path.name, "entries": snapshot.entries, "cursor": cursor}
+    async def read_file(self, file_name: str, *, before: int | None = None) -> JsonObject:
+        """Return the newest page of a file, or with ``before`` the page older than it.
+
+        Only a newest-page read returns a ``cursor``, which resumes after it.
+        """
+
+        if before is not None:
+            name, page = await _LOG_WORKERS.run(self._read_older, file_name, before)
+            return {"file": name, "entries": page.entries, "next_before": page.next_before}
+        name, page, cursor = await _LOG_WORKERS.run(self._read_newest, file_name)
+        return {
+            "file": name,
+            "entries": page.entries,
+            "next_before": page.next_before,
+            "cursor": cursor,
+        }
 
     async def subscribe(
         self,
@@ -206,17 +600,16 @@ class LogViewer:
         With a ``read_file`` cursor the stream first replays what changed since
         that read; when the file no longer starts with the bytes the read covered
         (truncated, rotated, rewritten, or another file's cursor), that replay is
-        a ``reset`` carrying the whole file. Without a cursor the stream starts at
+        a ``reset`` with the newest page. Without a cursor the stream starts at
         the file's current end. The stream ends when the file's watcher stops
         unexpectedly; the caller then reads again and subscribes to a fresh one.
         Raises ``ValueError`` for an invalid file name or a malformed cursor and
         ``FileNotFoundError`` for a missing file.
         """
+
         read_cursor = None if cursor is None else _parse_cursor(cursor)
         file_path = await _LOG_WORKERS.run(self._resolve_existing_file, file_name)
-        queue: _SubscriberQueue = asyncio.Queue()
-        pending_event: JsonObject | None = None
-        catch_up_event: JsonObject | None = None
+        queue: _SubscriberQueue = asyncio.Queue(maxsize=LOG_SUBSCRIBER_QUEUE_SIZE)
         catch_up_subscribers: list[_SubscriberQueue] = []
 
         # Finding or starting the watcher and registering the queue are one step under
@@ -224,29 +617,30 @@ class LogViewer:
         # leave in between, evict the watcher and leave this queue on a dead one.
         async with self._watch_lock:
             watcher = await self._ensure_watcher(file_path.name)
-            next_snapshot, read_snapshot = await _LOG_WORKERS.run(
-                _read_subscribe_start, file_path, read_cursor
+            # One read brings the watcher and this reader's cursor to the same point.
+            watcher.tail, catch_up_event, replay_event = await _LOG_WORKERS.run(
+                _read_subscribe_start, file_path, file_path.name, watcher.tail, read_cursor
             )
-            previous_snapshot = watcher.snapshot
-            catch_up_event = _build_snapshot_event(file_path.name, previous_snapshot, next_snapshot)
             if catch_up_event is not None:
                 catch_up_subscribers = list(watcher.subscribers)
-            watcher.snapshot = next_snapshot
             watcher.subscribers.append(queue)
-
-            if read_snapshot is not None:
-                pending_event = _build_snapshot_event(file_path.name, read_snapshot, next_snapshot)
+            tail, catalog = watcher.tail, watcher.catalog
 
         if catch_up_event is not None:
             for subscriber in catch_up_subscribers:
-                subscriber.put_nowait(catch_up_event)
+                _deliver(subscriber, [catch_up_event], tail, catalog)
 
-        if pending_event is not None:
-            queue.put_nowait(pending_event)
+        if replay_event is not None:
+            _deliver(queue, [replay_event], tail, catalog)
 
         try:
-            while (event := await queue.get()) is not None:
-                yield event
+            while (item := await queue.get()) is not None:
+                if not isinstance(item, _Resync):
+                    yield item
+                    continue
+                if item.catalog is not None:
+                    yield _catalog_event(file_path.name, item.catalog)
+                yield await _LOG_WORKERS.run(_resync_event, file_path, file_path.name, item.tail)
         except asyncio.CancelledError:
             return
         finally:
@@ -285,12 +679,12 @@ class LogViewer:
             # Its watch loop has ended and serves nobody: never attach to it.
             self._retire_locked(watcher)
 
-        directory_modified_ns, catalog, snapshot = await _LOG_WORKERS.run(
+        directory_modified_ns, catalog, tail = await _LOG_WORKERS.run(
             self._read_watch_start, self._logs_dir / file_name
         )
         watcher = _WatcherState(
             file_name=file_name,
-            snapshot=snapshot,
+            tail=tail,
             catalog=catalog,
             directory_modified_ns=directory_modified_ns,
         )
@@ -315,7 +709,7 @@ class LogViewer:
             del self._watchers[watcher.file_name]
         subscribers, watcher.subscribers = watcher.subscribers, []
         for subscriber in subscribers:
-            subscriber.put_nowait(None)
+            _end_stream(subscriber)
 
     async def _remove_subscriber(self, watcher: _WatcherState, queue: _SubscriberQueue) -> None:
         task: asyncio.Task[None] | None = None
@@ -385,52 +779,43 @@ class LogViewer:
         """Reconcile one watch batch (empty on a timeout) and fan out its events."""
         watched_path = self._logs_dir / watcher.file_name
         should_refresh_catalog = bool(changes)
-        should_read_snapshot = _includes_path(changes, str(watched_path))
+        should_read_file = _includes_path(changes, str(watched_path))
         if not changes:
-            should_refresh_catalog, should_read_snapshot = await _LOG_WORKERS.run(
+            should_refresh_catalog, should_read_file = await _LOG_WORKERS.run(
                 _metadata_changes,
                 self._logs_dir,
                 watcher.directory_modified_ns,
                 watched_path,
-                watcher.snapshot,
+                watcher.tail,
             )
-        if not should_refresh_catalog and not should_read_snapshot:
+        if not should_refresh_catalog and not should_read_file:
             return
 
         async with self._watch_lock:
             refresh = await _LOG_WORKERS.run(
                 self._read_refresh,
                 watched_path,
+                watcher.file_name,
+                watcher.tail,
                 catalog=should_refresh_catalog,
-                snapshot=should_read_snapshot,
+                content=should_read_file,
             )
-            catalog_event = None
+            events: list[JsonObject] = []
             if refresh.catalog is not None:
-                next_catalog = tuple(refresh.catalog["files"])
                 watcher.directory_modified_ns = refresh.directory_modified_ns
-                if next_catalog != watcher.catalog:
-                    watcher.catalog = next_catalog
-                    catalog_event = {
-                        "type": CATALOG_EVENT,
-                        "file": watcher.file_name,
-                        **refresh.catalog,
-                    }
-
-            event = None
-            if refresh.snapshot is not None:
-                event = _build_snapshot_event(
-                    watcher.file_name,
-                    watcher.snapshot,
-                    refresh.snapshot,
-                )
-                watcher.snapshot = refresh.snapshot
+                if refresh.catalog != watcher.catalog:
+                    watcher.catalog = refresh.catalog
+                    events.append(_catalog_event(watcher.file_name, refresh.catalog))
+            if refresh.tail is not None:
+                watcher.tail = refresh.tail
+                if refresh.event is not None:
+                    events.append(refresh.event)
             subscribers = list(watcher.subscribers)
+            tail, catalog = watcher.tail, watcher.catalog
 
-        for subscriber in subscribers:
-            if catalog_event is not None:
-                subscriber.put_nowait(catalog_event)
-            if event is not None:
-                subscriber.put_nowait(event)
+        if events:
+            for subscriber in subscribers:
+                _deliver(subscriber, events, tail, catalog)
 
     # Worker-pool operations: they touch the filesystem and never watcher state.
 
@@ -441,28 +826,45 @@ class LogViewer:
         )
         return {"files": files, "default_file": files[0] if files else None}
 
-    def _read_existing_file(self, file_name: str) -> tuple[Path, _LogSnapshot, str]:
+    def _read_newest(self, file_name: str) -> tuple[str, _Page, str]:
         file_path = self._resolve_existing_file(file_name)
-        data, snapshot = _read_log(file_path)
-        return file_path, snapshot, _encode_cursor(file_path.name, data)
+        with file_path.open("rb") as handle:
+            size = os.fstat(handle.fileno()).st_size
+            page = _read_page(handle, size, LOG_PAGE_ENTRIES)
+            cursor = _encode_cursor(handle, file_path.name, size)
+        return file_path.name, page, cursor
+
+    def _read_older(self, file_name: str, before: int) -> tuple[str, _Page]:
+        file_path = self._resolve_existing_file(file_name)
+        with file_path.open("rb") as handle:
+            if before > os.fstat(handle.fileno()).st_size:
+                raise ValueError("log position is past the end of the file")
+            page = _read_page(handle, before, LOG_PAGE_ENTRIES)
+        return file_path.name, page
 
     # The directory stamp is always taken before listing, so a file added in
     # between still counts as a change on the next metadata check.
 
-    def _read_watch_start(
-        self, file_path: Path
-    ) -> tuple[int | None, tuple[str, ...], _LogSnapshot]:
+    def _read_watch_start(self, file_path: Path) -> tuple[int | None, tuple[str, ...], _LogTail]:
         directory_modified_ns = _path_modified_ns(self._logs_dir)
         catalog = tuple(self._list_files()["files"])
-        return directory_modified_ns, catalog, self._read_snapshot(file_path)
+        return directory_modified_ns, catalog, _read_tail(file_path)
 
-    def _read_refresh(self, file_path: Path, *, catalog: bool, snapshot: bool) -> _WatchRefresh:
+    def _read_refresh(
+        self,
+        file_path: Path,
+        file_name: str,
+        tail: _LogTail,
+        *,
+        catalog: bool,
+        content: bool,
+    ) -> _WatchRefresh:
         refresh = _WatchRefresh()
         if catalog:
             refresh.directory_modified_ns = _path_modified_ns(self._logs_dir)
-            refresh.catalog = self._list_files()
-        if snapshot:
-            refresh.snapshot = self._read_snapshot(file_path)
+            refresh.catalog = tuple(self._list_files()["files"])
+        if content:
+            refresh.tail, refresh.event = _advance_tails(file_path, file_name, [tail])[0]
         return refresh
 
     def _iter_log_files(self) -> Iterable[Path]:
@@ -483,77 +885,6 @@ class LogViewer:
         if Path(file_name).name != file_name or "/" in file_name or "\\" in file_name:
             raise ValueError(f"invalid log file name: {file_name}")
         return file_name
-
-    def _read_snapshot(self, file_path: Path) -> _LogSnapshot:
-        return _read_log(file_path)[1]
-
-
-def _read_log(file_path: Path) -> tuple[bytes, _LogSnapshot]:
-    """Read and parse the file; a missing file reads as no bytes and a missing snapshot."""
-    try:
-        # Stat first: a write after it changes the metadata again, so the next
-        # metadata check re-reads instead of missing it.
-        modified_ns = file_path.stat().st_mtime_ns
-        data = file_path.read_bytes()
-    except FileNotFoundError:
-        return b"", _LogSnapshot(exists=False, size=0, entries=[])
-
-    return data, _LogSnapshot(
-        exists=True,
-        size=len(data),
-        entries=parse_log_entries(_decode_log(data)),
-        modified_ns=modified_ns,
-    )
-
-
-def _decode_log(data: bytes) -> str:
-    # A torn or foreign byte sequence must show as U+FFFD, not stop the viewer.
-    return data.decode("utf-8", errors="replace")
-
-
-def _read_subscribe_start(
-    file_path: Path, cursor: _ReadCursor | None
-) -> tuple[_LogSnapshot, _LogSnapshot | None]:
-    """Read the file now and, for a cursor, rebuild what its read returned.
-
-    The rebuilt snapshot is missing when the file no longer starts with the bytes
-    the read covered, so the diff against it is a ``reset`` with the whole file.
-    """
-    data, snapshot = _read_log(file_path)
-    if cursor is None:
-        return snapshot, None
-    missing = _LogSnapshot(exists=False, size=0, entries=[])
-    if not snapshot.exists or cursor.byte_length > len(data):
-        return snapshot, missing
-    prefix = data[: cursor.byte_length]
-    if _prefix_digest(file_path.name, prefix) != cursor.digest:
-        return snapshot, missing
-    if cursor.byte_length == len(data):
-        return snapshot, snapshot
-    return snapshot, _LogSnapshot(
-        exists=True,
-        size=cursor.byte_length,
-        entries=parse_log_entries(_decode_log(prefix)),
-    )
-
-
-def _encode_cursor(file_name: str, data: bytes) -> str:
-    return f"v1.{len(data)}.{_prefix_digest(file_name, data)}"
-
-
-def _parse_cursor(cursor: object) -> _ReadCursor:
-    match = _CURSOR_PATTERN.fullmatch(cursor) if isinstance(cursor, str) else None
-    if match is None:
-        raise ValueError("invalid log cursor")
-    return _ReadCursor(byte_length=int(match.group(1)), digest=match.group(2))
-
-
-def _prefix_digest(file_name: str, prefix: bytes) -> str:
-    """Digest of the covered bytes, bound to the file name so a cursor never fits another file."""
-    digest = hashlib.sha256(os.fsencode(file_name))
-    digest.update(b"\0")
-    digest.update(prefix)
-    return digest.hexdigest()
 
 
 def _log_watcher_task_result(file_name: str, task: asyncio.Task[None]) -> None:
@@ -609,12 +940,12 @@ def _metadata_changes(
     logs_dir: Path,
     directory_modified_ns: int | None,
     file_path: Path,
-    snapshot: _LogSnapshot,
+    tail: _LogTail,
 ) -> tuple[bool, bool]:
-    """Return whether the catalog and the watched file's snapshot need a re-read."""
+    """Return whether the catalog and the watched file need a re-read."""
     return (
         _path_modified_ns(logs_dir) != directory_modified_ns,
-        _snapshot_metadata_changed(file_path, snapshot),
+        _file_metadata_changed(file_path, tail),
     )
 
 
@@ -629,13 +960,13 @@ def _path_modified_ns(path: Path) -> int | None:
         return None
 
 
-def _snapshot_metadata_changed(file_path: Path, snapshot: _LogSnapshot) -> bool:
+def _file_metadata_changed(file_path: Path, tail: _LogTail) -> bool:
     try:
         file_stat = file_path.stat()
     except FileNotFoundError:
-        return snapshot.exists
+        return tail.exists
     return (
-        not snapshot.exists
-        or file_stat.st_size != snapshot.size
-        or file_stat.st_mtime_ns != snapshot.modified_ns
+        not tail.exists
+        or file_stat.st_size != tail.size
+        or file_stat.st_mtime_ns != tail.modified_ns
     )

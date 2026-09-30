@@ -43,12 +43,21 @@ def test_log_read_filters_the_level_before_keeping_the_last_entries(
         {"level": "error", "message": f"sentinel-{i}", "continuation": "traceback-sentinel"}
         for i in range(120)
     ]
-    entries.append({"level": "info", "message": "excluded-info"})
-    rpc.reply("log.read", {"entries": entries, "file": "test.log", "cursor": "unused-handoff"})
+    newest_page = [entries[-1], {"level": "info", "message": "excluded-info"}]
+    # The newest page holds one match; the older page completes the requested two.
+    rpc.reply(
+        "log.read",
+        {"entries": newest_page, "file": "test.log", "cursor": "unused-handoff", "next_before": 90},
+    )
+    rpc.reply("log.read", {"entries": entries[:-1], "file": "test.log", "next_before": None})
 
     code, out, _err = run_cli("log", "read", "test.log", "--limit", "2", "--level", "error")
 
     assert code == 0
+    assert rpc.calls == [
+        ("log.read", {"file": "test.log"}),
+        ("log.read", {"file": "test.log", "before": 90}),
+    ]
     assert "sentinel-118" in out and "sentinel-119" in out
     assert "sentinel-117" not in out and "excluded-info" not in out
     assert "traceback-sentinel" in out

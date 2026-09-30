@@ -20,6 +20,7 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import (
+    _optional_positive_integer,
     _reject_unsupported,
     _required_agent_address,
     _required_block_slug,
@@ -60,11 +61,12 @@ async def _list_logs(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _read_log(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"file"}, "log read")
+    _reject_unsupported(params, {"file", "before"}, "log read")
 
     file_name = _required_string(params, "file")
+    before = _optional_positive_integer(params, "before")
     try:
-        return await _log_viewer(state).read_file(file_name)
+        return await _log_viewer(state).read_file(file_name, before=before)
     except ValueError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
     except FileNotFoundError as exc:
