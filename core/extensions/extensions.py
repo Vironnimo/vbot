@@ -21,8 +21,10 @@ from core.extensions._api import (
     ExtensionAPI,
 )
 from core.extensions._callbacks import (
+    ExtensionHandlerTimeoutError,
     _log_slow_extension_handler,
     invoke_extension_handler,
+    invoke_lifecycle_handler,
 )
 from core.extensions._capabilities import ExtensionCapabilityInstaller
 from core.extensions._declarations import (
@@ -667,7 +669,14 @@ class ExtensionRegistry:
         return True
 
     async def quiesce(self, name: str) -> bool:
-        """Drain one current owner before removing any of its capabilities."""
+        """Drain one current owner before removing any of its capabilities.
+
+        The wait is bounded by the lifecycle deadline. A drain that exceeds it
+        is logged and left running, never cancelled: cancelling could stop it
+        before it cancels the owner's Runs. The owner then counts as quiesced,
+        so removal proceeds while its last Runs finish; the retired
+        registration refuses their late Session work.
+        """
         record = next((item for item in self._records if item.name == name), None)
         if record is None or record.status != "loaded":
             return False
@@ -675,7 +684,19 @@ class ExtensionRegistry:
             return True
         runtime = record.declarations.session_runtime
         if runtime is not None:
-            await invoke_extension_handler(runtime.quiesce)
+            try:
+                await invoke_lifecycle_handler(
+                    runtime.quiesce,
+                    extension_name=name,
+                    description="quiesce",
+                    cancel_on_timeout=False,
+                )
+            except ExtensionHandlerTimeoutError as exc:
+                _LOGGER.error(
+                    "Extension %r quiesce %s; continuing while its drain finishes",
+                    name,
+                    exc,
+                )
         self._quiesced.add(name)
         return True
 
@@ -797,9 +818,25 @@ class ExtensionRegistry:
     async def _invoke_lifecycle(
         self, phase: str, extension_name: str, handler: LifecycleHandler
     ) -> None:
-        """Call one lifecycle handler with fail-open isolation (logs at ``error``)."""
+        """Call one lifecycle handler with fail-open isolation (logs at ``error``).
+
+        A handler that exceeds the lifecycle deadline is asked to cancel and
+        detached, so it cannot hold startup, shutdown, reload or disable.
+        """
         try:
-            await invoke_extension_handler(handler)
+            await invoke_lifecycle_handler(
+                handler,
+                extension_name=extension_name,
+                description=f"{phase} handler",
+                cancel_on_timeout=True,
+            )
+        except ExtensionHandlerTimeoutError as exc:
+            _LOGGER.error(
+                "Extension %r %s handler %s; continuing without it",
+                extension_name,
+                phase,
+                exc,
+            )
         except Exception as exc:
             _LOGGER.error(
                 "Extension %r %s handler raised: %s",
