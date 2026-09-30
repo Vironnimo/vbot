@@ -38,6 +38,7 @@
   const TEXT_LABELS = {
     command: () => t('chat.toolDetailLabel.command'),
     output: () => t('chat.toolDetailLabel.output'),
+    page: () => t('chat.toolDetailLabel.page'),
     query: () => t('chat.toolDetailLabel.query'),
     results: () => t('chat.toolDetailLabel.results'),
   };

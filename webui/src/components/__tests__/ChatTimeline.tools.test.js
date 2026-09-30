@@ -488,6 +488,7 @@ describe('ChatTimeline Tools', () => {
             source: { from: 'arguments', path: ['missing'] },
           },
           { type: 'text', label: 'results', text: 'a.py:1:needle' },
+          { type: 'text', label: 'page', text: '# Example Domain' },
         ],
       });
       timeline.render(
@@ -506,6 +507,7 @@ describe('ChatTimeline Tools', () => {
       expect(detailText('chat.toolDetailLabel.output')).toBe('{"passed": 3}');
       expect(detailRow('chat.toolDetailLabel.query')).toBeNull();
       expect(detailText('chat.toolDetailLabel.results')).toBe('a.py:1:needle');
+      expect(detailText('chat.toolDetailLabel.page')).toBe('# Example Domain');
       expect(document.querySelector('.tool-raw-call')).not.toBeNull();
     });
 

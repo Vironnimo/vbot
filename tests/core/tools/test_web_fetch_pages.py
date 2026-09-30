@@ -175,3 +175,30 @@ async def test_saved_limit_is_reported_without_claiming_completeness(tmp_path, m
     result = await fetch(tmp_path, {"url": "https://example.com/"})
     assert len(result["data"]["content"]) == 1500 and "more" not in result["data"]
     assert "Saved content is partial" in result["data"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_the_user_sees_the_page_text_or_the_passages_and_whether_more_remains(
+    tmp_path, monkeypatch
+):
+    body = "\n".join("Filler " * 100 + f"Needle{i:02d}" for i in range(30))
+    install_http_get(
+        monkeypatch, lambda url: make_result(text=body, headers={"content-type": "text/plain"})
+    )
+    tool, context = web_fetch_registry(), make_context(tmp_path)
+    content = {"type": "text", "source": {"from": "result", "path": ["data", "content"]}}
+
+    read = {"url": "https://example.com/"}
+    page = await tool.dispatch(context, read)
+    found = {"ref": page["data"]["ref"], "find": "Needle"}
+    passages = await tool.dispatch(context, found)
+
+    # The text is read from the result, not copied; refs and follow-up calls stay raw.
+    assert tool.display_for_call("web_fetch", read, result=page)["details"] == [
+        {**content, "label": "page"},
+        {"type": "notice", "level": "info", "text": f"Shows {page['data']['shown']}."},
+    ]
+    assert tool.display_for_call("web_fetch", found, result=passages)["details"] == [
+        {**content, "label": "results"},
+        {"type": "notice", "level": "info", "text": "More matches follow on the page."},
+    ]

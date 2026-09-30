@@ -223,6 +223,7 @@ export default Object.freeze({
   'chat.toolRawCall': 'Raw call and result',
   'chat.toolDetailLabel.command': 'Command',
   'chat.toolDetailLabel.output': 'Output',
+  'chat.toolDetailLabel.page': 'Page',
   'chat.toolDetailLabel.query': 'Query',
   'chat.toolDetailLabel.results': 'Results',
   'chat.toolMatches': 'Matches',

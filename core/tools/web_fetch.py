@@ -52,6 +52,8 @@ from core.tools.tools import (
     ToolDisplayPart,
     ToolHandler,
     ToolRegistry,
+    display_notice,
+    display_text,
     read_media_artifact,
     run_tool_worker,
     tool_failure,
@@ -715,6 +717,32 @@ def _display_parts(arguments: JsonObject) -> list[ToolDisplayPart]:
     return parts
 
 
+def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the page text or the passages found, and whether more remains.
+
+    References, continuation calls and extraction notes are for the Agent and
+    stay in the raw result. A fetched image keeps the plain Args and Result.
+    """
+    ok = isinstance(result, dict) and result.get("ok") is True and not result.get("artifacts")
+    data = result.get("data") if ok and isinstance(result, dict) else None
+    if not isinstance(data, dict) or not isinstance(data.get("content"), str):
+        return []
+    try:
+        find = _normalize_web_fetch_arguments(arguments).get("find")
+    except ValueError:
+        find = None
+    found = isinstance(find, str) and bool(find.strip())
+    blocks = [
+        display_text("results" if found else "page", source="result", path=("data", "content"))
+    ]
+    shown = data.get("shown")
+    if "more" in data and found:
+        blocks.append(display_notice("info", "More matches follow on the page."))
+    elif "more" in data and isinstance(shown, str) and shown:
+        blocks.append(display_notice("info", f"Shows {shown}."))
+    return blocks
+
+
 def register_web_fetch_tool(
     registry: ToolRegistry,
     *,
@@ -736,7 +764,7 @@ def register_web_fetch_tool(
         ),
         family="web",
         result_schema={"type": "object", "required": ["content"]},
-        display=ToolDisplay(parts_builder=_display_parts),
+        display=ToolDisplay(parts_builder=_display_parts, detail_builder=_display_details),
         parallel_safe=True,
         open_input_schema=True,
         unadvertised_parameters=_UNADVERTISED_PARAMETERS,
