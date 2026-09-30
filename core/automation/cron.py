@@ -15,8 +15,9 @@ from core.config_validation import (
     JsonDiagnostic,
 )
 from core.json_documents import JsonDocumentWriteError, write_json_document
+from core.projects import format_agent_address
 from core.runs import RunCancelledError, RunKind
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.workers import OrderedWorker
@@ -910,6 +911,9 @@ class CronService:
                             )
                     return False
                 except Exception as error:
+                    if run is None and isinstance(error, SessionNotFoundError):
+                        await self._record_missing_session(job.id)
+                        return False
                     if run is None:
                         # Pre-admission failure - the Run never started. A full Queue
                         # or a shutdown window must not burn a recurring job's
@@ -959,21 +963,33 @@ class CronService:
         job.last_completed_at = _timing._utc_now_iso()
         job.last_outcome = "cancelled" if type(error).__name__ == "RunCancelledError" else "failed"
         job.last_error = _truncate_error(str(error) or type(error).__name__)
-        job.consecutive_failures += 1
-        if (
-            job.schedule_type != "once"
-            and job.status != "failed"
-            and job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
-        ):
-            job.status = "failed"
-            _LOGGER.warning(
-                "Cron job stopped after consecutive failures (job=%s failures=%d status=%s)",
-                job_id,
-                job.consecutive_failures,
-                job.status,
-            )
+        _count_consecutive_failure(job)
         self._jobs[job_id] = job
         return True
+
+    async def _record_missing_session(self, job_id: str) -> None:
+        """Count a fire whose pinned Session no longer exists toward the stop rule.
+
+        No Run started, so no finite run is consumed. The condition lasts until
+        the job is edited (for example, an Agent Takeover moved the Session to
+        another Agent), so unlike a capacity or shutdown rejection it stops a
+        recurring job like failed Runs do; a once job keeps its bounded fire
+        retries. A single miss, such as one during an Agent rename, is cleared by
+        the next success.
+        """
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.last_outcome = "failed"
+        job.last_error = _truncate_error(_missing_session_text(job))
+        _LOGGER.warning(
+            "Cron job fire failed without its Session (job=%s session=%s)",
+            job_id,
+            job.session_id,
+        )
+        _count_consecutive_failure(job)
+        self._jobs[job_id] = job
+        await self._save_jobs_after_fire(job_id)
 
     async def _record_trigger_failure(self, job_id: str, error: BaseException) -> None:
         """Record a pre-admission trigger failure without execution accounting.
@@ -1149,9 +1165,7 @@ class CronService:
                 )
             )
         ):
-            raise CronJobValidationError(
-                f"Session does not exist for cron target {job.agent_id}: {job.session_id}"
-            )
+            raise CronJobValidationError(_missing_session_text(job))
 
     def _validate_capacity(self, candidate: CronJob, *, replacing_id: str | None = None) -> None:
         if candidate.status != "active":
@@ -1190,6 +1204,28 @@ class CronService:
     @staticmethod
     def _clone_job(job: CronJob) -> CronJob:
         return CronJob.from_dict(job.to_dict())
+
+
+def _count_consecutive_failure(job: CronJob) -> None:
+    """Count one failed fire; a recurring job stops as ``failed`` at the limit."""
+    job.consecutive_failures += 1
+    if (
+        job.schedule_type != "once"
+        and job.status != "failed"
+        and job.consecutive_failures >= MAX_CONSECUTIVE_CRON_FAILURES
+    ):
+        job.status = "failed"
+        _LOGGER.warning(
+            "Cron job stopped after consecutive failures (job=%s failures=%d status=%s)",
+            job.id,
+            job.consecutive_failures,
+            job.status,
+        )
+
+
+def _missing_session_text(job: CronJob) -> str:
+    target = format_agent_address(job.agent_id, job.project_id)
+    return f"Session does not exist for cron target {target}: {job.session_id}"
 
 
 def _log_fire_save_failure(job_id: str, error: CronStorageError) -> None:

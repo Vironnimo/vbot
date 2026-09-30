@@ -22,6 +22,7 @@ from core.automation.cron import (
     CronStorageError,
 )
 from core.runs import RunKind
+from core.sessions import SessionNotFoundError
 from tests.core.automation.cron_test_support import (
     make_service,
 )
@@ -265,20 +266,46 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     assert len(give_up_records) == 1
 
 
+def _admitted_run_fails(trigger_service: SimpleNamespace) -> None:
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("boom")))
+    trigger_service.trigger_run.return_value = run
+
+
+def _pinned_session_missing(trigger_service: SimpleNamespace) -> None:
+    trigger_service.trigger_run.side_effect = SessionNotFoundError(
+        "session does not exist: ses_gone"
+    )
+
+
 @pytest.mark.asyncio
-async def test_recurring_job_stops_after_consecutive_run_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("arrange", "error_names", "remaining_runs"),
+    [
+        # The Run is admitted and then fails - execution failures count.
+        pytest.param(_admitted_run_fails, "boom", 3, id="admitted-run-fails"),
+        # The pinned Session was deleted or moved away: no Run can start until the
+        # job is edited, so the fire counts although nothing was admitted.
+        pytest.param(_pinned_session_missing, "ses_gone", 5, id="pinned-session-missing"),
+    ],
+)
+async def test_recurring_job_stops_after_consecutive_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    arrange: Any,
+    error_names: str,
+    remaining_runs: int,
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
-    # The Run is admitted and then fails - execution failures count.
-    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("boom")))
-    trigger_service.trigger_run.return_value = run
+    arrange(trigger_service)
     job = service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
         cron_expression="0 9 * * *",
+        session_id="ses_gone",
+        remaining_runs=5,
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
@@ -289,8 +316,10 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
     updated = service.get_job(job.id)
     assert updated.status == "failed"
     assert updated.last_outcome == "failed"
-    assert updated.last_error == "boom"
+    assert updated.last_error is not None and error_names in updated.last_error
     assert updated.consecutive_failures == 2
+    # Only admitted Runs consume a finite run.
+    assert updated.remaining_runs == remaining_runs
     # The stop is a health transition an operator must see: one WARNING, not INFO.
     stopped = [
         record
@@ -298,6 +327,7 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
         if record.name == "vbot.automation.cron"
         and record.levelno == logging.WARNING
         and job.id in record.getMessage()
+        and "status=failed" in record.getMessage()
     ]
     assert len(stopped) == 1
 
