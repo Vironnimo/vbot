@@ -57,7 +57,7 @@ async def cron_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]
             request["schedule"] = (datetime.now(UTC) + timedelta(days=10)).isoformat()
         before = [asdict(job) for job in service.list_jobs()]
         registry = ToolRegistry()
-        register_cron_tool(registry, service)
+        register_cron_tool(registry, service, reference_lock=asyncio.Lock())
         raw = await adapter.send(
             [
                 {

@@ -65,7 +65,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 `project.rm` coordinates domain boundaries before invoking archive storage:
 
 - It acquires `ChatRunManager.project_admission_guard` under the server Agent-reference lock. Guard acquisition atomically rejects active or queued Project-anchored work and Identity-Agent work whose internal `working_project_id` selects the Project; while held, every Run ingress rejects new work for either relationship until removal finishes.
-- It rejects removal while the Project is referenced by Cron configuration.
+- It rejects removal while a live Cron job, Bootstrap job or Calendar action targets an Agent of the Project (`AutomationReferences.project_references`, `automation.md`).
 - It identifies Identity Agents rooted in the Project. When their Workspace moves back to the Agent default, the workflow can preserve `SOUL.md`, `USER.md`, and `MEMORY.md`, updates those Agents, and rolls back the coordinated changes if removal fails.
 - It archives the Project Anchor, invalidates Team and Skill caches, and publishes Agent and Project resource changes.
 

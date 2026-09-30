@@ -10,8 +10,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
+from core.automation import AutomationReferences
 from core.chat import ChatSessionError
 from core.runs import ChatRunManager
 from core.sessions import (
@@ -255,6 +256,11 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         chat_sessions=sessions,
         chat_run_manager=chat_runs,
         bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
+        cron_service=SimpleNamespace(list_jobs=lambda: []),
+        calendar_service=SimpleNamespace(
+            actions=SimpleNamespace(list_actions=lambda: [], can_fire=lambda _action_id: True),
+            list_events=lambda: [],
+        ),
         terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),
@@ -275,6 +281,12 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
                 },
             }
         ),
+    )
+    # Tests arrange pinned automations by replacing these fakes' listings.
+    runtime.automation_references = AutomationReferences(
+        bootstrap=cast(Any, runtime.bootstrap_service),
+        cron=cast(Any, runtime.cron_service),
+        calendar=cast(Any, runtime.calendar_service),
     )
     state = SimpleNamespace(
         runtime=runtime,

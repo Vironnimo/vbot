@@ -21,6 +21,7 @@ RPC_ERROR_AGENT_ORDER_CONFLICT = "agent_order_conflict"
 RPC_ERROR_AGENT_NOT_FOUND = "agent_not_found"
 RPC_ERROR_SKILL_NOT_FOUND = "skill_not_found"
 RPC_ERROR_SESSION_BUSY = "session_busy"
+RPC_ERROR_SESSION_IN_USE = "session_in_use"
 RPC_ERROR_OAUTH_NOT_SUPPORTED = "oauth_not_supported"
 RPC_ERROR_CHANNEL_NOT_FOUND = "channel_not_found"
 RPC_ERROR_CHANNEL_ALREADY_EXISTS = "channel_already_exists"
@@ -37,13 +38,22 @@ RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING = "terminal_program_not_running"
 
 
 class RpcError(Exception):
-    """Expected RPC request or domain error."""
+    """Expected RPC request or domain error.
 
-    def __init__(self, code: str, message: str) -> None:
+    ``data`` optionally carries structured facts about the refusal, such as the
+    references that block a deletion, so clients can present them in their own
+    words instead of parsing ``message``.
+    """
+
+    def __init__(self, code: str, message: str, *, data: JsonObject | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.data = data
 
     def to_dict(self) -> JsonObject:
         """Return the provider-agnostic error envelope payload."""
-        return {"code": self.code, "message": self.message}
+        payload: JsonObject = {"code": self.code, "message": self.message}
+        if self.data is not None:
+            payload["data"] = self.data
+        return payload

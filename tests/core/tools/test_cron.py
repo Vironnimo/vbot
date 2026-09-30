@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from pathlib import Path
 from typing import Any, cast
@@ -479,3 +480,32 @@ def test_conflicting_target_spellings_create_nothing(tmp_path: Path) -> None:
 
     assert "Conflicting values for target" in _error(envelope)["message"]
     assert tool.jobs() == []
+
+
+@pytest.mark.parametrize("action", ["create", "update"])
+def test_target_choices_wait_for_the_reference_lock(tmp_path: Path, action: str) -> None:
+    """A removal that holds the lock ends before a call can select its Agent or Project."""
+    tool = cron_tool(tmp_path)
+    job_id = tool.add_job()
+    arguments = {
+        "create": {"action": "create", "prompt": PROMPT, "schedule": "every 3h"},
+        "update": {"action": "update", "id": job_id, "target": "builder@vbot"},
+    }[action]
+
+    def jobs() -> list[dict[str, Any]]:
+        return [job.to_dict() for job in tool.jobs()]
+
+    before = jobs()
+
+    async def while_a_removal_holds_the_lock() -> list[dict[str, Any]]:
+        async with tool.reference_lock:
+            call = asyncio.create_task(tool.call_async(arguments))
+            for _ in range(5):
+                await asyncio.sleep(0)
+            held = jobs()
+        envelope, text = await call
+        assert envelope["ok"] is True, text
+        return held
+
+    assert asyncio.run(while_a_removal_holds_the_lock()) == before
+    assert jobs() != before

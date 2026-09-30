@@ -21,7 +21,13 @@ from core.automation.cron import (
     CronJobInPastError,
     CronStorageError,
 )
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.runs import RunKind
+from core.sessions import SessionNotFoundError
 from tests.core.automation.cron_test_support import (
     make_service,
 )
@@ -265,20 +271,73 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     assert len(give_up_records) == 1
 
 
+def _admitted_run_fails(trigger_service: SimpleNamespace) -> None:
+    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("boom")))
+    trigger_service.trigger_run.return_value = run
+
+
+def _pinned_session_missing(trigger_service: SimpleNamespace) -> None:
+    trigger_service.trigger_run.side_effect = SessionNotFoundError(
+        "session does not exist: ses_gone"
+    )
+
+
+def _target_agent_missing(trigger_service: SimpleNamespace) -> None:
+    trigger_service.trigger_run.side_effect = ResolutionAgentNotFoundError("agent-one")
+
+
+def _target_project_missing(trigger_service: SimpleNamespace) -> None:
+    trigger_service.trigger_run.side_effect = ResolutionProjectNotFoundError("vbot")
+
+
 @pytest.mark.asyncio
-async def test_recurring_job_stops_after_consecutive_run_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+@pytest.mark.parametrize(
+    ("arrange", "error_names", "remaining_runs"),
+    [
+        # The Run is admitted and then fails - execution failures count.
+        pytest.param(_admitted_run_fails, "boom", 3, id="admitted-run-fails"),
+        # The pinned Session was deleted or moved away: no Run can start until the
+        # job is edited, so the fire counts although nothing was admitted.
+        pytest.param(
+            _pinned_session_missing,
+            "Session does not exist for cron target agent-one@vbot: ses_gone",
+            5,
+            id="pinned-session-missing",
+        ),
+        # The target Agent or Project was removed: the same lasting condition.
+        pytest.param(
+            _target_agent_missing,
+            "Cron target does not exist: agent-one@vbot",
+            5,
+            id="target-agent-missing",
+        ),
+        pytest.param(
+            _target_project_missing,
+            "Cron target does not exist: agent-one@vbot",
+            5,
+            id="target-project-missing",
+        ),
+    ],
+)
+async def test_recurring_job_stops_after_consecutive_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    arrange: Any,
+    error_names: str,
+    remaining_runs: int,
 ) -> None:
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
-    # The Run is admitted and then fails - execution failures count.
-    run = SimpleNamespace(id="run-one", wait=AsyncMock(side_effect=RuntimeError("boom")))
-    trigger_service.trigger_run.return_value = run
+    arrange(trigger_service)
     job = service.create_job(
         agent_id="agent-one",
+        project_id="vbot",
         prompt="Health check",
         schedule_type="cron",
         cron_expression="0 9 * * *",
+        session_id="ses_gone",
+        remaining_runs=5,
     )
 
     with caplog.at_level(logging.WARNING, logger="vbot.automation.cron"):
@@ -289,8 +348,10 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
     updated = service.get_job(job.id)
     assert updated.status == "failed"
     assert updated.last_outcome == "failed"
-    assert updated.last_error == "boom"
+    assert updated.last_error is not None and error_names in updated.last_error
     assert updated.consecutive_failures == 2
+    # Only admitted Runs consume a finite run.
+    assert updated.remaining_runs == remaining_runs
     # The stop is a health transition an operator must see: one WARNING, not INFO.
     stopped = [
         record
@@ -298,13 +359,26 @@ async def test_recurring_job_stops_after_consecutive_run_failures(
         if record.name == "vbot.automation.cron"
         and record.levelno == logging.WARNING
         and job.id in record.getMessage()
+        and "status=failed" in record.getMessage()
     ]
     assert len(stopped) == 1
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "last_error"),
+    [
+        pytest.param(RuntimeError("queue limit reached"), "queue limit reached", id="capacity"),
+        # A target that exists but cannot run can recover without editing the job.
+        pytest.param(
+            AgentResolutionError("no usable Model"),
+            "Cron target agent-one cannot run: no usable Model",
+            id="target-cannot-run",
+        ),
+    ],
+)
 async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurring_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: Exception, last_error: str
 ) -> None:
     """A fire that never admitted a Run is not a job execution failure.
 
@@ -315,7 +389,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     """
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
-    trigger_service.trigger_run.side_effect = RuntimeError("queue limit reached")
+    trigger_service.trigger_run.side_effect = error
     job = service.create_job(
         agent_id="agent-one",
         prompt="Health check",
@@ -332,7 +406,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
         assert updated.remaining_runs == 2
         assert updated.consecutive_failures == 0
         assert updated.last_outcome == "failed"
-        assert updated.last_error == "queue limit reached"
+        assert updated.last_error == last_error
 
 
 @pytest.mark.asyncio

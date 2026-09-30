@@ -471,6 +471,7 @@ export default Object.freeze({
   'calendar.actions.empty': 'No agent actions attached.',
   'calendar.actions.scheduled': 'Scheduled: {time}',
   'calendar.actions.expires': 'Latest start: {time}',
+  'calendar.actions.error': 'Could not start: {reason}',
   'calendar.actions.openSession': 'Open Session',
   'calendar.actions.deleteConfirm': 'Remove this action from the event?',
   'calendar.actions.agent': 'Agent',

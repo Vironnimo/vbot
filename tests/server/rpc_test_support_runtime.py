@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-from core.automation import ReflectionService, TriggerService
+from core.automation import AutomationReferences, ReflectionService, TriggerService
 from core.chat import (
     ChatMessage,
     ChatSessionManager,
@@ -31,11 +31,7 @@ from core.providers.accounts import (
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
-from core.runtime._agent_rename import (
-    AgentRenameServices,
-    identity_agent_references,
-    rename_identity_agent,
-)
+from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
 from core.runtime.runtime import Runtime
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
@@ -321,10 +317,13 @@ class StubTerminalManager:
 
 
 class StubJobService:
-    """Cron or Bootstrap service double that holds no jobs."""
+    """Cron or Bootstrap service double listing ``jobs``."""
+
+    def __init__(self) -> None:
+        self.jobs: list[Any] = []
 
     def list_jobs(self) -> list[Any]:
-        return []
+        return list(self.jobs)
 
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
@@ -341,18 +340,33 @@ class StubChannelService:
 
 
 class StubCalendarActions:
-    def list_actions(self) -> list[Any]:
-        return []
+    """Calendar action double listing ``actions``.
+
+    An action a test marks ``"spent": True`` can no longer fire, like one whose
+    one-time event has passed.
+    """
+
+    def __init__(self) -> None:
+        self.actions: list[dict[str, Any]] = []
+
+    def list_actions(self) -> list[dict[str, Any]]:
+        return [dict(action) for action in self.actions]
+
+    def can_fire(self, action_id: str) -> bool:
+        return not any(action["id"] == action_id and action.get("spent") for action in self.actions)
 
     def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> int:
         return 0
 
 
 class StubCalendarService:
-    """Calendar double that holds no actions."""
+    """Calendar double without events whose actions a test arranges."""
 
     def __init__(self) -> None:
         self.actions = StubCalendarActions()
+
+    def list_events(self) -> list[Any]:
+        return []
 
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
@@ -398,6 +412,11 @@ class StubRuntime:
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()
         self.calendar_service: Any = StubCalendarService()
+        self.automation_references = AutomationReferences(
+            bootstrap=cast(Any, self.bootstrap_service),
+            cron=cast(Any, self.cron_service),
+            calendar=cast(Any, self.calendar_service),
+        )
         self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(
             batch_tracker=SimpleNamespace(references_identity_agent=lambda _agent_id: False)
@@ -421,6 +440,7 @@ class StubRuntime:
             agents=cast(Any, self.agents),
             storage=cast(Any, self.storage),
             terminal_manager=cast(Any, self.terminal_manager),
+            automation_references=self.automation_references,
         )
 
     @property
@@ -433,7 +453,15 @@ class StubRuntime:
         return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
 
     def agent_references(self, agent_id: str) -> tuple[str, ...]:
-        return identity_agent_references(self._rename_services(), agent_id)
+        references = [
+            f"channel:{channel.id}"
+            for channel in self.channel_service.list_channels()
+            if channel.agent_id == agent_id
+        ]
+        references.extend(
+            reference.label for reference in self.automation_references.agent_references(agent_id)
+        )
+        return tuple(sorted(references))
 
     def _rename_services(self) -> AgentRenameServices:
         return AgentRenameServices(

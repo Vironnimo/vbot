@@ -181,24 +181,66 @@ describe('SessionListDrawer row actions', () => {
     );
   });
 
-  it('surfaces a delete failure as an inline error', async () => {
-    api.deleteSession.mockRejectedValueOnce(
-      new Error('cannot delete session with an active or queued run'),
-    );
-    drawer.mount();
-    await waitForCondition(() => rowCount() === 1);
+  it.each([
+    {
+      name: 'a busy Session',
+      error: Object.assign(
+        new Error(
+          'cannot delete session with an active or queued run: session-1',
+        ),
+        { code: 'session_busy' },
+      ),
+      shown: [t('sessions.delete_busy')],
+      hidden: ['cannot delete session'],
+    },
+    {
+      // The refusal names what uses the Session by the names the user knows,
+      // not by the internal references of the server message.
+      name: 'a Session that automations use',
+      error: Object.assign(
+        new Error(
+          'cannot delete Session referenced by calendar:act-1, cron:cron-1',
+        ),
+        {
+          code: 'session_in_use',
+          details: {
+            data: {
+              references: [
+                { kind: 'calendar', id: 'act-1', name: 'Weekly review' },
+                { kind: 'cron', id: 'cron-1', name: 'Daily report' },
+              ],
+            },
+          },
+        },
+      ),
+      shown: ['Weekly review', 'Daily report'],
+      hidden: ['calendar:act-1', 'cron:cron-1'],
+    },
+  ])(
+    'surfaces a refused delete of $name as an inline error',
+    async ({ error, shown, hidden }) => {
+      api.deleteSession.mockRejectedValueOnce(error);
+      drawer.mount();
+      await waitForCondition(() => rowCount() === 1);
 
-    chooseRowAction(DELETE_ITEM);
-    confirmDialog(t('common.delete'));
-    flushSync();
+      chooseRowAction(DELETE_ITEM);
+      confirmDialog(t('common.delete'));
+      flushSync();
 
-    await waitForCondition(
-      () => document.querySelector('.session-drawer__state--error') !== null,
-    );
-    expect(
-      document.querySelector('.session-drawer__state--error').textContent,
-    ).toContain('active or queued run');
-  });
+      await waitForCondition(
+        () => document.querySelector('.session-drawer__state--error') !== null,
+      );
+      const text = document.querySelector(
+        '.session-drawer__state--error',
+      ).textContent;
+      for (const part of shown) {
+        expect(text).toContain(part);
+      }
+      for (const part of hidden) {
+        expect(text).not.toContain(part);
+      }
+    },
+  );
 
   it('hands a saved Session Compaction Policy to Chat', async () => {
     const effective = {

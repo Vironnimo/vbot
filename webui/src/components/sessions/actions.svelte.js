@@ -1,4 +1,4 @@
-import { asText } from './presentation.js';
+import { asText, sessionDeleteErrorText } from './presentation.js';
 import {
   renameSession,
   setSessionCompactionPolicy,
@@ -180,7 +180,7 @@ export function createSessionActions(context) {
       // the resource_changed round-trip.
       await context.loadSessions();
     } catch (error) {
-      actionError = error.message || t('sessions.delete_error');
+      actionError = sessionDeleteErrorText(error);
     } finally {
       deleting = false;
     }

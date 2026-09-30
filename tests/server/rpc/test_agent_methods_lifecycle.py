@@ -165,6 +165,27 @@ def _references(service: str, *entries: JsonObject) -> Callable[[Any], None]:
     return arrange
 
 
+def _listed_job(service: str, **fields: Any) -> Callable[[Any], None]:
+    """List one live job of the Identity Agent ``coder`` on the runtime's cron or bootstrap service.
+
+    *fields* override the job's attributes.
+    """
+
+    def arrange(state: Any) -> None:
+        job = {
+            "id": "job-coder",
+            "name": "Report",
+            "agent_id": "coder",
+            "project_id": None,
+            "session_id": None,
+            "status": "active",
+            **fields,
+        }
+        getattr(state.runtime, service).jobs.append(SimpleNamespace(**job))
+
+    return arrange
+
+
 def _existing_destination(state: Any) -> None:
     state.runtime.agents.create("researcher", "Researcher")
 
@@ -198,6 +219,16 @@ async def test_a_refused_agent_rename_leaves_every_agent_in_place(
     assert state.event_bus.events == []
 
 
+def _calendar_action(**fields: Any) -> Callable[[Any], None]:
+    """List one Calendar action for the Agent ``coder`` unless *fields* say otherwise."""
+
+    def arrange(state: Any) -> None:
+        action = {"id": "act-coder", "event_id": "evt-1", "target": "coder", **fields}
+        state.runtime.calendar_service.actions.actions.append(action)
+
+    return arrange
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arrange", "code", "named"),
@@ -209,23 +240,14 @@ async def test_a_refused_agent_rename_leaves_every_agent_in_place(
             id="channel",
         ),
         # A bare cron job (no Project) targets the identity Agent.
+        pytest.param(_listed_job("cron_service"), "agent_in_use", "cron:job-coder", id="cron"),
         pytest.param(
-            _references(
-                "cron_service", {"id": "job-coder", "agent_id": "coder", "project_id": None}
-            ),
-            "agent_in_use",
-            "cron:job-coder",
-            id="cron",
-        ),
-        pytest.param(
-            _references(
-                "bootstrap_service",
-                {"id": "boot-coder", "agent_id": "coder", "project_id": None, "status": "active"},
-            ),
+            _listed_job("bootstrap_service", id="boot-coder"),
             "agent_in_use",
             "bootstrap:boot-coder",
             id="bootstrap",
         ),
+        pytest.param(_calendar_action(), "agent_in_use", "calendar:act-coder", id="calendar"),
     ],
 )
 async def test_agent_delete_refuses_a_referenced_agent(
@@ -255,20 +277,22 @@ async def test_agent_delete_refuses_the_last_agent(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "job",
+    "arrange",
     [
         # A Project-qualified job targets that Project's Team Agent, not the
         # same-named identity Agent.
-        pytest.param({"project_id": "vbot"}, id="project-qualified"),
-        pytest.param({"project_id": None, "status": "completed"}, id="terminal-history"),
+        pytest.param(_listed_job("cron_service", project_id="vbot"), id="project-qualified"),
+        pytest.param(_listed_job("cron_service", status="completed"), id="terminal-history"),
+        # An action that can no longer fire, for example of a past one-time event.
+        pytest.param(_calendar_action(spent=True), id="calendar-used-up"),
     ],
 )
-async def test_agent_delete_ignores_cron_jobs_that_do_not_target_the_identity_agent(
-    tmp_path: Path, job: JsonObject
+async def test_agent_delete_ignores_automations_that_never_start_a_run_for_the_agent(
+    tmp_path: Path, arrange: Callable[[Any], None]
 ) -> None:
     state = make_state(tmp_path, StubAdapter())
     state.runtime.agents.create("writer", "Writer")
-    _references("cron_service", {"id": "job-coder", "agent_id": "coder", **job})(state)
+    arrange(state)
 
     result = await rpc_result(state, "agent.delete", id="coder")
 

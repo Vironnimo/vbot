@@ -114,25 +114,37 @@ async def test_delete_busy_session_is_rejected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_session_referenced_by_bootstrap_is_rejected() -> None:
+async def test_delete_session_pinned_by_automations_is_rejected() -> None:
     state, _resolver, sessions = stub_session_state()
-    state.runtime.bootstrap_service = SimpleNamespace(
-        list_jobs=lambda: [
-            SimpleNamespace(
-                id="boot-1",
-                agent_id="builder",
-                project_id=None,
-                session_id="s1",
-                status="active",
-            )
-        ]
+    job = SimpleNamespace(
+        id="cron-1",
+        name="Daily report",
+        agent_id="builder",
+        project_id=None,
+        session_id="s1",
+        status="active",
     )
+    state.runtime.cron_service.list_jobs = lambda: [job]
+    calendar = state.runtime.calendar_service
+    calendar.actions.list_actions = lambda: [
+        {"id": "act-1", "event_id": "evt-1", "target": "builder", "session": "s1"}
+    ]
+    calendar.list_events = lambda: [SimpleNamespace(id="evt-1", title="Weekly review")]
 
     error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
-    assert error["code"] == "session_busy"
-    assert "bootstrap:boot-1" in error["message"]
+    # Which automations count is AutomationReferences' contract
+    # (tests/core/automation/test_references.py); the RPC names each of them.
+    assert error["code"] == "session_in_use"
+    assert error["message"] == "cannot delete Session referenced by calendar:act-1, cron:cron-1"
+    assert error["data"] == {
+        "references": [
+            {"kind": "calendar", "id": "act-1", "name": "Weekly review"},
+            {"kind": "cron", "id": "cron-1", "name": "Daily report"},
+        ]
+    }
     assert sessions.archived == []
+    assert resource_changes(state) == []
 
 
 @pytest.mark.asyncio

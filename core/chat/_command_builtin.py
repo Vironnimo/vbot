@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -37,6 +37,7 @@ from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
 if TYPE_CHECKING:
     from core.agents import AgentStore
+    from core.automation import AutomationReference, AutomationReferences
     from core.projects import AgentResolver, ProjectStore
     from core.sessions import ChatSessionManager
 
@@ -343,6 +344,7 @@ async def _execute_agent(
     *,
     agent_resolver: AgentResolver | None,
     agents: AgentStore | None,
+    automation_references: AutomationReferences | None,
     chat_runs: ChatRunManager,
     projects: ProjectStore | None,
     sessions: ChatSessionManager | None,
@@ -368,6 +370,7 @@ async def _execute_agent(
     resolver = _require_dependency(agent_resolver, "AgentResolver")
     sessions = _require_dependency(sessions, "ChatSessionManager")
     agents = _require_dependency(agents, "AgentStore")
+    references = _require_dependency(automation_references, "AutomationReferences")
     parsed = parse_agent_argument(argument)
     source_display = format_agent_address(context.agent_id, context.project_id)
     try:
@@ -404,7 +407,12 @@ async def _execute_agent(
         project_id=target_project_id, agent_id=target_agent_id, session_id=context.session_id
     )
     try:
-        async with chat_runs.session_admission_guard(source_address, target_address):
+        # The reference lock keeps an automation from selecting this Session
+        # between the check below and the move.
+        async with (
+            references.lock,
+            chat_runs.session_admission_guard(source_address, target_address),
+        ):
             metadata = await _command_session_io(
                 sessions,
                 "get_metadata_async",
@@ -414,6 +422,11 @@ async def _execute_agent(
             refusal = _session_move_block_reason(metadata)
             if refusal is not None:
                 return _notice("agent", refusal)
+            # An automation addresses its Session by Agent and id: moving the
+            # Session would leave it pointing at nothing.
+            pinned = references.session_references(source_address)
+            if pinned:
+                return _notice("agent", _pinned_session_refusal(pinned))
 
             await sessions.move(source_address, target_address)
             async with sessions.write_lock(target_address):
@@ -515,6 +528,23 @@ async def _execute_agent(
         runs=runs,
         resource_changes=tuple(changes),
     )
+
+
+def _pinned_session_refusal(references: Sequence[AutomationReference]) -> str:
+    names = [_reference_phrase(reference) for reference in references]
+    listed = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    return (
+        f"This session cannot be moved while it is used by {listed}. Choose another "
+        "session for each of them or delete them first."
+    )
+
+
+def _reference_phrase(reference: AutomationReference) -> str:
+    if reference.kind == "cron":
+        return f'the Cron job "{reference.name}"'
+    if reference.kind == "calendar":
+        return f'a Calendar action of "{reference.name}"'
+    return f'the Bootstrap job "{reference.name}"'
 
 
 def _session_move_block_reason(metadata: Mapping[str, object]) -> str | None:

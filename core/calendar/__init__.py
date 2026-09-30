@@ -2,6 +2,7 @@
 
 from core.calendar.actions import validate_calendar_actions_file
 from core.calendar.errors import (
+    CalendarActionTargetMissingError,
     CalendarEventNotFoundError,
     CalendarServiceError,
     CalendarStorageError,
@@ -26,6 +27,7 @@ __all__ = [
     "WHEN_GRAMMAR",
     "MAX_CALENDAR_EVENTS",
     "MAX_WINDOW_DAYS",
+    "CalendarActionTargetMissingError",
     "CalendarEvent",
     "CalendarEventNotFoundError",
     "CalendarService",

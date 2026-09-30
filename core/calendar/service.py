@@ -64,6 +64,8 @@ from core.calendar.recurrence import (
     expand_recurring_timed,
     normalize_rrule,
     parse_date_string,
+    recurring_allday_starts_from,
+    recurring_timed_starts_from,
     resolve_local_span,
 )
 from core.calendar.when import looks_like_date, parse_when
@@ -199,10 +201,44 @@ class CalendarService:
             raise CalendarEventNotFoundError(f"Calendar event not found: {event_id}")
         return _clone_event(event)
 
-    def update_event(
+    async def update_event(
         self, event_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CalendarEvent:
-        """Update one event from the same input shapes as create; omitted fields keep."""
+        """Update one event from the same input shapes as create; omitted fields keep.
+
+        A change that lets an action fire again first checks that action's target
+        (:meth:`CalendarActions.check_event_change`), off the Event Loop.
+        """
+        while True:
+            event, candidate, changed = self._event_update(event_id, fields)
+            if candidate is None:
+                return _clone_event(event)
+            await self.actions.check_event_change(event, candidate)
+            # The check may have waited; build the change again if the event moved on.
+            if self._events.get(event_id) is event:
+                break
+        self._events[event_id] = candidate
+        try:
+            self._save_events()
+        except Exception:
+            self._events[event_id] = event
+            raise
+        self._notify_changed()
+        _LOGGER.info(
+            "Calendar event updated (event=%s fields=%s actor=%s)",
+            event_id,
+            ",".join(changed),
+            actor,
+        )
+        return _clone_event(candidate)
+
+    def _event_update(
+        self, event_id: str, fields: dict[str, Any]
+    ) -> tuple[CalendarEvent, CalendarEvent | None, list[str]]:
+        """Return the stored event, its validated replacement and the changed input names.
+
+        The replacement is None when ``fields`` change nothing.
+        """
         self._ensure_events_loaded()
         event = self._events.get(event_id)
         if event is None:
@@ -222,7 +258,7 @@ class CalendarService:
         if inputs.get("rrule") is None:
             inputs["exdates"] = []
         if inputs == original:
-            return _clone_event(event)
+            return event, None, []
         changed = sorted(name for name in inputs if inputs[name] != original.get(name))
 
         candidate = self._build_event(
@@ -233,20 +269,7 @@ class CalendarService:
         # A title/duration edit must retain the recurrence's original wall-clock zone.
         if candidate.rrule is not None and event.rrule is not None and "start" not in fields:
             candidate.tz_name = event.tz_name
-        self._events[event_id] = candidate
-        try:
-            self._save_events()
-        except Exception:
-            self._events[event_id] = event
-            raise
-        self._notify_changed()
-        _LOGGER.info(
-            "Calendar event updated (event=%s fields=%s actor=%s)",
-            event_id,
-            ",".join(changed),
-            actor,
-        )
-        return _clone_event(candidate)
+        return event, candidate, changed
 
     def delete_event(self, event_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one event by id."""
@@ -338,6 +361,37 @@ class CalendarService:
         """Expand one known event for action scheduling using canonical recurrence rules."""
         return self._event_occurrences(
             event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
+        )
+
+    def occurs_from(self, event: CalendarEvent, instant: datetime) -> bool:
+        """Whether ``event`` has an occurrence starting at or after ``instant``.
+
+        Follows occurrence expansion: all-day occurrences start at midnight in
+        the system time zone, and a series ends with its count, its until date
+        and its removed occurrences.
+        """
+        instant = _as_utc(instant)
+        if event.all_day:
+            start_date = parse_date_string(event.start_date, field_name="start_date")
+            if event.rrule is None:
+                start = datetime.combine(start_date, time.min, tzinfo=self._timezone)
+                return start.astimezone(UTC) >= instant
+            return recurring_allday_starts_from(
+                start_date=start_date,
+                rrule_spec=event.rrule,
+                exdates=frozenset(event.exdates),
+                from_utc=instant,
+                system_tz=self._timezone,
+            )
+        if event.rrule is None:
+            return self.event_span(event)[0] >= instant
+        assert event.start_local is not None and event.tz_name is not None
+        return recurring_timed_starts_from(
+            start_local=datetime.fromisoformat(event.start_local),
+            tz=_resolve_zone(event.tz_name),
+            rrule_spec=event.rrule,
+            exdates=frozenset(event.exdates),
+            from_utc=instant,
         )
 
     def event_span(self, event: CalendarEvent) -> tuple[datetime, datetime]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,14 +13,26 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.calendar import CalendarService, CalendarStorageError, CalendarValidationError
+from core.calendar import (
+    CalendarActionTargetMissingError,
+    CalendarEventNotFoundError,
+    CalendarService,
+    CalendarStorageError,
+    CalendarValidationError,
+)
 from core.calendar import actions as actions_module
 from core.calendar.actions import (
     action_message,
     parse_action_when,
     validate_calendar_actions_file,
 )
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.runs import RunKind, RunStatus
+from core.sessions import SessionNotFoundError
 
 
 def setup(
@@ -90,8 +103,10 @@ def test_edit_preserves_event_id_and_moves_actions(tmp_path):
     before = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     after = service.actions.add(event.id, when="end + 30m", prompt="review", target="main")
     initial = service.actions.project(window(service, now))
-    updated = service.update_event(
-        event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
+    updated = asyncio.run(
+        service.update_event(
+            event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
+        )
     )
     assert updated.id == event.id
     rows = service.actions.project(window(service, now))
@@ -150,7 +165,7 @@ async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
     await service.actions.tick(now)
     await waiting.wait()
     # An event change withdraws work that is still awaiting admission.
-    service.update_event(event.id, title="Renamed")
+    await service.update_event(event.id, title="Renamed")
     await asyncio.gather(*list(service.actions._workers.values()), return_exceptions=True)
     assert service.actions.project(window(service, now))[0]["status"] == "pending"
     for step in range(1, 4):
@@ -211,11 +226,11 @@ async def test_single_action_fires_once_and_rearms_only_after_event_moves(tmp_pa
     old = service.actions.project(window(service, now))[0]
     assert old["status"] == "completed"
     assert old["session"] == "new-session"
-    service.update_event(event.id, title="Renamed")
+    await service.update_event(event.id, title="Renamed")
     await service.actions.tick(now)
     assert trigger.trigger_run.await_count == 1
     moved_start = now + timedelta(minutes=45)
-    service.update_event(event.id, start=moved_start.isoformat())
+    await service.update_event(event.id, start=moved_start.isoformat())
     projected = service.actions.project(window(service, now))[0]
     assert projected["status"] == "pending"
     assert datetime.fromisoformat(projected["scheduled_at"]) == moved_start - timedelta(hours=1)
@@ -283,7 +298,7 @@ async def test_move_during_admitted_run_keeps_claim_until_completion(
         assert len(service.actions._executions) == 1
         await entered.wait()
         original = next(iter(service.actions._executions.values())).copy()
-        service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
+        await service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
         await service.actions.tick(now)
         assert next(iter(service.actions._executions.values())) == original
         assert trigger.trigger_run.await_count == 1
@@ -439,13 +454,244 @@ async def test_timeout_after_admission_is_failed_not_missed(tmp_path):
     assert trigger.trigger_run.await_count == 1
 
 
+def _session_gone(service, trigger):
+    service.actions._sessions.exists.return_value = False
+
+
+def _session_gone_at_admission(service, trigger):
+    trigger.trigger_run.side_effect = SessionNotFoundError("session does not exist: chosen")
+
+
+def _target_gone(service, trigger):
+    service.actions._resolver.resolve_agent.side_effect = ResolutionAgentNotFoundError("gone")
+
+
+def _target_cannot_run(service, trigger):
+    service.actions._resolver.resolve_agent.side_effect = AgentResolutionError("no usable model")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arrange", "reason"),
+    [
+        pytest.param(
+            _session_gone,
+            "Session does not exist for calendar target main: chosen",
+            id="selected-session-missing",
+        ),
+        # The Session can disappear between validation and admission.
+        pytest.param(
+            _session_gone_at_admission,
+            "Session does not exist for calendar target main: chosen",
+            id="selected-session-missing-at-admission",
+        ),
+        pytest.param(_target_gone, "Calendar target does not exist: main", id="target-missing"),
+        pytest.param(
+            _target_cannot_run,
+            "Calendar target main cannot run: no usable model",
+            id="target-cannot-run",
+        ),
+    ],
+)
+async def test_occurrence_that_cannot_start_its_run_records_why(tmp_path, caplog, arrange, reason):
+    service, event, trigger, now = setup(tmp_path)
+    service.actions.add(
+        event.id, when="start - 1h", prompt="prepare", target="main", session="chosen"
+    )
+    arrange(service, trigger)
+
+    with caplog.at_level(logging.WARNING, logger="vbot.calendar.actions"):
+        await service.actions.tick(now)
+        await drain(service)
+
+    row = service.actions.project(window(service, now))[0]
+    assert (row["status"], row["error"]) == ("failed", reason)
+    stored = json.loads((tmp_path / "calendar" / "actions.json").read_text())["executions"]
+    assert [item["error"] for item in stored.values()] == [reason]
+    # An expected state: one WARNING naming the reason, without a traceback.
+    [record] = [item for item in caplog.records if item.levelno >= logging.WARNING]
+    assert record.levelno == logging.WARNING
+    assert reason in record.getMessage()
+    assert record.exc_info is None
+
+
+def _at(delay: timedelta):
+    async def arrange(service, event, trigger, now):
+        return now + delay
+
+    return arrange
+
+
+async def _fired(service, event, trigger, now):
+    await service.actions.tick(now + timedelta(minutes=31))
+    await drain(service)
+    return now + timedelta(minutes=45)
+
+
+async def _starting(service, event, trigger, now):
+    admitting = asyncio.Event()
+
+    async def admission_in_progress(*args, **kwargs):
+        admitting.set()
+        await asyncio.Event().wait()
+
+    trigger.trigger_run.side_effect = admission_in_progress
+    await service.actions.tick(now + timedelta(minutes=31))
+    await admitting.wait()
+    return now + timedelta(hours=2)
+
+
+async def _yearly(service, event, trigger, now):
+    await service.update_event(event.id, rrule={"freq": "yearly"})
+    return now + timedelta(days=40)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recurring", "arrange", "can_fire"),
+    [
+        pytest.param(False, _at(timedelta()), True, id="upcoming"),
+        # Due and within its expiry, but not started yet.
+        pytest.param(False, _at(timedelta(minutes=45)), True, id="due"),
+        pytest.param(False, _starting, True, id="starting-its-run"),
+        pytest.param(False, _fired, False, id="fired"),
+        pytest.param(False, _at(timedelta(hours=2)), False, id="expired-unused"),
+        pytest.param(True, _fired, True, id="series-continues"),
+        pytest.param(True, _at(timedelta(days=3, hours=2)), False, id="series-ended"),
+        # The next occurrence lies far beyond any scan window.
+        pytest.param(False, _yearly, True, id="next-occurrence-next-year"),
+    ],
+)
+async def test_an_action_can_fire_until_its_occurrences_are_used_up(
+    tmp_path, recurring, arrange, can_fire
+):
+    service, event, trigger, now = setup(tmp_path, recurring=recurring)
+    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+
+    at = await arrange(service, event, trigger, now)
+
+    assert service.actions.can_fire(action["id"], now=at) is can_fire
+    await service.actions.aclose()
+
+
+def _resolution_fails(error):
+    def arrange(service):
+        service.actions._resolver.resolve_agent.side_effect = error
+
+    return arrange
+
+
+def _session_deleted(service):
+    service.actions._sessions.exists.return_value = False
+
+
+@pytest.mark.parametrize(
+    ("spent", "target", "arrange", "problem"),
+    [
+        pytest.param(
+            True,
+            "main",
+            _session_deleted,
+            "Session chosen of main no longer exists",
+            id="selected-session-gone",
+        ),
+        pytest.param(
+            True,
+            "main",
+            _resolution_fails(ResolutionAgentNotFoundError("main")),
+            "Agent main no longer exists",
+            id="agent-gone",
+        ),
+        pytest.param(
+            True,
+            "builder@vbot",
+            _resolution_fails(ResolutionProjectNotFoundError("vbot")),
+            "Project vbot no longer exists",
+            id="project-gone",
+        ),
+        # A target that exists but cannot run now can recover; its occurrence records why.
+        pytest.param(
+            True,
+            "main",
+            _resolution_fails(AgentResolutionError("no usable model")),
+            None,
+            id="target-cannot-run",
+        ),
+        # An action that can still fire was checked by every removal; moving it revives nothing.
+        pytest.param(False, "main", _session_deleted, None, id="action-still-live"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_an_event_change_that_revives_an_action_checks_its_target(
+    tmp_path, spent, target, arrange, problem
+):
+    now = datetime.now(UTC)
+    start = now - timedelta(hours=3) if spent else now + timedelta(minutes=30)
+    service, event, _, _ = setup(tmp_path, start=start)
+    action = service.actions.add(
+        event.id, when="start", prompt="prepare", target=target, session="chosen"
+    )
+    arrange(service)
+    later = (now + timedelta(days=1)).isoformat()
+    # The target reads are blocking; they run on the Session pool, never on the Event Loop.
+    reading_threads = []
+    sessions, resolver = service.actions._sessions, service.actions._resolver
+    failure = resolver.resolve_agent.side_effect
+
+    async def on_the_pool(function, *args):
+        return await asyncio.to_thread(function, *args)
+
+    def resolve(*_args):
+        reading_threads.append(threading.current_thread())
+        if failure is not None:
+            raise failure
+
+    sessions.run_async.side_effect = on_the_pool
+    resolver.resolve_agent.side_effect = resolve
+
+    if problem is None:
+        assert (await service.update_event(event.id, start=later)).start_utc != event.start_utc
+    else:
+        with pytest.raises(CalendarActionTargetMissingError) as refused:
+            await service.update_event(event.id, start=later)
+        assert str(refused.value) == (
+            f"This event change would let an action run again whose target no longer exists: "
+            f"{action['id']} ({problem}). Change each action's target or Session, or delete the "
+            "action, first."
+        )
+        assert service.get_event(event.id) == event
+    # Only a revived action is checked.
+    assert bool(reading_threads) is spent
+    assert threading.current_thread() not in reading_threads
+    await service.actions.aclose()
+
+
+@pytest.mark.asyncio
+async def test_an_event_deleted_while_a_revival_is_checked_stays_deleted(tmp_path):
+    now = datetime.now(UTC)
+    service, event, _, _ = setup(tmp_path, start=now - timedelta(hours=3))
+    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    sessions = service.actions._sessions
+    on_the_pool = sessions.run_async.side_effect
+
+    async def deleted_meanwhile(function, *args):
+        service.delete_event(event.id)
+        return on_the_pool(function, *args)
+
+    sessions.run_async.side_effect = deleted_meanwhile
+
+    with pytest.raises(CalendarEventNotFoundError):
+        await service.update_event(event.id, start=(now + timedelta(days=1)).isoformat())
+    assert service.list_events() == []
+
+
 @pytest.mark.asyncio
 async def test_cancel_before_worker_starts_releases_capacity(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     tasks = list(service.actions._workers.values())
-    service.update_event(event.id, start=(now + timedelta(days=2)).isoformat())
+    await service.update_event(event.id, start=(now + timedelta(days=2)).isoformat())
     await asyncio.gather(*tasks, return_exceptions=True)
     await asyncio.sleep(0)
     await service.actions.tick(now)
@@ -837,7 +1083,7 @@ async def test_scheduler_saves_off_the_loop_and_recomputes_after_a_change(tmp_pa
         assert loop.time() - ticked_at < 1
         assert not ticking.done()
         # An edit while the save is in flight: nothing may start from stale state.
-        service.update_event(event.id, title="Moved")
+        await service.update_event(event.id, title="Moved")
     finally:
         writes.release.set()
     await ticking

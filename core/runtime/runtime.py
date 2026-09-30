@@ -17,7 +17,13 @@ from typing import Any, Literal, cast
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.attachments import AttachmentStore
-from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
+from core.automation import (
+    AutomationReferences,
+    BootstrapService,
+    CronService,
+    ReflectionService,
+    TriggerService,
+)
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
@@ -63,7 +69,6 @@ from core.runs import ChatRunManager
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
-    identity_agent_references,
     rename_identity_agent,
 )
 from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
@@ -203,6 +208,7 @@ class Runtime:
         self._cron_service: CronService | None = None
         self._calendar_service: CalendarService | None = None
         self._bootstrap_service: BootstrapService | None = None
+        self._automation_references: AutomationReferences | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._session_title_service: SessionTitleService | None = None
@@ -764,14 +770,23 @@ class Runtime:
         return outcome
 
     def agent_references(self, agent_id: str) -> tuple[str, ...]:
-        """Name the Channels, Cron and Bootstrap jobs and Calendar actions addressing an Agent id.
+        """Name the Channels and live automations that keep an Identity Agent from deletion.
 
-        Labels are ``<kind>:<id>``, sorted. An Identity Agent they name must not
-        be deleted, and no Agent can be renamed to an id they name. Blocking: it
-        reads every Channel config.
+        Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
+        :meth:`AutomationReferences.agent_references`, sorted; automation history
+        that never starts another Run does not count. Blocking: it reads every
+        Channel config.
         """
         self._ensure_started()
-        return identity_agent_references(self._agent_rename_services(), agent_id)
+        references = [
+            f"channel:{channel.id}"
+            for channel in self.channel_service.list_channels()
+            if channel.agent_id == agent_id
+        ]
+        references.extend(
+            reference.label for reference in self.automation_references.agent_references(agent_id)
+        )
+        return tuple(sorted(references))
 
     def _agent_rename_services(self) -> AgentRenameServices:
         """The owners an Identity Agent rename changes, also while startup builds them."""
@@ -1129,6 +1144,10 @@ class Runtime:
 
     bootstrap_service: _StartedService[BootstrapService] = _StartedService(
         lambda runtime: runtime._bootstrap_service, "Bootstrap service not available"
+    )
+
+    automation_references: _StartedService[AutomationReferences] = _StartedService(
+        lambda runtime: runtime._automation_references, "Automation references not available"
     )
 
     provider_usage: _StartedService[ProviderUsageService] = _StartedService(

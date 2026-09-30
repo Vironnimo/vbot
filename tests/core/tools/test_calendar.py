@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from core.projects import AgentResolutionError
 from core.tools.calendar import (
     CALENDAR_TOOL_DESCRIPTION,
     CALENDAR_TOOL_NAME,
@@ -135,6 +142,30 @@ class TestList:
             f"action {action['id']}: start - 1h, runs agent-one in a fresh Session\n"
             "  prompt: Prepare the notes.\n"
             "  next: 2030-01-10T11:00"
+        )
+
+    def test_list_shows_why_a_run_could_not_start(self, tmp_path: Path) -> None:
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Meeting", start="2030-01-10T12:00")
+        action = tool.service.actions.add(
+            event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+        )
+        # The target cannot run when the occurrence comes due.
+        resolver = SimpleNamespace(resolve_agent=Mock(side_effect=AgentResolutionError("gone")))
+        tool.service.actions.configure(Mock(), cast(Any, resolver), cast(Any, None))
+
+        async def come_due() -> None:
+            await tool.service.actions.tick(datetime(2030, 1, 10, 10, 30, tzinfo=UTC))
+            await asyncio.gather(*tool.service.actions._workers.values())
+
+        asyncio.run(come_due())
+
+        _, text = tool.call({"action": "list", "when": "2030-01"})
+
+        assert text.endswith(
+            f"action {action['id']}: start - 1h, runs agent-one in a fresh Session\n"
+            "  prompt: Prepare the notes.\n"
+            "  2030-01-10T11:00 failed: Calendar target agent-one cannot run: gone"
         )
 
     def test_list_rejects_unknown_when_with_a_corrected_call(self, tmp_path: Path) -> None:
@@ -450,6 +481,60 @@ class TestActions:
         _, deleted = tool.call({"action": "delete_action", "id": action["id"]})
         assert tool.actions() == []
         assert deleted == f"id: {action['id']}\nevent: Meeting ({event.id})\nstatus: deleted"
+
+    @pytest.mark.parametrize("change", ["add_action", "update_action", "update"])
+    def test_reference_changes_wait_for_the_reference_lock(
+        self, tmp_path: Path, change: str
+    ) -> None:
+        """A removal that holds the lock ends before a call can select or revive a reference."""
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Meeting", start="2030-01-01T12:00")
+        action = tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        arguments = {
+            "add_action": {"action": change, "id": event.id, "when": "end", "prompt": "review"},
+            "update_action": {"action": change, "id": action["id"], "when": "end"},
+            "update": {"action": change, "id": event.id, "start": "2030-01-02T12:00"},
+        }[change]
+
+        def state() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            return tool.actions(), [item.to_dict() for item in tool.events()]
+
+        before = state()
+
+        async def while_a_removal_holds_the_lock() -> Any:
+            async with tool.reference_lock:
+                call = asyncio.create_task(tool.call_async(arguments))
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                held = state()
+            await call
+            return held
+
+        assert asyncio.run(while_a_removal_holds_the_lock()) == before
+        assert state() != before
+
+    def test_update_refuses_to_revive_an_action_whose_session_is_gone(self, tmp_path: Path) -> None:
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Old", start="2020-01-10T12:00")
+        action = tool.service.actions.add(
+            event.id, when="start", prompt="p", target="agent-one", session="chosen"
+        )
+        sessions = Mock(exists=Mock(return_value=False))
+        sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))
+        tool.service.actions.configure(Mock(), Mock(), sessions)
+
+        envelope, text = tool.call(
+            {"action": "update", "id": event.id, "start": "2030-01-10T12:00"}
+        )
+
+        assert envelope["error"]["code"] == "action_target_missing"
+        assert text.endswith(
+            "calendar was not run: this update would let an action run again whose target no "
+            f"longer exists: {action['id']} (Session chosen of agent-one no longer exists). "
+            "Change each action's target or session with update_action, or remove it with "
+            "delete_action; then repeat this update."
+        )
+        assert tool.only_event() == event
 
     def test_explicit_target_and_session_are_kept(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)

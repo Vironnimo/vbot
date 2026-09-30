@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
+    CalendarActionTargetMissingError,
     CalendarEventNotFoundError,
     CalendarStorageError,
     CalendarValidationError,
@@ -40,9 +41,14 @@ from core.json_documents import (
     warn_unknown_fields,
     write_json_document,
 )
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.projects.address import InvalidAgentAddressError, parse_agent_address
 from core.runs import RunKind
-from core.sessions import SessionAddress
+from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.workers import OrderedWorker
@@ -61,6 +67,7 @@ _WHEN = re.compile(r"^(start|end)(?:\s*([+-])\s*([1-9][0-9]*)\s*([mhd]))?$")
 _TERMINAL = frozenset({"completed", "failed", "cancelled", "interrupted", "missed"})
 _MAX_OFFSET = 31 * 24 * 60
 _MAX_ACTIONS = 16
+_MAX_ERROR_CHARS = 500
 # Finished history is kept this long after expiry, then pruned once the scan
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
@@ -86,6 +93,7 @@ _EXECUTION_FIELDS = frozenset(
         "session",
         "run_id",
         "status",
+        "error",
     )
 )
 _ACTION_SHAPE = json_object(_ACTION_FIELDS)
@@ -259,6 +267,16 @@ def _validate_execution_record(key: str, row: Any) -> None:
         if not isinstance(row.get(field), str):
             raise ValueError(f"{field} must be a timestamp string")
         _instant(row[field])
+    if row.get("error") is not None and not isinstance(row["error"], str):
+        raise ValueError("error must be a string or null")
+
+
+class _TargetUnavailableError(CalendarValidationError):
+    """The action's target does not resolve into a runnable Agent; the cause says why."""
+
+
+class _SessionMissingError(CalendarValidationError):
+    """The action's selected Session does not exist for its target."""
 
 
 class CalendarActions:
@@ -405,7 +423,7 @@ class CalendarActions:
             try:
                 self._resolver.resolve_agent(project, agent)
             except Exception as error:
-                raise CalendarValidationError(
+                raise _TargetUnavailableError(
                     "target does not identify an available agent"
                 ) from error
         if (
@@ -416,7 +434,7 @@ class CalendarActions:
                 SessionAddress(project_id=project, agent_id=agent, session_id=session)
             )
         ):
-            raise CalendarValidationError("session does not exist for the selected target")
+            raise _SessionMissingError("session does not exist for the selected target")
 
     def add(
         self,
@@ -577,6 +595,121 @@ class CalendarActions:
             for a in self._actions.values()
             if a["event_id"] in live and (event_id is None or a["event_id"] == event_id)
         ]
+
+    def can_fire(self, action_id: str, *, now: datetime | None = None) -> bool:
+        """Whether the action can still start a Run.
+
+        False once every occurrence of its event has been used (fired, failed or
+        missed) or has expired unused, for example after a one-time event has
+        passed; such an action is history, like a completed Cron job. An
+        occurrence whose Run is being started counts, and so does one held by
+        an unreadable execution row, because a repair can release it. Moving the
+        event to a later time makes the action able to fire again.
+        """
+        try:
+            self._load()
+            action = self._actions.get(action_id)
+            if action is None:
+                return False
+            event = self._calendar.get_event(action["event_id"])
+        except CalendarEventNotFoundError:
+            return False
+        except CalendarStorageError:
+            return True  # Unknown; never report a live action as history.
+        return self._can_fire(action, event, now or datetime.now(UTC))
+
+    async def check_event_change(
+        self, before: CalendarEvent, after: CalendarEvent, *, now: datetime | None = None
+    ) -> None:
+        """Refuse an event change that would revive actions into a target that is gone.
+
+        An action that can no longer fire is history, so removing its Agent,
+        Project or selected Session did not check it. When the change (for
+        example, moving a past one-time event later) lets such an action fire
+        again, its target is checked like a new action's; a target that exists
+        but cannot run now is allowed, because it can recover. The Agent and
+        Session reads run on the Session pool, and only for revived actions.
+
+        Raises:
+            CalendarActionTargetMissingError: naming each revived action and
+                what it misses.
+        """
+        try:
+            self._load()
+        except CalendarStorageError:
+            return  # Action scheduling is disabled; nothing can fire.
+        now = now or datetime.now(UTC)
+        revived = [
+            dict(action)
+            for action in self._actions.values()
+            if action["event_id"] == after.id
+            and not self._can_fire(action, before, now)
+            and self._can_fire(action, after, now)
+        ]
+        if not revived:
+            return
+        problems = (
+            self._missing_targets(revived)
+            if self._sessions is None
+            else await self._sessions.run_async(self._missing_targets, revived)
+        )
+        if problems:
+            raise CalendarActionTargetMissingError(problems)
+
+    def _missing_targets(self, actions: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        """Pair each action whose target is partly gone with what is missing; blocking."""
+        return [
+            (action["id"], problem)
+            for action in actions
+            if (problem := self._missing_target(action)) is not None
+        ]
+
+    def _missing_target(self, action: dict[str, Any]) -> str | None:
+        """Say which part of the action's target no longer exists, if one does."""
+        target = action["target"]
+        agent, project = parse_agent_address(target)
+        if self._resolver is not None:
+            try:
+                self._resolver.resolve_agent(project, agent)
+            except ResolutionProjectNotFoundError:
+                return f"Project {project} no longer exists"
+            except ResolutionAgentNotFoundError:
+                return f"Agent {target} no longer exists"
+            except AgentResolutionError:
+                pass  # It exists but cannot run now; the occurrence records why.
+        session = action.get("session")
+        if (
+            session
+            and self._sessions is not None
+            and not self._sessions.exists(
+                SessionAddress(project_id=project, agent_id=agent, session_id=session)
+            )
+        ):
+            return f"Session {session} of {target} no longer exists"
+        return None
+
+    def _can_fire(self, action: dict[str, Any], event: CalendarEvent, now: datetime) -> bool:
+        """:meth:`can_fire` for ``event`` as given, which may be an unsaved edit."""
+        if any(self._executions[key]["action_id"] == action["id"] for key in self._workers):
+            return True
+        if self._calendar.occurs_from(event, now):
+            return True
+        # An occurrence that started earlier expires at most an hour after its
+        # end plus a positive offset, so older ones can no longer fire.
+        _, offset, _ = parse_action_when(action["when"])
+        lower = now - timedelta(minutes=max(offset, 0), hours=2)
+        created = _instant(action["created_at"])
+        for occurrence in self._calendar.event_occurrences(event, lower, now):
+            key, row = self._execution(action, event, occurrence)
+            expires = _instant(row["expires_at"])
+            if expires <= now or expires <= created:
+                continue
+            if key in self._invalid_executions:
+                return True
+            previous = self._executions.get(key)
+            if previous is None or not self._consumed(previous, row):
+                return True
+        return False
 
     def project(self, occurrences: list[EventOccurrence]) -> list[dict[str, Any]]:
         try:
@@ -907,10 +1040,19 @@ class CalendarActions:
         except asyncio.CancelledError:
             mark(status="interrupted" if run is not None or input_persisted else "pending")
             raise
-        except Exception:
+        except Exception as error:
             if run is None:
-                mark(status="failed")
-                _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
+                reason, expected = _admission_failure(action, error)
+                mark(status="failed", error=reason)
+                if expected:
+                    _LOGGER.warning(
+                        "Calendar action could not start its Run (action=%s event=%s reason=%s)",
+                        action["id"],
+                        event.id,
+                        reason,
+                    )
+                else:
+                    _LOGGER.exception("Calendar action admission failed (action=%s)", action["id"])
             else:
                 mark(status=run.status.value)
         finally:
@@ -919,6 +1061,30 @@ class CalendarActions:
             self._worker_events.pop(key, None)
             await self._save_async()
             self._calendar._notify_action_changed()
+
+
+def _admission_failure(action: dict[str, Any], error: Exception) -> tuple[str, bool]:
+    """Say why an occurrence could not start its Run, and whether that is an expected state.
+
+    A missing target or selected Session lasts until the action is edited, so it
+    is expected; its reason is stored on the occurrence for the user and Agents.
+    """
+    target = action["target"]
+    if isinstance(error, (_SessionMissingError, SessionNotFoundError)):
+        return f"Session does not exist for calendar target {target}: {action.get('session')}", True
+    cause = error.__cause__ if isinstance(error, _TargetUnavailableError) else error
+    if isinstance(cause, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)):
+        return f"Calendar target does not exist: {target}", True
+    if isinstance(error, _TargetUnavailableError) or isinstance(cause, AgentResolutionError):
+        return _bounded(f"Calendar target {target} cannot run: {cause}"), True
+    return _bounded(str(error) or type(error).__name__), False
+
+
+def _bounded(text: str) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= _MAX_ERROR_CHARS:
+        return normalized
+    return normalized[: _MAX_ERROR_CHARS - 3] + "..."
 
 
 def _log_missed(row: dict[str, Any], reason: str) -> None:

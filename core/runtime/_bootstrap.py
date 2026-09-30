@@ -13,7 +13,13 @@ from uuid import uuid4
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
 from core.attachments import AttachmentStore
-from core.automation import BootstrapService, CronService, ReflectionService, TriggerService
+from core.automation import (
+    AutomationReferences,
+    BootstrapService,
+    CronService,
+    ReflectionService,
+    TriggerService,
+)
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, ChatLoopDependencies, CommandDispatcher
@@ -556,6 +562,22 @@ def bootstrap(runtime: Runtime) -> None:
             agent_resolver=runtime._agent_resolver,
             sessions=runtime._chat_sessions,
         )
+        runtime._cron_service = CronService(
+            runtime._trigger_service,
+            runtime._storage.data_dir,
+            agent_resolver=runtime._agent_resolver,
+            sessions=runtime._chat_sessions,
+            tz=timezone_name,
+        )
+        runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
+        runtime._calendar_service.actions.configure(
+            runtime._trigger_service, runtime._agent_resolver, runtime._chat_sessions
+        )
+        runtime._automation_references = AutomationReferences(
+            bootstrap=runtime._bootstrap_service,
+            cron=runtime._cron_service,
+            calendar=runtime._calendar_service,
+        )
         runtime._command_dispatcher = CommandDispatcher(
             runtime._chat_run_manager,
             agent_resolver=runtime._agent_resolver,
@@ -571,6 +593,7 @@ def bootstrap(runtime: Runtime) -> None:
             storage=runtime._storage,
             terminal_manager=runtime._terminal_manager,
             reasoning_render_describer=runtime.describe_reasoning_render,
+            automation_references=runtime._automation_references,
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)
@@ -590,17 +613,6 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._channel_service._notify_tool_registration_changed_hook = (
             runtime._reload_channel_tool_if_started
         )
-        runtime._cron_service = CronService(
-            runtime._trigger_service,
-            runtime._storage.data_dir,
-            agent_resolver=runtime._agent_resolver,
-            sessions=runtime._chat_sessions,
-            tz=timezone_name,
-        )
-        runtime._calendar_service = CalendarService(runtime._storage.data_dir, tz=timezone_name)
-        runtime._calendar_service.actions.configure(
-            runtime._trigger_service, runtime._agent_resolver, runtime._chat_sessions
-        )
         if pending_rename is not None:
             complete_pending_rename(runtime._agent_rename_services(), pending_rename)
         if runtime.safe_startup_mode is None:
@@ -609,8 +621,16 @@ def bootstrap(runtime: Runtime) -> None:
         if runtime.safe_startup_mode is None:
             runtime._start_cron_service()
             runtime._start_calendar_service()
-        register_cron_tool(runtime._tools, runtime._cron_service)
-        register_calendar_tool(runtime._tools, runtime._calendar_service)
+        register_cron_tool(
+            runtime._tools,
+            runtime._cron_service,
+            reference_lock=runtime._automation_references.lock,
+        )
+        register_calendar_tool(
+            runtime._tools,
+            runtime._calendar_service,
+            reference_lock=runtime._automation_references.lock,
+        )
         register_bash_tool(
             runtime._tools,
             runtime._process_manager,

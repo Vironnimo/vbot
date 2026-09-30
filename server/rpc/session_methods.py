@@ -40,6 +40,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_SESSION_BUSY,
+    RPC_ERROR_SESSION_IN_USE,
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
@@ -192,8 +193,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     """Archive one session and report where the viewing accessor should land.
 
     Decisions baked in: the session is archived, not hard-deleted (#1,
-    recoverable); deletion is refused while a run is active or queued on it (#4);
-    the response carries ``next_session_id`` for #2 navigation; and the removed
+    recoverable); deletion is refused while a run is active or queued on it (#4)
+    and while a Bootstrap job, Cron job or Calendar action pins it; the response
+    carries ``next_session_id`` for #2 navigation; and the removed
     session is dropped from the active recall index immediately (#6). Channel-
     bound and sub-agent sessions need no special handling — a channel session
     simply resumes empty on the next inbound message, and an active sub-agent
@@ -217,7 +219,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                     _session_address(agent_id, session_id, project_id)
                 ),
             ):
-                _ensure_no_bootstrap_session_reference(state, agent_id, project_id, session_id)
+                _ensure_no_session_references(
+                    state, _session_address(agent_id, session_id, project_id)
+                )
                 # Existence check under the guard: concurrent deletes cannot both
                 # cross the storage boundary, and a missing Session still maps to
                 # the ordinary domain error.
@@ -273,26 +277,21 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
 
 
-def _ensure_no_bootstrap_session_reference(
-    state: Any,
-    agent_id: str,
-    project_id: str | None,
-    session_id: str,
-) -> None:
-    references = sorted(
-        f"bootstrap:{job.id}"
-        for job in state.runtime.bootstrap_service.list_jobs()
-        if (
-            job.agent_id == agent_id
-            and job.project_id == project_id
-            and job.session_id == session_id
-            and getattr(job, "status", "active") != "completed"
-        )
-    )
+def _ensure_no_session_references(state: Any, address: SessionAddress) -> None:
+    """Refuse archiving a Session that a Bootstrap job, Cron job or Calendar action pins.
+
+    Each of them starts its Runs in exactly that Session, so every later start
+    would fail. The refusal names them in ``message`` and, as
+    ``data.references`` (``kind``, ``id`` and the ``name`` the user knows it by:
+    the job name, or the title of the action's event), for accessors.
+    """
+    references = state.runtime.automation_references.session_references(address)
     if references:
+        named = ", ".join(reference.label for reference in references)
         raise RpcError(
-            RPC_ERROR_SESSION_BUSY,
-            f"cannot delete Session referenced by {', '.join(references)}",
+            RPC_ERROR_SESSION_IN_USE,
+            f"cannot delete Session referenced by {named}",
+            data={"references": [reference.to_dict() for reference in references]},
         )
 
 

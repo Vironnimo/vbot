@@ -97,7 +97,7 @@ def _calendar_create(state: Any, params: JsonObject) -> JsonObject:
     return result
 
 
-def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
+async def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _UPDATE_FIELDS, "calendar.update")
     service = _calendar_service(state)
     event_id = _required_string(params, "id")
@@ -118,10 +118,13 @@ def _calendar_update(state: Any, params: JsonObject) -> JsonObject:
         updates["exdates"] = _optional_string_list_value(params.get("exdates"), "exdates")
     if "notes" in params:
         updates["notes"] = _optional_string(params, "notes")
-    try:
-        event = service.update_event(event_id, actor="rpc", **updates)
-    except Exception as exc:
-        raise _map_expected_error(exc) from exc
+    # A moved event can let an action that no longer fires run again; its target
+    # check and the change must not interleave with a reference removal.
+    async with _agent_reference_lock(state):
+        try:
+            event = await service.update_event(event_id, actor="rpc", **updates)
+        except Exception as exc:
+            raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_CALENDAR)
     return {"event": _event_payload(event)}
 

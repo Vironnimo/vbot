@@ -14,6 +14,7 @@ from typing import Any, cast
 
 import pytest
 
+from core.automation import AutomationReference
 from core.chat import (
     ChatMessage,
     CommandDispatcher,
@@ -135,6 +136,19 @@ class _Resolver:
         return SimpleNamespace(id=agent_id)
 
 
+class _References:
+    """Automations selecting a Session; records whether each check held the lock."""
+
+    def __init__(self, pinned: tuple[AutomationReference, ...] = ()) -> None:
+        self.lock = asyncio.Lock()
+        self._pinned = pinned
+        self.checks: list[tuple[SessionAddress, bool]] = []
+
+    def session_references(self, address: SessionAddress) -> tuple[AutomationReference, ...]:
+        self.checks.append((address, self.lock.locked()))
+        return self._pinned
+
+
 class _MoveHarness:
     """The move's collaborators plus what the dispatcher reported to them."""
 
@@ -144,7 +158,9 @@ class _MoveHarness:
         metadata: dict[str, Any] | None = None,
         runs: Any = None,
         resolver_error: Exception | None = None,
+        pinned: tuple[AutomationReference, ...] = (),
     ) -> None:
+        self.references = _References(pinned)
         self.sessions = _MoveSessions(metadata)
         self.agents = _MoveAgents()
         self.runs: Any = runs if runs is not None else _MoveRuns()
@@ -163,6 +179,7 @@ class _MoveHarness:
             agent_resolver=cast(Any, self.resolver),
             sessions=cast(Any, self.sessions),
             agents=cast(Any, self.agents),
+            automation_references=cast(Any, self.references),
             trigger_service=SimpleNamespace(trigger_run=self._trigger_run),
             terminal_manager=cast(
                 Any,
@@ -311,6 +328,33 @@ async def test_move_is_refused_without_relocating(harness: Any, message: str) ->
     assert subject.sessions.move_calls == []
     # A refused move announces nothing; the changes follow only a relocation.
     assert subject.changes == []
+
+
+async def test_move_of_a_session_an_automation_selects_is_refused_naming_it() -> None:
+    harness = _MoveHarness(
+        pinned=(
+            AutomationReference("bootstrap", "boot-1", "Warm up"),
+            AutomationReference("calendar", "act-1", "Weekly review"),
+            AutomationReference("cron", "cron-1", "Daily report"),
+        )
+    )
+
+    outcome = await harness.move("/agent planner")
+
+    # The automations address the Session by Agent and id, so it stays where it is.
+    assert harness.sessions.move_calls == []
+    assert harness.changes == []
+    assert outcome.feedback is not None
+    assert outcome.feedback.text == (
+        'This session cannot be moved while it is used by the Bootstrap job "Warm up", a '
+        'Calendar action of "Weekly review" and the Cron job "Daily report". Choose another '
+        "session for each of them or delete them first."
+    )
+    # The source address is checked under the reference lock, so no automation can
+    # select the Session between the check and the move.
+    assert harness.references.checks == [
+        (SessionAddress(project_id=None, agent_id="builder", session_id="s1"), True)
+    ]
 
 
 async def test_move_guard_rejects_source_and_destination_runs_during_storage_wait() -> None:
