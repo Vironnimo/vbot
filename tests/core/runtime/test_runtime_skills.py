@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SKILL_ORIGIN_GLOBAL, SkillRegistry
-from core.tools import ToolContext
+from core.tools import ToolContext, tool_failure
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     write_agent_skill,
@@ -366,6 +367,37 @@ def test_agent_authored_skill_changes_reach_subscribers(runtime: Runtime, tmp_pa
     unsubscribe()
     assert manage({"action": "delete", "name": "authored"})["ok"] is True
     assert len(changes) == 1
+
+
+def test_skill_tools_in_a_session_of_a_missing_project_refuse_or_miss(
+    runtime: Runtime, tmp_path: Path
+) -> None:
+    def dispatch(tool_name: str, arguments: dict[str, object]) -> dict[str, Any]:
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-one",
+            run_id="run-one",
+            tool_call_id="call-one",
+            tool_name=tool_name,
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=runtime.storage.data_dir,
+            skill_project_id="gone",
+        )
+        return asyncio.run(runtime.tools.dispatch(context, arguments, [tool_name]))
+
+    # The Session's Skills come from the missing Project, so no Skill resolves.
+    assert dispatch("skill", {"name": "pdf"}) == tool_failure(
+        "project_not_found",
+        'skill was not run: the Project "gone" that this Session\'s Skills come from does '
+        "not exist. Tell the user that this Project is missing.",
+        retryable=False,
+    )
+    # skill_manage writes only the Agent's own Skills; a name that only the missing
+    # Project could provide is plainly unknown.
+    result = dispatch("skill_manage", {"action": "delete", "name": "proj-only"})
+    assert result["error"]["code"] == "skill_not_found"
 
 
 def test_disabled_skills_leave_every_scope_until_re_enabled(

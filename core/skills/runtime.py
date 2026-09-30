@@ -12,7 +12,13 @@ from typing import Any
 
 from core.agents import Agent, AgentStore
 from core.extensions import ExtensionRegistry
-from core.projects import Project, ProjectError, ProjectStore, effective_project_allowed_skills
+from core.projects import (
+    Project,
+    ProjectError,
+    ProjectNotFoundError,
+    ProjectStore,
+    effective_project_allowed_skills,
+)
 from core.skills.policy import SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
@@ -815,12 +821,12 @@ class SkillRuntime:
         this answers how the name is *visible* to the agent (bundled / global /
         project / shared) — never how the authoring core sees it, which only knows
         the target root. ``agent`` origin with the name absent from own home means a
-        Skill shared into this agent; ``None`` means genuinely unknown.
+        Skill shared into this agent; ``None`` means genuinely unknown, which
+        includes a name that only a Project which does not exist could provide.
         """
-        registry = self.skills_for(project_id, agent_id)
         try:
-            origin = registry.get(name).origin
-        except KeyError:
+            origin = self.skills_for(project_id, agent_id).get(name).origin
+        except (KeyError, ProjectNotFoundError):
             return None
         if origin == SKILL_ORIGIN_AGENT:
             return "shared"
