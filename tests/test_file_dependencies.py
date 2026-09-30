@@ -25,6 +25,7 @@ PROJECT_FILES = {
     "data/prompt.txt": "hello",
     "data/imported.txt": "at import",
     "listed/a.txt": "",
+    "listed/nested/b.txt": "",
     "test_reads.py": (
         "from pathlib import Path\n"
         "\n"
@@ -38,7 +39,11 @@ PROJECT_FILES = {
         "\n"
         "\n"
         "def test_lists_directory():\n"
-        '    assert [path.name for path in Path("listed").iterdir()] == ["a.txt"]\n'
+        '    assert sorted(path.name for path in Path("listed").iterdir()) == ["a.txt", "nested"]\n'
+        "\n"
+        "\n"
+        "def test_lists_nested_directory():\n"
+        '    assert [path.name for path in Path("listed/nested").iterdir()] == ["b.txt"]\n'
         "\n"
         "\n"
         "def test_reads_nothing():\n"
@@ -67,14 +72,23 @@ def recorded_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def test_readers_are_the_tests_that_read_a_file_or_listed_its_directory(
-    recorded_project: Path,
+    recorded_project: Path, tmp_path: Path
 ) -> None:
+    lists = "test_reads.py::test_lists_directory"
+    lists_nested = "test_reads.py::test_lists_nested_directory"
     assert _test_impact.readers(recorded_project, {"data/prompt.txt"}) == {
         "test_reads.py::test_reads_file"
     }
     # A file added to a listed directory changes what the listing test sees.
-    assert _test_impact.readers(recorded_project, {"listed/new.txt"}) == {
-        "test_reads.py::test_lists_directory"
+    assert _test_impact.readers(recorded_project, {"listed/new.txt"}) == {lists}
+    assert _test_impact.readers(recorded_project, {"listed/nested/new.txt"}) == {lists_nested}
+    # So does a new directory in it, however deep the added file lies.
+    assert _test_impact.readers(recorded_project, {"listed/new/deeper/c.txt"}) == {lists}
+    # A removed listed directory changes the listing of its own directory.
+    (tmp_path / "listed").mkdir()
+    assert _test_impact.readers(tmp_path, {"listed/nested/b.txt"}, recorded_project) == {
+        lists,
+        lists_nested,
     }
     assert _test_impact.readers(recorded_project, {"data/imported.txt"}) == {
         file_dependencies.COLLECTION

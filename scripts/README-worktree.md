@@ -148,7 +148,7 @@ When every change is committed, merge from anywhere. The commits passed the stat
 python scripts/worktree.py merge my-task
 ```
 
-The command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` with `--no-ff`, removes the worktree, its dedicated data dir, and the managed branch. See "Merging a finished task" below for the conflict flow.
+The command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` with `--no-ff`, removes the worktree, its dedicated data dir, and the managed branch. A merge that changes `webui/package-lock.json` also installs the merged WebUI packages in `main` (`npm ci`). See "Merging a finished task" below for the conflict flow.
 
 ### 7. Stop the worktree server and delete the worktree without merging
 
@@ -225,7 +225,9 @@ worktree.
 
 The command refuses to run when the primary checkout is not on `main` or, once it holds the merge lock, has uncommitted changes; while another merge is being checked, `main` holds that merge's staged result, so a second merge waits for the lock instead of refusing. It self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
 
-On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts, a failed branch check, or a merged result the commit check rejected; exit code 1 means refusal, timeout, or cleanup failure.
+It stages the merge in `main` first (`git merge --no-ff --no-commit`) and then commits it; the commit hook checks that commit against the merged result. The WebUI checks refuse packages that differ from `webui/package-lock.json`, so when the merge changes the lock and `main` has installed WebUI packages, the command runs `npm ci` in `main`'s `webui/` between the two steps. When the merge does not land, it rolls `main` back and runs `npm ci` again, which reinstalls `main`'s own packages; if that fails too, it says so, and `npm ci` in `main`'s `webui/` fixes it later.
+
+On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts, a failed branch check, or a merged result the commit check rejected; exit code 1 means refusal, timeout, a failed `npm ci` (typically a file that a dev server or test watcher using `main`'s `webui/node_modules` holds on Windows; stop it and retry), or cleanup failure.
 
 A failed branch check stops before the merge and prints its report; fix the reported problems in the worktree, commit, and retry the merge. A rejected merge rolls back completely and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
 
