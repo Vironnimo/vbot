@@ -22,7 +22,6 @@ from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
 from core.database import Database, UnregisteredDatabase
-from core.debug import drain_debug_traces
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -73,6 +72,7 @@ from core.runtime._prompt_blocks import refresh_prompt_blocks
 from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
+from core.runtime._shutdown import run_shutdown, run_shutdown_async
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -99,7 +99,7 @@ from core.tools import (
     register_skill_tool,
 )
 from core.tools.process_manager import ProcessManager
-from core.tools.terminal_manager import TerminalManager, TerminalManagerError
+from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.logging import LogManager
@@ -402,64 +402,22 @@ class Runtime:
             self.bootstrap_service.activate()
 
     def stop(self) -> None:
-        """Gracefully shut down the runtime.
+        """Shut the Runtime down synchronously; safe before ``start()``.
 
-        Logs the shutdown event and performs cleanup.
+        Runs every shutdown step even when an earlier one fails, then clears
+        service references and closes logging. A single failure is re-raised
+        unchanged; several are raised together as an ``ExceptionGroup``.
         """
-        self._log_shutdown()
-        self._started = False
-        if self._extensions is not None:
-            self._extensions.fire_shutdown_blocking()
-        self._close_extension_databases()
-
-        if self._channel_service is not None:
-            self._channel_service.stop()
-        if self._cron_service is not None:
-            self._cron_service.stop()
-        if self._calendar_service is not None:
-            self._calendar_service.actions.stop()
-        if self._bootstrap_service is not None:
-            self._bootstrap_service.stop()
-        if self._provider_usage is not None:
-            self._provider_usage.close()
-        if self._performance is not None:
-            self._performance.stop()
-        if self._process_manager is not None:
-            self._process_manager.stop()
-        terminal_error: TerminalManagerError | None = None
-        if self._terminal_manager is not None:
-            try:
-                self._terminal_manager.stop()
-            except TerminalManagerError as error:
-                terminal_error = error
-        if self._keep_awake is not None:
-            self._keep_awake.close()
-        if self._storage is not None:
-            self._storage.temporary_files.stop()
-        if self._channel_service is not None:
-            self._channel_service.close()
-        if self._recall is not None:
-            self._recall.close()
-        if self._statistics_index is not None:
-            self._statistics_index.close()
-        if self._chat_sessions is not None:
-            self._chat_sessions.close()
-
-        if self._decisions is not None:
-            self._decisions.close()
-        if self._speech is not None:
-            self._speech.close()
-        if self._usage_recorder is not None:
-            self._usage_recorder.close()
-        self._clear_service_references()
-        self._close_log_manager()
-        if terminal_error is not None:
-            raise terminal_error
+        run_shutdown(self)
 
     async def aclose(self) -> None:
-        """Finish shared service cleanup before propagating caller cancellation."""
+        """Shut down like ``stop()``, awaiting drains; concurrent callers share one close.
+
+        Caller cancellation propagates only after the shared cleanup settled. A
+        later call reports the same outcome without running any step again.
+        """
         if self._close_task is None:
-            self._close_task = asyncio.create_task(self._aclose())
+            self._close_task = asyncio.create_task(run_shutdown_async(self))
         task = self._close_task
         try:
             await asyncio.shield(task)
@@ -474,75 +432,6 @@ class Runtime:
             with suppress(BaseException):
                 task.result()
             raise cancellation
-
-    async def _aclose(self) -> None:
-        self._log_shutdown()
-        # An admitted reload still needs the live Runtime refresh callbacks.
-        # Drain it and close Extension admission before withdrawing readiness.
-        if self._extension_runtime is not None:
-            await self._extension_runtime.aclose()
-        elif self._extensions is not None:
-            await self._extensions.fire_shutdown()
-        self._close_extension_databases()
-        self._started = False
-
-        if self._channel_service is not None:
-            await self._channel_service.aclose()
-        if self._cron_service is not None:
-            await self._cron_service.aclose()
-        if self._calendar_service is not None:
-            await self._calendar_service.actions.aclose()
-        if self._bootstrap_service is not None:
-            await self._bootstrap_service.aclose()
-        if self._trigger_service is not None:
-            await self._trigger_service.aclose()
-        if self._reflection_service is not None:
-            await self._reflection_service.aclose()
-        if self._session_title_service is not None:
-            await self._session_title_service.aclose()
-        if self._chat_run_manager is not None:
-            await self._chat_run_manager.aclose()
-        if self._subagent_coordinator is not None:
-            # Every Run has ended; each Sub-Agent activity file records its outcome.
-            await self._subagent_coordinator.drain_activity()
-        if self._decisions is not None:
-            await self._decisions.aclose()
-        if self._speech is not None:
-            await self._speech.aclose()
-        if self._provider_usage is not None:
-            await self._provider_usage.aclose()
-        # Every Provider call has ended; persist the Debug traces they handed off.
-        await drain_debug_traces()
-        if self._performance is not None:
-            await self._performance.aclose()
-        if self._process_manager is not None:
-            await self._process_manager.aclose()
-        terminal_error: TerminalManagerError | None = None
-        if self._terminal_manager is not None:
-            try:
-                await self._terminal_manager.aclose()
-            except TerminalManagerError as error:
-                terminal_error = error
-        if self._keep_awake is not None:
-            self._keep_awake.close()
-        if self._storage is not None:
-            await self._storage.temporary_files.aclose()
-        if self._channel_service is not None:
-            self._channel_service.close()
-        if self._recall is not None:
-            await self._recall.aclose()
-        if self._statistics_index is not None:
-            # A running Statistics read holds the index lock; wait on its pool.
-            await self._statistics_index.aclose()
-        if self._usage_recorder is not None:
-            await self._usage_recorder.aclose()
-        if self._chat_sessions is not None:
-            self._chat_sessions.close()
-
-        self._clear_service_references()
-        self._close_log_manager()
-        if terminal_error is not None:
-            raise terminal_error
 
     def _close_extension_databases(self) -> None:
         """Close Extension databases a shutdown handler did not release."""
