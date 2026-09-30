@@ -384,7 +384,7 @@ def test_reset_current_after_session_removed_lands_on_newest_or_a_fresh_session(
     assert [session.id for session in manager.list("alpha")] == [fresh]
 
 
-def test_delete_archives_agent_trees_and_external_workspaces_and_leaves_the_order(
+def test_delete_archives_agent_trees_and_external_workspaces_and_leaves_order_and_grants(
     store: AgentStore, tmp_path: Path
 ) -> None:
     coder = store.create("coder", "Coder Agent")
@@ -392,12 +392,26 @@ def test_delete_archives_agent_trees_and_external_workspaces_and_leaves_the_orde
     # A workspace outside the Agent tree (e.g. a repo an identity Agent is rooted in)
     # is not swept up by the Agent-directory move, so it is archived beside it.
     external_workspace = tmp_path / "rooted-repo"
-    store.create("rooted", "Rooted Agent", workspace=external_workspace)
-    store.create("beta", "Beta")
+    store.create(
+        "rooted",
+        "Rooted Agent",
+        workspace=external_workspace,
+        tools={"subagent": {"allowed_agents": ["coder"]}},
+    )
+    # A qualified address names a Project's Team Agent, not the deleted one.
+    store.create(
+        "beta", "Beta", tools={"subagent": {"allowed_agents": ["coder", "coder@project", "rooted"]}}
+    )
 
-    archive_dir = store.delete("coder")
-    rooted_archive = store.delete("rooted")
+    deleted = store.delete("coder")
+    rooted_deleted = store.delete("rooted")
 
+    archive_dir, rooted_archive = deleted.archive_dir, rooted_deleted.archive_dir
+    assert (deleted.policy_agent_ids, rooted_deleted.policy_agent_ids) == (
+        ("beta", "rooted"),
+        ("beta",),
+    )
+    assert store.get("beta").tools["subagent"]["allowed_agents"] == ["coder@project"]
     assert archive_dir == store.data_dir / "archive" / "agents" / "coder"
     assert not (store.data_dir / "agents" / "coder").exists()
     assert not Path(coder.workspace).exists()
@@ -419,10 +433,11 @@ def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
     store: AgentStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store.create("coder", "First")
-    previous_archive = store.delete("coder")
+    previous_archive = store.delete("coder").archive_dir
     marker = previous_archive / "keep.txt"
     marker.write_text("previous", encoding="utf-8")
     store.create("coder", "Second")
+    store.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
 
     def fail_archive(_agent_id: str) -> None:
         raise RuntimeError("database unavailable")
@@ -434,6 +449,31 @@ def test_delete_restores_active_agent_and_previous_archive_on_session_failure(
 
     assert store.get("coder").name == "Second"
     assert marker.read_text(encoding="utf-8") == "previous"
+    # Grants go only once the archive is committed, so the Agent that stays keeps them.
+    assert store.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
+
+
+def test_delete_succeeds_although_a_delegation_grant_cannot_be_removed(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create("coder", "Coder")
+    store.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
+    write_agent = store._write_agent
+
+    def fail_manager(agent: Any) -> None:
+        if agent.id == "manager":
+            raise AgentError("disk full")
+        write_agent(agent)
+
+    monkeypatch.setattr(store, "_write_agent", fail_manager)
+
+    # The archive is irreversible, so the delete reports it; the entry names no Agent.
+    deleted = store.delete("coder")
+
+    assert deleted.policy_agent_ids == ()
+    assert (deleted.archive_dir / "agent" / "agent.json").is_file()
+    assert [agent.id for agent in store.list()] == ["manager"]
+    assert persisted(store, "manager")["tools"]["subagent"]["allowed_agents"] == ["coder"]
 
 
 @pytest.mark.parametrize("failed_restore", ["active", "previous"])
@@ -441,7 +481,7 @@ def test_delete_keeps_previous_archive_when_compensation_fails(
     store: AgentStore, monkeypatch: pytest.MonkeyPatch, failed_restore: str
 ) -> None:
     store.create("coder", "First")
-    archive = store.delete("coder")
+    archive = store.delete("coder").archive_dir
     (archive / "keep.txt").write_text("previous", encoding="utf-8")
     store.create("coder", "Second")
     real_replace = os.replace
@@ -489,7 +529,7 @@ def test_delete_keeps_every_tree_when_a_move_cannot_complete(
     blocked: str,
 ) -> None:
     store.create("coder", "First")
-    previous_archive = store.delete("coder")
+    previous_archive = store.delete("coder").archive_dir
     (previous_archive / "keep.txt").write_text("previous", encoding="utf-8")
     workspace = tmp_path / "rooted-repo"
     workspace.mkdir()
@@ -541,7 +581,7 @@ def test_delete_across_volumes_archives_the_agent_though_the_original_stays_part
     monkeypatch.setattr(tree_move, "_replace", replace)
     monkeypatch.setattr(tree_move, "_remove_tree", remove_nothing)
 
-    archive_dir = store.delete("coder")
+    archive_dir = store.delete("coder").archive_dir
 
     assert (archive_dir / "agent" / "agent.json").is_file()
     assert not (store.data_dir / "agents" / "coder").exists()
@@ -565,7 +605,7 @@ def test_delete_agent_named_like_sibling_archive_roots_never_touches_them(
     archived_project.write_text("{}\n", encoding="utf-8")
 
     for reserved_like_id in ("sessions", "projects"):
-        archive_dir = store.delete(reserved_like_id)
+        archive_dir = store.delete(reserved_like_id).archive_dir
         assert archive_dir == store.data_dir / "archive" / "agents" / reserved_like_id
         assert (archive_dir / "agent" / "agent.json").exists()
 

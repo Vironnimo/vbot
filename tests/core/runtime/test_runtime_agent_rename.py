@@ -208,19 +208,21 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
         # The rename and delete checks read every Channel config, off the Event Loop.
         channel_reads: set[int] = set()
         _record_threads(runtime.channel_service._storage, ("load_all",), channel_reads, monkeypatch)
-        # A deleted ``researcher`` left a Cron job and a delegation grant behind:
-        # the renamed Agent would adopt them, and a revert would take them along.
+        # A deleted ``researcher`` left a Cron job behind: the renamed Agent would
+        # adopt it, and a revert would take it along. Its delegation grant went
+        # with the deletion.
         runtime.agents.create("researcher", "Researcher")
         leftover = await runtime.cron_service.create_job(
             agent_id="researcher", prompt="Report", schedule_type="interval", interval_seconds=60
         )
         runtime.agents.update("coder", tools={"subagent": {"allowed_agents": ["researcher"]}})
         runtime.agents.delete("researcher")
+        assert runtime.agents.get("coder").tools["subagent"]["allowed_agents"] == []
 
         with pytest.raises(AgentReferencedError) as refused:
             await runtime.rename_agent("coder", "researcher")
 
-        assert refused.value.references == ("allowed_agents:coder", f"cron:{leftover.id}")
+        assert refused.value.references == (f"cron:{leftover.id}",)
         assert await runtime.agent_references("researcher") == (f"cron:{leftover.id}",)
         assert len(channel_reads) > 0
         assert threading.get_ident() not in channel_reads

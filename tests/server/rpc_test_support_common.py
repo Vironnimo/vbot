@@ -16,6 +16,7 @@ import pytest
 
 from core.agents import (
     AgentAlreadyExistsError,
+    AgentDeleteResult,
     AgentOrderConflictError,
     AgentReferencedError,
     AgentRename,
@@ -270,12 +271,12 @@ class StubAgents:
         ]
         self._order_revision += 1
 
-    def delete(self, agent_id: str) -> Path:
+    def delete(self, agent_id: str) -> AgentDeleteResult:
         self._get_raw(agent_id)
         del self._agents[agent_id]
         self._order.remove(agent_id)
         self._order_revision += 1
-        return Path("archive") / agent_id
+        return AgentDeleteResult(archive_dir=Path("archive") / agent_id)
 
 
 @dataclass(frozen=True)

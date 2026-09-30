@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from core.memory import (
@@ -32,9 +33,8 @@ class AgentNotFoundError(AgentError):
 class AgentReferencedError(AgentError):
     """Raised when a rename targets an Agent id that references still name.
 
-    ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``,
-    ``cron:<job id>`` or ``allowed_agents:manager`` (the delegation allow-list of
-    Agent ``manager``).
+    ``references`` names each one as ``<kind>:<id>``, such as ``channel:tg-main``
+    or ``cron:<job id>``.
     """
 
     def __init__(self, agent_id: str, references: Iterable[str]) -> None:
@@ -156,7 +156,8 @@ class AgentRename:
 class AgentRenameResult:
     """The Agent-owned half of a pending rename, applied and still recorded.
 
-    ``session_ids`` are the live Sessions that moved to the new id and
+    ``session_ids`` are the live Sessions that moved to the new id,
+    ``policy_agent_ids`` the Agents whose delegation allow-list changed and
     ``session_link_count`` the Sub-Agent parent links that now name it.
     """
 
@@ -165,3 +166,15 @@ class AgentRenameResult:
     session_ids: tuple[str, ...] = ()
     policy_agent_ids: tuple[str, ...] = ()
     session_link_count: int = 0
+
+
+@dataclass(frozen=True)
+class AgentDeleteResult:
+    """One archived Identity Agent.
+
+    ``policy_agent_ids`` are the Agents whose delegation allow-list no longer
+    names it.
+    """
+
+    archive_dir: Path
+    policy_agent_ids: tuple[str, ...] = ()

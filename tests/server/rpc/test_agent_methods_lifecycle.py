@@ -1,4 +1,4 @@
-"""Identity Agent rename and delete RPCs: the rename mapping, and refusals."""
+"""Identity Agent rename and delete RPCs: the rename mapping, delegation lists, refusals."""
 
 from __future__ import annotations
 
@@ -294,6 +294,29 @@ async def test_agent_delete_refuses_a_referenced_agent(
     assert error["code"] == code
     assert named in error["message"]
     assert _agent_names(state) == before
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
+    state.runtime.agents = agents
+    monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
+    agents.create("coder")
+    agents.create(
+        "manager", "Manager", tools={"subagent": {"allowed_agents": ["coder", "coder@vbot"]}}
+    )
+
+    try:
+        result = await rpc_result(state, "agent.delete", id="coder")
+    finally:
+        agents.close()
+
+    # A delegation grant never blocks the delete, and the response shows it removed.
+    [manager] = result["remaining_agents"]
+    assert manager["tools"]["subagent"]["allowed_agents"] == ["coder@vbot"]
 
 
 @pytest.mark.asyncio

@@ -748,12 +748,13 @@ class Runtime:
         The Agent's tree, config, Sessions and Sub-Agent links move together with
         the Channels, Cron and Bootstrap jobs, Calendar actions and delegation
         allow-lists that name it. A failure reverts all of it; an interrupted
-        rename completes on the next start. While any of these references still
-        names ``new_agent_id``, the rename is refused with
-        ``AgentReferencedError`` before anything changes. The caller holds the Run
-        admission guards of both ids. Afterwards Skills of both ids are
-        invalidated and the active Recall index forgets the moved Sessions' old
-        addresses.
+        rename completes on the next start. While a Channel, Cron or Bootstrap
+        job or Calendar action still names ``new_agent_id``, the rename is refused
+        with ``AgentReferencedError`` before anything changes; a delegation
+        allow-list entry naming the unused id is a leftover the rename removes
+        instead. The caller holds the Run admission guards of both ids.
+        Afterwards Skills of both ids are invalidated and the active Recall index
+        forgets the moved Sessions' old addresses.
         """
         self._ensure_started()
         outcome = await rename_identity_agent(self._agent_rename_services(), agent_id, new_agent_id)
@@ -777,8 +778,9 @@ class Runtime:
 
         Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
         :meth:`AutomationReferences.agent_references`, sorted; automation history
-        that never starts another Run does not count. The Channel configs are read
-        off the Event Loop.
+        that never starts another Run does not count, nor do delegation
+        allow-lists, which the deletion itself removes the Agent from. The Channel
+        configs are read off the Event Loop.
         """
         self._ensure_started()
         references = [
