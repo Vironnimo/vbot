@@ -20,7 +20,10 @@ from desktop.restart import (
     WindowPlacement,
 )
 
-COMMAND = ("C:/vBot/vBot.GUI.exe", "desktop")
+# A native absolute installation root: a drive path on Windows, a POSIX path elsewhere.
+ROOT = Path(Path.cwd().anchor, "vBot")
+VERSION_FILE = str(ROOT / "active-version")
+COMMAND = (str(ROOT / "vBot.GUI.exe"), "desktop")
 
 
 def _contract(tmp_path: Path, active: str = "v1") -> RelaunchContract:
@@ -32,11 +35,11 @@ def _contract(tmp_path: Path, active: str = "v1") -> RelaunchContract:
 @pytest.mark.parametrize(
     ("value", "valid"),
     [
-        ({"version_file": "C:/vBot/active-version", "version": "v1", "command": COMMAND}, True),
+        ({"version_file": VERSION_FILE, "version": "v1", "command": COMMAND}, True),
         ({"version_file": "active-version", "version": "v1", "command": COMMAND}, False),
-        ({"version_file": "C:/vBot/active-version", "version": "../v1", "command": COMMAND}, False),
-        ({"version_file": "C:/vBot/active-version", "version": "v1", "command": []}, False),
-        ({"version_file": "C:/vBot/active-version", "version": "v1", "command": ["x"]}, False),
+        ({"version_file": VERSION_FILE, "version": "../v1", "command": COMMAND}, False),
+        ({"version_file": VERSION_FILE, "version": "v1", "command": []}, False),
+        ({"version_file": VERSION_FILE, "version": "v1", "command": ["x"]}, False),
         ("not json", False),
     ],
     ids=["valid", "relative-file", "unsafe-version", "no-command", "relative-command", "garbage"],
