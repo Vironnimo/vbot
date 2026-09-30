@@ -189,11 +189,11 @@ def capture_documents(
     Each document is read whole in one short open, so a concurrent atomic
     replace by a running server sees at most a brief reader. The copy keeps the
     permission bits of its source (OAuth token files hold credentials). A
-    document that disappears after listing is not a member.
+    document that disappears after listing is not a member. The copies are not
+    yet durable (:func:`sync_documents`), which keeps the capture short.
     """
     root = Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME
     members: dict[str, DocumentMember] = {}
-    directories: set[Path] = set()
     for path in json_documents.snapshot_document_paths(data_dir):
         if cancelled is not None and cancelled():
             return None
@@ -212,15 +212,21 @@ def capture_documents(
         )
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        directories.add(destination.parent)
         members[path] = DocumentMember(
             path=path, file_size=len(content), sha256=hashlib.sha256(content).hexdigest()
         )
+    return members
+
+
+def sync_documents(snapshot_dir: Path, members: Mapping[str, DocumentMember]) -> None:
+    """Make the document copies :func:`capture_documents` wrote durable."""
+    directories: set[Path] = set()
+    for member in members.values():
+        copy = Path(snapshot_dir).joinpath(DOCUMENTS_DIRECTORY_NAME, *_parts(member.path))
+        fsync_file(copy)
+        directories.add(copy.parent)
     for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         fsync_dir(directory)
-    return members
 
 
 def verify_documents(snapshot_dir: Path, members: Mapping[str, DocumentMember]) -> None:

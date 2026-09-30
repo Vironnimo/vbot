@@ -218,7 +218,10 @@ class Database:
             return operation(connection)
 
     def backup(self, destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool:
-        """Write one consistent standalone copy; ``False`` when ``cancelled`` stopped it."""
+        """Write one consistent standalone copy; ``False`` when ``cancelled`` stopped it.
+
+        The copy is not synced to disk; the caller makes it durable.
+        """
         return self._runtime.backup(destination, cancelled=cancelled)
 
     def checkpoint(self) -> None:

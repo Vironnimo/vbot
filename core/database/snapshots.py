@@ -48,6 +48,7 @@ from core.database._documents import (
     documents_present,
     documents_size,
     parse_documents,
+    sync_documents,
     verify_documents,
 )
 from core.database._files import fsync_dir, fsync_file
@@ -871,6 +872,7 @@ def create_data_snapshot(
         )
         if capture is None or documents is None:
             raise _SnapshotCancelledError
+        sync_documents(staging, documents)
         members: dict[str, SnapshotMember] = {}
         for name, entry in sorted(marker.databases.items()):
             destination = partial / member_file_name(name)
