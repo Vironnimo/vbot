@@ -89,7 +89,7 @@ async def _cron_create(state: Any, params: JsonObject) -> JsonObject:
 
     try:
         async with _agent_reference_lock(state):
-            job = state.runtime.cron_service.create_job(
+            job = await state.runtime.cron_service.create_job(
                 agent_id=agent_id,
                 name=name,
                 prompt=prompt,
@@ -194,40 +194,40 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
     try:
         # Any update may select another Agent, Project or Session.
         async with _agent_reference_lock(state):
-            job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
+            job = await state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
 
 
-def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
+async def _cron_delete(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "cron.delete")
 
     job_id = _required_string(params, "id")
     try:
-        state.runtime.cron_service.delete_job(job_id, actor="rpc")
+        await state.runtime.cron_service.delete_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"ok": True}
 
 
-def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
+async def _cron_enable(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "cron.enable")
 
     job_id = _required_string(params, "id")
     try:
-        job = state.runtime.cron_service.enable_job(job_id, actor="rpc")
+        job = await state.runtime.cron_service.enable_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
 
 
-def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
+async def _cron_disable(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"id"}, "cron.disable")
 
     job_id = _required_string(params, "id")
     try:
-        job = state.runtime.cron_service.disable_job(job_id, actor="rpc")
+        job = await state.runtime.cron_service.disable_job(job_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)

@@ -188,6 +188,16 @@ class SwarmExtension:
         self.store = SwarmStore(database, lookup_delivery_receipt=receipt)
         await self.store.open()
         await self.store.recover_interrupted()
+        reconciled = await self.store.reconcile_prepared_deliveries()
+        # Unreachable batches recur on every start, so they alone stay silent.
+        if reconciled["acknowledged"] or reconciled["conflicting"]:
+            _LOGGER.log(
+                logging.WARNING if reconciled["conflicting"] else logging.INFO,
+                "Swarm saved deliveries reconciled (acknowledged=%d conflicting=%d unreachable=%d)",
+                reconciled["acknowledged"],
+                reconciled["conflicting"],
+                reconciled["unreachable"],
+            )
         await self._archive_unknown_groups(groups)
 
     async def _archive_unknown_groups(self, groups: Any) -> None:
@@ -1142,15 +1152,18 @@ class SwarmExtension:
             cwd = Path(snapshot["effective_configuration"]["cwd"])
             project_id = snapshot["effective_configuration"].get("project_id")
             for participant in snapshot["participants"]:
-                if participant["id"] not in existing:
+                binding = existing.get(participant["id"])
+                if binding is None:
                     binding = await group.create(
                         swarm_id,
                         participant["id"],
                         _participant_config(profile, participant, cwd),
                         project_id=project_id,
                     )
-                    await self._store().bind_participant_session(binding)
                     existing[participant["id"]] = binding
+                # Recording is idempotent; it also records a binding whose Session a
+                # failed or interrupted Start created without recording it.
+                await self._store().bind_participant_session(binding)
             handle = await group.open_group(swarm_id)
             await self._store().bind_execution_epoch(
                 swarm_id, expected_epoch=snapshot["epoch"], execution_epoch=handle.epoch

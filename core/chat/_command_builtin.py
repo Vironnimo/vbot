@@ -38,6 +38,7 @@ from core.tools.terminal_manager import TerminalManager, TerminalOwner
 if TYPE_CHECKING:
     from core.agents import AgentStore
     from core.automation import AutomationReference, AutomationReferences
+    from core.database import SnapshotBarrier
     from core.projects import AgentResolver, ProjectStore
     from core.sessions import ChatSessionManager
 
@@ -348,6 +349,7 @@ async def _execute_agent(
     chat_runs: ChatRunManager,
     projects: ProjectStore | None,
     sessions: ChatSessionManager | None,
+    snapshot_barrier: SnapshotBarrier,
     terminal_manager: TerminalManager | None,
     trigger_service: Any | None,
 ) -> CommandOutcome:
@@ -428,55 +430,57 @@ async def _execute_agent(
             if pinned:
                 return _notice("agent", _pinned_session_refusal(pinned))
 
-            await sessions.move(source_address, target_address)
-            async with sessions.write_lock(target_address):
-                destination = await _command_session_io(
-                    sessions,
-                    "get_async",
-                    "get",
-                    target_address,
-                )
-                await _command_session_io(
-                    destination,
-                    "append_async",
-                    "append",
-                    ChatMessage.agent_takeover(
-                        from_address=source_display, to_address=target_display
-                    ),
-                )
-                await _command_session_io(
-                    destination,
-                    "add_note_async",
-                    "add_note",
-                    AGENT_TAKEOVER_NOTE.format(source=source_display),
-                )
+            # The Session row and both current-Session pointers move as one unit.
+            async with snapshot_barrier.compound_mutation_async():
+                await sessions.move(source_address, target_address)
+                async with sessions.write_lock(target_address):
+                    destination = await _command_session_io(
+                        sessions,
+                        "get_async",
+                        "get",
+                        target_address,
+                    )
+                    await _command_session_io(
+                        destination,
+                        "append_async",
+                        "append",
+                        ChatMessage.agent_takeover(
+                            from_address=source_display, to_address=target_display
+                        ),
+                    )
+                    await _command_session_io(
+                        destination,
+                        "add_note_async",
+                        "add_note",
+                        AGENT_TAKEOVER_NOTE.format(source=source_display),
+                    )
 
-            if terminal_manager is not None:
-                terminal_manager.transfer_scope(
-                    TerminalOwner(
-                        context.project_id,
+                if terminal_manager is not None:
+                    terminal_manager.transfer_scope(
+                        TerminalOwner(
+                            context.project_id,
+                            context.agent_id,
+                            context.session_id,
+                        ),
+                        TerminalOwner(
+                            target_project_id,
+                            target_agent_id,
+                            context.session_id,
+                        ),
+                    )
+
+                if context.project_id is None:
+                    await _COMMAND_WORKERS.run(
+                        agents.reset_current_after_session_removed,
                         context.agent_id,
                         context.session_id,
-                    ),
-                    TerminalOwner(
-                        target_project_id,
+                    )
+                if target_project_id is None:
+                    await _COMMAND_WORKERS.run(
+                        agents.update,
                         target_agent_id,
-                        context.session_id,
-                    ),
-                )
-
-            if context.project_id is None:
-                await _COMMAND_WORKERS.run(
-                    agents.reset_current_after_session_removed,
-                    context.agent_id,
-                    context.session_id,
-                )
-            if target_project_id is None:
-                await _COMMAND_WORKERS.run(
-                    agents.update,
-                    target_agent_id,
-                    current_session_id=context.session_id,
-                )
+                        current_session_id=context.session_id,
+                    )
     except RunAdmissionBlockedError:
         return _notice(
             "agent", "This session can be moved once its source and destination are idle."

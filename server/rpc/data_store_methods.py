@@ -50,7 +50,10 @@ async def _data_store_status(state: Any, params: JsonObject) -> JsonObject:
 def _create_snapshot(runtime: Any, data_dir: Path, reason: str) -> JsonObject:
     before = read_snapshot_health(data_dir)
     snapshot = create_data_snapshot(
-        data_dir, reason=reason, databases=runtime.canonical_databases()
+        data_dir,
+        reason=reason,
+        databases=runtime.canonical_databases(),
+        barrier=runtime.snapshot_barrier,
     )
     if snapshot is None:
         after = read_snapshot_health(data_dir)

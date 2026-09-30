@@ -66,9 +66,11 @@ from core.database.marker import (
     require_no_maintenance,
     valid_database_id,
 )
+from core.database.snapshot_barrier import member_change
 from core.database.spec import (
     CANONICAL,
     DISPOSABLE,
+    HELD_CAPTURE,
     DatabaseHealth,
     DatabaseSpec,
     canonical_data_dir,
@@ -125,6 +127,7 @@ class Database:
         self._restore_id = restore_id
         self._owns_workers = workers is None
         self._workers = database_worker_pool(spec) if workers is None else workers
+        self._held = spec.snapshot_capture == HELD_CAPTURE
 
     @property
     def name(self) -> str:
@@ -171,8 +174,16 @@ class Database:
         *,
         patience_s: float = WRITE_PATIENCE_S,
     ) -> _Result:
-        """Run ``operation`` in one ``BEGIN IMMEDIATE`` transaction with busy retry."""
-        return self._runtime.execute_write(operation, patience_s=patience_s)  # type: ignore[no-any-return]
+        """Run ``operation`` in one ``BEGIN IMMEDIATE`` transaction with busy retry.
+
+        A write to a held database of a data directory first passes the data
+        snapshot freeze (``core.database.snapshot_barrier``), so it may wait
+        while a snapshot copies the data: call it off the Event Loop.
+        """
+        if self._data_dir is None:
+            return self._runtime.execute_write(operation, patience_s=patience_s)  # type: ignore[no-any-return]
+        with member_change(self._data_dir, held=self._held):
+            return self._runtime.execute_write(operation, patience_s=patience_s)  # type: ignore[no-any-return]
 
     async def run_async(
         self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
@@ -207,7 +218,10 @@ class Database:
             return operation(connection)
 
     def backup(self, destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool:
-        """Write one consistent standalone copy; ``False`` when ``cancelled`` stopped it."""
+        """Write one consistent standalone copy; ``False`` when ``cancelled`` stopped it.
+
+        The copy is not synced to disk; the caller makes it durable.
+        """
         return self._runtime.backup(destination, cancelled=cancelled)
 
     def checkpoint(self) -> None:

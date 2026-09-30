@@ -554,7 +554,13 @@ async def test_a_migration_moves_the_allowance_and_conversation_to_the_new_chat(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     old_anchor = "ch-tg-assistant--500"
-    persister = Mock()
+    state = channel_state(tmp_path)
+    bridged_before_persisting: list[str | None] = []
+    persister = Mock(
+        side_effect=lambda *_ids: bridged_before_persisting.append(
+            state.active_session_id("tg-assistant", "ch-tg-assistant--100500")
+        )
+    )
     trigger = AsyncMock(return_value=make_completed_run(output_text="ok", session_id=old_anchor))
     adapter, sessions, _trigger, bot = make_adapter(
         tmp_path,
@@ -572,6 +578,9 @@ async def test_a_migration_moves_the_allowance_and_conversation_to_the_new_chat(
     )
 
     persister.assert_called_once_with("-500", "-100500")
+    # The bridge lands first: a crash before the allowlist persists leaves the new
+    # chat denied, and allowing it by hand continues the old Session.
+    assert bridged_before_persisting == [old_anchor]
     # The new chat id's conversation points at the old conversation's Session,
     # without creating an empty anchor Session for the new chat id.
     assert (

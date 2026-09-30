@@ -39,7 +39,7 @@ _ACTION_REACH = timedelta(days=32)
 _LISTED_RUNS = 3
 
 
-def handle_add_action(
+async def handle_add_action(
     calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
 ) -> JsonObject:
     event = calendar_service.get_event(str(arguments["id"]))
@@ -61,7 +61,7 @@ def handle_add_action(
     if not isinstance(target, str) and context is not None:
         target = format_agent_address(context.agent_id, context.project_id)
     target = str(target)
-    action = calendar_service.actions.add(
+    action = await calendar_service.actions.add(
         event.id,
         when=when,
         prompt=str(arguments["prompt"]),
@@ -73,7 +73,7 @@ def handle_add_action(
     return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
 
 
-def handle_update_action(
+async def handle_update_action(
     calendar_service: CalendarService, arguments: JsonObject, context: ToolContext | None
 ) -> JsonObject:
     action_id = str(arguments["id"])
@@ -108,15 +108,17 @@ def handle_update_action(
                 when=STAND_INS["when"],
             )
         )
-    action = calendar_service.actions.update(action_id, actor="tool", **fields)
+    action = await calendar_service.actions.update(action_id, actor="tool", **fields)
     notes = [note, _unapplied_note("update_action", arguments, event)]
     return _action_success(calendar_service, action, event, " ".join(filter(None, notes)))
 
 
-def handle_delete_action(calendar_service: CalendarService, arguments: JsonObject) -> JsonObject:
+async def handle_delete_action(
+    calendar_service: CalendarService, arguments: JsonObject
+) -> JsonObject:
     action_id = str(arguments["id"])
     current = find_action(calendar_service, action_id)
-    calendar_service.actions.delete(action_id, actor="tool")
+    await calendar_service.actions.delete(action_id, actor="tool")
     event = calendar_service.get_event(current["event_id"])
     data: JsonObject = {
         "id": action_id,

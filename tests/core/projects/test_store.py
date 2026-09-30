@@ -27,6 +27,7 @@ from core.projects.projects import (
 from core.projects.store import ProjectStore
 from core.sessions import ChatSessionManager, SessionAddress
 from core.utils import tree_move
+from tests.core.database.database_test_support import frozen_members
 
 _SEEDED_FIELDS = (
     "cwd",
@@ -176,6 +177,25 @@ def test_concurrent_project_mutations_preserve_config_and_unique_cwd(
         assert [project.project_id for project in store.list()] == ["vbot"]
     else:
         assert persisted.overrides == {"coder": {"model": "other/model"}}
+
+
+def test_a_change_waiting_for_a_data_snapshot_never_holds_up_project_reads(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "Original", repo)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        with frozen_members(data_dir, monkeypatch) as gate:
+            updating = executor.submit(store.update, "vbot", display_name="Changed")
+            assert gate.waiting.acquire(timeout=10)
+            # The change waits without the store lock that Event Loop readers take.
+            assert executor.submit(store.get, "vbot").result(timeout=10).display_name == "Original"
+            assert not updating.done()
+        assert updating.result(timeout=10).display_name == "Changed"
+
+    assert gate.capture is not None
+    assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 1)
 
 
 @pytest.mark.parametrize("failed_restore", ["active", "previous"])

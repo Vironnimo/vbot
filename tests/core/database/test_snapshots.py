@@ -2,22 +2,29 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import queue
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from contextlib import closing
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
 
 from core.database import (
+    ANCHOR_CAPTURE,
+    TRAILING_CAPTURE,
     Database,
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
+    MemberFrozenError,
+    SnapshotBarrier,
     SnapshotFacts,
     create_data_snapshot,
     data_store_status,
@@ -33,7 +40,9 @@ from core.database import (
     snapshot_summaries,
 )
 from core.database import snapshots as snapshots_module
+from core.database.snapshot_barrier import CAPTURE_ATTEMPTS, capture_members
 from core.database.snapshots import SNAPSHOT_HEALTH_FILE_NAME, SNAPSHOT_MANIFEST_NAME
+from core.json_documents import document_change
 from tests.core.database.database_test_support import (
     NOTES_FACTS,
     NOTES_SCHEMA_SQL,
@@ -48,6 +57,7 @@ from tests.core.database.database_test_support import (
     rewrite_marker,
     snapshot_with_notes,
     stored_bodies,
+    write_document,
 )
 
 
@@ -148,7 +158,8 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
     pin_journal_mode(monkeypatch, journal_mode)
     # SQLite lock waits fail at once, so only a write that never meets one can succeed.
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
-    database = open_database(notes_spec(data_dir))
+    # The anchor, like the Session database, keeps taking writes while it is copied.
+    database = open_database(notes_spec(data_dir, snapshot_capture=ANCHOR_CAPTURE))
     writer = ThreadPoolExecutor(max_workers=1)
     overlapping: list[Future[None]] = []
     committed_during_copy: list[bool] = []
@@ -186,6 +197,194 @@ def test_an_online_snapshot_is_one_consistent_copy_while_another_thread_keeps_wr
     # A standalone rollback-journal copy of one instant, without sidecars.
     assert {path.name for path in published.iterdir()} == {"notes.db", SNAPSHOT_MANIFEST_NAME}
     assert manifest_payload(published)["members"]["notes"]["facts"] == {"note_count": 5000}
+
+
+@pytest.mark.asyncio
+async def test_a_capture_waits_for_compound_mutations_in_flight_and_holds_off_new_ones() -> None:
+    barrier = SnapshotBarrier()
+    order: list[str] = []
+    mutating, capture_waiting, finish_mutation = Event(), Event(), Event()
+    captured, finish_capture = Event(), Event()
+
+    def mutation() -> None:
+        with barrier.compound_mutation():
+            mutating.set()
+            assert finish_mutation.wait(10.0)
+            # A nested entry never waits on the capture that waits for this mutation.
+            with barrier.compound_mutation():
+                order.append("mutation")
+
+    def still_waiting() -> bool:
+        capture_waiting.set()  # consulted only while the capture waits
+        return False
+
+    def capture() -> None:
+        with barrier.capture(cancelled=still_waiting) as held:
+            assert held
+            order.append("capture")
+            captured.set()
+            assert finish_capture.wait(10.0)
+
+    async def new_mutation() -> None:
+        async with barrier.compound_mutation_async():
+            order.append("new mutation")
+
+    with ThreadPoolExecutor(max_workers=2) as threads:
+        in_flight = threads.submit(mutation)
+        assert await asyncio.to_thread(mutating.wait, 10.0)
+        capturing = threads.submit(capture)
+        assert await asyncio.to_thread(capture_waiting.wait, 10.0)
+        finish_mutation.set()
+        assert await asyncio.to_thread(captured.wait, 10.0)
+        arriving = asyncio.create_task(new_mutation())
+        await asyncio.sleep(0)  # One loop turn: the new mutation runs up to its wait.
+        assert not arriving.done()
+        finish_capture.set()
+        await arriving
+        in_flight.result(timeout=10.0)
+        capturing.result(timeout=10.0)
+    assert order == ["mutation", "capture", "new mutation"]
+
+
+def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Path) -> None:
+    notes = open_database(notes_spec(data_dir))
+    journal = open_database(notes_spec(data_dir, name="journal", snapshot_capture=ANCHOR_CAPTURE))
+    tally = open_database(notes_spec(data_dir, name="tally", snapshot_capture=TRAILING_CAPTURE))
+    document = data_dir / "settings.json"
+    inside, draining, late_ran = Event(), Event(), Event()
+    order: list[str] = []
+    late: list[Future[None]] = []
+
+    def in_flight(connection: sqlite3.Connection) -> None:
+        connection.execute("INSERT INTO notes (body) VALUES ('in flight')")
+        inside.set()
+        assert draining.wait(10.0)
+        # A document change inside this held write is admitted at once, although
+        # the capture already holds off new held changes and waits for this one.
+        with document_change(document):
+            document.write_text("{}", encoding="utf-8")
+
+    def still_draining() -> bool:
+        draining.set()  # consulted only while the capture waits for held changes
+        return False
+
+    def late_note(connection: sqlite3.Connection) -> None:
+        late_ran.set()
+        connection.execute("INSERT INTO notes (body) VALUES ('late')")
+
+    def change_without_waiting() -> None:
+        with document_change(document, wait=False):
+            pytest.fail("a change that must not wait entered during the freeze")
+
+    def copy_database(name: str) -> None:
+        order.append(name)
+        if name == "journal":
+            late.append(threads.submit(notes.write, late_note))
+            # The anchor keeps taking writes; the held member does not.
+            threads.submit(add_note, journal, "live").result(timeout=10.0)
+            assert not late_ran.is_set()
+            # A change that must not wait is refused instead.
+            with pytest.raises(MemberFrozenError):
+                threads.submit(change_without_waiting).result(timeout=10.0)
+            assert note_bodies(notes) == ["in flight"]
+
+    try:
+        with ThreadPoolExecutor(max_workers=4) as threads:
+            writing = threads.submit(notes.write, in_flight)
+            assert inside.wait(10.0)
+            capture = threads.submit(
+                capture_members,
+                data_dir,
+                {"tally": tally.spec, "journal": journal.spec, "notes": notes.spec},
+                copy_database=copy_database,
+                copy_documents=lambda: order.append("documents"),
+                discard_copies=lambda: pytest.fail("no change entered during the freeze"),
+                cancelled=still_draining,
+            ).result(timeout=20.0)
+            writing.result(timeout=10.0)
+            late[0].result(timeout=10.0)
+        assert capture is not None
+        assert order == ["notes", "documents", "journal", "tally"]
+        assert note_bodies(notes) == ["in flight", "late"]
+        assert note_bodies(journal) == ["live"]
+    finally:
+        for database in (notes, journal, tally):
+            database.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disturbed_attempts", [1, CAPTURE_ATTEMPTS])
+async def test_a_capture_an_event_loop_write_disturbed_is_retried_a_bounded_number_of_times(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, disturbed_attempts: int
+) -> None:
+    notes = open_database(notes_spec(data_dir))
+    real_backup = notes.backup
+    copying: queue.Queue[Event] = queue.Queue()
+    disturbed: list[Path] = []
+
+    def backup(destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool:
+        if len(disturbed) < disturbed_attempts:
+            disturbed.append(destination)
+            written = Event()
+            copying.put(written)
+            assert written.wait(10.0)
+        return real_backup(destination, cancelled=cancelled)
+
+    monkeypatch.setattr(notes, "backup", backup)
+    try:
+        taking = asyncio.ensure_future(
+            asyncio.to_thread(create_data_snapshot, data_dir, reason="test", databases=(notes,))
+        )
+        for attempt in range(disturbed_attempts):
+            written = await asyncio.to_thread(copying.get, timeout=10.0)
+            # A held write on the Event Loop never waits, even while the members are frozen.
+            add_note(notes, f"from the Event Loop {attempt}")
+            written.set()
+        published = await taking
+        assert note_count(notes) == disturbed_attempts
+    finally:
+        notes.close()
+
+    if disturbed_attempts < CAPTURE_ATTEMPTS:
+        # The disturbed copies were discarded; the next attempt holds every write.
+        assert isinstance(published, Path)
+        assert manifest_payload(published)["members"]["notes"]["facts"] == {
+            "note_count": disturbed_attempts
+        }
+        assert sorted(path.name for path in snapshot_root(data_dir).iterdir()) == sorted(
+            [published.name, SNAPSHOT_HEALTH_FILE_NAME]
+        )
+    else:
+        assert published is None
+        assert list_data_snapshots(data_dir) == []
+        assert "retry the snapshot" in read_snapshot_health(data_dir)["reason"]
+
+
+def test_an_online_snapshot_never_copies_inside_a_compound_mutation(data_dir: Path) -> None:
+    barrier = SnapshotBarrier(capture_wait_seconds=0.0)
+    database = open_database(notes_spec(data_dir))
+    try:
+        with barrier.compound_mutation():
+            add_note(database, "renamed")
+            halfway = create_data_snapshot(
+                data_dir, reason="test", databases=(database,), barrier=barrier
+            )
+            write_document(data_dir, "agents/renamed/agent.json", '{"format_version": 1}\n')
+        health = read_snapshot_health(data_dir)
+        published = create_data_snapshot(
+            data_dir, reason="test", databases=(database,), barrier=barrier
+        )
+    finally:
+        database.close()
+
+    # The attempt fails once the mutation outlasts the barrier's wait budget.
+    assert halfway is None
+    assert health["state"] == "degraded"
+    assert health["reason"].startswith(DatabaseUnavailableError.__name__)
+    assert isinstance(published, Path)
+    manifest = manifest_payload(published)
+    assert manifest["members"]["notes"]["facts"] == {"note_count": 1}
+    assert list(manifest["documents"]) == ["agents/renamed/agent.json"]
 
 
 @pytest.mark.parametrize("observed_at", ["2026-09-01T10:00:00Z", 17])

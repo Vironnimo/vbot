@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,9 +56,11 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
             return [(e["type"], e["payload"]) for e in bus.events if e["sequence"] > sequence]
 
         def publishes(action: Callable[[], object]) -> list[tuple[str, JsonObject]]:
-            def on_loop() -> list[tuple[str, JsonObject]]:
+            async def on_loop() -> list[tuple[str, JsonObject]]:
                 before = bus.last_sequence
-                action()
+                result = action()
+                if inspect.isawaitable(result):
+                    await result
                 return events_after(before)
 
             return portal.call(on_loop)

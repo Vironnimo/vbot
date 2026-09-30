@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from core.database import APPLICATION_IDS, CANONICAL, DatabaseSpec, SnapshotFacts
+from core.database import (
+    APPLICATION_IDS,
+    CANONICAL,
+    TRAILING_CAPTURE,
+    DatabaseSpec,
+    SnapshotFacts,
+)
 
 DATABASE_NAME = "model_usage"
 
@@ -59,4 +65,8 @@ def usage_database_spec(path: Path) -> DatabaseSpec:
                 "revision": "SELECT COALESCE(MAX(revision), 0) FROM usage_revision",
             }
         ),
+        # Recording goes on while a data snapshot is taken. A copy newer than the
+        # Session copy stays correct: calls are keyed by id, and a new Session
+        # handle replays the whole Session history (``import_session_history``).
+        snapshot_capture=TRAILING_CAPTURE,
     )

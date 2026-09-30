@@ -45,13 +45,13 @@ async def test_start_creates_active_tasks_and_records_missed_once_jobs(
     with monkeypatch.context() as earlier:
         # Created while its time was still ahead; it passed while vBot was offline.
         earlier.setattr(cron_timing, "_utc_now", lambda: datetime.now(UTC) - timedelta(hours=1))
-        missed = service.create_job(
+        missed = await service.create_job(
             agent_id="agent-one",
             prompt="Missed once",
             schedule_type="once",
             run_at=(datetime.now(UTC) - timedelta(minutes=1)).isoformat(),
         )
-    active_cron = service.create_job(
+    active_cron = await service.create_job(
         agent_id="agent-two",
         prompt="Cron active",
         schedule_type="cron",
@@ -87,7 +87,7 @@ async def test_cron_service_aclose_awaits_cancelled_job_tasks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Cron active",
         schedule_type="cron",
@@ -124,7 +124,7 @@ async def test_unexpected_scheduler_task_failure_restarts_active_recurring_job(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Cron active",
         schedule_type="cron",
@@ -171,7 +171,7 @@ async def test_run_once_job_fires_in_its_project_and_marks_completed(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -212,7 +212,7 @@ async def test_trigger_waits_for_run_and_records_execution_health(tmp_path: Path
     service, trigger_service = make_service(tmp_path)
     run = SimpleNamespace(id="run-one", wait=AsyncMock(return_value=None))
     trigger_service.trigger_run.return_value = run
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
@@ -248,7 +248,7 @@ async def test_persistent_save_failure_does_not_hang_the_firing_task(
     monkeypatch.setattr(cron_module, "_POST_FIRE_SAVE_RETRY_SECONDS", 0.0)
     run = SimpleNamespace(id="run-one", wait=AsyncMock(return_value=None))
     trigger_service.trigger_run.return_value = run
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
@@ -330,7 +330,7 @@ async def test_recurring_job_stops_after_consecutive_failures(
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
     arrange(trigger_service)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         project_id="vbot",
         prompt="Health check",
@@ -390,7 +390,7 @@ async def test_pre_admission_trigger_failures_neither_stop_nor_consume_a_recurri
     service, trigger_service = make_service(tmp_path)
     monkeypatch.setattr(cron_module, "MAX_CONSECUTIVE_CRON_FAILURES", 2)
     trigger_service.trigger_run.side_effect = error
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
@@ -416,7 +416,7 @@ async def test_run_once_job_retries_trigger_failure_without_completing(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -451,7 +451,7 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-gone",
         prompt="Once prompt",
         schedule_type="once",
@@ -488,7 +488,7 @@ async def test_run_once_job_abandons_after_attempt_limit_with_backoff(
 async def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
     # Arrange: a once job abandoned as failed (distinct from a completed fire).
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -498,18 +498,19 @@ async def test_failed_once_job_can_be_re_enabled(tmp_path: Path) -> None:
     assert service.get_job(job.id).status == "failed"
 
     # Act: unlike a completed job, a failed job can be re-enabled to retry.
-    re_enabled = service.enable_job(job.id)
+    re_enabled = await service.enable_job(job.id)
 
     # Assert
     assert re_enabled.status == "active"
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", ["paused", "failed"])
-def test_once_job_with_elapsed_time_is_not_rearmed(
+async def test_once_job_with_elapsed_time_is_not_rearmed(
     tmp_path: Path, status: cron_module.CronJobStatus
 ) -> None:
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -520,29 +521,32 @@ def test_once_job_with_elapsed_time_is_not_rearmed(
     service._jobs[job.id].run_at = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
 
     with pytest.raises(CronJobInPastError):
-        service.enable_job(job.id)
+        await service.enable_job(job.id)
     assert service.get_job(job.id).status == status
     # Choosing a future time together with the status change arms it normally.
     future = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-    assert service.update_job(job.id, status="active", run_at=future).status == "active"
+    assert (await service.update_job(job.id, status="active", run_at=future)).status == "active"
     trigger_service.trigger_run.assert_not_called()
 
 
-def test_once_job_cannot_be_created_or_moved_into_the_past(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_once_job_cannot_be_created_or_moved_into_the_past(tmp_path: Path) -> None:
     service, _trigger_service = make_service(tmp_path, tz="Europe/Berlin")
     past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
 
     with pytest.raises(CronJobInPastError):
-        service.create_job(agent_id="agent-one", prompt="p", schedule_type="once", run_at=past)
+        await service.create_job(
+            agent_id="agent-one", prompt="p", schedule_type="once", run_at=past
+        )
     assert service.list_jobs() == []
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="p",
         schedule_type="cron",
         cron_expression="0 9 * * *",
     )
     with pytest.raises(CronJobInPastError):
-        service.update_job(
+        await service.update_job(
             job.id, schedule_type="once", run_at=past, cron_expression=None, remaining_runs=1
         )
     assert service.get_job(job.id).schedule_type == "cron"
@@ -555,7 +559,7 @@ async def test_run_once_job_retries_completed_save_without_refiring(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -595,13 +599,14 @@ async def test_run_once_job_retries_completed_save_without_refiring(
     assert not cron_claims.path_for(service._once_fire_claims_dir, job.id).exists()
 
 
-def test_start_completes_claimed_once_job_without_refiring(
+@pytest.mark.asyncio
+async def test_start_completes_claimed_once_job_without_refiring(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -629,21 +634,22 @@ def test_start_completes_claimed_once_job_without_refiring(
     assert not cron_claims.path_for(restarted_service._once_fire_claims_dir, job.id).exists()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize("claim_bytes", [b"{", b"\xff"])
-def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
+async def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     claim_bytes: bytes,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
-    recurring = service.create_job(
+    recurring = await service.create_job(
         agent_id="agent-one",
         prompt="Recurring prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
     )
-    once = service.create_job(
+    once = await service.create_job(
         agent_id="agent-one",
         prompt="Once prompt",
         schedule_type="once",
@@ -672,23 +678,24 @@ def test_start_holds_only_the_once_job_with_an_unreadable_fire_claim(
     assert claim_path.read_bytes() == claim_bytes
     restarted_trigger_service.trigger_run.assert_not_called()
     # Storage stays writable; one bad claim file does not disable Cron.
-    assert restarted_service.update_job(recurring.id, prompt="Still editable").prompt == (
+    assert (await restarted_service.update_job(recurring.id, prompt="Still editable")).prompt == (
         "Still editable"
     )
 
 
-def test_start_keeps_cron_available_when_reconciliation_save_fails(
+@pytest.mark.asyncio
+async def test_start_keeps_cron_available_when_reconciliation_save_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service, _trigger_service = make_service(tmp_path)
-    recurring = service.create_job(
+    recurring = await service.create_job(
         agent_id="agent-one",
         prompt="Recurring prompt",
         schedule_type="cron",
         cron_expression="* * * * *",
     )
-    claimed = service.create_job(
+    claimed = await service.create_job(
         agent_id="agent-one",
         prompt="Claimed once",
         schedule_type="once",
@@ -711,7 +718,7 @@ def test_start_keeps_cron_available_when_reconciliation_save_fails(
     assert cron_claims.path_for(restarted_service._once_fire_claims_dir, claimed.id).exists()
     restarted_trigger_service.trigger_run.assert_not_called()
     monkeypatch.setattr(restarted_service, "_save_jobs", real_save)
-    restarted_service.update_job(recurring.id, prompt="Saved later")
+    await restarted_service.update_job(recurring.id, prompt="Saved later")
     persisted = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))["jobs"]
     assert {job["id"]: job["status"] for job in persisted}[claimed.id] == "completed"
 
@@ -729,7 +736,9 @@ async def test_removed_queued_fire_settles_without_killing_scheduler(
         if schedule_type == "once"
         else {"cron_expression": "* * * * *"}
     )
-    job = service.create_job(agent_id="agent", prompt="work", schedule_type=schedule_type, **kwargs)
+    job = await service.create_job(
+        agent_id="agent", prompt="work", schedule_type=schedule_type, **kwargs
+    )
     trigger.trigger_run.side_effect = RunCancelledError("removed")
     if schedule_type == "once":
         monkeypatch.setattr(cron_timing, "_sleep_until_utc", AsyncMock(return_value=True))
@@ -746,7 +755,7 @@ async def test_removed_queued_fire_settles_without_killing_scheduler(
 @pytest.mark.asyncio
 async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monkeypatch):
     service, trigger = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent", prompt="work", schedule_type="cron", cron_expression="* * * * *"
     )
     running = asyncio.Event()
@@ -774,7 +783,7 @@ async def test_rescheduling_keeps_live_run_waiter_and_global_slot(tmp_path, monk
         await asyncio.wait_for(running.wait(), _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         task = service._job_tasks[job.id]
         available = service._run_slots._value
-        service.update_job(job.id, cron_expression="*/2 * * * *")
+        await service.update_job(job.id, cron_expression="*/2 * * * *")
         await asyncio.sleep(0)
         assert service._job_tasks[job.id] is task
         assert not task.cancelling()
@@ -811,7 +820,7 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
     trigger_service.trigger_run.return_value = SimpleNamespace(
         id="run-one", wait=AsyncMock(return_value=None)
     )
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
@@ -822,19 +831,18 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
     firing = asyncio.create_task(service._trigger_job_run(job))
     try:
         assert await asyncio.to_thread(writes.entered.wait, 5)
-        loop = asyncio.get_running_loop()
-        ticked_at = loop.time()
-        for _ in range(5):
-            await asyncio.sleep(0.01)
-        assert loop.time() - ticked_at < 1
         assert not firing.done()
-        releaser = threading.Timer(0.1, writes.release.set)
-        releaser.start()
-        # The blocking edit save queues behind the fire's older snapshot.
-        service.update_job(job.id, name="Renamed")
+        # The edit applies at once; its save queues behind the fire's older snapshot
+        # without holding the Event Loop.
+        editing = asyncio.create_task(service.update_job(job.id, name="Renamed"))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert service.get_job(job.id).name == "Renamed"
+        assert not editing.done()
     finally:
         writes.release.set()
 
+    await asyncio.wait_for(editing, timeout=5)
     assert await asyncio.wait_for(firing, timeout=5) is True
     stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
     assert [(item["name"], item["last_outcome"]) for item in stored["jobs"]] == [
@@ -843,11 +851,43 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_edit_still_finishes_its_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _trigger_service = make_service(tmp_path)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Health check",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+    )
+    writes = _BlockedJobWrites(monkeypatch)
+    changes: list[str] = []
+    service.add_changed_callback(lambda: changes.append("cron"))
+
+    editing = asyncio.create_task(service.update_job(job.id, name="Renamed"))
+    try:
+        assert await asyncio.to_thread(writes.entered.wait, 5)
+        editing.cancel()
+        await asyncio.sleep(0)
+        assert not editing.done()
+    finally:
+        writes.release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(editing, timeout=5)
+    stored = json.loads((tmp_path / "cron" / "jobs.json").read_text(encoding="utf-8"))
+    assert [item["name"] for item in stored["jobs"]] == ["Renamed"]
+    assert service.get_job(job.id).name == "Renamed"
+    assert changes == ["cron"]
+
+
+@pytest.mark.asyncio
 async def test_job_paused_during_the_fire_save_does_not_fire(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Health check",
         schedule_type="cron",
@@ -858,12 +898,13 @@ async def test_job_paused_during_the_fire_save_does_not_fire(
     firing = asyncio.create_task(service._trigger_job_run(job))
     try:
         assert await asyncio.to_thread(writes.entered.wait, 5)
-        releaser = threading.Timer(0.1, writes.release.set)
-        releaser.start()
-        service.update_job(job.id, status="paused")
+        editing = asyncio.create_task(service.update_job(job.id, status="paused"))
+        await asyncio.sleep(0)
+        assert not editing.done()
     finally:
         writes.release.set()
 
+    await asyncio.wait_for(editing, timeout=5)
     assert await asyncio.wait_for(firing, timeout=5) is False
     trigger_service.trigger_run.assert_not_awaited()
     assert service.get_job(job.id).status == "paused"
@@ -886,7 +927,7 @@ async def test_unadmitted_once_claim_is_withdrawn_before_restart(
     now = datetime(2030, 10, 5, 10, tzinfo=UTC)
     monkeypatch.setattr(cron_timing, "_utc_now", lambda: now)
     service, trigger = make_service(tmp_path, tz="UTC")
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Work at the selected time",
         schedule_type="once",
@@ -922,14 +963,13 @@ async def test_unadmitted_once_claim_is_withdrawn_before_restart(
     try:
         assert await asyncio.to_thread(entered.wait, _ASYNC_COORDINATION_TIMEOUT_SECONDS)
         firing = service._job_tasks[job.id]
-        # Edits save synchronously behind the claim or fire save. Release the writer while
-        # keeping the Event Loop in this turn until the public edit has landed.
+        # An edit reaches the job task at once; its save queues behind the claim or fire save.
         release.set()
         if change == "reschedule":
-            updated = service.update_job(job.id, run_at=(now + timedelta(days=1)).isoformat())
+            updated = await service.update_job(job.id, run_at=(now + timedelta(days=1)).isoformat())
             expected_run_at = updated.run_at
         elif change == "pause":
-            service.disable_job(job.id)
+            await service.disable_job(job.id)
         if change != "shutdown":
             await asyncio.wait_for(firing, timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)
         await asyncio.wait_for(service.aclose(), timeout=_ASYNC_COORDINATION_TIMEOUT_SECONDS)

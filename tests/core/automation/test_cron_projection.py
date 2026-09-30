@@ -21,9 +21,10 @@ def service(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> CronService:
 
 
 class TestProjectOccurrences:
-    def test_spring_gap_projection_matches_successive_live_fires(self, service):
+    @pytest.mark.asyncio
+    async def test_spring_gap_projection_matches_successive_live_fires(self, service):
         service.set_timezone("Europe/Berlin")
-        job = service.create_job(
+        job = await service.create_job(
             agent_id="joel",
             prompt="half-hour",
             schedule_type="cron",
@@ -41,10 +42,11 @@ class TestProjectOccurrences:
             live.append(cursor)
         assert live == projected
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("day", ["2026-09-10", "2026-03-29", "2026-10-25"])
-    def test_cron_midnight_includes_start_and_excludes_end(self, service, day):
+    async def test_cron_midnight_includes_start_and_excludes_end(self, service, day):
         service.set_timezone("Europe/Berlin")
-        service.create_job(
+        await service.create_job(
             agent_id="joel",
             prompt="midnight",
             schedule_type="cron",
@@ -61,8 +63,9 @@ class TestProjectOccurrences:
             == []
         )
 
-    def test_once_job_projects_within_window(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_once_job_projects_within_window(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="one-shot",
             schedule_type="once",
@@ -76,8 +79,9 @@ class TestProjectOccurrences:
             datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
         ]
 
-    def test_once_job_outside_window_is_absent(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_once_job_outside_window_is_absent(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="one-shot",
             schedule_type="once",
@@ -89,8 +93,9 @@ class TestProjectOccurrences:
         )
         assert occurrences == []
 
-    def test_cron_expression_projects_local_schedule(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_cron_expression_projects_local_schedule(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="check mail",
             schedule_type="cron",
@@ -106,8 +111,9 @@ class TestProjectOccurrences:
             tzinfo=None
         ) == datetime(2026, 9, 2, 9, 0)  # 09:00 server-local
 
-    def test_interval_projects_from_anchor(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_interval_projects_from_anchor(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="interval job",
             schedule_type="interval",
@@ -123,15 +129,16 @@ class TestProjectOccurrences:
             datetime(2026, 9, 2, 2, 0, tzinfo=UTC),
         ]
 
-    def test_paused_and_terminal_jobs_do_not_project(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_paused_and_terminal_jobs_do_not_project(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="paused",
             schedule_type="cron",
             cron_expression="0 9 * * *",
             status="paused",
         )
-        service.create_job(
+        await service.create_job(
             agent_id="joel",
             prompt="exhausted",
             schedule_type="cron",
@@ -145,8 +152,9 @@ class TestProjectOccurrences:
             == []
         )
 
-    def test_future_ticks_respect_remaining_runs(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_future_ticks_respect_remaining_runs(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="limited",
             schedule_type="interval",
@@ -159,14 +167,15 @@ class TestProjectOccurrences:
         )
         assert len(occurrences) == 2
 
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("elapsed_hours", [0, 12, 24])
-    def test_historical_ticks_do_not_consume_remaining_runs(
+    async def test_historical_ticks_do_not_consume_remaining_runs(
         self, service: CronService, monkeypatch: pytest.MonkeyPatch, elapsed_hours: int
     ) -> None:
         window_start = datetime(2026, 9, 10, tzinfo=UTC)
         now = window_start + timedelta(hours=elapsed_hours)
         monkeypatch.setattr("core.automation._cron_timing._utc_now", lambda: now)
-        service.create_job(
+        await service.create_job(
             agent_id="joel",
             prompt="limited",
             schedule_type="interval",
@@ -181,15 +190,16 @@ class TestProjectOccurrences:
             window_start + timedelta(hours=hour) for hour in range(min(elapsed_hours + 2, 24))
         ]
 
-    def test_projection_is_sorted_and_sorted_by_fire_time(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_projection_is_sorted_and_sorted_by_fire_time(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="late",
             schedule_type="once",
             run_at="2026-09-02T18:00:00+00:00",
             remaining_runs=1,
         )
-        service.create_job(
+        await service.create_job(
             agent_id="joel",
             prompt="early",
             schedule_type="once",
@@ -203,8 +213,9 @@ class TestProjectOccurrences:
         assert fire_times == sorted(fire_times)
         assert [occurrence.name for occurrence in occurrences] == ["early", "late"]
 
-    def test_caps_occurrences_per_job(self, service: CronService) -> None:
-        service.create_job(
+    @pytest.mark.asyncio
+    async def test_caps_occurrences_per_job(self, service: CronService) -> None:
+        await service.create_job(
             agent_id="joel",
             prompt="every minute",
             schedule_type="interval",

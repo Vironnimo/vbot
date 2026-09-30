@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import re
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
 from functools import partial
@@ -51,7 +52,7 @@ from core.runs import RunKind
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import OrderedWorker
+from core.utils.workers import OrderedWorker, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation import TriggerService
@@ -72,9 +73,9 @@ _MAX_ERROR_CHARS = 500
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
 _EXECUTION_STATUSES = _TERMINAL | {"pending", "claimed", "running"}
-# Every actions.json write runs here in the order its snapshot was taken: the
-# scheduler's and a Run's saves never block the Event Loop, and an operator
-# edit's blocking save still lands after them.
+# Every actions.json write runs here in the order its snapshot was taken. The
+# scheduler's, a Run's and an edit's saves never block the Event Loop; the
+# blocking save of a scheduler that is not started still lands after them.
 _ACTIONS_WRITER = OrderedWorker(name="calendar-actions")
 
 CALENDAR_ACTIONS_FORMAT_VERSION = 1
@@ -316,6 +317,8 @@ class CalendarActions:
         self._generation = 0
         self._sleep_seconds = 30.0
         self._recovery_pending: set[str] = set()
+        # Edits run one at a time, so an edit's undo after a failed save is exact.
+        self._edits = asyncio.Lock()
         self._calendar.add_changed_callback(self._wake)
 
     def configure(
@@ -383,12 +386,32 @@ class CalendarActions:
             self._executions[key] = row
 
     def _save(self) -> None:
-        """Write actions and history, blocking until this and every earlier save landed."""
+        """Write actions and history, blocking until this and every earlier save landed.
+
+        Only for worker threads: on the Event Loop the wait would block the loop
+        for as long as a data snapshot holds the file.
+        """
         _ACTIONS_WRITER.call(partial(self._write, self._snapshot()))
 
     async def _save_async(self) -> None:
         """Event-Loop-safe :meth:`_save`; the snapshot is taken before the first await."""
         await _ACTIONS_WRITER.call_async(partial(self._write, self._snapshot()))
+
+    async def _save_edit(self, undo: Callable[[], object]) -> None:
+        """Save an edit already applied in memory and announced; undo it when the save fails.
+
+        The save finishes even when the caller is cancelled meanwhile.
+        """
+
+        async def save() -> None:
+            try:
+                await self._save_async()
+            except Exception:
+                undo()
+                self._calendar._notify_changed()
+                raise
+
+        await settle_before_cancelling(save())
 
     def _snapshot(self) -> dict[str, Any]:
         # The Event Loop keeps changing rows while the writer serializes them.
@@ -436,7 +459,7 @@ class CalendarActions:
         ):
             raise _SessionMissingError("session does not exist for the selected target")
 
-    def add(
+    async def add(
         self,
         event_id: str,
         *,
@@ -447,56 +470,67 @@ class CalendarActions:
         now: datetime | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> dict[str, Any]:
-        self._load()
-        self._calendar.get_event(event_id)
-        if sum(a["event_id"] == event_id for a in self._actions.values()) >= _MAX_ACTIONS:
-            raise CalendarValidationError("A calendar event supports at most 16 actions")
-        if len(self._actions) >= 512:
-            raise CalendarValidationError(
-                "The calendar supports at most 512 actions; remove unused actions first"
-            )
-        stamp = (now or datetime.now(UTC)).isoformat()
-        action: dict[str, Any] = {
-            "id": new_id("act", claim=self._action_id_available),
-            "event_id": event_id,
-            "when": parse_action_when(when)[2],
-            "prompt": prompt,
-            "target": target,
-            "session": session,
-            "created_at": stamp,
-            "scanned_until": stamp,
-        }
-        self._validate(action)
-        self._actions[action["id"]] = action
-        try:
-            self._save()
-        except Exception:
-            self._actions.pop(action["id"])
-            raise
-        self._calendar._notify_changed()
+        async with self._edits:
+            self._load()
+            self._calendar.get_event(event_id)
+            if sum(a["event_id"] == event_id for a in self._actions.values()) >= _MAX_ACTIONS:
+                raise CalendarValidationError("A calendar event supports at most 16 actions")
+            if len(self._actions) >= 512:
+                raise CalendarValidationError(
+                    "The calendar supports at most 512 actions; remove unused actions first"
+                )
+            stamp = (now or datetime.now(UTC)).isoformat()
+            action: dict[str, Any] = {
+                "id": new_id("act", claim=self._action_id_available),
+                "event_id": event_id,
+                "when": parse_action_when(when)[2],
+                "prompt": prompt,
+                "target": target,
+                "session": session,
+                "created_at": stamp,
+                "scanned_until": stamp,
+            }
+            await self._validate_async(action)
+            # The event may have been deleted while the references were checked.
+            self._calendar.get_event(event_id)
+            self._actions[action["id"]] = action
+            self._calendar._notify_changed()
+            await self._save_edit(lambda: self._actions.pop(action["id"], None))
         _LOGGER.info(
             "Calendar action added (event=%s action=%s actor=%s)", event_id, action["id"], actor
         )
         return self._payload(action)
 
-    def update(
+    async def update(
         self, action_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> dict[str, Any]:
-        self._load()
-        previous = self._get(action_id)
-        if not fields or set(fields) - {"when", "prompt", "target", "session"}:
-            raise CalendarValidationError("update_action requires when, prompt, target, or session")
-        action = {**previous, **fields}
-        action["when"] = parse_action_when(action["when"])[2]
-        changed = sorted(name for name in fields if action[name] != previous.get(name))
-        self._validate(action)
-        self._actions[action_id] = action
-        try:
-            self._save()
-        except Exception:
-            self._actions[action_id] = previous
-            raise
-        self._calendar._notify_changed()
+        async with self._edits:
+            self._load()
+            self._get(action_id)
+            if not fields or set(fields) - {"when", "prompt", "target", "session"}:
+                raise CalendarValidationError(
+                    "update_action requires when, prompt, target, or session"
+                )
+
+            def updated(current: dict[str, Any]) -> dict[str, Any]:
+                action = {**current, **fields}
+                action["when"] = parse_action_when(action["when"])[2]
+                return action
+
+            await self._validate_async(updated(self._get(action_id)))
+            # The scheduler may have moved or removed the action while the
+            # references were checked.
+            previous = self._get(action_id)
+            action = updated(previous)
+            changed = sorted(name for name in fields if action[name] != previous.get(name))
+
+            def undo() -> None:
+                if self._actions.get(action_id) is action:
+                    self._actions[action_id] = previous
+
+            self._actions[action_id] = action
+            self._calendar._notify_changed()
+            await self._save_edit(undo)
         if changed:
             _LOGGER.info(
                 "Calendar action updated (action=%s fields=%s actor=%s)",
@@ -506,16 +540,13 @@ class CalendarActions:
             )
         return self._payload(action)
 
-    def delete(self, action_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
-        self._load()
-        previous = self._get(action_id)
-        del self._actions[action_id]
-        try:
-            self._save()
-        except Exception:
-            self._actions[action_id] = previous
-            raise
-        self._calendar._notify_changed()
+    async def delete(self, action_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
+        async with self._edits:
+            self._load()
+            previous = self._get(action_id)
+            del self._actions[action_id]
+            self._calendar._notify_changed()
+            await self._save_edit(lambda: self._actions.setdefault(action_id, previous))
         _LOGGER.info("Calendar action deleted (action=%s actor=%s)", action_id, actor)
 
     def _action_id_available(self, candidate: str) -> bool:
@@ -547,42 +578,88 @@ class CalendarActions:
         longer targets ``destination`` keeps its target, so reverting a rename
         leaves rows that named ``destination`` before it alone. Returns the number
         of retargeted actions for the rename's summary line.
+
+        For a scheduler that is not started, such as during a rename that
+        completes at startup: blocking. A started scheduler's actions belong to the
+        Event Loop, so :meth:`retarget_identity_async` changes them there.
         """
+        if self._task is not None:
+            raise RuntimeError("Retarget the actions of a started scheduler on its Event Loop")
         self._load()
-        previous = copy.deepcopy((self._actions, self._executions))
-        retargeted = 0
-        for action in self._actions.values():
-            if action["target"] == source:
-                action["target"] = destination
-                retargeted += 1
-        rows = [row for row in self._executions.values() if row["target"] == source]
-        moved_sessions = self._live_session_ids(destination, rows)
-        for row in rows:
+        sessions, addresses = self._sessions, self._row_sessions(source, destination)
+        live = (
+            sessions.existing_addresses(addresses) if sessions is not None and addresses else set()
+        )
+        retargeted, undo = self._retarget(source, destination, live)
+        try:
+            self._save()
+        except Exception:
+            undo()
+            raise
+        self._calendar._notify_changed()
+        return retargeted
+
+    async def retarget_identity_async(self, source: str, destination: str) -> int:
+        """:meth:`retarget_identity` for a started scheduler, on the Event Loop that owns it.
+
+        An edit like :meth:`update`: the Session lookup runs on the Session pool,
+        the change applies at once and its save is awaited off the loop.
+        """
+        async with self._edits:
+            self._load()
+            sessions, addresses = self._sessions, self._row_sessions(source, destination)
+            live = (
+                await sessions.run_async(sessions.existing_addresses, addresses)
+                if sessions is not None and addresses
+                else set()
+            )
+            retargeted, undo = self._retarget(source, destination, live)
+            self._calendar._notify_changed()
+            await self._save_edit(undo)
+        return retargeted
+
+    def _row_sessions(self, source: str, destination: str) -> list[SessionAddress]:
+        """Address under ``destination`` each Session that a row targeting ``source`` names."""
+        return [
+            SessionAddress(project_id=None, agent_id=destination, session_id=row["session"])
+            for row in self._executions.values()
+            if row["target"] == source and row.get("session")
+        ]
+
+    def _retarget(
+        self, source: str, destination: str, live: set[SessionAddress]
+    ) -> tuple[int, Callable[[], None]]:
+        """Apply :meth:`retarget_identity` in memory.
+
+        ``live`` holds the Sessions the rows name that are live under
+        ``destination``. Returns the number of retargeted actions and the undo of
+        the change.
+        """
+        live_ids = {address.session_id for address in live}
+        action_ids = [key for key, action in self._actions.items() if action["target"] == source]
+        for key in action_ids:
+            self._actions[key]["target"] = destination
+        row_keys = []
+        for key, row in self._executions.items():
+            if row["target"] != source:
+                continue
             if row.get("session"):
-                follows = row["session"] in moved_sessions
+                follows = row["session"] in live_ids
             else:
                 owner = self._actions.get(row["action_id"])
                 follows = owner is not None and owner["target"] == destination
             if follows:
                 row["target"] = destination
-        try:
-            self._save()
-        except Exception:
-            self._actions, self._executions = previous
-            raise
-        self._calendar._notify_changed()
-        return retargeted
+                row_keys.append(key)
 
-    def _live_session_ids(self, agent_id: str, rows: list[dict[str, Any]]) -> set[str]:
-        """Return which Sessions named by ``rows`` are live under Identity Agent ``agent_id``."""
-        addresses = [
-            SessionAddress(project_id=None, agent_id=agent_id, session_id=row["session"])
-            for row in rows
-            if row.get("session")
-        ]
-        if not addresses or self._sessions is None:
-            return set()
-        return {address.session_id for address in self._sessions.existing_addresses(addresses)}
+        def undo() -> None:
+            for entries, keys in ((self._actions, action_ids), (self._executions, row_keys)):
+                for key in keys:
+                    entry = entries.get(key)
+                    if entry is not None and entry["target"] == destination:
+                        entry["target"] = source
+
+        return len(action_ids), undo
 
     def list_actions(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:

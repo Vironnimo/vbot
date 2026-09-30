@@ -7,6 +7,7 @@ Lengths, time zones and action times: ``test_calendar_call_times.py``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -286,8 +287,12 @@ class TestRepetition:
 class TestIds:
     def test_delete_and_update_of_an_action_id_act_on_the_action(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()
-        first = tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        second = tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
+        first = asyncio.run(
+            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        )
+        second = asyncio.run(
+            tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
+        )
 
         tool.call({"action": "update", "id": first["id"], "prompt": "changed"})
         tool.call({"action": "delete", "id": second["id"]})
@@ -299,7 +304,9 @@ class TestIds:
 
     def test_action_call_with_the_event_id_names_its_one_action(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()
-        action = tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        action = asyncio.run(
+            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        )
 
         _, text = tool.call({"action": "update_action", "id": event_id, "when": "end"})
 
@@ -310,8 +317,12 @@ class TestIds:
 
     def test_action_call_with_the_event_id_lists_several_actions(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()
-        first = tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
-        second = tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
+        first = asyncio.run(
+            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        )
+        second = asyncio.run(
+            tool.service.actions.add(event_id, when="end", prompt="b", target="agent-one")
+        )
 
         _, text = tool.call({"action": "delete_action", "id": event_id})
 
@@ -333,7 +344,9 @@ class TestIds:
 
     def test_event_call_with_an_action_id_names_the_event(self, tool: CalendarTool) -> None:
         event_id = tool.add_dentist()
-        action = tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        action = asyncio.run(
+            tool.service.actions.add(event_id, when="start", prompt="a", target="agent-one")
+        )
 
         _, added = tool.call(
             {"action": "add_action", "id": action["id"], "when": "end", "prompt": "b"}

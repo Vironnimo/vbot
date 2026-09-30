@@ -28,7 +28,7 @@ import sqlite3
 import stat
 import uuid
 from collections.abc import Callable, Iterable, Mapping
-from contextlib import closing, suppress
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 from core.database._connections import (
     classify_unavailable,
     classify_write_error,
-    copy_database,
+    copy_database_file,
     readonly_sqlite_uri,
     sqlite_source_id,
 )
@@ -46,7 +46,9 @@ from core.database._documents import (
     capture_documents,
     documents_payload,
     documents_present,
+    documents_size,
     parse_documents,
+    sync_documents,
     verify_documents,
 )
 from core.database._files import fsync_dir, fsync_file
@@ -56,19 +58,19 @@ from core.database.errors import (
     DatabaseUnavailableError,
 )
 from core.database.marker import (
-    DataStoreMarker,
     acquire_operation_lock,
+    describe_missing_databases,
+    missing_database_reason,
     read_marker,
     require_no_maintenance,
     valid_database_id,
 )
+from core.database.snapshot_barrier import capture_members
 from core.database.spec import (
     DatabaseSpec,
     canonical_database_path,
-    is_extension_database_name,
     validate_database_name,
 )
-from core.json_documents import snapshot_document_paths
 from core.utils.atomic import atomic_write_text
 from core.utils.timestamps import (
     is_canonical_timestamp,
@@ -79,6 +81,7 @@ from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
     from core.database.database import Database
+    from core.database.snapshot_barrier import SnapshotBarrier
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -771,47 +774,6 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
 # ---------------------------------------------------------------------------
 
 
-def missing_database_reason(name: str) -> str:
-    """Why a registered database without its file blocks snapshots, and what resolves it.
-
-    A snapshot never skips a registered database: retention would eventually
-    prune the last copies of the missing one.
-    """
-    if is_extension_database_name(name):
-        return (
-            f"the registered Extension database {name} has no file; the next open by its "
-            "Extension (enabling or reloading it) restores it from the newest verified data "
-            "snapshot that holds it; if the Extension was removed, "
-            f"`vbot data-store unregister {name} --yes` releases it"
-        )
-    return (
-        f"the registered database {name} has no file; starting vBot restores it from the "
-        "newest verified data snapshot that holds it, or `vbot data-store snapshot restore "
-        f"<snapshot-id> --database {name} --yes` restores it explicitly"
-    )
-
-
-def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str | None:
-    """Explain every registered database whose file is missing, or ``None``."""
-    missing = sorted(
-        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
-    )
-    if not missing:
-        return None
-    return "data snapshots need every registered database: " + "; ".join(
-        missing_database_reason(name) for name in missing
-    )
-
-
-def _document_bytes(data_dir: Path) -> int:
-    """The current size of the JSON document set; a document removed meanwhile counts 0."""
-    total = 0
-    for path in snapshot_document_paths(data_dir):
-        with suppress(FileNotFoundError):
-            total += data_dir.joinpath(*path.split("/")).stat().st_size
-    return total
-
-
 def create_data_snapshot(
     data_dir: Path,
     *,
@@ -819,20 +781,20 @@ def create_data_snapshot(
     databases: Iterable[Database] = (),
     specs: Iterable[DatabaseSpec] = (),
     cancelled: Callable[[], bool] | None = None,
+    barrier: SnapshotBarrier | None = None,
 ) -> Path | None:
     """Capture, verify and atomically publish one snapshot of the durable data.
 
-    Every registered database and the JSON document set are captured.
-    ``databases`` are the open handles of this process: their members are copied
-    online through the handle, so live writers keep committing. Every other
-    registered database is copied from its file, which must not be written by
-    another process meanwhile. Documents are copied after the databases, each
-    read whole at one instant. ``specs`` add owner facts for members not open
-    here. Returns ``None`` when there is nothing to capture, the attempt was
-    cancelled, or it failed; failures are recorded in the snapshot health. A
-    registered database without its file fails the attempt with the operator's
-    next step (``describe_missing_databases``) instead of being skipped.
-    Refuses with ``DatabaseFormatError`` while data maintenance is incomplete.
+    Every registered database and the JSON document set are captured by
+    ``capture_members`` (``core.database.snapshot_barrier``), so the copies show
+    the data a crash at one instant would leave; they are made durable after
+    it. ``databases`` are this process's open handles, copied online; any other
+    registered database is copied from its file, which no other process may
+    write meanwhile. A mutating process passes its ``barrier``; ``specs`` add
+    owner facts and capture roles for members not open here. Returns ``None``
+    when there is nothing to capture, or the attempt was cancelled or failed
+    (recorded in the snapshot health, a missing database file with the
+    operator's next step). Refuses with ``DatabaseFormatError`` during maintenance.
     """
     data_dir = Path(data_dir)
     if not reason or not reason.strip():
@@ -866,7 +828,7 @@ def create_data_snapshot(
                 canonical_database_path(data_dir, name).stat().st_size
                 for name in marker.databases
                 if canonical_database_path(data_dir, name).exists()
-            ) + _document_bytes(data_dir)
+            ) + documents_size(data_dir)
             if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
                 _record_snapshot_health(
                     data_dir, "degraded", reason="insufficient snapshot reserve"
@@ -876,21 +838,47 @@ def create_data_snapshot(
             _record_snapshot_health(data_dir, "degraded", reason="snapshot capacity probe failed")
             return None
         snapshot_id = _new_snapshot_id()
-        partial = root / f".{snapshot_id}.{os.getpid()}{SNAPSHOT_PARTIAL_SUFFIX}"
+        partial = staging = root / f".{snapshot_id}.{os.getpid()}{SNAPSHOT_PARTIAL_SUFFIX}"
         partial.mkdir(parents=False, exist_ok=False)
-        members: dict[str, SnapshotMember] = {}
-        for name, entry in sorted(marker.databases.items()):
-            destination = partial / member_file_name(name)
+        documents: dict[str, DocumentMember] | None = None
+
+        def copy_member(name: str) -> None:
             source_path = canonical_database_path(data_dir, name)
             if not source_path.is_file():
                 raise DatabaseUnavailableError(missing_database_reason(name))
+            destination = staging / member_file_name(name)
             handle = open_databases.get(name)
             if handle is not None:
                 copied = handle.backup(destination, cancelled=cancelled)
             else:
-                copied = _copy_file_database(source_path, destination, cancelled=cancelled)
+                copied = copy_database_file(source_path, destination, cancelled=cancelled)
             if not copied or (cancelled is not None and cancelled()):
                 raise _SnapshotCancelledError
+
+        def copy_documents() -> None:
+            nonlocal documents
+            if (documents := capture_documents(data_dir, staging, cancelled=cancelled)) is None:
+                raise _SnapshotCancelledError
+
+        def discard_copies() -> None:
+            shutil.rmtree(staging)
+            staging.mkdir()
+
+        capture = capture_members(
+            data_dir,
+            {name: known_specs.get(name) for name in marker.databases},
+            copy_database=copy_member,
+            copy_documents=copy_documents,
+            discard_copies=discard_copies,
+            barrier=barrier,
+            cancelled=cancelled,
+        )
+        if capture is None or documents is None:
+            raise _SnapshotCancelledError
+        sync_documents(staging, documents)
+        members: dict[str, SnapshotMember] = {}
+        for name, entry in sorted(marker.databases.items()):
+            destination = partial / member_file_name(name)
             file_size = destination.stat().st_size
             digest = _sha256(destination, cancelled=cancelled)
             verification = verify_database_file(
@@ -914,9 +902,6 @@ def create_data_snapshot(
                 migrations=verification.migrations,
                 facts=verification.facts,
             )
-        documents = capture_documents(data_dir, partial, cancelled=cancelled)
-        if documents is None:
-            raise _SnapshotCancelledError
         manifest = SnapshotManifest(
             snapshot_id=snapshot_id,
             reason=reason,
@@ -937,11 +922,15 @@ def create_data_snapshot(
         fsync_dir(root)
         _prune_snapshots(data_dir, protected_snapshot=final)
         _LOGGER.info(
-            "Created data snapshot (snapshot=%s databases=%d documents=%d reason=%s)",
+            "Created data snapshot (snapshot=%s databases=%d documents=%d reason=%s "
+            "held_ms=%.0f waited_changes=%d attempts=%d)",
             snapshot_id,
             len(members),
             len(documents),
             reason,
+            capture.held_seconds * 1000,
+            capture.waited_changes,
+            capture.attempts,
         )
         _record_snapshot_health(data_dir, "healthy", snapshot_id=snapshot_id)
         return final
@@ -954,16 +943,6 @@ def create_data_snapshot(
         if partial is not None:
             shutil.rmtree(partial, ignore_errors=True)
         lock.release()
-
-
-def _copy_file_database(
-    source_path: Path, destination: Path, *, cancelled: Callable[[], bool] | None
-) -> bool:
-    """Copy a database that is not open in this process, without changing it."""
-    with closing(
-        sqlite3.connect(readonly_sqlite_uri(source_path), uri=True, isolation_level=None)
-    ) as source:
-        return copy_database(source, destination, cancelled=cancelled)
 
 
 def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:

@@ -29,9 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# A module import: ``core.json_documents`` imports the kernel's snapshot freeze in turn.
+import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
-from core.json_documents import is_snapshot_document_path, snapshot_document_paths
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
 #: The quarantine child of replaced documents; never a valid database name.
@@ -102,7 +103,7 @@ def _contained_file(root: Path, parts: list[str]) -> Path | None:
 
 def document_copy_path(snapshot_dir: Path, path: str) -> Path | None:
     """The snapshot copy of document ``path``, or ``None`` when it is absent or unsafe."""
-    if not is_snapshot_document_path(path):
+    if not json_documents.is_snapshot_document_path(path):
         return None
     try:
         return _contained_file(Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME, _parts(path))
@@ -160,7 +161,7 @@ def parse_documents(payload: object) -> dict[str, DocumentMember]:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid file_size")
         if not isinstance(digest, str) or _HEX64_PATTERN.fullmatch(digest) is None:
             raise DatabaseCorruptError(f"snapshot document {path} has an invalid sha256")
-        if is_snapshot_document_path(path):
+        if json_documents.is_snapshot_document_path(path):
             members[path] = DocumentMember(path=path, file_size=size, sha256=digest)
     return members
 
@@ -188,12 +189,12 @@ def capture_documents(
     Each document is read whole in one short open, so a concurrent atomic
     replace by a running server sees at most a brief reader. The copy keeps the
     permission bits of its source (OAuth token files hold credentials). A
-    document that disappears after listing is not a member.
+    document that disappears after listing is not a member. The copies are not
+    yet durable (:func:`sync_documents`), which keeps the capture short.
     """
     root = Path(snapshot_dir) / DOCUMENTS_DIRECTORY_NAME
     members: dict[str, DocumentMember] = {}
-    directories: set[Path] = set()
-    for path in snapshot_document_paths(data_dir):
+    for path in json_documents.snapshot_document_paths(data_dir):
         if cancelled is not None and cancelled():
             return None
         try:
@@ -211,15 +212,21 @@ def capture_documents(
         )
         with os.fdopen(descriptor, "wb") as handle:
             handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        directories.add(destination.parent)
         members[path] = DocumentMember(
             path=path, file_size=len(content), sha256=hashlib.sha256(content).hexdigest()
         )
+    return members
+
+
+def sync_documents(snapshot_dir: Path, members: Mapping[str, DocumentMember]) -> None:
+    """Make the document copies :func:`capture_documents` wrote durable."""
+    directories: set[Path] = set()
+    for member in members.values():
+        copy = Path(snapshot_dir).joinpath(DOCUMENTS_DIRECTORY_NAME, *_parts(member.path))
+        fsync_file(copy)
+        directories.add(copy.parent)
     for directory in sorted(directories, key=lambda item: len(item.parts), reverse=True):
         fsync_dir(directory)
-    return members
 
 
 def verify_documents(snapshot_dir: Path, members: Mapping[str, DocumentMember]) -> None:
@@ -250,11 +257,20 @@ def documents_present(snapshot_dir: Path, members: Mapping[str, DocumentMember])
     return True
 
 
+def documents_size(data_dir: Path) -> int:
+    """The current size of the JSON document set; a document removed meanwhile counts 0."""
+    total = 0
+    for path in json_documents.snapshot_document_paths(data_dir):
+        with suppress(FileNotFoundError):
+            total += Path(data_dir).joinpath(*_parts(path)).stat().st_size
+    return total
+
+
 def live_documents(data_dir: Path) -> dict[str, str]:
     """The SHA-256 of every current document in ``data_dir`` by relative path."""
     hashes: dict[str, str] = {}
     try:
-        for path in snapshot_document_paths(data_dir):
+        for path in json_documents.snapshot_document_paths(data_dir):
             try:
                 hashes[path] = sha256_file(Path(data_dir).joinpath(*_parts(path)))
             except FileNotFoundError:

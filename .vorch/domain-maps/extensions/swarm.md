@@ -35,6 +35,8 @@ The in-memory wait after a participant's completed Run in which it used no Tool 
   WARNING when a participant's Run could not be admitted). Replays and no-ops are
   silent; the lines carry ids and counts, never goals, posts or profile text. Page
   operations and `/swarm` share the operation surface, so the lines name no actor.
+  Startup logs one line when it acknowledged saved delivery batches or found
+  conflicting receipts (counts only; WARNING for conflicts).
 - `store.py` owns the SQLite profile, Board, Wiki, audience, delivery, lifecycle and audit
   transactions. It receives canonical receipt lookups; it must
   not open the Session database directly. Its database handle comes from
@@ -328,8 +330,14 @@ acknowledges its contents. Tool batches are acknowledged after their complete
 carrier is saved. Successful automatic and Tool delivery acknowledgments publish
 a `participants` change, so pending counts refresh during an active Run without
 waiting for another Board mutation or Run completion. Failed acknowledgments
-retain pending state; empty Tool batches do not invalidate the page. Evidence:
-`test_swarm_inbox_delivery.py`, `test_swarm_wakes.py`, `SwarmPage.activity.test.js`.
+retain pending state; empty Tool batches do not invalidate the page. At startup,
+after epoch recovery, `SwarmStore.reconcile_prepared_deliveries()` acknowledges
+every unacknowledged batch whose receipt the Session already saved, so a stop
+between the carrier commit and the acknowledgment does not deliver those posts
+again. Batches without a receipt stay pending; a conflicting receipt or a gone
+Session binding is counted and leaves the batch unacknowledged. Evidence:
+`test_swarm_inbox_delivery.py`, `test_swarm_store_delivery.py`,
+`test_swarm_wakes.py`, `SwarmPage.activity.test.js`.
 Delivery mode and idle wake permission are independent. A wake
 always delivers actual pending Board content, including pull-mode messages on a
 wake-enabled route; it never asks the Agent to fetch the first batch. Bounded
@@ -477,8 +485,11 @@ old registration to start or mutate new execution.
 Explicit Resume may continue inactive peers in an open epoch while
 other peers run. A closed attempt opens a fresh epoch. Preparation failure closes
 that newly opened epoch so a later Resume can retry; existing Sessions and the
-initial-input receipt remain authoritative. Resume is rejected while initial
-preparation or Stop is still in progress. Background wake failures
+initial-input receipt remain authoritative. Resume records every participant's
+Session binding again (idempotent), so a Session a failed or interrupted Start
+created without recording it still receives Board delivery afterwards
+(`test_resume_records_a_participant_session_whose_binding_start_lost`). Resume
+is rejected while initial preparation or Stop is still in progress. Background wake failures
 retain pending delivery and expose needs_attention with ids-only diagnostics.
 
 Start and Resume persist admitted Run results in their existing request receipt;

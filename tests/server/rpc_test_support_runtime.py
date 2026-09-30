@@ -18,7 +18,7 @@ from core.chat import (
     ChatSessionManager,
     CommandDispatcher,
 )
-from core.database import write_bootstrap_marker
+from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.memory import MemoryService
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
@@ -335,6 +335,9 @@ class StubChannelService:
     def list_channels(self) -> list[Any]:
         return []
 
+    async def list_channels_async(self) -> list[Any]:
+        return []
+
     async def retarget_agent_async(self, _agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
         return ()
 
@@ -355,7 +358,7 @@ class StubCalendarActions:
     def can_fire(self, action_id: str) -> bool:
         return not any(action["id"] == action_id and action.get("spent") for action in self.actions)
 
-    def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> int:
+    async def retarget_identity_async(self, _old_agent_id: str, _new_agent_id: str) -> int:
         return 0
 
 
@@ -397,6 +400,7 @@ class StubRuntime:
         if not marker.exists():
             write_bootstrap_marker(tmp_path)
         self.chat_sessions = ChatSessionManager(tmp_path)
+        self.snapshot_barrier = SnapshotBarrier()
         self.agent_resolver = StubAgentResolver(self.agents, sessions=self.chat_sessions)
         self.file_read_state = FileReadState()
         self.tools = ToolRegistry()
@@ -452,10 +456,10 @@ class StubRuntime:
     async def rename_agent(self, agent_id: str, new_agent_id: str) -> AgentRenameOutcome:
         return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
 
-    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+    async def agent_references(self, agent_id: str) -> tuple[str, ...]:
         references = [
             f"channel:{channel.id}"
-            for channel in self.channel_service.list_channels()
+            for channel in await self.channel_service.list_channels_async()
             if channel.agent_id == agent_id
         ]
         references.extend(
@@ -471,6 +475,7 @@ class StubRuntime:
             cron=cast(Any, self.cron_service),
             bootstrap=cast(Any, self.bootstrap_service),
             calendar=cast(Any, self.calendar_service),
+            snapshot_barrier=self.snapshot_barrier,
         )
 
     def skills_for(self, _project_id: str | None = None, _agent_id: str | None = None) -> Any:

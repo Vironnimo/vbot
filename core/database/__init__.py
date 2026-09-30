@@ -6,8 +6,10 @@ serialized writes, pooled reads, the per-database worker pool, schema
 evolution (additive reconcile, retired indexes, the migration ledger and
 format generations), the canonical and disposable profiles, the data-store
 marker and maintenance guard, data snapshots (every canonical database plus
-the JSON document set), quarantine, recovery incidents, automatic restore and
-the updater's guarded pre-update snapshot rollback. See
+the JSON document set, taken online as a crash at one instant would leave them
+and kept apart from compound mutations by the :class:`SnapshotBarrier`; see
+``core.database.snapshot_barrier``), quarantine, recovery incidents, automatic
+restore and the updater's guarded pre-update snapshot rollback. See
 ``.vorch/domain-maps/database.md``. :class:`DisposableDatabase` and
 :func:`projection_failure` serve owners of disposable projections at runtime.
 """
@@ -30,6 +32,7 @@ from core.database.errors import (
     DatabaseSchemaMismatchError,
     DatabaseUnavailableError,
     IncidentConflictError,
+    MemberFrozenError,
     UpdateRollbackRefusedError,
     generation_1_conversion_hint,
 )
@@ -40,6 +43,7 @@ from core.database.marker import (
     MaintenanceOperation,
     MarkerEntry,
     begin_maintenance,
+    describe_missing_databases,
     finish_maintenance,
     maintenance,
     read_maintenance,
@@ -56,9 +60,9 @@ from core.database.recovery import (
     restore_data_snapshot,
     unregister_database,
 )
+from core.database.snapshot_barrier import SnapshotBarrier
 from core.database.snapshots import (
     create_data_snapshot,
-    describe_missing_databases,
     list_data_snapshots,
     read_snapshot_health,
     read_verified_manifest,
@@ -67,13 +71,17 @@ from core.database.snapshots import (
     snapshot_summary,
 )
 from core.database.spec import (
+    ANCHOR_CAPTURE,
     APPLICATION_IDS,
     CANONICAL,
     DISPOSABLE,
+    HELD_CAPTURE,
+    TRAILING_CAPTURE,
     DatabaseHealth,
     DatabaseProfile,
     DatabaseSpec,
     Migration,
+    SnapshotCapture,
     SnapshotFacts,
     canonical_database_path,
     is_extension_database_name,
@@ -88,14 +96,17 @@ from core.database.update_rollback import (
 )
 
 __all__ = [
+    "ANCHOR_CAPTURE",
     "APPLICATION_IDS",
     "CANONICAL",
     "DISPOSABLE",
+    "HELD_CAPTURE",
     "GENERATION_1_CONVERTER_COMMAND",
     "JOURNAL_MODE_DELETE",
     "JOURNAL_MODE_WAL",
     "MAINTENANCE_GUARD_FILE_NAME",
     "MARKER_FILE_NAME",
+    "TRAILING_CAPTURE",
     "DataStoreMarker",
     "Database",
     "DatabaseConversionRequiredError",
@@ -111,8 +122,11 @@ __all__ = [
     "IncidentConflictError",
     "MaintenanceOperation",
     "MarkerEntry",
+    "MemberFrozenError",
     "Migration",
     "ProjectionFailure",
+    "SnapshotBarrier",
+    "SnapshotCapture",
     "SnapshotFacts",
     "SnapshotRestore",
     "UnregisteredDatabase",

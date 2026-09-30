@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from core.agents.agents import AgentStore
 from core.automation import AutomationReferences
-from core.database import write_bootstrap_marker
+from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
     AgentResolver,
@@ -161,8 +161,9 @@ def _make_state(
     data_dir.mkdir()
     write_bootstrap_marker(data_dir)
     sessions = ChatSessionManager(data_dir)
-    projects = ProjectStore(data_dir, sessions=sessions)
-    agents = AgentStore(data_dir, sessions=sessions)
+    barrier = SnapshotBarrier()
+    projects = ProjectStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
+    agents = AgentStore(data_dir, sessions=sessions, snapshot_barrier=barrier)
     resolver = AgentResolver(
         agents=agents,
         projects=projects,
@@ -178,6 +179,8 @@ def _make_state(
         projects=projects,
         agents=agents,
         sessions=sessions,
+        chat_sessions=sessions,
+        snapshot_barrier=barrier,
         agent_resolver=resolver,
         terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,

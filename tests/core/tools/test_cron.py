@@ -428,8 +428,10 @@ def test_unresolvable_target_gets_target_guidance(
 ) -> None:
     resolver = Mock()
     tool = cron_tool(tmp_path, agent_resolver=resolver)
-    job = tool.service.create_job(
-        agent_id="agent-one", prompt="Ping", schedule_type="interval", interval_seconds=7200
+    job = asyncio.run(
+        tool.service.create_job(
+            agent_id="agent-one", prompt="Ping", schedule_type="interval", interval_seconds=7200
+        )
     )
     resolver.resolve_agent.reset_mock()
     resolver.resolve_agent.side_effect = resolver_error

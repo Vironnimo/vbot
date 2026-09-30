@@ -279,6 +279,7 @@ def bootstrap(runtime: Runtime) -> None:
             template_dir=resources_path / "workspace-templates",
             defaults_provider=lambda: storage.load_defaults().get("agent", {}),
             sessions=runtime._chat_sessions,
+            snapshot_barrier=runtime._snapshot_barrier,
         )
         # An Identity Agent rename interrupted by the last process ends before any
         # roster read or bootstrap Agent: its Agent-owned half first, its references
@@ -417,7 +418,11 @@ def bootstrap(runtime: Runtime) -> None:
             on_changed=runtime._notify_skills_changed,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
-        runtime._projects = ProjectStore(runtime._storage.data_dir, sessions=runtime._chat_sessions)
+        runtime._projects = ProjectStore(
+            runtime._storage.data_dir,
+            sessions=runtime._chat_sessions,
+            snapshot_barrier=runtime._snapshot_barrier,
+        )
         runtime._skill_runtime = SkillRuntime(
             registry=runtime._skills,
             policy=runtime._skill_policy,
@@ -449,6 +454,9 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )
+        # Creating the bootstrap Agent enters the snapshot barrier on the calling thread,
+        # the Event Loop in the server lifespan. It never waits there: no request, and so
+        # no data snapshot, is served before startup completes.
         runtime._agents.ensure_bootstrap()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
@@ -594,6 +602,7 @@ def bootstrap(runtime: Runtime) -> None:
             terminal_manager=runtime._terminal_manager,
             reasoning_render_describer=runtime.describe_reasoning_render,
             automation_references=runtime._automation_references,
+            snapshot_barrier=runtime._snapshot_barrier,
         )
         if runtime._extensions is not None:
             runtime._extensions.apply_commands(runtime._command_dispatcher)

@@ -27,7 +27,7 @@ from core.automation import (
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
-from core.database import Database, UnregisteredDatabase
+from core.database import Database, SnapshotBarrier, UnregisteredDatabase
 from core.extensions import (
     ExtensionRegistry,
     InteractionEvent,
@@ -154,6 +154,9 @@ class Runtime:
             None
         )
         self._close_task: asyncio.Task[None] | None = None
+        # Lives as long as the Runtime: a restart keeps coordinating with a
+        # data snapshot that is still copying.
+        self._snapshot_barrier = SnapshotBarrier()
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -769,18 +772,18 @@ class Runtime:
                     )
         return outcome
 
-    def agent_references(self, agent_id: str) -> tuple[str, ...]:
+    async def agent_references(self, agent_id: str) -> tuple[str, ...]:
         """Name the Channels and live automations that keep an Identity Agent from deletion.
 
         Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
         :meth:`AutomationReferences.agent_references`, sorted; automation history
-        that never starts another Run does not count. Blocking: it reads every
-        Channel config.
+        that never starts another Run does not count. The Channel configs are read
+        off the Event Loop.
         """
         self._ensure_started()
         references = [
             f"channel:{channel.id}"
-            for channel in self.channel_service.list_channels()
+            for channel in await self.channel_service.list_channels_async()
             if channel.agent_id == agent_id
         ]
         references.extend(
@@ -812,6 +815,7 @@ class Runtime:
             cron=cron,
             bootstrap=bootstrap_jobs,
             calendar=calendar,
+            snapshot_barrier=self._snapshot_barrier,
         )
 
     def reload_skills(self) -> None:
@@ -1043,6 +1047,16 @@ class Runtime:
     @property
     def extensions(self) -> ExtensionRegistry | None:
         return self._extensions
+
+    @property
+    def snapshot_barrier(self) -> SnapshotBarrier:
+        """Keeps data snapshots apart from this Runtime's compound mutations.
+
+        Every change of a canonical database together with a durable JSON
+        document enters it shared as one unit; a data snapshot of this data
+        directory passes it to ``create_data_snapshot``.
+        """
+        return self._snapshot_barrier
 
     def canonical_databases(self) -> tuple[Database, ...]:
         """Every canonical database this Runtime has open.

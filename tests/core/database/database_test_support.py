@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Condition, Event, Semaphore
 from typing import Any
 
 import pytest
@@ -13,16 +16,20 @@ import pytest
 from core.database import (
     CANONICAL,
     DISPOSABLE,
+    HELD_CAPTURE,
     MARKER_FILE_NAME,
     Database,
     DatabaseHealth,
     DatabaseSpec,
     Migration,
+    SnapshotCapture,
     SnapshotFacts,
     canonical_database_path,
     create_data_snapshot,
     open_database,
+    snapshot_barrier,
 )
+from core.database.snapshot_barrier import MemberCapture, capture_members
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 
 #: A test-only application id ("VBTX"), distinct from every real vBot database.
@@ -52,6 +59,7 @@ def notes_spec(
     after_open: Callable[[sqlite3.Connection], None] | None = None,
     health: Callable[[sqlite3.Connection], DatabaseHealth] | None = None,
     snapshot_facts: SnapshotFacts | None = NOTES_FACTS,
+    snapshot_capture: SnapshotCapture = HELD_CAPTURE,
 ) -> DatabaseSpec:
     """A canonical database at its fixed path in ``data_dir``."""
     return DatabaseSpec(
@@ -66,6 +74,7 @@ def notes_spec(
         after_open=after_open,
         snapshot_facts=snapshot_facts,
         health=health,
+        snapshot_capture=snapshot_capture,
     )
 
 
@@ -193,3 +202,49 @@ def write_document(data_dir: Path, relative: str, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
     return path
+
+
+class FrozenMembers(Condition):
+    """The member freeze's condition while a test holds a capture's freeze.
+
+    ``waiting`` counts held changes as they start waiting for the thaw;
+    ``capture`` is the finished capture once :func:`frozen_members` ends.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.waiting = Semaphore(0)
+        self.capture: MemberCapture | None = None
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if timeout is None:  # only a held change waits without a budget
+            self.waiting.release()
+        return super().wait(timeout)
+
+
+@contextmanager
+def frozen_members(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FrozenMembers]:
+    """Hold a capture of ``data_dir`` frozen (documents only) until the block ends."""
+    gate = FrozenMembers()
+    monkeypatch.setattr(snapshot_barrier, "_CONDITION", gate)
+    frozen, thaw = Event(), Event()
+
+    def copy_documents() -> None:
+        frozen.set()
+        assert thaw.wait(10)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        capturing = executor.submit(
+            capture_members,
+            data_dir,
+            {},
+            copy_database=lambda _name: None,
+            copy_documents=copy_documents,
+            discard_copies=lambda: pytest.fail("no change entered during the freeze"),
+        )
+        try:
+            assert frozen.wait(10)
+            yield gate
+        finally:
+            thaw.set()
+        gate.capture = capturing.result(timeout=10)

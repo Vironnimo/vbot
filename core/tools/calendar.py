@@ -286,10 +286,10 @@ async def _handle_calendar_tool(
         if action == "delete":
             return _handle_delete(calendar_service, arguments)
         if action == "add_action":
-            return handle_add_action(calendar_service, arguments, context)
+            return await handle_add_action(calendar_service, arguments, context)
         if action == "update_action":
-            return handle_update_action(calendar_service, arguments, context)
-        return handle_delete_action(calendar_service, arguments)
+            return await handle_update_action(calendar_service, arguments, context)
+        return await handle_delete_action(calendar_service, arguments)
     except CalendarCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
     except CalendarEventNotFoundError as error:

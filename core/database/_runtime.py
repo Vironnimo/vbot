@@ -371,7 +371,7 @@ class ConnectionRuntime:
         *,
         cancelled: Callable[[], bool] | None = None,
     ) -> bool:
-        """Write one consistent, durable copy of the live database to ``destination``.
+        """Write one consistent copy of the live database to ``destination``.
 
         The copy is a single ``copy_database`` pass from a read-only connection,
         so committing writers can neither restart nor tear it. With WAL the reader
@@ -379,7 +379,9 @@ class ConnectionRuntime:
         rollback-journal mode that reader's lock would block every commit and
         let short-budget writes fail as busy, so the copy holds this runtime's
         connection lock instead: writes and reads queue in Python until the copy
-        finishes. Returns ``False`` when ``cancelled`` stopped the copy.
+        finishes. The copy is not synced to disk: the caller makes it durable when
+        it needs to, outside any freeze it holds. Returns ``False`` when
+        ``cancelled`` stopped the copy.
         """
         destination = Path(destination).expanduser().resolve()
         if destination.exists():
@@ -411,8 +413,6 @@ class ConnectionRuntime:
             if not copied or (cancelled is not None and cancelled()):
                 remove_database_files(temporary)
                 return False
-            with temporary.open("r+b") as handle:
-                os.fsync(handle.fileno())
             os.replace(temporary, destination)
             return True
         except (sqlite3.Error, OSError) as exc:

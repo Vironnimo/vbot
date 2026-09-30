@@ -21,6 +21,7 @@ from core.utils import tree_move
 from tests.core.agents.agents_test_support import persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
+from tests.core.database.database_test_support import frozen_members
 
 EARLY_TIMESTAMP = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 LATE_TIMESTAMP = datetime(2026, 6, 1, 12, 0, tzinfo=UTC)
@@ -134,6 +135,37 @@ def test_roster_verifies_every_current_session_in_one_read(
     assert probes == []
     assert store.get("alpha").current_session_id != alpha.session_id
     assert probes == [1]
+
+
+def test_a_change_waiting_for_a_data_snapshot_never_holds_up_agent_reads(
+    store: AgentStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store.create("coder", "Original")
+    dangling = store.create("dangling").current_session_id
+    store._session_manager().delete(SessionAddress(None, "dangling", dangling))
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        with frozen_members(store.data_dir, monkeypatch) as gate:
+            updating = executor.submit(store.update, "coder", name="Changed")
+            repairing = executor.submit(store.get, "dangling")
+            assert gate.waiting.acquire(timeout=10)
+            assert gate.waiting.acquire(timeout=10)
+            # Both wait for the snapshot without the store lock that Event Loop
+            # readers take, and a read with nothing to repair does not wait.
+            found = executor.submit(store.find, "coder").result(timeout=10)
+            assert found is not None
+            assert found.name == "Original"
+            assert executor.submit(store.get, "coder").result(timeout=10).name == "Original"
+            assert not updating.done()
+            assert not repairing.done()
+        assert updating.result(timeout=10).name == "Changed"
+        repaired = repairing.result(timeout=10).current_session_id
+
+    assert gate.capture is not None
+    assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 2)
+    # The repair the snapshot deferred created one Session, after the thaw.
+    sessions = store._session_manager().list_summaries("dangling")
+    assert [session["id"] for session in sessions] == [repaired]
 
 
 def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> None:

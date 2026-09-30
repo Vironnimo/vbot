@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import Any, TypeVar
 
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
@@ -88,8 +88,10 @@ from core.config_validation import (
     JsonConfigValidationError,
     load_validated_json_file,
 )
+from core.database import MemberFrozenError, SnapshotBarrier
 from core.json_documents import (
     JsonDocumentWriteError,
+    document_change,
     strip_unknown_fields,
     write_json_document,
 )
@@ -156,6 +158,8 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
 
+_Read = TypeVar("_Read")
+
 
 @dataclass(frozen=True)
 class _AppliedRename:
@@ -174,6 +178,7 @@ class AgentStore:
         template_dir: str | Path | None = None,
         defaults_provider: Callable[[], dict[str, Any]] | None = None,
         sessions: ChatSessionManager | None = None,
+        snapshot_barrier: SnapshotBarrier | None = None,
     ) -> None:
         self._data_dir = Path(data_dir).expanduser().resolve()
         self._template_dir = (
@@ -186,7 +191,16 @@ class AgentStore:
         # RPC workers can overlap reads that repair state and lifecycle updates.
         # Hold this across each complete read-modify-write, including Session
         # repair and roster revisions, rather than just the final file replace.
+        # Event Loop code takes it for reads, so no thread may wait for a data
+        # snapshot while holding it: a mutation admits its document change before
+        # the lock (``_change``), and a read that repairs retries through that
+        # admission when a snapshot is being taken (``_repairing_read``).
         self._write_lock = RLock()
+        # Create, rename and delete change Sessions and ``agent.json`` together; a
+        # data snapshot of the Runtime's barrier never copies between the two.
+        self._snapshot_barrier = (
+            snapshot_barrier if snapshot_barrier is not None else SnapshotBarrier()
+        )
 
     @contextmanager
     def lifecycle_guard(self) -> Iterator[None]:
@@ -196,7 +210,7 @@ class AgentStore:
         so rename/archive cannot detach an already-resolved private home. Callers
         must run blocking guarded work in a worker without callbacks to the loop.
         """
-        with self._write_lock:
+        with self._change():
             yield
 
     def close(self) -> None:
@@ -230,7 +244,7 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_agent_id(agent_id)
             agent_dir = self._agent_dir(agent_id)
             if agent_dir.exists():
@@ -314,10 +328,13 @@ class AgentStore:
 
     def get(self, agent_id: str) -> Agent:
         """Load an agent from disk by its exact id, with a verified current Session."""
-        with self._write_lock:
+
+        def read() -> Agent:
             agent_path = self._require_agent_path(agent_id)
             raw_agent = self._load_verified_agent(agent_path)
             return _apply_defaults(raw_agent, self._agent_defaults())
+
+        return self._repairing_read(read)
 
     async def get_async(self, agent_id: str) -> Agent:
         """Event-Loop-safe :meth:`get`, run as one unit on the Session database's pool.
@@ -346,9 +363,11 @@ class AgentStore:
         current-Session pointer, so it is returned as stored, unverified; read it
         through :meth:`get`.
         """
-        with self._write_lock:
-            agent_path = self._require_agent_path(agent_id)
-            return self._load_seeded_agent(agent_path)
+
+        def read() -> Agent:
+            return self._load_seeded_agent(self._require_agent_path(agent_id))
+
+        return self._repairing_read(read)
 
     def exists(self, agent_id: str) -> bool:
         """Return whether a valid identity Agent with exactly this id can be loaded.
@@ -391,70 +410,73 @@ class AgentStore:
         never hides Agents: the roster falls back to id order and the invalid
         file remains available for ``doctor config`` diagnostics.
         """
-        with self._write_lock:
-            agents_dir = self._data_dir / "agents"
-            if not agents_dir.exists():
-                return AgentListResult(agents=(), order_revision=0)
+        return self._repairing_read(self._list_with_order)
 
-            defaults = self._agent_defaults()
+    def _list_with_order(self) -> AgentListResult:
+        """:meth:`list_with_order` under the store lock."""
+        agents_dir = self._data_dir / "agents"
+        if not agents_dir.exists():
+            return AgentListResult(agents=(), order_revision=0)
+
+        defaults = self._agent_defaults()
+        try:
+            agent_paths = sorted(agents_dir.glob("*/agent.json"))
+        except OSError as error:
+            _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
+            agent_paths = []
+
+        loaded: list[tuple[Path, Agent]] = []
+        for agent_path in agent_paths:
             try:
-                agent_paths = sorted(agents_dir.glob("*/agent.json"))
-            except OSError as error:
-                _LOGGER.warning("Could not scan Agent configs in %s: %s", agents_dir, error)
-                agent_paths = []
+                loaded.append((agent_path, self._load_seeded_agent(agent_path)))
+            except (AgentError, OSError) as error:
+                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
+        # One Session read verifies every current pointer of the roster.
+        live = self._live_current_session_agent_ids([agent for _path, agent in loaded])
+        agents: list[Agent] = []
+        for agent_path, raw_agent in loaded:
+            try:
+                if raw_agent.id not in live:
+                    raw_agent = self._replace_current_session(raw_agent)
+                agents.append(_apply_defaults(raw_agent, defaults))
+            except (AgentError, OSError) as error:
+                _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
 
-            loaded: list[tuple[Path, Agent]] = []
-            for agent_path in agent_paths:
-                try:
-                    loaded.append((agent_path, self._load_seeded_agent(agent_path)))
-                except (AgentError, OSError) as error:
-                    _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
-            # One Session read verifies every current pointer of the roster.
-            live = self._live_current_session_agent_ids([agent for _path, agent in loaded])
-            agents: list[Agent] = []
-            for agent_path, raw_agent in loaded:
-                try:
-                    if raw_agent.id not in live:
-                        raw_agent = self._replace_current_session(raw_agent)
-                    agents.append(_apply_defaults(raw_agent, defaults))
-                except (AgentError, OSError) as error:
-                    _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
-
-            order = self._load_agent_order()
-            ordered_agents = _apply_agent_order(agents, order)
-            if not agents and order is None:
-                return AgentListResult(
-                    agents=(),
-                    order_revision=0,
-                )
-
-            effective_ids = tuple(agent.id for agent in ordered_agents)
-            order_path = self._agent_order_path()
-            order_is_invalid = order is None and order_path.exists()
-            if order is None and not order_is_invalid:
-                materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
-                try:
-                    self._write_agent_order(materialized)
-                except OSError as error:
-                    _LOGGER.warning("Could not persist Identity Agent order: %s", error)
-                else:
-                    order = materialized
-            elif order is not None and order.agent_ids != effective_ids:
-                reconciled = _AgentOrderDocument(
-                    agent_ids=effective_ids,
-                    revision=order.revision + 1,
-                )
-                try:
-                    self._write_agent_order(reconciled)
-                except OSError as error:
-                    _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
-                else:
-                    order = reconciled
-
+        order = self._load_agent_order()
+        ordered_agents = _apply_agent_order(agents, order)
+        if not agents and order is None:
             return AgentListResult(
-                agents=tuple(ordered_agents),
-                order_revision=order.revision if order is not None else 0,
+                agents=(),
+                order_revision=0,
             )
+
+        effective_ids = tuple(agent.id for agent in ordered_agents)
+        order_path = self._agent_order_path()
+        order_is_invalid = order is None and order_path.exists()
+        if order is None and not order_is_invalid:
+            materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
+            try:
+                self._write_agent_order(materialized)
+            except OSError as error:
+                _LOGGER.warning("Could not persist Identity Agent order: %s", error)
+            else:
+                order = materialized
+        elif order is not None and order.agent_ids != effective_ids:
+            reconciled = _AgentOrderDocument(
+                agent_ids=effective_ids,
+                revision=order.revision + 1,
+            )
+            try:
+                self._write_agent_order(reconciled)
+            except OSError as error:
+                _LOGGER.warning("Could not reconcile Identity Agent order: %s", error)
+            else:
+                order = reconciled
+
+        return AgentListResult(
+            agents=tuple(ordered_agents),
+            order_revision=order.revision if order is not None else 0,
+        )
 
     def reorder(
         self,
@@ -463,7 +485,7 @@ class AgentStore:
         expected_revision: int,
     ) -> AgentListResult:
         """Atomically replace the canonical order when roster and revision match."""
-        with self._write_lock:
+        with self._change():
             if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
                 raise InvalidAgentOrderError("expected_revision must be a non-negative integer")
             if expected_revision < 0:
@@ -512,7 +534,7 @@ class AgentStore:
         Invalid Agent directories are preserved for diagnosis. If one already
         occupies ``main``, the bootstrap Agent uses the first free ``main-N`` id.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             if self.list():
                 return None
 
@@ -543,7 +565,7 @@ class AgentStore:
         a failure restores every destination touched before leaving the config on
         its original Workspace.
         """
-        with self._write_lock:
+        with self._change():
             _validate_agent_id(agent_id)
             if "id" in changes and changes["id"] != agent_id:
                 raise AgentError("Agent id is immutable")
@@ -652,7 +674,7 @@ class AgentStore:
 
     def restore_update(self, previous_agent: Agent, result: AgentUpdateResult) -> None:
         """Compensate a completed update during a larger coordinated operation."""
-        with self._write_lock:
+        with self._change():
             if result.destination is not None:
                 relocation = _WorkspaceRelocation(
                     destination=Path(result.destination),
@@ -692,7 +714,7 @@ class AgentStore:
         Agent-owned half and removes the record. While a rename is pending, no
         other rename starts and neither id can be created.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_agent_id(agent_id)
             _validate_agent_id(new_agent_id)
             if agent_id == new_agent_id:
@@ -754,7 +776,7 @@ class AgentStore:
         :meth:`finish_rename` with it. On failure the reversed record stays, and
         the next start completes the rollback.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             self._require_pending_rename(rename)
             reverse = rename.reversed()
             self._write_rename_record(reverse)
@@ -763,7 +785,7 @@ class AgentStore:
 
     def finish_rename(self, rename: AgentRename) -> None:
         """Remove the pending ``rename`` record once every reference is retargeted."""
-        with self._write_lock:
+        with self._change():
             self._require_pending_rename(rename)
             self._rename_record_path().unlink(missing_ok=True)
 
@@ -778,7 +800,7 @@ class AgentStore:
         the record cannot be read or neither direction completes; that record
         stays for the next start and the failure is logged.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             try:
                 rename = self._load_rename_record()
             except (AgentError, OSError) as error:
@@ -950,7 +972,7 @@ class AgentStore:
         custom workspace outside the agent tree (e.g. a repo an identity agent is
         rooted in) still exists after the first move and is archived beside it.
         """
-        with self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             agent = self.get(agent_id)
             archive_dir = self._archive_dir(agent_id)
             archive_dir.parent.mkdir(parents=True, exist_ok=True)
@@ -1033,7 +1055,7 @@ class AgentStore:
         sees the pointer dangling at the just-removed id, preempting the
         last-active landing this method exists to provide.
         """
-        with self._write_lock:
+        with self._change():
             agent_path = self._require_agent_path(agent_id)
             agent = self._read_agent_config(agent_path)
             if agent.current_session_id != removed_session_id:
@@ -1057,6 +1079,32 @@ class AgentStore:
                     created_session.delete()
                 raise
             return _apply_defaults(updated_agent, self._agent_defaults())
+
+    @contextmanager
+    def _change(self) -> Iterator[None]:
+        """Admit a change of the Agent documents, then hold the store lock.
+
+        In this order a change that waits for a data snapshot waits without the
+        lock, which Event Loop readers take.
+        """
+        with document_change(self._data_dir / "agents"), self._write_lock:
+            yield
+
+    def _repairing_read(self, read: Callable[[], _Read]) -> _Read:
+        """Run a read that may repair what it finds; it never waits for a snapshot under the lock.
+
+        A repair writes without waiting (``_write_agent``): while a data snapshot
+        is being taken it raises ``MemberFrozenError`` instead, and the read gives
+        the lock up, waits for the snapshot and runs again. A read that repairs
+        nothing never waits, so Agent resolution goes on during a snapshot.
+        """
+        try:
+            with self._write_lock:
+                return read()
+        except MemberFrozenError:
+            pass
+        with self._change():
+            return read()
 
     def _agent_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id
@@ -1150,13 +1198,15 @@ class AgentStore:
         return self._data_dir / "archive" / "agents" / agent_id
 
     def _write_agent(self, agent: Agent) -> None:
-        with self._write_lock:
+        """Write one config; it never waits under the lock (see ``_repairing_read``)."""
+        agent_path = self._agent_path(agent.id)
+        with self._write_lock, document_change(agent_path, wait=False):
             persisted = _agent_document(
                 agent,
                 workspace=_workspace_for_storage(agent.workspace, data_dir=self._data_dir),
             )
             try:
-                write_json_document(self._agent_path(agent.id), persisted, AGENT_FORMAT)
+                write_json_document(agent_path, persisted, AGENT_FORMAT)
             except JsonDocumentWriteError as error:
                 raise AgentError(str(error)) from error
 
@@ -1186,11 +1236,11 @@ class AgentStore:
         )
 
     def _write_agent_order(self, order: _AgentOrderDocument) -> None:
-        with self._write_lock:
+        """Write the roster order; it never waits under the lock (see ``_repairing_read``)."""
+        order_path = self._agent_order_path()
+        with self._write_lock, document_change(order_path, wait=False):
             try:
-                write_json_document(
-                    self._agent_order_path(), _agent_order_document(order), AGENT_ORDER_FORMAT
-                )
+                write_json_document(order_path, _agent_order_document(order), AGENT_ORDER_FORMAT)
             except JsonDocumentWriteError as error:
                 raise AgentError(str(error)) from error
         self._reported_order_error = None
@@ -1266,13 +1316,16 @@ class AgentStore:
 
     def _replace_current_session(self, agent: Agent) -> Agent:
         """Point *agent* at a fresh empty Session; its stored pointer is missing or dangling."""
-        session = self._session_manager().create(agent.id)
-        updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
-        try:
-            self._write_agent(updated_agent)
-        except Exception:
-            session.delete()
-            raise
+        # Admitted before the Session exists, so a repair that a data snapshot
+        # defers creates none (see ``_repairing_read``).
+        with document_change(self._agent_path(agent.id), wait=False):
+            session = self._session_manager().create(agent.id)
+            updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
+            try:
+                self._write_agent(updated_agent)
+            except Exception:
+                session.delete()
+                raise
         return updated_agent
 
     def _validate_current_session(self, agent_id: str, session_id: Any) -> None:

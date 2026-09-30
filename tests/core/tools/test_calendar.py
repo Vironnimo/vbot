@@ -132,8 +132,10 @@ class TestList:
     def test_list_shows_actions_with_next_due_time(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="Meeting", start="2030-01-10T12:00")
-        action = tool.service.actions.add(
-            event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+        action = asyncio.run(
+            tool.service.actions.add(
+                event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+            )
         )
 
         _, text = tool.call({"action": "list", "when": "2030-01"})
@@ -147,8 +149,10 @@ class TestList:
     def test_list_shows_why_a_run_could_not_start(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="Meeting", start="2030-01-10T12:00")
-        action = tool.service.actions.add(
-            event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+        action = asyncio.run(
+            tool.service.actions.add(
+                event.id, when="start - 1h", prompt="Prepare the notes.", target="agent-one"
+            )
         )
         # The target cannot run when the occurrence comes due.
         resolver = SimpleNamespace(resolve_agent=Mock(side_effect=AgentResolutionError("gone")))
@@ -330,7 +334,9 @@ class TestDelete:
     def test_delete_removes_the_event_and_its_actions(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="X", start="2030-01-10T15:00:00")
-        tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        asyncio.run(
+            tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        )
 
         _, text = tool.call({"action": "delete", "id": event.id})
 
@@ -489,7 +495,9 @@ class TestActions:
         """A removal that holds the lock ends before a call can select or revive a reference."""
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="Meeting", start="2030-01-01T12:00")
-        action = tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        action = asyncio.run(
+            tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        )
         arguments = {
             "add_action": {"action": change, "id": event.id, "when": "end", "prompt": "review"},
             "update_action": {"action": change, "id": action["id"], "when": "end"},
@@ -516,8 +524,10 @@ class TestActions:
     def test_update_refuses_to_revive_an_action_whose_session_is_gone(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="Old", start="2020-01-10T12:00")
-        action = tool.service.actions.add(
-            event.id, when="start", prompt="p", target="agent-one", session="chosen"
+        action = asyncio.run(
+            tool.service.actions.add(
+                event.id, when="start", prompt="p", target="agent-one", session="chosen"
+            )
         )
         sessions = Mock(exists=Mock(return_value=False))
         sessions.run_async = AsyncMock(side_effect=lambda function, *args: function(*args))

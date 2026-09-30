@@ -252,6 +252,16 @@ def copy_database(
             source.set_progress_handler(None, 0)
 
 
+def copy_database_file(
+    source_path: Path, destination: Path, *, cancelled: Callable[[], bool] | None = None
+) -> bool:
+    """:func:`copy_database` of a database file no connection here writes, without changing it."""
+    with contextlib.closing(
+        sqlite3.connect(readonly_sqlite_uri(source_path), uri=True, isolation_level=None)
+    ) as source:
+        return copy_database(source, destination, cancelled=cancelled)
+
+
 def sqlite_source_id() -> str:
     """The exact SQLite build, recorded in snapshot manifests."""
     try:

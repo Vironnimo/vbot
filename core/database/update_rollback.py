@@ -37,11 +37,15 @@ from core.database.errors import (
     DatabaseUnavailableError,
     UpdateRollbackRefusedError,
 )
-from core.database.marker import marker_path, read_maintenance, read_marker
+from core.database.marker import (
+    describe_missing_databases,
+    marker_path,
+    read_maintenance,
+    read_marker,
+)
 from core.database.recovery import SnapshotRestore, restore_data_snapshot
 from core.database.snapshots import (
     create_data_snapshot,
-    describe_missing_databases,
     read_manifest,
     read_snapshot_health,
     snapshot_inventory,
