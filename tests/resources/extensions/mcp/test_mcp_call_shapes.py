@@ -219,69 +219,100 @@ async def test_unparsable_argument_text_is_refused_without_echo(context_service,
     assert calls == []
 
 
+# A fingerprint no definition of the item has, such as an invented one.
+UNMATCHED = "0" * 24
+
+
 @pytest.mark.asyncio
-async def test_changed_definition_is_not_substituted_for_a_call(context_service, host):
+@pytest.mark.parametrize("earlier", [True, False], ids=["earlier_definition", "never_shown"])
+async def test_a_target_whose_fingerprint_does_not_match_is_never_called(
+    context_service, host, earlier
+):
     service, registry, runner, calls = context_service
-    old = await tool_target(registry, host)
-    runner.catalog["tools"][0]["description"] = "test-owned-new-description"
-    service._publish(runner, runner.catalog)
+    if earlier:
+        sent = await tool_target(registry, host)
+        # Metadata a server varies between listings keeps the target.
+        runner.catalog["tools"][0]["_meta"] = {"test-owned": "changed"}
+        runner.catalog["tools"][0]["icons"] = [{"src": "https://example.test/icon.png"}]
+        service._publish(runner, runner.catalog)
+        assert await tool_target(registry, host) == sent
+        runner.catalog["tools"][0]["description"] = "test-owned-new-description"
+        service._publish(runner, runner.catalog)
+    else:
+        sent = f"tool:inspect:{UNMATCHED}"
     current = await tool_target(registry, host)
+    assert current != sent
 
     call = await dispatch(
-        registry, host, {"action": "call", "target": old, "arguments": {"value": "x"}}
+        registry, host, {"action": "call", "target": sent, "arguments": {"value": "x"}}
     )
-    describe = await dispatch(registry, host, {"action": "describe", "target": old})
+    describe = await dispatch(registry, host, {"action": "describe", "target": sent})
 
     describe_current = json.dumps({"action": "describe", "target": current}, separators=(",", ":"))
     assert model_text(call) == (
-        "Error (mcp_target_changed): tool inspect changed since that target was returned, so "
-        f"it was not called. Its current target is {current}; check its arguments with "
-        f"{describe_current}, then call the current target."
-    )
-    assert describe["data"]["target"] == current
-    assert (
-        describe["data"]["note"] == f"{old} named an earlier definition; this is the current one."
+        "Error (mcp_target_mismatch): tool inspect was not called: the part after its name in "
+        f"{sent} does not match its current definition. Its current target is {current}; check "
+        f"its arguments with {describe_current}, then call the current target."
     )
     assert calls == []
+    assert describe["data"]["target"] == current
+    assert describe["data"]["note"] == (
+        f"Used the current target {current}: the part after the name in {sent} does not match "
+        "the current definition."
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "action,inputs",
-    [("call", {"value": "sentinel"}), ("call", {"value": 7, "vlaue": "y"}), ("describe", None)],
+    "kind,name,arguments,sent_call",
+    [
+        ("resource", "scene", {}, ("resources/read", {"uri": "test://scene"})),
+        (
+            "template",
+            "item",
+            {"uri": "test://items/a"},
+            ("resources/read", {"uri": "test://items/a"}),
+        ),
+        (
+            "prompt",
+            "workflow",
+            {"subject": "a"},
+            ("prompts/get", {"name": "workflow", "arguments": {"subject": "a"}}),
+        ),
+        ("operation", "ping", {}, ("ping", {})),
+        ("operation", "logging/setLevel", {"level": "debug"}, None),
+    ],
 )
-async def test_a_fingerprint_this_connection_never_showed_reads_as_the_name(
-    context_service, host, action, inputs
+async def test_only_reads_run_with_a_fingerprint_that_does_not_match(
+    context_service, host, kind, name, arguments, sent_call
 ):
     service, registry, runner, calls = context_service
-    current = await tool_target(registry, host)
-    # Invented, or from before a restart: this connection never showed it.
-    unknown = "tool:inspect:" + "0" * 24
-    arguments = {"action": action, "target": unknown}
-    if inputs is not None:
-        arguments["arguments"] = inputs
-
-    result = await dispatch(registry, host, arguments)
-
-    note = (
-        f"Used the current target {current}. The part after the name in {unknown} matches no "
-        "definition this connection knows, so it was ignored."
+    runner.catalog["resources"] = [{"uri": "test://scene", "name": "scene"}]
+    runner.catalog["resource_templates"] = [{"uriTemplate": "test://items/{name}", "name": "item"}]
+    runner.catalog["prompts"] = [
+        {"name": "workflow", "arguments": [{"name": "subject", "required": True}]}
+    ]
+    listed = targets(
+        await dispatch(registry, host, {"action": "search", "kind": kind, "query": name})
     )
-    if action == "describe":
-        assert result["data"]["target"] == current
-        assert result["data"]["note"] == note
-    elif "vlaue" in inputs:
-        assert model_text(result) == (
-            "Error (mcp_invalid_arguments): tool inspect was not called: /arguments has fields "
-            "the target does not take: vlaue. It takes value (string, required). Correct the "
-            f'arguments and call again; {{"action":"describe","target":"{current}"}} shows the '
-            f"full schema. {note}"
-        )
+    current = next(target for target in listed if target.startswith(f"{kind}:{name}:"))
+    sent = f"{kind}:{name}:{UNMATCHED}"
+
+    result = await dispatch(
+        registry, host, {"action": "call", "target": sent, "arguments": arguments}
+    )
+
+    if sent_call is None:
+        assert result["error"]["code"] == "mcp_target_mismatch"
+        assert f"Its current target is {current};" in result["error"]["message"]
         assert calls == []
     else:
-        assert model_text(result).startswith(f"note: {note}\n")
-        assert result["data"]["content"] == "sentinel"
-        assert calls == [("tools/call", {"name": "inspect", "arguments": {"value": "sentinel"}})]
+        assert result["ok"], result
+        assert result["data"]["note"] == (
+            f"Used the current target {current}: the part after the name in {sent} does not "
+            "match the current definition."
+        )
+        assert calls == [sent_call]
 
 
 @pytest.mark.asyncio
@@ -289,20 +320,18 @@ async def test_the_target_note_leaves_a_remote_note_field_intact(
     context_service, host, monkeypatch
 ):
     service, registry, runner, calls = context_service
-    current = await tool_target(registry, host)
+    runner.catalog["resources"] = [{"uri": "test://scene", "name": "scene"}]
 
     async def answer(operation, arguments, invocation_context=None):
         return {"content": [{"type": "text", "text": "done"}], "note": {"remote": True}}
 
     monkeypatch.setattr(runner, "invoke", answer)
     result = await dispatch(
-        registry,
-        host,
-        {"action": "call", "target": "tool:inspect:" + "0" * 24, "arguments": {"value": "x"}},
+        registry, host, {"action": "call", "target": f"resource:scene:{UNMATCHED}"}
     )
 
     assert result["data"]["note"] == {"remote": True}
-    assert result["data"]["target_note"].startswith(f"Used the current target {current}.")
+    assert result["data"]["target_note"].startswith("Used the current target resource:scene:")
 
 
 @pytest.mark.asyncio

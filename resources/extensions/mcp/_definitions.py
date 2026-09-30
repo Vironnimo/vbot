@@ -169,14 +169,14 @@ MCP_MESSAGES = {
         "Nothing was run: {name} names several items: {targets}. Repeat the call with the "
         "target you mean."
     ),
-    "target_changed": (
-        "{item} changed since that target was returned, so it was not called. Its current "
-        "target is {target}; check its arguments with {describe}, then call the current target."
+    "target_mismatch": (
+        "{item} was not called: the part after its name in {sent} does not match its current "
+        "definition. Its current target is {target}; check its arguments with {describe}, then "
+        "call the current target."
     ),
-    "target_updated": "{previous} named an earlier definition; this is the current one.",
-    "target_unrecognized": (
-        "Used the current target {current}. The part after the name in {sent} matches no "
-        "definition this connection knows, so it was ignored."
+    "target_current": (
+        "Used the current target {current}: the part after the name in {sent} does not match "
+        "the current definition."
     ),
     "access_denied": (
         "This Agent's Tool settings do not allow this MCP tool, so nothing was run. Tell the "
@@ -235,9 +235,6 @@ SEARCH_SUMMARY_CHARACTERS = 160
 GUIDANCE_PREVIEW_CHARACTERS = 1200
 
 TARGET_FINGERPRINT_LENGTH = 24
-
-# Targets each connection has shown, kept to tell a stale target from an invented one.
-PUBLISHED_TARGETS_PER_CONNECTION = 2048
 
 MAX_FINISHED_JOBS = 128
 

@@ -428,6 +428,12 @@ async def test_denied_tools_stay_out_of_search_and_are_refused_by_name(context_s
     }
     described = await dispatch(registry, host, {"action": "describe", "target": "tool:inspect"})
     assert described["error"]["code"] == "mcp_access_denied"
+    fingerprinted = await dispatch(
+        registry,
+        host,
+        {"action": "call", "target": "tool:inspect:" + "0" * 24, "arguments": {"value": "x"}},
+    )
+    assert fingerprinted["error"]["code"] == "mcp_access_denied"
     assert calls == []
 
 
