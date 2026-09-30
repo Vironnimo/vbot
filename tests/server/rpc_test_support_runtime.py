@@ -360,7 +360,7 @@ class StubRuntime:
             StubAgent(id="coder", allowed_tools=["*"]),
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
-        self.memory = MemoryService()
+        self.memory = MemoryService(history_root=self.storage.layout.agents)
         self.agent_resolver = StubAgentResolver(self.agents)
         self.projects = StubProjects()
         tmp_path.mkdir(parents=True, exist_ok=True)

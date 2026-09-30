@@ -234,3 +234,150 @@ def _scope_counts(data: Mapping[str, Any]) -> str | None:
         count = len(entries) if isinstance(entries, list) else 0
         parts.append(f"{scope_name}={count}")
     return " ".join(parts)
+
+
+def memory_history(
+    instance: ServerInstance, agent_id: str, scope: str | None, limit: int
+) -> CommandResult:
+    """Return the newest Memory revisions from `memory.history` RPC."""
+
+    params: dict[str, Any] = {"agent_id": agent_id, "limit": limit}
+    if scope is not None:
+        params["scope"] = scope
+    payload = _rpc_call(instance, "memory.history", params)
+    if not payload.ok:
+        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+    revisions = _records(payload.data.get("revisions"))
+    total = payload.data.get("total")
+    scope_text = f" ({scope} scope)" if scope is not None else ""
+    if not revisions:
+        message = f"no Memory changes recorded for {agent_id}{scope_text}"
+        return CommandResult(ok=True, message=message, instance=instance)
+    lines = [
+        f"Memory history of {agent_id}{scope_text}: {len(revisions)} of {total} revisions, "
+        "newest first"
+    ]
+    for revision in revisions:
+        lines.extend(_format_revision(revision))
+    if isinstance(total, int) and total > len(revisions):
+        lines.append(f"older revisions: re-run with --limit {total}")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def memory_show(instance: ServerInstance, agent_id: str, revision: int) -> CommandResult:
+    """Return the Memory entries as they were after one revision (`memory.show` RPC)."""
+
+    payload = _rpc_call(instance, "memory.show", {"agent_id": agent_id, "revision": revision})
+    if not payload.ok:
+        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+    scopes = payload.data.get("scopes")
+    lines = [f"Memory of {agent_id} after revision {revision}:"]
+    for scope_name in ("agent", "user"):
+        entries = scopes.get(scope_name) if isinstance(scopes, dict) else None
+        lines.append(f"{scope_name} scope:")
+        if not isinstance(entries, list) or not entries:
+            lines.append("  (no entries)")
+            continue
+        lines.extend(f"  - {_string_or_default(entry, '')}" for entry in entries)
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def memory_diff(
+    instance: ServerInstance, agent_id: str, from_revision: int, to_revision: int | None
+) -> CommandResult:
+    """Return how Memory changed between two revisions (`memory.diff` RPC)."""
+
+    params: dict[str, Any] = {"agent_id": agent_id, "from": from_revision}
+    if to_revision is not None:
+        params["to"] = to_revision
+    payload = _rpc_call(instance, "memory.diff", params)
+    if not payload.ok:
+        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+    target = f"revision {to_revision}" if to_revision is not None else "now"
+    changes = payload.data.get("changes")
+    lines = [f"Memory of {agent_id} from revision {from_revision} to {target}:"]
+    changed = False
+    for scope_name in ("agent", "user"):
+        scope_changes = changes.get(scope_name) if isinstance(changes, dict) else None
+        if not isinstance(scope_changes, list) or not scope_changes:
+            continue
+        changed = True
+        lines.append(f"{scope_name} scope:")
+        lines.extend(_format_change(change) for change in scope_changes)
+    if not changed:
+        lines.append("no differences")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def memory_revert(instance: ServerInstance, agent_id: str, revisions: list[int]) -> CommandResult:
+    """Take back the changes of one or more revisions (`memory.revert` RPC)."""
+
+    payload = _rpc_call(instance, "memory.revert", {"agent_id": agent_id, "revisions": revisions})
+    if not payload.ok:
+        return _memory_failure_result(instance, agent_id, payload.to_command_result())
+    named = ", ".join(str(revision) for revision in revisions)
+    noun = "revisions" if len(revisions) > 1 else "revision"
+    recorded = _records(payload.data.get("revisions"))
+    if not recorded:
+        message = f"nothing to revert in {agent_id}: the changes of {noun} {named} are already gone"
+        return CommandResult(ok=True, message=message, instance=instance)
+    lines = [f"reverted {noun} {named} in {agent_id}"]
+    for revision in recorded:
+        lines.extend(_format_revision(revision))
+    counts = _scope_counts(payload.data)
+    if counts is not None:
+        lines.append(f"entries now: {counts}")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+_REVISION_KIND_TEXT = {
+    "baseline": "history starts with the existing entries",
+    "edit": "changed",
+    "external": "file edited outside Memory",
+}
+
+
+def _records(value: object) -> list[Mapping[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _format_revision(revision: Mapping[str, Any]) -> list[str]:
+    kind = revision.get("kind")
+    if kind == "revert":
+        reverted = revision.get("reverts")
+        targets = ", ".join(str(item) for item in reverted) if isinstance(reverted, list) else "?"
+        what = f"revert of revision {targets}"
+    else:
+        what = _REVISION_KIND_TEXT.get(str(kind), str(kind))
+    header = (
+        f"revision {revision.get('id')}  {_string_or_default(revision.get('at'), '?')}  "
+        f"{_string_or_default(revision.get('scope'), '?')} scope  {what}"
+    )
+    actor = revision.get("actor")
+    if kind in ("edit", "revert") and isinstance(actor, str):
+        header += f" by {actor}"
+    origin = [
+        f"{name} {revision[key]}"
+        for name, key in (("session", "session_id"), ("run", "run_id"))
+        if isinstance(revision.get(key), str)
+    ]
+    if origin:
+        header += f" ({', '.join(origin)})"
+    changes = revision.get("changes")
+    lines = [header]
+    if isinstance(changes, list):
+        lines.extend(_format_change(change) for change in changes)
+    return lines
+
+
+def _format_change(change: object) -> str:
+    if not isinstance(change, dict):
+        return "  ? unreadable change"
+    text = _string_or_default(change.get("text"), "")
+    op = change.get("op")
+    if op == "added":
+        return f"  + {text}"
+    if op == "removed":
+        return f"  - {text}"
+    previous = _string_or_default(change.get("previous"), "")
+    return f"  ~ {previous}\n    -> {text}"

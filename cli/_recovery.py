@@ -146,6 +146,8 @@ def _inspection(args: argparse.Namespace) -> list[str] | None:
         agent = getattr(args, "agent", None)
         if not agent:
             return ["agent", "list"]
+        if area == "memory" and args.command in {"history", "show", "diff", "revert"}:
+            return ["memory", "history", agent]
         return (
             [area, "list", agent, "--scope", args.scope]
             if area == "memory"

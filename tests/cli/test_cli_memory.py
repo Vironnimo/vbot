@@ -55,6 +55,65 @@ def test_memory_add_defaults_to_the_agent_scope_and_reports_the_entry(
     ]
 
 
+def test_memory_history_lists_revisions_newest_first(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply(
+        "memory.history",
+        {
+            "agent_id": "assistant",
+            "total": 5,
+            "revisions": [
+                {
+                    "id": 5,
+                    "at": "2026-09-30T10:00:00Z",
+                    "scope": "agent",
+                    "kind": "revert",
+                    "actor": "rpc",
+                    "reverts": [4],
+                    "changes": [{"op": "added", "text": "Keep answers short", "index": 0}],
+                },
+                {
+                    "id": 4,
+                    "at": "2026-09-30T09:00:00Z",
+                    "scope": "agent",
+                    "kind": "edit",
+                    "actor": "tool",
+                    "session_id": "s-1",
+                    "run_id": "r-1",
+                    "changes": [
+                        {"op": "replaced", "text": "Short", "index": 0, "previous": "Keep"}
+                    ],
+                },
+            ],
+        },
+    )
+
+    code, out, _err = run_cli("memory", "history", "assistant", "--limit", "2")
+
+    assert code == 0
+    assert rpc.calls == [("memory.history", {"agent_id": "assistant", "limit": 2})]
+    assert out.splitlines() == [
+        "Memory history of assistant: 2 of 5 revisions, newest first",
+        "revision 5  2026-09-30T10:00:00Z  agent scope  revert of revision 4 by rpc",
+        "  + Keep answers short",
+        "revision 4  2026-09-30T09:00:00Z  agent scope  changed by tool (session s-1, run r-1)",
+        "  ~ Keep",
+        "    -> Short",
+        "older revisions: re-run with --limit 5",
+    ]
+
+
+def test_memory_revert_sends_every_revision(rpc: FakeRpc, run_cli: RunCli) -> None:
+    rpc.reply("memory.revert", {**memory_response(), "revisions": []})
+
+    code, out, _err = run_cli("memory", "revert", "assistant", "7", "4")
+
+    assert code == 0
+    assert rpc.calls == [("memory.revert", {"agent_id": "assistant", "revisions": [7, 4]})]
+    assert out.strip() == (
+        "nothing to revert in assistant: the changes of revisions 7, 4 are already gone"
+    )
+
+
 def test_memory_remove_requires_confirmation(rpc: FakeRpc, run_cli: RunCli) -> None:
     code, out, err = run_cli("memory", "remove", "assistant", "1")
 

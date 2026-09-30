@@ -6,11 +6,21 @@ import os
 import re
 import threading
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, Protocol
 
+from core.memory._history import (
+    MemoryChange,
+    MemoryHistory,
+    MemoryRevertConflict,
+    MemoryRevision,
+    diff_entries,
+    revert_revisions,
+    state_at,
+)
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -23,7 +33,7 @@ _LOGGER = get_logger("memory")
 MemoryScope = Literal["user", "agent"]
 MemoryPromptMode = Literal["off", "agent", "agent_user"]
 
-MEMORY_SCOPES = ("user", "agent")
+MEMORY_SCOPES: tuple[MemoryScope, ...] = ("user", "agent")
 MEMORY_FILES: dict[MemoryScope, str] = {
     "user": "USER.md",
     "agent": "MEMORY.md",
@@ -61,8 +71,6 @@ _MAX_ENTRY_LENGTH = 2_000
 # Both exceed _MAX_ENTRY_LENGTH so a single normal add into an empty scope always
 # fits; agent notes accumulate more than the user profile, so its budget is larger.
 _MAX_SCOPE_BUDGET: dict[MemoryScope, int] = {"agent": 4_000, "user": 3_000}
-# Who caused a mutation when the caller does not say (direct in-process callers).
-_DEFAULT_ACTOR = "internal"
 # Behavioral guidance rendered at the top of the pinned-memory block. It is the
 # editable default text of the ``memory:guidance`` block (D6): the memory domain
 # declares the block, so the guidance ships with its owner instead of as a
@@ -156,6 +164,42 @@ class MemoryMatchError(MemoryError):
         super().__init__(message)
 
 
+class MemoryRevertError(MemoryError):
+    """Reverting would overwrite later changes; nothing was changed."""
+
+    def __init__(self, conflicts: Sequence[MemoryRevertConflict]) -> None:
+        self.conflicts = tuple(conflicts)
+        lines = ["Nothing was reverted: later changes built on these ones."]
+        for conflict in self.conflicts:
+            later = ", ".join(str(revision) for revision in conflict.later)
+            noun = "revisions" if len(conflict.later) > 1 else "revision"
+            reason = f"{noun} {later} changed it since" if later else "it was changed since"
+            lines.append(
+                f'- Revision {conflict.revision}: no entry reads "{conflict.text}"; {reason}.'
+            )
+        lines.append(
+            "Revert the later revisions together with these ones, or change the entries directly."
+        )
+        super().__init__("\n".join(lines))
+
+
+@dataclass(frozen=True)
+class MemoryWriter:
+    """Who changes Memory, recorded in the log line and the Memory history.
+
+    ``actor`` is ``tool``, ``rpc`` or ``internal`` (direct in-process callers);
+    ``session_id``/``run_id`` name the Run of a Tool change.
+    """
+
+    agent_id: str | None = None
+    actor: str = "internal"
+    session_id: str | None = None
+    run_id: str | None = None
+
+
+_INTERNAL_WRITER = MemoryWriter()
+
+
 @dataclass(frozen=True)
 class MemoryTextChange:
     """Outcome of one entry addressed by its text: previous text and new text or None."""
@@ -182,7 +226,14 @@ class MemoryEntry:
 
 
 class FilePinnedMemoryBackend:
-    """Store pinned memory entries in USER.md and MEMORY.md workspace files."""
+    """Store pinned memory entries in USER.md and MEMORY.md workspace files.
+
+    With a :class:`MemoryHistory`, every change of an Agent's entries is also
+    recorded there: mutations by their writer, and changes made to the files
+    outside this backend as ``external`` revisions noticed on the next Memory
+    operation for that Agent. History failures never block a mutation; a change
+    that could not be recorded is noticed as external later.
+    """
 
     # Tool calls in one assistant turn run concurrently (and the memory handler runs
     # in a worker thread), so two mutations to the same file would otherwise read the
@@ -192,6 +243,9 @@ class FilePinnedMemoryBackend:
     # backend instance shares the same lock for a given file.
     _file_locks: ClassVar[dict[str, threading.Lock]] = {}
     _file_locks_guard: ClassVar[threading.Lock] = threading.Lock()
+
+    def __init__(self, history: MemoryHistory | None = None) -> None:
+        self._history = history
 
     @classmethod
     def _file_lock(cls, path: Path) -> threading.Lock:
@@ -214,24 +268,21 @@ class FilePinnedMemoryBackend:
         scope: MemoryScope,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            entries = _read_entries(path)
+            entries = self._read_synced(path, validated_scope, writer)
             normalized = _normalize_entry_content(content)
             if normalized in entries:
                 existing_index = entries.index(normalized) + 1
                 return MemoryEntry(id=existing_index, scope=validated_scope, content=normalized)
 
             before = list(entries)
-            previous_total = sum(len(entry) for entry in entries)
             entries.append(normalized)
-            _enforce_scope_budget(validated_scope, entries, previous_total)
-            _write_entries(path, entries)
-            _log_mutation("added", validated_scope, before, entries, agent_id, actor)
+            _enforce_scope_budget(validated_scope, entries, _total(before))
+            self._commit(path, validated_scope, "added", before, entries, writer)
             return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
 
     def replace_entry(
@@ -241,21 +292,18 @@ class FilePinnedMemoryBackend:
         entry_id: int,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            entries = _read_entries(path)
+            entries = self._read_synced(path, validated_scope, writer)
             index = _entry_index(entry_id, entries)
             normalized = _normalize_entry_content(content)
             before = list(entries)
-            previous_total = sum(len(entry) for entry in entries)
             entries[index] = normalized
-            _enforce_scope_budget(validated_scope, entries, previous_total)
-            _write_entries(path, entries)
-            _log_mutation("replaced", validated_scope, before, entries, agent_id, actor)
+            _enforce_scope_budget(validated_scope, entries, _total(before))
+            self._commit(path, validated_scope, "replaced", before, entries, writer)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
 
     def remove_entry(
@@ -264,18 +312,16 @@ class FilePinnedMemoryBackend:
         scope: MemoryScope,
         entry_id: int,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            entries = _read_entries(path)
+            entries = self._read_synced(path, validated_scope, writer)
             before = list(entries)
             index = _entry_index(entry_id, entries)
             removed = entries.pop(index)
-            _write_entries(path, entries)
-            _log_mutation("removed", validated_scope, before, entries, agent_id, actor)
+            self._commit(path, validated_scope, "removed", before, entries, writer)
             return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
@@ -291,8 +337,7 @@ class FilePinnedMemoryBackend:
         old_text: str,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
         """Replace the single entry ``old_text`` identifies (see :func:`match_memory_entries`).
 
@@ -304,19 +349,17 @@ class FilePinnedMemoryBackend:
         path = self._path(workspace, validated_scope)
         normalized = _normalize_entry_content(content)
         with self._file_lock(path):
-            entries = _read_entries(path)
+            entries = self._read_synced(path, validated_scope, writer)
             index = _single_match(validated_scope, entries, old_text)
             previous = entries[index]
             if normalized != previous:
                 before = list(entries)
-                previous_total = sum(len(entry) for entry in entries)
                 if normalized in entries:
                     entries.pop(index)
                 else:
                     entries[index] = normalized
-                _enforce_scope_budget(validated_scope, entries, previous_total)
-                _write_entries(path, entries)
-                _log_mutation("replaced", validated_scope, before, entries, agent_id, actor)
+                _enforce_scope_budget(validated_scope, entries, _total(before))
+                self._commit(path, validated_scope, "replaced", before, entries, writer)
             return MemoryTextChange(validated_scope, previous, normalized)
 
     def remove_matching(
@@ -325,25 +368,113 @@ class FilePinnedMemoryBackend:
         scope: MemoryScope,
         old_text: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
         """Remove the single entry ``old_text`` identifies."""
         validated_scope = validate_memory_scope(scope)
         path = self._path(workspace, validated_scope)
         with self._file_lock(path):
-            entries = _read_entries(path)
+            entries = self._read_synced(path, validated_scope, writer)
             before = list(entries)
             removed = entries.pop(_single_match(validated_scope, entries, old_text))
-            _write_entries(path, entries)
-            _log_mutation("removed", validated_scope, before, entries, agent_id, actor)
+            self._commit(path, validated_scope, "removed", before, entries, writer)
             return MemoryTextChange(validated_scope, removed, None)
+
+    def history(self, workspace: Path, agent_id: str) -> list[MemoryRevision]:
+        """Return every revision of the Agent's Memory, oldest first.
+
+        Changes made to the files since the last Memory operation are recorded
+        first, so the list ends with the current state.
+        """
+        history = self._require_history(agent_id)
+        with self._scope_locks(workspace):
+            for scope in MEMORY_SCOPES:
+                path = self._path(workspace, scope)
+                history.sync(agent_id, scope, _read_entries(path), path)
+            return history.revisions(agent_id)
+
+    def entries_at(
+        self, workspace: Path, agent_id: str, revision_id: int | None
+    ) -> dict[MemoryScope, list[str]]:
+        """Return each scope's entries after *revision_id*, or the current ones for ``None``."""
+        revisions = self.history(workspace, agent_id)
+        if revision_id is not None:
+            _require_revisions(revisions, [revision_id])
+        replayed = state_at(revisions, revision_id)
+        return {scope: replayed[scope] for scope in MEMORY_SCOPES}
+
+    def compare(
+        self, workspace: Path, agent_id: str, from_id: int, to_id: int | None = None
+    ) -> dict[MemoryScope, tuple[MemoryChange, ...]]:
+        """Describe how each scope changed from *from_id* to *to_id* (current for ``None``)."""
+        revisions = self.history(workspace, agent_id)
+        _require_revisions(revisions, [from_id] if to_id is None else [from_id, to_id])
+        before = state_at(revisions, from_id)
+        after = state_at(revisions, to_id)
+        return {scope: diff_entries(before[scope], after[scope]) for scope in MEMORY_SCOPES}
+
+    def revert(
+        self,
+        workspace: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: MemoryWriter,
+    ) -> list[MemoryRevision]:
+        """Take back the changes of *revision_ids*, all of them or none.
+
+        Returns the recorded ``revert`` revisions, one per changed scope, and an
+        empty list when the entries already match. Raises
+        :class:`MemoryRevertError` when later changes built on a reverted one and
+        :class:`MemoryBudgetError` when restored entries would exceed a budget.
+        """
+        agent_id = writer.agent_id or ""
+        history = self._require_history(agent_id)
+        if not revision_ids:
+            raise MemoryError("name at least one revision to revert")
+        with self._scope_locks(workspace):
+            paths = {scope: self._path(workspace, scope) for scope in MEMORY_SCOPES}
+            current: dict[MemoryScope, list[str]] = {}
+            for scope, path in paths.items():
+                current[scope] = _read_entries(path)
+                history.sync(agent_id, scope, current[scope], path)
+            revisions = history.revisions(agent_id)
+            targets = _require_revisions(revisions, revision_ids)
+            baselines = [target.id for target in targets if target.kind == "baseline"]
+            if baselines:
+                raise MemoryError(
+                    f"revision {baselines[0]} is where the history starts; it records the "
+                    "entries that already existed and cannot be reverted"
+                )
+            reverted, conflicts = revert_revisions(current, targets, revisions)
+            if conflicts:
+                raise MemoryRevertError(conflicts)
+            changed = [scope for scope in MEMORY_SCOPES if reverted[scope] != current[scope]]
+            for scope in changed:
+                _enforce_scope_budget(scope, reverted[scope], _total(current[scope]))
+            recorded: list[MemoryRevision] = []
+            for scope in changed:
+                _write_entries(paths[scope], reverted[scope])
+                _log_mutation("reverted", scope, current[scope], reverted[scope], writer)
+                revision = history.record(
+                    agent_id,
+                    scope,
+                    kind="revert",
+                    actor=writer.actor,
+                    changes=diff_entries(current[scope], reverted[scope]),
+                    entries=reverted[scope],
+                    session_id=writer.session_id,
+                    run_id=writer.run_id,
+                    reverts=[target.id for target in targets if target.scope == scope],
+                )
+                if revision is not None:
+                    recorded.append(revision)
+            return recorded
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         """Return a scope's used characters and its budget."""
         validated_scope = validate_memory_scope(scope)
         entries = _read_entries(self._path(workspace, validated_scope))
-        return sum(len(entry) for entry in entries), _MAX_SCOPE_BUDGET[validated_scope]
+        return _total(entries), _MAX_SCOPE_BUDGET[validated_scope]
 
     def render_scopes(self, workspace: Path, scopes: Sequence[MemoryScope]) -> str:
         """Render scopes exactly as the memory block shows them: heading, usage, bullets."""
@@ -375,7 +506,7 @@ class FilePinnedMemoryBackend:
         followed by the ``- `` bullet list or the empty-scope placeholder.
         """
         entries = _read_entries(self._path(workspace, scope))
-        used = sum(len(entry) for entry in entries)
+        used = _total(entries)
         label = f"{MEMORY_SCOPE_LABELS[scope]} ({used}/{_MAX_SCOPE_BUDGET[scope]} chars used)"
         if not entries:
             return f"{label}\n{_EMPTY_SCOPE_TEXT}"
@@ -386,17 +517,73 @@ class FilePinnedMemoryBackend:
         workspace_path = Path(workspace)
         return workspace_path / MEMORY_FILES[scope]
 
+    @contextmanager
+    def _scope_locks(self, workspace: Path) -> Iterator[None]:
+        # Always in MEMORY_SCOPES order; single-scope mutations hold only one lock.
+        with ExitStack() as stack:
+            for scope in MEMORY_SCOPES:
+                stack.enter_context(self._file_lock(self._path(workspace, scope)))
+            yield
+
+    def _require_history(self, agent_id: str) -> MemoryHistory:
+        if self._history is None or not self._history.available(agent_id):
+            raise MemoryError(f"Agent '{agent_id}' has no Memory history")
+        return self._history
+
+    def _read_synced(self, path: Path, scope: MemoryScope, writer: MemoryWriter) -> list[str]:
+        entries = _read_entries(path)
+        if self._history is not None and writer.agent_id:
+            try:
+                self._history.sync(writer.agent_id, scope, entries, path)
+            except MemoryError as exc:
+                _LOGGER.warning("Memory history not updated before a change: %s", exc)
+        return entries
+
+    def _commit(
+        self,
+        path: Path,
+        scope: MemoryScope,
+        event: str,
+        before: list[str],
+        after: list[str],
+        writer: MemoryWriter,
+    ) -> None:
+        _write_entries(path, after)
+        _log_mutation(event, scope, before, after, writer)
+        if self._history is None or not writer.agent_id:
+            return
+        try:
+            self._history.record(
+                writer.agent_id,
+                scope,
+                kind="edit",
+                actor=writer.actor,
+                changes=diff_entries(before, after),
+                entries=after,
+                session_id=writer.session_id,
+                run_id=writer.run_id,
+            )
+        except MemoryError as exc:
+            _LOGGER.warning("Memory history did not record a change: %s", exc)
+
 
 class MemoryService:
     """Small facade for pinned memory operations.
 
     Every mutation that changes a file logs one INFO line naming the Agent, the
-    scope, who caused it (``actor``: ``rpc`` or ``tool``) and the resulting entry
-    count and character change - never entry text.
+    scope, who caused it (the writer's ``actor``) and the resulting entry count
+    and character change - never entry text. With a ``history_root`` (the agents
+    directory), each Agent's changes are also kept in its Memory history.
     """
 
-    def __init__(self, backend: FilePinnedMemoryBackend | None = None) -> None:
-        self._backend = backend or FilePinnedMemoryBackend()
+    def __init__(
+        self,
+        backend: FilePinnedMemoryBackend | None = None,
+        *,
+        history_root: Path | None = None,
+    ) -> None:
+        history = MemoryHistory(history_root) if history_root is not None else None
+        self._backend = backend or FilePinnedMemoryBackend(history)
 
     def list_entries(self, workspace: Path, scope: MemoryScope) -> list[MemoryEntry]:
         return self._backend.list_entries(workspace, scope)
@@ -407,10 +594,9 @@ class MemoryService:
         scope: MemoryScope,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.add_entry(workspace, scope, content, agent_id=agent_id, actor=actor)
+        return self._backend.add_entry(workspace, scope, content, writer=writer)
 
     def replace_entry(
         self,
@@ -419,12 +605,9 @@ class MemoryService:
         entry_id: int,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.replace_entry(
-            workspace, scope, entry_id, content, agent_id=agent_id, actor=actor
-        )
+        return self._backend.replace_entry(workspace, scope, entry_id, content, writer=writer)
 
     def remove_entry(
         self,
@@ -432,12 +615,9 @@ class MemoryService:
         scope: MemoryScope,
         entry_id: int,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryEntry:
-        return self._backend.remove_entry(
-            workspace, scope, entry_id, agent_id=agent_id, actor=actor
-        )
+        return self._backend.remove_entry(workspace, scope, entry_id, writer=writer)
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
         return self._backend.find_matches(workspace, scope, old_text)
@@ -449,12 +629,9 @@ class MemoryService:
         old_text: str,
         content: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
-        return self._backend.replace_matching(
-            workspace, scope, old_text, content, agent_id=agent_id, actor=actor
-        )
+        return self._backend.replace_matching(workspace, scope, old_text, content, writer=writer)
 
     def remove_matching(
         self,
@@ -462,12 +639,27 @@ class MemoryService:
         scope: MemoryScope,
         old_text: str,
         *,
-        agent_id: str | None = None,
-        actor: str = _DEFAULT_ACTOR,
+        writer: MemoryWriter = _INTERNAL_WRITER,
     ) -> MemoryTextChange:
-        return self._backend.remove_matching(
-            workspace, scope, old_text, agent_id=agent_id, actor=actor
-        )
+        return self._backend.remove_matching(workspace, scope, old_text, writer=writer)
+
+    def history(self, workspace: Path, agent_id: str) -> list[MemoryRevision]:
+        return self._backend.history(workspace, agent_id)
+
+    def entries_at(
+        self, workspace: Path, agent_id: str, revision_id: int | None
+    ) -> dict[MemoryScope, list[str]]:
+        return self._backend.entries_at(workspace, agent_id, revision_id)
+
+    def compare(
+        self, workspace: Path, agent_id: str, from_id: int, to_id: int | None = None
+    ) -> dict[MemoryScope, tuple[MemoryChange, ...]]:
+        return self._backend.compare(workspace, agent_id, from_id, to_id)
+
+    def revert(
+        self, workspace: Path, revision_ids: Sequence[int], *, writer: MemoryWriter
+    ) -> list[MemoryRevision]:
+        return self._backend.revert(workspace, revision_ids, writer=writer)
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         return self._backend.scope_usage(workspace, scope)
@@ -649,8 +841,7 @@ def _log_mutation(
     scope: MemoryScope,
     before: list[str],
     after: list[str],
-    agent_id: str | None,
-    actor: str,
+    writer: MemoryWriter,
 ) -> None:
     """Log one changed Memory file: counts and sizes only, never entry text."""
     if before == after:
@@ -658,12 +849,28 @@ def _log_mutation(
     _LOGGER.info(
         "Memory entry %s (agent=%s scope=%s actor=%s entries=%d chars_delta=%+d)",
         event,
-        agent_id or "unknown",
+        writer.agent_id or "unknown",
         scope,
-        actor,
+        writer.actor,
         len(after),
-        sum(len(entry) for entry in after) - sum(len(entry) for entry in before),
+        _total(after) - _total(before),
     )
+
+
+def _total(entries: Sequence[str]) -> int:
+    return sum(len(entry) for entry in entries)
+
+
+def _require_revisions(
+    revisions: Sequence[MemoryRevision], revision_ids: Sequence[int]
+) -> list[MemoryRevision]:
+    by_id = {revision.id: revision for revision in revisions}
+    missing = [revision_id for revision_id in revision_ids if revision_id not in by_id]
+    if missing:
+        last = revisions[-1].id if revisions else 0
+        known = f"revisions run from 1 to {last}" if last else "the history is empty"
+        raise MemoryError(f"revision {missing[0]} does not exist; {known}")
+    return [by_id[revision_id] for revision_id in dict.fromkeys(revision_ids)]
 
 
 def _enforce_scope_budget(scope: MemoryScope, entries: list[str], previous_total: int) -> None:
