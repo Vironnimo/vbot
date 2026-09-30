@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 import sys
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,12 @@ from scripts import _test_impact, commit_check
 from tests import cpu_pool
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Like the hook, most tests start git, pytest with testmon, or ruff as subprocesses:
+# seconds each on a loaded machine, beyond the default 30 s per test. The budget
+# also covers the module fixture that seeds the test-impact data, since its setup
+# counts against the first test that uses it.
+pytestmark = pytest.mark.timeout(120)
 
 UNFORMATTED = "value  =  {'a':1}\n"
 FORMATTED = 'value = {"a": 1}\n'
@@ -41,10 +48,12 @@ def _staged_content(root: Path, path: str) -> str:
 
 
 def test_fixes_are_restaged_only_for_fully_staged_files(
-    impact_project: Path, capsys: pytest.CaptureFixture[str]
+    impact_project: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # A project with test-impact data: the test step finds no affected test.
     # Another session's unstaged edit of a committed file must stay as it is.
+    # mypy, not under test here, starts without a cache: tens of seconds under load.
+    monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     _write(impact_project, "other.py", FORMATTED)
     _git(impact_project, "add", "other.py")
     _git(impact_project, "commit", "-q", "-m", "other", "--no-verify")
@@ -65,7 +74,10 @@ def test_fixes_are_restaged_only_for_fully_staged_files(
     assert "FIXED" not in capsys.readouterr().out
 
 
-def test_partially_staged_file_is_left_alone_and_blocks(repo: Path) -> None:
+def test_partially_staged_file_is_left_alone_and_blocks(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     (repo / "module.py").write_text(UNFORMATTED)
     _git(repo, "add", "module.py")
     work_in_progress = UNFORMATTED + "other  =  2\n"
@@ -146,6 +158,8 @@ LOCKED_PACKAGES: dict[str, dict[str, object]] = {
     },
 }
 INSTALLED_PACKAGES = {"node_modules/vite": LOCKED_PACKAGES["node_modules/vite"]}
+# npm copies the manifest's dependency maps into the lock's root entry.
+DEPENDENCIES = {"devDependencies": {"vite": "^8.0.0"}, "optionalDependencies": {"fsevents": "^2"}}
 
 
 def _webui_project(
@@ -161,8 +175,10 @@ def _webui_project(
         manifest = webui / "node_modules" / package / "package.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"bin": {package: f"bin/{package}.js"}}), encoding="utf-8")
-    lock = {"lockfileVersion": 3, "packages": {"": {"name": "vbot-webui"}, **LOCKED_PACKAGES}}
+    root_entry = {"name": "vbot-webui", **DEPENDENCIES}
+    lock = {"lockfileVersion": 3, "packages": {"": root_entry, **LOCKED_PACKAGES}}
     (webui / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    (webui / "package.json").write_text(json.dumps(root_entry), encoding="utf-8")
     if installed is not None:
         record = {"lockfileVersion": 3, "packages": installed}
         (webui / "node_modules" / ".package-lock.json").write_text(
@@ -200,11 +216,22 @@ def _webui_checks(root: Path, path: str) -> list[commit_check.StepResult]:
             {"node_modules/vite": {**INSTALLED_PACKAGES["node_modules/vite"], "version": "8.0.1"}},
             False,
         ),
+        (
+            {"node_modules/vite": {**INSTALLED_PACKAGES["node_modules/vite"], "dev": False}},
+            False,
+        ),
         ({}, False),
         ({**INSTALLED_PACKAGES, "node_modules/left-pad": {"version": "1.3.0"}}, False),
         (None, False),
     ],
-    ids=["as locked", "other version", "missing package", "extra package", "never installed"],
+    ids=[
+        "as locked",
+        "other version",
+        "other entry",
+        "missing package",
+        "extra package",
+        "never installed",
+    ],
 )
 def test_webui_checks_refuse_packages_that_differ_from_the_lock(
     repo: Path,
@@ -250,6 +277,33 @@ def test_webui_configuration_changes_run_the_complete_checks(
     assert not any(result.blocking for result in results)
 
 
+@pytest.mark.parametrize(
+    ("manifest", "runs"),
+    [
+        (DEPENDENCIES, True),
+        # npm leaves out of the lock a dependency that optionalDependencies lists too.
+        ({**DEPENDENCIES, "dependencies": {"fsevents": "^2"}}, True),
+        ({**DEPENDENCIES, "devDependencies": {"vite": "^8.1.0"}}, False),
+    ],
+    ids=["as locked", "optional listed twice", "edited without npm install"],
+)
+def test_webui_checks_refuse_a_package_manifest_the_lock_does_not_record(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, manifest: Mapping[str, object], runs: bool
+) -> None:
+    commands = _webui_project(repo, monkeypatch, INSTALLED_PACKAGES)
+    _write(repo, "webui/package.json", json.dumps({"name": "vbot-webui", **manifest}))
+
+    results = commit_check.check_frontend(repo, ["webui/package.json"], set())
+
+    if runs:
+        assert not any(result.blocking for result in results)
+        assert "npm run lint" in commands
+    else:
+        # `npm ci`, as CI runs it, would refuse the lock; `npm install` updates it.
+        assert [(result.label, result.blocking) for result in results] == [("webui deps", True)]
+        assert commands == []
+
+
 # The test step drives a real pytest-testmon run in a small project; its selection
 # and the recorded dependencies are the behavior under test, so it cannot be faked.
 IMPACT_PROJECT = {
@@ -258,7 +312,8 @@ IMPACT_PROJECT = {
     "conftest.py": 'pytest_plugins = ["tests.file_dependencies"]\n',
     "calc.py": "def double(x):\n    return x * 2\n",
     "wip.py": "def triple(x):\n    return x * 3\n",
-    "factor.txt": "2",
+    # Mixed case: the records fold case where the filesystem ignores it (Windows).
+    "Factor.txt": "2",
     "test_calc.py": "import calc\n\n\ndef test_double():\n    assert calc.double(2) == 4\n",
     "test_wip.py": "import wip\n\n\ndef test_triple():\n    assert wip.triple(2) == 6\n",
     "test_factor.py": (
@@ -268,7 +323,7 @@ IMPACT_PROJECT = {
         "\n"
         "\n"
         "def test_factor():\n"
-        '    assert calc.double(int(Path("factor.txt").read_text())) < 10\n'
+        '    assert calc.double(int(Path("Factor.txt").read_text())) < 10\n'
     ),
     "test_git.py": (
         "import subprocess\n"
@@ -343,9 +398,13 @@ def seeded_impact_project(tmp_path_factory: pytest.TempPathFactory) -> Path:
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "COVERAGE_CORE": "ctrace"},
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=90,  # Within the test budget: a hang fails here, not the worker.
     )
     assert seed.returncode == 0, seed.stdout + seed.stderr
+    # Durations as an idle machine records them: a seed slowed by load would make
+    # the checks start xdist workers, slower still and a different run.
+    with closing(sqlite3.connect(root / _test_impact.TESTMON_DATA)) as records, records:
+        records.execute("UPDATE test_execution SET duration = 0.01")
     # As the primary checkout's last commit check would have recorded it.
     _test_impact.record_tested_state(root, _git(root, "write-tree").strip(), ())
     return root
@@ -376,8 +435,8 @@ def _check_tests(root: Path) -> dict[str, tuple[bool, str]]:
     ("records", "path", "content"),
     [
         ("missing", "calc.py", HARMLESS_CALC),
-        ("missing", "factor.txt", "9"),
-        ("without tested state", "factor.txt", "9"),
+        ("missing", "Factor.txt", "9"),
+        ("without tested state", "Factor.txt", "9"),
         ("corrupt", "calc.py", HARMLESS_CALC),
     ],
     ids=["no records, code", "no records, data", "no tested state", "corrupt"],
@@ -494,8 +553,8 @@ def test_failure_on_committed_code_blocks_every_commit_unless_it_passes_alone(
 
 
 def test_staged_data_file_runs_the_tests_that_read_it(impact_project: Path) -> None:
-    _write(impact_project, "factor.txt", "9")
-    _git(impact_project, "add", "factor.txt")
+    _write(impact_project, "Factor.txt", "9")
+    _git(impact_project, "add", "Factor.txt")
 
     results = _check_tests(impact_project)
 
@@ -572,9 +631,6 @@ def _merge_after_checked_commits(
     return f"exit code {merge.returncode}\n{merge.stdout}{merge.stderr}"
 
 
-# Two commit checks and the merge hook each start pytest in the project; under a
-# loaded commit check that exceeds the default 30 s.
-@pytest.mark.timeout(120)
 def test_merge_commit_reuses_the_test_runs_of_both_sides(
     impact_project: Path, tmp_path: Path
 ) -> None:
@@ -591,7 +647,6 @@ def test_merge_commit_reuses_the_test_runs_of_both_sides(
     assert _check_tests(impact_project) == {"PASS (no test affected)": (False, "")}
 
 
-@pytest.mark.timeout(120)
 @pytest.mark.parametrize("rebase", [False, True], ids=["merged", "rebased"])
 def test_merge_commit_runs_a_test_both_sides_changed(
     impact_project: Path, tmp_path: Path, rebase: bool
@@ -601,7 +656,7 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     output = _merge_after_checked_commits(
         impact_project,
         tmp_path / "worktree",
-        ("factor.txt", "4"),
+        ("Factor.txt", "4"),
         ("calc.py", SKEWED_CALC),
         rebase=rebase,
     )
@@ -617,7 +672,7 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     ("main_change", "branch_change", "expected"),
     [
         (("calc.py", HARMLESS_CALC), ("wip.py", HARMLESS_WIP), "PASS (no test affected)"),
-        (("factor.txt", "4"), ("calc.py", SKEWED_CALC), "FAIL: tests affected by this commit"),
+        (("Factor.txt", "4"), ("calc.py", SKEWED_CALC), "FAIL: tests affected by this commit"),
     ],
     ids=["main tested its change", "both sides changed"],
 )
@@ -682,6 +737,58 @@ def test_worktree_commits_leave_the_tests_to_the_branch_check(
     assert "FAIL: tests affected by this commit" in output
     assert "test_calc.py::test_double" in output
     assert "test_wip.py" not in output
+
+
+@pytest.mark.parametrize(
+    ("path", "content", "reported"),
+    [
+        ("calc.py", BROKEN_CALC, "test_calc.py::test_double"),
+        # Like pytest-timeout ending the run: no report, and no record of the test.
+        (
+            "tests/test_crash.py",
+            "import os\n\n\ndef test_crash():\n    os._exit(1)\n",
+            "FAIL (exit code 1)",
+        ),
+    ],
+    ids=["failing test", "run ended without report"],
+)
+def test_a_failed_branch_check_fails_again_when_retried(
+    impact_project: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    path: str,
+    content: str,
+    reported: str,
+) -> None:
+    worktree = tmp_path / "worktree"
+    _git(impact_project, "worktree", "add", "-q", "-b", "task", str(worktree))
+    (worktree / path).parent.mkdir(exist_ok=True)
+    _write(worktree, path, content)
+    _git(worktree, "add", path)
+    _git(worktree, "commit", "-q", "-m", path, "--no-verify")
+
+    # A retry without a fix, as after a failure blamed on a busy machine.
+    for _attempt in range(2):
+        assert commit_check.check_branch(worktree) == 1
+        assert reported in capsys.readouterr().out
+
+
+def test_a_test_that_failed_last_time_runs_with_every_commit_until_it_passes(
+    impact_project: Path,
+) -> None:
+    # As testmon records a failure that no change since the tested state explains.
+    with closing(sqlite3.connect(impact_project / _test_impact.TESTMON_DATA)) as records, records:
+        records.execute(
+            "UPDATE test_execution SET failed = 1 WHERE test_name = ?",
+            ("test_wip.py::test_triple",),
+        )
+    for number in (1, 2):
+        _write(impact_project, f"notes{number}.txt", "read by no test")
+        _git(impact_project, "add", f"notes{number}.txt")
+
+        # It runs with an unrelated change, passes, and is left out afterwards.
+        assert _check_tests(impact_project) == ({"PASS": (False, "")} if number == 1 else {})
+        _git(impact_project, "commit", "-q", "-m", f"notes {number}", "--no-verify")
 
 
 @pytest.mark.parametrize(

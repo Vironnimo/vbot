@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 PROJECT_PACKAGES = ("cli", "core", "desktop", "scripts", "server")
@@ -77,6 +79,9 @@ def test_entry_point_discovery_finds_project_importing_scripts() -> None:
     } <= set(_entry_points_importing_project_packages())
 
 
+# The check imports the whole project in a fresh interpreter: over 30 s next to a
+# full parallel suite on a loaded machine.
+@pytest.mark.timeout(120)
 def test_scripts_import_their_own_checkout_before_another_installation(tmp_path: Path) -> None:
     # From a linked worktree, the editable install (or a PYTHONPATH workaround)
     # names another checkout; a shadow copy of every project package that fails
@@ -98,7 +103,7 @@ def test_scripts_import_their_own_checkout_before_another_installation(tmp_path:
         env=environment,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=90,  # Within the test budget: a hang fails here, not the worker.
         check=False,
     )
 

@@ -44,7 +44,9 @@ is no source (build and test configuration, page shell, static assets) runs ever
 Vitest test and the build; a change to the packages or to the lint or format
 configuration lints and format-checks every source. The WebUI checks refuse to run
 on packages that differ from ``webui/package-lock.json`` and block the commit until
-``npm ci`` installs the locked ones; the hook never installs packages itself.
+``npm ci`` installs the locked ones; the hook never installs packages itself. A
+staged package manifest that the lock does not record blocks until ``npm install``
+updates the lock.
 """
 
 from __future__ import annotations
@@ -65,12 +67,12 @@ from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts import _test_impact  # noqa: E402
+from scripts import _test_impact, _webui_packages  # noqa: E402
 from tests import cpu_pool, file_dependencies  # noqa: E402
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
@@ -86,10 +88,8 @@ EXTENSION_UI_PATTERN = re.compile(
 WEBUI_PACKAGE_FILES = frozenset({"webui/package.json", "webui/package-lock.json"})
 # Lint and format configuration can change the verdict on every source.
 WEBUI_STYLE_CONFIG = frozenset({"webui/eslint.config.js", "webui/prettier.config.js"})
-# npm records the package tree it installed here (npm 7 and later).
-INSTALLED_LOCK = Path("node_modules") / ".package-lock.json"
-# Fields that identify an installed package; npm may annotate entries otherwise.
-PACKAGE_IDENTITY = ("version", "resolved", "integrity", "link")
+# Differences a refusal lists before it summarizes the rest.
+SHOWN_DIFFERENCES = 5
 # The platforms CI type-checks (.github/workflows/ci.yml, static job). mypy keeps
 # the host platform in its default cache and every other one in its own.
 MYPY_PLATFORMS = ("win32", "linux")
@@ -214,58 +214,42 @@ def webui_scope(paths: Iterable[str]) -> WebUIScope:
     )
 
 
-def _locked_packages(lock_file: Path) -> dict[str, dict[str, Any]]:
-    """Return the ``packages`` map of an npm lock file; raise ValueError when malformed."""
-    packages = json.loads(lock_file.read_text(encoding="utf-8")).get("packages")
-    if not isinstance(packages, dict) or not all(isinstance(e, dict) for e in packages.values()):
-        raise ValueError(f"{lock_file} holds no package map")
-    return packages
-
-
-def _installed_package_differences(webui: Path) -> list[str]:
-    """Return how ``webui/node_modules`` differs from ``webui/package-lock.json``.
-
-    An empty list means node_modules holds exactly the locked packages. npm skips
-    optional packages for other platforms, so a missing optional package is no
-    difference.
-    """
-    try:
-        locked = _locked_packages(webui / "package-lock.json")
-    except (OSError, ValueError):
-        return ["webui/package-lock.json is missing or unreadable"]
-    try:
-        installed = _locked_packages(webui / INSTALLED_LOCK)
-    except (OSError, ValueError):
-        return [f"webui/{INSTALLED_LOCK.as_posix()} is missing: npm installed nothing here"]
-    differences: list[str] = []
-    for path in sorted((locked.keys() | installed.keys()) - {""}):  # "": the WebUI itself
-        name = path.removeprefix("node_modules/")
-        if path not in installed:
-            if not (locked[path].get("optional") or locked[path].get("devOptional")):
-                differences.append(f"{name}: locked, not installed")
-        elif path not in locked:
-            differences.append(f"{name}: installed, not locked")
-        elif any(installed[path].get(key) != locked[path].get(key) for key in PACKAGE_IDENTITY):
-            installed_version = installed[path].get("version")
-            differences.append(
-                f"{name}: installed {installed_version}, locked {locked[path].get('version')}"
-            )
-    return differences
+def _listed(differences: list[str]) -> str:
+    shown = differences[:SHOWN_DIFFERENCES]
+    if len(differences) > len(shown):
+        shown.append(f"... and {len(differences) - len(shown)} more")
+    return "\n".join(shown)
 
 
 def _stale_packages(webui: Path) -> StepResult | None:
     """Return a blocking result when node_modules does not hold the locked packages."""
-    differences = _installed_package_differences(webui)
+    differences = _webui_packages.installed_differences(
+        webui / "node_modules", webui / "package-lock.json"
+    )
     if not differences:
         return None
-    shown = differences[:5]
-    if len(differences) > len(shown):
-        shown.append(f"... and {len(differences) - len(shown)} more")
     return StepResult(
         "webui deps",
         "FAIL: webui/node_modules does not match package-lock.json; run `npm ci` in webui/",
         True,
-        "\n".join(shown),
+        _listed(differences),
+    )
+
+
+def _unrecorded_manifest(webui: Path, staged: list[str]) -> StepResult | None:
+    """Return a blocking result when a staged package manifest and its lock disagree."""
+    if not WEBUI_PACKAGE_FILES & set(staged):
+        return None
+    differences = _webui_packages.manifest_differences(
+        webui / "package.json", webui / "package-lock.json"
+    )
+    if not differences:
+        return None
+    return StepResult(
+        "webui deps",
+        "FAIL: webui/package-lock.json does not record package.json; run `npm install` in webui/",
+        True,
+        _listed(differences),
     )
 
 
@@ -435,6 +419,10 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
     if not files and not scope.all_styles:
         return []
     webui = root / "webui"
+    # npm ci, as CI runs it, refuses a lock that does not record the manifest.
+    unrecorded = _unrecorded_manifest(webui, staged)
+    if unrecorded is not None:
+        return [unrecorded]
     prettier = _node_bin(webui, "prettier", "prettier")
     eslint = _node_bin(webui, "eslint", "eslint")
     npm = _npm()
@@ -551,6 +539,9 @@ def classify_failures(
     and on no staged file, and otherwise to committed code.
     """
     dependencies = _test_impact.dependencies(root, set(failed))
+    # The dependencies are spelled as the records spell paths.
+    staged = set(map(file_dependencies.recorded_path, staged))
+    dirty = set(map(file_dependencies.recorded_path, dirty))
     commit: list[str] = []
     committed: list[str] = []
     in_progress: list[str] = []
@@ -731,9 +722,10 @@ def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[li
     if not tests:
         return failed, []
     result = _run([*_pytest(), "-n", "0", *tests], root, env)
-    if result.returncode not in (0, 1):
-        return failed, []
     failing = set(failed_tests(result.stdout))
+    # A run that ends with 1 but names no failure died before its report.
+    if result.returncode not in (0, 1) or (result.returncode == 1 and not failing):
+        return failed, []
     passed = [test for test in tests if test not in failing]
     return [test for test in failed if test not in passed], passed
 
@@ -785,20 +777,26 @@ def check_tests(
                 f"Commit check: discarded the corrupt {name}; this run records afresh.", flush=True
             )
         result = _run(command, root, env)
-        if result.returncode not in (0, 1, 5):  # 5: no test selected
+        output = result.stdout
+        failed = failed_tests(output)
+        # 5: no test selected. A run that ends with 1 but names no failure died
+        # before its report, as when pytest-timeout ends the process.
+        if result.returncode not in (0, 1, 5) or (result.returncode == 1 and not failed):
             return [
                 StepResult("pytest", f"FAIL (exit code {result.returncode})", True, _output(result))
             ]
-        _record_tested_state(root, dirty)
-        output = result.stdout
-        failed = failed_tests(output)
         if not failed:
+            _record_tested_state(root, dirty)
             return [StepResult("pytest", "PASS", False)]
         commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
         # A busy machine can fail any test: only a test that fails alone as well blocks.
         failing, flaky = _rerun_alone(root, [*commit, *committed], env)
         commit = [test for test in commit if test in failing]
         committed = [test for test in committed if test in failing]
+        # A blocked run leaves the tested state as it was, so the next run judges
+        # every change since then again, tests whose failure left no record included.
+        if not commit and not committed:
+            _record_tested_state(root, dirty)
 
     results: list[StepResult] = []
     if commit:

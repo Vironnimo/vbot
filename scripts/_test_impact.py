@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from tests.file_dependencies import COLLECTION, DATA_FILE, TESTMON_DATA
+from tests.file_dependencies import COLLECTION, DATA_FILE, TESTMON_DATA, recorded_path
 
 # Changes that can affect any test: pytest and plugin configuration.
 FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
@@ -80,13 +80,15 @@ def readers(root: Path, paths: set[str], records: Path | None = None) -> set[str
     itself, and one that no longer exists was removed; either changes the entries
     of its own directory in turn. So the tests that listed any directory up to the
     nearest existing one a test listed are readers too. The result contains
-    ``COLLECTION`` when a path was read outside any test.
+    ``COLLECTION`` when a path was read outside any test. *paths* may be spelled
+    in any case the filesystem accepts; the records answer for each path in
+    their own spelling.
 
     Raises sqlite3.Error when the records are missing or unreadable.
     """
     records = records or root
-    directories = {path: _directories(path) for path in paths}
-    candidates = set(paths).union(*directories.values())
+    directories = {path: _directories(path) for path in map(recorded_path, paths)}
+    candidates = set(directories).union(*directories.values())
     rows = _query(
         records / DATA_FILE,
         "SELECT DISTINCT test, path FROM reads WHERE path IN ({placeholders})",
@@ -113,9 +115,10 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
     That is every Python file whose code the test executed (testmon) and every data
     file it read or directory it listed. Each test also depends on its own module.
     A test module id without ``::``, as a collection error reports it, depends on
-    the files of all recorded tests of that module.
+    the files of all recorded tests of that module. Paths are spelled as
+    ``recorded_path`` spells them; compare them with paths spelled alike.
     """
-    result = {test: {test.partition("::")[0]} for test in tests}
+    result = {test: {recorded_path(test.partition("::")[0])} for test in tests}
     modules = {test.partition("::")[0] for test in tests}
     module_of = "substr({column}, 1, instr({column} || '::', '::') - 1) IN ({{placeholders}})"
     executed = _query_or_nothing(
@@ -135,7 +138,7 @@ def dependencies(root: Path, tests: set[str]) -> dict[str, set[str]]:
         module = recorded.partition("::")[0]
         for test in (recorded, module):
             if test in result:
-                result[test].add(path.replace("\\", "/"))
+                result[test].add(recorded_path(path))
     return result
 
 
@@ -144,9 +147,8 @@ class Selection:
     """The tests a change affects, judged against recorded test runs."""
 
     tests: frozenset[str]
-    """Selected tests: their recorded code changed, or they read a changed file."""
-    failed: frozenset[str]
-    """Tests that failed in their last recorded run."""
+    """Selected tests: their recorded code changed, they read a changed file, or they
+    failed in their last recorded run."""
     durations: Mapping[str, float]
     """Recorded duration of every recorded test."""
     complete: bool
@@ -156,9 +158,7 @@ class Selection:
 
     def selects(self, test: str) -> bool:
         """Whether *test* lacks a passing run with the code and files it has now."""
-        return (
-            self.complete or test in self.tests or test in self.failed or test not in self.durations
-        )
+        return self.complete or test in self.tests or test not in self.durations
 
     def __and__(self, other: Selection) -> Selection:
         """Return the tests both selections select.
@@ -169,13 +169,13 @@ class Selection:
         """
         durations = {**other.durations, **self.durations}
         if self.complete and other.complete:
-            return Selection(frozenset(), frozenset(), durations, True, self.reason)
-        candidates = self.tests | other.tests | self.failed | other.failed
+            return Selection(frozenset(), durations, True, self.reason)
+        candidates = self.tests | other.tests
         for selection in (self, other):
             if selection.complete:
                 candidates |= set(selection.durations)
         tests = frozenset(test for test in candidates if self.selects(test) and other.selects(test))
-        return Selection(tests, frozenset(), durations, complete=False)
+        return Selection(tests, durations, complete=False)
 
     @property
     def seconds(self) -> float:
@@ -207,16 +207,17 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     *root*); *changed* are the paths that differ from that state, None when that
     state is unknown. Changed Python code selects through pytest-testmon's record
     of the code each test executed; any other changed file selects the tests that
-    read it. testmon also selects the tests that failed in their last run. Records
-    that are missing, unreadable or without a tested state select every test.
+    read it. A test that failed in its last run is selected whatever changed, until
+    it passes. Records that are missing, unreadable or without a tested state
+    select every test.
     """
     records = records or root
     if not (records / TESTMON_DATA).is_file():
-        return Selection(frozenset(), frozenset(), {}, True, "there are no test records")
+        return Selection(frozenset(), {}, True, "there are no test records")
     try:
         return _select(root, changed, records)
     except sqlite3.Error:
-        return Selection(frozenset(), frozenset(), {}, True, "the test records are unreadable")
+        return Selection(frozenset(), {}, True, "the test records are unreadable")
 
 
 def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selection:
@@ -226,22 +227,22 @@ def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selecti
     # Records without a tested state may describe any state of the working tree.
     if changed is None or tested_state(records) is None:
         reason = "the test records describe no known state of the checkout"
-        return Selection(frozenset(), failed, durations, True, reason)
+        return Selection(frozenset(), durations, True, reason)
     changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
     tests = readers(root, data_files, records)
     triggers = sorted(FULL_SUITE_TRIGGERS & data_files)
     if triggers:
-        return Selection(frozenset(), failed, durations, True, f"{triggers[0]} changed")
+        return Selection(frozenset(), durations, True, f"{triggers[0]} changed")
     if COLLECTION in tests:
         reason = "a file that test modules read while they are imported changed"
-        return Selection(frozenset(), failed, durations, True, reason)
+        return Selection(frozenset(), durations, True, reason)
     if len(data_files) < len(changed):
         affected = _affected_by_code(root, records)
         if isinstance(affected, str):
-            return Selection(frozenset(), failed, durations, True, affected)
+            return Selection(frozenset(), durations, True, affected)
         tests |= affected
-    return Selection(frozenset(tests), failed, durations, complete=False)
+    return Selection(frozenset(tests | failed), durations, complete=False)
 
 
 def _affected_by_code(root: Path, records: Path) -> set[str] | str:
@@ -260,7 +261,7 @@ def _affected_by_code(root: Path, records: Path) -> set[str] | str:
         if not data.all_tests:
             return "there are no test records"
         data.determine_stable()
-        return set(data.unstable_test_names) | set(data.failing_tests)
+        return set(data.unstable_test_names)
     finally:
         data.db.con.close()
 

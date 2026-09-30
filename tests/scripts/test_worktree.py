@@ -265,18 +265,11 @@ def test_cmd_create_copies_primary_webui_packages_and_native_resources(tmp_path,
     ("installed", "seeded"),
     [
         pytest.param({"node_modules/vite": {"version": "8.0.0", "dev": True}}, True, id="match"),
+        # Which installations differ from the lock: test_commit_check.py, whose
+        # stale-package refusal shares the comparison.
         pytest.param(
             {"node_modules/vite": {"version": "8.0.1", "dev": True}}, False, id="other-version"
         ),
-        pytest.param(
-            {
-                "node_modules/vite": {"version": "8.0.0", "dev": True},
-                "node_modules/left-pad": {"version": "1.0.0"},
-            },
-            False,
-            id="unlocked-package",
-        ),
-        pytest.param({}, False, id="missing-required-package"),
     ],
 )
 def test_seed_webui_packages_copies_only_a_tree_matching_the_worktree_lock(

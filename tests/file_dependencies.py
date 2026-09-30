@@ -15,6 +15,10 @@ pytest elsewhere, or each change to it selects the complete suite.
 Files opened outside a test, while test modules are imported during collection,
 are recorded under ``COLLECTION``: their readers cannot be attributed to single
 tests, so a change to one of them selects the complete suite.
+
+Paths are recorded as ``recorded_path`` spells them, relative to the repository
+root: case-folded where the filesystem ignores case (Windows), because a test may
+open a file in any case there. Lookups spell the paths they query the same way.
 """
 
 from __future__ import annotations
@@ -38,11 +42,17 @@ _IGNORED_SUFFIXES = (".py", ".pyc", ".pyi")
 _COVERAGE_PACKAGE = f"{os.sep}coverage{os.sep}"
 
 
+def recorded_path(path: str) -> str:
+    """Return *path* as the records spell it: case-folded where the filesystem
+    ignores case, with ``/`` separators."""
+    return os.path.normcase(path).replace("\\", "/")
+
+
 class _Recorder:
     """Audit-hook target that attributes repository reads to the running test."""
 
     def __init__(self, root: Path) -> None:
-        self._root = os.path.normcase(str(root)) + os.sep
+        self._root = recorded_path(str(root)).rstrip("/") + "/"
         self.current: str | None = COLLECTION
         self.records: dict[str, set[str]] = {}
 
@@ -62,12 +72,12 @@ class _Recorder:
         if target is None or isinstance(target, int):
             return  # file descriptors carry no path
         try:
-            full = os.path.normcase(os.path.abspath(os.fsdecode(target)))
+            full = recorded_path(os.path.abspath(os.fsdecode(target)))
         except (TypeError, ValueError):
             return
         if not full.startswith(self._root):
             return
-        relative = full[len(self._root) :].replace("\\", "/")
+        relative = full[len(self._root) :]
         if (
             not relative
             or relative.endswith(_IGNORED_SUFFIXES)
