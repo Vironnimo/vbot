@@ -477,8 +477,11 @@ old registration to start or mutate new execution.
 Explicit Resume may continue inactive peers in an open epoch while
 other peers run. A closed attempt opens a fresh epoch. Preparation failure closes
 that newly opened epoch so a later Resume can retry; existing Sessions and the
-initial-input receipt remain authoritative. Resume is rejected while initial
-preparation or Stop is still in progress. Background wake failures
+initial-input receipt remain authoritative. Resume records every participant's
+Session binding again (idempotent), so a Session a failed or interrupted Start
+created without recording it still receives Board delivery afterwards
+(`test_resume_records_a_participant_session_whose_binding_start_lost`). Resume
+is rejected while initial preparation or Stop is still in progress. Background wake failures
 retain pending delivery and expose needs_attention with ids-only diagnostics.
 
 Start and Resume persist admitted Run results in their existing request receipt;
