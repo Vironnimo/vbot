@@ -179,6 +179,7 @@ def _make_state(
         projects=projects,
         agents=agents,
         sessions=sessions,
+        chat_sessions=sessions,
         snapshot_barrier=barrier,
         agent_resolver=resolver,
         terminal_manager=_FakeTerminalManager(),

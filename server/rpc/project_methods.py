@@ -462,9 +462,6 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     project_id = _required_string(params, "project_id")
     copy_identity_files = _optional_bool(params, "copy_rooted_agent_identity_files", default=False)
     projects = _projects(state)
-    affected_agents: list[str] = []
-    copied_files: dict[str, list[str]] = {}
-    backed_up_files: dict[str, list[str]] = {}
     try:
         # Serialize the check-then-archive against any concurrent remove using the
         # same lock the Agent delete lock uses, so a busy check cannot race the
@@ -474,35 +471,13 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
             try:
                 async with _state_chat_runs(state).project_admission_guard(project_id):
                     _ensure_no_automation_reference(state, project_id)
-                    # Unrooting Agents and archiving the anchor and its Sessions is
-                    # one unit for data snapshots, compensation included.
-                    async with state.runtime.snapshot_barrier.compound_mutation_async():
-                        rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
-                        completed_updates: list[tuple[Any, Any]] = []
-                        try:
-                            await state.runtime.terminal_manager.close_project_scope(project_id)
-                            for agent in rooted_agents:
-                                default_workspace = state.runtime.agents.default_workspace(agent.id)
-                                changes: JsonObject = {"root_project_id": None}
-                                workspace_changes = agent.workspace != default_workspace
-                                if workspace_changes:
-                                    changes["workspace"] = default_workspace
-                                result = state.runtime.agents.update_with_metadata(
-                                    agent.id,
-                                    copy_workspace_identity_files=(
-                                        copy_identity_files and workspace_changes
-                                    ),
-                                    **changes,
-                                )
-                                completed_updates.append((agent, result))
-                                affected_agents.append(agent.id)
-                                copied_files[agent.id] = list(result.copied_files)
-                                backed_up_files[agent.id] = list(result.backed_up_files)
-                            archive_path = projects.delete(project_id)
-                        except Exception:
-                            for previous_agent, result in reversed(completed_updates):
-                                state.runtime.agents.restore_update(previous_agent, result)
-                            raise
+                    await state.runtime.terminal_manager.close_project_scope(project_id)
+                    removal = await state.runtime.chat_sessions.run_async(
+                        _unroot_agents_and_archive_project,
+                        state,
+                        project_id,
+                        copy_identity_files,
+                    )
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_PROJECT_BUSY,
@@ -521,11 +496,48 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     _LOGGER.info(
         "Project archived (project=%s affected_agents=%s)",
         project_id,
-        len(affected_agents),
+        len(removal["affected_agent_ids"]),
     )
+    return {"project_id": project_id, "archived": True, **removal}
+
+
+def _unroot_agents_and_archive_project(
+    state: Any, project_id: str, copy_identity_files: bool
+) -> JsonObject:
+    """Unroot the Project's Identity Agents and archive it, restoring the Agents on failure.
+
+    Runs on the Session database's pool: both stores write files and Session rows.
+    Unrooting and archiving is one compound mutation for data snapshots, so a snapshot
+    sees the Project live with its Agents rooted or archived with them unrooted.
+    """
+    agents = state.runtime.agents
+    affected_agents: list[str] = []
+    copied_files: dict[str, list[str]] = {}
+    backed_up_files: dict[str, list[str]] = {}
+    with state.runtime.snapshot_barrier.compound_mutation():
+        completed_updates: list[tuple[Any, Any]] = []
+        try:
+            for agent in agents.agents_rooted_in(project_id):
+                default_workspace = agents.default_workspace(agent.id)
+                changes: JsonObject = {"root_project_id": None}
+                workspace_changes = agent.workspace != default_workspace
+                if workspace_changes:
+                    changes["workspace"] = default_workspace
+                result = agents.update_with_metadata(
+                    agent.id,
+                    copy_workspace_identity_files=copy_identity_files and workspace_changes,
+                    **changes,
+                )
+                completed_updates.append((agent, result))
+                affected_agents.append(agent.id)
+                copied_files[agent.id] = list(result.copied_files)
+                backed_up_files[agent.id] = list(result.backed_up_files)
+            archive_path = _projects(state).delete(project_id)
+        except Exception:
+            for previous_agent, result in reversed(completed_updates):
+                agents.restore_update(previous_agent, result)
+            raise
     return {
-        "project_id": project_id,
-        "archived": True,
         "archive_path": str(archive_path),
         "affected_agent_ids": affected_agents,
         "copied_files": copied_files,
