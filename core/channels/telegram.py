@@ -541,8 +541,12 @@ class TelegramChannelAdapter(ChannelAdapter):
 
         The upgrade changes the chat id in place; without this the allowlist stops
         matching and the bot silently goes dead in that chat. The allowlist swap is
-        applied to the running adapter, persisted into the channel config, and the
-        conversation anchor is bridged so the session history continues seamlessly.
+        applied to the running adapter, the conversation anchor is bridged so the
+        session history continues seamlessly, and then the swap and the group access
+        persist. Only a repeated announcement would repair a crash between the steps,
+        so the order decides what such a crash leaves: an unpersisted swap keeps the
+        new chat visibly denied, and allowing it by hand continues the bridged
+        history instead of silently answering in an empty Session.
         """
         message = getattr(update, "effective_message", None)
         chat = getattr(update, "effective_chat", None)
@@ -576,6 +580,16 @@ class TelegramChannelAdapter(ChannelAdapter):
             self._config.id,
         )
 
+        try:
+            await self._engine.migrate_group_conversation(old_chat_id, new_chat_id)
+        except Exception as error:
+            _LOGGER.error(
+                "Cannot bridge migrated chat conversation (channel=%s): %s",
+                self._config.id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
         persister = self._chat_migration_persister
         if persister is not None:
             try:
@@ -587,16 +601,6 @@ class TelegramChannelAdapter(ChannelAdapter):
                     error,
                     exc_info=(type(error), error, error.__traceback__),
                 )
-
-        try:
-            await self._engine.migrate_group_conversation(old_chat_id, new_chat_id)
-        except Exception as error:
-            _LOGGER.error(
-                "Cannot bridge migrated chat conversation (channel=%s): %s",
-                self._config.id,
-                error,
-                exc_info=(type(error), error, error.__traceback__),
-            )
 
         try:
             await self.send(_CHAT_MIGRATED_REPLY, new_chat_id)
