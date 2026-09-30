@@ -672,7 +672,7 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     ("main_change", "branch_change", "expected"),
     [
         (("calc.py", HARMLESS_CALC), ("wip.py", HARMLESS_WIP), "PASS (no test affected)"),
-        (("factor.txt", "4"), ("calc.py", SKEWED_CALC), "FAIL: tests affected by this commit"),
+        (("Factor.txt", "4"), ("calc.py", SKEWED_CALC), "FAIL: tests affected by this commit"),
     ],
     ids=["main tested its change", "both sides changed"],
 )

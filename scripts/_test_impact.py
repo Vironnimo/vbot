@@ -169,8 +169,8 @@ class Selection:
         """
         durations = {**other.durations, **self.durations}
         if self.complete and other.complete:
-            return Selection(frozenset(), frozenset(), durations, True, self.reason)
-        candidates = self.tests | other.tests | self.failed | other.failed
+            return Selection(frozenset(), durations, True, self.reason)
+        candidates = self.tests | other.tests
         for selection in (self, other):
             if selection.complete:
                 candidates |= set(selection.durations)
@@ -213,11 +213,11 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     """
     records = records or root
     if not (records / TESTMON_DATA).is_file():
-        return Selection(frozenset(), frozenset(), {}, True, "there are no test records")
+        return Selection(frozenset(), {}, True, "there are no test records")
     try:
         return _select(root, changed, records)
     except sqlite3.Error:
-        return Selection(frozenset(), frozenset(), {}, True, "the test records are unreadable")
+        return Selection(frozenset(), {}, True, "the test records are unreadable")
 
 
 def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selection:
@@ -227,22 +227,22 @@ def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selecti
     # Records without a tested state may describe any state of the working tree.
     if changed is None or tested_state(records) is None:
         reason = "the test records describe no known state of the checkout"
-        return Selection(frozenset(), failed, durations, True, reason)
+        return Selection(frozenset(), durations, True, reason)
     changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
     tests = readers(root, data_files, records)
     triggers = sorted(FULL_SUITE_TRIGGERS & data_files)
     if triggers:
-        return Selection(frozenset(), failed, durations, True, f"{triggers[0]} changed")
+        return Selection(frozenset(), durations, True, f"{triggers[0]} changed")
     if COLLECTION in tests:
         reason = "a file that test modules read while they are imported changed"
-        return Selection(frozenset(), failed, durations, True, reason)
+        return Selection(frozenset(), durations, True, reason)
     if len(data_files) < len(changed):
         affected = _affected_by_code(root, records)
         if isinstance(affected, str):
-            return Selection(frozenset(), failed, durations, True, affected)
+            return Selection(frozenset(), durations, True, affected)
         tests |= affected
-    return Selection(frozenset(tests | failed), failed, durations, complete=False)
+    return Selection(frozenset(tests | failed), durations, complete=False)
 
 
 def _affected_by_code(root: Path, records: Path) -> set[str] | str:
