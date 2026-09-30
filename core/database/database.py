@@ -116,11 +116,13 @@ class Database:
         database_id: str,
         data_dir: Path | None,
         workers: BoundedWorkerPool | None = None,
+        restore_id: str | None = None,
     ) -> None:
         self.spec = spec
         self._runtime = runtime
         self._database_id = database_id
         self._data_dir = data_dir
+        self._restore_id = restore_id
         self._owns_workers = workers is None
         self._workers = database_worker_pool(spec) if workers is None else workers
 
@@ -140,6 +142,19 @@ class Database:
     def data_dir(self) -> Path | None:
         """The data directory of a marker-registered canonical database."""
         return self._data_dir
+
+    @property
+    def restore_id(self) -> str | None:
+        """The latest restore recorded for this database when it opened, or ``None``.
+
+        A data snapshot restore keeps ``database_id`` but brings back older
+        content. This id (the database's recovery incident id) changes whenever
+        a restore began replacing the file and stays the same across ordinary
+        reopens, so a projection that keys its cursor on both identities
+        continues incrementally after a restart and rebuilds after a restore.
+        Offline and disposable databases have none.
+        """
+        return self._restore_id
 
     @property
     def writer(self) -> sqlite3.Connection:
@@ -270,7 +285,7 @@ def open_offline_database(spec: DatabaseSpec) -> Database:
 
 
 def _open_canonical(spec: DatabaseSpec) -> Database:
-    from core.database.recovery import auto_restore_if_needed, pending_restore
+    from core.database.recovery import auto_restore_if_needed, latest_restore_id, pending_restore
 
     data_dir = canonical_data_dir(spec)
     require_no_maintenance(data_dir)
@@ -288,13 +303,23 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
             f"the {spec.name} database is missing although the data store lists it: "
             f"{spec.path}; no verified data snapshot could restore it"
         )
+    # Read before the guarded open: malformed incident evidence is never grounds
+    # to restore the database itself.
+    restore_id = latest_restore_id(data_dir, spec.name)
     try:
-        return _open_existing(spec, expected_database_id=entry.database_id, data_dir=data_dir)
+        return _open_existing(
+            spec, expected_database_id=entry.database_id, data_dir=data_dir, restore_id=restore_id
+        )
     except (DatabaseCorruptError, OSError):
         # Only corruption, identity failures and unreadable files may be
         # restored; a format or schema mismatch is never grounds to replace data.
         if auto_restore_if_needed(data_dir, spec, entry.database_id):
-            return _open_existing(spec, expected_database_id=entry.database_id, data_dir=data_dir)
+            return _open_existing(
+                spec,
+                expected_database_id=entry.database_id,
+                data_dir=data_dir,
+                restore_id=latest_restore_id(data_dir, spec.name),
+            )
         raise
 
 
@@ -315,6 +340,11 @@ def _require_generation(spec: DatabaseSpec, entry: MarkerEntry, data_dir: Path) 
 
 def _bootstrap_canonical(spec: DatabaseSpec, data_dir: Path) -> Database:
     """Create or adopt an unlisted canonical database, then register it."""
+    from core.database.recovery import latest_restore_id
+
+    # A restore recorded under this name before (an unregistered and recreated
+    # Extension database) keeps its id, so later reopens report the same one.
+    restore_id = latest_restore_id(data_dir, spec.name)
     with operation_lock(data_dir):
         marker = read_marker(data_dir)
         listed = marker is not None and spec.name in marker.databases
@@ -325,7 +355,9 @@ def _bootstrap_canonical(spec: DatabaseSpec, data_dir: Path) -> Database:
     if listed:
         # Another opener registered it while this one waited for the lock.
         return _open_canonical(spec)
-    database = _open_existing(spec, expected_database_id=None, data_dir=data_dir)
+    database = _open_existing(
+        spec, expected_database_id=None, data_dir=data_dir, restore_id=restore_id
+    )
     try:
         register_database(
             data_dir,
@@ -481,6 +513,7 @@ def _open_existing(
     expected_database_id: str | None,
     data_dir: Path | None,
     workers: BoundedWorkerPool | None = None,
+    restore_id: str | None = None,
 ) -> Database:
     runtime = ConnectionRuntime(
         spec.path,
@@ -519,7 +552,12 @@ def _open_existing(
         runtime.close()
         raise
     return Database(
-        spec, runtime, database_id=identity["database_id"], data_dir=data_dir, workers=workers
+        spec,
+        runtime,
+        database_id=identity["database_id"],
+        data_dir=data_dir,
+        workers=workers,
+        restore_id=restore_id,
     )
 
 
