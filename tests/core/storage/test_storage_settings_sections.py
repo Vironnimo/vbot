@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from core.storage import StorageError, StorageManager
+from core.storage import SettingsConflictError, StorageError, StorageManager
 
 APPEARANCE_DEFAULTS = {"language": "en", "chat_width": "comfortable", "chat_working_mode": "normal"}
 REFLECTION_DEFAULTS = {"enabled": True, "memory_turn_interval": 10, "skill_model_step_interval": 10}
@@ -461,6 +461,76 @@ def test_rejected_section_update_leaves_the_file_unchanged(tmp_path: Path, updat
     with pytest.raises(StorageError):
         storage.update_settings_sections(update)
 
+    assert storage.settings_path.read_bytes() == original
+
+
+_ALL_NOTIFICATIONS_ON = dict.fromkeys(NOTIFICATION_DEFAULTS, True)
+
+
+# (stored, update, base, the paths a conflict names or None when the update applies)
+BASED_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], Any]] = {
+    "unchanged-since-base": (
+        {"debug": {"enabled": False, "trace_limit": 50}},
+        {"debug": {"enabled": False, "trace_limit": 100}},
+        {"debug": {"enabled": False, "trace_limit": 50}},
+        None,
+    ),
+    # A full section would write back the old value of a leaf changed meanwhile.
+    "stale-leaf-would-be-reverted": (
+        {"notifications": {**_ALL_NOTIFICATIONS_ON, "run_failed": False}},
+        {"notifications": {**_ALL_NOTIFICATIONS_ON, "run_completed": False}},
+        {"notifications": _ALL_NOTIFICATIONS_ON},
+        ("notifications.run_failed",),
+    ),
+    "same-leaf-changed-meanwhile": (
+        {"debug": {"enabled": False, "trace_limit": 80}},
+        {"debug": {"enabled": False, "trace_limit": 100}},
+        {"debug": {"enabled": False, "trace_limit": 50}},
+        ("debug.trace_limit",),
+    ),
+    # Nothing the update writes differs from the current value.
+    "same-value-written-meanwhile": (
+        {"notifications": {**_ALL_NOTIFICATIONS_ON, "run_failed": False}},
+        {"notifications": {**_ALL_NOTIFICATIONS_ON, "run_failed": False}},
+        {"notifications": _ALL_NOTIFICATIONS_ON},
+        None,
+    ),
+    # Per-key sections change only the keys they name.
+    "other-key-changed-meanwhile": (
+        {"local_models": {"context_windows": {"ollama/a": 8192}}},
+        {"local_models": {"context_windows": {"ollama/b": 2048}}},
+        {"local_models": {"context_windows": {"ollama/b": None}}},
+        None,
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("stored", "update", "base", "stale_paths"),
+    BASED_UPDATES.values(),
+    ids=BASED_UPDATES.keys(),
+)
+def test_section_update_with_base_refuses_only_changes_over_newer_values(
+    tmp_path: Path,
+    stored: dict[str, Any],
+    update: dict[str, Any],
+    base: dict[str, Any],
+    stale_paths: tuple[str, ...] | None,
+) -> None:
+    storage = StorageManager(tmp_path)
+    storage.save_settings({"server_port": 8500, **stored})
+    original = storage.settings_path.read_bytes()
+    [section] = update
+
+    if stale_paths is None:
+        updated = storage.update_settings_sections(update, base=base)
+        assert storage.load_settings()[section] == updated[section]
+        return
+
+    with pytest.raises(SettingsConflictError) as conflict:
+        storage.update_settings_sections(update, base=base)
+
+    assert conflict.value.paths == stale_paths
     assert storage.settings_path.read_bytes() == original
 
 

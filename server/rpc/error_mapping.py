@@ -26,6 +26,7 @@ from core.projects import (
 )
 from core.runs import ActiveRunError, RunCancelledError, RunError, RunNotFoundError
 from core.sessions import SessionPageCursorError
+from core.storage import SettingsConflictError
 from core.tools.terminal_manager import (
     TerminalCapacityError,
     TerminalClosedError,
@@ -52,6 +53,7 @@ from server.rpc.errors import (
     RPC_ERROR_PROJECT_NOT_FOUND,
     RPC_ERROR_RUN_NOT_FOUND,
     RPC_ERROR_SESSION_CAPABILITY_EXPIRED,
+    RPC_ERROR_SETTINGS_CONFLICT,
     RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING,
     RpcError,
 )
@@ -100,6 +102,8 @@ def _map_expected_error(error: Exception) -> RpcError:
         return RpcError(RPC_ERROR_AGENT_ORDER_CONFLICT, str(error))
     if isinstance(error, AgentReferencedError):
         return RpcError(RPC_ERROR_AGENT_IN_USE, str(error))
+    if isinstance(error, SettingsConflictError):
+        return RpcError(RPC_ERROR_SETTINGS_CONFLICT, str(error))
     if isinstance(error, InvalidAgentOrderError):
         return RpcError(RPC_ERROR_INVALID_REQUEST, str(error))
     if isinstance(error, TerminalNotFoundError):

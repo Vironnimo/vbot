@@ -34,6 +34,7 @@ RPC_ERROR_PROJECT_IN_USE = "project_in_use"
 RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE = "performance_recording_active"
 RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE = "performance_recording_inactive"
 RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING = "terminal_program_not_running"
+RPC_ERROR_SETTINGS_CONFLICT = "settings_conflict"
 
 
 class RpcError(Exception):

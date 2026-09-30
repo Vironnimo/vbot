@@ -555,6 +555,16 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
     [
         # A section the parser rejects (the parser's rows: tests/core/settings).
         ("settings.update", {"skills": []}, "params.skills must be an object"),
+        (
+            "settings.update",
+            {"debug": {"enabled": True}, "base": {"recall": {"backend": "sqlite_fts"}}},
+            "params.base names sections the update does not change: recall",
+        ),
+        (
+            "settings.update",
+            {"debug": {"enabled": True}, "base": []},
+            "params.base must be an object",
+        ),
         # Values that parse but that the running Runtime does not accept.
         (
             "settings.update",
@@ -664,6 +674,37 @@ async def test_rejected_settings_changes_persist_nothing(
 
 
 @pytest.mark.asyncio
+async def test_settings_update_based_on_stale_values_is_refused_without_effects(
+    tmp_path: Path,
+) -> None:
+    state = _stored_state(tmp_path)
+    storage = state.runtime.storage
+    storage.save_settings({"debug": {"enabled": False, "trace_limit": 80}})
+    original = storage.settings_path.read_bytes()
+
+    error = await rpc_error(
+        state,
+        "settings.update",
+        debug={"enabled": True, "trace_limit": 50},
+        base={"debug": {"enabled": False, "trace_limit": 50}},
+    )
+
+    assert error["code"] == "settings_conflict"
+    assert "debug.trace_limit" in error["message"]
+    assert storage.settings_path.read_bytes() == original
+    assert resource_changes(state) == []
+
+    await rpc_result(
+        state,
+        "settings.update",
+        debug={"enabled": True, "trace_limit": 80},
+        base={"debug": {"enabled": False, "trace_limit": 80}},
+    )
+
+    assert storage.load_settings()["debug"] == {"enabled": True, "trace_limit": 80}
+
+
+@pytest.mark.asyncio
 async def test_settings_update_maps_storage_errors_to_domain_error_without_partial_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -675,7 +716,7 @@ async def test_settings_update_maps_storage_errors_to_domain_error_without_parti
     }
     state.runtime.storage.save_settings(original_settings)
 
-    def fail_settings_update(_settings_update: object) -> JsonObject:
+    def fail_settings_update(_settings_update: object, **_options: object) -> JsonObject:
         raise StorageError("compaction write failed")
 
     monkeypatch.setattr(state.runtime.storage, "update_settings_sections", fail_settings_update)

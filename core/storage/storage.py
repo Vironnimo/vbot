@@ -33,8 +33,6 @@ from core.settings import (
 )
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
-    coerce_defaults_update,
-    coerce_skills_update,
     normalize_appearance_settings,
     normalize_compaction_settings,
     normalize_custom_provider_id,
@@ -62,7 +60,7 @@ from core.settings.paths import (
 )
 from core.settings.settings import SETTINGS_UPDATE_SECTIONS
 from core.storage import _settings_updates as settings_updates
-from core.storage.errors import StorageError
+from core.storage.errors import SettingsConflictError, StorageError
 from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.storage.prompt_blocks import PromptBlockStore
 from core.storage.prompt_fragments import PromptFragmentStore
@@ -380,8 +378,18 @@ class StorageManager:
             self.save_settings(candidate)
             return previous, candidate, changed_paths
 
-    def update_settings_sections(self, settings_update: Mapping[str, Any]) -> dict[str, Any]:
-        """Persist a parsed public Settings update in one settings transaction."""
+    def update_settings_sections(
+        self,
+        settings_update: Mapping[str, Any],
+        *,
+        base: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist a parsed public Settings update in one settings transaction.
+
+        With ``base`` (the caller's view of the edited sections, in the update's
+        shape), the write is refused with :class:`SettingsConflictError` when it
+        would change a value that no longer matches that view.
+        """
 
         if not isinstance(settings_update, Mapping):
             raise StorageError("Settings update must be a mapping")
@@ -390,105 +398,12 @@ class StorageManager:
         if unsupported_sections:
             raise StorageError(f"Unsupported settings sections: {', '.join(unsupported_sections)}")
 
-        updated_sections: dict[str, Any] = {}
-
         def apply_update(settings: dict[str, Any]) -> dict[str, Any]:
-            if "appearance" in settings_update:
-                updated_sections["appearance"] = settings_updates.apply_appearance_settings(
-                    settings,
-                    settings_update["appearance"],
-                )
-            if "speech" in settings_update:
-                updated_sections["speech"] = settings_updates.apply_speech_settings(
-                    settings,
-                    settings_update["speech"],
-                )
-            if "skills" in settings_update:
-                skills_update = coerce_skills_update(settings_update["skills"])
-                updated_sections["skills"] = {
-                    "directories": settings_updates.apply_skill_directory_settings(
-                        settings,
-                        skills_update["directories"],
-                    )
-                }
-            if "subagents" in settings_update:
-                updated_sections["subagents"] = settings_updates.apply_subagent_settings(
-                    settings,
-                    settings_update["subagents"],
-                )
-            if "compaction" in settings_update:
-                updated_sections["compaction"] = settings_updates.apply_compaction_settings(
-                    settings,
-                    settings_update["compaction"],
-                )
-            if "defaults" in settings_update:
-                defaults_update = coerce_defaults_update(settings_update["defaults"])
-                updated_sections["defaults"] = settings_updates.apply_defaults(
-                    settings,
-                    "agent",
-                    defaults_update["agent"],
-                )
-            if "recall" in settings_update:
-                updated_sections["recall"] = settings_updates.apply_recall_settings(
-                    settings,
-                    settings_update["recall"],
-                )
-            if "web_fetch" in settings_update:
-                updated_sections["web_fetch"] = settings_updates.apply_web_fetch_settings(
-                    settings,
-                    settings_update["web_fetch"],
-                )
-            if "web_search" in settings_update:
-                updated_sections["web_search"] = settings_updates.apply_web_search_settings(
-                    settings,
-                    settings_update["web_search"],
-                )
-            if "model_tasks" in settings_update:
-                updated_sections["model_tasks"] = settings_updates.apply_model_task_settings(
-                    settings,
-                    settings_update["model_tasks"],
-                )
-            if "providers" in settings_update:
-                updated_sections["providers"] = settings_updates.apply_providers_settings(
-                    settings,
-                    settings_update["providers"],
-                )
-            if "debug" in settings_update:
-                updated_sections["debug"] = settings_updates.apply_debug_settings(
-                    settings,
-                    settings_update["debug"],
-                )
-            if "server" in settings_update:
-                updated_sections["server"] = settings_updates.apply_server_settings(
-                    settings,
-                    settings_update["server"],
-                )
-            if "extensions" in settings_update:
-                updated_sections["extensions"] = settings_updates.apply_extensions_settings(
-                    settings,
-                    settings_update["extensions"],
-                )
-            if "reflection" in settings_update:
-                updated_sections["reflection"] = settings_updates.apply_reflection_settings(
-                    settings,
-                    settings_update["reflection"],
-                )
-            if "local_models" in settings_update:
-                updated_sections["local_models"] = settings_updates.apply_local_models_settings(
-                    settings,
-                    settings_update["local_models"],
-                )
-            if "session_titles" in settings_update:
-                updated_sections["session_titles"] = settings_updates.apply_session_title_settings(
-                    settings,
-                    settings_update["session_titles"],
-                )
-            if "notifications" in settings_update:
-                updated_sections["notifications"] = settings_updates.apply_notification_settings(
-                    settings,
-                    settings_update["notifications"],
-                )
-            return dict(updated_sections)
+            if base is not None:
+                stale_paths = settings_updates.stale_setting_paths(settings, settings_update, base)
+                if stale_paths:
+                    raise SettingsConflictError(stale_paths)
+            return settings_updates.apply_settings_update(settings, settings_update)
 
         return self.update_settings(apply_update)
 
