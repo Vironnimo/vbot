@@ -263,5 +263,5 @@ Missing STT bindings and Provider request failures are logged through `vbot.spee
 - Binary audio transport stays outside JSON-RPC. Accessors use dedicated HTTP endpoints for recording upload and synthesized audio download.
 - The speech HTTP client is not the chat adapter stack. Provider-specific chat behavior, debug capture, streaming behavior, or message formatting changes do not automatically apply here.
 - Local speech imports remain dependency-free; dependency availability does not promise GPU/model readiness. Device, checkpoint and memory errors are reported during execution as `SpeechExecutionError`; missing extras remain `SpeechUnsupportedTargetError`.
-- Artifact persistence (shared `TaskArtifactStore`) exclusively reserves the sidecar name before writing the audio file and complete metadata; interrupted writes can leave invalid sidecars or orphaned audio blobs, whose names remain occupied.
+- Artifact persistence (shared `TaskArtifactStore`, `model_tasks.md`) exclusively reserves the sidecar name, then creates the audio file without replacing any file and writes the complete metadata; interrupted writes can leave invalid sidecars or orphaned audio blobs, whose names remain occupied.
 - No credentials may be logged, persisted in artifacts, or returned to accessors.
