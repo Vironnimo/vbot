@@ -39,7 +39,7 @@ test("speech and image Tools persist and serve fake Provider artifacts", async (
   await expect(generation).toContainText(
     "A deterministic blue square on a white background",
   );
-  const image = chat.getByRole("img", { name: /^img_[a-z0-9]+\.png$/ });
+  const image = generation.getByRole("img", { name: /^img_[a-z0-9]+\.png$/ });
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((node) => node.naturalWidth)).toBe(1);
   const imageUrl = await image.getAttribute("src");
