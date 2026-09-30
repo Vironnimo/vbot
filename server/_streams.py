@@ -13,6 +13,7 @@ from core.performance import count
 from core.runs import RUN_AGENT_ACTIVITY_FIELD, RunStatus
 from server._app_lifecycle import _app_chat_runs
 from server._http_dependencies import Request, WebSocket
+from server.clients import ClientEntry, ClientRegistry
 from server.events import (
     RESOURCE_KIND_CLIENTS,
     ServerEventBus,
@@ -134,18 +135,15 @@ def _parse_query_string(raw: str | None) -> str:
     return raw.strip()
 
 
-def _register_ws_client(websocket: WebSocket) -> Any:
-    """Register the connecting window in the presence roster, if one is wired.
+def _register_ws_client(websocket: WebSocket) -> ClientEntry:
+    """Register the connecting window in the presence roster.
 
     Reads the client-minted connection id and accessor type from the query
     params and the browser/OS from the ``User-Agent`` header, then publishes a
     ``clients`` reload-on-change signal so other windows refresh the roster.
-    Returns the registry entry (the unregister handle) or ``None`` when no
-    registry exists (CLI-only runtime stub).
+    Returns the registry entry (the unregister handle).
     """
-    registry = getattr(websocket.app.state, "client_registry", None)
-    if registry is None:
-        return None
+    registry: ClientRegistry = websocket.app.state.client_registry
     entry = registry.register(
         connection_id=_parse_query_string(websocket.query_params.get("connection_id")),
         accessor=_parse_query_string(websocket.query_params.get("accessor")),
@@ -155,14 +153,9 @@ def _register_ws_client(websocket: WebSocket) -> Any:
     return entry
 
 
-def _unregister_ws_client(state: Any, entry: Any) -> None:
+def _unregister_ws_client(state: Any, entry: ClientEntry) -> None:
     """Remove a previously registered window and signal the roster change."""
-    if entry is None:
-        return
-    registry = getattr(state, "client_registry", None)
-    if registry is None:
-        return
-    registry.unregister(entry.id)
+    state.client_registry.unregister(entry.id)
     publish_resource_changed(state, RESOURCE_KIND_CLIENTS)
 
 

@@ -796,9 +796,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         async def _do_request(body: bytes) -> dict[str, Any]:
             headers = httpx.Headers(await self._build_request_headers(messages, payload))
             headers.update(request_headers)
-            headers.setdefault(
-                "Content-Type", self._client.headers.get("Content-Type", "application/json")
-            )
+            headers.setdefault("Content-Type", "application/json")
             try:
                 response = await self._client.post(
                     CHAT_COMPLETIONS_ENDPOINT,

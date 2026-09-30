@@ -51,20 +51,18 @@ def _initialize_app_state(
     app.state.runtime = runtime
     app.state.chat_runs = runtime.chat_run_manager
     app.state.event_bus = ServerEventBus()
-    set_extension_change_publisher = getattr(runtime, "set_extension_change_publisher", None)
-    if callable(set_extension_change_publisher):
-        set_extension_change_publisher(
-            lambda owner, resource, ids, revision: publish_resource_changed(
-                app.state,
-                RESOURCE_KIND_EXTENSIONS,
-                scope={
-                    "owner": owner,
-                    "resource": resource,
-                    "ids": list(ids),
-                    "revision": revision,
-                },
-            )
+    runtime.set_extension_change_publisher(
+        lambda owner, resource, ids, revision: publish_resource_changed(
+            app.state,
+            RESOURCE_KIND_EXTENSIONS,
+            scope={
+                "owner": owner,
+                "resource": resource,
+                "ids": list(ids),
+                "revision": revision,
+            },
         )
+    )
     app.state.client_registry = ClientRegistry()
     app.state.file_delivery = FileDelivery()
     app.state.run_event_bridge_run_ids = OrderedDict()
@@ -135,8 +133,8 @@ async def _warm_statistics_index(service: Any) -> None:
 
 
 def _unregister_run_event_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "run_event_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.run_event_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.run_event_bridge_unsubscribe = None
 
@@ -150,8 +148,8 @@ def _register_session_title_bridge(state: Any) -> Any:
 
 
 def _unregister_session_title_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "session_title_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.session_title_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.session_title_bridge_unsubscribe = None
 
@@ -171,8 +169,8 @@ def _register_session_completion_read_bridge(state: Any) -> Any:
 
 
 def _unregister_session_completion_read_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "session_completion_read_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.session_completion_read_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.session_completion_read_bridge_unsubscribe = None
 
@@ -184,8 +182,8 @@ def _register_cron_change_bridge(state: Any) -> Any:
 
 
 def _unregister_cron_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "cron_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.cron_change_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.cron_change_bridge_unsubscribe = None
 
@@ -197,8 +195,8 @@ def _register_calendar_change_bridge(state: Any) -> Any:
 
 
 def _unregister_calendar_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "calendar_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.calendar_change_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.calendar_change_bridge_unsubscribe = None
 
@@ -211,8 +209,8 @@ def _register_skill_change_bridge(state: Any) -> Any:
 
 
 def _unregister_skill_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "skill_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.skill_change_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.skill_change_bridge_unsubscribe = None
 
@@ -228,8 +226,8 @@ def _register_terminal_change_bridge(state: Any) -> Any:
 
 
 def _unregister_terminal_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "terminal_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.terminal_change_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.terminal_change_bridge_unsubscribe = None
 
@@ -241,8 +239,8 @@ def _register_bash_process_change_bridge(state: Any) -> Any:
 
 
 def _unregister_bash_process_change_bridge(state: Any) -> None:
-    unsubscribe = getattr(state, "bash_process_change_bridge_unsubscribe", None)
-    if callable(unsubscribe):
+    unsubscribe = state.bash_process_change_bridge_unsubscribe
+    if unsubscribe is not None:
         unsubscribe()
     state.bash_process_change_bridge_unsubscribe = None
 

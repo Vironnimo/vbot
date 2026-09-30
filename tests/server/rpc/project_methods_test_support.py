@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,6 +18,7 @@ from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
+from server.events import ServerEventBus
 
 
 # ---------------------------------------------------------------------------
@@ -190,4 +192,9 @@ def _make_state(
             }
         ),
     )
-    return SimpleNamespace(runtime=runtime, chat_runs=chat_runs)
+    return SimpleNamespace(
+        runtime=runtime,
+        chat_runs=chat_runs,
+        event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
+    )

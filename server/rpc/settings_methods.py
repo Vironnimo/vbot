@@ -361,10 +361,7 @@ def _validate_changed_provider_connections(
 def _apply_runtime_values(state: Any, values: JsonObject) -> None:
     """Replace restart-applied configured values with the active runtime values."""
 
-    server_bind = getattr(state, "server_bind", {})
-    active_port = server_bind.get("listen_port")
-    if isinstance(active_port, int):
-        values["server"]["port"] = active_port
+    values["server"]["port"] = state.server_bind["listen_port"]
 
     runtime = state.runtime
     with suppress(AttributeError, RuntimeError):
@@ -386,11 +383,9 @@ def _runtime_setting_details(
 
     if values == ("server", "port"):
         desired = details.get("value")
-        active = getattr(state, "server_bind", {}).get("listen_port", details.get("value"))
+        active = state.server_bind["listen_port"]
         details["value"] = active
-        details["source"] = getattr(state, "server_bind", {}).get(
-            "port_source", details.get("source", "default")
-        )
+        details["source"] = state.server_bind["port_source"]
         _set_restart_state(details, active, desired)
     elif values == ("attachments", "max_size_bytes"):
         desired = details.get("value")
@@ -799,15 +794,7 @@ async def _trace_count(runtime: Any) -> int:
 
 
 def _server_bind_response(state: Any) -> JsonObject:
-    server_bind = getattr(state, "server_bind", {})
-    listen_host = server_bind.get("listen_host", "127.0.0.1")
-    listen_port = server_bind.get("listen_port", 8420)
-    port_source = server_bind.get("port_source", "default")
-    return {
-        "listen_host": listen_host,
-        "listen_port": listen_port,
-        "port_source": port_source,
-    }
+    return dict(state.server_bind)
 
 
 def _provider_settings_item(runtime: Any, provider_id: str) -> JsonObject:

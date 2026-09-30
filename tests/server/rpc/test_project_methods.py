@@ -534,7 +534,11 @@ async def test_project_skill_cache_follows_settings_and_repo_changes(tmp_path: P
     runtime = Runtime(Config(data_dir=tmp_path / "data"))
     runtime.start()
     try:
-        state = SimpleNamespace(runtime=runtime)
+        state = SimpleNamespace(
+            runtime=runtime,
+            event_bus=ServerEventBus(),
+            server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
+        )
         repo = _make_repo(tmp_path, "repo")
         _write_project_skill(repo, "project-playbook", "Project instructions")
         global_root = runtime.global_skills_dir / "global-playbook"

@@ -14,6 +14,7 @@ from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-
 from core.runs import RunKind, RunStatus
 from core.sessions import SessionAddress
 from server.app import create_app
+from server.clients import ClientRegistry
 from server.events import APP_ERROR_EVENT, ServerEventBus
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
@@ -285,7 +286,7 @@ async def test_shared_socket_closes_subscription_immediately(
     bus = ServerEventBus()
     app = _stub_app(tmp_path)
     app.state.event_bus = bus
-    monkeypatch.setattr(server_app, "_register_ws_client", lambda _socket: None)
+    app.state.client_registry = ClientRegistry()
     monkeypatch.setattr(server_app, "_active_runs_snapshot", lambda _state: [])
     monkeypatch.setattr(server_app, "_queues_snapshot", lambda _state: [])
     held_streams: list[Any] = []
@@ -319,7 +320,7 @@ async def test_shared_socket_closes_subscription_immediately(
         raise WebSocketDisconnect()
 
     socket = SimpleNamespace(
-        app=app, query_params={}, accept=accept, receive=receive, send_json=send_json
+        app=app, query_params={}, headers={}, accept=accept, receive=receive, send_json=send_json
     )
     endpoint = next(
         cast(Any, route).endpoint for route in app.routes if getattr(route, "path", None) == "/ws"
@@ -333,6 +334,7 @@ async def test_shared_socket_closes_subscription_immediately(
                 await endpoint(socket)
         assert held_streams
         assert bus.subscriber_count == 0
+        assert app.state.client_registry.list() == []
     finally:
         for stream in held_streams:
             await stream.aclose()

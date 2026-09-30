@@ -139,10 +139,7 @@ def _publish_provider_auth_completed_event(
     account: str,
     success: bool,
 ) -> None:
-    event_bus = getattr(state, "event_bus", None)
-    if event_bus is None:
-        return
-    event_bus.publish(
+    state.event_bus.publish(
         PROVIDER_AUTH_COMPLETED_EVENT,
         {
             "provider_id": provider_id,
@@ -161,10 +158,9 @@ def publish_bash_process_status_changed(state: Any, notification: Any) -> None:
     start/end timestamps the WebUI needs to replace its live tick with the
     real runtime.
     """
-    event_bus = getattr(state, "event_bus", None)
-    if event_bus is None or not isinstance(notification, dict):
+    if not isinstance(notification, dict):
         return
-    event_bus.publish(
+    state.event_bus.publish(
         BASH_PROCESS_STATUS_CHANGED_EVENT,
         dict(notification),
     )
@@ -180,18 +176,14 @@ def publish_resource_changed(
 
     The event carries no payload beyond ``kind`` (and an optional ``scope`` that
     narrows it to one agent/session) — the client re-fetches the affected
-    resource through its normal RPC, so this never ships data. No-op when no
-    event bus is wired (CLI-only runtime stubs).
+    resource through its normal RPC, so this never ships data.
     """
     if kind not in ALLOWED_RESOURCE_KINDS:
         raise ValueError(f"unsupported resource kind: {kind}")
-    event_bus = getattr(state, "event_bus", None)
-    if event_bus is None:
-        return
     payload: JsonObject = {"kind": kind}
     if scope:
         payload["scope"] = scope
-    event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
+    state.event_bus.publish(RESOURCE_CHANGED_EVENT, payload)
 
 
 def session_resource_scope(

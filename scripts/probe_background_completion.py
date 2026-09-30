@@ -255,8 +255,7 @@ class _SyntheticFirstStepAdapter:
         return dict(self._delegate.request_context_kwargs(**kwargs))
 
     def set_debug_context(self, context: Any) -> None:
-        if hasattr(self._delegate, "set_debug_context"):
-            self._delegate.set_debug_context(context)
+        self._delegate.set_debug_context(context)
 
     async def aclose(self) -> None:
         close = getattr(self._delegate, "aclose", None)

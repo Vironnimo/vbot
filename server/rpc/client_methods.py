@@ -13,16 +13,12 @@ JsonObject = dict[str, Any]
 def _list_clients(state: Any, params: JsonObject) -> JsonObject:
     """Return the roster of connected app clients (browser tabs, Desktop, tray).
 
-    A pure read of the in-memory presence registry; empty when no registry is
-    wired (e.g. a CLI-only runtime stub). The client re-fetches this after each
-    ``resource_changed(kind="clients")`` signal.
+    A pure read of the in-memory presence registry. The client re-fetches this
+    after each ``resource_changed(kind="clients")`` signal.
     """
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "client.list does not accept params")
-    registry = getattr(state, "client_registry", None)
-    if registry is None:
-        return {"clients": []}
-    return {"clients": [entry.to_dict() for entry in registry.list()]}
+    return {"clients": [entry.to_dict() for entry in state.client_registry.list()]}
 
 
 def method_handlers() -> dict[str, RpcMethodHandler]:

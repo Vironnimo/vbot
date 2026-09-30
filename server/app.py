@@ -284,21 +284,19 @@ def create_app(
             _start_speech_preload(app_runtime)
         # Local model catalogs (auto_refresh connections, e.g. Ollama) refresh
         # in the background — never blocking startup; the method itself is
-        # throttled and swallows failures. Guarded for stub runtimes in tests.
-        maybe_refresh_local_catalogs = getattr(app_runtime, "maybe_refresh_local_catalogs", None)
-        if effective_safe_mode is None and callable(maybe_refresh_local_catalogs):
-            app.state.local_catalog_refresh_task = asyncio.create_task(
-                maybe_refresh_local_catalogs()
-            )
+        # throttled and swallows failures.
+        app.state.local_catalog_refresh_task = (
+            None
+            if effective_safe_mode is not None
+            else asyncio.create_task(app_runtime.maybe_refresh_local_catalogs())
+        )
         server_logger = logging.getLogger("vbot.server.app")
         server_logger.debug(
             "Server application ready on %s:%s",
             resolved_server_bind["listen_host"],
             resolved_server_bind["listen_port"],
         )
-        activate_bootstrap = getattr(app_runtime, "activate_bootstrap", None)
-        if callable(activate_bootstrap):
-            activate_bootstrap()
+        app_runtime.activate_bootstrap()
         if on_ready is not None:
             on_ready(app_runtime)
         try:
@@ -308,12 +306,10 @@ def create_app(
                 server_logger.debug("Server application stopping")
                 await _shutdown_live_calls(app.state, server_logger)
                 await _shutdown_local_catalog_refresh(
-                    getattr(app.state, "local_catalog_refresh_task", None),
+                    app.state.local_catalog_refresh_task,
                     server_logger,
                 )
-                await _shutdown_statistics_warmup(
-                    getattr(app.state, "statistics_warmup_task", None)
-                )
+                await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
                 _unregister_run_event_bridge(app.state)
                 _unregister_session_title_bridge(app.state)
                 _unregister_session_completion_read_bridge(app.state)

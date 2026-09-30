@@ -211,7 +211,7 @@ class ImageService:
                     target_ref.connection_id,
                 )
             )
-            wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
+            wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
             return any(media_type.startswith("image/") for media_type in wire_media_types)
         except (ImageConfigurationError, VBotError, KeyError, RuntimeError):
             return False
@@ -407,7 +407,7 @@ class ImageService:
                     safe_error,
                 )
                 raise ImageUnderstandingUnavailableError(safe_error) from exc
-            wire_media_types = _adapter_wire_media_types(adapter, target_ref.model_id)
+            wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
             wire_limit = adapter.image_size_limit(target_ref.model_id)
             max_image_bytes = self._max_input_bytes
             if isinstance(wire_limit, int) and not isinstance(wire_limit, bool) and wire_limit > 0:
@@ -644,13 +644,6 @@ def _attempts_made(error: VBotError) -> int | None:
     if isinstance(attempts_made, bool) or not isinstance(attempts_made, int):
         return None
     return attempts_made if attempts_made > 0 else None
-
-
-def _adapter_wire_media_types(adapter: Any, model_id: str) -> frozenset[str]:
-    wire_media_support = getattr(adapter, "wire_media_support", None)
-    if not callable(wire_media_support):
-        return frozenset()
-    return frozenset(wire_media_support(model_id))
 
 
 def _set_analysis_debug_context(

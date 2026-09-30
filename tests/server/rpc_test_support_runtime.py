@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections import OrderedDict
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -439,6 +439,17 @@ class StubRuntime:
         return lambda: self.skill_changed_callbacks.remove(callback)
 
     def start(self) -> None:
+        return None
+
+    def activate_bootstrap(self) -> None:
+        return None
+
+    def set_extension_change_publisher(
+        self, publisher: Callable[[str, str, Sequence[str], int], None] | None
+    ) -> None:
+        self._extension_change_publisher = publisher
+
+    async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         return None
 
     def stop(self) -> None:
