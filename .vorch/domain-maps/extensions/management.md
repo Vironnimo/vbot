@@ -61,6 +61,14 @@ Authoring convention: keep imports and `register(api)` free of resource acquisit
 
 Loaded Extensions fire startup in load order after runtime capability application. Runtime stop fires shutdown for loaded records; live reload awaits old shutdown and new startup on the serving loop; live disable fires only that record's shutdown. After each owner's shutdown handlers, the registry releases that registration through the root host's `release_owner`, closing the databases it opened with `host.open_database` (`extensions.md`). Synchronous and asynchronous lifecycle handlers share fail-open logging and do not prevent remaining handlers from running; a failed release is logged the same way.
 
+Lifecycle waits are bounded like registration, because reload, disable and shutdown hold the ExtensionRuntime mutation lock (and a Settings save that triggered them waits for it). `invoke_lifecycle_handler` in `_callbacks.py` stops waiting after `_LIFECYCLE_HANDLER_TIMEOUT_SECONDS` (30 s) and logs an ERROR `... timed out after 30 seconds`:
+
+- A startup or shutdown handler past the deadline is asked to cancel and detached; the next handler runs. Owner release still follows shutdown.
+- A Session owner's `quiesce` past the deadline is detached without cancellation and the owner counts as quiesced, so removal proceeds. Cancelling could stop the drain before it cancels the owner's Runs. The drain keeps retiring admissions and cancelling owned Runs in the background; the retired registration refuses their late Session work.
+- Detached callbacks stay referenced, and a later failure is still logged (`Extension ... detached ... raised`); async registration uses the same detachment. Cancelling the caller cancels the callback and propagates. A synchronous handler blocked in its worker thread cannot be stopped: it keeps that worker until it returns. `fire_shutdown_blocking` runs on its own event loop, whose close still waits for detached tasks that ignore cancellation.
+
+Coverage: `test_lifecycle_handlers_fire_in_load_order_and_fail_open` (`test_registration.py`) and `test_deactivate_quiesces_before_removing_capabilities_and_retires_host` (`test_deactivate.py`).
+
 ## Source and tests
 
 - Discovery/import/registration deadlines: `core/extensions/_loading.py`; records: `_declarations.py`; schema declarations: `_api.py` and `settings_schema.py`; lifecycle and public API: `extensions.py` (internal files under `core/extensions/`).

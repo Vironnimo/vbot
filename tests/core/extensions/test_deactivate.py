@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+import core.extensions._callbacks as extension_callbacks
 from core.chat import CommandDispatcher
 from core.extensions import ExtensionRegistry
 from core.extensions.extensions import SessionCapabilityExpiredError, SessionRequestContext
@@ -38,9 +39,11 @@ _SESSION_OWNER_SOURCE = (
     "import asyncio\n"
     "entered = asyncio.Event()\n"
     "release = asyncio.Event()\n"
+    "passed = asyncio.Event()\n"
     "async def _gate():\n"
     "    entered.set()\n"
     "    await release.wait()\n"
+    "    passed.set()\n"
     "async def _before_request(*_args):\n"
     "    from core.extensions.extensions import PreparedSessionDelivery\n"
     "    await _gate()\n"
@@ -130,9 +133,15 @@ def test_deactivate_stops_every_live_effect_exactly_once(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drain", ["settles", "exceeds_deadline"])
 async def test_deactivate_quiesces_before_removing_capabilities_and_retires_host(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    drain: str,
 ) -> None:
+    if drain == "exceeds_deadline":
+        monkeypatch.setattr(extension_callbacks, "_LIFECYCLE_HANDLER_TIMEOUT_SECONDS", 0.05)
     write_extension(tmp_path / "extensions", "owned", _SESSION_OWNER_SOURCE)
     registry = ExtensionRegistry.load(tmp_path / "extensions")
     tools = ToolRegistry()
@@ -162,8 +171,17 @@ async def test_deactivate_quiesces_before_removing_capabilities_and_retires_host
     await gates.entered.wait()
     assert tools.get("owned_tool").name == "owned_tool"
 
-    gates.release.set()
-    assert await deactivation is True
+    if drain == "settles":
+        gates.release.set()
+        assert await deactivation is True
+    else:
+        # A drain past its deadline no longer holds deactivation. It keeps running:
+        # cancelling it could stop it before it cancels the owner's Runs.
+        assert await deactivation is True
+        assert not gates.passed.is_set()
+        assert "quiesce timed out" in caplog.text
+        gates.release.set()
+    await asyncio.wait_for(gates.passed.wait(), 1)
     with pytest.raises(ValueError, match="no longer current"):
         registry.host_for(identity)
     assert registry._owner_hosts == {}  # noqa: SLF001 - the cached owner host must be dropped

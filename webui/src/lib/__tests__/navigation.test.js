@@ -307,6 +307,40 @@ describe('createNavigator', () => {
     expect(gate).toHaveBeenCalledTimes(2);
   });
 
+  it('returns the browser to the shown entry when the gate drops a pending Back', async () => {
+    let hold = false;
+    const gate = vi.fn((action) => (hold ? false : action()));
+    const { navigator, browser } = setup({ gate });
+    navigator.navigate('agents', ['alpha']);
+    navigator.navigate('settings', ['providers']);
+    hold = true;
+
+    browser.history.back();
+    await settle();
+    expect(browser.location.hash).toBe('#agents/alpha');
+    expect(navigator.cancelPendingMove()).toBe(true);
+    await settle();
+    expect(browser.index).toBe(2);
+    expect(browser.location.hash).toBe('#settings/providers');
+    expect(navigator.view('settings').replace(['voice'])).toBe(true);
+
+    // Back again while a layer is open whose close drops the pending move:
+    // the layer bounce and the return chain up to the shown entry.
+    browser.history.back();
+    await settle();
+    const release = navigator.registerLayer({
+      close: () => navigator.cancelPendingMove(),
+    });
+    browser.history.back();
+    await settle();
+    release();
+    expect(browser.index).toBe(2);
+    expect(browser.location.hash).toBe('#settings/voice');
+    expect(shown(navigator).place).toEqual(['voice']);
+    expect(navigator.cancelPendingMove()).toBe(false);
+    expect(gate).toHaveBeenCalledTimes(4);
+  });
+
   it('keeps the Desktop app open when Back reaches its first entry', async () => {
     const { navigator, browser } = setup({ guardExit: true });
     expect(navigator.back()).toBe(false);

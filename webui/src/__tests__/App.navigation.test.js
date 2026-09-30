@@ -7,6 +7,7 @@ import {
   baseAgent,
   createAgentsRpcMock,
 } from '../components/__tests__/AgentsView.support.js';
+import { AUTOSAVE_STILL_SAVING_MS } from '../lib/autosave.js';
 import { t } from '../lib/i18n.js';
 import {
   App,
@@ -42,6 +43,8 @@ const FIXTURE_EXTENSION_PAGE = {
 };
 const TRANSITION_FAILURE_DIALOG =
   '[role="dialog"][aria-labelledby="autosave-transition-failure-title"]';
+const STILL_SAVING_DIALOG =
+  '[role="dialog"][aria-labelledby="autosave-transition-slow-title"]';
 
 const isCurrent = (viewId) =>
   sidebarNavButton(viewId)?.getAttribute('aria-current') === 'page';
@@ -96,6 +99,7 @@ describe('App navigation', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     mountedComponent = await cleanupAppHarness(mountedComponent);
   });
 
@@ -740,6 +744,117 @@ describe('App navigation', () => {
       expect(settingsUpdates()).toHaveLength(saves);
     },
   );
+
+  it('offers to leave while a transition save still runs, then stops waiting for that save', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    rpcMock.mockImplementation((method, params) =>
+      method === 'settings.update'
+        ? new Promise(() => {})
+        : settingsRpc(method, params),
+    );
+    mountApp();
+    await openSettingsTools();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    typeInto(depthInput(), '5');
+    const sectionShown = (id) =>
+      document.querySelector(`[data-settings-section="${id}"]`)?.hidden ===
+      false;
+
+    settingsPanelButton('general').click();
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_STILL_SAVING_MS - 1);
+    flushSync();
+    expect(settingsUpdates()).toHaveLength(1);
+    expect(document.querySelector(STILL_SAVING_DIALOG)).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    flushSync();
+    expect(document.querySelector(STILL_SAVING_DIALOG)).toBeTruthy();
+
+    // Keep waiting closes the prompt; the next navigation asks again at once
+    // and becomes the one that runs.
+    buttonWithText(
+      `${STILL_SAVING_DIALOG} button`,
+      t('autosave.keepWaiting'),
+    ).click();
+    flushSync();
+    expect(document.querySelector(STILL_SAVING_DIALOG)).toBeNull();
+    settingsPanelButton('memory').click();
+    flushSync();
+    expect(sectionShown('subagents')).toBe(true);
+
+    buttonWithText(
+      `${STILL_SAVING_DIALOG} button`,
+      t('autosave.leaveAnyway'),
+    ).click();
+    flushSync();
+    expect(document.querySelector(STILL_SAVING_DIALOG)).toBeNull();
+    expect(sectionShown('recall')).toBe(true);
+
+    // The editor stays mounted, but its left-behind save holds nothing.
+    settingsPanelButton('system').click();
+    flushSync();
+    expect(sectionShown('server')).toBe(true);
+    const unload = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(false);
+    expect(settingsUpdates()).toHaveLength(1);
+  });
+
+  it('never locks on a failed transition save: closing stays, Discard works while Retry runs', async () => {
+    const settingsRpc = createSettingsRpcMock();
+    rpcMock.mockImplementation((method, params) => {
+      if (method !== 'settings.update') return settingsRpc(method, params);
+      return settingsUpdates().length <= 2
+        ? Promise.reject(new Error('save unavailable'))
+        : new Promise(() => {});
+    });
+    mountApp();
+    await openSettingsTools();
+    await waitForCondition(() =>
+      expect(window.location.hash).toBe('#settings/tools'),
+    );
+    typeInto(depthInput(), '5');
+
+    // Closing the prompt keeps the edits and returns the pending Back.
+    window.history.back();
+    await waitForCondition(() =>
+      expect(document.querySelector(TRANSITION_FAILURE_DIALOG)).toBeTruthy(),
+    );
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+    );
+    flushSync();
+    await waitForCondition(() => {
+      expect(document.querySelector(TRANSITION_FAILURE_DIALOG)).toBeNull();
+      expect(window.location.hash).toBe('#settings/tools');
+    });
+    expect(depthInput().value).toBe('5');
+
+    // A Retry that hangs still leaves Discard and continue available.
+    sidebarNavButton('logs').click();
+    await waitForCondition(() =>
+      expect(document.querySelector(TRANSITION_FAILURE_DIALOG)).toBeTruthy(),
+    );
+    buttonWithText(
+      `${TRANSITION_FAILURE_DIALOG} button`,
+      t('common.retry'),
+    ).click();
+    flushSync();
+    expect(
+      buttonWithText(`${TRANSITION_FAILURE_DIALOG} button`, t('common.saving'))
+        .disabled,
+    ).toBe(true);
+    const discard = buttonWithText(
+      `${TRANSITION_FAILURE_DIALOG} button`,
+      t('autosave.discardAndContinue'),
+    );
+    expect(discard.disabled).toBe(false);
+    discard.click();
+    await waitForCondition(() => {
+      expect(logsShown()).toBe(true);
+      expect(document.querySelector(TRANSITION_FAILURE_DIALOG)).toBeNull();
+    });
+    expect(settingsUpdates()).toHaveLength(3);
+  });
 
   it('returns from a sub-agent Session to its parent and opens the same child again', async () => {
     rpcMock.mockImplementation(

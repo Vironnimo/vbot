@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from core.extensions._api import ExtensionAPI
+from core.extensions._callbacks import detach_extension_task
 from core.extensions._declarations import (
     API_VERSION,
     ExtensionManifest,
@@ -26,7 +27,6 @@ _LOGGER = get_logger("extensions")
 _EXTENSION_PARENT_PACKAGE = "vbot_ext"
 _MANIFEST_FILENAME = "extension.json"
 _ASYNC_REGISTER_TIMEOUT_SECONDS = 10.0
-_detached_register_tasks: set[asyncio.Task[None]] = set()
 
 
 class _ManifestError(Exception):
@@ -220,21 +220,8 @@ def _await_pending_registers(pending: list[tuple[ExtensionRecord, Any]]) -> None
 
 
 def _detach_register_task(task: asyncio.Task[None], record: ExtensionRecord) -> None:
-    """Retain abandoned registration work and report failures after detachment."""
-    _detached_register_tasks.add(task)
-
-    def finished(completed: asyncio.Task[None]) -> None:
-        _detached_register_tasks.discard(completed)
-        if completed.cancelled():
-            return
-        try:
-            completed.result()
-        except Exception as exc:
-            _LOGGER.error(
-                "Extension %r detached register() raised: %s", record.name, exc, exc_info=True
-            )
-
-    task.add_done_callback(finished)
+    """Request cancellation of abandoned registration work and keep it observable."""
+    detach_extension_task(task, extension_name=record.name, description="register()")
     task.cancel()
 
 

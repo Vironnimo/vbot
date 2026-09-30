@@ -133,6 +133,11 @@ export default Object.freeze({
   'autosave.transitionFailureBody':
     'Your changes are still open. Try saving again, or discard them and continue.',
   'autosave.discardAndContinue': 'Discard and continue',
+  'autosave.stillSavingTitle': 'Still saving',
+  'autosave.stillSavingBody':
+    'Saving takes longer than usual. Keep waiting, or leave now and let it finish in the background.',
+  'autosave.keepWaiting': 'Keep waiting',
+  'autosave.leaveAnyway': 'Leave anyway',
   'loading.agents': 'Loading agents…',
   'loading.history': 'Loading chat history…',
   'errors.generic': 'Something went wrong. Try again.',

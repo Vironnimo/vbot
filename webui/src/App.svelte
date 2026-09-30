@@ -117,6 +117,7 @@
   import { startClientMetrics } from '$lib/clientMetrics.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
   import {
+    AUTOSAVE_STILL_SAVING_MS,
     createAutosaveCoordinator,
     provideAutosaveContext,
   } from '$lib/autosave.js';
@@ -177,9 +178,17 @@
   const autosaveCoordinator = createAutosaveCoordinator();
   let appController;
 
+  // A navigation waits here while pending edits save. `autosavePrompt` is
+  // null, 'slow' (a save takes long: Keep waiting / Leave anyway) or
+  // 'failed' (Retry / Discard and continue).
   let autosaveTransitionSaving = $state(false);
-  let autosaveFailureOpen = $state(false);
+  let autosavePrompt = $state(null);
   let pendingAutosaveTransition = null;
+  // Each flush belongs to one transition; one the user left behind cannot
+  // navigate or reopen a prompt when it settles.
+  let autosaveTransitionId = 0;
+  let autosaveTransitionSlow = false;
+  let autosaveSlowTimer = null;
   // Unknown until the first status read; Debug stays reachable meanwhile so a
   // startup link to it is not lost.
   let debugEnabled = $state(null);
@@ -244,27 +253,59 @@
     }
   });
 
+  const stopAutosaveSlowTimer = () => {
+    clearTimeout(autosaveSlowTimer);
+    autosaveSlowTimer = null;
+    autosaveTransitionSlow = false;
+  };
+
+  // Ends the waiting transition without running it; a flush still running
+  // for it settles unobserved.
+  const closeAutosaveTransition = () => {
+    autosaveTransitionId += 1;
+    stopAutosaveSlowTimer();
+    autosaveTransitionSaving = false;
+    autosavePrompt = null;
+    pendingAutosaveTransition = null;
+  };
+
   const runAutosaveTransition = async (action) => {
+    const transitionId = ++autosaveTransitionId;
     pendingAutosaveTransition = action;
     autosaveTransitionSaving = true;
+    stopAutosaveSlowTimer();
+    // A save that takes long offers to leave; an open failure prompt (a
+    // Retry) already offers it.
+    autosaveSlowTimer = setTimeout(() => {
+      autosaveSlowTimer = null;
+      if (transitionId !== autosaveTransitionId) return;
+      autosaveTransitionSlow = true;
+      autosavePrompt ??= 'slow';
+    }, AUTOSAVE_STILL_SAVING_MS);
     const saved = await autosaveCoordinator.flushPending();
+    if (transitionId !== autosaveTransitionId) return false;
+    stopAutosaveSlowTimer();
     autosaveTransitionSaving = false;
 
     if (!saved) {
-      autosaveFailureOpen = true;
+      autosavePrompt = 'failed';
       return false;
     }
 
     const latestAction = pendingAutosaveTransition;
     pendingAutosaveTransition = null;
-    autosaveFailureOpen = false;
+    autosavePrompt = null;
     return latestAction?.();
   };
 
   const requestAutosaveTransition = (action) => {
-    if (typeof action !== 'function' || autosaveFailureOpen) return false;
+    if (typeof action !== 'function' || autosavePrompt === 'failed') {
+      return false;
+    }
     if (autosaveTransitionSaving) {
       pendingAutosaveTransition = action;
+      // The save already took long: ask again instead of waiting silently.
+      if (autosaveTransitionSlow) autosavePrompt ??= 'slow';
       return false;
     }
     if (!autosaveCoordinator.hasPending()) {
@@ -285,14 +326,27 @@
     void runAutosaveTransition(pendingAutosaveTransition);
   };
 
-  const discardAutosaveTransition = () => {
-    if (!pendingAutosaveTransition || autosaveTransitionSaving) {
-      return;
-    }
+  // Keep waiting: the navigation still runs once the save finishes.
+  const keepWaitingForAutosave = () => {
+    if (autosavePrompt === 'slow') autosavePrompt = null;
+  };
+
+  // Leave anyway / Discard and continue: the latest navigation runs now,
+  // also while a save still runs. Running saves finish in the background.
+  const leaveAutosaveTransition = () => {
     const action = pendingAutosaveTransition;
-    pendingAutosaveTransition = null;
-    autosaveFailureOpen = false;
+    if (!action) return;
+    closeAutosaveTransition();
+    autosaveCoordinator.releaseRunningSaves();
     action();
+  };
+
+  // Closing the failure prompt stays with the unsaved edits: the navigation
+  // is dropped, and a pending Back/Forward returns to the shown place.
+  const stayAfterAutosaveFailure = () => {
+    if (autosavePrompt !== 'failed') return;
+    closeAutosaveTransition();
+    navigator.cancelPendingMove();
   };
 
   // Every navigation - a click, a deep link, Back or Forward - waits for
@@ -338,7 +392,7 @@
       cronNewJobDraft !== null ||
       restartDiscardConfirmOpen ||
       autosaveTransitionSaving ||
-      autosaveFailureOpen;
+      autosavePrompt !== null;
     if (blocked()) return false;
     if (
       autosaveCoordinator.hasPending() &&
@@ -707,6 +761,7 @@
 
     return () => {
       cancelled = true;
+      closeAutosaveTransition();
       stopDesktopSessionRequests();
       stopDesktopRestartRequests();
       selection.destroy();
@@ -997,12 +1052,35 @@
   />
 </AppShell>
 
-{#if autosaveFailureOpen}
+{#if autosavePrompt === 'slow'}
+  <Modal
+    title={t('autosave.stillSavingTitle')}
+    labelledById="autosave-transition-slow-title"
+    onClose={keepWaitingForAutosave}
+  >
+    {#snippet body()}
+      <div class="modal-body">
+        <p>
+          {t('autosave.stillSavingBody')}
+        </p>
+      </div>
+    {/snippet}
+    {#snippet footer()}
+      <Button variant="primary" onClick={keepWaitingForAutosave}>
+        {t('autosave.keepWaiting')}
+      </Button>
+      <Button variant="secondary" onClick={leaveAutosaveTransition}>
+        {t('autosave.leaveAnyway')}
+      </Button>
+    {/snippet}
+  </Modal>
+{:else if autosavePrompt === 'failed'}
+  <!-- Closing it stays with the unsaved edits; Discard stays available
+       while a Retry runs, so a hanging save never locks the app. -->
   <Modal
     title={t('autosave.transitionFailureTitle')}
     labelledById="autosave-transition-failure-title"
-    closeDisabled={true}
-    onClose={() => {}}
+    onClose={stayAfterAutosaveFailure}
   >
     {#snippet body()}
       <div class="modal-body">
@@ -1019,11 +1097,7 @@
       >
         {autosaveTransitionSaving ? t('common.saving') : t('common.retry')}
       </Button>
-      <Button
-        variant="danger"
-        disabled={autosaveTransitionSaving}
-        onClick={discardAutosaveTransition}
-      >
+      <Button variant="danger" onClick={leaveAutosaveTransition}>
         {t('autosave.discardAndContinue')}
       </Button>
     {/snippet}

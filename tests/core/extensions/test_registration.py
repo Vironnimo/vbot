@@ -227,7 +227,7 @@ async def test_cancelling_aload_cancels_active_and_closes_pending_registrations(
         assert inspect.getcoroutinestate(pending) == inspect.CORO_CLOSED
     finally:
         pending.close()
-        for task in tuple(extension_loading._detached_register_tasks):
+        for task in tuple(extension_callbacks._detached_tasks):
             task.cancel()
         await asyncio.sleep(0)
 
@@ -354,20 +354,27 @@ def test_page_declarations_are_checked_and_scoped_to_the_live_registry_epoch(
             api.register_page("board", "Board", unsafe_entry)
 
 
-def _lifecycle_source(name: str, marker: Path, *, startup_boom: bool = False) -> str:
+def _lifecycle_source(
+    name: str, marker: Path, *, startup_boom: bool = False, hang: bool = False
+) -> str:
     boom = "        raise RuntimeError('startup boom')\n" if startup_boom else ""
+    # Hanging handlers never finish on their own; only the deadline moves on.
+    define = "    async def" if hang else "    def"
+    wait = "        await asyncio.Event().wait()\n" if hang else ""
     return (
+        "import asyncio\n"
         "import pathlib\n"
         f"_MARKER = pathlib.Path({str(marker)!r})\n"
         "def _write(tag):\n"
         "    with _MARKER.open('a', encoding='utf-8') as fh:\n"
         "        fh.write(tag + '\\n')\n"
         "def register(api):\n"
-        "    def _startup():\n"
+        f"{define} _startup():\n"
         f"        _write({name!r} + ':startup')\n"
-        f"{boom}"
-        "    def _shutdown():\n"
+        f"{boom}{wait}"
+        f"{define} _shutdown():\n"
         f"        _write({name!r} + ':shutdown')\n"
+        f"{wait}"
         "    api.on_startup(_startup)\n"
         "    api.on_shutdown(_shutdown)\n"
     )
@@ -377,11 +384,13 @@ def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(extension_callbacks, "_SLOW_EXTENSION_HANDLER_SECONDS", 0)
+    monkeypatch.setattr(extension_callbacks, "_LIFECYCLE_HANDLER_TIMEOUT_SECONDS", 0.05)
     caplog.set_level(logging.WARNING, logger="vbot.extensions")
     root = tmp_path / "extensions"
     marker = tmp_path / "lifecycle.txt"
     write_extension(root, "alpha", _lifecycle_source("alpha", marker, startup_boom=True))
     write_extension(root, "dormant", _lifecycle_source("dormant", marker))
+    write_extension(root, "stuck", _lifecycle_source("stuck", marker, hang=True))
     write_extension(root, "zeta", _lifecycle_source("zeta", marker))
 
     registry = ExtensionRegistry.load(root, disabled={"dormant"})
@@ -389,19 +398,23 @@ def test_lifecycle_handlers_fire_in_load_order_and_fail_open(
     asyncio.run(registry.fire_shutdown())
     registry.fire_shutdown_blocking()
 
-    # alpha's failing startup does not stop zeta's; the disabled Extension never fires.
+    # alpha's failing startup and stuck's hanging handlers do not stop zeta's;
+    # the disabled Extension never fires.
     assert marker_lines(marker) == [
         "alpha:startup",
+        "stuck:startup",
         "zeta:startup",
         "alpha:shutdown",
+        "stuck:shutdown",
         "zeta:shutdown",
         "alpha:shutdown",
+        "stuck:shutdown",
         "zeta:shutdown",
     ]
-    # Only the failed startup is logged, with its traceback; lifecycle handlers are
-    # never reported as slow.
+    # The failed startup is logged with its traceback and each missed deadline
+    # once; lifecycle handlers are never reported as slow.
     assert [
-        (entry.levelno, entry.exc_info is not None)
+        (entry.levelno, entry.exc_info is not None, "timed out" in entry.getMessage())
         for entry in caplog.records
         if entry.name == "vbot.extensions"
-    ] == [(logging.ERROR, True)]
+    ] == [(logging.ERROR, True, False)] + [(logging.ERROR, False, True)] * 3
