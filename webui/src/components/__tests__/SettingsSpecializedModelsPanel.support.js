@@ -1,5 +1,6 @@
 // Shared harness for the SettingsSpecializedModelsPanel suites: `api` holds
-// one mock per task-model and local-speech API function the panel calls.
+// one mock per task-model and local-speech API function the panel calls, plus
+// the Settings read a refused save rebases onto.
 
 import { expect, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
@@ -7,6 +8,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { init } from '../../lib/i18n.js';
 
 export const api = {
+  getSettings: vi.fn(),
   listTaskModelTargets: vi.fn(),
   getTaskModelOptions: vi.fn(),
   updateTaskModelSettings: vi.fn(),
@@ -35,6 +37,7 @@ let mounted = null;
 export function resetSpecializedModelsHarness() {
   document.body.innerHTML = '';
   init('en');
+  api.getSettings.mockReset().mockResolvedValue({ model_tasks: {} });
   api.listTaskModelTargets.mockReset().mockResolvedValue({ targets: [] });
   api.getTaskModelOptions.mockReset().mockResolvedValue({ fields: [] });
   api.updateTaskModelSettings

@@ -358,7 +358,7 @@ class _ModelTasks:
     def list_targets(self, _task_type: str) -> list[_Target]:
         return [_Target()]
 
-    def update(self, model_tasks: object) -> object:
+    def update(self, model_tasks: object, *, base: object = None) -> object:
         return model_tasks
 
     def settings(self) -> dict[str, object]:

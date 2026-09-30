@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyExtensionsPanelList,
-  buildExtensionsUpdatePayload,
+  buildExtensionsUpdate,
+  extensionsSettingsSection,
   buildSchemaConfigFromForm,
   buildSchemaFormState,
   describeExtensionWaiting,
@@ -222,28 +223,42 @@ describe('extension list', () => {
     });
   });
 
-  it('rebuilds the whole extensions section with one override applied', () => {
-    const extensions = applyExtensionsPanelList(rawExtensions());
-
-    expect(buildExtensionsUpdatePayload(extensions)).toEqual({
-      extensions: {
-        disabled: ['legacy'],
-        config: { guard_bash: { deny: ['rm -rf'] } },
+  it('changes only the named Extensions in the saved section', () => {
+    const saved = extensionsSettingsSection({
+      settings: {
+        disabled: ['removed', 'legacy'],
+        config: { guard_bash: { deny: ['rm -rf'] }, removed: { level: 1 } },
       },
     });
+    const base = { extensions: saved };
+
+    // The saved order and entries without a record stay.
     expect(
-      buildExtensionsUpdatePayload(extensions, {
-        name: 'guard_bash',
-        disabled: true,
+      buildExtensionsUpdate(saved, {
+        toggle: { name: 'guard_bash', disabled: true },
+      }),
+    ).toEqual({
+      extensions: { ...saved, disabled: ['removed', 'legacy', 'guard_bash'] },
+      base,
+    });
+    expect(
+      buildExtensionsUpdate(saved, {
+        toggle: { name: 'removed', disabled: false },
       }).extensions.disabled,
-    ).toEqual(['guard_bash', 'legacy']);
+    ).toEqual(['legacy']);
     // An emptied config drops the extension's entry.
     expect(
-      buildExtensionsUpdatePayload(extensions, {
-        name: 'guard_bash',
-        config: {},
+      buildExtensionsUpdate(saved, {
+        configs: { guard_bash: {}, other: { mode: 'a' } },
       }),
-    ).toEqual({ extensions: { disabled: ['legacy'], config: {} } });
+    ).toEqual({
+      extensions: {
+        disabled: ['removed', 'legacy'],
+        config: { removed: { level: 1 }, other: { mode: 'a' } },
+      },
+      base,
+    });
+    expect(extensionsSettingsSection({})).toEqual({ disabled: [], config: {} });
   });
 });
 

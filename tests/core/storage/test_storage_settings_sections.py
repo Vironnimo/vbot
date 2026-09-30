@@ -502,6 +502,13 @@ BASED_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], dict[str, Any], A
         {"local_models": {"context_windows": {"ollama/b": None}}},
         None,
     ),
+    # A base binding with an empty target is the caller's view of an unbound task.
+    "task-bound-meanwhile": (
+        {"model_tasks": {"text_to_speech": {"target": "openai/a::key", "options": {}}}},
+        {"model_tasks": {"text_to_speech": {"target": "openai/b::key", "options": {}}}},
+        {"model_tasks": {"text_to_speech": {"target": ""}}},
+        ("model_tasks.text_to_speech.target",),
+    ),
 }
 
 

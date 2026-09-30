@@ -60,6 +60,9 @@ _CODE_GUIDANCE = {
     "last_agent": "The last Agent cannot be removed. Inspect the Agent list and keep at least one.",
     "agent_order_conflict": "The Agent list changed. Read its current order before submitting "
     "a new complete order.",
+    "settings_conflict": "Another writer kept changing these Settings while this command "
+    "applied its change, so it saved nothing. Inspect the current values, then run the "
+    "command again.",
     "oauth_not_supported": "This Connection does not support OAuth. Inspect the Provider's "
     "Connections and choose the authentication method they advertise.",
     "run_cancelled": "The Run was cancelled. Inspect its Session for completed work before "

@@ -565,6 +565,14 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
             {"debug": {"enabled": True}, "base": []},
             "params.base must be an object",
         ),
+        (
+            "task_model.update",
+            {
+                "model_tasks": {TASK_TEXT_TO_SPEECH: {"target": "openai/gpt-4o-mini-tts::api-key"}},
+                "base": {"debug": {"enabled": False}},
+            },
+            "params.base names sections the update does not change: debug",
+        ),
         # Values that parse but that the running Runtime does not accept.
         (
             "settings.update",
@@ -673,35 +681,68 @@ async def test_rejected_settings_changes_persist_nothing(
         assert JSONResponse(await rpc_result(state, read_method)).status_code == 200
 
 
+_TTS_TARGET = "openai/gpt-4o-mini-tts::api-key"
+
+
+def _tts_binding(**options: str) -> JsonObject:
+    return {TASK_TEXT_TO_SPEECH: {"target": _TTS_TARGET, "options": options}}
+
+
 @pytest.mark.asyncio
-async def test_settings_update_based_on_stale_values_is_refused_without_effects(
+@pytest.mark.parametrize(
+    ("method", "stored", "update", "stale_base", "fresh_base", "stale_path"),
+    [
+        pytest.param(
+            "settings.update",
+            {"debug": {"enabled": False, "trace_limit": 80}},
+            {"debug": {"enabled": True, "trace_limit": 50}},
+            {"debug": {"enabled": False, "trace_limit": 50}},
+            {"debug": {"enabled": False, "trace_limit": 80}},
+            "debug.trace_limit",
+            id="settings",
+        ),
+        pytest.param(
+            "task_model.update",
+            {"model_tasks": _tts_binding(voice="echo")},
+            {"model_tasks": _tts_binding(voice="alloy")},
+            {"model_tasks": _tts_binding()},
+            {"model_tasks": _tts_binding(voice="echo")},
+            "model_tasks.text_to_speech.options.voice",
+            id="task-model",
+        ),
+    ],
+)
+async def test_update_based_on_stale_values_is_refused_without_effects(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    stored: JsonObject,
+    update: JsonObject,
+    stale_base: JsonObject,
+    fresh_base: JsonObject,
+    stale_path: str,
 ) -> None:
-    state = _stored_state(tmp_path)
+    state = _tts_state(tmp_path)
     storage = state.runtime.storage
-    storage.save_settings({"debug": {"enabled": False, "trace_limit": 80}})
+    storage.save_settings(stored)
     original = storage.settings_path.read_bytes()
 
-    error = await rpc_error(
-        state,
-        "settings.update",
-        debug={"enabled": True, "trace_limit": 50},
-        base={"debug": {"enabled": False, "trace_limit": 50}},
-    )
+    with caplog.at_level(logging.DEBUG, logger="vbot"):
+        error = await rpc_error(state, method, **update, base=stale_base)
 
     assert error["code"] == "settings_conflict"
-    assert "debug.trace_limit" in error["message"]
+    assert stale_path in error["message"]
     assert storage.settings_path.read_bytes() == original
     assert resource_changes(state) == []
+    # An expected refusal the writer resolves by reading again: logged once, quietly.
+    refusals = [record for record in caplog.records if "refused" in record.getMessage()]
+    assert [record.levelno for record in refusals] == [logging.DEBUG]
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
 
-    await rpc_result(
-        state,
-        "settings.update",
-        debug={"enabled": True, "trace_limit": 80},
-        base={"debug": {"enabled": False, "trace_limit": 80}},
-    )
+    await rpc_result(state, method, **update, base=fresh_base)
 
-    assert storage.load_settings()["debug"] == {"enabled": True, "trace_limit": 80}
+    section = next(iter(update))
+    assert storage.load_settings()[section] == update[section]
 
 
 @pytest.mark.asyncio

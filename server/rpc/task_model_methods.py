@@ -12,6 +12,7 @@ from core.model_tasks import (
 from core.settings import (
     SettingsValidationError,
     parse_settings_update,
+    parse_settings_update_base,
 )
 from core.utils.logging import get_logger
 from server.rpc._mutations import serialized_mutation
@@ -38,16 +39,24 @@ def _task_model_settings(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _task_model_update(state: Any, params: JsonObject) -> JsonObject:
-    _reject_unsupported(params, {"model_tasks"}, "task_model.update")
+    _reject_unsupported(params, {"model_tasks", "base"}, "task_model.update")
     try:
         settings_update = parse_settings_update({"model_tasks": params.get("model_tasks")})
+        # Like `settings.update`: the caller's view of the bindings it writes,
+        # as `{"model_tasks": {...}}`.
+        raw_base = params.get("base")
+        base = (
+            None
+            if raw_base is None
+            else parse_settings_update_base(raw_base, settings_update).get("model_tasks")
+        )
     except SettingsValidationError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
 
     try:
         previous_settings = state.runtime.storage.load_settings()
         previous = state.runtime.model_tasks.settings()
-        model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"])
+        model_tasks = state.runtime.model_tasks.update(settings_update["model_tasks"], base=base)
         await state.runtime.apply_settings_change(
             previous_settings, state.runtime.storage.load_settings()
         )

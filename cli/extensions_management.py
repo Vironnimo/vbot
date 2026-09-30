@@ -2,10 +2,11 @@
 
 `list` reads `extensions.list`; `reload` drives `extensions.reload` (a full,
 restart-equivalent rebuild of the whole extension layer from disk); `enable` /
-`disable` are thin wrappers over `settings.update` (full-replace `extensions`
-section). Every change applies **live** without a restart: disabling deactivates
-the extension immediately (hooks off, tools gone, shutdown fired), and enabling
-rebuilds the layer so newly-loaded code takes effect at once.
+`disable` rewrite the full-replace `extensions` section through `settings.update`,
+based on the section they read, and `set` writes its one config field through
+`settings.patch`. Every change applies **live** without a restart: disabling
+deactivates the extension immediately (hooks off, tools gone, shutdown fired), and
+enabling rebuilds the layer so newly-loaded code takes effect at once.
 """
 
 from __future__ import annotations
@@ -24,6 +25,11 @@ from cli.server_management import CommandResult, ServerInstance
 
 _INTEGER_RE = re.compile(r"[+-]?\d+")
 _RELOAD_STATUSES = ("loaded", "failed", "disabled", "overridden")
+# A write based on the section it read is refused when another writer changed that
+# section meanwhile; each attempt reads it again. A few attempts outlast an ordinary
+# burst of concurrent edits without retrying indefinitely.
+_SETTINGS_WRITE_ATTEMPTS = 3
+_SETTINGS_CONFLICT = "settings_conflict"
 
 
 def extensions_list(instance: ServerInstance) -> CommandResult:
@@ -100,48 +106,71 @@ def _set_disabled(instance: ServerInstance, name: str, *, disable: bool) -> Comm
     if isinstance(extensions, CommandResult):
         return extensions
 
-    known_names = [
-        ext["name"]
-        for ext in extensions
-        if isinstance(ext, dict) and isinstance(ext.get("name"), str)
-    ]
+    known_names = _known_names(extensions)
     if name not in known_names:
         return CommandResult(
             ok=False, message=_format_unknown_extension(name, known_names), instance=instance
         )
 
-    currently_disabled = [
-        ext["name"] for ext in extensions if isinstance(ext, dict) and ext.get("disabled")
-    ]
-    if disable and name in currently_disabled:
-        return CommandResult(
-            ok=True,
-            message=f"extension '{name}' is already disabled (no change)",
-            instance=instance,
+    for _attempt in range(_SETTINGS_WRITE_ATTEMPTS):
+        section = _load_extension_settings(instance)
+        if isinstance(section, CommandResult):
+            return section
+        disabled = section["disabled"]
+        if disable and name in disabled:
+            return CommandResult(
+                ok=True,
+                message=f"extension '{name}' is already disabled (no change)",
+                instance=instance,
+            )
+        if not disable and name not in disabled:
+            return _enabled_result(instance, name)
+
+        changed = [*disabled, name] if disable else [other for other in disabled if other != name]
+        update = _rpc_call(
+            instance,
+            "settings.update",
+            {
+                "extensions": {"disabled": changed, "config": section["config"]},
+                "base": {"extensions": section},
+            },
         )
-    if not disable and name not in currently_disabled:
-        return _enabled_result(instance, name)
+        if update.ok:
+            if disable:
+                return CommandResult(
+                    ok=True, message=f"extension '{name}' disabled", instance=instance
+                )
+            return _enabled_result(instance, name)
+        if update.failure is None or update.failure.code != _SETTINGS_CONFLICT:
+            return update.to_command_result()
 
-    if disable:
-        disabled = [*currently_disabled, name]
-    else:
-        disabled = [other for other in currently_disabled if other != name]
-
-    config = {
-        ext["name"]: ext["config"]
-        for ext in extensions
-        if isinstance(ext, dict) and isinstance(ext.get("config"), dict) and ext["config"]
-    }
-
-    update = _rpc_call(
-        instance, "settings.update", {"extensions": {"disabled": disabled, "config": config}}
+    action = "disabled" if disable else "enabled"
+    return CommandResult(
+        ok=False,
+        message=(
+            f"extension '{name}' was not {action}: the settings changed during each of "
+            f"{_SETTINGS_WRITE_ATTEMPTS} attempts\n{update.message}"
+        ),
+        instance=instance,
+        failure=update.failure,
     )
-    if not update.ok:
-        return update.to_command_result()
 
-    if disable:
-        return CommandResult(ok=True, message=f"extension '{name}' disabled", instance=instance)
-    return _enabled_result(instance, name)
+
+def _load_extension_settings(instance: ServerInstance) -> dict[str, Any] | CommandResult:
+    """Read the persisted ``extensions`` section in the shape ``settings.update`` writes."""
+
+    payload = _rpc_call(instance, "settings.values", {})
+    if not payload.ok:
+        return payload.to_command_result()
+    settings = payload.data.get("settings")
+    section = settings.get("extensions") if isinstance(settings, dict) else None
+    disabled = section.get("disabled") if isinstance(section, dict) else None
+    config = section.get("config") if isinstance(section, dict) else None
+    if not isinstance(disabled, list) or not isinstance(config, dict):
+        return CommandResult(
+            ok=False, message="RPC result missing extensions settings", instance=instance
+        )
+    return {"disabled": disabled, "config": config}
 
 
 def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
@@ -193,8 +222,8 @@ def extensions_set(instance: ServerInstance, name: str, field: str, value: str) 
 
     A ``secret`` field goes to ``.env`` via ``extensions.set_secret`` (the server maps
     the field key to its declared env key — the caller never names the env key). Every
-    other field type is coerced to its declared type and written to the extension's
-    live config via ``settings.update``. Both take effect without a restart.
+    other field type is coerced to its declared type and written as that one config
+    field via ``settings.patch``. Both take effect without a restart.
     """
 
     extensions = _load_extensions(instance)
@@ -237,7 +266,7 @@ def extensions_set(instance: ServerInstance, name: str, field: str, value: str) 
     coerced, error = _coerce_value(str(field_declaration.get("type")), value)
     if error is not None:
         return CommandResult(ok=False, message=f"{field}: {error}", instance=instance)
-    return _set_config_value(instance, extensions, name, field, coerced)
+    return _set_config_value(instance, name, field, coerced)
 
 
 def _set_secret(instance: ServerInstance, name: str, field: str, value: str) -> CommandResult:
@@ -253,23 +282,13 @@ def _set_secret(instance: ServerInstance, name: str, field: str, value: str) -> 
     return CommandResult(ok=True, message=message, instance=instance)
 
 
-def _set_config_value(
-    instance: ServerInstance,
-    extensions: Sequence[Any],
-    name: str,
-    field: str,
-    value: Any,
-) -> CommandResult:
-    disabled = [ext["name"] for ext in extensions if isinstance(ext, dict) and ext.get("disabled")]
-    config = {
-        ext["name"]: dict(ext["config"])
-        for ext in extensions
-        if isinstance(ext, dict) and isinstance(ext.get("config"), dict) and ext["config"]
-    }
-    config.setdefault(name, {})[field] = value
-
+def _set_config_value(instance: ServerInstance, name: str, field: str, value: Any) -> CommandResult:
+    # Only this field is written, so concurrent changes to other settings are kept.
+    path = f"extensions.config[{json.dumps(name)}][{json.dumps(field)}]"
     update = _rpc_call(
-        instance, "settings.update", {"extensions": {"disabled": disabled, "config": config}}
+        instance,
+        "settings.patch",
+        {"operations": [{"op": "set", "path": path, "value": value}]},
     )
     if not update.ok:
         return update.to_command_result()

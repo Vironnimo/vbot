@@ -235,11 +235,21 @@ class TaskModelService:
 
         return cast(JsonObject, self._storage.load_model_task_settings())
 
-    def update(self, model_tasks: Mapping[str, Any]) -> JsonObject:
-        """Persist task-model settings and return the normalized section."""
+    def update(
+        self,
+        model_tasks: Mapping[str, Any],
+        *,
+        base: Mapping[str, Any] | None = None,
+    ) -> JsonObject:
+        """Persist task-model settings and return the normalized section.
+
+        ``base`` is the caller's view of the bindings it edits, in the update's
+        shape. Storage refuses the write with ``SettingsConflictError`` when a
+        value it would change no longer matches that view.
+        """
 
         prepared = self._prepare_update(model_tasks)
-        return cast(JsonObject, self._storage.update_model_task_settings(prepared))
+        return cast(JsonObject, self._storage.update_model_task_settings(prepared, base=base))
 
     def validate_update(self, model_tasks: Mapping[str, Any]) -> None:
         """Validate a sparse binding update without persisting it."""

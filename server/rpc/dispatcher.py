@@ -11,6 +11,7 @@ from core.performance import measure
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_METHOD_NOT_FOUND,
+    RPC_ERROR_SETTINGS_CONFLICT,
     RpcError,
 )
 
@@ -18,6 +19,11 @@ JsonObject = dict[str, Any]
 RpcMethodHandler = Callable[[Any, JsonObject], JsonObject | Awaitable[JsonObject]]
 
 _LOGGER = logging.getLogger("vbot.server.rpc.dispatcher")
+
+# Refusals that are an expected, handled outcome and that their owner already
+# logs: a Settings write based on values changed meanwhile, which the writer
+# resolves by reading again.
+_OWNER_LOGGED_ERROR_CODES = frozenset({RPC_ERROR_SETTINGS_CONFLICT})
 
 
 async def dispatch_rpc(
@@ -32,11 +38,12 @@ async def dispatch_rpc(
         method, params = parse_rpc_request(request)
         result = await dispatch_method(state, method, params, handlers)
     except RpcError as exc:
-        _LOGGER.warning(
-            "RPC request rejected (method=%s code=%s)",
-            method_name,
-            exc.code,
-        )
+        if exc.code not in _OWNER_LOGGED_ERROR_CODES:
+            _LOGGER.warning(
+                "RPC request rejected (method=%s code=%s)",
+                method_name,
+                exc.code,
+            )
         return {"ok": False, "error": exc.to_dict()}
     except Exception:
         _LOGGER.exception("Unexpected RPC request failure (method=%s)", method_name)
