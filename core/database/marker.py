@@ -40,7 +40,11 @@ from core.database.errors import (
     DatabaseFormatError,
     DatabaseUnavailableError,
 )
-from core.database.spec import canonical_database_path, validate_database_name
+from core.database.spec import (
+    canonical_database_path,
+    is_extension_database_name,
+    validate_database_name,
+)
 from core.utils.atomic import atomic_write_text
 from core.utils.timestamps import utc_now_timestamp
 
@@ -548,3 +552,35 @@ def operation_lock(data_dir: Path, timeout: float | None = None) -> Iterator[Ope
         yield lock
     finally:
         lock.release()
+
+
+def missing_database_reason(name: str) -> str:
+    """Why a registered database without its file blocks snapshots, and what resolves it.
+
+    A snapshot never skips a registered database: retention would eventually
+    prune the last copies of the missing one.
+    """
+    if is_extension_database_name(name):
+        return (
+            f"the registered Extension database {name} has no file; the next open by its "
+            "Extension (enabling or reloading it) restores it from the newest verified data "
+            "snapshot that holds it; if the Extension was removed, "
+            f"`vbot data-store unregister {name} --yes` releases it"
+        )
+    return (
+        f"the registered database {name} has no file; starting vBot restores it from the "
+        "newest verified data snapshot that holds it, or `vbot data-store snapshot restore "
+        f"<snapshot-id> --database {name} --yes` restores it explicitly"
+    )
+
+
+def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str | None:
+    """Explain every registered database whose file is missing, or ``None``."""
+    missing = sorted(
+        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
+    )
+    if not missing:
+        return None
+    return "data snapshots need every registered database: " + "; ".join(
+        missing_database_reason(name) for name in missing
+    )

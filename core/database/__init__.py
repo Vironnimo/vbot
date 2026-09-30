@@ -42,6 +42,7 @@ from core.database.marker import (
     MaintenanceOperation,
     MarkerEntry,
     begin_maintenance,
+    describe_missing_databases,
     finish_maintenance,
     maintenance,
     read_maintenance,
@@ -61,7 +62,6 @@ from core.database.recovery import (
 from core.database.snapshot_barrier import SnapshotBarrier
 from core.database.snapshots import (
     create_data_snapshot,
-    describe_missing_databases,
     list_data_snapshots,
     read_snapshot_health,
     read_verified_manifest,
