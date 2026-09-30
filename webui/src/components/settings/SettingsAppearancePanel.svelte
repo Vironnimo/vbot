@@ -4,12 +4,12 @@
   import Dropdown from '../Dropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
-  import { updateSettings } from '$lib/api.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildChatWidthOptions,
     buildChatWorkingModeOptions,
@@ -37,6 +37,25 @@
     untrack(() => getPersistedChatWorkingMode(settings)),
   );
   let saving = $state(false);
+  const appearanceDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: (next) => ({
+      language: next?.appearance?.language ?? 'en',
+      chatWidth: getPersistedChatWidth(next),
+      chatWorkingMode: getPersistedChatWorkingMode(next),
+    }),
+    read: () => ({
+      language: selectedLanguageId,
+      chatWidth: selectedChatWidth,
+      chatWorkingMode: selectedChatWorkingMode,
+    }),
+    write: (next) => {
+      selectedLanguageId = next.language;
+      selectedChatWidth = next.chatWidth;
+      selectedChatWorkingMode = next.chatWorkingMode;
+    },
+    toPayload: createAppearanceUpdatePayload,
+  });
 
   let availableLanguageOptions = $derived(
     buildLanguageOptions(settings?.appearance),
@@ -140,25 +159,11 @@
       return true;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await updateSettings(
-        createAppearanceUpdatePayload({
-          language: selectedLanguageId,
-          chatWidth: selectedChatWidth,
-          chatWorkingMode: selectedChatWorkingMode,
-        }),
-      );
-      onCommit(nextSettings);
-      return true;
-    } catch (error) {
-      onError(`${t('settings.saveError')} ${error.message}`);
-      return false;
-    } finally {
-      saving = false;
-    }
+    return appearanceDraft.save({
+      onCommit,
+      onError,
+      setSaving: (value) => (saving = value),
+    });
   }
 </script>
 

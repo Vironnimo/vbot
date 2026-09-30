@@ -925,6 +925,7 @@ describe('Skills manager', () => {
     await settle();
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       skills: { directories: ['/skills/folder-sentinel'] },
+      base: { skills: { directories: [] } },
     });
     collection('All skills');
     expect(rows().map((row) => row.dataset.skillId)).toContain(

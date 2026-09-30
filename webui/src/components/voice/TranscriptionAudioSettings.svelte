@@ -18,7 +18,7 @@
     createAutosaveParticipant,
     useAutosaveContext,
   } from '$lib/autosave.js';
-  import { updateSettings } from '$lib/api.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   let { settings, onCommit, onError } = $props();
 
   let transcriptionAudio = $state(
@@ -30,6 +30,13 @@
   );
 
   let transcriptionSaveState = $state('idle');
+  const audioDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: normalizeTranscriptionAudio,
+    read: () => transcriptionAudio,
+    write: (next) => (transcriptionAudio = next),
+    toPayload: buildTranscriptionAudioSettingsPayload,
+  });
 
   let transcriptionProfileOptions = $derived(
     TRANSCRIPTION_AUDIO_PROFILES.map((profile) => ({
@@ -87,22 +94,18 @@
 
   async function persistCurrentTranscriptionAudio() {
     if (!transcriptionAudioHasChanges()) return true;
-    const savedSnapshot = { ...transcriptionAudio };
-    transcriptionSaveState = 'saving';
-    onError('');
-    try {
-      const nextSettings = await updateSettings(
-        buildTranscriptionAudioSettingsPayload(savedSnapshot),
-      );
-      lastSavedTranscriptionAudio = normalizeTranscriptionAudio(nextSettings);
-      onCommit(nextSettings);
-      transcriptionSaveState = 'saved';
-      return true;
-    } catch (error) {
-      transcriptionSaveState = 'error';
-      onError(`${t('settings.saveError')} ${error.message}`);
-      return false;
-    }
+    const saved = await audioDraft.save({
+      onCommit: (nextSettings) => {
+        lastSavedTranscriptionAudio = normalizeTranscriptionAudio(nextSettings);
+        onCommit(nextSettings);
+      },
+      onError,
+      setSaving: (saving) => {
+        if (saving) transcriptionSaveState = 'saving';
+      },
+    });
+    transcriptionSaveState = saved ? 'saved' : 'error';
+    return saved;
   }
 
   function handleTranscriptionProfileChange(profile) {

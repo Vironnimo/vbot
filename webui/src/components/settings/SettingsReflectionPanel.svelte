@@ -10,7 +10,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
 
   const noop = () => {};
 
@@ -52,6 +52,15 @@
     untrack(() => getReflectionSettings(settings)),
   );
   let saving = $state(false);
+  const reflectionDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getReflectionSettings,
+    read: () => reflectionSettings,
+    write: (next) => (reflectionSettings = next),
+    toPayload: (values) => ({
+      reflection: getReflectionSettings({ reflection: values }),
+    }),
+  });
 
   let saveDisabled = $derived(
     saving ||
@@ -133,15 +142,10 @@
       return true;
     }
 
-    return runSettingsSave({
+    return reflectionDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => ({
-        reflection: getReflectionSettings({ reflection: reflectionSettings }),
-      }),
-      getDraftSnapshot: () => reflectionSettings,
-      applyResult: (next) => (reflectionSettings = getReflectionSettings(next)),
     });
   }
 </script>

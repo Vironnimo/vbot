@@ -5,12 +5,12 @@
   import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
-  import { updateSettings } from '$lib/api.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
 
   const noop = () => {};
 
@@ -46,6 +46,13 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let debugSettings = $state(untrack(() => getDebugSettings(settings)));
   let saving = $state(false);
+  const debugDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getDebugSettings,
+    read: () => debugSettings,
+    write: (next) => (debugSettings = next),
+    toPayload: (values) => ({ debug: getDebugSettings({ debug: values }) }),
+  });
 
   let saveDisabled = $derived(
     saving || debugSettingsMatch(debugSettings, getDebugSettings(settings)),
@@ -93,26 +100,19 @@
       return true;
     }
 
-    const submitted = JSON.stringify(debugSettings);
-    const nextEnabled = debugSettings.enabled === true;
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await updateSettings({
-        debug: getDebugSettings({ debug: debugSettings }),
-      });
-      onCommit(nextSettings);
-      if (JSON.stringify(debugSettings) === submitted)
-        debugSettings = getDebugSettings(nextSettings);
-      onDebugEnabledChange(nextEnabled);
-      return true;
-    } catch (error) {
-      onError(`${t('settings.saveError')} ${error.message}`);
-      return false;
-    } finally {
-      saving = false;
+    let committed = null;
+    const saved = await debugDraft.save({
+      onCommit: (next) => {
+        committed = next;
+        onCommit(next);
+      },
+      onError,
+      setSaving: (value) => (saving = value),
+    });
+    if (saved && committed) {
+      onDebugEnabledChange(getDebugSettings(committed).enabled);
     }
+    return saved;
   }
 </script>
 

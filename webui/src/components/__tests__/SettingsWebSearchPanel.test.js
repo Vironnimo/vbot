@@ -141,6 +141,13 @@ describe('Web Search settings', () => {
         default_count: 12,
         searxng: { base_url: 'http://localhost:8888' },
       },
+      base: {
+        web_search: {
+          provider: 'brave',
+          default_count: 12,
+          searxng: { base_url: 'http://localhost:8888' },
+        },
+      },
     });
   });
 });

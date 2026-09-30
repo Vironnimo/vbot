@@ -78,7 +78,13 @@ describe('SettingsNotificationsPanel', () => {
     await waitForCondition(() => commits.length === 1);
 
     expect(rpcMock.mock.calls).toEqual([
-      ['settings.update', { notifications: { ...ALL_ON, run_failed: false } }],
+      [
+        'settings.update',
+        {
+          notifications: { ...ALL_ON, run_failed: false },
+          base: { notifications: ALL_ON },
+        },
+      ],
     ]);
     expect(commits[0].notifications.run_failed).toBe(false);
   });

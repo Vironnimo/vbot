@@ -9,7 +9,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildSubAgentSettingsPayload,
     normalizeSubAgentSettings,
@@ -25,6 +25,13 @@
     untrack(() => normalizeSubAgentSettings(settings)),
   );
   let saving = $state(false);
+  const subAgentsDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: normalizeSubAgentSettings,
+    read: () => subAgentSettings,
+    write: (next) => (subAgentSettings = next),
+    toPayload: buildSubAgentSettingsPayload,
+  });
 
   let saveDisabled = $derived(saving || !subAgentDraftHasChanges());
   const autosaveContext = useAutosaveContext();
@@ -91,16 +98,12 @@
       return true;
     }
 
-    return runSettingsSave({
+    // Saved values (e.g. the default a cleared field saved) replace the
+    // fields the user did not edit while the request was in flight.
+    return subAgentsDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildSubAgentSettingsPayload(subAgentSettings),
-      // Show the saved values (e.g. the default a cleared field saved) unless
-      // the user kept editing while the request was in flight.
-      getDraftSnapshot: () => subAgentSettings,
-      applyResult: (next) =>
-        (subAgentSettings = normalizeSubAgentSettings(next)),
     });
   }
 </script>

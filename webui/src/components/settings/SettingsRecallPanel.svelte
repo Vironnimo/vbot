@@ -9,7 +9,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildRecallBackendOptions,
     buildRecallSettingsPayload,
@@ -28,6 +28,13 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let recallSettings = $state(untrack(() => getRecallSettings(settings)));
   let saving = $state(false);
+  const recallDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getRecallSettings,
+    read: () => recallSettings,
+    write: (next) => (recallSettings = next),
+    toPayload: buildRecallSettingsPayload,
+  });
 
   let recallBackendOptions = $derived(
     buildRecallBackendOptions(recallSettings),
@@ -88,13 +95,10 @@
       return true;
     }
 
-    return runSettingsSave({
+    return recallDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildRecallSettingsPayload(recallSettings),
-      getDraftSnapshot: () => recallSettings,
-      applyResult: (next) => (recallSettings = getRecallSettings(next)),
     });
   }
 </script>

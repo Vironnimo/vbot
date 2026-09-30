@@ -11,7 +11,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildWebSearchProviderOptions,
     buildWebSearchSettingsPayload,
@@ -32,6 +32,13 @@
   // reactive dependency); later commits flow back through saveDisabled.
   let webSearchSettings = $state(untrack(() => getWebSearchSettings(settings)));
   let saving = $state(false);
+  const webSearchDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getWebSearchSettings,
+    read: () => webSearchSettings,
+    write: (next) => (webSearchSettings = next),
+    toPayload: buildWebSearchSettingsPayload,
+  });
 
   // Whether each keyed provider's API key is set is a server fact read from
   // the current settings, never part of the draft or its dirty comparison.
@@ -128,13 +135,10 @@
       return true;
     }
 
-    return runSettingsSave({
+    return webSearchDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildWebSearchSettingsPayload(webSearchSettings),
-      getDraftSnapshot: () => webSearchSettings,
-      applyResult: (next) => (webSearchSettings = getWebSearchSettings(next)),
     });
   }
 </script>

@@ -367,6 +367,13 @@ describe('SettingsView Providers', () => {
               max_subagents_per_turn: 8,
               subagent_timeout_minutes: 60,
             },
+            base: {
+              subagents: {
+                max_subagent_depth: 4,
+                max_subagents_per_turn: 8,
+                subagent_timeout_minutes: 60,
+              },
+            },
           },
         ],
       ]);

@@ -91,7 +91,7 @@ Cross-cutting value coercion for JSON-derived data lives in `webui/src/lib/value
 
 ## Source and tests
 
-- Shared normalization, payloads, and tracked save lifecycle: `webui/src/lib/settingsView.js`, `webui/src/lib/settingsSave.js`, `webui/src/lib/autosave.js`
+- Shared normalization, payloads, and tracked save lifecycle with conflict rebase (`webui/autosave.md` -> Concurrent writers): `webui/src/lib/settingsView.js`, `webui/src/lib/settingsSave.js`, `webui/src/lib/autosave.js`
 - Settings composition: `webui/src/components/SettingsView.svelte`, `webui/src/components/settings/`
 - Onboarding: `webui/src/lib/onboarding.js` and onboarding components under `webui/src/components/`
 - Desktop Voice: `webui/src/lib/desktopBridge.js`, `webui/src/app/desktop.svelte.js` (app-level Voice owner), `webui/src/lib/wakewordSettings.js`, `webui/src/components/WakewordVoiceSettings.svelte`, and `webui/src/components/voice/`

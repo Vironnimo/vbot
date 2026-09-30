@@ -57,6 +57,19 @@ describe('SettingsCompactionPanel', () => {
     await waitForModelCatalogs();
   }
 
+  // The stored policy every first write replaces.
+  const STORED = {
+    compaction: {
+      enabled: true,
+      trigger: { type: 'context_ratio', threshold: 0.8 },
+      strategy: {
+        type: 'summary_tail',
+        tail_tokens: 15000,
+        summary_model: null,
+      },
+    },
+  };
+
   function saveCall(index) {
     getButton('Save').click();
     return waitForCondition(() => getSettingsUpdateCalls().length > index).then(
@@ -81,7 +94,7 @@ describe('SettingsCompactionPanel', () => {
       threshold: 0.8,
       tokens: 200000,
     };
-    expect(await saveCall(0)).toEqual({
+    const chosen = {
       compaction: {
         enabled: true,
         trigger,
@@ -91,7 +104,8 @@ describe('SettingsCompactionPanel', () => {
           summary_model: 'openai/gpt-5.2-mini::api-key',
         },
       },
-    });
+    };
+    expect(await saveCall(0)).toEqual({ ...chosen, base: STORED });
 
     await openSearchableDropdown('settings-compaction-summary-model');
     selectSearchableOption(
@@ -108,6 +122,7 @@ describe('SettingsCompactionPanel', () => {
           summary_model: null,
         },
       },
+      base: chosen,
     });
   });
 
@@ -134,6 +149,7 @@ describe('SettingsCompactionPanel', () => {
         trigger: { type: 'context_ratio', threshold: 0.8 },
         strategy: { type: 'continuation' },
       },
+      base: STORED,
     });
 
     document
