@@ -190,6 +190,15 @@ class ToolDispatchContext:
         return tuple(sorted(self._owned_effect_call_ids))
 
 
+@dataclass
+class _CallEvents:
+    """The lifecycle events one dispatch has emitted, and the arguments they show."""
+
+    arguments: JsonObject
+    started: bool = False
+    finished: bool = False
+
+
 class _EmittingToolRegistry(ToolRegistry):
     """Adapter that emits public lifecycle events around registry dispatch.
 
@@ -296,6 +305,7 @@ class _EmittingToolRegistry(ToolRegistry):
         self._run.tool_call_names.add(context.tool_name)
         started_at = datetime.now(UTC)
         started_perf = time.perf_counter()
+        events = _CallEvents(arguments=arguments)
         # Payloads persist only with a result this dispatch returns.
         returned = False
         try:
@@ -303,7 +313,7 @@ class _EmittingToolRegistry(ToolRegistry):
             if rejection is not None:
                 return self._answer_without_running(
                     context,
-                    arguments,
+                    events,
                     tool_failure(rejection.code, rejection.message, retryable=False),
                     error_code=rejection.code,
                     display=_empty_tool_display_payload(),
@@ -319,7 +329,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 )
                 return self._answer_without_running(
                     context,
-                    arguments,
+                    events,
                     removed_result,
                     error_code=TOOL_REMOVED_ERROR_CODE,
                     display=_tool_display_payload(
@@ -341,7 +351,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 denied_result = tool_failure("tool_not_allowed", denial_message)
                 return self._answer_without_running(
                     context,
-                    arguments,
+                    events,
                     denied_result,
                     error_code="tool_not_allowed",
                     display=_tool_display_payload(
@@ -406,6 +416,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 elif decision.replacement is not None:
                     result = decision.replacement
 
+            events.arguments = effective_arguments
             fingerprint = _tool_context_schema_fingerprint(self, context)
             started_display = _tool_display_payload(
                 self._registry,
@@ -413,20 +424,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 effective_arguments,
                 context=context,
             )
-            self._run.emit(
-                TOOL_CALL_STARTED_EVENT,
-                {
-                    "assistant_message_id": self._assistant_message_id,
-                    "tool_call": {
-                        "id": context.tool_call_id,
-                        "index": context.tool_call_index,
-                        "name": context.tool_name,
-                        "arguments": effective_arguments,
-                    },
-                    "display": started_display,
-                    "schema_fingerprint": fingerprint,
-                },
-            )
+            self._emit_started(context, events, display=started_display, fingerprint=fingerprint)
 
             if result is None:
                 result = await self._dispatch_with_failure_envelope(
@@ -486,24 +484,23 @@ class _EmittingToolRegistry(ToolRegistry):
             # Run cancellation may stop the batch before Chat receives every
             # sibling; the next Provider request repairs those missing Results
             # from durable Session evidence instead.
-            self._run.emit(
-                TOOL_CALL_RESULT_EVENT,
-                {
-                    "assistant_message_id": self._assistant_message_id,
-                    "tool_call": {
-                        "id": context.tool_call_id,
-                        "index": context.tool_call_index,
-                        "name": context.tool_name,
-                    },
-                    "result": result,
-                    "display": completed_display,
-                    "timing": timing,
-                    "schema_fingerprint": fingerprint,
-                    "error_code": error_code,
-                },
+            self._emit_result(
+                context,
+                events,
+                result,
+                display=completed_display,
+                timing=timing,
+                fingerprint=fingerprint,
+                error_code=error_code,
             )
             returned = True
             return result
+        except Exception as error:
+            # A hook or the bookkeeping around the handler raised. The call
+            # still gets exactly one result, in its events and for the Model.
+            if events.finished:
+                raise
+            return self._answer_failed_dispatch(context, events, error, started_at, started_perf)
         finally:
             # Per-call cancel registry entries are scoped to a single dispatch.
             # Clearing on every exit path keeps the registry bounded and lets a
@@ -515,7 +512,7 @@ class _EmittingToolRegistry(ToolRegistry):
     def _answer_without_running(
         self,
         context: ToolContext,
-        arguments: JsonObject,
+        events: _CallEvents,
         result: JsonObject,
         *,
         error_code: str,
@@ -528,6 +525,59 @@ class _EmittingToolRegistry(ToolRegistry):
         self._tool_timings[context.tool_call_id] = timing
         self._tool_displays[context.tool_call_id] = display
         fingerprint = _tool_context_schema_fingerprint(self, context)
+        self._emit_started(context, events, display=display, fingerprint=fingerprint)
+        self._emit_result(
+            context,
+            events,
+            result,
+            display=display,
+            timing=timing,
+            fingerprint=fingerprint,
+            error_code=error_code,
+        )
+        return result
+
+    def _answer_failed_dispatch(
+        self,
+        context: ToolContext,
+        events: _CallEvents,
+        error: Exception,
+        started_at: datetime,
+        started_perf: float,
+    ) -> JsonObject:
+        """Finish the lifecycle of a call whose hooks or bookkeeping raised."""
+        result = tool_failure_for_exception(context.tool_name, error)
+        try:
+            display = _tool_display_payload(
+                self._registry, context.tool_name, events.arguments, context=context, result=result
+            )
+        except Exception:
+            display = _empty_tool_display_payload()
+        fingerprint = _tool_context_schema_fingerprint(self, context)
+        if not events.started:
+            self._emit_started(context, events, display=display, fingerprint=fingerprint)
+        timing = _timing_payload(started_at, started_perf)
+        self._tool_timings[context.tool_call_id] = timing
+        self._tool_displays[context.tool_call_id] = display
+        self._emit_result(
+            context,
+            events,
+            result,
+            display=display,
+            timing=timing,
+            fingerprint=fingerprint,
+            error_code=result["error"]["code"],
+        )
+        return result
+
+    def _emit_started(
+        self,
+        context: ToolContext,
+        events: _CallEvents,
+        *,
+        display: JsonObject,
+        fingerprint: str,
+    ) -> None:
         self._run.emit(
             TOOL_CALL_STARTED_EVENT,
             {
@@ -536,12 +586,25 @@ class _EmittingToolRegistry(ToolRegistry):
                     "id": context.tool_call_id,
                     "index": context.tool_call_index,
                     "name": context.tool_name,
-                    "arguments": arguments,
+                    "arguments": events.arguments,
                 },
                 "display": display,
                 "schema_fingerprint": fingerprint,
             },
         )
+        events.started = True
+
+    def _emit_result(
+        self,
+        context: ToolContext,
+        events: _CallEvents,
+        result: JsonObject,
+        *,
+        display: JsonObject,
+        timing: JsonObject,
+        fingerprint: str,
+        error_code: Any,
+    ) -> None:
         self._run.emit(
             TOOL_CALL_RESULT_EVENT,
             {
@@ -558,7 +621,7 @@ class _EmittingToolRegistry(ToolRegistry):
                 "error_code": error_code,
             },
         )
-        return result
+        events.finished = True
 
     def take_media_for_call(self, tool_call_id: str, *, tool_message_id: str) -> list[JsonObject]:
         """Transfer in-memory media to the correlated request without retaining a cache."""
