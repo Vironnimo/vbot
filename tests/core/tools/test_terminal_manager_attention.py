@@ -10,7 +10,9 @@ from typing import Any
 import pytest
 
 import core.tools._terminal_state as terminal_state
+import core.tools.process_manager as process_manager
 import core.tools.terminal_manager as terminal_module
+from core.runs import RunAdmissionBlockedError
 from core.tools.terminal_manager import (
     TerminalClosedError,
     TerminalManager,
@@ -122,6 +124,38 @@ async def test_attention_auto_delivers_and_manual_ack_cancels_exactly_once(
     assert session.acknowledged_attention_revision == 1
     assert session.notification_task is not None
     assert session.notification_task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner_closed", [True, False], ids=["owner-closed", "fault"])
+async def test_failed_attention_delivery_stays_undelivered_and_logs_only_faults(
+    delivering_manager: Delivering,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_closed: bool,
+) -> None:
+    manager, factory, trigger = delivering_manager
+    trigger.error = (
+        RunAdmissionBlockedError("completion owner can no longer receive work")
+        if owner_closed
+        else RuntimeError("delivery broke")
+    )
+    errors: list[tuple[Any, ...]] = []
+    monkeypatch.setattr(
+        process_manager._LOGGER, "error", lambda *args, **_kwargs: errors.append(args)
+    )
+    session = await spawn(manager, tmp_path)
+    await _agent_input(manager, session, text="do work", key="enter")
+    factory.adapters[0].emit("working...\r\nREADY> ")
+    await eventually(lambda: len(trigger.submissions) == 1)
+    task = session.notification_task
+    assert task is not None
+    await asyncio.wait({task})
+
+    assert session.attention is not None
+    assert session.attention.delivered is False
+    # A closed execution owner is an expected lifecycle end, not an error.
+    assert len(errors) == (0 if owner_closed else 1)
 
 
 @pytest.mark.asyncio

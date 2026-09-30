@@ -103,11 +103,16 @@ class PendingTriggerService:
         self.release = asyncio.Event()
         self.submissions: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
         self.cancellations: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        # Set to fail every delivery terminally with this error.
+        self.error: BaseException | None = None
 
     def submit_completion(self, *args: Any, **kwargs: Any) -> Any:
         self.submissions.append((args, kwargs))
+        error = self.error
 
         async def pending() -> None:
+            if error is not None:
+                raise error
             await self.release.wait()
 
         return pending()

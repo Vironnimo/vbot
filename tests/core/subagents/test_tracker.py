@@ -10,7 +10,7 @@ import pytest
 
 import core.subagents.tracker as subagent_tracker
 from core.chat import ChatSessionManager
-from core.runs import Run, RunExecutionOwner
+from core.runs import Run, RunAdmissionBlockedError, RunExecutionOwner
 from core.subagents import SubAgentBatchTracker
 from tests.core.sessions.history_fixtures import settle_run
 from tests.core.subagents.subagents_test_support import (
@@ -225,12 +225,12 @@ async def test_removed_queue_entry_leaves_only_its_siblings_notice(sibling: str 
     assert not _batch_open(tracker)
 
 
-@pytest.mark.parametrize("delivered", [True, False])
+@pytest.mark.parametrize("outcome", ["delivered", "failed", "owner-closed"])
 async def test_child_is_marked_read_only_after_its_notice_is_stored(
     tmp_path: Path,
     current_format_data_directory: None,
     monkeypatch: pytest.MonkeyPatch,
-    delivered: bool,
+    outcome: str,
 ) -> None:
     del current_format_data_directory
     sessions = ChatSessionManager(tmp_path)
@@ -239,8 +239,11 @@ async def test_child_is_marked_read_only_after_its_notice_is_stored(
     settle_run(sessions, child, "run-one", completed_at="2026-07-22T10:00:00+00:00")
     triggers = RecordingTriggerService()
     triggers.defer_persistence = True
-    if not delivered:
+    delivered = outcome == "delivered"
+    if outcome == "failed":
         triggers.error = RuntimeError("parent unavailable")
+    elif outcome == "owner-closed":
+        triggers.error = RunAdmissionBlockedError("completion owner can no longer receive work")
     logged: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
         subagent_tracker._LOGGER, "error", lambda *args, **_kwargs: logged.append(args)
@@ -260,11 +263,12 @@ async def test_child_is_marked_read_only_after_its_notice_is_stored(
     # A notice that cannot be delivered releases the work but leaves the child unread.
     assert unread is not delivered
     assert not _batch_open(tracker)
-    if delivered:
-        assert logged == []
-    else:
+    if outcome == "failed":
         assert "Sub-Agent completion delivery failed" in logged[0][1]
         assert str(logged[0][2]) == "parent unavailable"
+    else:
+        # A closed execution owner is an expected lifecycle end, not an error.
+        assert logged == []
 
 
 async def test_work_ids_are_unique_across_parent_batches(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,9 +8,10 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-from core.runs import RunExecutionOwner
+from core.runs import RunAdmissionBlockedError, RunExecutionOwner
 from core.tools import terminal_backend
 from core.tools.process_manager import log_background_task_result
+from core.utils.logging import get_logger
 
 from ._terminal_events import TerminalEvents, _attention_body
 from ._terminal_input import (
@@ -37,6 +38,8 @@ from ._terminal_state import (
     _utc_now,
     _validate_dimensions,
 )
+
+_LOGGER = get_logger("tools.terminal_manager")
 
 
 class TerminalSessionIO:
@@ -423,7 +426,17 @@ class TerminalSessionIO:
             project_id=attachment.project_id,
             execution_owner=session.activity_execution_owner,
         )
-        await delivery
+        try:
+            await delivery
+        except RunAdmissionBlockedError:
+            # The activity's execution owner closed (for example its temporary
+            # group): an expected end of its lifecycle, not a delivery fault.
+            _LOGGER.debug(
+                "Terminal attention dropped for a closed execution owner (terminal=%s revision=%s)",
+                session.terminal_id,
+                attention.revision,
+            )
+            return
         attention.delivered = True
 
     def _cancel_delivery(self, session: TerminalSession) -> None:

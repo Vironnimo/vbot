@@ -777,6 +777,16 @@ def create_app(
             await websocket.close(code=1008, reason=str(exc))
         except FileNotFoundError as exc:
             await websocket.close(code=1008, reason=str(exc))
+        except OSError as exc:
+            # A share lock or a virus scanner can deny a read for a moment; the
+            # accessor's reconnect reads again and resubscribes.
+            logging.getLogger("vbot.server.app").warning(
+                "Live-log stream closed after a failed file read (file=%s error=%s: %s)",
+                file_name,
+                type(exc).__name__,
+                exc,
+            )
+            await websocket.close(code=1011, reason="log file could not be read")
         except WebSocketDisconnect:
             return
         finally:

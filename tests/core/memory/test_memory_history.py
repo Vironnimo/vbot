@@ -157,13 +157,13 @@ def test_revert_is_recorded_and_can_itself_be_reverted(
     service.add_entry(workspace, "agent", "Keep me.", writer=_TOOL)
     service.remove_matching(workspace, "agent", "Keep me.", writer=_TOOL)
 
-    [reverted] = service.revert(workspace, [2], writer=_RPC)
+    [reverted] = service.revert(workspace, [2], writer=_RPC).revisions
     service.revert(workspace, [reverted.id], writer=_RPC)
 
     assert (reverted.id, reverted.kind, reverted.reverts) == (3, "revert", (2,))
     assert _changes(reverted.to_dict()) == [("added", None, "Keep me.")]
     assert service.entries_at(workspace, "coder", None)["agent"] == []
-    assert service.revert(workspace, [2, 4], writer=_RPC) != []
+    assert service.revert(workspace, [2, 4], writer=_RPC).changed == ("agent",)
 
 
 def test_revert_refuses_to_overwrite_later_changes_and_changes_nothing(
@@ -344,7 +344,12 @@ def test_a_failing_history_never_fails_a_change(
         added = service.add_entry(workspace, "agent", "Deploys from main.", writer=_TOOL)
         reverted = service.revert(workspace, [1, 2], writer=_RPC)
 
-    assert (added.revision, reverted) == (None, [])
+    # The files changed although the history recorded nothing.
+    assert (added.revision, reverted.changed, reverted.revisions) == (
+        None,
+        ("user", "agent"),
+        (),
+    )
     # Every change the history missed is noticed as an external one.
     assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
         (3, "agent", "external"),

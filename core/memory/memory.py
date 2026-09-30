@@ -25,6 +25,7 @@ from core.memory._history import (
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     from core.prompts.blocks import BlockDefinition
@@ -199,6 +200,19 @@ class MemoryRevertIncompleteError(MemoryError):
             f"The revert failed part-way ({failure}). The {names} Memory could not be "
             "restored and keeps its reverted entries; the other Memory is unchanged."
         )
+
+
+@dataclass(frozen=True)
+class MemoryRevertResult:
+    """What a revert changed: the scopes it wrote and the revisions that recorded them.
+
+    ``revisions`` holds one ``revert`` revision per recorded scope. It is shorter
+    than ``changed`` when the history could not record a change; those files
+    changed all the same.
+    """
+
+    changed: tuple[MemoryScope, ...]
+    revisions: tuple[MemoryRevision, ...]
 
 
 @dataclass(frozen=True)
@@ -448,12 +462,12 @@ class FilePinnedMemoryBackend:
         revision_ids: Sequence[int],
         *,
         writer: MemoryWriter,
-    ) -> list[MemoryRevision]:
+    ) -> MemoryRevertResult:
         """Take back the changes of *revision_ids*, all of them or none.
 
-        Returns the recorded ``revert`` revisions, one per changed scope, and an
-        empty list when the entries already match (or the history could not
-        record them). Raises :class:`MemoryRevertError` when later changes built
+        Returns the scopes it changed, none when the entries already match, and
+        the ``revert`` revisions that recorded them (fewer when the history could
+        not record a change). Raises :class:`MemoryRevertError` when later changes built
         on a reverted one and :class:`MemoryBudgetError` when restored entries
         would exceed a budget, both before writing anything. Every changed scope
         is written before any is recorded: when a write fails, the scopes already
@@ -508,7 +522,7 @@ class FilePinnedMemoryBackend:
                 )
                 if revision is not None:
                     recorded.append(revision)
-            return recorded
+            return MemoryRevertResult(changed=tuple(changed), revisions=tuple(recorded))
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         """Return a scope's used characters and its budget."""
@@ -719,7 +733,7 @@ class MemoryService:
 
     def revert(
         self, workspace: Path, revision_ids: Sequence[int], *, writer: MemoryWriter
-    ) -> list[MemoryRevision]:
+    ) -> MemoryRevertResult:
         return self._backend.revert(workspace, revision_ids, writer=writer)
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
@@ -846,7 +860,9 @@ def _read_file(path: Path) -> bytes | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+        raise MemoryError(
+            f"failed to read memory file {model_path(path)}: {_os_error_text(exc)}"
+        ) from exc
 
 
 def _decode_entries(path: Path, content: bytes | None) -> list[str]:
@@ -856,7 +872,7 @@ def _decode_entries(path: Path, content: bytes | None) -> list[str]:
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+        raise MemoryError(f"failed to read memory file {model_path(path)}: {exc}") from exc
     return _parse_entries(text)
 
 
@@ -882,7 +898,14 @@ def _write_entries(path: Path, entries: list[str]) -> None:
     try:
         atomic_write_bytes(path, text.encode("utf-8"))
     except OSError as exc:
-        raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
+        raise MemoryError(
+            f"failed to write memory file {model_path(path)}: {_os_error_text(exc)}"
+        ) from exc
+
+
+def _os_error_text(error: OSError) -> str:
+    """Return the OS reason without the path, which the error spells natively."""
+    return error.strerror or str(error)
 
 
 def _write_scopes(

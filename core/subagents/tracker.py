@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.projects import format_agent_address
-from core.runs import Run, RunExecutionOwner, RunStatus
+from core.runs import Run, RunAdmissionBlockedError, RunExecutionOwner, RunStatus
 from core.sessions import SessionAddress
 from core.tools.tools import JsonObject
 from core.utils.ids import new_id
@@ -319,7 +319,8 @@ class SubAgentBatchTracker:
         delivery: asyncio.Future[None],
         failure_message: str,
     ) -> None:
-        if not delivery.cancelled() and delivery.exception() is not None:
+        error = None if delivery.cancelled() else delivery.exception()
+        if error is not None:
             batch = self._batches.get(parent_key)
             if batch is not None and batch.entries.get(work_id) is delivered_entry:
                 # A failed Future is terminal: transient start/write failures
@@ -329,6 +330,18 @@ class SubAgentBatchTracker:
                 batch.entries.pop(work_id, None)
                 self._prune_if_empty(parent_key, batch)
                 self._prune_if_finished(parent_key, batch)
+        if isinstance(error, RunAdmissionBlockedError):
+            # The batch's execution owner closed (for example its temporary
+            # group): an expected end of its lifecycle, not a delivery fault.
+            _LOGGER.debug(
+                "Sub-Agent completion notice dropped for a closed execution owner "
+                "(agent=%s session=%s run=%s work=%s)",
+                parent_key[0],
+                parent_key[1],
+                parent_key[2],
+                work_id,
+            )
+            return
         _log_background_task_result(delivery, failure_message)
 
     def _acknowledge_delivered_entry(

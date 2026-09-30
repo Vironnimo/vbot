@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -114,29 +115,47 @@ def _append_event() -> dict[str, Any]:
     }
 
 
-def test_log_websocket_closes_when_the_log_watcher_stops(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("failure", ["watcher-stops", "start-read-fails"])
+def test_log_websocket_closes_for_a_reconnect_when_the_stream_cannot_continue(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
 ) -> None:
     app, _log_file = _log_app(tmp_path)
 
-    async def crashing_awatch(*_args: object, **_kwargs: object):
-        raise OSError("log directory unavailable")
-        yield set()
+    if failure == "watcher-stops":
 
-    monkeypatch.setattr(log_viewer_module, "awatch", crashing_awatch)
+        async def crashing_awatch(*_args: object, **_kwargs: object):
+            raise OSError("log directory unavailable")
+            yield set()
 
-    with TestClient(app) as client:
+        monkeypatch.setattr(log_viewer_module, "awatch", crashing_awatch)
+    else:
+
+        def locked_read(*_args: object) -> None:
+            raise PermissionError(13, "Permission denied")
+
+        monkeypatch.setattr(log_viewer_module, "_read_subscribe_start", locked_read)
+
+    with TestClient(app) as client, caplog.at_level(logging.WARNING, logger="vbot.server.app"):
         # A stopped watcher ends the stream instead of leaving an idle socket that
-        # heartbeats keep alive; the accessor reconnects, reads again and resubscribes.
+        # heartbeats keep alive, and a file read that fails closes it the same way;
+        # the accessor reconnects, reads again and resubscribes.
         with (
             client.websocket_connect("/ws/logs?file=2026-05-11") as websocket,
             pytest.raises(WebSocketDisconnect) as closed,
         ):
             websocket.receive_json()
 
-        wait_for_log_viewer_idle(app)
+        if failure == "watcher-stops":
+            wait_for_log_viewer_idle(app)
 
     assert closed.value.code == 1011
+    if failure == "start-read-fails":
+        # An expected read failure is a warning, not an unhandled server error.
+        [warning] = [record for record in caplog.records if record.name == "vbot.server.app"]
+        assert (warning.levelno, warning.exc_info) == (logging.WARNING, None)
 
 
 def wait_for_log_subscriber(app: Any, file_name: str, timeout_seconds: float = 2.0) -> None:
