@@ -3,6 +3,8 @@ import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
 const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
+// `edit`, `write`, `glob` and `grep` are retired Tools; Sessions recorded before
+// 2026-09-14 still hold their calls, which these entries keep readable.
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
   edit: ['edits', 'new_string', 'old_string'],
   write: ['content'],
@@ -399,7 +401,19 @@ const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
 const MEMORY_SCOPES = new Set(['agent', 'user']);
 const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
-const TEXT_LABELS = new Set(['command', 'output', 'page', 'query', 'results']);
+const TEXT_LABELS = new Set([
+  'command',
+  'content',
+  'input',
+  'output',
+  'page',
+  'query',
+  'response',
+  'results',
+  'screen',
+  'scrollback',
+  'task',
+]);
 
 // The user-facing detail blocks of a Tool whose display declares them
 // (`display.details`), in the Tool's order, or null for a Tool without them.

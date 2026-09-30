@@ -128,6 +128,23 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
     )
     assert model_path(skill_path) not in data["content"]
     assert file_state.check_stale("session-one", agents_file.resolve()) is None
+    # The user sees where the Project lives and the context the Agent received.
+    display = _registry(projects).display_for_call(
+        PROJECT_TOOL_NAME, {"project_id": "vbot"}, result=result
+    )
+    assert display["details"] == [
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "Project Context loaded.",
+            "subject": project_path,
+        },
+        {
+            "type": "text",
+            "label": "content",
+            "source": {"from": "result", "path": ["data", "content"]},
+        },
+    ]
 
 
 def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:

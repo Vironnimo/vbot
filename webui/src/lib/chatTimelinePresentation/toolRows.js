@@ -26,6 +26,8 @@ import { trimmedString } from './values.js';
 import { isPlainObject } from '$lib/values.js';
 import { subAgentToolLabel } from './subagents.js';
 
+// Row summaries for calls without a server display payload. `write`, `edit`,
+// `glob` and `grep` are retired Tools that older Sessions still contain.
 const TOOL_DISPLAY_ARGS = {
   read: ['path'],
   write: ['path'],

@@ -15,7 +15,7 @@ from core.tools import terminal as terminal_module
 from core.tools._terminal_arguments import normalize_terminal_arguments, terminal_key_name
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject, ToolContext, tool_failure
-from tests.core.tools.terminal_helpers import call, make_context
+from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
 from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
@@ -29,6 +29,11 @@ class Terminal:
     def __init__(self, terminal_manager: TerminalManager, tmp_path: Path) -> None:
         self.manager = terminal_manager
         self.context = make_context(tmp_path)
+        self.tmp_path = tmp_path
+
+    def details(self, arguments: JsonObject, result: dict[str, Any]) -> list[JsonObject]:
+        """Return the detail blocks the user sees for one call."""
+        return details(self.manager, self.tmp_path, arguments, result)
 
     async def __call__(
         self, arguments: JsonObject, context: ToolContext | None = None
@@ -212,6 +217,18 @@ async def test_input_types_text_keys_and_exact_data_against_the_current_screen(
     raw = "\x1b[200~more\r\n\x1b[201~"
     exact = await send(data=raw)
     assert exact["data"]["characters_sent"] == len(raw)
+    # The user sees what was typed, with named keys and control characters spelled out.
+    shown = [
+        terminal.details({"action": "input", "terminal_id": terminal_id, **fields}, result)
+        for fields, result in (
+            ({"text": "submit", "key": "enter"}, submitted),
+            ({"data": raw}, exact),
+        )
+    ]
+    assert shown == [
+        [{"type": "text", "label": "input", "text": "submit <enter>"}],
+        [{"type": "text", "label": "input", "text": "\\x1b[200~more\\r\n\\x1b[201~"}],
+    ]
     assert adapter.writes == ["answer", "submit", "\r", "\x1b[24~", raw]
 
     multiline = "first\n  second"
@@ -384,11 +401,17 @@ async def test_close_stops_the_terminal(
 ) -> None:
     terminal_id = await terminal.start()
 
-    result = await terminal({"action": "close", "terminal_id": terminal_id})
+    arguments: JsonObject = {"action": "close", "terminal_id": terminal_id}
+    result = await terminal(arguments)
 
     assert result["ok"] is True
     assert result["data"]["state"] == "exited"
     assert manager[1].adapters[0].alive is False
+    assert terminal.details(arguments, result)[-1] == {
+        "type": "notice",
+        "level": "info",
+        "text": "The terminal was stopped.",
+    }
 
 
 @pytest.mark.asyncio
@@ -636,7 +659,8 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
     manager[1].adapters[0].emit("".join(f"line-{index}\r\n" for index in range(30)) + "ready> ")
     await eventually(lambda: session.renderer.revision > 0)
 
-    waited = await terminal({"action": "wait", "terminal_id": terminal_id, "timeout_ms": 2000})
+    wait: JsonObject = {"action": "wait", "terminal_id": terminal_id, "timeout_ms": 2000}
+    waited = await terminal(wait)
     assert list(waited["data"]) == [
         "terminal_id",
         "state",
@@ -645,6 +669,11 @@ async def test_follow_up_results_show_the_screen_without_repeating_launch_facts(
         "screen",
         "scrollback",
         "timed_out",
+    ]
+    # The user sees the lines above the screen and the screen, read from the result.
+    assert terminal.details(wait, waited) == [
+        {"type": "text", "label": label, "source": {"from": "result", "path": ["data", key]}}
+        for label, key in (("scrollback", "history"), ("screen", "screen"))
     ]
     assert waited["data"]["history"].splitlines() == [f"line-{index}" for index in range(7)]
     assert "text" not in waited["data"]["scrollback"]

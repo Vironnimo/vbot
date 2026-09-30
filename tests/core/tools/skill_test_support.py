@@ -37,6 +37,13 @@ class SkillTool:
         self.tools = ToolRegistry()
         register_skill_tool(self.tools, resolver, refresh)
 
+    def details(self, arguments: dict[str, object], result: dict[str, Any]) -> list[Any]:
+        """Return the detail blocks the user sees for one call."""
+        shown: list[Any] = self.tools.display_for_call(SKILL_TOOL_NAME, arguments, result=result)[
+            "details"
+        ]
+        return shown
+
     def call(
         self,
         arguments: dict[str, object],

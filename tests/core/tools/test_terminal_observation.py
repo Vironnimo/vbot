@@ -10,7 +10,7 @@ import pytest
 
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import JsonObject
-from tests.core.tools.terminal_helpers import call, make_context
+from tests.core.tools.terminal_helpers import call, details, make_context
 from tests.core.tools.terminal_helpers import manager as manager
 from tests.core.tools.terminal_manager_helpers import AdapterFactory, eventually
 from tests.core.tools.terminal_manager_helpers import shell_environment as shell_environment
@@ -47,6 +47,10 @@ async def test_list_shows_every_terminal_with_its_title_and_attachment(
         (terminal_id, "current")
     ]
     assert terminals[0]["title"] == "Codex migration"
+    [shown] = details(terminal_manager, tmp_path, {"action": "list"}, listed)
+    assert shown["type"] == "results"
+    assert shown["items"][0]["title"] == "Codex migration"
+    assert shown["items"][0]["meta"].endswith(" · attached here")
     discovered = await call(
         terminal_manager, make_context(tmp_path, session_id="other"), {"action": "list"}
     )

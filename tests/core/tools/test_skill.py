@@ -113,9 +113,24 @@ def test_env_requirements_add_environment_access_guidance(tmp_path: Path) -> Non
         environment={"OPENAI_API_KEY": "available", "OPENROUTER_API_KEY": "available"},
     )
 
-    result = SkillTool(tmp_path, registry).call({"name": "provider-probe"})
+    tool = SkillTool(tmp_path, registry)
+    result = tool.call({"name": "provider-probe"})
 
     assert result["data"]["content"] == "# Provider Probe\n\nCall the provider API."
+    # The user sees the instructions and that credentials reach shell commands.
+    assert tool.details({"name": "provider-probe"}, result) == [
+        {
+            "type": "text",
+            "label": "content",
+            "source": {"from": "result", "path": ["data", "content"]},
+        },
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "This Skill makes additional environment credentials available to shell "
+            "commands.",
+        },
+    ]
     guidance = result["data"]["environment_access"]
     assert "Loading this Skill makes these additional environment credentials" in guidance
     assert "- `OPENAI_API_KEY`" in guidance
@@ -212,9 +227,8 @@ def test_unavailable_skill_fails_with_missing_requirements(tmp_path: Path) -> No
 
 
 def test_already_active_skill_is_not_loaded_again(tmp_path: Path) -> None:
-    result = debugging_tool(tmp_path).call(
-        {"name": "debugging"}, activation_hook=ActivationRecorder(accept=False)
-    )
+    tool = debugging_tool(tmp_path)
+    result = tool.call({"name": "debugging"}, activation_hook=ActivationRecorder(accept=False))
 
     assert result["ok"] is True
     assert result["data"] == {
@@ -225,6 +239,13 @@ def test_already_active_skill_is_not_loaded_again(tmp_path: Path) -> None:
             "its instructions are already in context."
         ),
     }
+    assert tool.details({"name": "debugging"}, result) == [
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "The Skill was already active; it was not loaded again.",
+        }
+    ]
 
 
 @pytest.mark.parametrize(

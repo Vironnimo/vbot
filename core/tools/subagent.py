@@ -18,6 +18,9 @@ from core.tools.tools import (
     ToolDisplayPart,
     ToolPromptBlockRegistry,
     ToolRegistry,
+    display_notice,
+    display_results,
+    display_text,
 )
 
 SUBAGENT_TOOL_NAME = "subagent"
@@ -149,6 +152,7 @@ def register_subagent_tools(
         result_schema={"type": "object"},
         display=ToolDisplay(
             parts_builder=_subagent_display_parts,
+            detail_builder=_subagent_detail_blocks,
             hidden_argument_keys=("content",),
         ),
     )
@@ -157,6 +161,60 @@ def register_subagent_tools(
             SUBAGENT_TOOL_NAME,
             render=lambda context: _render_subagent_prompt_block(context, coordinator),
         )
+
+
+# Final states the user should notice; queued and running ones change while the
+# row is shown, and a completed one shows its response.
+_ENDED_NOTICES = {
+    "failed": ("warning", "The sub-agent run failed."),
+    "interrupted": ("warning", "The sub-agent run was interrupted."),
+    "cancelled": ("info", "The sub-agent run was cancelled."),
+}
+
+
+def _subagent_detail_blocks(
+    raw_arguments: JsonObject, result: JsonObject | None
+) -> list[JsonObject]:
+    """Show the user the task, the sub-agent's final response and how its run ended.
+
+    Ids, delivery facts, usage, activity paths and notes are for the Agent and
+    stay in the raw result. The response is read from the result, so a spawn
+    row shows it once the WebUI has fetched the completed result.
+    """
+    try:
+        arguments = _normalize_subagent_arguments(raw_arguments)
+    except ValueError:
+        arguments = raw_arguments
+    call = arguments if isinstance(arguments, dict) else {}
+    blocks: list[JsonObject] = []
+    content = call.get("content")
+    if call.get("action", "run") == "run" and isinstance(content, str) and content.strip():
+        blocks.append(display_text("task", text=content))
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return blocks
+    listed = data.get("subagents")
+    if isinstance(listed, list):
+        entries = [entry for entry in listed if isinstance(entry, dict)]
+        if not entries:
+            return [*blocks, display_notice("info", "No sub-agent work is tracked.")]
+        items = [
+            {
+                "title": entry.get("agent_id") or entry.get("id"),
+                "meta": " · ".join(
+                    str(part) for part in (entry.get("status"), entry.get("tool_name")) if part
+                ),
+                "time": entry.get("started_at"),
+                "text": entry.get("result") if isinstance(entry.get("result"), str) else None,
+            }
+            for entry in entries
+        ]
+        return [*blocks, display_results(items)]
+    blocks.append(display_text("response", source="result", path=("data", "result")))
+    ended = _ENDED_NOTICES.get(str(data.get("status")))
+    if ended is not None:
+        blocks.append(display_notice(*ended))
+    return blocks
 
 
 def _subagent_display_parts(raw_arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
