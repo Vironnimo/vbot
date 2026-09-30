@@ -22,6 +22,8 @@ import builtins
 import os
 import shutil
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -96,6 +98,9 @@ class ProjectStore:
         self._owns_sessions = sessions is None
         # Commands and RPC workers share this store. Serialize complete config
         # transactions, including duplicate-cwd checks and failure compensation.
+        # Event Loop code takes it for reads, so no thread may wait for a data
+        # snapshot while holding it: a mutation admits its document change first
+        # (``_change``).
         self._write_lock = RLock()
         # Deletion archives the anchor and its Sessions together; a data snapshot
         # of the Runtime's barrier never copies between the two.
@@ -138,7 +143,7 @@ class ProjectStore:
         # A new project starts with AGENTS.md seeded as its first auto-load entry
         # (the project-instruction convention). Seeded here, in create only — never
         # in build_project, which update shares — so removing it later sticks.
-        with self._write_lock:
+        with self._change():
             project = build_project(
                 project_id,
                 display_name,
@@ -235,7 +240,7 @@ class ProjectStore:
         an updatable field, so passing it (the anchor directory name) is rejected
         as an unknown field rather than silently moving the anchor.
         """
-        with self._write_lock:
+        with self._change():
             project = self.get(project_id)
             if not changes:
                 return project
@@ -307,7 +312,7 @@ class ProjectStore:
         an overridden model is *configured in this instance* is the caller's gate (the
         ``/model`` command path), not enforced here. Returns the updated project.
         """
-        with self._write_lock:
+        with self._change():
             project = self.get(project_id)
             overrides = _copy_overrides(project.overrides)
             agent_override = dict(overrides.get(agent_id, {}))
@@ -325,7 +330,7 @@ class ProjectStore:
         field, the project is returned unchanged without a write; otherwise exactly that
         one field is dropped and every other override and field is preserved.
         """
-        with self._write_lock:
+        with self._change():
             project = self.get(project_id)
             agent_override = project.overrides.get(agent_id)
             if agent_override is None or field not in agent_override:
@@ -379,7 +384,7 @@ class ProjectStore:
         restore the active anchor and any prior archive. Product-level reference
         and Run admission guards belong to the caller. Returns the archive path.
         """
-        with self._snapshot_barrier.compound_mutation(), self._write_lock:
+        with self._snapshot_barrier.compound_mutation(), self._change():
             project_dir = self._stored_project_dir(project_id)
             if project_dir is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
@@ -461,6 +466,16 @@ class ProjectStore:
                 self._owns_sessions = True
             return self._sessions
 
+    @contextmanager
+    def _change(self) -> Iterator[None]:
+        """Admit a change of the Project documents, then hold the store lock.
+
+        In this order a change that waits for a data snapshot waits without the
+        lock, which Event Loop readers take.
+        """
+        with document_change(self._data_dir / _PROJECTS_DIRNAME), self._write_lock:
+            yield
+
     def _project_dir(self, project_id: str) -> Path:
         return self._data_dir / _PROJECTS_DIRNAME / _validate_project_id(project_id)
 
@@ -500,9 +515,11 @@ class ProjectStore:
                 )
 
     def _write_project(self, project: Project) -> None:
+        """Write one Anchor config inside an admitted change (``_change``); it never waits."""
         config_path = self._config_path(project.project_id)
         try:
-            write_json_document(config_path, project.to_dict(), project_format())
+            with document_change(config_path, wait=False):
+                write_json_document(config_path, project.to_dict(), project_format())
         except JsonDocumentWriteError as error:
             raise ProjectError(str(error)) from error
 

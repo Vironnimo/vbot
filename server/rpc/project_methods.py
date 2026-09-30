@@ -53,6 +53,7 @@ from core.tools.availability import normalize_tool_access
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
+from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -74,9 +75,10 @@ from server.rpc.validation import (
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("server.rpc.projects")
 _MISSING = object()
-# project.list/show read Project anchors and re-scan repos here, never on the
-# Event Loop: pickers open one show per Project.
-_PROJECT_READ_WORKERS = BoundedWorkerPool(name="project-read", max_workers=2)
+# Project requests read and write Project anchors and re-scan repos here, never
+# on the Event Loop: pickers open one show per Project, and a write may wait for
+# a data snapshot.
+_PROJECT_WORKERS = BoundedWorkerPool(name="project", max_workers=2)
 
 # A bare cwd is a valid Project (GLOSSARY → Project; plan: "Minimal-Projekt = nur
 # eine cwd"): the chosen format location's presence is surfaced in the scan
@@ -146,7 +148,19 @@ def _invalidate_project_caches(state: Any, project_id: str) -> None:
         invalidate_project_skills(project_id)
 
 
-def _add_project(state: Any, params: JsonObject) -> JsonObject:
+async def _add_project(state: Any, params: JsonObject) -> JsonObject:
+    project, scan = await _PROJECT_WORKERS.run(_add_project_record, state, params)
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    _LOGGER.info(
+        "Project added (project=%s source_format=%s)",
+        project.project_id,
+        project.source_format,
+    )
+    return {"project": _project_response(project), "scan": scan}
+
+
+def _add_project_record(state: Any, params: JsonObject) -> tuple[Project, JsonObject]:
+    """Validate, create and scan one Project on a worker thread."""
     _reject_unsupported(params, _ADD_FIELDS, "project.add")
 
     cwd = _required_string(params, "cwd")
@@ -192,21 +206,13 @@ def _add_project(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-
-    scan = _scan_preview(state, project)
-    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
-    _LOGGER.info(
-        "Project added (project=%s source_format=%s)",
-        project.project_id,
-        project.source_format,
-    )
-    return {"project": _project_response(project), "scan": scan}
+    return project, _scan_preview(state, project)
 
 
 async def _list_projects(state: Any, params: JsonObject) -> JsonObject:
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "project.list does not accept params")
-    return await _PROJECT_READ_WORKERS.run(_project_list_response, state)
+    return await _PROJECT_WORKERS.run(_project_list_response, state)
 
 
 def _project_list_response(state: Any) -> JsonObject:
@@ -222,7 +228,7 @@ async def _show_project(state: Any, params: JsonObject) -> JsonObject:
 
     project_id = _required_string(params, "project_id")
     try:
-        project = await _PROJECT_READ_WORKERS.run(_projects(state).get, project_id)
+        project = await _PROJECT_WORKERS.run(_projects(state).get, project_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 
@@ -239,7 +245,7 @@ async def _show_project(state: Any, params: JsonObject) -> JsonObject:
     if callable(reload_skills):
         await reload_skills()
     _invalidate_project_caches(state, project_id)
-    return await _PROJECT_READ_WORKERS.run(_project_show_response, state, project)
+    return await _PROJECT_WORKERS.run(_project_show_response, state, project)
 
 
 def _project_show_response(state: Any, project: Project) -> JsonObject:
@@ -247,8 +253,34 @@ def _project_show_response(state: Any, project: Project) -> JsonObject:
     return {"project": _project_response(project), "scan": scan}
 
 
-def _set_project(state: Any, params: JsonObject) -> JsonObject:
+async def _set_project(state: Any, params: JsonObject) -> JsonObject:
     project_id = _required_string(params, "project_id")
+    project, changed_fields = await _PROJECT_WORKERS.run(
+        _update_project_record, state, project_id, params
+    )
+    # Publish Project edits with fresh derived state. Identity Skill registries
+    # retain Project grants and display labels as well as scanned files, so a
+    # registry is not merely a cwd/source-format cache. Keep callers independent
+    # of which Project fields the discovery and Skill owners currently capture.
+    if changed_fields:
+        _invalidate_project_caches(state, project_id)
+    scan = await _PROJECT_WORKERS.run(_scan_preview, state, project)
+    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    if _SKILL_INVENTORY_FIELDS.intersection(changed_fields):
+        publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    if changed_fields:
+        _LOGGER.info(
+            "Project updated (project=%s fields=%s)",
+            project_id,
+            ",".join(changed_fields),
+        )
+    return {"project": _project_response(project), "scan": scan}
+
+
+def _update_project_record(
+    state: Any, project_id: str, params: JsonObject
+) -> tuple[Project, list[str]]:
+    """Validate and apply one ``project.set`` on a worker thread; return the changed fields."""
     unsupported_fields = sorted(set(params) - {"project_id"} - _SET_MUTABLE_FIELDS)
     if unsupported_fields:
         raise RpcError(
@@ -284,27 +316,14 @@ def _set_project(state: Any, params: JsonObject) -> JsonObject:
         )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-
-    # Publish Project edits with fresh derived state. Identity Skill registries
-    # retain Project grants and display labels as well as scanned files, so a
-    # registry is not merely a cwd/source-format cache. Keep callers independent
-    # of which Project fields the discovery and Skill owners currently capture.
-    if changed_fields:
-        _invalidate_project_caches(state, project_id)
-    scan = _scan_preview(state, project)
-    publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
-    if _SKILL_INVENTORY_FIELDS.intersection(changed_fields):
-        publish_resource_changed(state, RESOURCE_KIND_SKILLS)
-    if changed_fields:
-        _LOGGER.info(
-            "Project updated (project=%s fields=%s)",
-            project_id,
-            ",".join(changed_fields),
-        )
-    return {"project": _project_response(project), "scan": scan}
+    return project, changed_fields
 
 
-def _set_override(state: Any, params: JsonObject) -> JsonObject:
+async def _set_override(state: Any, params: JsonObject) -> JsonObject:
+    return await _PROJECT_WORKERS.run(_set_override_record, state, params)
+
+
+def _set_override_record(state: Any, params: JsonObject) -> JsonObject:
     """Override one field (``model`` / ``temperature`` / ``thinking_effort``) for an agent.
 
     Validates the field name and its value before the store write: ``model`` through
@@ -351,7 +370,11 @@ def _set_override(state: Any, params: JsonObject) -> JsonObject:
     return _override_result(state, project)
 
 
-def _clear_override(state: Any, params: JsonObject) -> JsonObject:
+async def _clear_override(state: Any, params: JsonObject) -> JsonObject:
+    return await _PROJECT_WORKERS.run(_clear_override_record, state, params)
+
+
+def _clear_override_record(state: Any, params: JsonObject) -> JsonObject:
     """Clear one overridden field for an agent and return the refreshed project.
 
     Clearing an absent field (or the agent's last field, which removes the entry) is
@@ -914,16 +937,21 @@ def _finding_response(finding: ScanFinding) -> JsonObject:
     }
 
 
+def _serialized(handler: MutationHandler) -> MutationHandler:
+    """Run Project edits one at a time, as they ran on the Event Loop before their workers."""
+    return serialized_mutation(handler, lock_attribute="_project_mutation_lock")
+
+
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the project RPC handlers."""
 
     return {
-        "project.add": _add_project,
+        "project.add": _serialized(_add_project),
         "project.list": _list_projects,
         "project.show": _show_project,
-        "project.set": _set_project,
-        "project.set_override": _set_override,
-        "project.clear_override": _clear_override,
+        "project.set": _serialized(_set_project),
+        "project.set_override": _serialized(_set_override),
+        "project.clear_override": _serialized(_clear_override),
         "project.rm": _remove_project,
         "project.detect": _detect_project,
     }

@@ -423,13 +423,33 @@ async def test_show_rescans_repo_changes(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("method", "params", "writes"),
+    [
+        ("project.show", {"project_id": "vbot"}, False),
+        ("project.add", {"display_name": "Other"}, True),
+        ("project.set", {"project_id": "vbot", "display_name": "Renamed"}, True),
+        (
+            "project.set_override",
+            {"project_id": "vbot", "agent_id": "builder", "field": "temperature", "value": 0.4},
+            True,
+        ),
+    ],
+)
+async def test_project_requests_scan_and_write_off_the_event_loop(
+    tmp_path: Path, method: str, params: JsonObject, writes: bool
+) -> None:
     state, _repo = await _vbot_state(tmp_path, "builder.md")
+    if method == "project.add":
+        params = {**params, "cwd": str(_make_repo(tmp_path, "other", "builder.md"))}
     resolver = state.runtime.agent_resolver
     scan_project_report = resolver.scan_project_report
+    projects = state.runtime.projects
+    write_project = projects._write_project
     entered = threading.Event()
     release = threading.Event()
     threads: list[int] = []
+    write_threads: list[int] = []
 
     def blocked_scan(*args: Any, **kwargs: Any) -> Any:
         threads.append(threading.get_ident())
@@ -437,8 +457,13 @@ async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
         release.wait(timeout=5)
         return scan_project_report(*args, **kwargs)
 
+    def recorded_write(project: Any) -> None:
+        write_threads.append(threading.get_ident())
+        write_project(project)
+
     resolver.scan_project_report = blocked_scan
-    showing = asyncio.create_task(rpc_result(state, "project.show", project_id="vbot"))
+    projects._write_project = recorded_write
+    requesting = asyncio.create_task(rpc_result(state, method, **params))
     try:
         assert await asyncio.to_thread(entered.wait, 5)
         loop = asyncio.get_running_loop()
@@ -446,13 +471,15 @@ async def test_show_scans_the_repo_off_the_event_loop(tmp_path: Path) -> None:
         for _ in range(5):
             await asyncio.sleep(0.01)
         assert loop.time() - ticked_at < 1
-        assert not showing.done()
+        assert not requesting.done()
     finally:
         release.set()
 
-    result = await asyncio.wait_for(showing, timeout=5)
+    result = await asyncio.wait_for(requesting, timeout=5)
     assert _team(result) == ["builder"]
     assert threads and threading.get_ident() not in threads
+    assert bool(write_threads) is writes
+    assert threading.get_ident() not in write_threads
 
 
 @pytest.mark.asyncio
