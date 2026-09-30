@@ -19,6 +19,7 @@ from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
+from tests.server.rpc_test_support_runtime import StubCalendarActions
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +153,7 @@ def _make_state(
     *,
     cron_jobs: list | None = None,
     bootstrap_jobs: list | None = None,
+    calendar_actions: list | None = None,
 ) -> SimpleNamespace:
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -168,6 +170,8 @@ def _make_state(
     chat_runs = ChatRunManager()
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
     bootstrap_service = SimpleNamespace(list_jobs=lambda: list(bootstrap_jobs or []))
+    actions = StubCalendarActions()
+    actions.actions.extend(calendar_actions or [])
     runtime = SimpleNamespace(
         projects=projects,
         agents=agents,
@@ -176,7 +180,7 @@ def _make_state(
         terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,
         bootstrap_service=bootstrap_service,
-        calendar_service=SimpleNamespace(actions=SimpleNamespace(list_actions=lambda: [])),
+        calendar_service=SimpleNamespace(actions=actions),
         skills=SimpleNamespace(list_all=lambda: []),
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
         # ``::connection`` suffix (never in these tests), but expose it so a plain

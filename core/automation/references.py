@@ -52,8 +52,10 @@ class AutomationReferences:
     """Answer which live automations select a Session, for its removers and movers.
 
     Terminal history never starts another Run and does not count: completed
-    Bootstrap jobs and completed or missed Cron jobs. A paused or failed Cron job
-    can be enabled again, so it counts.
+    Bootstrap jobs, completed or missed Cron jobs, and Calendar actions that can
+    no longer fire (``CalendarActions.can_fire``, for example after a one-time
+    event has passed). A paused or failed Cron job can be enabled again, so it
+    counts.
 
     ``lock`` serializes reference checks with the edits that create, move or
     remove references, across RPC handlers, Tools and commands. Hold it from the
@@ -94,6 +96,7 @@ class AutomationReferences:
             for action in self._calendar.actions.list_actions()
             if action.get("session") == address.session_id
             and parse_agent_address(action["target"]) == owner
+            and self._calendar.actions.can_fire(action["id"])
         ]
         if actions:
             titles = {event.id: event.title for event in self._calendar.list_events()}

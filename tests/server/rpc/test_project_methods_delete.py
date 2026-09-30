@@ -15,7 +15,7 @@ from core.runs import Run, RunAdmission
 from core.sessions import SessionAddress
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
-from tests.server.rpc_test_support import JsonObject, call, rpc_error, rpc_result
+from tests.server.rpc_test_support import call, rpc_error, rpc_result
 
 
 async def _vbot_state(
@@ -181,6 +181,13 @@ async def test_rm_is_refused_while_a_run_uses_the_project(
             "bootstrap:boot-1",
             id="bootstrap",
         ),
+        pytest.param(
+            {"calendar_actions": [{"id": "act-1", "event_id": "evt-1", "target": "builder@vbot"}]},
+            "vbot",
+            "project_in_use",
+            "calendar:act-1",
+            id="calendar",
+        ),
         pytest.param({}, "ghost", "project_not_found", "", id="unknown-project"),
     ],
 )
@@ -196,22 +203,34 @@ async def test_rm_refusals_keep_the_project(
     assert state.runtime.projects.exists("vbot")
 
 
+def _cron_job(**fields: Any) -> dict[str, list[Any]]:
+    return {"cron_jobs": [SimpleNamespace(id="job-1", agent_id="builder", **fields)]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "job",
+    "jobs",
     [
         # A bare job targets the identity Agent, not this Project's same-named
         # Team Agent.
-        pytest.param({"project_id": None}, id="bare-identity-job"),
-        pytest.param({"project_id": "vbot", "status": "missed"}, id="terminal-history"),
-        pytest.param({"project_id": "other"}, id="other-project"),
+        pytest.param(_cron_job(project_id=None), id="bare-identity-job"),
+        pytest.param(_cron_job(project_id="vbot", status="missed"), id="terminal-history"),
+        pytest.param(_cron_job(project_id="other"), id="other-project"),
+        # An action that can no longer fire, for example of a past one-time event.
+        pytest.param(
+            {
+                "calendar_actions": [
+                    {"id": "act-1", "event_id": "evt-1", "target": "builder@vbot", "spent": True}
+                ]
+            },
+            id="calendar-used-up",
+        ),
     ],
 )
-async def test_rm_ignores_cron_jobs_that_do_not_target_the_project(
-    tmp_path: Path, job: JsonObject
+async def test_rm_ignores_automations_that_never_start_a_run_for_the_project(
+    tmp_path: Path, jobs: dict[str, list[Any]]
 ) -> None:
-    cron_jobs = [SimpleNamespace(id="job-1", agent_id="builder", **job)]
-    state, _repo = await _vbot_state(tmp_path, "builder.md", cron_jobs=cron_jobs)
+    state, _repo = await _vbot_state(tmp_path, "builder.md", **jobs)
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 

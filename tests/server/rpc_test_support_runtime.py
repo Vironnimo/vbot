@@ -341,8 +341,20 @@ class StubChannelService:
 
 
 class StubCalendarActions:
-    def list_actions(self) -> list[Any]:
-        return []
+    """Calendar action double listing ``actions``.
+
+    An action a test marks ``"spent": True`` can no longer fire, like one whose
+    one-time event has passed.
+    """
+
+    def __init__(self) -> None:
+        self.actions: list[dict[str, Any]] = []
+
+    def list_actions(self) -> list[dict[str, Any]]:
+        return [dict(action) for action in self.actions]
+
+    def can_fire(self, action_id: str) -> bool:
+        return not any(action["id"] == action_id and action.get("spent") for action in self.actions)
 
     def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> int:
         return 0

@@ -543,10 +543,12 @@ def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
     """
     from core.projects.address import parse_agent_address
 
+    actions = state.runtime.calendar_service.actions
+    # An action that can no longer fire (its one-time event passed) is history.
     references = [
         f"calendar:{action['id']}"
-        for action in state.runtime.calendar_service.actions.list_actions()
-        if parse_agent_address(action["target"])[1] == project_id
+        for action in actions.list_actions()
+        if parse_agent_address(action["target"])[1] == project_id and actions.can_fire(action["id"])
     ]
     if references:
         raise RpcError(

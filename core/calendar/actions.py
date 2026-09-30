@@ -595,6 +595,48 @@ class CalendarActions:
             if a["event_id"] in live and (event_id is None or a["event_id"] == event_id)
         ]
 
+    def can_fire(self, action_id: str, *, now: datetime | None = None) -> bool:
+        """Whether the action can still start a Run.
+
+        False once every occurrence of its event has been used (fired, failed or
+        missed) or has expired unused, for example after a one-time event has
+        passed; such an action is history, like a completed Cron job. An
+        occurrence whose Run is being started counts, and so does one held by
+        an unreadable execution row, because a repair can release it. Moving the
+        event to a later time makes the action able to fire again.
+        """
+        now = now or datetime.now(UTC)
+        try:
+            self._load()
+            action = self._actions.get(action_id)
+            if action is None:
+                return False
+            event = self._calendar.get_event(action["event_id"])
+        except CalendarEventNotFoundError:
+            return False
+        except CalendarStorageError:
+            return True  # Unknown; never report a live action as history.
+        if any(self._executions[key]["action_id"] == action_id for key in self._workers):
+            return True
+        if self._calendar.occurs_from(event, now):
+            return True
+        # An occurrence that started earlier expires at most an hour after its
+        # end plus a positive offset, so older ones can no longer fire.
+        _, offset, _ = parse_action_when(action["when"])
+        lower = now - timedelta(minutes=max(offset, 0), hours=2)
+        created = _instant(action["created_at"])
+        for occurrence in self._calendar.event_occurrences(event, lower, now):
+            key, row = self._execution(action, event, occurrence)
+            expires = _instant(row["expires_at"])
+            if expires <= now or expires <= created:
+                continue
+            if key in self._invalid_executions:
+                return True
+            previous = self._executions.get(key)
+            if previous is None or not self._consumed(previous, row):
+                return True
+        return False
+
     def project(self, occurrences: list[EventOccurrence]) -> list[dict[str, Any]]:
         try:
             self._load()

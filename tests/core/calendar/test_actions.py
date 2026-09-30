@@ -503,6 +503,65 @@ async def test_occurrence_that_cannot_start_its_run_records_why(tmp_path, caplog
     assert record.exc_info is None
 
 
+def _at(delay: timedelta):
+    async def arrange(service, event, trigger, now):
+        return now + delay
+
+    return arrange
+
+
+async def _fired(service, event, trigger, now):
+    await service.actions.tick(now + timedelta(minutes=31))
+    await drain(service)
+    return now + timedelta(minutes=45)
+
+
+async def _starting(service, event, trigger, now):
+    admitting = asyncio.Event()
+
+    async def admission_in_progress(*args, **kwargs):
+        admitting.set()
+        await asyncio.Event().wait()
+
+    trigger.trigger_run.side_effect = admission_in_progress
+    await service.actions.tick(now + timedelta(minutes=31))
+    await admitting.wait()
+    return now + timedelta(hours=2)
+
+
+async def _yearly(service, event, trigger, now):
+    service.update_event(event.id, rrule={"freq": "yearly"})
+    return now + timedelta(days=40)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("recurring", "arrange", "can_fire"),
+    [
+        pytest.param(False, _at(timedelta()), True, id="upcoming"),
+        # Due and within its expiry, but not started yet.
+        pytest.param(False, _at(timedelta(minutes=45)), True, id="due"),
+        pytest.param(False, _starting, True, id="starting-its-run"),
+        pytest.param(False, _fired, False, id="fired"),
+        pytest.param(False, _at(timedelta(hours=2)), False, id="expired-unused"),
+        pytest.param(True, _fired, True, id="series-continues"),
+        pytest.param(True, _at(timedelta(days=3, hours=2)), False, id="series-ended"),
+        # The next occurrence lies far beyond any scan window.
+        pytest.param(False, _yearly, True, id="next-occurrence-next-year"),
+    ],
+)
+async def test_an_action_can_fire_until_its_occurrences_are_used_up(
+    tmp_path, recurring, arrange, can_fire
+):
+    service, event, trigger, now = setup(tmp_path, recurring=recurring)
+    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+
+    at = await arrange(service, event, trigger, now)
+
+    assert service.actions.can_fire(action["id"], now=at) is can_fire
+    await service.actions.aclose()
+
+
 @pytest.mark.asyncio
 async def test_cancel_before_worker_starts_releases_capacity(tmp_path):
     service, event, trigger, now = setup(tmp_path)

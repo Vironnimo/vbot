@@ -220,6 +220,58 @@ def expand_recurring_allday(
     return occurrences
 
 
+def recurring_timed_starts_from(
+    *,
+    start_local: datetime,
+    tz: ZoneInfo,
+    rrule_spec: dict[str, Any],
+    exdates: frozenset[str],
+    from_utc: datetime,
+) -> bool:
+    """Whether a recurring timed event has an occurrence starting at or after ``from_utc``.
+
+    Uses the start arithmetic and EXDATE matching of :func:`expand_recurring_timed`,
+    so a series ended by its count, its until date or removed occurrences has none.
+    """
+    rule = _build_rrule(start_local, rrule_spec)
+    # A day earlier covers a DST-gap start that shifts forward past ``from_utc``.
+    after = from_utc.astimezone(tz).replace(tzinfo=None) - timedelta(days=1)
+    for naive_start in rule.xafter(after, inc=True):
+        if naive_start.isoformat() in exdates or naive_start < start_local:
+            continue
+        start_utc, _ = resolve_local_span(naive_start, tz, timedelta())
+        if start_utc.astimezone(tz).replace(tzinfo=None).isoformat() in exdates:
+            continue
+        if start_utc >= from_utc:
+            return True
+    return False
+
+
+def recurring_allday_starts_from(
+    *,
+    start_date: date,
+    rrule_spec: dict[str, Any],
+    exdates: frozenset[str],
+    from_utc: datetime,
+    system_tz: ZoneInfo,
+) -> bool:
+    """Whether a recurring all-day event has an occurrence starting at or after ``from_utc``.
+
+    An all-day occurrence starts at midnight in the system time zone, as in
+    :func:`expand_recurring_allday`.
+    """
+    rule = _build_rrule(datetime.combine(start_date, time.min), rrule_spec)
+    after = datetime.combine(from_utc.astimezone(system_tz).date() - timedelta(days=1), time.min)
+    for naive_start in rule.xafter(after, inc=True):
+        occurrence_date = naive_start.date()
+        if occurrence_date.isoformat() in exdates:
+            continue
+        start_utc = datetime.combine(occurrence_date, time.min, tzinfo=system_tz).astimezone(UTC)
+        if start_utc >= from_utc:
+            return True
+    return False
+
+
 def _build_rrule(dtstart: datetime, spec: dict[str, Any]) -> rrule:
     kwargs: dict[str, Any] = {"dtstart": dtstart, "interval": spec["interval"]}
     if spec.get("count") is not None:

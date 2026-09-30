@@ -24,7 +24,15 @@ class _Automations:
         self.bootstrap = SimpleNamespace(list_jobs=lambda: list(self.bootstrap_jobs))
         self.cron = SimpleNamespace(list_jobs=lambda: list(self.cron_jobs))
         self.calendar = SimpleNamespace(
-            actions=SimpleNamespace(list_actions=lambda: list(self.actions)),
+            actions=SimpleNamespace(
+                list_actions=lambda: list(self.actions),
+                # A test marks an action whose occurrences are used up "spent".
+                can_fire=lambda action_id: (
+                    not any(
+                        action["id"] == action_id and action.get("spent") for action in self.actions
+                    )
+                ),
+            ),
             list_events=lambda: [SimpleNamespace(id="evt-1", title="Weekly review")],
         )
 
@@ -112,6 +120,8 @@ def test_session_references_name_each_live_automation_in_the_session(
         pytest.param(_calendar(target="builder@vbot"), id="calendar-other-scope"),
         # A fresh Session per start selects none.
         pytest.param(_calendar(session=None), id="calendar-fresh-session"),
+        # An action that can no longer fire, for example of a past one-time event.
+        pytest.param(_calendar(spent=True), id="calendar-used-up"),
     ],
 )
 def test_session_references_ignore_automations_that_cannot_start_in_the_session(

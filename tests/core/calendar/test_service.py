@@ -284,6 +284,63 @@ class TestOccurrencesInWindow:
         occurrences = service.occurrences_in_window(window_start, window_end)
         assert len(occurrences) == 3
 
+    @pytest.mark.parametrize(
+        ("fields", "instant", "occurs"),
+        [
+            # Berlin midnight on 2026-09-14 is 22:00 UTC the day before.
+            pytest.param({"start": "2026-09-14"}, "2026-09-13T21:59", True, id="all-day-ahead"),
+            pytest.param({"start": "2026-09-14"}, "2026-09-13T22:01", False, id="all-day-started"),
+            pytest.param(
+                {"start": "2026-09-14", "rrule": {"freq": "daily", "count": 3}},
+                "2026-09-16T12:00",
+                False,
+                id="all-day-series-ended",
+            ),
+            pytest.param(
+                {
+                    "start": "2026-09-14",
+                    "rrule": {"freq": "daily", "count": 3},
+                    "exdates": ["2026-09-16"],
+                },
+                "2026-09-15T12:00",
+                False,
+                id="all-day-rest-removed",
+            ),
+            pytest.param(
+                {
+                    "start": "2026-09-07T09:00:00",
+                    "rrule": {"freq": "weekly", "until": "2026-09-21"},
+                },
+                "2026-09-21T06:59",
+                True,
+                id="timed-last-occurrence-ahead",
+            ),
+            pytest.param(
+                {
+                    "start": "2026-09-07T09:00:00",
+                    "rrule": {"freq": "weekly", "until": "2026-09-21"},
+                    "exdates": ["2026-09-21T09:00:00"],
+                },
+                "2026-09-15T00:00",
+                False,
+                id="timed-rest-removed",
+            ),
+            pytest.param(
+                {"start": "2026-09-07T09:00:00", "rrule": {"freq": "monthly"}},
+                "2031-01-01T00:00",
+                True,
+                id="timed-series-without-end",
+            ),
+        ],
+    )
+    def test_occurs_from_follows_expansion(
+        self, service: CalendarService, fields: dict[str, Any], instant: str, occurs: bool
+    ) -> None:
+        event = service.create_event(title="Event", **fields)
+
+        at = datetime.fromisoformat(instant).replace(tzinfo=UTC)
+        assert service.occurs_from(event, at) is occurs
+
     def test_rejects_inverted_window(self, service: CalendarService) -> None:
         with pytest.raises(CalendarValidationError, match="after"):
             service.occurrences_in_window(

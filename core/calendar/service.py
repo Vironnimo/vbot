@@ -64,6 +64,8 @@ from core.calendar.recurrence import (
     expand_recurring_timed,
     normalize_rrule,
     parse_date_string,
+    recurring_allday_starts_from,
+    recurring_timed_starts_from,
     resolve_local_span,
 )
 from core.calendar.when import looks_like_date, parse_when
@@ -338,6 +340,37 @@ class CalendarService:
         """Expand one known event for action scheduling using canonical recurrence rules."""
         return self._event_occurrences(
             event, window_start, window_end, self._timezone, MAX_OCCURRENCES_PER_EVENT
+        )
+
+    def occurs_from(self, event: CalendarEvent, instant: datetime) -> bool:
+        """Whether ``event`` has an occurrence starting at or after ``instant``.
+
+        Follows occurrence expansion: all-day occurrences start at midnight in
+        the system time zone, and a series ends with its count, its until date
+        and its removed occurrences.
+        """
+        instant = _as_utc(instant)
+        if event.all_day:
+            start_date = parse_date_string(event.start_date, field_name="start_date")
+            if event.rrule is None:
+                start = datetime.combine(start_date, time.min, tzinfo=self._timezone)
+                return start.astimezone(UTC) >= instant
+            return recurring_allday_starts_from(
+                start_date=start_date,
+                rrule_spec=event.rrule,
+                exdates=frozenset(event.exdates),
+                from_utc=instant,
+                system_tz=self._timezone,
+            )
+        if event.rrule is None:
+            return self.event_span(event)[0] >= instant
+        assert event.start_local is not None and event.tz_name is not None
+        return recurring_timed_starts_from(
+            start_local=datetime.fromisoformat(event.start_local),
+            tz=_resolve_zone(event.tz_name),
+            rrule_spec=event.rrule,
+            exdates=frozenset(event.exdates),
+            from_utc=instant,
         )
 
     def event_span(self, event: CalendarEvent) -> tuple[datetime, datetime]:
