@@ -41,9 +41,11 @@
     output: () => t('chat.toolDetailLabel.output'),
     page: () => t('chat.toolDetailLabel.page'),
     query: () => t('chat.toolDetailLabel.query'),
+    response: () => t('chat.toolDetailLabel.response'),
     results: () => t('chat.toolDetailLabel.results'),
     screen: () => t('chat.toolDetailLabel.screen'),
     scrollback: () => t('chat.toolDetailLabel.scrollback'),
+    task: () => t('chat.toolDetailLabel.task'),
   };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));

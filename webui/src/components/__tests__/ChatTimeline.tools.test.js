@@ -505,6 +505,8 @@ describe('ChatTimeline Tools', () => {
           { type: 'text', label: 'input', text: 'y <enter>' },
           { type: 'text', label: 'scrollback', text: 'line-0' },
           { type: 'text', label: 'screen', text: 'ready> ' },
+          { type: 'text', label: 'task', text: 'Check links' },
+          { type: 'text', label: 'response', text: 'All links work.' },
         ],
       });
       timeline.render(
@@ -527,6 +529,10 @@ describe('ChatTimeline Tools', () => {
       expect(detailText('chat.toolDetailLabel.input')).toBe('y <enter>');
       expect(detailText('chat.toolDetailLabel.scrollback')).toBe('line-0');
       expect(detailText('chat.toolDetailLabel.screen')).toBe('ready> ');
+      expect(detailText('chat.toolDetailLabel.task')).toBe('Check links');
+      expect(detailText('chat.toolDetailLabel.response')).toBe(
+        'All links work.',
+      );
       expect(document.querySelector('.tool-raw-call')).not.toBeNull();
     });
 

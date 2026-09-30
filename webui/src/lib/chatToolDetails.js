@@ -405,9 +405,11 @@ const TEXT_LABELS = new Set([
   'output',
   'page',
   'query',
+  'response',
   'results',
   'screen',
   'scrollback',
+  'task',
 ]);
 
 // The user-facing detail blocks of a Tool whose display declares them

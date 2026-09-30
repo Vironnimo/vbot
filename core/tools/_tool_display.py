@@ -29,7 +29,18 @@ TOOL_DISPLAY_FACT_UNITS = frozenset({"edits", "failures", "files", "matches", "r
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
 TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
 TOOL_DISPLAY_TEXT_LABELS = frozenset(
-    {"command", "input", "output", "page", "query", "results", "screen", "scrollback"}
+    {
+        "command",
+        "input",
+        "output",
+        "page",
+        "query",
+        "response",
+        "results",
+        "screen",
+        "scrollback",
+        "task",
+    }
 )
 TOOL_DISPLAY_TEXT_SOURCES = frozenset({"arguments", "result"})
 MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384

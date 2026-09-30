@@ -432,3 +432,50 @@ async def test_display_labels_what_the_call_meant(
     display = harness.registry.get(SUBAGENT_TOOL_NAME).display.to_payload(arguments)
 
     assert [(part.get("kind", "text"), part["value"]) for part in display["primary"]] == expected
+
+
+async def test_details_show_the_task_the_response_and_how_the_run_ended(
+    harness: SubAgentHarness,
+) -> None:
+    display = harness.registry.get(SUBAGENT_TOOL_NAME).display
+
+    def details(arguments: JsonObject, data: JsonObject) -> list[JsonObject]:
+        result: JsonObject = {"ok": True, "error": None, "data": data, "artifacts": []}
+        shown: list[JsonObject] = display.to_payload(arguments, result=result)["details"]
+        return shown
+
+    response: JsonObject = {
+        "type": "text",
+        "label": "response",
+        "source": {"from": "result", "path": ["data", "result"]},
+    }
+    # A spawn row reads the response once the completed result replaces the descriptor.
+    assert details(
+        {"task": "Check links", "agent": "worker"},
+        {"id": "sub_a", "status": "queued", "delivery": "automatic"},
+    ) == [{"type": "text", "label": "task", "text": "Check links"}, response]
+    assert details(
+        {"action": "status", "id": "sub_a"}, {"id": "sub_a", "status": "cancelled", "result": None}
+    ) == [response, {"type": "notice", "level": "info", "text": "The sub-agent run was cancelled."}]
+    assert details(
+        {"action": "status"},
+        {
+            "subagents": [
+                {
+                    "id": "sub_a",
+                    "agent_id": "worker",
+                    "status": "running",
+                    "tool_name": "bash",
+                    "started_at": "2026-09-30T12:00:00Z",
+                    "usage": {"input_tokens": 10},
+                }
+            ]
+        },
+    ) == [
+        {
+            "type": "results",
+            "items": [
+                {"title": "worker", "meta": "running · bash", "time": "2026-09-30T12:00:00Z"}
+            ],
+        }
+    ]
