@@ -15,7 +15,12 @@ from core.config_validation import (
     JsonDiagnostic,
 )
 from core.json_documents import JsonDocumentWriteError, write_json_document
-from core.projects import format_agent_address
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+    format_agent_address,
+)
 from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
@@ -911,8 +916,7 @@ class CronService:
                             )
                     return False
                 except Exception as error:
-                    if run is None and isinstance(error, SessionNotFoundError):
-                        await self._record_missing_session(job.id)
+                    if run is None and await self._record_unavailable_target(job.id, error):
                         return False
                     if run is None:
                         # Pre-admission failure - the Run never started. A full Queue
@@ -967,29 +971,43 @@ class CronService:
         self._jobs[job_id] = job
         return True
 
-    async def _record_missing_session(self, job_id: str) -> None:
-        """Count a fire whose pinned Session no longer exists toward the stop rule.
+    async def _record_unavailable_target(self, job_id: str, error: Exception) -> bool:
+        """Record a fire that could not start because its target is unavailable.
 
-        No Run started, so no finite run is consumed. The condition lasts until
-        the job is edited (for example, an Agent Takeover moved the Session to
-        another Agent), so unlike a capacity or shutdown rejection it stops a
-        recurring job like failed Runs do; a once job keeps its bounded fire
-        retries. A single miss, such as one during an Agent rename, is cleared by
-        the next success.
+        Returns ``False`` for any other error, which the caller records as a
+        trigger failure. No Run started, so no finite run is consumed. A pinned
+        Session or a target Agent or Project that no longer exists lasts until
+        the job is edited (for example, an Agent Takeover moved the Session, or
+        the Agent was removed), so unlike a capacity or shutdown rejection it
+        counts toward the stop rule like a failed Run; a once job keeps its
+        bounded fire retries. A single miss, such as one during an Agent rename,
+        is cleared by the next success. A target that exists but cannot run (for
+        example, no usable Model) can recover without an edit, so it is recorded
+        without counting.
         """
+        if not isinstance(error, (SessionNotFoundError, AgentResolutionError)):
+            return False
         job = self._jobs.get(job_id)
         if job is None:
-            return
+            return True
+        if isinstance(error, SessionNotFoundError):
+            reason = _missing_session_text(job)
+            counts = True
+        else:
+            reason = str(_target_validation_error(job, error))
+            counts = isinstance(
+                error, (ResolutionAgentNotFoundError, ResolutionProjectNotFoundError)
+            )
         job.last_outcome = "failed"
-        job.last_error = _truncate_error(_missing_session_text(job))
+        job.last_error = _truncate_error(reason)
         _LOGGER.warning(
-            "Cron job fire failed without its Session (job=%s session=%s)",
-            job_id,
-            job.session_id,
+            "Cron job could not start its Run (job=%s reason=%s)", job_id, job.last_error
         )
-        _count_consecutive_failure(job)
+        if counts:
+            _count_consecutive_failure(job)
         self._jobs[job_id] = job
         await self._save_jobs_after_fire(job_id)
+        return True
 
     async def _record_trigger_failure(self, job_id: str, error: BaseException) -> None:
         """Record a pre-admission trigger failure without execution accounting.
