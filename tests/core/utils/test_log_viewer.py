@@ -15,7 +15,6 @@ from watchfiles import Change
 
 from core.utils import log_viewer as log_viewer_module
 from core.utils.log_viewer import (
-    MAX_READ_HANDOFFS,
     LogViewer,
     _build_snapshot_event,
     _cancel_watcher_task,
@@ -205,35 +204,6 @@ async def test_read_file_returns_structured_entries(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_read_file_caps_unconsumed_handoff_snapshots(tmp_path: Path) -> None:
-    logs_dir = tmp_path / "logs"
-    logs_dir.mkdir()
-    viewer = LogViewer(tmp_path)
-
-    first_cursor = ""
-    for index in range(MAX_READ_HANDOFFS + 3):
-        file_name = f"2026-05-{index + 1:02d}"
-        (logs_dir / file_name).write_text(
-            f"2026-05-{index + 1:02d} 09:00:00 [INFO] vbot.core - Ready\n",
-            encoding="utf-8",
-        )
-        result = await viewer.read_file(file_name)
-        if index == 0:
-            first_cursor = str(result["cursor"])
-
-    assert len(viewer._read_handoffs) == MAX_READ_HANDOFFS
-
-    async def consume_pruned_cursor() -> None:
-        async with aclosing(
-            viewer.subscribe("2026-05-01", cursor=first_cursor),
-        ) as stream:
-            await stream.__anext__()
-
-    with pytest.raises(ValueError):
-        await consume_pruned_cursor()
-
-
-@pytest.mark.asyncio
 async def test_read_file_parses_the_log_off_the_event_loop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -268,50 +238,6 @@ async def test_read_file_parses_the_log_off_the_event_loop(
     result = await reading
 
     assert [entry["message"] for entry in result["entries"]] == ["Ready"]
-
-
-@pytest.mark.asyncio
-async def test_subscribe_replays_entries_appended_after_read_handoff(tmp_path: Path) -> None:
-    logs_dir = tmp_path / "logs"
-    logs_dir.mkdir()
-    log_file = logs_dir / "2026-05-11"
-    log_file.write_text(
-        "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
-        encoding="utf-8",
-    )
-
-    viewer = LogViewer(tmp_path)
-    initial = await viewer.read_file("2026-05-11")
-    cursor = initial["cursor"]
-
-    log_file.write_text(
-        "\n".join(
-            [
-                "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready",
-                "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
-                "",
-            ]
-        ),
-        encoding="utf-8",
-    )
-
-    async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
-        event = await asyncio.wait_for(stream.__anext__(), timeout=1)
-
-    assert event == {
-        "type": "append",
-        "file": "2026-05-11",
-        "entries": [
-            {
-                "timestamp": "2026-05-11 09:00:01",
-                "level": "error",
-                "logger_name": "vbot.server.app",
-                "message": "Failed",
-                "continuation": "",
-                "raw": "2026-05-11 09:00:01 [ERROR] vbot.server.app - Failed",
-            }
-        ],
-    }
 
 
 @pytest.mark.asyncio
@@ -377,6 +303,125 @@ async def _until(condition: Callable[[], bool]) -> None:
 
 async def _next_event(stream: AsyncGenerator[dict[str, Any], None]) -> dict[str, Any]:
     return await stream.__anext__()
+
+
+class _FakeWatch:
+    """Stands in for ``awatch``: yields the change batches a test puts, raises a put exception."""
+
+    def __init__(self) -> None:
+        self.changes: asyncio.Queue[set[tuple[Change, str]] | BaseException] = asyncio.Queue()
+
+    async def awatch(self, *_args: object, **_kwargs: object):
+        while True:
+            item = await self.changes.get()
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+
+def _line(second: int, message: str) -> str:
+    return f"2026-05-11 09:00:{second:02d} [INFO] vbot.core - {message}\n"
+
+
+def _messages(event: dict[str, Any]) -> list[str]:
+    return [entry["message"] for entry in event["entries"]]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_replays_what_each_read_missed_from_its_own_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    log_file = logs_dir / "2026-05-11"
+    watch = _FakeWatch()
+    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
+    viewer = LogViewer(tmp_path)
+
+    log_file.write_text(_line(0, "Ready"), encoding="utf-8")
+    first_read = await viewer.read_file(log_file.name)
+    log_file.write_text(_line(0, "Ready") + _line(1, "Failed"), encoding="utf-8")
+    second_read = await viewer.read_file(log_file.name)
+    log_file.write_text(_line(0, "Ready") + _line(1, "Failed") + _line(2, "Retried"), "utf-8")
+
+    async def replay(cursor: str) -> dict[str, Any]:
+        async with aclosing(viewer.subscribe(log_file.name, cursor=cursor)) as stream:
+            return await asyncio.wait_for(stream.__anext__(), timeout=1)
+
+    # A subscriber without a cursor starts at the file's end and takes nothing from the
+    # readers; each read's cursor replays its own gap, in any order and more than once.
+    live = viewer.subscribe(log_file.name)
+    live_event = asyncio.create_task(_next_event(live))
+    try:
+        await _until(lambda: viewer.subscriber_count(log_file.name) == 1)
+        second_replay = await replay(second_read["cursor"])
+        first_replay = await replay(first_read["cursor"])
+        first_again = await replay(first_read["cursor"])
+
+        log_file.write_text(
+            _line(0, "Ready") + _line(1, "Failed") + _line(2, "Retried") + _line(3, "Done"),
+            encoding="utf-8",
+        )
+        watch.changes.put_nowait({(Change.modified, str(log_file))})
+        first_live_event = await asyncio.wait_for(live_event, timeout=1)
+    finally:
+        live_event.cancel()
+        await asyncio.gather(live_event, return_exceptions=True)
+        await live.aclose()
+        await viewer.aclose()
+
+    assert second_replay["type"] == "append"
+    assert _messages(second_replay) == ["Retried"]
+    assert first_replay == first_again
+    assert first_replay["type"] == "append"
+    assert _messages(first_replay) == ["Failed", "Retried"]
+    assert first_live_event["type"] == "append"
+    assert _messages(first_live_event) == ["Done"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("read_name", "read_text", "current_text"),
+    [
+        pytest.param(
+            "2026-05-11", _line(0, "Ready") + _line(1, "Failed"), _line(2, "Reset"), id="truncated"
+        ),
+        pytest.param(
+            "2026-05-11",
+            _line(0, "Ready"),
+            _line(0, "Reset") + _line(1, "Failed"),
+            id="rewritten-in-place",
+        ),
+        pytest.param(
+            "2026-05-10", _line(0, "Ready"), _line(0, "Ready") + _line(1, "Failed"), id="other-file"
+        ),
+    ],
+)
+async def test_subscribe_resets_when_the_file_no_longer_starts_with_the_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    read_name: str,
+    read_text: str,
+    current_text: str,
+) -> None:
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    monkeypatch.setattr(log_viewer_module, "awatch", _FakeWatch().awatch)
+    viewer = LogViewer(tmp_path)
+    (logs_dir / read_name).write_text(read_text, encoding="utf-8")
+    cursor = (await viewer.read_file(read_name))["cursor"]
+    (logs_dir / "2026-05-11").write_text(current_text, encoding="utf-8")
+
+    async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
+        event = await asyncio.wait_for(stream.__anext__(), timeout=1)
+    await viewer.aclose()
+
+    assert event == {
+        "type": "reset",
+        "file": "2026-05-11",
+        "entries": parse_log_entries(current_text),
+    }
 
 
 @pytest.mark.asyncio
@@ -511,7 +556,14 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
 
 
 @pytest.mark.asyncio
-async def test_subscribe_rejects_invalid_cursor(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "cursor",
+    [
+        pytest.param("9f86d081884c7d659a2feaa0c55ad015", id="not-a-cursor"),
+        pytest.param("v2.0." + "0" * 64, id="unknown-version"),
+    ],
+)
+async def test_subscribe_rejects_a_malformed_cursor(tmp_path: Path, cursor: str) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "2026-05-11").write_text(
@@ -522,8 +574,9 @@ async def test_subscribe_rejects_invalid_cursor(tmp_path: Path) -> None:
     viewer = LogViewer(tmp_path)
 
     with pytest.raises(ValueError):
-        async with aclosing(viewer.subscribe("2026-05-11", cursor="missing")) as stream:
+        async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
             await stream.__anext__()
+    assert viewer.watcher_count == 0
 
 
 @pytest.mark.asyncio
