@@ -35,7 +35,6 @@ from server.events import (
     RESOURCE_KIND_SESSIONS,
 )
 from server.rpc.agent_refs import _agent_reference_lock
-from server.rpc.channel_methods import _channel_config_by_id
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -678,7 +677,7 @@ async def _link_session_to_channel(state: Any, params: JsonObject) -> JsonObject
 
     try:
         channel_service = state.runtime.channel_service
-        channel_config = _channel_config_by_id(channel_service, channel_id)
+        channel_config = await channel_service.get_channel(channel_id)
         if channel_config.agent_id != agent_id:
             raise ChannelConfigError(
                 f"Channel {channel_id} belongs to agent {channel_config.agent_id}, not {agent_id}"

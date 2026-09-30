@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -248,8 +249,9 @@ async def test_channel_ids_with_path_components_never_reach_the_filesystem(
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"
 
 
-def test_channel_storage_load_all_skips_invalid_configs(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+@pytest.mark.asyncio
+async def test_an_invalid_config_is_skipped_by_listings_and_refused_when_read_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     storage = ChannelStorage(tmp_path)
     storage.save(make_config("tg-valid"))
@@ -261,13 +263,37 @@ def test_channel_storage_load_all_skips_invalid_configs(
         ),
         encoding="utf-8",
     )
+    service = make_service(tmp_path)
+    loop_thread = threading.get_ident()
+    off_loop_reads: list[bool] = []
 
-    with caplog.at_level(logging.WARNING):
-        loaded = storage.load_all()
+    def recorded(read: Any) -> Any:
+        def call(*args: Any) -> Any:
+            off_loop_reads.append(threading.get_ident() != loop_thread)
+            return read(*args)
 
-    # One corrupt config is skipped (logged), not raised, so the rest stay loadable.
-    assert [config.id for config in loaded] == ["tg-valid"]
+        return call
+
+    for name in ("get", "load_all"):
+        monkeypatch.setattr(service._storage, name, recorded(getattr(service._storage, name)))
+    try:
+        with caplog.at_level(logging.WARNING):
+            listed = await service.list_channels_async()
+        valid = await service.get_channel("tg-valid")
+        with pytest.raises(ChannelConfigError, match="enabled"):
+            await service.get_channel("tg-broken")
+        with pytest.raises(ChannelNotFoundError):
+            await service.get_channel("tg-missing")
+    finally:
+        service.close()
+
+    # A listing skips one corrupt config (logged), so the rest stay loadable;
+    # reading that Channel alone reports why it cannot load.
+    assert [config.id for config in listed] == ["tg-valid"]
     assert any("tg-broken" in record.getMessage() for record in caplog.records)
+    assert valid.to_dict() == make_config("tg-valid").to_dict()
+    # Every read runs on the channels.db worker pool, never on the Event Loop.
+    assert off_loop_reads == [True, True, True, True]
 
 
 def test_managed_channel_token_env_var_is_safe_and_collision_free() -> None:
