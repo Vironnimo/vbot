@@ -752,12 +752,31 @@ async def test_restart_recovers_terminal_run_from_session(tmp_path):
     row["status"] = "running"
     service.actions._save()
     sessions = session_manager()
-    sessions.get.return_value.find_run_summary.return_value = SimpleNamespace(status="completed")
+    # The Run's outcome is read from its Session on the Session pool, never on
+    # the Event Loop.
+    reading_threads = []
+
+    def read(result):
+        def reading(*_args, **_kwargs):
+            reading_threads.append(threading.current_thread())
+            return result
+
+        return reading
+
+    async def on_the_pool(function, *args):
+        return await asyncio.to_thread(function, *args)
+
+    session = Mock(find_run_summary=Mock(side_effect=read(SimpleNamespace(status="completed"))))
+    sessions.run_async.side_effect = on_the_pool
+    sessions.exists.side_effect = read(True)
+    sessions.get.side_effect = read(session)
     reloaded = CalendarService(tmp_path, tz="Europe/Berlin")
     reloaded.actions.configure(trigger, Mock(), sessions)
     await reloaded.actions.tick(now)
     assert reloaded.actions.project(window(reloaded, now))[0]["status"] == "completed"
-    sessions.get.return_value.find_run_summary.assert_called_once_with(run_id="run-1")
+    session.find_run_summary.assert_called_once_with(run_id="run-1")
+    assert len(reading_threads) == 3
+    assert threading.current_thread() not in reading_threads
     assert trigger.trigger_run.await_count == 1
 
 

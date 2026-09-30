@@ -1026,22 +1026,32 @@ class CalendarActions:
         )
 
     async def _recover(self) -> None:
-        """Settle rows a previous process left claimed or running (once per load)."""
+        """Settle rows a previous process left claimed or running (once per load).
+
+        A row whose Run ended takes that Run's terminal status, read from its
+        Session on the Session pool, off the Event Loop.
+        """
         if not self._recovery_pending or self._sessions is None:
             return
-        for key in self._recovery_pending:
-            row = self._executions[key]
-            if row.get("session") and row.get("run_id"):
+        pending = tuple(self._recovery_pending)
+        runs: dict[str, tuple[SessionAddress, str]] = {}
+        for key in pending:
+            row = self._executions.get(key)
+            if row is not None and row.get("session") and row.get("run_id"):
                 agent, project = parse_agent_address(row["target"])
                 address = SessionAddress(
                     project_id=project, agent_id=agent, session_id=row["session"]
                 )
-                if self._sessions.exists(address):
-                    summary = self._sessions.get(address).find_run_summary(run_id=row["run_id"])
-                    if summary is not None and summary.status in _TERMINAL:
-                        row["status"] = summary.status
+                runs[key] = (address, row["run_id"])
+        if runs:
+            statuses = await self._sessions.run_async(_ended_run_statuses, self._sessions, runs)
+            for key, status in statuses.items():
+                row = self._executions.get(key)
+                # Only a row still waiting for its outcome takes it.
+                if row is not None and row["status"] == "interrupted":
+                    row["status"] = status
         await self._save_async()
-        self._recovery_pending.clear()
+        self._recovery_pending.difference_update(pending)
 
     async def _execute(
         self,
@@ -1138,6 +1148,23 @@ class CalendarActions:
             self._worker_events.pop(key, None)
             await self._save_async()
             self._calendar._notify_action_changed()
+
+
+def _ended_run_statuses(
+    sessions: ChatSessionManager, runs: dict[str, tuple[SessionAddress, str]]
+) -> dict[str, str]:
+    """Map each key of ``runs`` whose Run ended to that Run's terminal status. Blocking.
+
+    ``runs`` maps a key to the Session and id of a Run; a Session that no longer
+    exists and a Run without a terminal summary leave their key out.
+    """
+    statuses: dict[str, str] = {}
+    for key, (address, run_id) in runs.items():
+        if sessions.exists(address):
+            summary = sessions.get(address).find_run_summary(run_id=run_id)
+            if summary is not None and summary.status in _TERMINAL:
+                statuses[key] = summary.status
+    return statuses
 
 
 def _admission_failure(action: dict[str, Any], error: Exception) -> tuple[str, bool]:
