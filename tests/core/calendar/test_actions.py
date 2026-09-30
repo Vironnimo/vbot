@@ -341,9 +341,28 @@ async def test_expired_and_excluded_occurrences_never_fire(tmp_path):
 @pytest.mark.asyncio
 async def test_selected_session_and_project_are_preserved(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    await service.actions.add(
-        event.id, when="start - 1h", prompt="prepare", target="builder@project", session="chosen"
+    # An edit's target and Session reads are blocking; they run on the Session
+    # pool, never on the Event Loop.
+    reading_threads = []
+    sessions, resolver = service.actions._sessions, service.actions._resolver
+
+    async def on_the_pool(function, *args):
+        return await asyncio.to_thread(function, *args)
+
+    def read(*_args):
+        reading_threads.append(threading.current_thread())
+        return True
+
+    sessions.run_async.side_effect = on_the_pool
+    resolver.resolve_agent.side_effect = read
+    sessions.exists.side_effect = read
+    added = await service.actions.add(
+        event.id, when="start - 1h", prompt="draft", target="builder@project", session="chosen"
     )
+    await service.actions.update(added["id"], prompt="prepare")
+    # Each edit resolved the target and checked the Session.
+    assert len(reading_threads) == 4
+    assert threading.current_thread() not in reading_threads
     await service.actions.tick(now)
     await drain(service)
     call = trigger.trigger_run.call_args
