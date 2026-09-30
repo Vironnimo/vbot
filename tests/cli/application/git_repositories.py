@@ -27,6 +27,13 @@ def git(directory: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def _disable_background_maintenance(repository: Path) -> None:
+    # Automatic maintenance after commit, push or fetch runs detached and creates and
+    # removes ``objects/maintenance.lock`` while the templates are being copied.
+    git(repository, "config", "maintenance.auto", "false")
+    git(repository, "config", "gc.auto", "0")
+
+
 @dataclass(frozen=True)
 class Templates:
     root: Path
@@ -47,6 +54,8 @@ def build_templates(root: Path) -> Templates:
     remote, checkout, publisher = root / "remote.git", root / "checkout", root / "publisher"
     git(root, "init", "--quiet", "--bare", "--initial-branch=main", "--template=", remote.name)
     git(root, "init", "--quiet", "--initial-branch=main", "--template=", checkout.name)
+    _disable_background_maintenance(remote)
+    _disable_background_maintenance(checkout)
     git(checkout, "config", "user.name", "Source Test")
     git(checkout, "config", "user.email", "source@example.invalid")
     for name, content in TEMPLATE_FILES.items():
@@ -59,6 +68,7 @@ def build_templates(root: Path) -> Templates:
     git(checkout, "remote", "add", "origin", f"../{remote.name}")
     git(checkout, "push", "--quiet", "-u", "origin", "main")
     git(root, "clone", "--quiet", "--template=", remote.name, publisher.name)
+    _disable_background_maintenance(publisher)
     git(publisher, "remote", "set-url", "origin", f"../{remote.name}")
     git(publisher, "config", "user.name", "Publisher")
     git(publisher, "config", "user.email", "publisher@example.invalid")
