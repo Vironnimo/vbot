@@ -214,7 +214,7 @@ async def _calendar_add_action(state: Any, params: JsonObject) -> JsonObject:
     )
     async with _agent_reference_lock(state):
         try:
-            result = _calendar_service(state).actions.add(
+            result = await _calendar_service(state).actions.add(
                 _required_string(params, "id"),
                 when=_required_string(params, "when"),
                 prompt=_required_string(params, "prompt"),
@@ -233,7 +233,7 @@ async def _calendar_update_action(state: Any, params: JsonObject) -> JsonObject:
     )
     async with _agent_reference_lock(state):
         try:
-            result = _calendar_service(state).actions.update(
+            result = await _calendar_service(state).actions.update(
                 _required_string(params, "id"),
                 actor="rpc",
                 **{key: value for key, value in params.items() if key != "id"},
@@ -243,11 +243,11 @@ async def _calendar_update_action(state: Any, params: JsonObject) -> JsonObject:
     return {"action": result}
 
 
-def _calendar_delete_action(state: Any, params: JsonObject) -> JsonObject:
+async def _calendar_delete_action(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, _DELETE_FIELDS, "calendar.delete_action")
     action_id = _required_string(params, "id")
     try:
-        _calendar_service(state).actions.delete(action_id, actor="rpc")
+        await _calendar_service(state).actions.delete(action_id, actor="rpc")
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return {"id": action_id, "deleted": True}

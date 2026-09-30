@@ -52,7 +52,7 @@ async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
     )
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
     event = runtime.calendar_service.create_event(title="Review", start="2026-10-01T09:00:00")
-    runtime.calendar_service.actions.add(
+    await runtime.calendar_service.actions.add(
         event.id, when="start - 1h", prompt="Prepare", target="coder"
     )
     return coder.current_session_id

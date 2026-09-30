@@ -98,15 +98,14 @@ def test_relative_grammar_rejects_unsupported_values(value):
         parse_action_when(value)
 
 
-def test_edit_preserves_event_id_and_moves_actions(tmp_path):
+@pytest.mark.asyncio
+async def test_edit_preserves_event_id_and_moves_actions(tmp_path):
     service, event, _, now = setup(tmp_path)
-    before = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
-    after = service.actions.add(event.id, when="end + 30m", prompt="review", target="main")
+    before = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    after = await service.actions.add(event.id, when="end + 30m", prompt="review", target="main")
     initial = service.actions.project(window(service, now))
-    updated = asyncio.run(
-        service.update_event(
-            event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
-        )
+    updated = await service.update_event(
+        event.id, start=(now + timedelta(hours=3)).isoformat(), duration_minutes=120
     )
     assert updated.id == event.id
     rows = service.actions.project(window(service, now))
@@ -119,10 +118,11 @@ def test_edit_preserves_event_id_and_moves_actions(tmp_path):
     assert reloaded.actions.list_actions() == service.actions.list_actions()
 
 
-def test_deadlines_use_start_end_and_post_event_grace(tmp_path):
+@pytest.mark.asyncio
+async def test_deadlines_use_start_end_and_post_event_grace(tmp_path):
     service, event, _, now = setup(tmp_path)
     for when in ("start - 1h", "start", "end", "end + 30m"):
-        service.actions.add(event.id, when=when, prompt="test", target="main")
+        await service.actions.add(event.id, when=when, prompt="test", target="main")
     rows = service.actions.project(window(service, now))
     assert [datetime.fromisoformat(row["expires_at"]) - now for row in rows] == [
         timedelta(minutes=30),
@@ -136,7 +136,7 @@ def test_deadlines_use_start_end_and_post_event_grace(tmp_path):
 async def test_actions_waiting_for_a_worker_slot_fire_exactly_once(tmp_path):
     service, event, trigger, now = setup(tmp_path)
     for index in range(6):
-        service.actions.add(event.id, when="start - 1h", prompt=f"p{index}", target="main")
+        await service.actions.add(event.id, when="start - 1h", prompt=f"p{index}", target="main")
     for step in range(4):
         await service.actions.tick(now + timedelta(seconds=step))
         await drain(service)
@@ -161,7 +161,7 @@ async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
         return SimpleNamespace(id="run-1", session_id="new-session", wait=AsyncMock())
 
     trigger.trigger_run.side_effect = first_call_waits
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await waiting.wait()
     # An event change withdraws work that is still awaiting admission.
@@ -178,7 +178,7 @@ async def test_withdrawn_worker_is_redispatched_and_fires_once(tmp_path):
 @pytest.mark.asyncio
 async def test_finished_history_is_pruned_after_retention_without_refiring(tmp_path, monkeypatch):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     await service.actions.tick(now + timedelta(days=29))
@@ -202,11 +202,11 @@ async def test_finished_history_is_pruned_after_retention_without_refiring(tmp_p
 @pytest.mark.asyncio
 async def test_deleted_action_history_is_pruned(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
-    kept = service.actions.add(event.id, when="start - 45m", prompt="keep", target="main")
+    action = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    kept = await service.actions.add(event.id, when="start - 45m", prompt="keep", target="main")
     await service.actions.tick(now)
     await drain(service)
-    service.actions.delete(action["id"])
+    await service.actions.delete(action["id"])
     await service.actions.tick(now + timedelta(seconds=1))
     stored = json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"]
     assert [row["action_id"] for row in stored.values()] == [kept["id"]]
@@ -216,7 +216,7 @@ async def test_deleted_action_history_is_pruned(tmp_path):
 @pytest.mark.asyncio
 async def test_single_action_fires_once_and_rearms_only_after_event_moves(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     await service.actions.tick(now + timedelta(seconds=1))
@@ -249,7 +249,7 @@ async def test_single_action_fires_once_and_rearms_only_after_event_moves(tmp_pa
 @pytest.mark.asyncio
 async def test_timezone_change_does_not_rearm_unchanged_single_instant(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     initial = service.actions.project(window(service, now))[0]
@@ -260,7 +260,7 @@ async def test_timezone_change_does_not_rearm_unchanged_single_instant(tmp_path)
     assert projected["status"] == "completed"
     assert projected["scheduled_at"] == initial["scheduled_at"]
     # An explicit change of the action's due time does rearm it.
-    service.actions.update(action["id"], when="start - 45m")
+    await service.actions.update(action["id"], when="start - 45m")
     await service.actions.tick(now)
     await drain(service)
     assert trigger.trigger_run.await_count == 2
@@ -290,7 +290,7 @@ async def test_move_during_admitted_run_keeps_claim_until_completion(
     trigger.trigger_run.return_value = SimpleNamespace(
         id="run-1", session_id="new-session", wait=wait_for_finish
     )
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
     try:
         await service.actions.tick(now)
         # Reconciliation before the scheduled worker starts must retain its pending row.
@@ -326,7 +326,7 @@ async def test_expired_and_excluded_occurrences_never_fire(tmp_path):
     service, event, trigger, now = setup(
         tmp_path, start=datetime.now(UTC) - timedelta(hours=2), recurring=True
     )
-    service.actions.add(
+    await service.actions.add(
         event.id, when="start - 1h", prompt="prepare", target="main", now=now - timedelta(days=1)
     )
     occurrences = window(service, now)
@@ -341,7 +341,7 @@ async def test_expired_and_excluded_occurrences_never_fire(tmp_path):
 @pytest.mark.asyncio
 async def test_selected_session_and_project_are_preserved(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(
+    await service.actions.add(
         event.id, when="start - 1h", prompt="prepare", target="builder@project", session="chosen"
     )
     await service.actions.tick(now)
@@ -408,7 +408,7 @@ async def test_event_delete_withdraws_queued_action_and_its_definition(tmp_path)
             cancelled.set()
 
     trigger.trigger_run.side_effect = busy
-    service.actions.add(
+    await service.actions.add(
         event.id, when="start - 1h", prompt="prepare", target="main", session="busy"
     )
     await service.actions.tick(now)
@@ -422,10 +422,11 @@ async def test_event_delete_withdraws_queued_action_and_its_definition(tmp_path)
     assert not service.actions._workers
 
 
-def test_all_day_deadlines_respect_dst(tmp_path):
+@pytest.mark.asyncio
+async def test_all_day_deadlines_respect_dst(tmp_path):
     service = CalendarService(tmp_path, tz="Europe/Berlin")
     event = service.create_event(title="Day", start="2026-10-25")
-    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start", prompt="prepare", target="main")
     occurrences = service.occurrences_in_window(*service.parse_window("2026-10-25", "2026-10-25"))
     row = service.actions.project(occurrences)[0]
     assert datetime.fromisoformat(row["expires_at"]) - datetime.fromisoformat(
@@ -443,7 +444,7 @@ async def test_timeout_after_admission_is_failed_not_missed(tmp_path):
         status=RunStatus.FAILED,
         wait=AsyncMock(side_effect=TimeoutError),
     )
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     row = service.actions.project(window(service, now))[0]
@@ -495,7 +496,7 @@ def _target_cannot_run(service, trigger):
 )
 async def test_occurrence_that_cannot_start_its_run_records_why(tmp_path, caplog, arrange, reason):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(
+    await service.actions.add(
         event.id, when="start - 1h", prompt="prepare", target="main", session="chosen"
     )
     arrange(service, trigger)
@@ -566,7 +567,7 @@ async def test_an_action_can_fire_until_its_occurrences_are_used_up(
     tmp_path, recurring, arrange, can_fire
 ):
     service, event, trigger, now = setup(tmp_path, recurring=recurring)
-    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start", prompt="prepare", target="main")
 
     at = await arrange(service, event, trigger, now)
 
@@ -628,7 +629,7 @@ async def test_an_event_change_that_revives_an_action_checks_its_target(
     now = datetime.now(UTC)
     start = now - timedelta(hours=3) if spent else now + timedelta(minutes=30)
     service, event, _, _ = setup(tmp_path, start=start)
-    action = service.actions.add(
+    action = await service.actions.add(
         event.id, when="start", prompt="prepare", target=target, session="chosen"
     )
     arrange(service)
@@ -670,7 +671,7 @@ async def test_an_event_change_that_revives_an_action_checks_its_target(
 async def test_an_event_deleted_while_a_revival_is_checked_stays_deleted(tmp_path):
     now = datetime.now(UTC)
     service, event, _, _ = setup(tmp_path, start=now - timedelta(hours=3))
-    service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start", prompt="prepare", target="main")
     sessions = service.actions._sessions
     on_the_pool = sessions.run_async.side_effect
 
@@ -688,7 +689,7 @@ async def test_an_event_deleted_while_a_revival_is_checked_stays_deleted(tmp_pat
 @pytest.mark.asyncio
 async def test_cancel_before_worker_starts_releases_capacity(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     tasks = list(service.actions._workers.values())
     await service.update_event(event.id, start=(now + timedelta(days=2)).isoformat())
@@ -711,7 +712,7 @@ async def test_uncertain_admission_is_never_replayed(tmp_path):
         await asyncio.Event().wait()
 
     trigger.trigger_run.side_effect = admitting
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await persisted.wait()
     await service.actions.aclose()
@@ -725,7 +726,7 @@ async def test_uncertain_admission_is_never_replayed(tmp_path):
 @pytest.mark.asyncio
 async def test_restart_recovers_terminal_run_from_session(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     row = next(iter(service.actions._executions.values()))
@@ -744,7 +745,9 @@ async def test_restart_recovers_terminal_run_from_session(tmp_path):
 @pytest.mark.asyncio
 async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp_path):
     service, event, _, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="coder")
+    action = await service.actions.add(
+        event.id, when="start - 1h", prompt="prepare", target="coder"
+    )
     await service.actions.tick(now)
     await drain(service)
     ((ran_key, ran),) = service.actions._executions.items()
@@ -794,16 +797,17 @@ async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp
     }
 
 
-def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
     service, event, _, _ = setup(tmp_path)
-    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
-    monkeypatch.setattr(service.actions, "_save", Mock(side_effect=CalendarStorageError("disk")))
+    action = await service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    monkeypatch.setattr(service.actions, "_write", Mock(side_effect=CalendarStorageError("disk")))
     with pytest.raises(CalendarStorageError):
-        service.actions.update(action["id"], prompt="changed")
+        await service.actions.update(action["id"], prompt="changed")
     with pytest.raises(CalendarStorageError):
-        service.actions.delete(action["id"])
+        await service.actions.delete(action["id"])
     with pytest.raises(CalendarStorageError):
-        service.actions.add(event.id, when="end", prompt="new", target="main")
+        await service.actions.add(event.id, when="end", prompt="new", target="main")
     assert service.actions.list_actions() == [action]
 
 
@@ -811,7 +815,7 @@ def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
 async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
     now = datetime(2030, 10, 5, 10, tzinfo=UTC)
     service, event, trigger, now = setup(tmp_path, recurring=True, now=now)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
     entered = [asyncio.Event(), asyncio.Event()]
     finish = asyncio.Event()
 
@@ -852,6 +856,7 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
         await service.actions.aclose()
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "content",
     [
@@ -871,7 +876,7 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
         "executions-not-an-object",
     ],
 )
-def test_unreadable_store_fails_closed(tmp_path, content):
+async def test_unreadable_store_fails_closed(tmp_path, content):
     path = tmp_path / "calendar" / "actions.json"
     path.parent.mkdir()
     path.write_text(content, encoding="utf-8")
@@ -879,13 +884,14 @@ def test_unreadable_store_fails_closed(tmp_path, content):
     assert service.actions.list_actions() == []
     assert service.actions.storage_error
     with pytest.raises(CalendarStorageError):
-        service.actions.delete("unused")
+        await service.actions.delete("unused")
     assert path.read_text(encoding="utf-8") == content
 
 
-def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
+@pytest.mark.asyncio
+async def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
     service, event, _, _ = setup(tmp_path)
-    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start", prompt="prepare", target="main")
     path = tmp_path / "calendar" / "actions.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["future_setting"] = 1
@@ -894,7 +900,7 @@ def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
 
     reopened = CalendarService(tmp_path, tz="Europe/Berlin")
     assert "priority" not in reopened.actions.list_actions()[0]
-    reopened.actions.update(action["id"], prompt="prepare slides")
+    await reopened.actions.update(action["id"], prompt="prepare slides")
 
     rewritten = json.loads(path.read_text(encoding="utf-8"))
     assert rewritten["format_version"] == 1
@@ -907,7 +913,7 @@ def test_unknown_action_fields_are_hidden_and_kept_on_save(tmp_path):
 @pytest.mark.parametrize("whole_file", [True, False])
 async def test_invalid_event_storage_never_deletes_action_definitions(tmp_path, whole_file):
     service, event, _, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start", prompt="prepare", target="main")
     path = tmp_path / "calendar" / "events.json"
     path.write_text(
         "broken" if whole_file else json.dumps({"format_version": 1, "events": [{"id": event.id}]})
@@ -925,13 +931,13 @@ async def test_invalid_event_storage_never_deletes_action_definitions(tmp_path, 
 @pytest.mark.asyncio
 async def test_invalid_event_recurrence_does_not_block_other_actions(tmp_path):
     service, broken_event, trigger, now = setup(tmp_path, recurring=True)
-    broken_action = service.actions.add(
+    broken_action = await service.actions.add(
         broken_event.id, when="start - 1h", prompt="broken", target="main"
     )
     valid_event = service.create_event(
         title="Valid", start=(now + timedelta(minutes=30)).isoformat()
     )
-    valid_action = service.actions.add(
+    valid_action = await service.actions.add(
         valid_event.id, when="start - 1h", prompt="valid", target="main"
     )
     path = tmp_path / "calendar" / "events.json"
@@ -954,14 +960,15 @@ async def test_invalid_event_recurrence_does_not_block_other_actions(tmp_path):
     assert {row["action_id"] for row in stored["executions"].values()} == {valid_action["id"]}
 
 
-def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
     from core.utils import ids
 
     service, event, _, _ = setup(tmp_path)
     values = iter((1, 1, 2))
     monkeypatch.setattr(ids.secrets, "randbits", lambda _bits: next(values))
-    first = service.actions.add(event.id, when="start", prompt="first", target="main")
-    second = service.actions.add(event.id, when="end", prompt="second", target="main")
+    first = await service.actions.add(event.id, when="start", prompt="first", target="main")
+    second = await service.actions.add(event.id, when="end", prompt="second", target="main")
     assert first["id"] == "act_000000000001"
     assert second["id"] == "act_000000000002"
     assert {action["id"]: action["prompt"] for action in service.actions.list_actions()} == {
@@ -974,7 +981,7 @@ def test_short_action_ids_skip_collisions(tmp_path, monkeypatch):
 @pytest.mark.parametrize(("field", "value"), [("prompt", ""), ("when", "nonsense")])
 async def test_invalid_action_is_skipped_kept_verbatim_and_reported(tmp_path, field, value):
     service, event, trigger, now = setup(tmp_path)
-    broken = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    broken = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     path = tmp_path / "calendar" / "actions.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["actions"][0][field] = value
@@ -987,7 +994,7 @@ async def test_invalid_action_is_skipped_kept_verbatim_and_reported(tmp_path, fi
     assert reopened.actions.storage_error is None
     await reopened.actions.tick(now)
     await drain(reopened)
-    added = reopened.actions.add(event.id, when="end", prompt="wrap up", target="main")
+    added = await reopened.actions.add(event.id, when="end", prompt="wrap up", target="main")
 
     trigger.trigger_run.assert_not_awaited()
     stored = json.loads(path.read_text(encoding="utf-8"))["actions"]
@@ -1000,7 +1007,7 @@ async def test_invalid_action_is_skipped_kept_verbatim_and_reported(tmp_path, fi
 @pytest.mark.asyncio
 async def test_invalid_execution_row_blocks_its_occurrence_and_is_kept(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     assert trigger.trigger_run.await_count == 1
@@ -1014,7 +1021,7 @@ async def test_invalid_execution_row_blocks_its_occurrence_and_is_kept(tmp_path)
     reopened.actions.configure(trigger, Mock(), session_manager())
     await reopened.actions.tick(now + timedelta(seconds=1))
     await drain(reopened)
-    reopened.actions.update(action["id"], prompt="prepare slides")
+    await reopened.actions.update(action["id"], prompt="prepare slides")
 
     # The row may record a consumed claim, so the occurrence never fires again.
     assert trigger.trigger_run.await_count == 1
@@ -1027,7 +1034,7 @@ async def test_invalid_execution_row_blocks_its_occurrence_and_is_kept(tmp_path)
 @pytest.mark.asyncio
 async def test_history_of_unknown_actions_stays_while_invalid_actions_are_kept(tmp_path):
     service, event, trigger, now = setup(tmp_path)
-    action = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    action = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     await service.actions.tick(now)
     await drain(service)
     path = tmp_path / "calendar" / "actions.json"
@@ -1070,7 +1077,7 @@ class _BlockedActionWrites:
 @pytest.mark.asyncio
 async def test_scheduler_saves_off_the_loop_and_recomputes_after_a_change(tmp_path, monkeypatch):
     service, event, trigger, now = setup(tmp_path)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     writes = _BlockedActionWrites(monkeypatch)
 
     ticking = asyncio.create_task(service.actions.tick(now))
@@ -1098,18 +1105,24 @@ async def test_scheduler_saves_off_the_loop_and_recomputes_after_a_change(tmp_pa
 @pytest.mark.asyncio
 async def test_an_action_edit_lands_after_an_in_flight_scheduler_save(tmp_path, monkeypatch):
     service, event, _, now = setup(tmp_path)
-    first = service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
+    first = await service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
     writes = _BlockedActionWrites(monkeypatch)
 
     ticking = asyncio.create_task(service.actions.tick(now))
     try:
         assert await asyncio.to_thread(writes.entered.wait, 5)
-        releaser = threading.Timer(0.1, writes.release.set)
-        releaser.start()
-        # The blocking edit save queues behind the scheduler's older snapshot.
-        second = service.actions.add(event.id, when="end", prompt="review", target="main")
+        # The edit's save queues behind the scheduler's older snapshot without
+        # holding the Event Loop.
+        adding = asyncio.create_task(
+            service.actions.add(event.id, when="end", prompt="review", target="main")
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert len(service.actions.list_actions()) == 2
+        assert not adding.done()
     finally:
         writes.release.set()
+    second = await asyncio.wait_for(adding, timeout=5)
     await ticking
     await drain(service)
 

@@ -150,7 +150,7 @@ async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_r
 ) -> None:
     service = _configure_actions(state, session_exists=True)
     event = service.create_event(title="Old", start="2020-01-10T12:00")
-    action = service.actions.add(
+    action = await service.actions.add(
         event.id, when="start", prompt="prepare", target="main", session="chosen"
     )
     _configure_actions(state, session_exists=False)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import re
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import UTC, datetime, time, timedelta
 from functools import partial
@@ -51,7 +52,7 @@ from core.runs import RunKind
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import OrderedWorker
+from core.utils.workers import OrderedWorker, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation import TriggerService
@@ -72,9 +73,9 @@ _MAX_ERROR_CHARS = 500
 # window no longer reaches its occurrence (it can then never become due again).
 _RETENTION = timedelta(days=30)
 _EXECUTION_STATUSES = _TERMINAL | {"pending", "claimed", "running"}
-# Every actions.json write runs here in the order its snapshot was taken: the
-# scheduler's and a Run's saves never block the Event Loop, and an operator
-# edit's blocking save still lands after them.
+# Every actions.json write runs here in the order its snapshot was taken. The
+# scheduler's, a Run's and an operator edit's saves never block the Event Loop;
+# the Agent rename worker's blocking save still lands after them.
 _ACTIONS_WRITER = OrderedWorker(name="calendar-actions")
 
 CALENDAR_ACTIONS_FORMAT_VERSION = 1
@@ -316,6 +317,8 @@ class CalendarActions:
         self._generation = 0
         self._sleep_seconds = 30.0
         self._recovery_pending: set[str] = set()
+        # Edits run one at a time, so an edit's undo after a failed save is exact.
+        self._edits = asyncio.Lock()
         self._calendar.add_changed_callback(self._wake)
 
     def configure(
@@ -383,12 +386,32 @@ class CalendarActions:
             self._executions[key] = row
 
     def _save(self) -> None:
-        """Write actions and history, blocking until this and every earlier save landed."""
+        """Write actions and history, blocking until this and every earlier save landed.
+
+        Only for worker threads: on the Event Loop the wait would block the loop
+        for as long as a data snapshot holds the file.
+        """
         _ACTIONS_WRITER.call(partial(self._write, self._snapshot()))
 
     async def _save_async(self) -> None:
         """Event-Loop-safe :meth:`_save`; the snapshot is taken before the first await."""
         await _ACTIONS_WRITER.call_async(partial(self._write, self._snapshot()))
+
+    async def _save_edit(self, undo: Callable[[], object]) -> None:
+        """Save an edit already applied in memory and announced; undo it when the save fails.
+
+        The save finishes even when the caller is cancelled meanwhile.
+        """
+
+        async def save() -> None:
+            try:
+                await self._save_async()
+            except Exception:
+                undo()
+                self._calendar._notify_changed()
+                raise
+
+        await settle_before_cancelling(save())
 
     def _snapshot(self) -> dict[str, Any]:
         # The Event Loop keeps changing rows while the writer serializes them.
@@ -436,7 +459,7 @@ class CalendarActions:
         ):
             raise _SessionMissingError("session does not exist for the selected target")
 
-    def add(
+    async def add(
         self,
         event_id: str,
         *,
@@ -447,56 +470,67 @@ class CalendarActions:
         now: datetime | None = None,
         actor: str = _DEFAULT_ACTOR,
     ) -> dict[str, Any]:
-        self._load()
-        self._calendar.get_event(event_id)
-        if sum(a["event_id"] == event_id for a in self._actions.values()) >= _MAX_ACTIONS:
-            raise CalendarValidationError("A calendar event supports at most 16 actions")
-        if len(self._actions) >= 512:
-            raise CalendarValidationError(
-                "The calendar supports at most 512 actions; remove unused actions first"
-            )
-        stamp = (now or datetime.now(UTC)).isoformat()
-        action: dict[str, Any] = {
-            "id": new_id("act", claim=self._action_id_available),
-            "event_id": event_id,
-            "when": parse_action_when(when)[2],
-            "prompt": prompt,
-            "target": target,
-            "session": session,
-            "created_at": stamp,
-            "scanned_until": stamp,
-        }
-        self._validate(action)
-        self._actions[action["id"]] = action
-        try:
-            self._save()
-        except Exception:
-            self._actions.pop(action["id"])
-            raise
-        self._calendar._notify_changed()
+        async with self._edits:
+            self._load()
+            self._calendar.get_event(event_id)
+            if sum(a["event_id"] == event_id for a in self._actions.values()) >= _MAX_ACTIONS:
+                raise CalendarValidationError("A calendar event supports at most 16 actions")
+            if len(self._actions) >= 512:
+                raise CalendarValidationError(
+                    "The calendar supports at most 512 actions; remove unused actions first"
+                )
+            stamp = (now or datetime.now(UTC)).isoformat()
+            action: dict[str, Any] = {
+                "id": new_id("act", claim=self._action_id_available),
+                "event_id": event_id,
+                "when": parse_action_when(when)[2],
+                "prompt": prompt,
+                "target": target,
+                "session": session,
+                "created_at": stamp,
+                "scanned_until": stamp,
+            }
+            await self._validate_async(action)
+            # The event may have been deleted while the references were checked.
+            self._calendar.get_event(event_id)
+            self._actions[action["id"]] = action
+            self._calendar._notify_changed()
+            await self._save_edit(lambda: self._actions.pop(action["id"], None))
         _LOGGER.info(
             "Calendar action added (event=%s action=%s actor=%s)", event_id, action["id"], actor
         )
         return self._payload(action)
 
-    def update(
+    async def update(
         self, action_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> dict[str, Any]:
-        self._load()
-        previous = self._get(action_id)
-        if not fields or set(fields) - {"when", "prompt", "target", "session"}:
-            raise CalendarValidationError("update_action requires when, prompt, target, or session")
-        action = {**previous, **fields}
-        action["when"] = parse_action_when(action["when"])[2]
-        changed = sorted(name for name in fields if action[name] != previous.get(name))
-        self._validate(action)
-        self._actions[action_id] = action
-        try:
-            self._save()
-        except Exception:
-            self._actions[action_id] = previous
-            raise
-        self._calendar._notify_changed()
+        async with self._edits:
+            self._load()
+            self._get(action_id)
+            if not fields or set(fields) - {"when", "prompt", "target", "session"}:
+                raise CalendarValidationError(
+                    "update_action requires when, prompt, target, or session"
+                )
+
+            def updated(current: dict[str, Any]) -> dict[str, Any]:
+                action = {**current, **fields}
+                action["when"] = parse_action_when(action["when"])[2]
+                return action
+
+            await self._validate_async(updated(self._get(action_id)))
+            # The scheduler may have moved or removed the action while the
+            # references were checked.
+            previous = self._get(action_id)
+            action = updated(previous)
+            changed = sorted(name for name in fields if action[name] != previous.get(name))
+
+            def undo() -> None:
+                if self._actions.get(action_id) is action:
+                    self._actions[action_id] = previous
+
+            self._actions[action_id] = action
+            self._calendar._notify_changed()
+            await self._save_edit(undo)
         if changed:
             _LOGGER.info(
                 "Calendar action updated (action=%s fields=%s actor=%s)",
@@ -506,16 +540,13 @@ class CalendarActions:
             )
         return self._payload(action)
 
-    def delete(self, action_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
-        self._load()
-        previous = self._get(action_id)
-        del self._actions[action_id]
-        try:
-            self._save()
-        except Exception:
-            self._actions[action_id] = previous
-            raise
-        self._calendar._notify_changed()
+    async def delete(self, action_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
+        async with self._edits:
+            self._load()
+            previous = self._get(action_id)
+            del self._actions[action_id]
+            self._calendar._notify_changed()
+            await self._save_edit(lambda: self._actions.setdefault(action_id, previous))
         _LOGGER.info("Calendar action deleted (action=%s actor=%s)", action_id, actor)
 
     def _action_id_available(self, candidate: str) -> bool:
