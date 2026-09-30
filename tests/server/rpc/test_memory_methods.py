@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import threading
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 
+import core.memory.memory as memory_module
 from core.agents import AgentStore
+from core.memory import MemoryError
+from core.memory._history import MemoryHistory
 from tests.server.rpc_test_support import (
     StubAdapter,
     call,
@@ -96,6 +100,47 @@ async def test_memory_history_lists_compares_and_reverts_changes(tmp_path: Path)
     assert 'no entry reads "New fact."' in conflict["message"]
     # Four mutations announced; the refused revert changed nothing.
     assert resource_changes(state) == [_CODER_MEMORIES] * 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["history-not-recorded", "restore-failed"])
+async def test_memory_revert_announces_changed_files_without_a_recorded_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    (tmp_path / "agents" / "coder").mkdir(parents=True)
+    state.runtime.agents.update("coder", workspace=str(tmp_path / "agents" / "coder" / "workspace"))
+    await rpc_result(state, "memory.add", agent_id="coder", scope="user", content="Prefers German.")
+    await rpc_result(state, "memory.add", agent_id="coder", scope="agent", content="Uses pytest.")
+    if failure == "history-not-recorded":
+
+        def failing_record(*_args: object, **_kwargs: object) -> None:
+            raise MemoryError("failed to write Memory history")
+
+        monkeypatch.setattr(MemoryHistory, "record", failing_record)
+    else:
+        write = memory_module.atomic_write_bytes
+        writes: list[Path] = []
+
+        def atomic_write_bytes(path: Path, data: bytes, **kwargs: Any) -> None:
+            # Only the first write succeeds: USER.md is reverted, then writing
+            # MEMORY.md and restoring USER.md fail.
+            writes.append(Path(path))
+            if len(writes) > 1:
+                raise OSError(errno.ENOSPC, "No space left on device")
+            write(path, data, **kwargs)
+
+        monkeypatch.setattr(memory_module, "atomic_write_bytes", atomic_write_bytes)
+
+    response = await call(state, "memory.revert", agent_id="coder", revisions=[1, 2])
+
+    if failure == "history-not-recorded":
+        assert response["result"]["revisions"] == []
+        assert response["result"]["scopes"] == {"agent": [], "user": []}
+    else:
+        assert response["error"]["code"] == "domain_error"
+    # Open views refresh after every revert that changed a file.
+    assert resource_changes(state) == [_CODER_MEMORIES] * 3
 
 
 @pytest.mark.asyncio

@@ -202,6 +202,19 @@ class MemoryRevertIncompleteError(MemoryError):
 
 
 @dataclass(frozen=True)
+class MemoryRevertResult:
+    """What a revert changed: the scopes it wrote and the revisions that recorded them.
+
+    ``revisions`` holds one ``revert`` revision per recorded scope. It is shorter
+    than ``changed`` when the history could not record a change; those files
+    changed all the same.
+    """
+
+    changed: tuple[MemoryScope, ...]
+    revisions: tuple[MemoryRevision, ...]
+
+
+@dataclass(frozen=True)
 class MemoryWriter:
     """Who changes Memory, recorded in the log line and the Memory history.
 
@@ -448,12 +461,12 @@ class FilePinnedMemoryBackend:
         revision_ids: Sequence[int],
         *,
         writer: MemoryWriter,
-    ) -> list[MemoryRevision]:
+    ) -> MemoryRevertResult:
         """Take back the changes of *revision_ids*, all of them or none.
 
-        Returns the recorded ``revert`` revisions, one per changed scope, and an
-        empty list when the entries already match (or the history could not
-        record them). Raises :class:`MemoryRevertError` when later changes built
+        Returns the scopes it changed, none when the entries already match, and
+        the ``revert`` revisions that recorded them (fewer when the history could
+        not record a change). Raises :class:`MemoryRevertError` when later changes built
         on a reverted one and :class:`MemoryBudgetError` when restored entries
         would exceed a budget, both before writing anything. Every changed scope
         is written before any is recorded: when a write fails, the scopes already
@@ -508,7 +521,7 @@ class FilePinnedMemoryBackend:
                 )
                 if revision is not None:
                     recorded.append(revision)
-            return recorded
+            return MemoryRevertResult(changed=tuple(changed), revisions=tuple(recorded))
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         """Return a scope's used characters and its budget."""
@@ -719,7 +732,7 @@ class MemoryService:
 
     def revert(
         self, workspace: Path, revision_ids: Sequence[int], *, writer: MemoryWriter
-    ) -> list[MemoryRevision]:
+    ) -> MemoryRevertResult:
         return self._backend.revert(workspace, revision_ids, writer=writer)
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:

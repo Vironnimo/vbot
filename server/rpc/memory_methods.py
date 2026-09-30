@@ -7,7 +7,13 @@ from functools import partial
 from pathlib import Path
 from typing import Any, TypeVar, cast
 
-from core.memory import MemoryEntry, MemoryRevision, MemoryScope, MemoryWriter
+from core.memory import (
+    MemoryEntry,
+    MemoryRevertIncompleteError,
+    MemoryRevision,
+    MemoryScope,
+    MemoryWriter,
+)
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES
 from server.rpc._mutations import MutationHandler, serialized_mutation
@@ -186,16 +192,24 @@ async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
             "params.revisions must be a non-empty list of positive integers",
         )
     agent_id, workspace = await _agent_workspace(state, params)
-    recorded = await _MEMORY_RPC_WORKERS.run(
-        _expected(state.runtime.memory.revert),
-        workspace,
-        revision_ids,
-        writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
-    )
-    response = await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
-    if recorded:
+    try:
+        result = await _MEMORY_RPC_WORKERS.run(
+            state.runtime.memory.revert,
+            workspace,
+            revision_ids,
+            writer=MemoryWriter(agent_id=agent_id, actor="rpc"),
+        )
+    except MemoryRevertIncompleteError as exc:
+        # The scopes it names keep their reverted entries, so open views refresh.
         _publish_memory_changed(state, agent_id)
-    response["revisions"] = [_revision_response(revision) for revision in recorded]
+        raise _map_expected_error(exc) from exc
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    # Announce every changed file, whether or not the history recorded it.
+    if result.changed:
+        _publish_memory_changed(state, agent_id)
+    response = await _MEMORY_RPC_WORKERS.run(_memory_response, state, agent_id, workspace)
+    response["revisions"] = [_revision_response(revision) for revision in result.revisions]
     return response
 
 
