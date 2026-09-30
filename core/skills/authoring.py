@@ -42,6 +42,7 @@ PROVENANCE_SOURCE_KEY = "source"
 SKILL_ARCHIVE_MAX_BYTES = MAX_DOWNLOAD_BYTES
 
 SkillAuthor = Literal["agent", "human"]
+SkillFileChangeKind = Literal["created", "updated", "deleted"]
 _VALID_AUTHORS: tuple[SkillAuthor, ...] = ("agent", "human")
 
 
@@ -53,6 +54,24 @@ class SkillAuthoringError(VBotError):
         self.diagnostics: list[str] = list(diagnostics) if diagnostics else [message]
 
 
+# A changed file larger than this reports no text; its change is still reported.
+MAX_CHANGE_TEXT_BYTES = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class SkillFileChange:
+    """One file a Skill mutation changed, by its package-relative path.
+
+    ``before``/``after`` hold its text with LF line endings; ``None`` means the
+    file was absent on that side or is not UTF-8 text.
+    """
+
+    path: str
+    change: SkillFileChangeKind
+    before: str | None
+    after: str | None
+
+
 @dataclass(frozen=True)
 class SkillWriteResult:
     """Outcome of one successful direct Skill mutation."""
@@ -61,6 +80,7 @@ class SkillWriteResult:
     operation: str
     path: Path
     warnings: list[str] = field(default_factory=list)
+    changes: tuple[SkillFileChange, ...] = ()
 
 
 class SkillAuthoringService:
@@ -103,6 +123,7 @@ class SkillAuthoringService:
                 operation="create",
                 path=skill_file,
                 warnings=validation.warnings,
+                changes=(SkillFileChange(SKILL_FILENAME, "created", None, document),),
             )
 
     def install(
@@ -146,7 +167,8 @@ class SkillAuthoringService:
         """Replace an existing Skill's complete ``SKILL.md``."""
         with self._write_lock:
             skill_file = self._existing_skill_file(target_root, skill_name)
-            file_ending = _detect_line_ending(_read_raw_text(skill_file))
+            current = _read_raw_text(skill_file)
+            file_ending = _detect_line_ending(current)
             document, validation = self._prepare_document(
                 content,
                 skill_name=skill_name,
@@ -160,6 +182,11 @@ class SkillAuthoringService:
                 operation="edit",
                 path=skill_file,
                 warnings=validation.warnings,
+                changes=(
+                    SkillFileChange(
+                        SKILL_FILENAME, "updated", _normalize_newlines(current), document
+                    ),
+                ),
             )
 
     def read_text(self, target_root: Path, skill_name: str, relative_path: str) -> str:
@@ -205,6 +232,9 @@ class SkillAuthoringService:
                 operation="rewrite",
                 path=target,
                 warnings=warnings,
+                changes=(
+                    SkillFileChange(normalized, "updated", _normalize_newlines(current), updated),
+                ),
             )
 
     def _existing_text_file(
@@ -225,8 +255,20 @@ class SkillAuthoringService:
         """Delete a Skill directory and all support files."""
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
+            files = sorted(
+                (path for path in skill_dir.rglob("*") if path.is_file() and not path.is_symlink()),
+                key=lambda path: (path.name != SKILL_FILENAME or path.parent != skill_dir, path),
+            )
+            changes = tuple(
+                SkillFileChange(
+                    path.relative_to(skill_dir).as_posix(), "deleted", _change_text(path), None
+                )
+                for path in files
+            )
             shutil.rmtree(skill_dir)
-            return SkillWriteResult(name=skill_name, operation="delete", path=skill_dir)
+            return SkillWriteResult(
+                name=skill_name, operation="delete", path=skill_dir, changes=changes
+            )
 
     def write_file(
         self,
@@ -241,21 +283,32 @@ class SkillAuthoringService:
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
             resource_path = self._resource_path(skill_dir, relative_path)
+            existed = resource_path.is_file()
             file_ending = "\n"
-            if resource_path.is_file():
+            if existed:
                 try:
                     existing = _read_raw_text(resource_path)
                 except UnicodeDecodeError:
                     existing = ""
                 if existing:
                     file_ending = _detect_line_ending(existing)
-            styled = _to_line_ending(_normalize_newlines(content), file_ending)
+            before = _change_text(resource_path) if existed else None
+            text = _normalize_newlines(content)
+            styled = _to_line_ending(text, file_ending)
             resource_path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write_bytes(resource_path, styled.encode("utf-8"))
             return SkillWriteResult(
                 name=skill_name,
                 operation="write_file",
                 path=resource_path,
+                changes=(
+                    SkillFileChange(
+                        _normalized_support_path(relative_path),
+                        "updated" if existed else "created",
+                        before,
+                        text,
+                    ),
+                ),
             )
 
     def remove_file(
@@ -270,12 +323,18 @@ class SkillAuthoringService:
             resource_path = self._resource_path(skill_dir, relative_path)
             if not resource_path.is_file():
                 raise SkillAuthoringError(f"Support file not found: {relative_path}")
+            before = _change_text(resource_path)
             resource_path.unlink()
             _remove_empty_resource_parents(resource_path.parent, skill_dir)
             return SkillWriteResult(
                 name=skill_name,
                 operation="remove_file",
                 path=resource_path,
+                changes=(
+                    SkillFileChange(
+                        _normalized_support_path(relative_path), "deleted", before, None
+                    ),
+                ),
             )
 
     def _skill_dir(self, target_root: Path, skill_name: str) -> Path:
@@ -426,6 +485,16 @@ def _to_line_ending(text: str, ending: str) -> str:
     if ending == "\n":
         return text
     return text.replace("\n", ending)
+
+
+def _change_text(path: Path) -> str | None:
+    """Return a changed file's LF text, or ``None`` when it is not reportable text."""
+    try:
+        if path.stat().st_size > MAX_CHANGE_TEXT_BYTES:
+            return None
+        return _normalize_newlines(_read_raw_text(path))
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _read_text_file(path: Path, relative_path: str) -> str:

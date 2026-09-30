@@ -76,18 +76,29 @@ class _Harness:
         return self.home(agent_id) / name / "SKILL.md"
 
     def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
+        context = _context(agent_id, self.root)
         try:
-            return cast(
+            result = cast(
                 dict[str, Any],
-                asyncio.run(
-                    self.tools.dispatch(
-                        _context(agent_id, self.root), arguments, [SKILL_MANAGE_TOOL_NAME]
-                    )
-                ),
+                asyncio.run(self.tools.dispatch(context, arguments, [SKILL_MANAGE_TOOL_NAME])),
             )
         except ValueError as error:
             # The executor reports contract violations the same way.
-            return tool_failure("invalid_arguments", str(error), retryable=False)
+            result = tool_failure("invalid_arguments", str(error), retryable=False)
+        # What the user sees of the latest call.
+        self.details = self.tools.display_for_call(
+            SKILL_MANAGE_TOOL_NAME, arguments, context=context, result=result
+        )["details"]
+        return result
+
+    def changed_files(self) -> list[tuple[str, str, int, int]]:
+        """The latest call's changed files: path, change, added and removed lines."""
+        return [
+            (change["path"], change["change"], change["added"], change["removed"])
+            for block in self.details
+            if block["type"] == "file_changes"
+            for change in block["files"]
+        ]
 
     def create(self, *, name: str = "demo", content: str | None = None) -> dict[str, Any]:
         return self.run(
@@ -221,6 +232,8 @@ def test_create_is_immediately_live_and_invalidates(tmp_path: Path, caplog: Any)
     assert harness.changes == [["main"]]
     assert "action=create" in caplog.text
     assert "private body" not in caplog.text
+    lines = len(harness.document().read_text(encoding="utf-8").splitlines())
+    assert harness.changed_files() == [("SKILL.md", "created", lines, 0)]
     assert str(harness.home("main")) not in str(result)
 
 
@@ -481,23 +494,24 @@ def test_content_must_be_present_and_textual(
 
 def test_write_and_remove_support_file(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
+    arguments = {"action": "write_file", "name": "demo", "file_path": "references/notes.md"}
 
-    written = harness.run(
-        {
-            "action": "write_file",
-            "name": "demo",
-            "file_path": "references/notes.md",
-            "content": "Useful notes\n",
-        }
-    )
+    written = harness.run({**arguments, "content": "Useful notes\n"})
+    written_files = harness.changed_files()
+    harness.run({**arguments, "content": "Useful notes\nMore\n"})
+    rewritten_files = harness.changed_files()
     removed = harness.run(
         {"action": "remove_file", "name": "demo", "file_path": "references/notes.md"}
     )
 
     assert written["data"] == {"content": "Wrote references/notes.md of Skill 'demo'."}
     assert removed["data"] == {"content": "Removed references/notes.md from Skill 'demo'."}
+    # The user sees each change as a diff of the package file.
+    assert written_files == [("references/notes.md", "created", 1, 0)]
+    assert rewritten_files == [("references/notes.md", "updated", 1, 0)]
+    assert harness.changed_files() == [("references/notes.md", "deleted", 0, 2)]
     assert not (skill_file.parent / "references").exists()
-    assert harness.invalidated == ["main", "main"]
+    assert harness.invalidated == ["main", "main", "main"]
 
 
 @pytest.mark.parametrize("existing", [False, True])
@@ -556,6 +570,7 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     )
 
     assert result["ok"] is True
+    assert harness.changed_files() == [("SKILL.md", "updated", 2, 10)]
     text = skill_file.read_text(encoding="utf-8")
     assert "description: Updated." in text
     assert "New body." in text
@@ -576,6 +591,10 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
     result = harness.run({"action": "delete", "name": "demo"})
 
     assert result["data"] == {"content": "Deleted Skill 'demo' and its files."}
+    assert [(path, change) for path, change, _added, _removed in harness.changed_files()] == [
+        ("SKILL.md", "deleted"),
+        ("references/notes.md", "deleted"),
+    ]
     assert not skill_file.parent.exists()
     assert harness.invalidated == ["main"]
 
@@ -820,6 +839,7 @@ def test_patch_by_legacy_names_changes_skill_md_or_the_named_file(tmp_path: Path
     removed = harness.run(
         {"action": "patch", "name": "demo", "match": "Obsolete step.\n", "content": ""}
     )
+    removed_files = harness.changed_files()
     script = harness.run(
         {
             "action": "patch",
@@ -831,6 +851,8 @@ def test_patch_by_legacy_names_changes_skill_md_or_the_named_file(tmp_path: Path
     )
 
     assert (removed["ok"], script["ok"]) == (True, True)
+    assert removed_files == [("SKILL.md", "updated", 0, 1)]
+    assert harness.changed_files() == [("scripts/run.py", "updated", 1, 1)]
     assert _body(skill_file) == "Keep this step.\n"
     assert (skill_file.parent / "scripts" / "run.py").read_text(encoding="utf-8") == (
         "print('new')\n"
@@ -885,6 +907,13 @@ def test_patch_that_changes_nothing_says_so(tmp_path: Path) -> None:
         "SKILL.md of Skill 'demo' already reads as new_string at line 9; nothing changed."
     )
     assert _body(skill_file) == "Say “hello” to users.\n"
+    assert harness.details == [
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "Nothing changed; the file already had this text.",
+        }
+    ]
 
 
 def test_patch_keeps_the_files_curly_quotes_for_a_plain_copy(tmp_path: Path) -> None:

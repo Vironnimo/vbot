@@ -289,6 +289,7 @@ def make_skill_manage_handler(
             call.action,
             context.agent_id,
         )
+        _record_display_details(context, result)
         # Deliberately identical for own and shared targets: a receiving Agent
         # must not be able to tell a shared Skill apart from its own.
         lines = [summary]
@@ -297,6 +298,17 @@ def make_skill_manage_handler(
         return tool_success({"content": "\n".join(lines)})
 
     return skill_manage_handler
+
+
+def _record_display_details(context: ToolContext, result: SkillWriteResult) -> None:
+    """Show the user the changed package files and the Skill's validation warnings."""
+    for change in result.changes:
+        if change.before != change.after:
+            context.add_display_file_change(change.path, change.change, change.before, change.after)
+    if result.changes and all(change.before == change.after for change in result.changes):
+        context.add_display_notice("info", "Nothing changed; the file already had this text.")
+    for warning in result.warnings:
+        context.add_display_notice("warning", warning)
 
 
 def _read_call(arguments: JsonObject) -> _Call:
@@ -907,6 +919,7 @@ def register_skill_manage_tool(
         display=ToolDisplay(
             parts_builder=_skill_manage_display_parts,
             hidden_argument_keys=("content", "old_string", "new_string"),
+            details=True,
         ),
     )
 
