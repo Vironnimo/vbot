@@ -268,10 +268,7 @@ def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
 
 
 async def _await_local_catalog_refresh(runtime: Any) -> None:
-    maybe_refresh = getattr(runtime, "maybe_refresh_local_catalogs", None)
-    if not callable(maybe_refresh):
-        return
-    refresh_task = asyncio.ensure_future(maybe_refresh())
+    refresh_task = asyncio.ensure_future(runtime.maybe_refresh_local_catalogs())
     # ``asyncio.wait`` (unlike ``wait_for``) does not cancel on timeout — the
     # sweep keeps running in the background and later calls see its result.
     done, pending = await asyncio.wait({refresh_task}, timeout=LOCAL_CATALOG_REFRESH_WAIT_SECONDS)

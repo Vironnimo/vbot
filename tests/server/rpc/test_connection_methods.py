@@ -584,7 +584,11 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
     runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
     runtime.start()
     try:
-        state = SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+        state = SimpleNamespace(
+            runtime=runtime,
+            event_bus=ServerEventBus(),
+            server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
+        )
         providers = runtime.providers
         models = runtime.models
 

@@ -16,6 +16,7 @@ import yaml
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SkillRegistry, project_skills_dir
 from core.utils.config import Config
+from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
 from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill, write_skill
 
@@ -53,7 +54,12 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
                 "---\nname: deploy\ndescription: After mutation\n---\n\nNew instructions.\n"
             )
 
-        state = SimpleNamespace(runtime=runtime, chat_runs=runtime.chat_runs)
+        state = SimpleNamespace(
+            runtime=runtime,
+            chat_runs=runtime.chat_runs,
+            agent_delete_lock=asyncio.Lock(),
+            event_bus=ServerEventBus(),
+        )
         if operation == "delete_owner":
             await call_rpc(agent_methods.method_handlers(), "agent.delete", state, {"id": "main"})
         else:
@@ -177,7 +183,9 @@ def test_installed_private_and_global_skills_refresh_live_visibility(
     runtime.agents.update("main", allowed_skills=[])
     runtime.skills_for(None, "main")
     runtime.skills_for(None, "receiver")
-    state = SimpleNamespace(runtime=runtime)
+    state = SimpleNamespace(
+        runtime=runtime, agent_delete_lock=asyncio.Lock(), event_bus=ServerEventBus()
+    )
     handlers = skill_methods.method_handlers()
 
     def install(params: dict[str, Any]) -> None:

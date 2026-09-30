@@ -279,6 +279,7 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
     state = SimpleNamespace(
         runtime=runtime,
         event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
         # _state_chat_runs reads state.chat_runs directly (not under runtime).
         chat_runs=chat_runs,
     )

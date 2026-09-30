@@ -6,6 +6,7 @@ projects the service's jobs; the services own scheduling and target validation.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -19,6 +20,7 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
+from server.events import ServerEventBus
 from tests.core.automation.cron_test_support import make_service
 from tests.server.rpc_test_support import rpc_error, rpc_result
 
@@ -53,7 +55,9 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
     return SimpleNamespace(
-        runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver)
+        runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver),
+        event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
     )
 
 
@@ -119,7 +123,11 @@ async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() 
     service = Mock()
     service.create_job.return_value = _bootstrap_job(agent_id="builder", project_id="vbot")
     service.update_job.return_value = _bootstrap_job(session_id=None)
-    state = SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(bootstrap_service=service),
+        event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
+    )
 
     created = await rpc_result(
         state,
@@ -151,7 +159,11 @@ async def test_bootstrap_create_and_update_pass_the_parsed_target_and_session() 
 async def test_bootstrap_list_projects_each_job() -> None:
     service = Mock()
     service.list_jobs.return_value = [_bootstrap_job(agent_id="builder", project_id="vbot")]
-    state = SimpleNamespace(runtime=SimpleNamespace(bootstrap_service=service))
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(bootstrap_service=service),
+        event_bus=ServerEventBus(),
+        agent_delete_lock=asyncio.Lock(),
+    )
 
     result = await rpc_result(state, "bootstrap.list")
 

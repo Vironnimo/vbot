@@ -579,6 +579,8 @@ def test_merge_commit_runs_a_test_both_sides_changed(
     assert "test_factor.py::test_factor" in output
 
 
+# The branch check starts a nested pytest process under parallel suite load.
+@pytest.mark.timeout(120)
 def test_worktree_commits_leave_the_tests_to_the_branch_check(
     impact_project: Path,
     tmp_path: Path,

@@ -45,7 +45,6 @@ from server.rpc.event_bridge import (
     _bridge_queued_item_to_event_bus,
     _publish_run_events,
     _server_event_from_run_event,
-    publish_bash_process_status_changed,
     publish_resource_changed,
 )
 
@@ -326,14 +325,6 @@ def test_publish_resource_changed_signals_the_kind_and_its_scope(
     assert [(event["type"], event["payload"]) for event in state.event_bus.events] == [
         ("resource_changed", payload)
     ]
-
-
-def test_publishers_are_noops_without_event_bus() -> None:
-    # A CLI-only runtime stub has no bus: the helpers must no-op, not crash.
-    state = SimpleNamespace(event_bus=None)
-
-    publish_resource_changed(state, "models")
-    publish_bash_process_status_changed(state, {"process_id": "process-one"})
 
 
 def test_publish_resource_changed_rejects_unknown_kind() -> None:

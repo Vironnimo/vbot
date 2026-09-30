@@ -34,8 +34,8 @@ async def test_list_clients_returns_registry_roster() -> None:
     assert entry["status"] == "connected"
 
 
-def test_list_clients_empty_without_registry() -> None:
-    state = SimpleNamespace()
+def test_list_clients_empty_without_connections() -> None:
+    state = SimpleNamespace(client_registry=ClientRegistry())
 
     result = _list_clients(state, {})
 

@@ -5,6 +5,7 @@ Linking a Session to a Channel is a Session RPC (``test_session_methods.py``).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from types import SimpleNamespace
 from typing import Any
@@ -119,7 +120,9 @@ def _state(
         live_credentials=live,
         agents=agents,
     )
-    return SimpleNamespace(runtime=runtime, event_bus=ServerEventBus())
+    return SimpleNamespace(
+        runtime=runtime, event_bus=ServerEventBus(), agent_delete_lock=asyncio.Lock()
+    )
 
 
 # ---------------------------------------------------------------------------
