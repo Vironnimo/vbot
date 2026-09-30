@@ -257,8 +257,7 @@ def test_callback_failure_does_not_turn_a_committed_title_into_an_error(
     assert "session-one" in record.getMessage()
 
 
-@pytest.mark.parametrize("restoring", [False, True])
-def test_identity_reference_changes_roll_back_together(manager, monkeypatch, restoring) -> None:
+def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> None:
     from core.sessions import _store_values
 
     children = [manager.create("child", session_id=f"child-{index}") for index in range(2)]
@@ -267,7 +266,6 @@ def test_identity_reference_changes_roll_back_together(manager, monkeypatch, res
             child.address,
             {"subagent_parent": {"agent_id": "old", "project_id": None, "session_id": "parent"}},
         )
-    updates = manager.retarget_identity_agent_references("old", "new") if restoring else ()
     before = [manager.get_metadata(child.address) for child in children]
     original = _store_values._subagent_parent_columns
     calls = 0
@@ -281,10 +279,7 @@ def test_identity_reference_changes_roll_back_together(manager, monkeypatch, res
 
     monkeypatch.setattr(_store_values, "_subagent_parent_columns", fail_second_write)
     with pytest.raises(OSError):
-        if restoring:
-            manager.restore_identity_agent_references(updates)
-        else:
-            manager.retarget_identity_agent_references("old", "new")
+        manager.retarget_identity_agent_references("old", "new")
 
     assert [manager.get_metadata(child.address) for child in children] == before
 
@@ -316,47 +311,3 @@ def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
     assert [update.address for update in updates] == [changed.address]
     assert manager.get_metadata(changed.address)["subagent_parent"]["agent_id"] == "new"
     assert [state(session) for session in (unrelated, qualified)] == before
-
-
-@pytest.mark.parametrize("new_parent", [False, True])
-def test_rename_compensation_only_restores_its_unchanged_parent_reference(manager, new_parent):
-    manager.create("worker", session_id="child")
-    address = _address("worker", "child")
-    # The shape the Sub-Agent service records; the store keeps these fields as columns.
-    original_parent = {
-        "id": "original-work",
-        "agent_id": "before",
-        "session_id": "parent-session",
-        "run_id": "parent-run",
-        "tool_call_id": "parent-call",
-        "tool_call_index": 0,
-        "project_id": None,
-    }
-    manager.set_metadata(address, {"title": "Before", "subagent_parent": original_parent})
-
-    updates = manager.retarget_identity_agent_references("before", "after")
-    assert manager.get_metadata(address)["subagent_parent"]["agent_id"] == "after"
-
-    def concurrent_edit(metadata):
-        metadata["title"] = "Concurrent title"
-        metadata["unrelated"] = {"retained": True}
-        if new_parent:
-            # A later delegation can retain the same renamed Agent but establish
-            # a different parent Run. Compensation must not rewrite that link.
-            metadata["subagent_parent"] = {
-                **metadata["subagent_parent"],
-                "id": "new-work",
-                "run_id": "new-parent-run",
-            }
-
-    manager.mutate_metadata(address, concurrent_edit)
-    expected_parent = (
-        manager.get_metadata(address)["subagent_parent"] if new_parent else original_parent
-    )
-    manager.restore_identity_agent_references(updates)
-
-    assert manager.get_metadata(address) == {
-        "title": "Concurrent title",
-        "unrelated": {"retained": True},
-        "subagent_parent": expected_parent,
-    }

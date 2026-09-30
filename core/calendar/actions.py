@@ -516,9 +516,11 @@ class CalendarActions:
         }
 
     def retarget_identity(self, source: str, destination: str) -> int:
-        """Retarget under the caller's Agent rename transaction; support compensation.
+        """Point every action and execution row that targets ``source`` at ``destination``.
 
-        Returns the number of retargeted actions for the rename's summary line.
+        One step of an Identity Agent rename: repeating it converges, and swapping
+        the ids reverts it. Returns the number of retargeted actions for the
+        rename's summary line.
         """
         self._load()
         previous = copy.deepcopy((self._actions, self._executions))

@@ -100,22 +100,50 @@ class AgentUpdateResult:
 
 
 @dataclass(frozen=True)
-class AgentRenameResult:
-    """A completed Identity Agent tree rename and its rollback snapshot."""
+class AgentRename:
+    """One pending Identity Agent rename, recorded in ``agents/rename-pending.json``.
 
-    agent: Agent
-    previous_agent: Agent = field(repr=False)
-    previous_order: _AgentOrderDocument | None = field(default=None, repr=False)
-    order_updated: bool = field(default=False, repr=False)
+    The record names the direction still to reach: ``source_id`` is replaced by
+    ``target_id`` everywhere. A failed rename reverses the record in place, so
+    ``rollback`` marks a record that now leads back to the original id.
+    ``staging_name`` is the sibling directory a case-only rename passes through.
+    """
+
+    source_id: str
+    target_id: str
+    staging_name: str | None = None
+    rollback: bool = False
+
+    @property
+    def old_id(self) -> str:
+        """The id the Agent had before the rename started."""
+        return self.target_id if self.rollback else self.source_id
+
+    @property
+    def new_id(self) -> str:
+        """The id the rename set out to give the Agent."""
+        return self.source_id if self.rollback else self.target_id
+
+    def reversed(self) -> AgentRename:
+        """Return the record that leads back to ``source_id``."""
+        return AgentRename(
+            source_id=self.target_id,
+            target_id=self.source_id,
+            staging_name=self.staging_name,
+            rollback=not self.rollback,
+        )
 
 
 @dataclass(frozen=True)
-class AgentReferenceUpdateResult:
-    """Exact Agent-config snapshots changed by an Identity Agent rename."""
+class AgentRenameResult:
+    """The Agent-owned half of a pending rename, applied and still recorded.
 
-    previous_agents: tuple[Agent, ...] = field(repr=False)
+    ``session_ids`` are the live Sessions that moved to the new id and
+    ``session_link_count`` the Sub-Agent parent links that now name it.
+    """
 
-    @property
-    def agent_ids(self) -> tuple[str, ...]:
-        """Return the Identity Agent configs whose policies changed."""
-        return tuple(agent.id for agent in self.previous_agents)
+    rename: AgentRename
+    agent: Agent
+    session_ids: tuple[str, ...] = ()
+    policy_agent_ids: tuple[str, ...] = ()
+    session_link_count: int = 0

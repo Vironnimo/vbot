@@ -8,7 +8,7 @@ from core.agents.agents import (
     AgentListResult,
     AgentNotFoundError,
     AgentOrderConflictError,
-    AgentReferenceUpdateResult,
+    AgentRename,
     AgentRenameResult,
     AgentStore,
     AgentUpdateResult,
@@ -20,6 +20,8 @@ from core.agents.agents import (
     validate_agent_file,
     validate_agent_order_data,
     validate_agent_order_file,
+    validate_agent_rename_data,
+    validate_agent_rename_file,
 )
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 
@@ -31,7 +33,7 @@ __all__ = [
     "AgentNotFoundError",
     "AgentListResult",
     "AgentOrderConflictError",
-    "AgentReferenceUpdateResult",
+    "AgentRename",
     "AgentRenameResult",
     "AgentStore",
     "AgentUpdateResult",
@@ -43,6 +45,8 @@ __all__ = [
     "validate_agent_file",
     "validate_agent_order_data",
     "validate_agent_order_file",
+    "validate_agent_rename_data",
+    "validate_agent_rename_file",
     "TemporaryAgent",
     "TemporaryAgentConfig",
     "TemporaryAgentRegistry",

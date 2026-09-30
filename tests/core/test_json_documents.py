@@ -344,6 +344,7 @@ def test_snapshot_document_paths_lists_exactly_the_documents_in_scope(tmp_path: 
         "settings.json",
         "agents/main/agent.json",
         "agents/order.json",
+        "agents/rename-pending.json",
         "agents/main/prompts/layout.json",
         "prompts/layout.json",
         "channels/telegram/channel.json",

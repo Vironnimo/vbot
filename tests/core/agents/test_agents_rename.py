@@ -1,18 +1,70 @@
-"""Agent rename, its compensation and Sub-Agent reference retargeting."""
+"""Agent rename: its Agent-owned half, its rollback, and its recovery after a crash."""
 
+import os
+import sys
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from core.agents import (
     Agent,
     AgentAlreadyExistsError,
+    AgentError,
+    AgentRename,
     AgentStore,
 )
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.agents.agents_test_support import persisted
 from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
+
+_CHILD = SessionAddress(None, "manager", "child")
+
+
+class _Killed(BaseException):
+    """The process dying at one step: no ``except Exception`` compensation runs."""
+
+
+def _record(store: AgentStore) -> Path:
+    return store.data_dir / "agents" / "rename-pending.json"
+
+
+def _seed(store: AgentStore) -> Agent:
+    """``coder``, a ``manager`` that delegates to it, and a Sub-Agent link to it."""
+    created = store.create(
+        "coder", "Coder Agent", tools={"subagent": {"allowed_agents": ["coder", "coder@project"]}}
+    )
+    store.create("manager", "Manager", tools={"subagent": {"allowed_agents": ["coder"]}})
+    sessions = store._session_manager()
+    sessions.create("coder", session_id="kept")
+    sessions.create("manager", session_id="child")
+    sessions.set_metadata(
+        _CHILD,
+        {"subagent_parent": {"agent_id": "coder", "session_id": "kept", "project_id": None}},
+    )
+    return created
+
+
+def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id: str) -> None:
+    """Every Agent-owned trace of ``created`` names ``agent_id`` and none ``other_id``."""
+    sessions = store._session_manager()
+    assert store.find(other_id) is None
+    agent = store.get(agent_id)
+    assert agent.name == "Coder Agent"
+    assert agent.current_session_id == created.current_session_id
+    assert agent.workspace == store.default_workspace(agent_id)
+    assert agent.tools["subagent"]["allowed_agents"] == [agent_id, "coder@project"]
+    assert store.get("manager").tools["subagent"]["allowed_agents"] == [agent_id]
+    assert sessions.exists(SessionAddress(None, agent_id, "kept"))
+    assert sessions.list_addresses(None, agent_id=other_id) == []
+    assert sessions.get_metadata(_CHILD)["subagent_parent"]["agent_id"] == agent_id
+    assert [listed.id for listed in store.list()] == [agent_id, "manager"]
+    assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == sorted(
+        [agent_id, "manager", "order.json"]
+    )
 
 
 def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
@@ -37,6 +89,7 @@ def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
     assert result.agent.created_at == created.created_at
     assert result.agent.updated_at != created.updated_at
     assert result.agent.workspace == str((new_dir / "homes" / "primary").resolve())
+    assert sorted(result.session_ids) == sorted([created.current_session_id, "kept-session"])
     assert store._session_manager().exists(
         SessionAddress(project_id=None, agent_id="researcher", session_id="kept-session")
     )
@@ -48,6 +101,11 @@ def test_rename_moves_complete_agent_tree_and_rebases_internal_workspace(
     data = persisted(store, "researcher")
     assert data["id"] == "researcher"
     assert data["workspace"] == "agents/researcher/homes/primary"
+    # The rename stays recorded until the caller has moved every other reference.
+    assert result.rename == AgentRename(source_id="coder", target_id="researcher")
+    assert _record(store).is_file()
+    store.finish_rename(result.rename)
+    assert not _record(store).exists()
 
 
 def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) -> None:
@@ -61,26 +119,47 @@ def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) 
     assert (workspace / "SOUL.md").is_file()
 
 
-def test_restore_rename_retargets_sessions_back_to_the_original_agent(store: AgentStore) -> None:
-    created = store.create("coder", "Coder Agent")
+def test_rename_retargets_bare_allowed_agent_ids_and_sub_agent_links(store: AgentStore) -> None:
+    _seed(store)
+    # A stale entry naming the new id merges instead of duplicating.
+    store.update(
+        "manager", tools={"subagent": {"allowed_agents": ["coder", "researcher", "coder@project"]}}
+    )
+
     result = store.rename("coder", "researcher")
 
-    store.restore_rename(result)
+    assert result.policy_agent_ids == ("manager", "researcher")
+    assert result.session_link_count == 1
+    assert store.get("manager").tools["subagent"]["allowed_agents"] == [
+        "researcher",
+        "coder@project",
+    ]
+    assert store.get("researcher").tools["subagent"]["allowed_agents"] == [
+        "researcher",
+        "coder@project",
+    ]
+    subagent_parent = store._session_manager().get_metadata(_CHILD)["subagent_parent"]
+    assert subagent_parent["agent_id"] == "researcher"
 
-    assert store._session_manager().exists(
-        SessionAddress(None, "coder", created.current_session_id)
-    )
-    assert not store._session_manager().exists(
-        SessionAddress(None, "researcher", created.current_session_id)
-    )
+
+def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:
+    created = _seed(store)
+    result = store.rename("coder", "researcher")
+
+    reverse = store.revert_rename(result.rename)
+
+    assert reverse == AgentRename(source_id="researcher", target_id="coder", rollback=True)
+    store.finish_rename(reverse)
+    _assert_agent_is(store, created, "coder", "researcher")
 
 
 def test_rename_supports_case_only_id_change(store: AgentStore) -> None:
     store.create("coder", "Coder Agent")
 
-    renamed = store.rename("coder", "Coder").agent
+    result = store.rename("coder", "Coder")
+    store.finish_rename(result.rename)
 
-    assert renamed.id == "Coder"
+    assert result.agent.id == "Coder"
     assert store.get("Coder").id == "Coder"
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == [
         "Coder",
@@ -112,13 +191,32 @@ def test_rename_rejects_existing_destination(store: AgentStore) -> None:
 
     assert store.get("coder").name == "Coder Agent"
     assert store.get("researcher").name == "Researcher Agent"
+    assert not _record(store).exists()
 
 
+def test_a_pending_rename_blocks_other_renames_and_its_ids(store: AgentStore) -> None:
+    store.create("coder", "Coder Agent")
+    store.create("writer", "Writer")
+    result = store.rename("coder", "researcher")
+
+    with pytest.raises(AgentError):
+        store.rename("writer", "author")
+    with pytest.raises(AgentError):
+        store.create("coder")
+
+    store.finish_rename(result.rename)
+    assert store.create("coder").id == "coder"
+    assert store.rename("writer", "author").agent.id == "author"
+
+
+@pytest.mark.parametrize("rollback_fails", [False, True])
 def test_rename_rolls_tree_back_when_config_write_fails(
     store: AgentStore,
     monkeypatch: pytest.MonkeyPatch,
+    template_dir: Path,
+    rollback_fails: bool,
 ) -> None:
-    store.create("coder", "Coder Agent")
+    created = _seed(store)
     original_write = store._write_agent
 
     def fail_new_config(agent: Agent) -> None:
@@ -127,40 +225,137 @@ def test_rename_rolls_tree_back_when_config_write_fails(
         original_write(agent)
 
     monkeypatch.setattr(store, "_write_agent", fail_new_config)
+    if rollback_fails:
+        # The tree cannot move back (a file held open); the next start finishes.
+        _fail_replace(monkeypatch, lambda source: source.name == "researcher", PermissionError)
 
     with pytest.raises(OSError, match="disk full"):
         store.rename("coder", "researcher")
 
-    assert store.get("coder").id == "coder"
-    assert not (store.data_dir / "agents" / "researcher").exists()
+    if rollback_fails:
+        monkeypatch.undo()
+        store.close()
+        store = AgentStore(store.data_dir, template_dir=template_dir)
+        reverse = store.recover_rename()
+        assert reverse == AgentRename(source_id="researcher", target_id="coder", rollback=True)
+        store.finish_rename(reverse)
+    assert not _record(store).exists()
+    _assert_agent_is(store, created, "coder", "researcher")
 
 
-def test_retarget_allowed_agent_references_is_exact_and_reversible(store: AgentStore) -> None:
-    store.create(
-        "coder",
-        "Coder Agent",
-        tools={"subagent": {"allowed_agents": ["coder", "coder@project"]}},
-    )
-    store.create(
-        "manager",
-        "Manager Agent",
-        tools={"subagent": {"allowed_agents": ["coder", "researcher", "coder@project"]}},
-    )
-    store.rename("coder", "researcher")
-    manager_before = store.get_raw("manager")
+def _fail_replace(
+    monkeypatch: pytest.MonkeyPatch,
+    matches: Callable[[Path], bool],
+    error: type[BaseException],
+) -> None:
+    """Make ``os.replace`` of a matching source path raise ``error``."""
+    original = os.replace
 
-    update = store.retarget_allowed_agent_references("coder", "researcher")
+    def replace(source: Any, destination: Any) -> None:
+        if matches(Path(source)):
+            raise error(f"cannot move {source}")
+        original(source, destination)
 
-    assert update.agent_ids == ("researcher", "manager")
-    assert store.get("manager").tools["subagent"]["allowed_agents"] == [
-        "researcher",
-        "coder@project",
-    ]
-    assert store.get("researcher").tools["subagent"]["allowed_agents"] == [
-        "researcher",
-        "coder@project",
-    ]
+    monkeypatch.setattr(os, "replace", replace)
 
-    store.restore_allowed_agent_references(update)
 
-    assert store.get_raw("manager") == manager_before
+def _die(*_args: Any) -> None:
+    raise _Killed
+
+
+def _kill_on_sessions(store: AgentStore, monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    monkeypatch.setattr(store._session_manager(), method, _die)
+
+
+def _kill_on_write(store: AgentStore, monkeypatch: pytest.MonkeyPatch, agent_id: str) -> None:
+    original = store._write_agent
+
+    def write(agent: Agent) -> None:
+        if agent.id == agent_id:
+            raise _Killed
+        original(agent)
+
+    monkeypatch.setattr(store, "_write_agent", write)
+
+
+def _kill_on_order(store: AgentStore, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(store, "_write_agent_order", _die)
+
+
+_KILL_POINTS: dict[str, Callable[[AgentStore, pytest.MonkeyPatch], None]] = {
+    "before-sessions": lambda store, patch: _kill_on_sessions(
+        store, patch, "retarget_identity_agent_sessions"
+    ),
+    "before-sub-agent-links": lambda store, patch: _kill_on_sessions(
+        store, patch, "retarget_identity_agent_references"
+    ),
+    "before-tree": lambda _store, patch: _fail_replace(
+        patch, lambda source: source.name == "coder", _Killed
+    ),
+    "between-case-only-moves": lambda _store, patch: _fail_replace(
+        patch, lambda source: source.name.startswith(".coder.rename-"), _Killed
+    ),
+    "before-config": lambda store, patch: _kill_on_write(store, patch, "researcher"),
+    "before-order": _kill_on_order,
+    "before-policies": lambda store, patch: _kill_on_write(store, patch, "manager"),
+}
+
+
+@contextmanager
+def _killed_at(store: AgentStore, point: str) -> Iterator[None]:
+    with pytest.MonkeyPatch.context() as patch:
+        _KILL_POINTS[point](store, patch)
+        with pytest.raises(_Killed):
+            yield
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        pytest.param(
+            point,
+            marks=pytest.mark.skipif(
+                point == "between-case-only-moves" and sys.platform != "win32",
+                reason="only case-insensitive filesystems stage a case-only rename",
+            ),
+        )
+        for point in _KILL_POINTS
+    ],
+)
+def test_a_rename_killed_at_any_step_completes_on_the_next_start(
+    store: AgentStore, template_dir: Path, point: str
+) -> None:
+    created = _seed(store)
+    new_id = "Coder" if point == "between-case-only-moves" else "researcher"
+
+    with _killed_at(store, point):
+        store.rename("coder", new_id)
+    store.close()
+
+    restarted = AgentStore(store.data_dir, template_dir=template_dir)
+    rename = restarted.recover_rename()
+    assert rename is not None
+    assert (rename.source_id, rename.target_id, rename.rollback) == ("coder", new_id, False)
+    restarted.finish_rename(rename)
+
+    _assert_agent_is(restarted, created, new_id, "coder")
+
+
+def test_a_rename_killed_while_reverting_rolls_back_on_the_next_start(
+    store: AgentStore, template_dir: Path
+) -> None:
+    created = _seed(store)
+    result = store.rename("coder", "researcher")
+
+    with pytest.MonkeyPatch.context() as patch:
+        _fail_replace(patch, lambda source: source.name == "researcher", _Killed)
+        with pytest.raises(_Killed):
+            store.revert_rename(result.rename)
+    store.close()
+
+    restarted = AgentStore(store.data_dir, template_dir=template_dir)
+    rename = restarted.recover_rename()
+    assert rename == AgentRename(source_id="researcher", target_id="coder", rollback=True)
+    restarted.finish_rename(rename)
+
+    _assert_agent_is(restarted, created, "coder", "researcher")

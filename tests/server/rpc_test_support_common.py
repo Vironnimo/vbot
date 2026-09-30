@@ -7,7 +7,6 @@ import builtins
 import json
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +17,8 @@ import pytest
 from core.agents import (
     AgentAlreadyExistsError,
     AgentOrderConflictError,
+    AgentRename,
+    AgentRenameResult,
     InvalidAgentOrderError,
     default_workspace_dir,
 )
@@ -240,49 +241,29 @@ class StubAgents:
             backup_dir=None,
         )
 
-    def rename(self, agent_id: str, new_agent_id: str) -> Any:
+    def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
         if new_agent_id in self._agents:
             raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
-        previous = self._get_raw(agent_id)
-        renamed = StubAgent(**{**previous.__dict__, "id": new_agent_id})
-        del self._agents[agent_id]
-        self._agents[new_agent_id] = renamed
-        self._order = [new_agent_id if item == agent_id else item for item in self._order]
-        self._order_revision += 1
-        return SimpleNamespace(agent=self.get(new_agent_id), previous_agent=previous)
+        self._get_raw(agent_id)
+        rename = AgentRename(source_id=agent_id, target_id=new_agent_id)
+        self._move(rename)
+        return AgentRenameResult(rename=rename, agent=cast(Any, self.get(new_agent_id)))
 
-    def restore_rename(self, result: Any) -> None:
-        del self._agents[result.agent.id]
-        self._agents[result.previous_agent.id] = result.previous_agent
+    def revert_rename(self, rename: AgentRename) -> AgentRename:
+        reverse = rename.reversed()
+        self._move(reverse)
+        return reverse
+
+    def finish_rename(self, _rename: AgentRename) -> None:
+        return None
+
+    def _move(self, rename: AgentRename) -> None:
+        agent = self._agents.pop(rename.source_id)
+        self._agents[rename.target_id] = StubAgent(**{**agent.__dict__, "id": rename.target_id})
         self._order = [
-            result.previous_agent.id if item == result.agent.id else item for item in self._order
+            rename.target_id if item == rename.source_id else item for item in self._order
         ]
         self._order_revision += 1
-
-    def retarget_allowed_agent_references(
-        self,
-        old_agent_id: str,
-        new_agent_id: str,
-    ) -> Any:
-        previous_agents: list[StubAgent] = []
-        for agent_id, agent in list(self._agents.items()):
-            tools = deepcopy(agent.tools or {})
-            allowed = tools.get("subagent", {}).get("allowed_agents")
-            if not isinstance(allowed, list) or old_agent_id not in allowed:
-                continue
-            previous_agents.append(agent)
-            tools["subagent"]["allowed_agents"] = list(
-                dict.fromkeys(new_agent_id if item == old_agent_id else item for item in allowed)
-            )
-            self._agents[agent_id] = StubAgent(**{**agent.__dict__, "tools": tools})
-        return SimpleNamespace(
-            previous_agents=tuple(previous_agents),
-            agent_ids=tuple(agent.id for agent in previous_agents),
-        )
-
-    def restore_allowed_agent_references(self, result: Any) -> None:
-        for agent in result.previous_agents:
-            self._agents[agent.id] = agent
 
     def delete(self, agent_id: str) -> Path:
         self._get_raw(agent_id)

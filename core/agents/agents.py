@@ -5,10 +5,11 @@ from __future__ import annotations
 import builtins
 import shutil
 import tempfile
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any
@@ -18,6 +19,8 @@ from core.agents._config import (
     AGENT_FORMAT,
     AGENT_ORDER_FORMAT,
     AGENT_ORDER_SHAPE,
+    AGENT_RENAME_FORMAT,
+    AGENT_RENAME_SHAPE,
     DEFAULT_ALLOWED_ITEMS,
     DEFAULT_FALLBACK_MODELS,
     DEFAULT_MODEL,
@@ -26,6 +29,8 @@ from core.agents._config import (
     _agent_document,
     _agent_from_dict,
     _agent_order_document,
+    _agent_rename_document,
+    _agent_rename_from_data,
     _apply_agent_order,
     _apply_defaults,
     _normalize_agent_name,
@@ -49,6 +54,8 @@ from core.agents._config import (
     validate_agent_file,
     validate_agent_order_data,
     validate_agent_order_file,
+    validate_agent_rename_data,
+    validate_agent_rename_file,
 )
 from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
@@ -58,7 +65,7 @@ from core.agents._types import (
     AgentListResult,
     AgentNotFoundError,
     AgentOrderConflictError,
-    AgentReferenceUpdateResult,
+    AgentRename,
     AgentRenameResult,
     AgentUpdateResult,
     InvalidAgentIdError,
@@ -109,7 +116,7 @@ __all__ = [
     "AgentListResult",
     "AgentNotFoundError",
     "AgentOrderConflictError",
-    "AgentReferenceUpdateResult",
+    "AgentRename",
     "AgentRenameResult",
     "AgentStore",
     "AgentUpdateResult",
@@ -129,6 +136,8 @@ __all__ = [
     "validate_agent_file",
     "validate_agent_order_data",
     "validate_agent_order_file",
+    "validate_agent_rename_data",
+    "validate_agent_rename_file",
 ]
 
 _BOOTSTRAP_AGENT_ID = "main"
@@ -137,11 +146,21 @@ _BOOTSTRAP_AGENT_NAME = "Main"
 
 _AGENT_ORDER_FILE_NAME = "order.json"
 
+_AGENT_RENAME_FILE_NAME = "rename-pending.json"
+
 _LOGGER = get_logger("agents")
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
+
+
+@dataclass(frozen=True)
+class _AppliedRename:
+    """What the Agent-owned half of one rename direction changed besides the tree."""
+
+    policy_agent_ids: tuple[str, ...]
+    session_link_count: int
 
 
 class AgentStore:
@@ -214,6 +233,11 @@ class AgentStore:
             agent_dir = self._agent_dir(agent_id)
             if agent_dir.exists():
                 raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
+            if agent_id in self._pending_rename_ids():
+                raise AgentError(
+                    f"Agent id {agent_id} belongs to an unfinished rename; "
+                    "restart vBot to finish it"
+                )
 
             validated_name = _normalize_agent_name(agent_id, name)
             validated_model = _validate_string_field("model", model, allow_empty=True)
@@ -492,7 +516,8 @@ class AgentStore:
 
             candidate = _BOOTSTRAP_AGENT_ID
             suffix = 2
-            while self._agent_dir(candidate).exists():
+            reserved = self._pending_rename_ids()
+            while self._agent_dir(candidate).exists() or candidate in reserved:
                 candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
                 suffix += 1
             return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
@@ -638,146 +663,242 @@ class AgentStore:
             self._write_agent(previous_agent)
 
     def rename(self, agent_id: str, new_agent_id: str) -> AgentRenameResult:
-        """Rename one complete Identity Agent tree as a rollback-capable mutation.
+        """Start renaming one Identity Agent and apply the Agent-owned half.
 
         Sessions, prompts, private Skills, the default Workspace, and every other
         Agent-owned file live below the same directory, so moving that directory
         preserves the whole identity. A Workspace anywhere inside the tree is
         rebased to the same relative location; an external Workspace is unchanged.
+        Live Session addresses, Sub-Agent parent links, the roster order and
+        delegation allow-lists move to the new id with it.
+
+        ``agents/rename-pending.json`` records the rename before its first change
+        and every step converges when repeated, so a rename interrupted at any
+        point completes on the next start (:meth:`recover_rename`). The record
+        stays pending after a successful return: the caller retargets the
+        references other domains hold and then calls :meth:`finish_rename`, or
+        :meth:`revert_rename` when that fails. A failure here reverts the
+        Agent-owned half and removes the record. While a rename is pending, no
+        other rename starts and neither id can be created.
         """
         with self._write_lock:
             _validate_agent_id(agent_id)
             _validate_agent_id(new_agent_id)
             if agent_id == new_agent_id:
                 raise AgentError("new agent id must differ from the current id")
+            if self._rename_record_path().exists():
+                raise AgentError(
+                    "An earlier Agent rename is still pending; restart vBot to finish it"
+                )
 
             source_dir = self._agent_dir(agent_id)
             destination_dir = self._agent_dir(new_agent_id)
-            self._require_agent_path(agent_id)
-            if destination_dir.exists() and not _paths_are_same_location(
-                source_dir, destination_dir
-            ):
+            agent_path = self._require_agent_path(agent_id)
+            case_only = _paths_are_same_location(source_dir, destination_dir)
+            if destination_dir.exists() and not case_only:
                 raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
-
-            previous_listing = self.list_with_order()
-            previous_order = self._load_agent_order()
-            previous_agent = self._load_verified_agent(self._agent_path(agent_id))
-            renamed_workspace = _rebase_path_with_tree(
-                previous_agent.workspace,
-                source_dir,
-                destination_dir,
+            sessions = self._session_manager()
+            # Rolling back renames the new id's Sessions back, so it must own none yet.
+            if sessions.list_addresses(None, agent_id=new_agent_id):
+                raise AgentAlreadyExistsError(f"Sessions already exist for Agent: {new_agent_id}")
+            # Repairs a dangling current-Session pointer before the Sessions move.
+            self._load_verified_agent(agent_path)
+            session_ids = tuple(
+                address.session_id for address in sessions.list_addresses(None, agent_id=agent_id)
             )
-            renamed_agent = replace(
-                previous_agent,
-                id=new_agent_id,
-                workspace=str(renamed_workspace),
-                updated_at=_utc_now(),
+            rename = AgentRename(
+                source_id=agent_id,
+                target_id=new_agent_id,
+                staging_name=f".{agent_id}.rename-{uuid.uuid4().hex}.tmp" if case_only else None,
             )
-
-            order_updated = False
-            agent_config_updated = False
-            sessions_retargeted = False
-            tree_moved = False
+            self._write_rename_record(rename)
             try:
-                self._session_manager().retarget_identity_agent_sessions(agent_id, new_agent_id)
-                sessions_retargeted = True
-                workspace_ops._move_agent_tree(source_dir, destination_dir)
-                tree_moved = True
-                self._write_agent(renamed_agent)
-                agent_config_updated = True
-                if previous_order is not None:
-                    renamed_ids = tuple(
-                        new_agent_id if listed.id == agent_id else listed.id
-                        for listed in previous_listing.agents
-                    )
-                    self._write_agent_order(
-                        _AgentOrderDocument(
-                            agent_ids=renamed_ids,
-                            revision=previous_order.revision + 1,
-                        )
-                    )
-                    order_updated = True
-            except Exception:
-                if tree_moved:
-                    workspace_ops._move_agent_tree(destination_dir, source_dir)
-                if sessions_retargeted:
-                    self._session_manager().retarget_identity_agent_sessions(new_agent_id, agent_id)
-                if agent_config_updated:
-                    self._write_agent(previous_agent)
+                applied = self._apply_rename(rename)
+                renamed = self._read_agent_config(self._require_agent_path(new_agent_id))
+            except Exception as error:
+                self._roll_back_rename(rename, error)
                 raise
-
             return AgentRenameResult(
-                agent=_apply_defaults(renamed_agent, self._agent_defaults()),
-                previous_agent=previous_agent,
-                previous_order=previous_order,
-                order_updated=order_updated,
+                rename=rename,
+                agent=_apply_defaults(renamed, self._agent_defaults()),
+                session_ids=session_ids,
+                policy_agent_ids=applied.policy_agent_ids,
+                session_link_count=applied.session_link_count,
             )
 
-    def restore_rename(self, result: AgentRenameResult) -> None:
-        """Restore the exact pre-rename Agent tree and config snapshot."""
-        with self._write_lock:
-            self._session_manager().retarget_identity_agent_sessions(
-                result.agent.id, result.previous_agent.id
-            )
-            try:
-                workspace_ops._move_agent_tree(
-                    self._agent_dir(result.agent.id),
-                    self._agent_dir(result.previous_agent.id),
-                )
-            except Exception:
-                self._session_manager().retarget_identity_agent_sessions(
-                    result.previous_agent.id, result.agent.id
-                )
-                raise
-            self._write_agent(result.previous_agent)
-            if result.order_updated:
-                self._restore_agent_order(result.previous_order)
+    def revert_rename(self, rename: AgentRename) -> AgentRename:
+        """Reverse the pending ``rename`` and apply its Agent-owned half back.
 
-    def retarget_allowed_agent_references(
-        self,
-        old_agent_id: str,
-        new_agent_id: str,
-    ) -> AgentReferenceUpdateResult:
-        """Retarget bare Identity Agent ids in every delegation allow-list.
-
-        Project-qualified addresses such as ``builder@project`` name Config
-        Agents and are a separate address space, so they are deliberately left
-        untouched. Exact config snapshots make this mutation reversible without
-        reconstructing prior list order or timestamps.
+        Returns the reversed record, which stays pending until the caller has
+        retargeted the other domains' references back and calls
+        :meth:`finish_rename` with it. On failure the reversed record stays, and
+        the next start completes the rollback.
         """
         with self._write_lock:
-            _validate_agent_id(old_agent_id)
-            _validate_agent_id(new_agent_id)
-            previous_agents: list[Agent] = []
-            try:
-                for listed_agent in self.list():
-                    agent = self.get_raw(listed_agent.id)
-                    tools = deepcopy(agent.tools)
-                    subagent = tools.get("subagent")
-                    if not isinstance(subagent, dict):
-                        continue
-                    allowed_agents = subagent.get("allowed_agents")
-                    if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
-                        continue
-                    retargeted = _replace_list_item_once(
-                        allowed_agents,
-                        old_agent_id,
-                        new_agent_id,
-                    )
-                    subagent["allowed_agents"] = retargeted
-                    previous_agents.append(agent)
-                    self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
-            except Exception:
-                for previous_agent in reversed(previous_agents):
-                    self._write_agent(previous_agent)
-                raise
-            return AgentReferenceUpdateResult(previous_agents=tuple(previous_agents))
+            self._require_pending_rename(rename)
+            reverse = rename.reversed()
+            self._write_rename_record(reverse)
+            self._apply_rename(reverse)
+            return reverse
 
-    def restore_allowed_agent_references(self, result: AgentReferenceUpdateResult) -> None:
-        """Restore exact Agent configs changed by a reference retarget."""
+    def finish_rename(self, rename: AgentRename) -> None:
+        """Remove the pending ``rename`` record once every reference is retargeted."""
         with self._write_lock:
-            for previous_agent in reversed(result.previous_agents):
-                self._write_agent(previous_agent)
+            self._require_pending_rename(rename)
+            self._rename_record_path().unlink(missing_ok=True)
+
+    def recover_rename(self) -> AgentRename | None:
+        """Bring an interrupted rename's Agent-owned half to one consistent end.
+
+        Runs at startup before the roster is read. The pending record is applied
+        again in its direction; when that fails, it is reversed and applied back
+        instead. Returns the record whose Agent-owned half is now complete: the
+        caller retargets the other domains' references in its direction and calls
+        :meth:`finish_rename`. Returns ``None`` when no rename is pending, and when
+        the record cannot be read or neither direction completes; that record
+        stays for the next start and the failure is logged.
+        """
+        with self._write_lock:
+            try:
+                rename = self._load_rename_record()
+            except (AgentError, OSError) as error:
+                _LOGGER.error("Pending Agent rename cannot be read and stays in place: %s", error)
+                return None
+            if rename is None:
+                return None
+            try:
+                self._apply_rename(rename)
+                return rename
+            except Exception as error:
+                _LOGGER.warning(
+                    "Agent rename could not be completed after restart; reverting it "
+                    "(agent=%s new_agent=%s): %s",
+                    rename.old_id,
+                    rename.new_id,
+                    error,
+                )
+            reverse = rename.reversed()
+            try:
+                self._write_rename_record(reverse)
+                self._apply_rename(reverse)
+            except Exception as error:
+                _LOGGER.error(
+                    "Agent rename recovery failed; the next start retries it "
+                    "(agent=%s new_agent=%s)",
+                    rename.old_id,
+                    rename.new_id,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+                return None
+            return reverse
+
+    def _roll_back_rename(self, rename: AgentRename, error: Exception) -> None:
+        """Revert a rename whose Agent-owned half failed; the next start finishes a failure."""
+        reverse = rename.reversed()
+        try:
+            self._write_rename_record(reverse)
+            self._apply_rename(reverse)
+            self._rename_record_path().unlink(missing_ok=True)
+        except Exception as rollback_error:
+            _LOGGER.error(
+                "Agent rename rollback incomplete; the next start finishes it "
+                "(agent=%s new_agent=%s error=%s)",
+                rename.old_id,
+                rename.new_id,
+                error,
+                exc_info=(type(rollback_error), rollback_error, rollback_error.__traceback__),
+            )
+
+    def _apply_rename(self, rename: AgentRename) -> _AppliedRename:
+        """Move every Agent-owned trace of ``source_id`` to ``target_id``.
+
+        Each step selects only what still names ``source_id`` or converges on its
+        target state, so repeating the whole sequence after an interruption at any
+        point finishes it.
+        """
+        sessions = self._session_manager()
+        sessions.retarget_identity_agent_sessions(rename.source_id, rename.target_id)
+        link_count = len(
+            sessions.retarget_identity_agent_references(rename.source_id, rename.target_id)
+        )
+        if workspace_ops._move_renamed_tree(self._data_dir / "agents", rename):
+            self._write_renamed_config(rename)
+            self._rename_order_entry(rename)
+        else:
+            _LOGGER.warning(
+                "Agent files missing during rename; only references were renamed "
+                "(agent=%s new_agent=%s)",
+                rename.old_id,
+                rename.new_id,
+            )
+        return _AppliedRename(
+            policy_agent_ids=self._retarget_allowed_agents(rename.source_id, rename.target_id),
+            session_link_count=link_count,
+        )
+
+    def _write_renamed_config(self, rename: AgentRename) -> None:
+        """Give the moved config the target id and rebase an in-tree Workspace."""
+        agent_path = self._agent_path(rename.target_id)
+        data = load_validated_agent_json(agent_path)
+        if data["id"] not in (rename.source_id, rename.target_id):
+            raise AgentError(f"{agent_path}: Agent id {data['id']!r} does not match the rename")
+        agent = _agent_from_dict(
+            data,
+            data_dir=self._data_dir,
+            default_workspace=self._default_workspace(rename.target_id),
+        )
+        workspace = str(
+            _rebase_path_with_tree(
+                agent.workspace,
+                self._agent_dir(rename.source_id),
+                self._agent_dir(rename.target_id),
+            )
+        )
+        if agent.id == rename.target_id and workspace == agent.workspace:
+            return
+        self._write_agent(
+            replace(agent, id=rename.target_id, workspace=workspace, updated_at=_utc_now())
+        )
+
+    def _rename_order_entry(self, rename: AgentRename) -> None:
+        """Keep the renamed Agent at its roster position."""
+        order = self._load_agent_order()
+        if order is None or rename.source_id not in order.agent_ids:
+            return
+        agent_ids = _replace_list_item_once(
+            builtins.list(order.agent_ids), rename.source_id, rename.target_id
+        )
+        self._write_agent_order(
+            _AgentOrderDocument(agent_ids=tuple(agent_ids), revision=order.revision + 1)
+        )
+
+    def _retarget_allowed_agents(self, old_agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        """Retarget bare Identity Agent ids in every delegation allow-list.
+
+        Project-qualified addresses such as ``builder@project`` name Config Agents
+        and are a separate address space, so they are deliberately left untouched.
+        Configs are read side-effect free, and an invalid one is skipped as the
+        roster skips it. Returns the ids of the Agents whose configs changed.
+        """
+        changed: builtins.list[str] = []
+        for agent_path in sorted((self._data_dir / "agents").glob("*/agent.json")):
+            try:
+                agent = self._read_agent_config(agent_path)
+            except (AgentError, OSError):
+                continue
+            subagent = agent.tools.get("subagent")
+            if not isinstance(subagent, dict):
+                continue
+            allowed_agents = subagent.get("allowed_agents")
+            if not isinstance(allowed_agents, list) or old_agent_id not in allowed_agents:
+                continue
+            tools = deepcopy(agent.tools)
+            tools["subagent"]["allowed_agents"] = _replace_list_item_once(
+                allowed_agents, old_agent_id, new_agent_id
+            )
+            self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+            changed.append(agent.id)
+        return tuple(changed)
 
     def agents_rooted_in(self, project_id: str) -> builtins.list[Agent]:
         """Return Identity Agents explicitly referencing one Project."""
@@ -939,6 +1060,47 @@ class AgentStore:
     def _agent_order_path(self) -> Path:
         return self._data_dir / "agents" / _AGENT_ORDER_FILE_NAME
 
+    def _rename_record_path(self) -> Path:
+        return self._data_dir / "agents" / _AGENT_RENAME_FILE_NAME
+
+    def _load_rename_record(self) -> AgentRename | None:
+        try:
+            data = load_validated_json_file(
+                self._rename_record_path(),
+                validate_agent_rename_data,
+                missing_ok=True,
+                missing_default=None,
+            )
+        except JsonConfigValidationError as error:
+            raise AgentError(str(error)) from error
+        if data is None:
+            return None
+        return _agent_rename_from_data(strip_unknown_fields(data, AGENT_RENAME_SHAPE))
+
+    def _write_rename_record(self, rename: AgentRename) -> None:
+        try:
+            write_json_document(
+                self._rename_record_path(), _agent_rename_document(rename), AGENT_RENAME_FORMAT
+            )
+        except JsonDocumentWriteError as error:
+            raise AgentError(str(error)) from error
+
+    def _require_pending_rename(self, rename: AgentRename) -> None:
+        if self._load_rename_record() != rename:
+            raise AgentError(
+                f"No such pending Agent rename: {rename.source_id} -> {rename.target_id}"
+            )
+
+    def _pending_rename_ids(self) -> frozenset[str]:
+        """Both ids of a readable pending rename, which no new Agent may take."""
+        try:
+            rename = self._load_rename_record()
+        except (AgentError, OSError):
+            return frozenset()
+        if rename is None:
+            return frozenset()
+        return frozenset((rename.source_id, rename.target_id))
+
     def default_workspace(self, agent_id: str) -> str:
         """Return an agent's default identity home as a resolved absolute path.
 
@@ -1006,13 +1168,6 @@ class AgentStore:
             except JsonDocumentWriteError as error:
                 raise AgentError(str(error)) from error
         self._reported_order_error = None
-
-    def _restore_agent_order(self, order: _AgentOrderDocument | None) -> None:
-        if order is None:
-            self._agent_order_path().unlink(missing_ok=True)
-            self._reported_order_error = None
-            return
-        self._write_agent_order(order)
 
     def _agent_defaults(self) -> AgentDefaults:
         if self._defaults_provider is None:

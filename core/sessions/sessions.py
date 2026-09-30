@@ -693,12 +693,12 @@ class ChatSessionManager:
     def retarget_identity_agent_references(
         self, old_agent_id: str, new_agent_id: str
     ) -> tuple[SessionIdentityReferenceUpdate, ...]:
-        return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
+        """Point every live Sub-Agent parent link that names an Identity Agent at its new id.
 
-    def restore_identity_agent_references(
-        self, updates: tuple[SessionIdentityReferenceUpdate, ...]
-    ) -> None:
-        self._store.restore_identity_agent_references(updates)
+        Only links still naming ``old_agent_id`` change, so a repeated call after an
+        interruption finishes the retarget; reversing the ids reverts it.
+        """
+        return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.
@@ -763,6 +763,11 @@ class ChatSessionManager:
         self._store.restore(address)
 
     def retarget_identity_agent_sessions(self, old_agent_id: str, new_agent_id: str) -> None:
+        """Move every live global Session of an Identity Agent to its new id.
+
+        Only Sessions still owned by ``old_agent_id`` move, so a repeated call after an
+        interruption finishes the move.
+        """
         self._store.retarget_identity_agent(old_agent_id, new_agent_id)
 
     def archive_identity_agent_sessions(self, agent_id: str) -> None:
