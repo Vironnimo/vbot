@@ -1,13 +1,16 @@
 """Tests for shared logging infrastructure."""
 
 import logging
+import os
 import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
+from core.utils import logging as logging_module
 from core.utils.logging import (
     DailyFileHandler,
     LogManager,
@@ -170,28 +173,227 @@ def test_log_manager_writes_channel_session_ids_with_pseudonymous_platform_part(
     assert re.search(r"KeyError: 'ch-pseudo-tg-#[0-9a-f]{6}'", text)
 
 
-def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
-    """Daily file handler switches files when the day rolls over."""
-    dates = DateSequence(date(2026, 5, 10), date(2026, 5, 10), date(2026, 5, 11))
-    handler = DailyFileHandler(tmp_path / "logs", current_date_provider=dates)
+def _write_through(handler: DailyFileHandler, *messages: str) -> None:
+    """Write *messages* through *handler* alone, then close it (awaiting its sweep)."""
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger = logging.getLogger("tests.daily-file-handler")
     logger.handlers = []
     logger.setLevel(logging.INFO)
     logger.propagate = False
     logger.addHandler(handler)
-
     try:
-        logger.info("first day")
-        logger.info("second day")
+        for message in messages:
+            logger.info(message)
     finally:
         logger.removeHandler(handler)
         handler.close()
+
+
+def _write_files(logs_dir: Path, sizes: dict[str, int]) -> None:
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    for name, size in sizes.items():
+        (logs_dir / name).write_bytes(b"x" * size)
+
+
+def _retention_lines(caplog: pytest.LogCaptureFixture) -> list[tuple[int, dict[str, str]]]:
+    """Return the level and ``key=value`` fields of every retention record."""
+    return [
+        (record.levelno, dict(re.findall(r"(\w+)=([^\s)]+)", record.getMessage())))
+        for record in caplog.records
+        if record.name == "vbot.logging"
+    ]
+
+
+def test_daily_file_handler_rotates_when_date_changes(tmp_path: Path) -> None:
+    """Daily file handler switches files when the day rolls over."""
+    dates = DateSequence(date(2026, 5, 10), date(2026, 5, 10), date(2026, 5, 11))
+
+    _write_through(
+        DailyFileHandler(tmp_path / "logs", current_date_provider=dates), "first day", "second day"
+    )
 
     assert (tmp_path / "logs" / "2026-05-10.log").read_text(encoding="utf-8").strip() == "first day"
     assert (tmp_path / "logs" / "2026-05-11.log").read_text(
         encoding="utf-8"
     ).strip() == "second day"
+
+
+def test_opening_a_day_deletes_only_daily_log_files_past_the_retention(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """At start and at each rollover, in the background; nothing else in the directory."""
+    caplog.set_level(logging.INFO, logger="vbot.logging")
+    logs_dir = tmp_path / "logs"
+    # 90 days before 2026-09-29 is 2026-07-01; before 2026-09-30 it is 2026-07-02.
+    _write_files(logs_dir, {"2026-06-30.log": 30, "2026-07-01.log": 20, "2026-07-02.log": 10})
+    unrelated = [
+        "2026-06-01",
+        "2026-06-01.log.1",
+        "2026-06-02.LOG",
+        "2026-13-45.log",
+        "server-startup.log",
+        "notes.txt",
+    ]
+    _write_files(logs_dir, dict.fromkeys(unrelated, 1))
+    (logs_dir / "2026-06-03.log").mkdir()
+    dates = DateSequence(date(2026, 9, 29), date(2026, 9, 29), date(2026, 9, 30))
+
+    _write_through(DailyFileHandler(logs_dir, current_date_provider=dates), "start", "next day")
+
+    assert sorted(path.name for path in logs_dir.iterdir()) == sorted(
+        [*unrelated, "2026-06-03.log", "2026-07-02.log", "2026-09-29.log", "2026-09-30.log"]
+    )
+    assert _retention_lines(caplog) == [
+        (
+            logging.INFO,
+            {
+                "count": "1",
+                "bytes": "30",
+                "reason": "age",
+                "oldest": "2026-06-30",
+                "newest": "2026-06-30",
+            },
+        ),
+        (
+            logging.INFO,
+            {
+                "count": "1",
+                "bytes": "20",
+                "reason": "age",
+                "oldest": "2026-07-01",
+                "newest": "2026-07-01",
+            },
+        ),
+    ]
+    # Never on the thread that wrote the record, which may be the Event Loop.
+    assert all(
+        (record.threadName or "").startswith("vbot-log-retention")
+        for record in caplog.records
+        if record.name == "vbot.logging"
+    )
+
+
+@pytest.mark.parametrize(
+    ("current_day_bytes", "deleted"),
+    [
+        (30, ["2026-09-26.log", "2026-09-27.log", "2026-09-28.log"]),
+        (500, ["2026-09-26.log", "2026-09-27.log", "2026-09-28.log", "2026-09-29.log"]),
+    ],
+    ids=["oldest-first-until-under-the-cap", "current-day-alone-over-the-cap"],
+)
+def test_opening_a_day_deletes_the_oldest_daily_log_files_beyond_the_size_cap(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    current_day_bytes: int,
+    deleted: list[str],
+) -> None:
+    caplog.set_level(logging.INFO, logger="vbot.logging")
+    monkeypatch.setattr(logging_module, "LOG_RETENTION_MAX_BYTES", 100)
+    logs_dir = tmp_path / "logs"
+    older = ["2026-09-26.log", "2026-09-27.log", "2026-09-28.log", "2026-09-29.log"]
+    _write_files(logs_dir, {**dict.fromkeys(older, 40), "2026-09-30.log": current_day_bytes})
+
+    # Whether the sweep counts the written record or not changes nothing below.
+    _write_through(DailyFileHandler(logs_dir, current_date_provider=lambda: date(2026, 9, 30)), "x")
+
+    assert sorted(path.name for path in logs_dir.iterdir()) == [
+        *(name for name in older if name not in deleted),
+        "2026-09-30.log",
+    ]
+    assert _retention_lines(caplog) == [
+        (
+            logging.INFO,
+            {
+                "count": str(len(deleted)),
+                "bytes": str(40 * len(deleted)),
+                "reason": "size",
+                "oldest": "2026-09-26",
+                "newest": deleted[-1].removesuffix(".log"),
+            },
+        )
+    ]
+
+
+def test_daily_log_retention_skips_files_it_cannot_delete_and_warns_once_per_streak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each start's outcome reaches that day's log file before its manager closes."""
+    logs_dir = tmp_path / "logs"
+    _write_files(logs_dir, {"2026-01-01.log": 10, "2026-01-02.log": 20, "2026-01-03.log": 30})
+    locked = {"2026-01-01.log"}
+    real_unlink = os.unlink
+
+    def unlink(path: Any, *args: Any, **kwargs: Any) -> None:
+        name = os.path.basename(path)
+        if name in locked:
+            # Windows refuses to delete a file that another process holds open.
+            raise PermissionError(13, "The file is in use", path)
+        if name == "2026-01-02.log":
+            # Another process deletes it between the listing and this deletion.
+            real_unlink(path)
+            raise FileNotFoundError(2, "No such file", path)
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", unlink)
+
+    days = [date(2026, 9, 28), date(2026, 9, 29), date(2026, 9, 30)]
+    for day in days:
+        if day == days[-1]:
+            locked.clear()
+        manager = LogManager(
+            level="INFO",
+            data_dir=tmp_path,
+            enable_console=False,
+            current_date_provider=DateSequence(day),
+        )
+        try:
+            manager.get_logger("tests").info("Started")
+        finally:
+            manager.close()
+
+    assert sorted(path.name for path in logs_dir.iterdir()) == [
+        f"{day.isoformat()}.log" for day in days
+    ]
+    retention_lines = [
+        [
+            (message.split(" ", 1)[0], dict(re.findall(r"(\w+)=([^\s)]+)", message)))
+            for message in _messages(logs_dir / f"{day.isoformat()}.log")
+            if " vbot.logging - " in message
+        ]
+        for day in days
+    ]
+    assert retention_lines == [
+        [
+            (
+                "[INFO]",
+                {
+                    "count": "1",
+                    "bytes": "30",
+                    "reason": "age",
+                    "oldest": "2026-01-03",
+                    "newest": "2026-01-03",
+                },
+            ),
+            ("[WARN]", {"count": "1", "first": "2026-01-01.log", "error": "PermissionError:"}),
+        ],
+        # The second failing sweep stays silent.
+        [],
+        [
+            (
+                "[INFO]",
+                {
+                    "count": "1",
+                    "bytes": "10",
+                    "reason": "age",
+                    "oldest": "2026-01-01",
+                    "newest": "2026-01-01",
+                },
+            ),
+            # The failure streak ended.
+            ("[INFO]", {}),
+        ],
+    ]
 
 
 _ACCEPTED = '%s - "WebSocket %s" [accepted]'

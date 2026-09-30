@@ -6,6 +6,8 @@ writes to both the console and a daily log file under ``<data_dir>/logs``.
 WARNING and higher records of other libraries' loggers reach the same
 outputs under their own logger names. Every written line shows Channel-derived
 Session ids with a pseudonym in place of their platform chat or user id.
+Daily log files are kept for ``LOG_RETENTION_DAYS`` and at most
+``LOG_RETENTION_MAX_BYTES`` in total; older ones are deleted in the background.
 """
 
 from __future__ import annotations
@@ -17,14 +19,29 @@ import os
 import re
 import threading
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
-from datetime import date
+from concurrent.futures import Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 from io import TextIOWrapper
 from pathlib import Path
+
+from core.utils.log_conditions import LoggedConditions
 
 CONSOLE_LOGGING_ENV_VAR = "VBOT_LOG_STDIO"
 LOGGER_NAMESPACE = "vbot"
 DAILY_LOG_FILE_SUFFIX = ".log"
+# Daily log files older than this many days are deleted ...
+LOG_RETENTION_DAYS = 90
+# ... and, oldest first, while all daily log files of a directory together
+# exceed this size. The current day's file is never deleted.
+LOG_RETENTION_MAX_BYTES = 500 * 1024 * 1024
+# Retention only ever deletes files named exactly like the ones DailyFileHandler
+# writes; everything else in the directory stays untouched.
+_DAILY_LOG_FILE_PATTERN = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}" + re.escape(DAILY_LOG_FILE_SUFFIX)
+)
+# A closing handler waits at most this long for the retention sweep it started.
+_RETENTION_CLOSE_WAIT_SECONDS = 5.0
 UVICORN_LOGGER_NAME = "vbot.server.uvicorn"
 # Every websocket route the server owns: /ws, /ws/logs, /ws/terminals/{terminal_id}
 # and /ws/live/{call_id}. The Live path carries a Provider call id.
@@ -258,6 +275,144 @@ def build_uvicorn_log_config(
     }
 
 
+_LOGGER = get_logger("logging")
+# Retention sweeps run on this thread: never on the thread whose record opened a
+# daily file (often the Event Loop) and never inside that record's emit, so a
+# sweep that logs its outcome cannot block or re-enter the handler. A plain
+# executor, because ``core.utils.workers`` measures through ``core.performance``,
+# which logs through this module. Its thread is joined at interpreter exit, so a
+# short-lived CLI process still finishes a sweep it started.
+_RETENTION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vbot-log-retention")
+# The day each logs directory was last swept for in this process: nested managers
+# and every handler writing one directory sweep it once per day.
+_retention_days: dict[str, date] = {}
+_retention_days_lock = threading.Lock()
+# Directories whose sweeps currently fail, so a failure streak warns once.
+_retention_failures = LoggedConditions(limit=16)
+
+
+@dataclass(slots=True)
+class _RetentionOutcome:
+    """What one retention sweep deleted and what it could not."""
+
+    # (day, bytes, reason) of every deleted file, oldest first.
+    deleted: list[tuple[date, int, str]] = field(default_factory=list)
+    # (file name, error) of every file that could not be deleted.
+    failed: list[tuple[str, OSError]] = field(default_factory=list)
+    listing_error: OSError | None = None
+
+
+def _sweep_daily_logs(logs_dir: Path, today: date, key: str) -> None:
+    """Apply retention to one logs directory and log the outcome; on the retention thread."""
+
+    try:
+        outcome = _prune_daily_logs(logs_dir, today)
+    except Exception:
+        _LOGGER.exception("Daily log retention failed unexpectedly")
+        return
+    if outcome.deleted:
+        reasons = dict.fromkeys(reason for _day, _size, reason in outcome.deleted)
+        _LOGGER.info(
+            "Deleted old daily log files (count=%d bytes=%d reason=%s oldest=%s newest=%s)",
+            len(outcome.deleted),
+            sum(size for _day, size, _reason in outcome.deleted),
+            ",".join(reasons),
+            outcome.deleted[0][0].isoformat(),
+            outcome.deleted[-1][0].isoformat(),
+        )
+    if outcome.listing_error is not None:
+        if _retention_failures.started(key, "list"):
+            error = outcome.listing_error
+            _LOGGER.warning(
+                "Could not list daily log files for retention, retrying at the next sweep "
+                "(error=%s: %s)",
+                type(error).__name__,
+                error.strerror or error,
+            )
+    elif outcome.failed:
+        if _retention_failures.started(key, "delete"):
+            file_name, error = outcome.failed[0]
+            _LOGGER.warning(
+                "Could not delete old daily log files, retrying at the next sweep "
+                "(count=%d first=%s error=%s: %s)",
+                len(outcome.failed),
+                file_name,
+                type(error).__name__,
+                error.strerror or error,
+            )
+    elif _retention_failures.ended(key):
+        _LOGGER.info("Daily log retention recovered")
+
+
+def _prune_daily_logs(logs_dir: Path, today: date) -> _RetentionOutcome:
+    """Delete daily files older than the retention, then the oldest beyond the size cap.
+
+    Files dated ``today`` or later are never deleted. A file another process
+    removed meanwhile counts as gone; one that cannot be deleted (on Windows,
+    held open elsewhere) stays and is retried by the next sweep.
+    """
+
+    outcome = _RetentionOutcome()
+    try:
+        files = _list_daily_logs(logs_dir)
+    except FileNotFoundError:
+        return outcome
+    except OSError as error:
+        outcome.listing_error = error
+        return outcome
+
+    total = sum(size for _day, _path, size in files)
+    age_cutoff = today - timedelta(days=LOG_RETENTION_DAYS)
+    for day, path, size in files:
+        if day >= today:
+            break
+        if day < age_cutoff:
+            reason = "age"
+        elif total > LOG_RETENTION_MAX_BYTES:
+            reason = "size"
+        else:
+            # Oldest first: every later file is younger and the total only shrinks.
+            break
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            total -= size
+            continue
+        except OSError as error:
+            outcome.failed.append((os.path.basename(path), error))
+            continue
+        total -= size
+        outcome.deleted.append((day, size, reason))
+    return outcome
+
+
+def _list_daily_logs(logs_dir: Path) -> list[tuple[date, str, int]]:
+    """Return ``(day, path, size)`` of the directory's daily log files, oldest first."""
+
+    files: list[tuple[date, str, int]] = []
+    with os.scandir(logs_dir) as listing:
+        for entry in listing:
+            if _DAILY_LOG_FILE_PATTERN.fullmatch(entry.name) is None:
+                continue
+            try:
+                day = date.fromisoformat(entry.name.removesuffix(DAILY_LOG_FILE_SUFFIX))
+            except ValueError:
+                continue
+            try:
+                # Listing data: no per-file system call on Windows, one stat elsewhere.
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                size = entry.stat(follow_symlinks=False).st_size
+            except FileNotFoundError:
+                continue
+            except OSError:
+                # Its size stays unknown; deleting it still reports a real failure.
+                size = 0
+            files.append((day, entry.path, size))
+    files.sort()
+    return files
+
+
 class DailyFileHandler(logging.FileHandler):
     """File handler that writes to one log file per day.
 
@@ -266,6 +421,13 @@ class DailyFileHandler(logging.FileHandler):
     itself against the new daily file before emitting the next record. The
     logs directory and file are created with the first record, so a handler
     that never writes leaves no trace on disk.
+
+    Opening a day's file - with the first record, and with the first record of
+    each new day - starts a retention sweep of the directory in the background,
+    once per directory and day in the process: daily files older than
+    ``LOG_RETENTION_DAYS``, then the oldest while all together exceed
+    ``LOG_RETENTION_MAX_BYTES``, are deleted; the open day's file never is.
+    :meth:`close` waits for the sweep this handler started.
     """
 
     def __init__(
@@ -276,6 +438,8 @@ class DailyFileHandler(logging.FileHandler):
         encoding: str = "utf-8",
     ) -> None:
         self._logs_dir = Path(logs_dir)
+        self._retention_key = os.path.normcase(os.path.abspath(self._logs_dir))
+        self._retention: Future[None] | None = None
         self._current_date_provider = current_date_provider or date.today
         self._active_date = self._current_date_provider()
         super().__init__(self._build_path(self._active_date), encoding=encoding, delay=True)
@@ -286,9 +450,39 @@ class DailyFileHandler(logging.FileHandler):
         self._rotate_if_needed()
         super().emit(record)
 
+    def close(self) -> None:
+        """Wait for this handler's retention sweep, then close the file."""
+
+        self._await_retention()
+        super().close()
+
+    def _await_retention(self) -> None:
+        """Wait, bounded, until the sweep this handler started has finished."""
+
+        retention = self._retention
+        if retention is not None:
+            wait((retention,), timeout=_RETENTION_CLOSE_WAIT_SECONDS)
+
     def _open(self) -> TextIOWrapper:
         self._logs_dir.mkdir(parents=True, exist_ok=True)
-        return super()._open()
+        stream = super()._open()
+        self._start_retention(self._active_date)
+        return stream
+
+    def _start_retention(self, day: date) -> None:
+        """Hand the directory's sweep for *day* to the retention thread; never waits."""
+
+        with _retention_days_lock:
+            if _retention_days.get(self._retention_key) == day:
+                return
+            _retention_days[self._retention_key] = day
+        try:
+            self._retention = _RETENTION_EXECUTOR.submit(
+                _sweep_daily_logs, self._logs_dir, day, self._retention_key
+            )
+        except RuntimeError:
+            # The interpreter is shutting down; the next process sweeps instead.
+            return
 
     def _rotate_if_needed(self) -> None:
         current_date = self._current_date_provider()
@@ -525,12 +719,16 @@ class LogManager:
 
         When this manager is the active pipeline, the manager it replaced
         becomes active again if it is still open; otherwise ``vbot`` records
-        propagate normally again.
+        propagate normally again. A retention sweep its daily file started is
+        awaited first, so the sweep's outcome still reaches these outputs.
         """
 
         if self._closed:
             return
         self._closed = True
+        for handler in self._handlers:
+            if isinstance(handler, DailyFileHandler):
+                handler._await_retention()
         namespace = logging.getLogger(LOGGER_NAMESPACE)
         root = logging.getLogger()
         active = self._router in root.handlers or any(
