@@ -56,7 +56,9 @@ def make_server(tmp_path: Path):
         active_run=lambda **_kwargs: None,
         cancel=AsyncMock(),
     )
-    state = SimpleNamespace(runtime=runtime, chat_runs=runs, control_token="secret")
+    state = SimpleNamespace(
+        runtime=runtime, chat_runs=runs, control_token="secret", agent_delete_lock=asyncio.Lock()
+    )
     return state, grant, bootstrap
 
 
@@ -284,3 +286,28 @@ async def test_update_continuation_is_unique_across_receipt_retry(tmp_path: Path
         "created": False,
     }
     assert len(bootstrap.jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_continuation_creates_its_job_under_the_reference_lock(
+    tmp_path: Path,
+) -> None:
+    """A Session or Agent removal that holds the lock ends before the job selects the Session."""
+    state, ticket, bootstrap = make_state(tmp_path)
+    params = {
+        "control_token": "secret",
+        "operation_id": "operation-one",
+        "handoff_ticket_id": ticket.ticket_id,
+    }
+
+    async with state.agent_delete_lock:
+        request = asyncio.create_task(
+            dispatch_method(state, "application.update_continuation", params, method_handlers())
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert bootstrap.jobs == []
+    result = await request
+
+    assert result["created"] is True
+    assert [job.session_id for job in bootstrap.jobs] == ["session-one"]

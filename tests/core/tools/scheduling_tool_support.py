@@ -33,6 +33,7 @@ WEEKLY_MONDAY = {"freq": "weekly", "by_weekday": ["mo"]}
 class _DispatchedTool:
     registry: ToolRegistry
     workspace: Path
+    reference_lock: asyncio.Lock
 
     tool_name: ClassVar[str]
 
@@ -104,7 +105,6 @@ class CronTool(_DispatchedTool):
 @dataclass
 class CalendarTool(_DispatchedTool):
     service: CalendarService
-    reference_lock: asyncio.Lock
 
     tool_name: ClassVar[str] = CALENDAR_TOOL_NAME
 
@@ -132,8 +132,15 @@ class CalendarTool(_DispatchedTool):
 def cron_tool(tmp_path: Path, *, tz: str = SERVER_ZONE, agent_resolver: Any = None) -> CronTool:
     service, trigger = make_service(tmp_path, agent_resolver=agent_resolver, tz=tz)
     registry = ToolRegistry()
-    register_cron_tool(registry, service)
-    return CronTool(registry=registry, workspace=tmp_path, service=service, trigger=trigger)
+    reference_lock = asyncio.Lock()
+    register_cron_tool(registry, service, reference_lock=reference_lock)
+    return CronTool(
+        registry=registry,
+        workspace=tmp_path,
+        reference_lock=reference_lock,
+        service=service,
+        trigger=trigger,
+    )
 
 
 def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
@@ -142,7 +149,7 @@ def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
     reference_lock = asyncio.Lock()
     register_calendar_tool(registry, service, reference_lock=reference_lock)
     return CalendarTool(
-        registry=registry, workspace=tmp_path, service=service, reference_lock=reference_lock
+        registry=registry, workspace=tmp_path, reference_lock=reference_lock, service=service
     )
 
 

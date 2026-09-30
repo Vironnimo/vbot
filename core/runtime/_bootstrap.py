@@ -621,7 +621,11 @@ def bootstrap(runtime: Runtime) -> None:
         if runtime.safe_startup_mode is None:
             runtime._start_cron_service()
             runtime._start_calendar_service()
-        register_cron_tool(runtime._tools, runtime._cron_service)
+        register_cron_tool(
+            runtime._tools,
+            runtime._cron_service,
+            reference_lock=runtime._automation_references.lock,
+        )
         register_calendar_tool(
             runtime._tools,
             runtime._calendar_service,

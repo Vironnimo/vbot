@@ -433,6 +433,49 @@ async def test_automation_rpcs_reject_invalid_params_before_the_service(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("method", "params", "service_call"),
+    [
+        ("cron.create", _CRON_PARAMS, ("cron_service", "create_job")),
+        # Only a status change: every update holds the lock, whatever it changes.
+        ("cron.update", {"id": "job-1", "status": "paused"}, ("cron_service", "update_job")),
+        (
+            "bootstrap.create",
+            {"agent_id": "main", "prompt": "Check", "mode": "once", "session_id": "session-one"},
+            ("bootstrap_service", "create_job"),
+        ),
+        (
+            "bootstrap.update",
+            {"id": "bootstrap-123", "prompt": "Check again"},
+            ("bootstrap_service", "update_job"),
+        ),
+    ],
+)
+async def test_job_creates_and_updates_wait_for_the_reference_lock(
+    method: str, params: JsonObject, service_call: tuple[str, str]
+) -> None:
+    """A removal that holds the lock ends before a job can select its Agent or Session."""
+    state = _cron_state()
+    state.runtime.cron_service.create_job.return_value = _cron_job()
+    state.runtime.cron_service.update_job.return_value = _cron_job()
+    state.runtime.bootstrap_service = Mock()
+    state.runtime.bootstrap_service.create_job.return_value = _bootstrap_job()
+    state.runtime.bootstrap_service.update_job.return_value = _bootstrap_job()
+    state.agent_delete_lock = asyncio.Lock()
+    service, method_name = service_call
+    change = getattr(getattr(state.runtime, service), method_name)
+
+    async with state.agent_delete_lock:
+        request = asyncio.create_task(rpc_result(state, method, **params))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        change.assert_not_called()
+    await request
+
+    change.assert_called_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("address", "resolver_error", "expected_code"),
     [
         (

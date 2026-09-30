@@ -191,16 +191,10 @@ async def _cron_update(state: Any, params: JsonObject) -> JsonObject:
                 f"params.status must be one of: {options}",
             )
         updates["status"] = status
-    if "agent_id" in updates:
-        try:
-            async with _agent_reference_lock(state):
-                job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
-        except Exception as exc:
-            raise _map_expected_error(exc) from exc
-        return _cron_job_response(state.runtime.cron_service, job)
-
     try:
-        job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
+        # Any update may select another Agent, Project or Session.
+        async with _agent_reference_lock(state):
+            job = state.runtime.cron_service.update_job(job_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return _cron_job_response(state.runtime.cron_service, job)
@@ -328,10 +322,8 @@ async def _bootstrap_update(state: Any, params: JsonObject) -> JsonObject:
     if "session_id" in params:
         updates["session_id"] = _optional_string(params, "session_id")
     try:
-        if "agent_id" in updates or "session_id" in updates:
-            async with _agent_reference_lock(state):
-                job = state.runtime.bootstrap_service.update_job(job_id, actor="rpc", **updates)
-        else:
+        # Any update may select another Agent, Project or Session.
+        async with _agent_reference_lock(state):
             job = state.runtime.bootstrap_service.update_job(job_id, actor="rpc", **updates)
     except Exception as exc:
         raise _map_expected_error(exc) from exc

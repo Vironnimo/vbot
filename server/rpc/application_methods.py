@@ -15,6 +15,7 @@ from core.tools._bash_update_handoff import (
 from core.utils.atomic import atomic_write_text
 from core.utils.logging import get_logger
 from core.utils.server_control import is_authorized_control_token
+from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import (
     RPC_ERROR_ACTIVE_RUN,
@@ -180,43 +181,46 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
         "application.update_continuation",
     )
     ticket_id = _required_string(params, "handoff_ticket_id")
-    ticket, _address = await _verified_ticket(state, ticket_id)
-    receipt_path = _continuation_receipt_path(state, operation_id)
-    receipt = _read_receipt(receipt_path, ticket_id)
-    if receipt is not None:
-        return {
-            "operation_id": operation_id,
-            "bootstrap_job_id": receipt["bootstrap_job_id"],
-            "created": False,
-        }
+    # The job selects the ticket's Session: verify it exists and create the job
+    # without a Session or Agent removal in between.
+    async with _agent_reference_lock(state):
+        ticket, _address = await _verified_ticket(state, ticket_id)
+        receipt_path = _continuation_receipt_path(state, operation_id)
+        receipt = _read_receipt(receipt_path, ticket_id)
+        if receipt is not None:
+            return {
+                "operation_id": operation_id,
+                "bootstrap_job_id": receipt["bootstrap_job_id"],
+                "created": False,
+            }
 
-    prompt = _CONTINUATION_PROMPT.format(operation_id=operation_id)
-    name = f"Update continuation {operation_id}"
-    service = state.runtime.bootstrap_service
-    matching = [
-        job
-        for job in service.list_jobs()
-        if job.name == name
-        and job.agent_id == ticket.agent_id
-        and job.project_id == ticket.project_id
-        and job.session_id == ticket.session_id
-        and job.prompt == prompt
-        and job.mode == "once"
-    ]
-    created = False
-    if matching:
-        job = matching[0]
-    else:
-        job = service.create_job(
-            agent_id=ticket.agent_id,
-            project_id=ticket.project_id,
-            session_id=ticket.session_id,
-            name=name,
-            prompt=prompt,
-            mode="once",
-            actor="application",
-        )
-        created = True
+        prompt = _CONTINUATION_PROMPT.format(operation_id=operation_id)
+        name = f"Update continuation {operation_id}"
+        service = state.runtime.bootstrap_service
+        matching = [
+            job
+            for job in service.list_jobs()
+            if job.name == name
+            and job.agent_id == ticket.agent_id
+            and job.project_id == ticket.project_id
+            and job.session_id == ticket.session_id
+            and job.prompt == prompt
+            and job.mode == "once"
+        ]
+        created = False
+        if matching:
+            job = matching[0]
+        else:
+            job = service.create_job(
+                agent_id=ticket.agent_id,
+                project_id=ticket.project_id,
+                session_id=ticket.session_id,
+                name=name,
+                prompt=prompt,
+                mode="once",
+                actor="application",
+            )
+            created = True
     atomic_write_text(
         receipt_path,
         json.dumps(

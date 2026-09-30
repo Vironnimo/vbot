@@ -42,6 +42,8 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    import asyncio
+
     from core.automation.cron import CronJob, CronService
 
 CRON_TOOL_NAME = "cron"
@@ -151,10 +153,24 @@ def _normalize_cron_arguments(arguments: Any) -> Any:
     return normalize_cron_arguments(_repair_contract(), arguments)
 
 
-def register_cron_tool(registry: ToolRegistry, cron_service: CronService) -> None:
-    """Register the cron tool with a vBot tool registry."""
+# Actions that choose a job's target Agent and Project.
+_REFERENCE_ACTIONS = frozenset({"create", "update"})
 
-    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+
+def register_cron_tool(
+    registry: ToolRegistry, cron_service: CronService, *, reference_lock: asyncio.Lock
+) -> None:
+    """Register the cron tool with a vBot tool registry.
+
+    ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
+    create and update hold it like the cron RPCs, so a job cannot select an Agent
+    or Project between a removal's reference check and the removal.
+    """
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if arguments.get("action") in _REFERENCE_ACTIONS:
+            async with reference_lock:
+                return _handle_cron_tool(cron_service, context, arguments)
         return _handle_cron_tool(cron_service, context, arguments)
 
     registry.register(
