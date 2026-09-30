@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 
 import cli.update_management as update_management
-from cli import _update_assets
+from cli import _update_assets, autostart_management
 from cli._update_types import UpdateResult, _SnapshotStep
 from cli.install_state import dependency_digest, read_install_state
 from cli.main import dispatch_update_command
@@ -244,6 +244,62 @@ def test_an_update_with_nothing_new_neither_snapshots_nor_restarts(
     assert runner.ran("git", "fetch")
     assert not runner.ran("git", "merge")
     assert not runner.ran("pip")
+
+
+@pytest.mark.parametrize("rewrite_ok", [True, False], ids=["rewritten", "rewrite-failed"])
+def test_a_posix_update_lets_the_updated_code_rewrite_the_autostart_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rewrite_ok: bool
+) -> None:
+    _applied_checkout(tmp_path)
+    data_dir = tmp_path / "data"
+    instance = ServerInstance(
+        host="127.0.0.1",
+        port=9123,
+        data_dir=data_dir,
+        url="http://127.0.0.1:9123",
+        log_path=data_dir / "logs" / "today.log",
+    )
+    rewrites: list[list[str]] = []
+
+    def rewrite(command: list[str]) -> CommandRun | None:
+        if command[1:4] != ["-m", "cli.autostart_management", "--refresh-unit"]:
+            return None
+        rewrites.append(command)
+        return _ok("test-owned rewrite") if rewrite_ok else _err("test-owned reload failure")
+
+    result = run_update(
+        instance,
+        runner=ScriptedRunner(checkout(answer=rewrite)),
+        root=tmp_path,
+        platform_name="posix",
+        service_name="vbot-alt",
+    )
+
+    # Even an update with nothing new lets the installed code repair the unit; a
+    # failed rewrite does not stop the update, and the result names it.
+    assert result.ok, result.message
+    assert ("test-owned rewrite" in result.message) is rewrite_ok
+    assert ("test-owned reload failure" in result.message) is not rewrite_ok
+    assert bool(result.attention) is not rewrite_ok
+    [command] = rewrites
+    assert command[0] == sys.executable  # the recorded interpreter runs the updated code
+
+    # The refresh entrypoint accepts exactly what the updater sends.
+    received: list[tuple[ServerInstance, str]] = []
+
+    def refresh(target: ServerInstance, *, service_name: str) -> CommandResult:
+        received.append((target, service_name))
+        return CommandResult(ok=True, message="", instance=target)
+
+    monkeypatch.setattr(autostart_management, "refresh_autostart_unit", refresh)
+    assert autostart_management._run_refresh_unit(command[3:]) == 0
+    [(target, service_name)] = received
+    assert (target.host, target.port, target.data_dir, service_name) == (
+        "127.0.0.1",
+        9123,
+        data_dir.resolve(),
+        "vbot-alt",
+    )
 
 
 def test_new_upstream_commits_are_applied_after_the_snapshot(tmp_path: Path) -> None:

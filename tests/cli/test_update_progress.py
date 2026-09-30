@@ -121,21 +121,24 @@ def test_update_summary_does_not_repeat_details_or_hide_pending_work(
     assert "\033[" not in output
 
 
-def test_healthy_server_with_unavailable_webui_is_visibly_a_warning(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize("problem", ["webui", "attention"])
+def test_healthy_server_with_a_remaining_problem_is_visibly_a_warning(
+    problem: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     result = UpdateResult(
         ok=True,
         message="test-owned restart",
         instance=_instance(),
         restart_state="completed",
-        webui=WebUIProbeResult(available=False),
+        webui=WebUIProbeResult(available=problem != "webui"),
+        attention=("test-owned attention",) if problem == "attention" else (),
     )
     print_update_command_result(result, version_before="1.0", version_after="2.0")
     output = capsys.readouterr().out
     assert "[WARN]" in output
     assert "[OK]" not in output
-    assert "WebUI: unavailable" in output
+    assert ("WebUI: unavailable" in output) is (problem == "webui")
+    assert ("test-owned attention" in output) is (problem == "attention")
 
 
 def test_snapshot_failure_is_reported_before_any_checkout_mutation(tmp_path: Path) -> None:

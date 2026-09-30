@@ -247,6 +247,7 @@ def print_update_command_result(
         not isinstance(result, UpdateResult)
         or result.restart_state in {"pending", "skipped"}
         or result.forced
+        or result.attention
         or (result.webui is not None and not result.webui.available)
     ):
         state = "warning"
@@ -259,6 +260,8 @@ def print_update_command_result(
         print(f"  WebUI: {_webui_text(result)}")
     if result.forced:
         print("  Attention: stopping the old server required forced termination.")
+    for note in result.attention:
+        print(f"  Attention: {note}.")
 
 
 def _operation_duration(operation: Operation) -> str | None:
