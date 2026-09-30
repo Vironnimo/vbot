@@ -835,7 +835,8 @@ async def test_fire_saves_off_the_loop_and_an_edit_lands_after_them(
         # The edit applies at once; its save queues behind the fire's older snapshot
         # without holding the Event Loop.
         editing = asyncio.create_task(service.update_job(job.id, name="Renamed"))
-        await asyncio.sleep(0)
+        for _ in range(5):
+            await asyncio.sleep(0)
         assert service.get_job(job.id).name == "Renamed"
         assert not editing.done()
     finally:
