@@ -25,6 +25,7 @@ from core.memory._history import (
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     from core.prompts.blocks import BlockDefinition
@@ -859,7 +860,9 @@ def _read_file(path: Path) -> bytes | None:
     except FileNotFoundError:
         return None
     except OSError as exc:
-        raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+        raise MemoryError(
+            f"failed to read memory file {model_path(path)}: {_os_error_text(exc)}"
+        ) from exc
 
 
 def _decode_entries(path: Path, content: bytes | None) -> list[str]:
@@ -869,7 +872,7 @@ def _decode_entries(path: Path, content: bytes | None) -> list[str]:
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
+        raise MemoryError(f"failed to read memory file {model_path(path)}: {exc}") from exc
     return _parse_entries(text)
 
 
@@ -895,7 +898,14 @@ def _write_entries(path: Path, entries: list[str]) -> None:
     try:
         atomic_write_bytes(path, text.encode("utf-8"))
     except OSError as exc:
-        raise MemoryError(f"failed to write memory file {path}: {exc}") from exc
+        raise MemoryError(
+            f"failed to write memory file {model_path(path)}: {_os_error_text(exc)}"
+        ) from exc
+
+
+def _os_error_text(error: OSError) -> str:
+    """Return the OS reason without the path, which the error spells natively."""
+    return error.strerror or str(error)
 
 
 def _write_scopes(

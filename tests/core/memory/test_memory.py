@@ -26,6 +26,7 @@ from core.memory import (
     memory_prompt_file_paths,
     read_memory_files,
 )
+from core.utils.paths import model_path
 
 
 @pytest.fixture
@@ -250,19 +251,29 @@ def test_match_errors_carry_matches_and_current_entries(
     assert len(service.list_entries(workspace, "agent")) == 2
 
 
-def test_a_file_that_is_not_utf8_fails_as_memory_error_and_is_kept(
-    service: MemoryService, workspace: Path
+@pytest.mark.parametrize("unreadable", ["not-utf8", "not-a-file"])
+def test_an_unreadable_memory_file_fails_as_memory_error_and_is_kept(
+    service: MemoryService, workspace: Path, unreadable: str
 ) -> None:
     workspace.mkdir()
     memory_file = workspace / "MEMORY.md"
-    memory_file.write_bytes(b"- Caf\xe9 in Latin-1.\n")
+    if unreadable == "not-utf8":
+        memory_file.write_bytes(b"- Caf\xe9 in Latin-1.\n")
+    else:
+        memory_file.mkdir()
 
-    with pytest.raises(MemoryError):
+    with pytest.raises(MemoryError) as failure:
         service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
     with pytest.raises(MemoryError):
         service.add_entry(workspace, "agent", "New fact.")
 
-    assert memory_file.read_bytes() == b"- Caf\xe9 in Latin-1.\n"
+    # The memory Tool passes the message on, so the path takes the Model-facing form.
+    assert model_path(memory_file) in str(failure.value)
+    assert "\\" not in str(failure.value)
+    if unreadable == "not-utf8":
+        assert memory_file.read_bytes() == b"- Caf\xe9 in Latin-1.\n"
+    else:
+        assert memory_file.is_dir()
 
 
 def test_prompt_renders_selected_scopes_in_mode_order(

@@ -19,7 +19,7 @@ The domain **owns its two workspace files**: `USER.md` (user profile/preferences
 - Content normalizes to single-line whitespace capped at 2,000 chars/entry; a leading-dash entry round-trips because the `- ` prefix strips exactly once (no escaping).
 - Per-scope budgets bound prompt injection: MEMORY.md 4,000 chars, USER.md 3,000. A growing mutation past budget rejects with `MemoryBudgetError` (a `MemoryError` carrying scope, resulting total and budget); shrinking changes always pass so the model can dig out. Duplicate adds return the existing entry without rejection. A text-addressed replace whose new text equals another entry folds into it instead of duplicating.
 - Writes use temp-file atomic replace with LF line endings on every platform. Rooting never changes this boundary: Memory always uses Workspace even when file/shell Tools work in a Project repo.
-- Files are UTF-8. A file that cannot be read or is not UTF-8 raises `MemoryError` on every read and mutation of that scope and is never rewritten; the `memory` Tool reports it as `memory_error` (`tests/core/memory/test_memory.py`).
+- Files are UTF-8. A file that cannot be read or is not UTF-8 raises `MemoryError` on every read and mutation of that scope and is never rewritten; the `memory` Tool reports it as `memory_error`. Read and write failure messages name the file with `/` separators (`model_path`, PROJECT.md -> Model-facing paths) and give the OS reason without its native path (`tests/core/memory/test_memory.py`).
 
 ## History
 
