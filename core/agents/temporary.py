@@ -6,6 +6,7 @@ import asyncio
 import builtins
 import hashlib
 from collections.abc import Awaitable, Callable, Sequence
+from contextlib import AsyncExitStack
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -250,13 +251,24 @@ class ExecutionResources(Protocol):
     def has_execution_work(self, owner: RunExecutionOwner) -> bool: ...
 
 
-async def archive_temporary_group(
-    sessions: ChatSessionManager, run_manager: ChatRunManager, owner_name: str, group_id: str
-) -> int:
-    """Archive one owner group's live participant Sessions under a no-Run boundary.
+SessionTerminalCloser = Callable[[SessionAddress], Awaitable[None]]
 
-    Raises :class:`RunAdmissionBlockedError` while any of them has active,
-    queued or guarded work; nothing is archived then.
+
+async def release_temporary_group(
+    sessions: ChatSessionManager,
+    run_manager: ChatRunManager,
+    owner_name: str,
+    group_id: str,
+    *,
+    delete: bool,
+    close_terminals: SessionTerminalCloser | None,
+) -> int:
+    """Archive or delete one owner group's participant Sessions; return how many.
+
+    Like an ordinary Session removal, it first closes the Terminal Sessions of
+    each live participant, all under one no-Run boundary. Raises
+    :class:`RunAdmissionBlockedError` while any of them has active, queued or
+    guarded work; nothing changes then. Deleting also removes archived ones.
     """
     addresses: list[SessionAddress] = []
     after = ""
@@ -268,9 +280,16 @@ async def archive_temporary_group(
         if len(page) < 1000:
             break
         after = page[-1].participant_id
-    if not addresses:
-        return 0
-    async with run_manager.session_admission_guard(*addresses):
+    async with AsyncExitStack() as boundary:
+        if addresses:
+            await boundary.enter_async_context(run_manager.session_admission_guard(*addresses))
+        if close_terminals is not None:
+            for address in addresses:
+                await close_terminals(address)
+        if delete:
+            return await sessions.delete_temporary_group(owner_name=owner_name, group_id=group_id)
+        if not addresses:
+            return 0
         return await sessions.archive_temporary_group(owner_name=owner_name, group_id=group_id)
 
 
@@ -300,6 +319,7 @@ class TemporaryExecutionGroups:
         usage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
         validate_binding: Callable[[TemporarySessionBinding], Awaitable[None]] | None = None,
         title: Callable[[str, str], Awaitable[str | None]] | None = None,
+        close_terminals: SessionTerminalCloser | None = None,
     ) -> None:
         self._registry = registry
         self._chat = chat
@@ -311,6 +331,7 @@ class TemporaryExecutionGroups:
         self._usage = usage
         self._title = title
         self._validate_binding = validate_binding
+        self._close_terminals = close_terminals
         self._groups: dict[str, _Group] = {}
         self._lifecycle = asyncio.Lock()
         self._retiring = False
@@ -585,8 +606,13 @@ class TemporaryExecutionGroups:
                 raise ValueError("group_not_closed")
             await self.close_group(group_id)
             self._require_current()
-            count = await self._sessions.delete_temporary_group(
-                owner_name=self._identity.name, group_id=group_id
+            count = await release_temporary_group(
+                self._sessions,
+                self._manager,
+                self._identity.name,
+                group_id,
+                delete=True,
+                close_terminals=self._close_terminals,
             )
             self._groups.pop(group_id, None)
             return count
@@ -604,8 +630,13 @@ class TemporaryExecutionGroups:
                 raise ValueError("group_not_closed")
             await self.close_group(group_id)
             self._require_current()
-            count = await archive_temporary_group(
-                self._sessions, self._manager, self._identity.name, group_id
+            count = await release_temporary_group(
+                self._sessions,
+                self._manager,
+                self._identity.name,
+                group_id,
+                delete=False,
+                close_terminals=self._close_terminals,
             )
             self._groups.pop(group_id, None)
             return count

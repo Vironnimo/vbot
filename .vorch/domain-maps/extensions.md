@@ -76,7 +76,8 @@ lets an owner reconcile: `temporary_agents.groups(after="", limit=100)` pages it
 group ids that still have live participant Sessions, and `archive_group(group_id)`
 (closed groups only, else `ValueError("group_not_closed")`) archives them under a
 no-Run guard, keeping history, bindings and usage attribution; `delete_group` still
-removes an archived group. Once an Extension is removed from every root, nothing
+removes an archived group. Both close each live participant's Terminal Sessions first,
+like an ordinary Session removal (`release_temporary_group`). Once an Extension is removed from every root, nothing
 could manage its Sessions any more, so `ExtensionRuntime` archives the live ones of
 every owner name without a registry record before startup handlers run, at initial
 startup and after each reload (`ExtensionHostFactory.archive_uninstalled_owner_groups`,

@@ -13,7 +13,7 @@ from core.agents.temporary import (
     TemporaryAgentConfig,
     TemporaryAgentRegistry,
     TemporaryExecutionGroups,
-    archive_temporary_group,
+    release_temporary_group,
 )
 from core.chat import ChatLoop
 from core.extensions import ExtensionRegistry
@@ -45,6 +45,7 @@ from core.tools.availability import (
     SUBAGENT_ALLOWED_AGENTS_KEY,
     SUBAGENT_TOOL_SETTINGS_KEY,
 )
+from core.tools.terminal_manager import TerminalManager, TerminalOwner
 from core.tools.tools import ToolContext, ToolRegistry
 from core.usage import UsageRecorder
 from core.utils.ids import is_safe_id
@@ -120,6 +121,7 @@ class ExtensionHostFactory:
         skills_for: Callable[[str | None, str | None], SkillRegistry],
         project_skill_names: Callable[[str | None], frozenset[str]],
         resources: Sequence[ExecutionResources],
+        terminals: TerminalManager,
         get_change_publisher: Callable[[], Callable[[str, str, Sequence[str], int], None] | None],
         get_title_service: Callable[[], SessionTitleService | None],
         logger: LoggerProtocol | None,
@@ -144,6 +146,7 @@ class ExtensionHostFactory:
         self.skills_for = skills_for
         self.project_skill_names = project_skill_names
         self._resources = resources
+        self._terminals = terminals
         self._get_change_publisher = get_change_publisher
         self._get_title_service = get_title_service
         self.logger = logger
@@ -183,6 +186,7 @@ class ExtensionHostFactory:
             title=lambda group_id, source_text: self._extension_group_title(
                 identity.name, group_id, source_text
             ),
+            close_terminals=self._close_session_terminals,
         )
         self._temporary_groups.append(groups)
         state_dir = self._host.data_dir / "extension-data" / identity.name
@@ -205,6 +209,11 @@ class ExtensionHostFactory:
             ),
         )
 
+    async def _close_session_terminals(self, address: SessionAddress) -> None:
+        await self._terminals.close_scope(
+            TerminalOwner(address.project_id, address.agent_id, address.session_id)
+        )
+
     async def archive_uninstalled_owner_groups(self, installed: frozenset[str]) -> None:
         """Archive the live owner-managed Sessions of every owner not in *installed*.
 
@@ -221,8 +230,13 @@ class ExtensionHostFactory:
                 )
                 for group_id in group_ids:
                     try:
-                        archived = await archive_temporary_group(
-                            self.chat_sessions, self.chat_run_manager, owner_name, group_id
+                        archived = await release_temporary_group(
+                            self.chat_sessions,
+                            self.chat_run_manager,
+                            owner_name,
+                            group_id,
+                            delete=False,
+                            close_terminals=self._close_session_terminals,
                         )
                     except RunAdmissionBlockedError:
                         if self.logger is not None:
