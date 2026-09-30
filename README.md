@@ -4,11 +4,12 @@
 
 <h1 align="center">vBot</h1>
 
-<p align="center"><strong>Keep your coding agents working when you step away.</strong></p>
+<p align="center"><strong>Your own AI Agents, self-hosted.</strong></p>
 
 <p align="center">
-  A self-hosted home for AI Agents. Run Claude Code, Codex and other coding CLIs in terminals on your vBot server,
-  hand a terminal to an Agent when you leave, steer everything by voice, and put whole swarms of Agents on one goal.
+  Persistent Agents with Memory that work with you or on their own: in chat, in real terminals, in teams and swarms,
+  on schedules and by voice. Use any Model, run everything on your own machine, and reach it from the browser,
+  the Desktop app, the CLI or your messenger.
 </p>
 
 <p align="center">
@@ -20,56 +21,70 @@
 
 <p align="center">
   <a href="#get-started">Get started</a> ·
-  <a href="#what-vbot-does">Features</a> ·
+  <a href="#what-you-get">Features</a> ·
   <a href="USAGE.md">User guide</a> ·
   <a href="#security">Security</a>
 </p>
 
 <p align="center">
-  <img src=".github/assets/handoff.gif" alt="Claude Code fixes a bug in a vBot terminal, the user hands the terminal to the Agent Atlas, Atlas answers Claude Code's question, drives it through the project roadmap and reports back when the tests pass" width="880">
+  <img src=".github/assets/tour.webp" alt="A short tour through vBot: a Swarm of 14 Agents reviewing code, five terminals working in parallel, an Agent planning the week in chat, the calendar the Agent filled, and the Agent settings" width="880">
 </p>
 
-## What vBot does
+## What you get
 
-### Terminals that keep going without you
+<table>
+<tr>
+<td width="33%" valign="top"><strong>Agents that remember</strong><br>Each Agent has its own personality, Memory, Skills, permissions and Sessions, and picks up where you left off, also after a restart.</td>
+<td width="33%" valign="top"><strong>Reachable everywhere</strong><br>WebUI, Desktop app, CLI, Telegram, Discord, Slack, WhatsApp and Mattermost all reach the same Agents and Sessions. Agents can message you on their own.</td>
+<td width="33%" valign="top"><strong>Real terminals</strong><br>Run shells, REPLs, Claude Code, Codex or any other interactive program on the vBot server, watch from anywhere, and hand a terminal to an Agent.</td>
+</tr>
+<tr>
+<td valign="top"><strong>Swarms</strong><br>Put a group of Agents on one goal. They split the work on a shared Board, keep a Wiki together and can each run on a different Model.</td>
+<td valign="top"><strong>Live voice</strong><br>Talk to the app. A realtime voice Model starts terminals, passes tasks to your Agents, checks their status and tells you when a Run is done.</td>
+<td valign="top"><strong>Work on their own</strong><br>Cron jobs, a calendar whose events can trigger Agent actions, a message Queue, Sub-Agents and recovery of interrupted Runs.</td>
+</tr>
+<tr>
+<td valign="top"><strong>Projects</strong><br>Register a repository and work in it with your Agents, or use its existing Claude Code or OpenCode Agents and Skills in place.</td>
+<td valign="top"><strong>Any Model</strong><br>Sign in with ChatGPT, GitHub Copilot, SuperGrok or MiniMax, use API keys for Anthropic, OpenRouter, Mistral, Ollama Cloud and more, or run Models locally.</td>
+<td valign="top"><strong>Extensible</strong><br>Files, shell, web, images and speech Tools, MCP servers, Computer Use, Home Assistant and your own Extensions, allowed per Agent.</td>
+</tr>
+</table>
 
-Start Claude Code, Codex, OpenCode or any other interactive program in a real terminal. The terminals run on the machine where the vBot server runs; your browser, the Desktop app or your phone only shows them, so you can close the tab and come back later.
+## A closer look
 
-When you step away, hand a terminal to an Agent. It attaches to the running session, reads the screen, answers questions, types the next instruction and tells you when the work is done, in the WebUI or through Telegram, Discord and the other messaging Channels. Agents can also start their own terminals.
+### Agents you talk to like a colleague
+
+Ask in plain words and the Agent uses its Tools: here Juno plans the week, blocks focus time in the calendar and sets up a weekly reminder that runs as an Agent action. Every Agent keeps its own Memory and Sessions, so you can continue the same conversation later from the WebUI, your phone or a messenger.
 
 <p align="center">
-  <img src=".github/assets/terminals.png" alt="Five coding terminals side by side: two Codex, two Claude Code and one OpenCode session working in the same repository" width="880">
+  <img src=".github/assets/chat.png" alt="Chat with the Agent Juno, who plans the week and creates calendar events with its Tools" width="880">
 </p>
 
-### Talk to it
+### Terminals on your vBot server
 
-Live voice (preview) connects a realtime voice Model, OpenAI GPT-Live or xAI Grok Voice, to the app itself. Say *"start three Codex terminals in my project"*, *"tell Atlas to continue"* or *"what is the status?"*: it opens and arranges terminals, passes tasks to your Agents and checks on them, and it speaks up when a Run finishes or an Agent has a question. Every terminal also has a microphone button for dictating into the program.
+Terminals run on the machine that hosts the vBot server. The browser, the Desktop app or your phone only display them, so programs keep running when you close the tab. Here Claude Code, Codex and OpenCode work on three tasks in the same repository while a test watcher and a Python REPL run next to them.
+
+When you step away, hand a terminal to an Agent: it attaches to the running program, reads the screen, answers questions, types the next instruction and reports back when the work is done. Agents can also start terminals of their own.
+
+<p align="center">
+  <img src=".github/assets/terminals.png" alt="Five terminals side by side: a Python REPL, a test watcher, OpenCode, Codex and Claude Code working in the same repository" width="880">
+</p>
 
 ### Swarms: many Agents, one goal
 
-Give a Swarm a goal and a working directory. Each participant gets its own Session and Model, and they coordinate on a shared Board, keep a Wiki together and address each other directly. Mix Models from different Providers in one Swarm, follow the discussion live and step in with your own posts.
+Give a Swarm a goal and a working directory. Every participant gets its own Session and Model; they coordinate on the Board, address each other directly and write their results into a shared Wiki. You follow along live and can step in with your own posts.
 
 <p align="center">
-  <img src=".github/assets/swarm.png" alt="A Swarm of 14 Agents on three different Models reviewing a repository on a shared Board" width="880">
+  <img src=".github/assets/swarm.png" alt="A Swarm of 14 Agents on three different Models reviewing code changes on a shared Board" width="880">
 </p>
 
-### Agents that stay with you
+### Scheduled and background work
 
-- **Persistent Agents** keep their own Memory, Skills, permissions and Sessions across restarts.
-- **Reach them anywhere:** WebUI, Desktop app, CLI, Telegram, Discord, Slack, WhatsApp and Mattermost all talk to the same Agents and Sessions.
-- **Scheduled and background work:** Cron jobs, a calendar with event-triggered Agent actions, a message Queue, Sub-Agents and recovery of interrupted Runs.
-- **Your choice of Models:** sign in with a ChatGPT, GitHub Copilot, SuperGrok or MiniMax subscription, use API keys for OpenAI, Anthropic, OpenRouter, Mistral, Ollama Cloud and more, or run local Models with Ollama or LM Studio.
+Agents do not have to wait for you. Cron jobs run briefings and nightly checks, calendar events can start an Agent action at the right time, and interrupted Runs are recovered after a restart.
 
-<details>
-<summary><strong>Also included</strong></summary>
-
-- **Projects:** register a repository and use its Claude Code or OpenCode Agents and Skills in place, without vBot changing the repository.
-- **Tools:** files, shell, web search and fetch, images, speech, MCP servers and Computer Use, controlled per Agent.
-- **Extensions:** add Tools, pages and integrations such as Home Assistant ([authoring guide](resources/skills/vbot-cli/references/extensions.md)).
-- **Speech:** local or hosted speech recognition and text-to-speech, wake phrases in the Desktop app.
-- **Insight:** Usage statistics, searchable Logs and optional Debug traces of Model requests.
-
-</details>
+<p align="center">
+  <img src=".github/assets/calendar.png" alt="The vBot calendar in agenda view with events and a recurring Agent action created by an Agent" width="880">
+</p>
 
 ## Get started
 
