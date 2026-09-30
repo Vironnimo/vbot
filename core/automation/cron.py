@@ -129,9 +129,10 @@ class CronService:
     """Manage cron jobs, persistence, and per-job scheduling tasks.
 
     Job tasks and job edits run on the Event Loop and await their writes on the
-    ``cron`` ordered writer. An edit applies to memory and the job tasks at once,
-    then saves; a failed save undoes both. Edits run one at a time and finish
-    even when their caller is cancelled, so that undo is exact.
+    ``cron`` ordered writer. An edit checks its target Agent and Session on the
+    Session database's pool, then applies to memory and the job tasks at once and
+    saves; a failed save undoes both. Edits run one at a time and finish even
+    when their caller is cancelled, so that undo is exact.
     """
 
     def __init__(
@@ -221,7 +222,8 @@ class CronService:
                 created_at=_timing._utc_now_iso(),
                 project_id=project_id,
             )
-            self._validate_job(job)
+            self._validate_job(job, validate_references=False)
+            await self._validate_references_async(job)
             self._reject_past_once_run(job)
             self._validate_capacity(job)
             self._jobs[job.id] = job
@@ -386,7 +388,15 @@ class CronService:
         Returns the job before and after the edit and the names that changed.
         """
         async with self._edits:
-            job, candidate, changed_fields, restart_task = self._stage_update(job_id, fields)
+            job, candidate, changed_fields, restart_task = self._stage_update(
+                job_id, fields, validate_references=False
+            )
+            if changed_fields:
+                await self._validate_references_async(candidate)
+                # A fire may have changed the job while its references were checked.
+                job, candidate, changed_fields, restart_task = self._stage_update(
+                    job_id, fields, validate_references=False
+                )
             if changed_fields:
                 self._jobs[job_id] = candidate
                 # Job tasks follow memory at once, so a fire in flight sees the edit.
@@ -403,13 +413,14 @@ class CronService:
         return self._clone_job(job), self._clone_job(candidate), changed_fields
 
     def _stage_update(
-        self, job_id: str, fields: dict[str, Any]
+        self, job_id: str, fields: dict[str, Any], *, validate_references: bool = True
     ) -> tuple[CronJob, CronJob, list[str], bool]:
         """Validate ``fields`` against a job without applying them.
 
         Returns the current job, the updated candidate, the names that changed
         and whether the job's task must restart. Without changes the candidate
-        is the current job itself.
+        is the current job itself. ``validate_references=False`` leaves the
+        blocking target and Session reads to the caller.
         """
         self._ensure_jobs_loaded()
         job = self._jobs.get(job_id)
@@ -463,7 +474,7 @@ class CronService:
         if not changed_fields:
             return job, job, [], False
 
-        self._validate_job(candidate)
+        self._validate_job(candidate, validate_references=validate_references)
         if {"run_at", "schedule_type"} & set(changed_fields) or (
             candidate.status == "active" and job.status != "active"
         ):
@@ -1239,7 +1250,15 @@ class CronService:
             self._validate_references(job)
         _schedule.normalize_job_schedule(self._timezone, _timing._utc_now(), job)
 
+    async def _validate_references_async(self, job: CronJob) -> None:
+        """Event-Loop-safe :meth:`_validate_references`: its reads use the Session pool."""
+        if self._sessions is None:
+            self._validate_references(job)
+            return
+        await self._sessions.run_async(self._validate_references, job)
+
     def _validate_references(self, job: CronJob) -> None:
+        """Refuse a job whose target Agent or selected Session is unavailable. Blocking."""
         if self._agent_resolver is not None:
             try:
                 self._agent_resolver.resolve_agent(job.project_id, job.agent_id)

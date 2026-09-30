@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 from zoneinfo import ZoneInfo
 
@@ -553,25 +555,78 @@ async def test_next_fire_keeps_local_wall_clock_across_dst_transitions(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_create_validates_target_and_owned_session(tmp_path: Path) -> None:
-    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="agent-one")))
-    sessions = SimpleNamespace(exists=Mock(return_value=False))
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_edits_validate_target_and_owned_session_off_the_loop(
+    tmp_path: Path, operation: str
+) -> None:
+    # The target and Session reads block; they run on the Session pool, never on
+    # the Event Loop.
+    reading_threads: list[threading.Thread] = []
+
+    def reads(result: Any) -> Mock:
+        def read(*_args: Any) -> Any:
+            reading_threads.append(threading.current_thread())
+            return result
+
+        return Mock(side_effect=read)
+
+    async def on_the_pool(function: Any, *args: Any) -> Any:
+        return await asyncio.to_thread(function, *args)
+
+    resolver = SimpleNamespace(resolve_agent=reads(SimpleNamespace(id="agent-one")))
+    sessions = SimpleNamespace(exists=reads(False), run_async=on_the_pool)
     service, _trigger_service = make_service(tmp_path, agent_resolver=resolver, sessions=sessions)
+    job = await service.create_job(
+        agent_id="agent-one", prompt="Ping", schedule_type="cron", cron_expression="0 9 * * *"
+    )
+    resolver.resolve_agent.reset_mock()
+    fields: dict[str, Any] = {"session_id": "wrong-session", "project_id": "vbot"}
 
     with pytest.raises(CronJobValidationError):
-        await service.create_job(
-            agent_id="agent-one",
-            prompt="Reuse context",
-            schedule_type="cron",
-            cron_expression="0 9 * * *",
-            session_id="wrong-session",
-            project_id="vbot",
-        )
+        if operation == "create":
+            await service.create_job(
+                agent_id="agent-one",
+                prompt="Reuse context",
+                schedule_type="cron",
+                cron_expression="0 9 * * *",
+                **fields,
+            )
+        else:
+            await service.update_job(job.id, **fields)
 
     resolver.resolve_agent.assert_called_once_with("vbot", "agent-one")
     sessions.exists.assert_called_once_with(
         SessionAddress(project_id="vbot", agent_id="agent-one", session_id="wrong-session")
     )
+    assert len(reading_threads) == 3
+    assert threading.current_thread() not in reading_threads
+    assert service.list_jobs() == [job]
+
+
+@pytest.mark.asyncio
+async def test_a_fire_while_an_edit_checks_its_references_is_kept(tmp_path: Path) -> None:
+    resolver = SimpleNamespace(resolve_agent=Mock(return_value=SimpleNamespace(id="agent-one")))
+    service, _trigger_service = make_service(tmp_path, agent_resolver=resolver)
+    job = await service.create_job(
+        agent_id="agent-one",
+        prompt="Ping",
+        schedule_type="cron",
+        cron_expression="0 9 * * *",
+        remaining_runs=3,
+    )
+    fired_at = "2026-09-30T09:00:00+00:00"
+
+    async def fired_meanwhile(function: Any, *args: Any) -> Any:
+        # A fire records its outcome on the stored job while the edit waits.
+        stored = service._jobs[job.id]
+        stored.last_fired_at, stored.remaining_runs = fired_at, 2
+        return function(*args)
+
+    service._sessions = cast(Any, SimpleNamespace(run_async=fired_meanwhile))
+    updated = await service.update_job(job.id, prompt="Pong")
+
+    assert (updated.prompt, updated.last_fired_at, updated.remaining_runs) == ("Pong", fired_at, 2)
+    assert service.list_jobs() == [updated]
 
 
 @pytest.mark.asyncio
