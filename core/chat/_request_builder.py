@@ -255,14 +255,11 @@ class RequestBuilder:
         return cwd
 
     @staticmethod
-    def available_skill_names(agent: Any, skill_registry: SkillRegistry) -> list[str] | None:
-        """Return the currently advertised Skill names, or ``None`` for a degraded registry."""
-        filter_allowed = getattr(skill_registry, "filter_allowed", None)
-        if not callable(filter_allowed):
-            return None
+    def available_skill_names(agent: Any, skill_registry: SkillRegistry) -> list[str]:
+        """Return the currently advertised Skill names."""
         allowed_skills = getattr(agent, "allowed_skills", None)
         allowed = ["*"] if allowed_skills is None else allowed_skills
-        return sorted(str(skill.name) for skill in filter_allowed(allowed))
+        return sorted(str(skill.name) for skill in skill_registry.filter_allowed(allowed))
 
     def _plan_skill_announcement(
         self,
@@ -286,12 +283,7 @@ class RequestBuilder:
         announcement persists. A Session without a seen set records the whole
         catalog as its baseline instead.
         """
-        # Minimal/degraded skill registries (e.g. some test doubles) may not expose
-        # ``filter_allowed``; the announcement is an optional enhancement, so skip it
-        # cleanly rather than break the run - the real ``SkillRegistry`` always has it.
         available_names = self.available_skill_names(agent, skill_registry)
-        if available_names is None:
-            return _SkillAnnouncement()
         allowed_skills = getattr(agent, "allowed_skills", None)
         allowed = ["*"] if allowed_skills is None else allowed_skills
         available = {

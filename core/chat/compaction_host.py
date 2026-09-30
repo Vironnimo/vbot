@@ -423,9 +423,7 @@ class ChatCompactionHost:
             skill_catalog=skill_catalog,
             skill_project_id=prompt_skill_project_id,
             prompt_read_paths=tuple(read_paths),
-            available_skill_names=(
-                tuple(available_skill_names) if available_skill_names is not None else None
-            ),
+            available_skill_names=tuple(available_skill_names),
             memory_prompt_mode=getattr(
                 refreshed_agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE
             ),
