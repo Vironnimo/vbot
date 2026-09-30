@@ -8,12 +8,15 @@ import queue
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import pytest
 from websockets.asyncio.server import ServerConnection, serve
 from websockets.http11 import Request, Response
 
+from cli._server_target import HealthProbeResult
 from cli.application import monitor as monitor_module
 from cli.application.monitor import MonitorStatus, ServerMonitor
+from cli.server_management import ServerState
 
 _RUN_EVENT = {
     "type": "run_completed",
@@ -37,6 +40,16 @@ class _Recorder:
 
     async def next(self) -> tuple[str, Any]:
         return await asyncio.to_thread(self.calls.get, True, 5)
+
+
+class _SilentClient(httpx.AsyncClient):
+    """Answers no request in time, like a server whose Event Loop is blocked."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        def time_out(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadTimeout("no answer", request=request)
+
+        super().__init__(transport=httpx.MockTransport(time_out), **kwargs)
 
 
 def _query(path: str) -> dict[str, str]:
@@ -91,27 +104,44 @@ def test_monitor_follows_the_stream_as_tray_and_resumes_after_a_restart():
 
 
 @pytest.mark.parametrize(
-    ("health", "expected"),
+    ("health", "recorded", "expected"),
     [
-        pytest.param(None, ("refused", False), id="nothing-listens"),
-        pytest.param('{"status":"ok"}', ("rejected", True), id="vbot-refuses-stream"),
-        pytest.param("<html></html>", ("rejected", False), id="foreign-listener"),
+        pytest.param(None, "absent", ("refused", False), id="nothing-listens"),
+        pytest.param('{"status":"ok"}', "running", ("rejected", True), id="vbot-refuses-stream"),
+        pytest.param("<html></html>", "foreign", ("rejected", False), id="foreign-listener"),
+        pytest.param(TimeoutError, "unresponsive", ("unresponsive", False), id="busy-server"),
+        pytest.param(TimeoutError, "absent", ("unreachable", False), id="silent-listener"),
+        pytest.param(TimeoutError, "foreign", ("unreachable", False), id="silent-stranger"),
     ],
 )
 def test_monitor_classifies_a_target_without_an_event_stream(
-    monkeypatch: pytest.MonkeyPatch, health: str | None, expected: tuple[str, bool]
+    monkeypatch: pytest.MonkeyPatch,
+    health: str | type[TimeoutError] | None,
+    recorded: ServerState,
+    expected: tuple[str, bool],
 ):
-    if health is None:
-        # A real refused loopback connect takes about two seconds on Windows.
-        async def refuse(*_args: object, **_kwargs: object) -> None:
-            raise ConnectionRefusedError
+    observed: list[HealthProbeResult] = []
 
-        monkeypatch.setattr(monitor_module, "connect", refuse)
+    def classify(result: HealthProbeResult) -> ServerState:
+        observed.append(result)
+        return recorded
+
+    if health is None or health is TimeoutError:
+        # A real refused loopback connect takes about two seconds on Windows, and a
+        # busy server holds the handshake for the whole ten-second open timeout.
+        failure = ConnectionRefusedError if health is None else TimeoutError
+
+        async def fail(*_args: object, **_kwargs: object) -> None:
+            raise failure
+
+        monkeypatch.setattr(monitor_module, "connect", fail)
+    if health is TimeoutError:
+        monkeypatch.setattr(monitor_module.httpx, "AsyncClient", _SilentClient)
 
     def respond(connection: ServerConnection, request: Request) -> Response:
         if request.path.startswith("/ws"):
             return connection.respond(403, "Forbidden")
-        return connection.respond(200, health or "")
+        return connection.respond(200, health if isinstance(health, str) else "")
 
     async def never_streams(_connection: ServerConnection) -> None:
         return None
@@ -120,7 +150,9 @@ def test_monitor_classifies_a_target_without_an_event_stream(
         async with serve(never_streams, "127.0.0.1", 0, process_request=respond) as server:
             url = f"http://127.0.0.1:{next(iter(server.sockets)).getsockname()[1]}"
             recorder = _Recorder()
-            monitor = ServerMonitor(lambda: url, recorder, local=True, user_agent="test")
+            monitor = ServerMonitor(
+                lambda: url, recorder, local=True, user_agent="test", classify=classify
+            )
             await asyncio.to_thread(monitor.start)
             try:
                 return await recorder.next()
@@ -131,3 +163,8 @@ def test_monitor_classifies_a_target_without_an_event_stream(
 
     assert name == "status"
     assert (status.connection, status.vbot) == expected
+    # Only an unanswered `/health` request is classified, from that observation alone.
+    assert bool(observed) == (health is TimeoutError)
+    assert all(
+        (item.reachable, item.is_vbot, item.timed_out) == (False, False, True) for item in observed
+    )

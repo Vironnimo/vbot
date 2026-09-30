@@ -31,6 +31,7 @@ from cli.application.state import (
     write_json,
 )
 from cli.application.tray import TraySink, TrayState, run_tray
+from cli.server_management import HealthProbeResult, ServerInstance, ServerState, classify_server
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
 
@@ -69,7 +70,7 @@ class ApplicationFacade:
         self._display_version = ""
         self._version_signature: tuple[int, int] | None = None
         self._observer = operations.OperationObserver(install)
-        self._server_url_value: str | None = None
+        self._server_target_value: ServerInstance | None = None
         self._source_label: str | None = None
         self._monitor: ServerMonitor | None = None
         self._notifier: Notifier | None = None
@@ -124,6 +125,7 @@ class ApplicationFacade:
             _MonitorEvents(notifier, sink),
             local=self._install.owns_server,
             user_agent=f"vBot-Tray/{self._version() or 'unknown'}",
+            classify=self._classify_server if self._install.owns_server else None,
         )
         self._notifier, self._monitor = notifier, monitor
         monitor.start()
@@ -301,15 +303,29 @@ class ApplicationFacade:
         else:
             server_state = {
                 "connected": "running",
+                "unresponsive": "unresponsive",
                 "refused": "stopped",
                 "unreachable": "stopped",
             }.get(status.connection, "unknown")
         return server_state, self._server_url()
 
     def _server_url(self) -> str:
-        if self._server_url_value is None:
-            self._server_url_value = processes.target(self._install).url
-        return self._server_url_value
+        return self._server_target().url
+
+    def _server_target(self) -> ServerInstance:
+        if self._server_target_value is None:
+            self._server_target_value = processes.target(self._install)
+        return self._server_target_value
+
+    def _classify_server(self, health: HealthProbeResult) -> ServerState:
+        """Classify the owned target from the monitor's unanswered ``/health`` request.
+
+        The monitor calls this on its own thread after a failed connect; the
+        control record and process check tell a busy server from a stopped one
+        without probing the target again.
+        """
+
+        return classify_server(self._server_target(), health=health)
 
     def _monitor_target(self) -> str | None:
         if self._install.owns_server:

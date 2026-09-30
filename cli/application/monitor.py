@@ -4,7 +4,8 @@ The monitor holds one ``/ws`` connection as the ``tray`` accessor. The server
 pushes Run and resource events, and the connection's protocol pings are the only
 traffic while nothing happens, so an idle tray does no periodic work for its
 server. While disconnected, the monitor retries with a bounded backoff and
-classifies the listener through ``/health``.
+classifies the listener through ``/health``; when that goes unanswered too, the
+optional ``classify`` callback tells a busy server from an unreachable target.
 """
 
 from __future__ import annotations
@@ -18,15 +19,18 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import urlencode
 
 import httpx
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed, InvalidHandshake
 
-from cli._server_target import HEALTH_PATH, health_result
+from cli._server_target import HEALTH_PATH, HealthProbeResult, health_result
 from cli.rpc_client import RPC_PATH
+
+if TYPE_CHECKING:
+    from cli.server_management import ServerState
 
 _LOGGER = logging.getLogger("vbot.application.monitor")
 
@@ -45,9 +49,12 @@ class MonitorStatus:
 
     ``connection`` is ``unknown`` before the first attempt, ``connected`` while
     the event stream is open, ``refused`` when nothing listens, ``rejected``
-    when a listener answered but refused the stream, ``unreachable`` when the
-    target could not be reached, and ``no_target`` without a target. ``vbot``
-    says whether the listener's ``/health`` identified vBot.
+    when a listener answered but refused the stream, ``unresponsive`` when the
+    target's own server process lives but answered neither the stream nor
+    ``/health`` (a busy Event Loop, still starting or already stopping),
+    ``unreachable`` when the target could not be reached otherwise, and
+    ``no_target`` without a target. ``vbot`` says whether the listener's
+    ``/health`` identified vBot.
     """
 
     url: str | None = None
@@ -66,7 +73,14 @@ class MonitorListener(Protocol):
 
 
 class ServerMonitor:
-    """Own the tray's background event loop, stream connection and server RPC client."""
+    """Own the tray's background event loop, stream connection and server RPC client.
+
+    ``classify`` classifies the target from the monitor's own unanswered
+    ``/health`` request, which it receives as the health observation. It runs on
+    the monitor's thread only after a failed connect, so it must stay cheap and
+    must not probe the target again; without it, silence counts as
+    ``unreachable``.
+    """
 
     def __init__(
         self,
@@ -75,11 +89,13 @@ class ServerMonitor:
         *,
         local: bool,
         user_agent: str,
+        classify: Callable[[HealthProbeResult], ServerState] | None = None,
     ) -> None:
         self._target = target
         self._listener = listener
         self._local = local
         self._user_agent = user_agent
+        self._classify = classify
         # One stable id lets the server's client roster recognize reconnects.
         self._connection_id = uuid.uuid4().hex
         self._status = MonitorStatus()
@@ -251,12 +267,31 @@ class ServerMonitor:
         try:
             health = health_result(await self._client.get(f"{url}{HEALTH_PATH}", timeout=2.0))
         except httpx.RequestError as exc:
-            refused = isinstance(exc, httpx.ConnectError) and self._local
-            self._set_status(
-                MonitorStatus(url=url, connection="refused" if refused else "unreachable")
-            )
+            if isinstance(exc, httpx.ConnectError) and self._local:
+                connection = "refused"
+            else:
+                connection = self._classify_silence(exc)
+            self._set_status(MonitorStatus(url=url, connection=connection))
             return
         self._set_status(MonitorStatus(url=url, connection="rejected", vbot=health.is_vbot))
+
+    def _classify_silence(self, error: httpx.RequestError) -> str:
+        """Tell a busy server from an unreachable target without probing it again."""
+
+        if self._classify is None:
+            return "unreachable"
+        health = HealthProbeResult(
+            reachable=False,
+            is_vbot=False,
+            error=str(error) or type(error).__name__,
+            timed_out=isinstance(error, httpx.TimeoutException),
+        )
+        try:
+            state = self._classify(health)
+        except Exception:
+            _LOGGER.exception("Could not classify the silent tray server target")
+            return "unreachable"
+        return "unresponsive" if state == "unresponsive" else "unreachable"
 
     async def _pause(self, seconds: float) -> None:
         assert self._wake is not None
