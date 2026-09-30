@@ -31,7 +31,7 @@ _CORE_FRAGMENT_NAMES = (
 
 # (name, description, activation, constraints) of the registered stub Tools.
 _STUB_TOOLS = (
-    ("read_file", "Read a workspace file", "configurable", ()),
+    ("read", "Read a workspace file", "configurable", ()),
     ("shell", "Run a shell command", "configurable", ()),
     ("memory", "Manage pinned memory", "memory_mode", ("identity_agent",)),
     ("skill", "Load a skill", "configurable", ()),

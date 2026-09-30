@@ -145,7 +145,7 @@ def test_default_scope_layout_and_override_shape_the_prompt(
     manager = _manager(
         tmp_path, skills=StubSkills([StubSkill("agent-cli", "Delegate")]), block_store=store
     )
-    agent = _agent(workspace, allowed_tools=["read_file"], allowed_skills=["agent-cli"])
+    agent = _agent(workspace, allowed_tools=["read"], allowed_skills=["agent-cli"])
 
     prompt = manager.build_system_prompt(agent)
 
@@ -153,7 +153,7 @@ def test_default_scope_layout_and_override_shape_the_prompt(
     assert "Delegate" not in prompt
     assert "0.1.0" in prompt
     assert "## Custom Tools" in prompt
-    assert "- read_file: Read a workspace file" in prompt
+    assert "- read: Read a workspace file" in prompt
 
 
 def test_update_block_definitions_refreshes_contributed_blocks(

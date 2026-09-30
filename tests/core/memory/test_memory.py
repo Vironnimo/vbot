@@ -263,7 +263,7 @@ def test_an_unreadable_memory_file_fails_as_memory_error_and_is_kept(
         memory_file.mkdir()
 
     with pytest.raises(MemoryError) as failure:
-        service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
+        service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT, memory_tool="memory")
     with pytest.raises(MemoryError):
         service.add_entry(workspace, "agent", "New fact.")
 
@@ -285,15 +285,17 @@ def test_prompt_renders_selected_scopes_in_mode_order(
     (workspace / "MEMORY.md").write_text("- Agent fact\n", encoding="utf-8")
     (workspace / "USER.md").write_text("- User fact\n", encoding="utf-8")
 
-    agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT)
-    agent_and_user = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER)
+    agent_only = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT, memory_tool=None)
+    agent_and_user = service.read_prompt_files(
+        workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool=None
+    )
 
     assert "Agent fact" in agent_only
     assert "User fact" not in agent_only
     assert "<memory>" not in agent_only
     assert "<file name=" not in agent_only
     assert agent_and_user.index("Agent fact") < agent_and_user.index("User fact")
-    assert service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF) == ""
+    assert service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_OFF, memory_tool=None) == ""
 
 
 def test_missing_memory_files_render_like_empty_ones_without_being_created(
@@ -303,16 +305,85 @@ def test_missing_memory_files_render_like_empty_ones_without_being_created(
     # the Model always sees the scope, and rendering never creates a file.
     workspace.mkdir()
 
-    missing = read_memory_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service)
+    missing = read_memory_files(
+        workspace, MEMORY_PROMPT_MODE_AGENT_USER, provider=service, memory_tool="memory"
+    )
 
     assert "No entries yet." in missing
-    assert read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service) == ""
+    assert (
+        read_memory_files(workspace, MEMORY_PROMPT_MODE_OFF, provider=service, memory_tool=None)
+        == ""
+    )
     assert list(workspace.iterdir()) == []
     entry = service.add_entry(workspace, "agent", "temporary")
     service.remove_entry(workspace, "agent", entry.id)
     (workspace / "USER.md").write_text("", encoding="utf-8")
     assert (workspace / "MEMORY.md").exists()
-    assert service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER) == missing
+    assert (
+        service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool="memory")
+        == missing
+    )
+
+
+@pytest.mark.parametrize("memory_tool", ["memory", None], ids=["tool-offered", "no-tool"])
+def test_prompt_cuts_a_scope_above_its_budget_and_counts_what_it_left_out(
+    service: MemoryService,
+    workspace: Path,
+    caplog: pytest.LogCaptureFixture,
+    memory_tool: str | None,
+) -> None:
+    # A hand edit can exceed a scope's budget (agent 4000, user 3000 characters).
+    # The prompt shows the entries that fit in file order, skipping one that does not,
+    # and a notice counting the rest; the label keeps the true total. The memory
+    # Tool's list still shows every entry, and only a whole file is stamped as read.
+    workspace.mkdir()
+    agent_entries = ["A" * 1500, "B" * 3000, "C" * 1000, "D" * 2000]
+    (workspace / "MEMORY.md").write_text(
+        "".join(f"- {entry}\n" for entry in agent_entries), encoding="utf-8"
+    )
+    (workspace / "USER.md").write_text(f"- {'U' * 3500}\n", encoding="utf-8")
+
+    with caplog.at_level(logging.INFO, logger="vbot.memory"):
+        rendered = service.read_prompt_files(
+            workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool=memory_tool
+        )
+        assert (
+            service.read_prompt_files(
+                workspace, MEMORY_PROMPT_MODE_AGENT_USER, memory_tool=memory_tool
+            )
+            == rendered
+        )
+
+    agent_section, user_section = rendered.split("\n\n")
+    assert "7500/4000" in agent_section
+    assert "A" * 1500 in agent_section and "C" * 1000 in agent_section
+    assert "B" * 3000 not in agent_section and "D" * 2000 not in agent_section
+    agent_notice = agent_section.splitlines()[-1]
+    assert " 2 " in agent_notice and "5000" in agent_notice
+    assert ("`memory`" in agent_notice) is (memory_tool is not None)
+    assert ("`agent`" in agent_notice) is (memory_tool is not None)
+    # A scope whose only entry is cut shows its notice, never "No entries yet."
+    assert "U" * 3500 not in user_section
+    assert "No entries yet." not in user_section
+    assert ("`user`" in user_section) is (memory_tool is not None)
+    assert all(entry in service.render_scopes(workspace, ["agent"]) for entry in agent_entries)
+    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT_USER) == []
+    # One warning per cut file for repeated renders, without entry text.
+    assert [record.levelno for record in caplog.records] == [logging.WARNING] * 2
+    assert "AAAA" not in caplog.text and "UUUU" not in caplog.text
+
+    service.remove_matching(workspace, "agent", "B" * 10)
+    service.remove_matching(workspace, "agent", "D" * 10)
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="vbot.memory"):
+        whole = service.read_prompt_files(workspace, MEMORY_PROMPT_MODE_AGENT, memory_tool=None)
+
+    assert whole == service.render_scopes(workspace, ["agent"])
+    # The end of the condition is logged once.
+    assert [record.levelno for record in caplog.records] == [logging.INFO]
+    assert memory_prompt_file_paths(workspace, MEMORY_PROMPT_MODE_AGENT) == [
+        (workspace / "MEMORY.md").resolve()
+    ]
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ layout, and contributor declarations; this module never reaches for them itself.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -25,16 +26,20 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from core.tools import READ_TOOL_NAME, model_tool_name
 from core.utils.errors import VBotError
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
+from core.utils.paths import model_path
 
 if TYPE_CHECKING:
     from core.prompts.prompts import ProjectPromptContext, PromptAgent
 
 _LOGGER = get_logger("prompts")
-# Missing or unreadable includes and unknown markers the process has already logged.
+# Unknown markers the process has already logged.
 _TEMPLATE_CONDITIONS = LoggedConditions()
+# Missing, unreadable or oversized prompt files the process has already logged.
+_FILE_CONDITIONS = LoggedConditions()
 
 # Exactly one blank line separates two rendered blocks. The old format padded
 # missing pieces with blank lines so an identity agent stayed byte-identical;
@@ -95,6 +100,14 @@ BlockProducer = Callable[["BlockRenderContext"], str]
 # A dynamic block's build-time render function. Exactly one of ``default_text`` /
 # ``render`` is set on a definition. A raising render drops only that block.
 BlockRenderer = Callable[["BlockRenderContext"], str]
+# Whether the Agent that receives the rendered text can call a Tool, asked by the
+# Tool's registry name. Text names a Tool only when this answers ``True``.
+ToolAvailability = Callable[[str], bool]
+
+
+def no_tools_available(_tool_name: str) -> bool:
+    """The :data:`ToolAvailability` of an Agent that can call no Tool."""
+    return False
 
 
 @dataclass(frozen=True)
@@ -136,6 +149,10 @@ class BlockRenderContext:
     # a separate read call. ``None`` = no observer — the assembly output is byte-for-
     # byte identical either way, so preview/tests and the prompt cache are unaffected.
     read_observer: Callable[[Path], None] | None = None
+    # Which Tools the Agent receiving this prompt can call. A notice that stands in
+    # for an oversized file names ``read`` only when it answers ``True`` for it; the
+    # default names no Tool.
+    tool_available: ToolAvailability = no_tools_available
 
 
 @dataclass(frozen=True)
@@ -361,43 +378,30 @@ def _render_workspace_include(
     filename: str,
     workspace: str,
     on_read: Callable[[Path], None] | None,
+    tool_available: ToolAvailability,
 ) -> str:
     """Return one ``{include:filename}`` expansion, fail-soft.
 
     An empty workspace means "no includes": the marker is dropped with no read and
     no warning — it must never resolve against ``Path("")`` (= ``Path(".")``), which
     would read SOUL.md/USER.md from the server's process CWD. A safe flat filename
-    resolves under the workspace and is ``<file>``-wrapped; a missing **or**
-    unreadable file is dropped with a warning (a prompt file never aborts a run —
-    user decision), logged once per state rather than on every build, and a later
-    successful read logs the recovery. An **unsafe** include path raises
-    :class:`PromptError` — that is a malformed directive, not a readability issue.
+    resolves under the workspace and renders through :func:`render_prompt_file`:
+    ``<file>``-wrapped, an oversized file as its notice, a missing **or**
+    unreadable file dropped with a warning (a prompt file never aborts a run —
+    user decision). An **unsafe** include path raises :class:`PromptError` — that
+    is a malformed directive, not a readability issue.
     """
     if not workspace:
         return ""
     validate_workspace_include(filename)
-    include_path = Path(workspace) / filename
-    # Every build reads the include again: log when it goes missing or
-    # unreadable, when that changes, and when it is readable again.
-    condition = ("include", str(include_path))
-    try:
-        content = include_path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        if _TEMPLATE_CONDITIONS.started(condition, "missing"):
-            _LOGGER.warning("Skipped missing workspace include (path=%s)", include_path)
-        return ""
-    except (OSError, ValueError) as exc:
-        # Present but unreadable for ANY reason (locked, no permission, a
-        # directory, binary/non-UTF-8, …): log and drop the block, like a
-        # missing include. A prompt file must never abort the run.
-        if _TEMPLATE_CONDITIONS.started(condition, type(exc).__name__):
-            _LOGGER.warning("Skipped unreadable workspace include (path=%s): %s", include_path, exc)
-        return ""
-    if _TEMPLATE_CONDITIONS.ended(condition):
-        _LOGGER.info("Workspace include became readable again (path=%s)", include_path)
-    if on_read is not None:
-        on_read(include_path.resolve())
-    return wrap_include_file(filename, content)
+    rendered = render_prompt_file(
+        Path(workspace) / filename,
+        filename,
+        tool_available=tool_available,
+        on_read=on_read,
+        warn_missing=True,
+    )
+    return rendered or ""
 
 
 def expand_block_template(
@@ -436,37 +440,141 @@ def expand_block_template(
         if generated_name is not None:
             return _render_generated_marker(generated_name.strip(), producers, context)
         if include_name is not None:
-            return _render_workspace_include(include_name.strip(), workspace, context.read_observer)
+            return _render_workspace_include(
+                include_name.strip(), workspace, context.read_observer, context.tool_available
+            )
         return replacements[match.group(0)]
 
     return pattern.sub(replace, text)
 
 
 def expand_workspace_includes(
-    text: str, workspace: str, *, on_read: Callable[[Path], None] | None = None
+    text: str,
+    workspace: str,
+    *,
+    tool_available: ToolAvailability,
+    on_read: Callable[[Path], None] | None = None,
 ) -> str:
     """Replace every ``{include:filename}`` with the workspace file, fail-soft.
 
     The include-only form of :func:`expand_block_template`, used for the SOUL data
     block. Included content is inserted verbatim and never scanned again. See
     :func:`_render_workspace_include` for the empty-workspace, missing/unreadable
-    and unsafe-path rules.
+    and unsafe-path rules, and :func:`render_prompt_file` for the size limit.
 
     ``on_read``, when given, is called with the resolved absolute path of every file
-    whose content is actually inlined (never for a missing/unreadable/dropped one),
-    so a caller can register the inlined file as read-before-write.
+    whose content is actually inlined (never for a missing/unreadable/oversized
+    one), so a caller can register the inlined file as read-before-write.
     """
     return INCLUDE_PATTERN.sub(
-        lambda match: _render_workspace_include(match.group(1).strip(), workspace, on_read),
+        lambda match: _render_workspace_include(
+            match.group(1).strip(), workspace, on_read, tool_available
+        ),
         text,
     )
 
 
 # Largest text file vBot inlines whole into a Model's Context without being asked
-# per request: an ``@``-mentioned file and each Project auto-load file. About 32k
-# tokens: far above real instruction files, so it only stops a runaway file (a
-# generated dump, a misconfigured path) from flooding the Context of every request.
+# per request: an ``@``-mentioned file, each Project auto-load file and each
+# workspace include (SOUL included). About 32k tokens: far above real instruction
+# files, so it only stops a runaway file (a generated dump, a misconfigured path)
+# from flooding the Context of every request.
 INLINE_FILE_MAX_BYTES = 128 * 1024
+
+# Stands in for a file above ``INLINE_FILE_MAX_BYTES`` inside its ``<file>`` frame,
+# so the Agent learns that the file exists and why its content is missing.
+# ``{read_hint}`` is ``FILE_READ_HINT`` when the Agent can call ``read``, else "".
+FILE_TOO_LARGE_NOTICE = (
+    "[Not included: this file has {size:,} bytes, more than the {limit:,}-byte limit "
+    "for automatically loaded files.{read_hint}]"
+)
+# Names the file's absolute path: the Agent's relative paths can resolve against
+# another directory than the one the file was loaded from.
+FILE_READ_HINT = (
+    " When your work needs its content, read `{path}` with the `{read_tool}` Tool, "
+    "which returns large files in pages."
+)
+
+
+def render_prompt_file(
+    path: Path,
+    name: str,
+    *,
+    tool_available: ToolAvailability,
+    on_read: Callable[[Path], None] | None = None,
+    warn_missing: bool = False,
+) -> str | None:
+    """Return one file as a ``<file name="…">`` block for a Model's Context.
+
+    The single reader for every file vBot loads into a Model's Context on its
+    own: workspace ``{include:…}`` files (SOUL included) and the Project auto-load
+    files of the Working Project block and the ``project`` Tool. *name* is the
+    frame's ``name`` attribute.
+
+    - A file above ``INLINE_FILE_MAX_BYTES`` keeps its frame but holds
+      ``FILE_TOO_LARGE_NOTICE`` instead of its content; only the first
+      ``INLINE_FILE_MAX_BYTES + 1`` bytes are ever read. The notice points to the
+      ``read`` Tool only when *tool_available* says the Agent can call it.
+    - A missing file returns ``None``; with *warn_missing* it also warns.
+    - A file that cannot be read or is not UTF-8 text returns ``None`` and warns.
+      A prompt file never aborts a Run (user decision).
+
+    Each condition logs once when it starts or changes and once when the file
+    loads whole again, never on every render, and never with file content.
+    *on_read*, when given, receives the resolved absolute path only when the
+    content is inlined whole, so the caller can stamp it as read-before-write.
+    """
+    # Keyed with the missing-file policy, so a file that is both included and
+    # auto-loaded cannot flip one condition between logged and silent on every build.
+    condition = (warn_missing, str(path))
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(INLINE_FILE_MAX_BYTES + 1)
+            size = max(os.fstat(handle.fileno()).st_size, len(raw))
+        # Text mode's universal newlines, exactly as ``read_text`` applies them.
+        content = (
+            None
+            if len(raw) > INLINE_FILE_MAX_BYTES
+            else raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        )
+    except FileNotFoundError:
+        if not warn_missing:
+            # An optional file that does not exist yet is normal, not a condition.
+            _FILE_CONDITIONS.ended(condition)
+        elif _FILE_CONDITIONS.started(condition, "missing"):
+            _LOGGER.warning("Skipped missing prompt file (path=%s)", path)
+        return None
+    except (OSError, ValueError) as exc:
+        # Present but unreadable for ANY reason (locked, no permission, a
+        # directory, binary/non-UTF-8, a malformed path).
+        if _FILE_CONDITIONS.started(condition, type(exc).__name__):
+            _LOGGER.warning("Skipped unreadable prompt file (path=%s): %s", path, exc)
+        return None
+    if content is None:
+        if _FILE_CONDITIONS.started(condition, "too_large"):
+            _LOGGER.warning(
+                "Replaced oversized prompt file with a notice (path=%s bytes=%d limit=%d)",
+                path,
+                size,
+                INLINE_FILE_MAX_BYTES,
+            )
+        read_hint = (
+            FILE_READ_HINT.format(
+                path=model_path(os.path.abspath(path)),
+                read_tool=model_tool_name(READ_TOOL_NAME),
+            )
+            if tool_available(READ_TOOL_NAME)
+            else ""
+        )
+        notice = FILE_TOO_LARGE_NOTICE.format(
+            size=size, limit=INLINE_FILE_MAX_BYTES, read_hint=read_hint
+        )
+        return wrap_include_file(name, notice)
+    if _FILE_CONDITIONS.ended(condition):
+        _LOGGER.info("Loaded prompt file whole again (path=%s)", path)
+    if on_read is not None:
+        on_read(path.resolve())
+    return wrap_include_file(name, content)
 
 
 def wrap_include_file(filename: str, content: str) -> str:

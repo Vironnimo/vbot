@@ -19,7 +19,14 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 
 
 class _Renderer:
-    def render_project_files(self, project_context: Any, *, on_read: Any = None) -> str:
+    def __init__(self) -> None:
+        # Whether the Tool result could point the Agent to `read`, per call.
+        self.read_offered: list[bool] = []
+
+    def render_project_files(
+        self, project_context: Any, *, tool_available: Any, on_read: Any = None
+    ) -> str:
+        self.read_offered.append(tool_available("read"))
         blocks: list[str] = []
         for name in project_context.auto_load:
             path = (project_context.cwd / name).resolve()
@@ -38,7 +45,12 @@ class _Renderer:
         return "\n".join(lines)
 
 
-def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
+def _context(
+    tmp_path: Path,
+    *,
+    project_id: str | None = None,
+    tool_denial_resolver: Any = None,
+) -> ToolContext:
     return ToolContext(
         agent_id="coder",
         session_id="session-one",
@@ -50,6 +62,7 @@ def _context(tmp_path: Path, *, project_id: str | None = None) -> ToolContext:
         vbot_root=tmp_path,
         data_root=tmp_path,
         project_id=project_id,
+        tool_denial_resolver=tool_denial_resolver,
     )
 
 
@@ -57,9 +70,10 @@ def _registry(
     projects: ProjectStore,
     file_state: FileReadState | None = None,
     skills: list[Any] | None = None,
+    renderer: _Renderer | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
-    renderer = _Renderer()
+    renderer = renderer or _Renderer()
     register_project_tool(
         registry,
         projects,
@@ -145,6 +159,40 @@ def test_project_tool_loads_context_skills_and_stamps_files_read(tmp_path: Path)
             "source": {"from": "result", "path": ["data", "content"]},
         },
     ]
+
+
+@pytest.mark.parametrize(
+    ("allowed_tools", "denied_tool", "read_offered"),
+    [
+        (["project", "read"], None, True),
+        (["project"], None, False),
+        (["project", "read"], "read", False),
+    ],
+    ids=["run-allows-read", "run-lacks-read", "run-denies-read"],
+)
+def test_project_tool_lets_file_notices_name_read_only_when_the_run_can_call_it(
+    tmp_path: Path, allowed_tools: list[str], denied_tool: str | None, read_offered: bool
+) -> None:
+    # An oversized auto-load file becomes a notice; the renderer asks which Tools the
+    # notice may name, and the answer follows this Run's dispatch rules.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    projects = ProjectStore(tmp_path / "data")
+    projects.create("vbot", "vBot", repo)
+    renderer = _Renderer()
+    context = _context(
+        tmp_path,
+        tool_denial_resolver=lambda name: "Denied here." if name == denied_tool else None,
+    )
+
+    result = asyncio.run(
+        _registry(projects, renderer=renderer).dispatch(
+            context, {"project_id": "vbot"}, allowed_tools
+        )
+    )
+
+    assert result["ok"] is True
+    assert renderer.read_offered == [read_offered]
 
 
 def test_project_tool_returns_context_for_bare_project(tmp_path: Path) -> None:

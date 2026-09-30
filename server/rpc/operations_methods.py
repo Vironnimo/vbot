@@ -293,7 +293,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     try:
         prompt_manager = state.runtime.system_prompts
         working_project_context = (
-            await prompt_manager.render_working_project_context_async(project_context)
+            await prompt_manager.render_working_project_context_async(agent, project_context)
             if project_id is None and prompt_project is not None and project_context is not None
             else None
         )

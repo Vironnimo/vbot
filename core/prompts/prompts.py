@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import platform
 import socket
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -68,7 +67,6 @@ from core.prompts._types import (
 )
 from core.prompts.blocks import (
     BLOCK_KIND_DATA,
-    INLINE_FILE_MAX_BYTES,
     BlockDefinition,
     BlockProducer,
     BlockRenderContext,
@@ -77,21 +75,23 @@ from core.prompts.blocks import (
     EmptyBlockStore,
     LayoutEntry,
     PromptError,
+    ToolAvailability,
     apply_replacements,
     assemble_system_prompt,
     expand_workspace_includes,
+    render_prompt_file,
     resolve_layout,
-    wrap_include_file,
 )
 from core.tools.availability import (
+    MEMORY_TOOL_NAME,
     agent_tool_settings,
     apply_agent_target_tool_visibility,
     memory_tool_enabled,
     resolve_tool_access,
     subagent_allowed_agents,
 )
+from core.tools.model_names import model_tool_name
 from core.tools.tools import ToolDefinitionProfileContext
-from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
 from core.utils.paths import model_path
 from core.utils.workers import BoundedWorkerPool
@@ -143,16 +143,6 @@ __all__ = [
 
 PROMPT_WORKER_LIMIT = 4
 _LOGGER = get_logger("prompts")
-# Oversized or unreadable Project auto-load files the process has already logged.
-_PROJECT_FILE_CONDITIONS = LoggedConditions()
-
-# Stands in for a Project auto-load file above ``INLINE_FILE_MAX_BYTES`` inside its
-# ``<file>`` frame, so the Agent learns the file exists and how to read it.
-PROJECT_FILE_TOO_LARGE_NOTICE = (
-    "[Not included: this file has {size:,} bytes, more than the {limit:,}-byte limit "
-    "for project context files. Read it with the `read` Tool when your work needs its "
-    "content; `read` returns large files in pages.]"
-)
 
 _PROMPT_WORKERS = BoundedWorkerPool(
     name="prompt",
@@ -295,12 +285,19 @@ class SystemPromptManager:
         them, and the ``tool_list`` producer renders their names and descriptions,
         so neither changes while the definitions stay the same: readiness and
         registry changes are not consulted. ``None`` evaluates the Agent's live
-        Tool policy with ``session_tool_grants`` instead (previews).
+        Tool policy with ``session_tool_grants`` instead (previews). The same Tool
+        set decides whether a notice that stands in for an oversized file or a cut
+        Memory section names the Tool that shows the rest.
         """
         prompt_scope = self._resolve_build_scope(agent, scope)
         scope_key = self._catalog.scope_key(prompt_scope)
         observer: Callable[[Path], None] | None = (
             read_paths.append if read_paths is not None else None
+        )
+        effective_tool_names = (
+            None
+            if effective_tool_definitions is None
+            else frozenset(str(definition["name"]) for definition in effective_tool_definitions)
         )
         context = BlockRenderContext(
             agent=agent,
@@ -312,11 +309,11 @@ class SystemPromptManager:
             nesting_depth=nesting_depth,
             scope=scope_key,
             read_observer=observer,
-        )
-        effective_tool_names = (
-            None
-            if effective_tool_definitions is None
-            else frozenset(str(definition["name"]) for definition in effective_tool_definitions)
+            tool_available=self._tool_availability(
+                agent,
+                effective_tool_names=effective_tool_names,
+                session_tool_grants=session_tool_grants,
+            ),
         )
         producers = self._build_producers(
             agent,
@@ -449,10 +446,10 @@ class SystemPromptManager:
 
         Reuses the single ``{include:…}`` expansion path so fail-soft behavior
         (missing/unreadable → dropped, unsafe path → ``PromptError``, empty workspace
-        → no read) never drifts from a normal include. The context's read observer
-        (if any) is threaded through so an inlined SOUL.md is stamped as
-        read-before-write. A session-pinned ``soul_context`` wins verbatim so the
-        prompt cache stays stable between Compactions.
+        → no read, oversized → notice) never drifts from a normal include. The
+        context's read observer (if any) is threaded through so an inlined SOUL.md
+        is stamped as read-before-write. A session-pinned ``soul_context`` wins
+        verbatim so the prompt cache stays stable between Compactions.
 
         When SOUL is present, ``SOUL_FRAMING`` is prefixed so the model reads the
         identity/persona text as its core operating contract rather than as neutral
@@ -461,7 +458,7 @@ class SystemPromptManager:
         """
         if context.soul_context is not None:
             return context.soul_context
-        return self.render_soul(context.agent, on_read=context.read_observer)
+        return self._render_soul(context.agent, context.tool_available, context.read_observer)
 
     def render_soul(
         self, agent: PromptAgent, *, on_read: Callable[[Path], None] | None = None
@@ -470,9 +467,24 @@ class SystemPromptManager:
 
         The single live render path shared by the block and by Chat's prompt-epoch
         snapshot: fail-soft include expansion plus the ``SOUL_FRAMING`` prefix,
-        empty when the file is missing or the workspace is empty.
+        empty when the file is missing or the workspace is empty. An oversized
+        ``SOUL.md`` notice names ``read`` only when the Agent's current Tool policy
+        offers it.
         """
-        rendered = expand_workspace_includes(SOUL_INCLUDE_MARKER, agent.workspace, on_read=on_read)
+        return self._render_soul(agent, self._tool_availability(agent), on_read)
+
+    def _render_soul(
+        self,
+        agent: PromptAgent,
+        tool_available: ToolAvailability,
+        on_read: Callable[[Path], None] | None,
+    ) -> str:
+        rendered = expand_workspace_includes(
+            SOUL_INCLUDE_MARKER,
+            agent.workspace,
+            tool_available=tool_available,
+            on_read=on_read,
+        )
         if not rendered:
             return ""
         return f"{SOUL_FRAMING}\n\n{rendered}"
@@ -483,28 +495,36 @@ class SystemPromptManager:
             return context.working_project_context
         if context.project_context is None:
             return ""
-        return self.render_working_project_context(
-            context.project_context,
-            on_read=context.read_observer,
+        return self._render_working_project(
+            context.project_context, context.tool_available, context.read_observer
         )
 
     def render_working_project_context(
         self,
+        agent: PromptAgent,
         project_context: ProjectPromptContext,
         *,
         on_read: Callable[[Path], None] | None = None,
     ) -> str:
-        """Render the complete Working Project block from its resource template."""
-        project_files: list[str] = []
-        for name in project_context.auto_load:
-            block = self._read_project_file_block(
-                project_context.cwd,
-                name,
-                on_read=on_read,
-            )
-            if block is not None:
-                project_files.append(_indent_project_file_frame(block))
+        """Render the complete Working Project block from its resource template.
 
+        *agent* is the Agent that receives the block: a notice for an oversized
+        auto-load file names ``read`` only when its current Tool policy offers it.
+        """
+        return self._render_working_project(
+            project_context, self._tool_availability(agent), on_read
+        )
+
+    def _render_working_project(
+        self,
+        project_context: ProjectPromptContext,
+        tool_available: ToolAvailability,
+        on_read: Callable[[Path], None] | None,
+    ) -> str:
+        project_files = [
+            _indent_project_file_frame(block)
+            for block in self._project_file_blocks(project_context, tool_available, on_read)
+        ]
         template = self._storage.read_prompt_fragment("working_project.md")
         return apply_replacements(
             template,
@@ -518,6 +538,7 @@ class SystemPromptManager:
 
     async def render_working_project_context_async(
         self,
+        agent: PromptAgent,
         project_context: ProjectPromptContext,
         *,
         on_read: Callable[[Path], None] | None = None,
@@ -525,6 +546,7 @@ class SystemPromptManager:
         """Render Working Project files through the prompt worker boundary."""
         return await _PROMPT_WORKERS.run(
             self.render_working_project_context,
+            agent,
             project_context,
             on_read=on_read,
         )
@@ -559,36 +581,26 @@ class SystemPromptManager:
         self,
         project_context: ProjectPromptContext | None,
         *,
+        tool_available: ToolAvailability,
         on_read: Callable[[Path], None] | None = None,
     ) -> str:
         """Render the project's auto-loaded files as ``<file>``-wrapped blocks.
 
         The ``auto_load`` files in list order. AGENTS.md is no longer special — it
         is seeded as the first entry at project creation, so the list is the single
-        source of what loads. Each existing file wrapped exactly like ``{include}``
-        (one source of wrap logic). Auto-load paths are taken verbatim — relative to
-        the project cwd at any subfolder depth, or absolute, with no location
-        restriction (see ``_read_project_file_block``). Lazy: returns ``""`` when
-        there is no project context or no readable file, so the placeholder
-        collapses. A file above ``INLINE_FILE_MAX_BYTES`` renders as a notice
-        naming its size instead of its content (see ``_read_project_file_block``).
+        source of what loads. Lazy: returns ``""`` when there is no project context
+        or no readable file, so the placeholder collapses. *tool_available* tells
+        which Tools the receiving Agent can call; a notice for an oversized file
+        names ``read`` only when it can. See :meth:`_project_file_blocks` for paths
+        and :func:`render_prompt_file` for the size limit and fail-soft rules.
 
         ``on_read``, when given, is called with the resolved absolute path of every
         file actually inlined, so the caller can stamp it as read-before-write —
         used both for prompt assembly and the explicit ``project`` Tool.
-
-        The Working Project renderer and this explicit-Tool renderer share
-        ``_read_project_file_block`` so path and fail-soft behavior cannot drift.
         """
         if project_context is None:
             return ""
-
-        blocks: list[str] = []
-        for name in project_context.auto_load:
-            block = self._read_project_file_block(project_context.cwd, name, on_read=on_read)
-            if block is not None:
-                blocks.append(block)
-        return "\n".join(blocks)
+        return "\n".join(self._project_file_blocks(project_context, tool_available, on_read))
 
     def render_project_skills(
         self, project_name: str, skills: Sequence[ProjectContextSkill]
@@ -610,70 +622,35 @@ class SystemPromptManager:
         )
         return "\n".join(lines)
 
-    def _read_project_file_block(
-        self, cwd: Path, filename: str, *, on_read: Callable[[Path], None] | None = None
-    ) -> str | None:
-        """Read one project auto-load file and wrap it, or ``None`` when absent.
+    def _project_file_blocks(
+        self,
+        project_context: ProjectPromptContext,
+        tool_available: ToolAvailability,
+        on_read: Callable[[Path], None] | None,
+    ) -> list[str]:
+        """Return each existing auto-load file as a ``<file>`` block, in list order.
 
-        The path is used **as the user wrote it** in the project's auto-load list:
-        a relative path resolves against the project ``cwd`` at any subfolder depth,
-        an absolute path is read as-is. There is deliberately **no location
-        restriction** — the auto-load list is the user's own config naming the
-        user's own files, so where a file lives is not vBot's business (project
-        philosophy: maximum agency, minimal restrictions). A missing file is skipped
-        silently (lazy rendering); an unreadable file is skipped with a warning.
-        A file above ``INLINE_FILE_MAX_BYTES`` keeps its ``<file>`` frame but holds
-        ``PROJECT_FILE_TOO_LARGE_NOTICE`` instead of its content: every request
-        of the Session carries this block, so one runaway file must not fill the
-        Context Window. Only the first ``INLINE_FILE_MAX_BYTES + 1`` bytes are
-        ever read. Oversized and unreadable files warn once per condition, not on
-        every render. The ``<file>`` wrap is shared with ``{include}`` so framing
-        cannot drift.
-
-        ``on_read``, when given, is called with the file's resolved absolute path
-        only when its content is actually inlined (never for a missing, unreadable
-        or oversized one), so the caller can stamp it as read-before-write.
+        The Working Project renderer and the explicit-Tool renderer share this, so
+        path and fail-soft behavior cannot drift. Each path is used **as the user
+        wrote it** in the project's auto-load list: a relative path resolves against
+        the project ``cwd`` at any subfolder depth, an absolute path is read as-is.
+        There is deliberately **no location restriction** — the auto-load list is
+        the user's own config naming the user's own files (project philosophy:
+        maximum agency, minimal restrictions). A missing file is skipped silently
+        (the seeded AGENTS.md may not exist yet); every other rule is
+        :func:`render_prompt_file`'s.
         """
-        file_path = cwd / filename
-        condition = ("project_file", str(file_path))
-        try:
-            with file_path.open("rb") as handle:
-                raw = handle.read(INLINE_FILE_MAX_BYTES + 1)
-                size = os.fstat(handle.fileno()).st_size
-            if len(raw) > INLINE_FILE_MAX_BYTES:
-                if _PROJECT_FILE_CONDITIONS.started(condition, "too_large"):
-                    _LOGGER.warning(
-                        "Project file not loaded into the prompt: %d bytes exceed %d (path=%s)",
-                        size,
-                        INLINE_FILE_MAX_BYTES,
-                        file_path,
-                    )
-                notice = PROJECT_FILE_TOO_LARGE_NOTICE.format(
-                    size=max(size, len(raw)), limit=INLINE_FILE_MAX_BYTES
-                )
-                return wrap_include_file(model_path(filename), notice)
-            # Text mode's universal newlines, exactly as ``read_text`` applied them.
-            content = raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
-        except FileNotFoundError:
-            # Lazy: a configured-but-absent file is normal — including the seeded
-            # AGENTS.md before the repo actually has one — so skip quietly here
-            # rather than warn every turn.
-            _PROJECT_FILE_CONDITIONS.ended(condition)
-            return None
-        except (OSError, ValueError) as exc:
-            # Present but unreadable for ANY reason — locked, no permission, a
-            # directory, binary/non-UTF-8, a malformed path. A prompt-load file must
-            # never abort the run (user decision): log and skip, so one bad auto-load
-            # entry can never take the whole turn down. OSError covers the filesystem
-            # failures, ValueError the decode/bad-path ones.
-            if _PROJECT_FILE_CONDITIONS.started(condition, type(exc).__name__):
-                _LOGGER.warning("Skipping unreadable project file %s: %s", file_path, exc)
-            return None
-        if _PROJECT_FILE_CONDITIONS.ended(condition):
-            _LOGGER.info("Project file loads into the prompt again (path=%s)", file_path)
-        if on_read is not None:
-            on_read(file_path.resolve())
-        return wrap_include_file(model_path(filename), content)
+        blocks: list[str] = []
+        for filename in project_context.auto_load:
+            block = render_prompt_file(
+                project_context.cwd / filename,
+                model_path(filename),
+                tool_available=tool_available,
+                on_read=on_read,
+            )
+            if block is not None:
+                blocks.append(block)
+        return blocks
 
     def render_skill_catalog(
         self,
@@ -780,7 +757,9 @@ class SystemPromptManager:
         def memory_files(context: BlockRenderContext) -> str:
             if context.memory_files_context is not None:
                 return context.memory_files_context
-            return self.render_memory_files(context.agent, on_read=context.read_observer)
+            return self._render_memory_files(
+                context.agent, context.tool_available, context.read_observer
+            )
 
         return {
             "tool_list": tool_list,
@@ -795,21 +774,68 @@ class SystemPromptManager:
         """Render the pinned-memory text for the agent's memory prompt mode.
 
         The single live render path shared by the ``memory_files`` producer and by
-        Chat's prompt-epoch snapshot. When *on_read* is given, every on-disk memory
-        file whose content reaches the render is reported so the agent can edit a
+        Chat's prompt-epoch snapshot. A section above its Memory budget shows the
+        entries that fit plus a notice; that notice names the ``memory`` Tool only
+        when the Agent's current Tool policy offers it. When *on_read* is given,
+        every on-disk memory file shown whole is reported so the agent can edit a
         file it was auto-shown (see ``memory_prompt_file_paths``); an empty
         workspace (a config agent) reports nothing and must never resolve against
         ``Path(".")``.
         """
+        return self._render_memory_files(agent, self._tool_availability(agent), on_read)
+
+    def _render_memory_files(
+        self,
+        agent: PromptAgent,
+        tool_available: ToolAvailability,
+        on_read: Callable[[Path], None] | None,
+    ) -> str:
         mode = getattr(agent, "memory_prompt_mode", DEFAULT_MEMORY_PROMPT_MODE)
         workspace = agent.workspace
         if not workspace:
             return ""
-        rendered = read_memory_files(Path(workspace), mode, provider=self._memory_provider)
-        if on_read is not None and workspace:
+        # Asked only when the mode renders Memory: resolving the Tool set is not free.
+        memory_tool = (
+            model_tool_name(MEMORY_TOOL_NAME)
+            if memory_tool_enabled(mode) and tool_available(MEMORY_TOOL_NAME)
+            else None
+        )
+        rendered = read_memory_files(
+            Path(workspace), mode, provider=self._memory_provider, memory_tool=memory_tool
+        )
+        if on_read is not None:
             for path in memory_prompt_file_paths(Path(workspace), mode):
                 on_read(path)
         return rendered
+
+    def _tool_availability(
+        self,
+        agent: PromptAgent,
+        *,
+        effective_tool_names: Collection[str] | None = None,
+        session_tool_grants: Sequence[str] = (),
+    ) -> ToolAvailability:
+        """Return which Tools *agent* can call, asked by registry name.
+
+        With *effective_tool_names* (the Tools a request lists) this is plain
+        membership. Otherwise the Agent's live Tool policy is resolved once, on the
+        first question, through the same path the Tool list uses.
+        """
+        if effective_tool_names is not None:
+            listed = effective_tool_names
+            return lambda tool_name: tool_name in listed
+        resolved: frozenset[str] | None = None
+
+        def available(tool_name: str) -> bool:
+            nonlocal resolved
+            if resolved is None:
+                resolved = frozenset(
+                    str(definition.get("name"))
+                    for definition in self._prompt_definitions_for_agent(agent, session_tool_grants)
+                )
+            return tool_name in resolved
+
+        return available
 
     def _is_owner_active(
         self,

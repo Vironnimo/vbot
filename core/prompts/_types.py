@@ -329,14 +329,20 @@ class ChannelPromptRegistry(Protocol):
 
 
 class MemoryPromptProvider(Protocol):
-    """Pinned-memory file renderer used by the ``memory_files`` producer.
+    """Pinned-memory renderer used by the ``memory_files`` producer.
 
-    Only the **file** half of the memory block now lives here — the guidance and
-    the ``<memory>`` wrapper moved into the ``memory:guidance`` block the memory
-    domain declares (D6). This returns just the ``<file>``-wrapped contents (``""``
-    when empty/absent), which the ``{generated:memory_files}`` marker injects.
+    Only the entry half of the memory block lives here — the guidance and the
+    ``<memory>`` wrapper are the ``memory:guidance`` block the memory domain
+    declares (D6). This returns each selected scope's label and entries, which the
+    ``{generated:memory_files}`` marker injects.
     """
 
-    def read_prompt_files(self, workspace: Path, mode: MemoryPromptMode) -> str:
-        """Return the ``<file>``-wrapped pinned-memory file contents for a mode."""
+    def read_prompt_files(
+        self, workspace: Path, mode: MemoryPromptMode, *, memory_tool: str | None
+    ) -> str:
+        """Return the pinned-memory entries for a mode, each scope cut to its budget.
+
+        *memory_tool* is the name under which the Agent can call the memory Tool,
+        or ``None`` when it cannot; the notice for a cut scope names it only then.
+        """
         ...
