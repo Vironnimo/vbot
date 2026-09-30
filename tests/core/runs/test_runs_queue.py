@@ -56,7 +56,10 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
     queued_execute, queued_release = held("queued")
     active_run = await manager.start(SESSION, active_execute)
     admission = RunAdmission(
-        work_id="sub-work-one", contributes_to_agent_activity=False, source_session_id="source"
+        work_id="sub-work-one",
+        contributes_to_agent_activity=False,
+        source_session_id="source",
+        expected_session_generation_id="generation-one",
     )
     item = await manager.enqueue(
         SESSION, queued_execute, display_content="Queued next", admission=admission
@@ -76,6 +79,7 @@ async def test_busy_session_queues_input_and_drains_it_with_its_admission() -> N
     assert queued_run.status == RunStatus.RUNNING
     assert queued_run.work_id == "sub-work-one"
     assert queued_run.source_session_id == "source"
+    assert queued_run.expected_session_generation_id == "generation-one"
     assert manager.list_queued("coder", "session-one", project_id=None) == []
     [started] = [event for event in queued_run.events if event.type == RUN_STARTED_EVENT]
     assert started.payload == {"status": RunStatus.RUNNING.value, "queue_item_id": item.item_id}

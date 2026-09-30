@@ -112,6 +112,51 @@ async def test_run_admission_records_its_run_kind_in_the_same_transaction(manage
     assert manager.get_metadata(session.address)[SESSION_RUN_KINDS_META_KEY] == ["cron"]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_state", ["live", "archived", "recreated", "create_missing"])
+async def test_run_admission_requires_the_expected_live_generation(manager, session_state):
+    session = manager.create("coder")
+    generation_id = manager.get(session.address).generation_id
+    if session_state != "live":
+        await manager.archive(session.address)
+    if session_state == "recreated":
+        replacement = manager.create("coder", session_id=session.id)
+        replacement.append(ChatMessage.user("Replacement history"))
+    runs = ChatRunManager(persistence=manager)
+    executed = False
+
+    async def execute(run):
+        nonlocal executed
+        executed = True
+
+    run = await runs.start(
+        session.address,
+        execute,
+        admission=RunAdmission(
+            expected_session_generation_id=(
+                None if session_state == "create_missing" else generation_id
+            )
+        ),
+    )
+    if session_state in {"live", "create_missing"}:
+        await run.wait_admitted()
+        await run.wait()
+        assert executed
+        assert manager.get(session.address).find_run_summary(run_id=run.id).status == "completed"
+    else:
+        with pytest.raises(ChatSessionError):
+            await run.wait_admitted()
+        with pytest.raises(ChatSessionError):
+            await run.wait()
+        assert not executed
+        assert run.events[-1].payload["history_persisted"] is False
+        if session_state == "recreated":
+            assert [message.content for message in replacement.load()] == ["Replacement history"]
+        else:
+            assert not manager.exists(session.address)
+    await runs.aclose()
+
+
 def test_restart_settles_run_and_unfinished_calls_once(manager):
     session = manager.create("coder").start_run("abandoned")
     session.append(

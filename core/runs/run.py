@@ -176,9 +176,9 @@ class RunAdmission:
     """Immutable admission decisions carried with one inbound Run request.
 
     Every :meth:`ChatRunManager.start` / :meth:`ChatRunManager.enqueue` call
-    supplies these once as one bundle instead of repeating four kwargs. The
-    values are stored unchanged on the created ``Run`` (or its queued item) and
-    never influence Run admission, execution, or cancellation.
+    supplies these once as one bundle instead of repeating individual kwargs. The
+    values are stored unchanged on the created ``Run`` (or its queued item).
+    Session persistence validates an optional expected generation at admission.
     """
 
     working_project_id: str | None = None
@@ -190,6 +190,7 @@ class RunAdmission:
     # The Session a background review Run examines from its own fork; accessors
     # attribute the review to that Session without reading fork metadata.
     source_session_id: str | None = None
+    expected_session_generation_id: str | None = None
 
 
 # Module-level singleton so ``admission`` can default without a call at the
@@ -295,6 +296,7 @@ class Run:
         execution_owner: RunExecutionOwner | None = None,
         execution_input_id: str | None = None,
         source_session_id: str | None = None,
+        expected_session_generation_id: str | None = None,
         event_retention_limit: int = DEFAULT_RUN_EVENT_RETENTION_LIMIT,
         subscriber_queue_limit: int = DEFAULT_RUN_SUBSCRIBER_QUEUE_LIMIT,
     ) -> None:
@@ -320,6 +322,7 @@ class Run:
         self.work_id = work_id
         # Accessor-only attribution of a review Run to the Session it examines.
         self.source_session_id = source_session_id
+        self.expected_session_generation_id = expected_session_generation_id
         self.status = RunStatus.RUNNING
         self.created_at = datetime.now(UTC).isoformat()
         self.updated_at = self.created_at

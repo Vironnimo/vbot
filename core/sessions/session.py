@@ -55,10 +55,18 @@ class ChatSession:
     """Path-free Session handle backed by the canonical SQLite store."""
 
     def __init__(
-        self, store: SessionStore, address: SessionAddress, *, run_id: str | None = None
+        self,
+        store: SessionStore,
+        address: SessionAddress,
+        *,
+        run_id: str | None = None,
+        generation_id: str | None = None,
     ) -> None:
         self._store = store
         self.address = address
+        # Existing-Session lookups capture the generation for later admission;
+        # address-only handles retain deliberate create-missing semantics.
+        self.generation_id = generation_id
         self.run_id = run_id
         self.assistant_message_id: str | None = None
         self._buffers = _SessionBuffers()
@@ -67,13 +75,20 @@ class ChatSession:
         """Admit a plain User Run now and return its explicitly bound Session writer."""
         self._store.admit_run(
             self.address,
-            SessionRunAdmission(run_id=run_id, run_kind="user", started_at=utc_now_timestamp()),
+            SessionRunAdmission(
+                run_id=run_id,
+                run_kind="user",
+                started_at=utc_now_timestamp(),
+                expected_generation_id=self.generation_id,
+            ),
         )
         return self.for_run(run_id)
 
     def for_run(self, run_id: str) -> ChatSession:
         """Bind writes to a Run while sharing the Session's pending context."""
-        handle = ChatSession(self._store, self.address, run_id=run_id)
+        handle = ChatSession(
+            self._store, self.address, run_id=run_id, generation_id=self.generation_id
+        )
         handle._buffers = self._buffers
         return handle
 
