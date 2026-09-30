@@ -216,38 +216,50 @@ export function describeExtensionWaiting(extension) {
   };
 }
 
-export function buildExtensionsUpdatePayload(extensions, override = {}) {
-  const items = Array.isArray(extensions) ? extensions : [];
-  const disabled = [];
-  const config = {};
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
-  for (const extension of items) {
-    const name = textOrEmpty(extension?.name);
-    if (!name) {
-      continue;
-    }
+/**
+ * Read the persisted ``extensions`` section that ``extensions.list`` returns
+ * beside its records, in the shape ``settings.update`` writes.
+ */
+export function extensionsSettingsSection(result) {
+  const settings = isPlainObject(result?.settings) ? result.settings : {};
+  return {
+    disabled: Array.isArray(settings.disabled)
+      ? settings.disabled.filter(
+          (name) => typeof name === 'string' && name.length > 0,
+        )
+      : [],
+    config: isPlainObject(settings.config) ? settings.config : {},
+  };
+}
 
-    const isOverride = name === override.name;
-    const extensionDisabled =
-      isOverride && typeof override.disabled === 'boolean'
-        ? override.disabled
-        : extension.disabled === true;
-    if (extensionDisabled) {
-      disabled.push(name);
-    }
-
-    const extensionConfig =
-      isOverride && override.config && typeof override.config === 'object'
-        ? override.config
-        : extension.config && typeof extension.config === 'object'
-          ? extension.config
-          : {};
-    if (Object.keys(extensionConfig).length > 0) {
-      config[name] = extensionConfig;
+/**
+ * Build a ``settings.update`` payload that changes only the named Extensions in
+ * the persisted section ``saved`` and sends ``saved`` as ``base``, so the server
+ * refuses the write when another writer changed a value it would overwrite.
+ * Everything else stays as saved: the ``disabled`` order and the entries of
+ * Extensions that no longer load. ``configs`` maps names to their new config
+ * (an empty one removes the entry); ``toggle`` is ``{ name, disabled }``.
+ */
+export function buildExtensionsUpdate(saved, { configs = {}, toggle } = {}) {
+  let disabled = [...saved.disabled];
+  if (toggle && toggle.disabled && !disabled.includes(toggle.name)) {
+    disabled.push(toggle.name);
+  } else if (toggle && !toggle.disabled) {
+    disabled = disabled.filter((name) => name !== toggle.name);
+  }
+  const config = { ...saved.config };
+  for (const [name, value] of Object.entries(configs)) {
+    if (Object.keys(value).length > 0) {
+      config[name] = value;
+    } else {
+      delete config[name];
     }
   }
-
-  return { extensions: { disabled, config } };
+  return { extensions: { disabled, config }, base: { extensions: saved } };
 }
 
 // --- Extension settings schema (form helpers) ---------------------------------

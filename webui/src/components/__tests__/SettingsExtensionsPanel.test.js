@@ -63,14 +63,33 @@ function withSchema(fields, overrides = {}) {
   return guardBash({ settings_schema: fields, ...overrides });
 }
 
-// extensions.list answers with `extensions`; every write succeeds.
-function serveExtensions(extensions, overrides = {}) {
+// The persisted section as the server saved it for these records.
+function savedSection(extensions) {
+  return {
+    disabled: extensions
+      .filter((extension) => extension.disabled)
+      .map((extension) => extension.name),
+    config: Object.fromEntries(
+      extensions
+        .filter((extension) => Object.keys(extension.config ?? {}).length > 0)
+        .map((extension) => [extension.name, extension.config]),
+    ),
+  };
+}
+
+// extensions.list answers with `extensions` and their saved section; every
+// write succeeds.
+function serveExtensions(
+  extensions,
+  overrides = {},
+  settings = savedSection(extensions),
+) {
   rpcMock.mockImplementation((method, params) => {
     if (typeof overrides[method] === 'function') {
       return overrides[method](params);
     }
     if (method === 'extensions.list') {
-      return Promise.resolve({ extensions });
+      return Promise.resolve({ extensions, settings });
     }
     return Promise.resolve({});
   });
@@ -228,19 +247,34 @@ describe('SettingsExtensionsPanel', () => {
     ).toBeGreaterThan(listCallsBefore);
   });
 
+  // The saved section keeps entries the records do not show, such as those of
+  // an Extension that no longer loads, and its own order.
+  const removedEntries = {
+    disabled: ['removed', 'guard_bash', 'other'],
+    config: { removed: { level: 1 } },
+  };
+
   it.each([
-    ['disables', guardBash(), 'true', ['guard_bash'], []],
+    ['disables', guardBash(), 'true', null, ['guard_bash']],
     [
       'enables',
       guardBash({ disabled: true, status: 'disabled' }),
       'false',
+      null,
       [],
-      ['guard_bash'],
+    ],
+    [
+      'enables among saved entries without a record',
+      guardBash({ disabled: true, status: 'disabled' }),
+      'false',
+      removedEntries,
+      ['removed', 'other'],
     ],
   ])(
     '%s an extension live through the disabled set',
-    async (_label, extension, checked, disabled, savedDisabled) => {
-      serveExtensions([extension]);
+    async (_label, extension, checked, saved, disabled) => {
+      const settings = saved ?? savedSection([extension]);
+      serveExtensions([extension], {}, settings);
       await mountPanel();
 
       const toggle = document.querySelector(
@@ -254,9 +288,9 @@ describe('SettingsExtensionsPanel', () => {
         [
           'settings.update',
           {
-            extensions: { disabled, config: {} },
+            extensions: { disabled, config: settings.config },
             // The saved section it replaces, so a newer write is not lost.
-            base: { extensions: { disabled: savedDisabled, config: {} } },
+            base: { extensions: settings },
           },
         ],
       ]);
@@ -280,10 +314,13 @@ describe('SettingsExtensionsPanel', () => {
     let listCount = 0;
     let refused = false;
     serveExtensions([], {
-      'extensions.list': () =>
-        Promise.resolve({
-          extensions: listings[Math.min(listCount++, listings.length - 1)],
-        }),
+      'extensions.list': () => {
+        const extensions = listings[Math.min(listCount++, listings.length - 1)];
+        return Promise.resolve({
+          extensions,
+          settings: savedSection(extensions),
+        });
+      },
       'settings.update': () => {
         if (refused) return Promise.resolve({});
         refused = true;

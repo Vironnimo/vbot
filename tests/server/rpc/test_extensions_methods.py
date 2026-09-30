@@ -61,12 +61,13 @@ class _Registry:
 
 
 class _Storage:
-    def __init__(self, config: dict[str, dict[str, Any]]) -> None:
+    def __init__(self, config: dict[str, dict[str, Any]], disabled: list[str]) -> None:
         self._config = config
+        self._disabled = disabled
         self.credentials: dict[str, str] = {}
 
     def load_extensions_settings(self) -> JsonObject:
-        return {"disabled": [], "config": self._config}
+        return {"disabled": self._disabled, "config": self._config}
 
     def load_environment(self) -> dict[str, str]:
         return dict(self.credentials)
@@ -128,6 +129,7 @@ def _state_with_records(
     records: list[ExtensionRecord],
     *,
     config: dict[str, dict[str, Any]] | None = None,
+    disabled: list[str] | None = None,
     tools: _ToolRegistry | None = None,
     command_dispatcher: _CommandDispatcher | None = None,
     credentials: dict[str, str] | None = None,
@@ -135,7 +137,7 @@ def _state_with_records(
     runtime = _Runtime(
         credentials,
         extensions=_Registry(records),
-        storage=_Storage(config or {}),
+        storage=_Storage(config or {}, disabled or []),
         tools=tools if tools is not None else _ToolRegistry(),
     )
     return SimpleNamespace(
@@ -223,7 +225,9 @@ async def test_extensions_list_projects_every_record_state() -> None:
             _record("off", status="disabled"),
             _record("homeassistant", status="overridden", overridden_by=overridden_by),
         ],
-        config={"guard_bash": {"deny": ["rm -rf"]}},
+        # The saved section keeps its own order and entries without a record.
+        config={"guard_bash": {"deny": ["rm -rf"]}, "removed": {"level": 1}},
+        disabled=["removed", "off"],
         tools=_ToolRegistry({"word_count": None}),
         command_dispatcher=_CommandDispatcher({"workflow": "guard_bash"}),
     )
@@ -267,6 +271,10 @@ async def test_extensions_list_projects_every_record_state() -> None:
     assert overridden_item["status"] == "overridden"
     assert overridden_item["disabled"] is False
     assert overridden_item["overridden_by"] == overridden_by
+    assert result["settings"] == {
+        "disabled": ["removed", "off"],
+        "config": {"guard_bash": {"deny": ["rm -rf"]}, "removed": {"level": 1}},
+    }
 
 
 @pytest.mark.asyncio
@@ -296,7 +304,10 @@ async def test_extensions_list_is_empty_without_registry() -> None:
     state = _state_with_records([])
     state.runtime.extensions = None
 
-    assert await rpc_result(state, "extensions.list") == {"extensions": []}
+    assert await rpc_result(state, "extensions.list") == {
+        "extensions": [],
+        "settings": {"disabled": [], "config": {}},
+    }
 
 
 @pytest.mark.asyncio

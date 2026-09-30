@@ -66,18 +66,20 @@ async def _reload_extensions(state: Any, params: JsonObject) -> JsonObject:
 
 
 def _extensions_payload(state: Any) -> JsonObject:
-    """Build the shared ``extensions.list`` / ``extensions.reload`` catalog payload."""
+    """Build the shared ``extensions.list`` / ``extensions.reload`` catalog payload.
+
+    ``settings`` is the persisted ``extensions`` section as ``settings.update``
+    writes it, entries without a record and the saved ``disabled`` order included,
+    so a writer can change one entry and send the section it read as ``base``.
+    """
     registry = state.runtime.extensions
-    config_map = _persisted_extension_config(state)
+    settings = state.runtime.storage.load_extensions_settings()
+    config_map = settings["config"]
     records = registry.records() if registry is not None else []
-    return {"extensions": [_extension_response(record, config_map, state) for record in records]}
-
-
-def _persisted_extension_config(state: Any) -> dict[str, dict[str, Any]]:
-    """Read ``settings.extensions.config`` so loaded/disabled records can echo it."""
-    extensions_settings = state.runtime.storage.load_extensions_settings()
-    config = extensions_settings.get("config", {})
-    return config if isinstance(config, dict) else {}
+    return {
+        "extensions": [_extension_response(record, config_map, state) for record in records],
+        "settings": settings,
+    }
 
 
 def _extension_response(

@@ -28,10 +28,11 @@
   import { isSettingsConflict, rebaseDraft } from '$lib/settingsSave.js';
   import {
     applyExtensionsPanelList,
-    buildExtensionsUpdatePayload,
+    buildExtensionsUpdate,
     buildSchemaConfigFromForm,
     buildSchemaFormState,
     describeExtensionWaiting,
+    extensionsSettingsSection,
     extensionStatusChip,
     hasSettingsSchema,
     extensionCapabilityParts,
@@ -46,6 +47,8 @@
   const uid = $props.id();
 
   let extensions = $state([]);
+  // The persisted `extensions` section every write starts from and sends as `base`.
+  let savedSettings = { disabled: [], config: {} };
   let mcpLoaded = $derived(
     extensions.some(
       (extension) => extension.name === 'mcp' && extension.status === 'loaded',
@@ -222,6 +225,7 @@
     try {
       const result = await listExtensions();
       extensions = applyExtensionsPanelList(result);
+      savedSettings = extensionsSettingsSection(result);
       formStates = Object.fromEntries(
         extensions
           .filter((extension) => hasSettingsSchema(extension))
@@ -289,7 +293,8 @@
   // field changed on both sides takes the saved one. Returns whether any
   // draft value gave way.
   async function adoptSavedExtensions() {
-    const saved = applyExtensionsPanelList(await listExtensions());
+    const result = await listExtensions();
+    const saved = applyExtensionsPanelList(result);
     let conflicted = false;
     const nextFormStates = {};
     for (const extension of saved) {
@@ -318,17 +323,9 @@
       );
     }
     extensions = saved;
+    savedSettings = extensionsSettingsSection(result);
     formStates = nextFormStates;
     return conflicted;
-  }
-
-  // The panel writes the whole `extensions` section; `base` makes the server
-  // refuse it when another writer changed a value it would overwrite.
-  function extensionsUpdate(nextExtensions, override) {
-    return {
-      ...buildExtensionsUpdatePayload(nextExtensions, override),
-      base: buildExtensionsUpdatePayload(extensions),
-    };
   }
 
   async function saveExtensionConfigs() {
@@ -398,11 +395,15 @@
         : extension,
     );
 
+    const update = buildExtensionsUpdate(savedSettings, {
+      configs: Object.fromEntries(nextConfigs),
+    });
     try {
-      await updateSettings(extensionsUpdate(nextExtensions));
+      await updateSettings(update);
       // Update the persisted baseline without unmounting the form or replacing
       // drafts (including another extension edited during this request).
       extensions = nextExtensions;
+      savedSettings = update.extensions;
       return true;
     } catch (error) {
       if (isSettingsConflict(error)) return 'conflict';
@@ -450,12 +451,14 @@
     actionName = extension.name;
     onError('');
 
-    const override = { name: extension.name, disabled: !extension.disabled };
+    const toggle = { name: extension.name, disabled: !extension.disabled };
 
     try {
       for (let attempt = 1; ; attempt += 1) {
         try {
-          await updateSettings(extensionsUpdate(extensions, override));
+          await updateSettings(
+            buildExtensionsUpdate(savedSettings, { toggle }),
+          );
           break;
         } catch (error) {
           if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
