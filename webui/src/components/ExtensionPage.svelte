@@ -63,8 +63,12 @@
   const unregisterAutosave = useAutosaveContext().register({
     hasPending: () => frameContext?.autosavePending === true,
     flush: flushAutosave,
+    release: releaseAutosave,
   });
 
+  // Asks the current frame to save its editor; transitions share the flush
+  // that runs. Every flush sent stays answerable until its result, a reload
+  // or its deadline.
   function flushAutosave() {
     const context = frameContext;
     if (!context?.autosavePending) return Promise.resolve(true);
@@ -75,17 +79,34 @@
       const timer = setTimeout(() => finish(false), 35_000);
       finish = (saved) => {
         clearTimeout(timer);
-        context.autosaveFlush = null;
+        context.autosaveFlushes.delete(id);
+        if (context.autosaveFlush?.id === id) context.autosaveFlush = null;
         resolve(saved === true && frameContext === context);
       };
     });
     context.autosaveFlush = { id, promise, finish };
+    context.autosaveFlushes.set(id, finish);
     post(context, {
       ...contextPayload(context),
       type: 'vbot.extension.autosave.flush',
       id,
     });
     return promise;
+  }
+
+  // The user left while the frame saves: later transitions no longer share
+  // the running flush but ask the frame again, and the frame's editor stops
+  // holding them for its running write unless the draft changed after that
+  // write started.
+  function releaseAutosave() {
+    const context = frameContext;
+    if (!context) return;
+    context.autosaveFlush = null;
+    if (!context.autosavePending) return;
+    post(context, {
+      ...contextPayload(context),
+      type: 'vbot.extension.autosave.release',
+    });
   }
 
   function descriptorIdentity(value) {
@@ -220,7 +241,9 @@
     const previous = frameContext;
     frameContext = null;
     if (previous) showPageLayers(previous, false);
-    previous?.autosaveFlush?.finish(false);
+    for (const finish of previous?.autosaveFlushes.values() ?? []) {
+      finish(false);
+    }
     for (const subscription of runSubscriptions.values()) subscription.close();
     runSubscriptions.clear();
     if (previous?.window) {
@@ -250,6 +273,7 @@
       descriptor: captured,
       ready: false,
       allowedUrls: [],
+      autosaveFlushes: new Map(),
       // Where the App moves on the Back/Forward keys and mouse buttons (the
       // Desktop app), the page forwards the ones pressed inside its frame,
       // which never reach the App window.
@@ -336,12 +360,11 @@
     }
     if (
       context.ready &&
-      context.autosaveFlush &&
       data.type === 'vbot.extension.autosave.result' &&
-      data.id === context.autosaveFlush?.id &&
+      context.autosaveFlushes.has(data.id) &&
       typeof data.saved === 'boolean'
     ) {
-      context.autosaveFlush.finish(data.saved);
+      context.autosaveFlushes.get(data.id)(data.saved);
       return;
     }
     if (!context.ready || !validCall(data)) return;

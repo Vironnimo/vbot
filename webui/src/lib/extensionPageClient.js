@@ -223,6 +223,15 @@ export function createExtensionPageClient({ target = window.parent } = {}) {
         });
       return;
     }
+    // The user left while a flush runs: the editor stops holding the App's
+    // transitions for its running write, and reports whether it still has
+    // edits the next transition must wait for.
+    if (data.type === 'vbot.extension.autosave.release') {
+      if (!autosaveParticipant) return;
+      autosaveParticipant.release?.();
+      notifyAutosave();
+      return;
+    }
     if (data.type === 'vbot.extension.context') {
       context = {
         ...context,
