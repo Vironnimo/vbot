@@ -37,6 +37,7 @@
 
   const TEXT_LABELS = {
     command: () => t('chat.toolDetailLabel.command'),
+    content: () => t('chat.toolDetailLabel.content'),
     input: () => t('chat.toolDetailLabel.input'),
     output: () => t('chat.toolDetailLabel.output'),
     page: () => t('chat.toolDetailLabel.page'),

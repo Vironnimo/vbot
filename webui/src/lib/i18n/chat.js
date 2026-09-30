@@ -222,6 +222,7 @@ export default Object.freeze({
   'chat.toolChanges': 'Changes',
   'chat.toolRawCall': 'Raw call and result',
   'chat.toolDetailLabel.command': 'Command',
+  'chat.toolDetailLabel.content': 'Content',
   'chat.toolDetailLabel.input': 'Input',
   'chat.toolDetailLabel.output': 'Output',
   'chat.toolDetailLabel.page': 'Page',

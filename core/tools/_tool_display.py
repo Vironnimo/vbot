@@ -31,6 +31,7 @@ TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
 TOOL_DISPLAY_TEXT_LABELS = frozenset(
     {
         "command",
+        "content",
         "input",
         "output",
         "page",

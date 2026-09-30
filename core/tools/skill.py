@@ -28,6 +28,8 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayField,
     ToolRegistry,
+    display_notice,
+    display_text,
     result_count_fact_builder,
     run_tool_worker,
     tool_failure,
@@ -394,9 +396,34 @@ def register_skill_tool(
                 ),
             ),
             fact_builder=result_count_fact_builder("count"),
+            detail_builder=_skill_detail_blocks,
         ),
         open_input_schema=True,
     )
+
+
+def _skill_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the Skill's instructions, the file read, or the catalog.
+
+    Resource listings, activation guidance and notes are for the Agent and stay
+    in the raw result.
+    """
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return []
+    status = data.get("status")
+    if status == SKILL_STATUS_ALREADY_ACTIVE:
+        return [display_notice("info", "The Skill was already active; it was not loaded again.")]
+    label = "content" if status in {SKILL_STATUS_LOADED, SKILL_STATUS_FILE_LOADED} else "results"
+    blocks = [display_text(label, source="result", path=("data", "content"))]
+    if data.get("environment_access"):
+        blocks.append(
+            display_notice(
+                "info",
+                "This Skill makes additional environment credentials available to shell commands.",
+            )
+        )
+    return blocks
 
 
 def load_skill_content(

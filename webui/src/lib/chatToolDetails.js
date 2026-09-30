@@ -401,6 +401,7 @@ const MEMORY_SCOPES = new Set(['agent', 'user']);
 const MEMORY_CHANGE_OPS = new Set(['added', 'removed', 'replaced']);
 const TEXT_LABELS = new Set([
   'command',
+  'content',
   'input',
   'output',
   'page',
