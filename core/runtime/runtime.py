@@ -497,6 +497,9 @@ class Runtime:
             await self._session_title_service.aclose()
         if self._chat_run_manager is not None:
             await self._chat_run_manager.aclose()
+        if self._subagent_coordinator is not None:
+            # Every Run has ended; each Sub-Agent activity file records its outcome.
+            await self._subagent_coordinator.drain_activity()
         if self._decisions is not None:
             await self._decisions.aclose()
         if self._speech is not None:

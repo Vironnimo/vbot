@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import weakref
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat import ChatSessionError
@@ -170,6 +171,8 @@ class SubAgentCoordinator:
             trigger_service,
             sessions=sessions,
         )
+        # Activity files still in use; each leaves once nothing references it.
+        self._activities: weakref.WeakSet[SubAgentActivity] = weakref.WeakSet()
 
     @property
     def batch_tracker(self) -> SubAgentBatchTracker:
@@ -195,7 +198,16 @@ class SubAgentCoordinator:
             arguments,
             runtime=self._runtime,
             batch_tracker=self._batch_tracker,
+            activities=self._activities,
         )
+
+    async def drain_activity(self) -> None:
+        """Wait until the activity files' text so far is on disk.
+
+        For every followed Run that has ended this includes its outcome, so
+        Runtime shutdown calls it once the Run manager has closed.
+        """
+        await asyncio.gather(*(activity.drain() for activity in list(self._activities)))
 
     async def inspect(
         self,
@@ -221,6 +233,7 @@ async def _handle_subagent(
     *,
     runtime: RuntimeServices,
     batch_tracker: SubAgentBatchTracker,
+    activities: weakref.WeakSet[SubAgentActivity],
 ) -> JsonObject:
     action = arguments.get("action")
     if action is None:
@@ -405,11 +418,13 @@ async def _handle_subagent(
                 session_overrides,
             )
 
-        activity = SubAgentActivity.create(
+        activity = await SubAgentActivity.create(
             runtime.storage.temporary_files,
             agent_id=target_agent_id,
             session_id=session.id,
         )
+        if activity is not None:
+            activities.add(activity)
         activity_file = _activity_file(activity)
         await _emit_subagent_session_started(
             context,

@@ -208,6 +208,7 @@ async def test_background_queue_item_that_never_starts_is_delivered_and_answerab
     assert notice.notice_id == f"subagent:parent-run:{spawned['id']}"
     assert notice.body.splitlines()[0].endswith(f"— {status}")
     assert notice.body.endswith(f"\n(no output) {note}")
+    await harness.coordinator.drain_activity()
     activity_log = Path(activity_path_from_note(spawned["activity_note"])).read_text(
         encoding="utf-8"
     )

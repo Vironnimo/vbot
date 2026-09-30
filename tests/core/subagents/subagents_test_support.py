@@ -611,6 +611,7 @@ class SubAgentHarness:
                 if run.status is RunStatus.RUNNING:
                     run.mark_completed(done())
             await self.settle()
+        await self.coordinator.drain_activity()
         for delivery in self.triggers.deliveries.values():
             delivery.cancel()
         self.sessions.close()
