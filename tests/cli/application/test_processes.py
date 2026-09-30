@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from cli import server_management
 from cli.application import processes
 from cli.application.state import Installation
 from cli.server_management import HealthProbeResult, WebUIProbeResult
@@ -28,7 +29,6 @@ def _runtime_interpreter(root: Path, version_id: str, role: str) -> Path:
 _VBOT = HealthProbeResult(reachable=True, is_vbot=True)
 _BUSY = HealthProbeResult(reachable=False, is_vbot=False, timed_out=True, unresponsive=True)
 _CLOSED = HealthProbeResult(reachable=False, is_vbot=False)
-_OTHER_APP = HealthProbeResult(reachable=True, is_vbot=False, status_code=404)
 _NORMAL = ("-m", "server.main")
 _VERIFICATION = ("-m", "server.main", "--verification-only")
 
@@ -39,59 +39,43 @@ def _record_server(
     *,
     version_id: str = "rel_one",
     command: tuple[str, ...] = _NORMAL,
-    process: str = "alive",
     recorded: Callable[[], bool] = lambda: True,
 ) -> None:
-    """Publish a control record naming one server process of *version_id*."""
+    """Publish a control record naming one live server process of *version_id*."""
     executable = _runtime_interpreter(root, version_id, "Server")
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.write_bytes(b"")
     monkeypatch.setattr(
-        processes,
+        server_management,
         "read_server_control",
         lambda *_args: SimpleNamespace(pid=12, process_create_time=34.0) if recorded() else None,
     )
-
-    def inspect() -> str:
-        if process == "uninspectable":
-            raise processes.psutil.AccessDenied(12)
-        return str(executable)
-
-    def open_process(_pid: int) -> SimpleNamespace:
-        if process == "exited":
-            raise processes.psutil.NoSuchProcess(12)
-        return SimpleNamespace(
-            create_time=lambda: 99.0 if process == "reused" else 34.0,
-            exe=inspect,
+    monkeypatch.setattr(
+        server_management.psutil,
+        "Process",
+        lambda _pid: SimpleNamespace(
+            create_time=lambda: 34.0,
+            exe=lambda: str(executable),
             cmdline=lambda: [executable.name, *command],
-        )
+        ),
+    )
 
-    monkeypatch.setattr(processes.psutil, "Process", open_process)
 
-
+# How identity, liveness and health combine is ``classify_server``'s contract
+# (tests/cli/test_server_management.py); these cases pin the exact version and mode.
 @pytest.mark.parametrize(
     ("health", "server", "verification", "expected"),
     [
         pytest.param(_VBOT, {}, False, "running", id="normal"),
         pytest.param(_VBOT, {"command": _VERIFICATION}, True, "running", id="verification"),
         pytest.param(_BUSY, {}, False, "unresponsive", id="busy-event-loop"),
-        pytest.param(_CLOSED, {}, False, "unresponsive", id="starting-or-stopping"),
-        pytest.param(_CLOSED, {"process": "exited"}, False, "absent", id="stopped"),
-        pytest.param(_CLOSED, {"process": "reused"}, False, "absent", id="pid-reused"),
-        pytest.param(_CLOSED, {"recorded": lambda: False}, False, "absent", id="never-started"),
         pytest.param(
             _VBOT, {"command": _VERIFICATION}, False, "foreign", id="verification-is-not-normal"
         ),
         pytest.param(_VBOT, {"version_id": "rel_other"}, False, "foreign", id="other-version"),
-        pytest.param(_BUSY, {"process": "uninspectable"}, False, "foreign", id="uninspectable"),
-        pytest.param(
-            _VBOT, {"recorded": lambda: False}, False, "foreign", id="other-data-directory"
-        ),
-        pytest.param(_BUSY, {"recorded": lambda: False}, False, "foreign", id="silent-listener"),
-        pytest.param(_OTHER_APP, {}, False, "foreign", id="other-application"),
     ],
 )
-def test_server_state_separates_identity_liveness_and_health(
+def test_server_state_requires_the_exact_version_and_startup_mode(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     health: HealthProbeResult,
@@ -101,7 +85,6 @@ def test_server_state_separates_identity_liveness_and_health(
 ) -> None:
     install = _install(tmp_path)
     _record_server(monkeypatch, tmp_path, **server)
-    # Only the patient probe decides: a missed quick answer never means stopped.
     monkeypatch.setattr(processes, "probe_health", lambda *_a, **_k: pytest.fail("quick probe"))
     monkeypatch.setattr(processes, "probe_health_patiently", lambda _instance: health)
 

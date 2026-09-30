@@ -7,7 +7,6 @@ import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Literal
 
 import psutil  # type: ignore[import-untyped]
 
@@ -17,6 +16,8 @@ from cli.server_management import (
     CommandResult,
     HealthProbeResult,
     ServerInstance,
+    ServerState,
+    classify_server,
     probe_health,
     probe_health_patiently,
     probe_webui,
@@ -25,20 +26,9 @@ from cli.server_management import (
 )
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR
 from core.utils.processes import subprocess_creation_flags
-from core.utils.server_control import read_server_control
 
 # The startup log keeps one previous generation once it outgrows this bound.
 STARTUP_LOG_ROTATE_BYTES = 1024 * 1024
-
-#: How the installation's server target relates to one exact version and startup mode.
-#:
-#: ``running``: the control record's live process is that exact server and answers
-#: ``/health``. ``unresponsive``: that exact process is alive but does not answer: busy,
-#: still starting or already stopping. ``foreign``: something else holds or answers the
-#: target, such as another version or startup mode, a process that cannot be inspected, a
-#: vBot server of another data directory or an unidentified listener. ``absent``: no live
-#: recorded process and no listener.
-ServerState = Literal["absent", "running", "unresponsive", "foreign"]
 
 OCCUPIED_MESSAGE = "Server port is occupied by another application version or startup mode"
 UNRESPONSIVE_MESSAGE = "the server process is running but does not answer its health check"
@@ -60,11 +50,10 @@ def server_state(
     version_id: str | None = None,
     verification: bool = False,
 ) -> ServerState:
-    """Classify the server target for the exact installed version and startup mode.
+    """Classify the installation's server for the exact installed version and startup mode.
 
-    Identity and liveness come from the control record (PID, creation time, exact
-    native executable and startup mode), health from the patient probe, so a busy
-    server is never mistaken for a stopped one.
+    ``classify_server`` with the recorded process narrowed to that version's native
+    executable and startup mode: any other version or mode is ``foreign``.
     """
     instance = target(install)
     health = probe_health_patiently(instance)
@@ -79,44 +68,17 @@ def _classify(
     version_id: str | None,
     verification: bool,
 ) -> ServerState:
-    recorded = _recorded_process(install, instance, version_id, verification)
-    if recorded == "other" or (health.reachable and not health.is_vbot):
-        return "foreign"
-    if recorded == "exact":
-        return "running" if health.is_vbot else "unresponsive"
-    # Without a live recorded process any listener belongs to someone else.
-    return "foreign" if health.reachable or health.unresponsive else "absent"
-
-
-def _recorded_process(
-    install: Installation,
-    instance: ServerInstance,
-    version_id: str | None,
-    verification: bool,
-) -> Literal["exact", "other"] | None:
-    """Whether the control record's live process is the exact server; ``None`` if none lives."""
-    record = read_server_control(instance.data_dir, instance.port)
-    if record is None:
-        return None
-    try:
-        process = psutil.Process(record.pid)
-        if abs(process.create_time() - record.process_create_time) >= 0.001:
-            return None
-    except (OSError, psutil.Error):
-        # The recorded process exited, or its identity cannot be confirmed.
-        return None
-    try:
-        expected = install.interpreter(version_id, "Server").resolve()
+    def is_exact(process: psutil.Process) -> bool:
+        try:
+            expected = install.interpreter(version_id, "Server").resolve()
+        except ApplicationError:
+            return False
         actual = Path(process.exe()).resolve()
-        command = process.cmdline()
-    except psutil.NoSuchProcess:
-        return None
-    except (OSError, psutil.Error, ApplicationError):
-        # A live process that cannot be inspected is never taken for this server.
-        return "other"
-    if os.path.normcase(str(actual)) != os.path.normcase(str(expected)):
-        return "other"
-    return "exact" if ("--verification-only" in command) is verification else "other"
+        if os.path.normcase(str(actual)) != os.path.normcase(str(expected)):
+            return False
+        return ("--verification-only" in process.cmdline()) is verification
+
+    return classify_server(instance, health=health, is_expected=is_exact)
 
 
 def start(

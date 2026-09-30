@@ -16,7 +16,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -468,6 +468,52 @@ def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
     except (psutil.Error, OSError):
         return None
     return process
+
+
+#: How a local target's server stands before a lifecycle decision (``classify_server``).
+ServerState = Literal["absent", "running", "unresponsive", "foreign"]
+
+
+def classify_server(
+    instance: ServerInstance,
+    *,
+    health: HealthProbeResult | None = None,
+    is_expected: Callable[[psutil.Process], bool] | None = None,
+) -> ServerState:
+    """Classify a local target's server, keeping identity, liveness and health apart.
+
+    Identity and liveness come from the target's control record: the exact process
+    (PID plus creation time) that published it, which *is_expected* may narrow, for
+    example to one installed version. Health comes from ``probe_health_patiently``
+    unless the caller passes an observation it already made, so a busy server is
+    never taken for a stopped one.
+
+    ``running``: the recorded process lives and the target answers as vBot.
+    ``unresponsive``: it lives but the target does not answer (busy Event Loop, still
+    starting, already stopping; the record exists before the listener). ``foreign``:
+    something else holds or answers the target (a process *is_expected* rejects or
+    that cannot be inspected, a vBot server of another data directory, a non-vBot
+    or unidentified listener). ``absent``: no live recorded process and no listener.
+    """
+
+    if health is None:
+        health = probe_health_patiently(instance)
+    process = _resolve_control_process(instance)
+    recorded: Literal["expected", "other"] | None = None
+    if process is not None:
+        try:
+            recorded = "expected" if is_expected is None or is_expected(process) else "other"
+        except psutil.NoSuchProcess:
+            recorded = None
+        except (psutil.Error, OSError):
+            # A live process that cannot be inspected is never taken for the server.
+            recorded = "other"
+    if recorded == "other" or (health.reachable and not health.is_vbot):
+        return "foreign"
+    if recorded == "expected":
+        return "running" if health.is_vbot else "unresponsive"
+    # Without a live recorded process any listener belongs to someone else.
+    return "foreign" if health.reachable or health.unresponsive else "absent"
 
 
 def _await_process_exit(
@@ -1070,6 +1116,8 @@ __all__ = [
     "start_server_process",
     "start_server",
     "find_listening_process",
+    "ServerState",
+    "classify_server",
     "stop_server",
     "SystemctlRunner",
     "is_systemd_managed",
