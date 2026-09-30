@@ -3,6 +3,8 @@ import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
 const TOOL_DETAIL_HIDDEN_KEYS = ['artifacts', 'description'];
+// `edit`, `write`, `glob` and `grep` are retired Tools; Sessions recorded before
+// 2026-09-14 still hold their calls, which these entries keep readable.
 const TOOL_ARGUMENT_HIDDEN_KEYS = {
   edit: ['edits', 'new_string', 'old_string'],
   write: ['content'],
