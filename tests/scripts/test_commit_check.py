@@ -678,7 +678,7 @@ def test_worktree_commits_leave_the_tests_to_the_branch_check(
     # A worktree made without scripts/worktree.py takes the records over now.
     output = capsys.readouterr().out
     assert f"using the test-impact data of {impact_project}" in output
-    assert "no usable test-impact data" not in output
+    assert "running the complete suite" not in output
     assert "FAIL: tests affected by this commit" in output
     assert "test_calc.py::test_double" in output
     assert "test_wip.py" not in output
