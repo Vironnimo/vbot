@@ -6,6 +6,7 @@ import argparse
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -175,19 +176,23 @@ def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capsys, real_rep
     assert "python scripts/worktree.py merge task-b" in captured.out
 
 
+def _reject_commits(repo):
+    """Install a commit check that rejects every commit, as both hooks .githooks has."""
+    hooks = repo.parent / "hooks"
+    hooks.mkdir()
+    for name in ("pre-commit", "pre-merge-commit"):
+        hook = hooks / name
+        hook.write_bytes(b"#!/bin/sh\necho 'FAIL: tests' >&2\nexit 1\n")
+        hook.chmod(0o755)  # git skips a hook that is not executable on POSIX
+    subprocess.run(["git", "-C", str(repo), "config", "core.hooksPath", str(hooks)], check=True)
+
+
 def test_cmd_merge_rejected_by_the_merge_check_keeps_main_intact(capsys, real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
-    hooks = real_repo.parent / "hooks"
-    hooks.mkdir()
-    hook = hooks / "pre-merge-commit"
-    hook.write_bytes(b"#!/bin/sh\necho 'FAIL: tests' >&2\nexit 1\n")
-    hook.chmod(0o755)  # git skips a hook that is not executable on POSIX
-    subprocess.run(
-        ["git", "-C", str(real_repo), "config", "core.hooksPath", str(hooks)], check=True
-    )
     worktree = _create_task_worktree(module, real_repo, "task-a")
     _commit_file(worktree, "feature.txt", "new\n", "a edit")
+    _reject_commits(real_repo)
     main_head = _git_output(real_repo, "rev-parse", "HEAD")
 
     result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
@@ -200,6 +205,85 @@ def test_cmd_merge_rejected_by_the_merge_check_keeps_main_intact(capsys, real_re
     assert "FAIL: tests" in captured.out + captured.err
     assert "conflicted:" not in captured.out
     assert "repair-start" not in captured.out
+    assert "python scripts/worktree.py merge task-a" in captured.out
+
+
+LOCKED_BEFORE = '{"packages": {"node_modules/vite": {"version": "8.0.1"}}}\n'
+LOCKED_AFTER = '{"packages": {"node_modules/vite": {"version": "8.0.3"}}}\n'
+
+
+def _branch_with_webui_change(module, repo, path):
+    """Give main installed WebUI packages and a task branch that changes *path*."""
+    _commit_file(repo, ".gitignore", ".worktrees/\nnode_modules/\n", "ignore packages")
+    _commit_file(repo, "webui/package-lock.json", LOCKED_BEFORE, "lock packages")
+    (repo / "webui" / "node_modules").mkdir()
+    worktree = _create_task_worktree(module, repo, "task-a")
+    _commit_file(worktree, path, LOCKED_AFTER, "change the webui")
+    return worktree
+
+
+def _record_npm(monkeypatch, module, repo, *, failing_install=False):
+    """Record each npm command with main's HEAD and WebUI lock then; git still runs.
+
+    *failing_install* makes the first npm command fail, as a locked file would.
+    """
+    run_command = module._run_command
+    installs = []
+
+    def run(command, *, cwd=None):
+        if Path(command[0]).stem.lower() != "npm":
+            return run_command(command, cwd=cwd)
+        lock = (repo / "webui" / "package-lock.json").read_text(encoding="utf-8")
+        installs.append((command[1:], cwd, _git_output(repo, "rev-parse", "HEAD"), lock))
+        if failing_install and len(installs) == 1:
+            return 1, "npm error EBUSY: resource busy or locked"
+        return 0, ""
+
+    monkeypatch.setattr(module, "_run_command", run)
+    return installs
+
+
+@pytest.mark.parametrize("changes_lock", [True, False], ids=["lock changed", "lock unchanged"])
+def test_cmd_merge_installs_the_merged_webui_packages_before_the_merge_commit(
+    real_repo, monkeypatch, changes_lock
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    path = "webui/package-lock.json" if changes_lock else "webui/src/app.js"
+    _branch_with_webui_change(module, real_repo, path)
+    main_head = _git_output(real_repo, "rev-parse", "HEAD")
+    installs = _record_npm(monkeypatch, module, real_repo)
+
+    result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
+
+    assert result == 0
+    assert _git_output(real_repo, "rev-parse", "HEAD") != main_head
+    # The merge commit's check runs the WebUI checks on the merged packages.
+    expected = [(["ci"], real_repo / "webui", main_head, LOCKED_AFTER)] if changes_lock else []
+    assert installs == expected
+
+
+@pytest.mark.parametrize("failure", ["install", "check"])
+def test_cmd_merge_restores_main_webui_packages_when_the_merge_does_not_land(
+    capsys, real_repo, monkeypatch, failure
+):
+    module = _load_worktree_module()
+    _patch_repo_globals(monkeypatch, module, real_repo)
+    worktree = _branch_with_webui_change(module, real_repo, "webui/package-lock.json")
+    if failure == "check":
+        _reject_commits(real_repo)
+    main_head = _git_output(real_repo, "rev-parse", "HEAD")
+    installs = _record_npm(monkeypatch, module, real_repo, failing_install=failure == "install")
+
+    result = module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60))
+    captured = capsys.readouterr()
+
+    assert result == (1 if failure == "install" else module.MERGE_CONFLICT_EXIT_CODE)
+    assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
+    assert _list_porcelain(real_repo) == []
+    assert worktree.exists()
+    # main gets its own packages back: the last npm ci installs main's lock.
+    assert [lock for _command, _cwd, _head, lock in installs] == [LOCKED_AFTER, LOCKED_BEFORE]
     assert "python scripts/worktree.py merge task-a" in captured.out
 
 

@@ -32,7 +32,7 @@
 ## Merge commits
 
 - A merge commit selects twice: against this checkout's records, and against the records of the worktree holding the merged branch (with the changes since that worktree's tested state, normally the changes made here since the fork). It runs only the tests both select; a test either side leaves out passed there with the code and files it has now.
-- `git merge` runs the pre-merge-commit hook before it writes MERGE_HEAD, so the hook takes the merged head from `GIT_REFLOG_ACTION` (`merge <branch>`).
+- `worktree.py merge` stages the merge (`git merge --no-commit`) and commits it with `git commit`, whose pre-commit hook finds MERGE_HEAD. A hand-run `git merge` runs the pre-merge-commit hook before it writes MERGE_HEAD, so the hook takes the merged head from `GIT_REFLOG_ACTION` (`merge <branch>`).
 - The checkout adopts the branch's record of each test whose current state only the branch tested.
 
 ## Test environment

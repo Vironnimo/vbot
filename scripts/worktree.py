@@ -110,6 +110,8 @@ MERGE_HOLDER_FILE_NAME = "vbot-merge.lock.holder.json"
 MERGE_RELEASE_FILE_NAME = "vbot-merge.lock.release"
 REPAIR_LOG_FILE_NAME = "vbot-merge-repair.log"
 MERGE_CONFLICT_EXIT_CODE = 2
+# Locks the WebUI packages; a merge that changes it replaces main's node_modules.
+WEBUI_LOCK_FILE = "webui/package-lock.json"
 # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — keeps the repair keeper alive
 # after the spawning CLI exits and outside the caller's Ctrl+C group.
 WINDOWS_DETACHED_CREATION_FLAGS = 0x00000008 | 0x00000200
@@ -421,6 +423,10 @@ def _run_command(
     return result.returncode, result.stderr.strip()
 
 
+def _npm_command() -> str:
+    return shutil.which("npm") or "npm"
+
+
 def iter_worktree_entries(worktrees_dir: Path) -> list[dict[str, str | int | Path]]:
     """Collect script-managed worktree entries sorted by name."""
     if not worktrees_dir.exists():
@@ -626,8 +632,7 @@ def cmd_create(args: argparse.Namespace) -> int:
             "(cold npm cache: several minutes, no output until done)...",
             flush=True,
         )
-        npm_command = shutil.which("npm") or "npm"
-        return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")
+        return_code, stderr = _run_command([_npm_command(), "install"], cwd=worktree_path / "webui")
         if return_code != 0:
             cleanup_failed_create(
                 name,
@@ -878,6 +883,41 @@ def _print_branch_check_hints(name: str, *, window_open: bool) -> None:
         print("note: your protected repair window stays open while you fix this")
 
 
+def _merge_replaces_webui_packages() -> bool:
+    """Whether the staged merge changes the lock of main's installed WebUI packages."""
+    if not (PROJECT_ROOT / "webui" / "node_modules").is_dir():
+        return False
+    return_code, _ = _run_command(
+        ["git", "-C", str(PROJECT_ROOT), "diff", "--cached", "--quiet", "HEAD", "--"]
+        + [WEBUI_LOCK_FILE]
+    )
+    return return_code == 1
+
+
+def _install_webui_packages(action: str) -> str | None:
+    """Install the packages main's WebUI lock names; return why that failed, or None."""
+    print(f"{action} (npm ci, no output until done)...", flush=True)
+    return_code, stderr = _run_command([_npm_command(), "ci"], cwd=PROJECT_ROOT / "webui")
+    if return_code == 0:
+        return None
+    return stderr or f"npm ci exited with code {return_code}"
+
+
+def _abort_merge(*, restore_packages: bool) -> None:
+    """Roll main back to its last commit, and its WebUI packages when the merge replaced them."""
+    _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
+    for line in _list_uncommitted_paths(PROJECT_ROOT):
+        print(f"uncommitted-after-abort: {line}")
+    if not restore_packages:
+        return
+    failure = _install_webui_packages("reinstalling main's webui dependencies")
+    if failure is not None:
+        print_error(
+            "main's webui/node_modules does not match its package-lock.json; run `npm ci` in "
+            f"{PROJECT_ROOT / 'webui'} before its next WebUI commit: {failure}"
+        )
+
+
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge a finished worktree branch into main and remove the worktree.
 
@@ -960,7 +1000,13 @@ def _merge_and_cleanup(
     *,
     window_open: bool,
 ) -> int:
-    """Run the mechanical merge into main and remove the merged worktree."""
+    """Merge the branch into main, commit it through the commit check, remove the worktree.
+
+    The merge is staged first and committed separately: the commit check runs the
+    WebUI checks on main's installed packages, so a merge that changes the WebUI
+    lock installs the merged packages in main before its commit, and reinstalls
+    main's own when the merge does not land.
+    """
     merge_head_path = PROJECT_ROOT / ".git" / "MERGE_HEAD"
     if merge_head_path.exists():
         _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
@@ -976,23 +1022,42 @@ def _merge_and_cleanup(
         return 1
 
     return_code, stderr = _run_command(
-        ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "-m", message]
+        ["git", "-C", str(PROJECT_ROOT), "merge", branch, "--no-ff", "--no-commit"]
     )
     if return_code != 0:
         conflicted = _list_conflicted_paths(PROJECT_ROOT)
         for conflict_path in conflicted:
             print(f"conflicted: {conflict_path}")
-        _run_command(["git", "-C", str(PROJECT_ROOT), "merge", "--abort"])
-        remaining = _list_uncommitted_paths(PROJECT_ROOT)
-        for line in remaining:
-            print(f"uncommitted-after-abort: {line}")
-        detail = stderr or "git merge failed"
-        print_error(detail)
+        _abort_merge(restore_packages=False)
+        print_error(stderr or "git merge failed")
         if conflicted:
             _print_merge_conflict_hints(name, window_open=window_open)
         else:
             _print_merge_check_hints(name, window_open=window_open)
         return MERGE_CONFLICT_EXIT_CODE
+
+    # Without MERGE_HEAD, main already contains the branch: nothing to commit.
+    if merge_head_path.exists():
+        replaces_packages = _merge_replaces_webui_packages()
+        if replaces_packages:
+            failure = _install_webui_packages("installing the merged webui dependencies in main")
+            if failure is not None:
+                print_error(f"npm ci failed in main's webui; the merge did not land: {failure}")
+                _abort_merge(restore_packages=True)
+                print("hint: stop programs that use main's webui/node_modules, such as dev servers")
+                print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
+                if window_open:
+                    print("note: your protected repair window stays open while you fix this")
+                return 1
+        # The commit hook checks the merge commit against the merged result.
+        return_code, stderr = _run_command(
+            ["git", "-C", str(PROJECT_ROOT), "commit", "-m", message]
+        )
+        if return_code != 0:
+            _abort_merge(restore_packages=replaces_packages)
+            print_error(stderr or "git commit failed")
+            _print_merge_check_hints(name, window_open=window_open)
+            return MERGE_CONFLICT_EXIT_CODE
 
     head_result = subprocess.run(
         ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--short", "HEAD"],
