@@ -255,6 +255,10 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         chat_sessions=sessions,
         chat_run_manager=chat_runs,
         bootstrap_service=SimpleNamespace(list_jobs=lambda: []),
+        cron_service=SimpleNamespace(list_jobs=lambda: []),
+        calendar_service=SimpleNamespace(
+            actions=SimpleNamespace(list_actions=lambda: []), list_events=lambda: []
+        ),
         terminal_manager=FakeTerminalManager(),
         agents=SimpleNamespace(
             update=lambda agent_id, **k: updates.append({agent_id: k}),

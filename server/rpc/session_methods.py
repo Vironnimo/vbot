@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
+from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
@@ -40,6 +42,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_SESSION_BUSY,
+    RPC_ERROR_SESSION_IN_USE,
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
@@ -192,8 +195,9 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     """Archive one session and report where the viewing accessor should land.
 
     Decisions baked in: the session is archived, not hard-deleted (#1,
-    recoverable); deletion is refused while a run is active or queued on it (#4);
-    the response carries ``next_session_id`` for #2 navigation; and the removed
+    recoverable); deletion is refused while a run is active or queued on it (#4)
+    and while a Bootstrap job, Cron job or Calendar action pins it; the response
+    carries ``next_session_id`` for #2 navigation; and the removed
     session is dropped from the active recall index immediately (#6). Channel-
     bound and sub-agent sessions need no special handling — a channel session
     simply resumes empty on the next inbound message, and an active sub-agent
@@ -217,7 +221,7 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
                     _session_address(agent_id, session_id, project_id)
                 ),
             ):
-                _ensure_no_bootstrap_session_reference(state, agent_id, project_id, session_id)
+                _ensure_no_session_references(state, agent_id, project_id, session_id)
                 # Existence check under the guard: concurrent deletes cannot both
                 # cross the storage boundary, and a missing Session still maps to
                 # the ordinary domain error.
@@ -273,27 +277,76 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
 
 
-def _ensure_no_bootstrap_session_reference(
+def _ensure_no_session_references(
     state: Any,
     agent_id: str,
     project_id: str | None,
     session_id: str,
 ) -> None:
-    references = sorted(
-        f"bootstrap:{job.id}"
-        for job in state.runtime.bootstrap_service.list_jobs()
+    """Refuse archiving a Session that a Bootstrap job, Cron job or Calendar action pins.
+
+    Each of them starts its Runs in exactly that Session, so every later start
+    would fail. The refusal names them in ``message`` and, as
+    ``data.references`` (``kind``, ``id`` and the ``name`` the user knows it by:
+    the job name, or the title of the action's event), for accessors.
+    """
+    references = _session_references(state, agent_id, project_id, session_id)
+    if references:
+        named = ", ".join(f"{reference['kind']}:{reference['id']}" for reference in references)
+        raise RpcError(
+            RPC_ERROR_SESSION_IN_USE,
+            f"cannot delete Session referenced by {named}",
+            data={"references": references},
+        )
+
+
+def _session_references(
+    state: Any,
+    agent_id: str,
+    project_id: str | None,
+    session_id: str,
+) -> list[JsonObject]:
+    """Return the live automations pinned to one Session address.
+
+    Terminal history never starts another Run and does not count: completed
+    Bootstrap jobs and completed or missed Cron jobs. A paused or failed job can
+    be enabled again, so it counts.
+    """
+    runtime = state.runtime
+    references: list[JsonObject] = [
+        {"kind": "bootstrap", "id": job.id, "name": job.name}
+        for job in runtime.bootstrap_service.list_jobs()
         if (
-            job.agent_id == agent_id
-            and job.project_id == project_id
-            and job.session_id == session_id
-            and getattr(job, "status", "active") != "completed"
+            (job.agent_id, job.project_id, job.session_id) == (agent_id, project_id, session_id)
+            and job.status not in TERMINAL_BOOTSTRAP_STATUSES
+        )
+    ]
+    references.extend(
+        {"kind": "cron", "id": job.id, "name": job.name}
+        for job in runtime.cron_service.list_jobs()
+        if (
+            (job.agent_id, job.project_id, job.session_id) == (agent_id, project_id, session_id)
+            and job.status not in TERMINAL_CRON_JOB_STATUSES
         )
     )
-    if references:
-        raise RpcError(
-            RPC_ERROR_SESSION_BUSY,
-            f"cannot delete Session referenced by {', '.join(references)}",
+    calendar = runtime.calendar_service
+    pinning_actions = [
+        action
+        for action in calendar.actions.list_actions()
+        if action.get("session") == session_id
+        and parse_agent_address(action["target"]) == (agent_id, project_id)
+    ]
+    if pinning_actions:
+        titles = {event.id: event.title for event in calendar.list_events()}
+        references.extend(
+            {
+                "kind": "calendar",
+                "id": action["id"],
+                "name": titles.get(action["event_id"], action["event_id"]),
+            }
+            for action in pinning_actions
         )
+    return sorted(references, key=lambda reference: (reference["kind"], reference["id"]))
 
 
 def _resolve_post_delete_landing(

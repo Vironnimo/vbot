@@ -1,5 +1,5 @@
 import { asText as asSharedText } from '$lib/values.js';
-import { t } from '$lib/i18n.js';
+import { activeLocaleTag, t } from '$lib/i18n.js';
 import { formatMoment } from '$lib/timeText.js';
 import {
   sessionDisplayName,
@@ -160,4 +160,44 @@ export function reflectionBadgeKinds(session) {
 
 export function asText(value) {
   return asSharedText(value).trim();
+}
+
+// A refused delete names, in the user's words, what still runs in the Session;
+// other refusals keep the server's explanation.
+export function sessionDeleteErrorText(error) {
+  if (error?.code === 'session_in_use') {
+    const references = Array.isArray(error.details?.data?.references)
+      ? error.details.data.references
+      : [];
+    const names = references.map(sessionReferenceText).filter(Boolean);
+    if (names.length > 0) {
+      return t('sessions.delete_in_use', { references: formatList(names) });
+    }
+  }
+  return error?.message || t('sessions.delete_error');
+}
+
+function sessionReferenceText(reference) {
+  const name = asText(reference?.name);
+  if (reference?.kind === 'cron') {
+    return t('sessions.reference_cron', { name });
+  }
+  if (reference?.kind === 'calendar') {
+    return t('sessions.reference_calendar', { name });
+  }
+  if (reference?.kind === 'bootstrap') {
+    return t('sessions.reference_bootstrap', { name });
+  }
+  return '';
+}
+
+function formatList(items) {
+  try {
+    return new Intl.ListFormat(activeLocaleTag(), {
+      style: 'long',
+      type: 'conjunction',
+    }).format(items);
+  } catch {
+    return items.join(', ');
+  }
 }

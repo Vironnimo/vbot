@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -113,26 +114,104 @@ async def test_delete_busy_session_is_rejected() -> None:
     assert state._resets == []
 
 
-@pytest.mark.asyncio
-async def test_delete_session_referenced_by_bootstrap_is_rejected() -> None:
-    state, _resolver, sessions = stub_session_state()
-    state.runtime.bootstrap_service = SimpleNamespace(
-        list_jobs=lambda: [
-            SimpleNamespace(
-                id="boot-1",
-                agent_id="builder",
-                project_id=None,
-                session_id="s1",
-                status="active",
-            )
-        ]
+def _jobs(service: str, **fields: Any) -> Callable[[Any], None]:
+    """Install a Bootstrap or Cron service listing one job pinned by default to builder/s1."""
+    job = SimpleNamespace(
+        **{
+            "id": "job-1",
+            "name": "Daily report",
+            "agent_id": "builder",
+            "project_id": None,
+            "session_id": "s1",
+            "status": "active",
+            **fields,
+        }
     )
+
+    def arrange(runtime: Any) -> None:
+        setattr(runtime, service, SimpleNamespace(list_jobs=lambda: [job]))
+
+    return arrange
+
+
+def _calendar_action(**fields: Any) -> Callable[[Any], None]:
+    """Install a Calendar listing one action pinned by default to builder/s1."""
+    action = {
+        "id": "act-1",
+        "event_id": "evt-1",
+        "target": "builder",
+        "session": "s1",
+        **fields,
+    }
+
+    def arrange(runtime: Any) -> None:
+        runtime.calendar_service = SimpleNamespace(
+            actions=SimpleNamespace(list_actions=lambda: [action]),
+            list_events=lambda: [SimpleNamespace(id="evt-1", title="Weekly review")],
+        )
+
+    return arrange
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("arrange", "reference"),
+    [
+        pytest.param(
+            _jobs("bootstrap_service", id="boot-1", name="Warm up"),
+            {"kind": "bootstrap", "id": "boot-1", "name": "Warm up"},
+            id="bootstrap",
+        ),
+        # A failed job can be enabled again, so its pin still counts.
+        pytest.param(
+            _jobs("cron_service", id="cron-1", status="failed"),
+            {"kind": "cron", "id": "cron-1", "name": "Daily report"},
+            id="cron",
+        ),
+        # An action is named by its event's title.
+        pytest.param(
+            _calendar_action(),
+            {"kind": "calendar", "id": "act-1", "name": "Weekly review"},
+            id="calendar",
+        ),
+    ],
+)
+async def test_delete_session_pinned_by_an_automation_is_rejected(
+    arrange: Callable[[Any], None], reference: JsonObject
+) -> None:
+    state, _resolver, sessions = stub_session_state()
+    arrange(state.runtime)
 
     error = await rpc_error(state, "session.delete", agent_id="builder", session_id="s1")
 
-    assert error["code"] == "session_busy"
-    assert "bootstrap:boot-1" in error["message"]
+    assert error["code"] == "session_in_use"
+    assert f"{reference['kind']}:{reference['id']}" in error["message"]
+    assert error["data"] == {"references": [reference]}
     assert sessions.archived == []
+    assert resource_changes(state) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "arrange",
+    [
+        # Terminal history never starts another Run.
+        pytest.param(_jobs("cron_service", status="completed"), id="cron-terminal"),
+        pytest.param(_jobs("bootstrap_service", status="completed"), id="bootstrap-terminal"),
+        # The same Session id in another scope is another Session.
+        pytest.param(_jobs("cron_service", project_id="vbot"), id="cron-other-scope"),
+        pytest.param(_calendar_action(target="builder@vbot"), id="calendar-other-scope"),
+    ],
+)
+async def test_delete_ignores_automations_that_cannot_start_in_the_session(
+    arrange: Callable[[Any], None],
+) -> None:
+    state, _resolver, sessions = stub_session_state()
+    arrange(state.runtime)
+
+    await rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
+
+    assert sessions.archived == [("builder", "s1", None)]
 
 
 @pytest.mark.asyncio
