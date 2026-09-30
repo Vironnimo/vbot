@@ -17,7 +17,7 @@ from core.tools._display_diff import (
     display_diff_line_count,
     display_file_diff,
 )
-from core.tools._tool_display import _normalize_display_fact
+from core.tools._tool_display import _normalize_display_fact, display_notice
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
@@ -168,9 +168,9 @@ class ToolContext:
         compare=False,
     )
     presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
-    presentation_file_changes: list[JsonObject] = field(
-        default_factory=list, repr=False, compare=False
-    )
+    # User-facing detail blocks in the order recorded, for Tools whose display
+    # declares ``details``.
+    presentation_details: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Request-only media: never included in result envelopes or lifecycle events.
     result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
@@ -235,11 +235,18 @@ class ToolContext:
     ) -> JsonObject:
         """Record one changed file's bounded diff without changing the Tool result.
 
-        ``None`` text means absent or not text. All changes of one call share
-        one diff line budget. Returns the recorded change, whose ``added`` and
-        ``removed`` count every changed line.
+        ``None`` text means absent or not text. The changed files of one call
+        form one ``file_changes`` detail block at the place of the first, and
+        share one diff line budget. Returns the recorded change, whose ``added``
+        and ``removed`` count every changed line.
         """
-        shown = sum(display_diff_line_count(item) for item in self.presentation_file_changes)
+        block = next(
+            (item for item in self.presentation_details if item["type"] == "file_changes"), None
+        )
+        if block is None:
+            block = {"type": "file_changes", "files": []}
+            self.presentation_details.append(block)
+        shown = sum(display_diff_line_count(item) for item in block["files"])
         recorded = display_file_diff(
             path,
             change,
@@ -248,8 +255,12 @@ class ToolContext:
             destination=destination,
             line_budget=max(0, MAX_DISPLAY_DIFF_LINES - shown),
         )
-        self.presentation_file_changes.append(recorded)
+        block["files"].append(recorded)
         return recorded
+
+    def add_display_notice(self, level: str, text: str, *, subject: str | None = None) -> None:
+        """Record one notice detail block (``info``, ``warning`` or ``error``) for the user."""
+        self.presentation_details.append(display_notice(level, text, subject=subject))
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""

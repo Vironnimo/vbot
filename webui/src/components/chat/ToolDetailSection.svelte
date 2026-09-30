@@ -15,6 +15,8 @@
     value,
     isError = false,
     preferPayload = false,
+    // Show arguments with the keys the Tool's display hides.
+    raw = false,
     toolName = '',
     tool = null,
     // Keep showing the end of growing content, such as live command output.
@@ -23,7 +25,7 @@
 
   let images = $derived(toolDetailImages(value, { preferPayload, tool }));
   let presentation = $derived(
-    toolDetailPresentation(value, { preferPayload, toolName, tool }),
+    toolDetailPresentation(value, { preferPayload, raw, toolName, tool }),
   );
 </script>
 

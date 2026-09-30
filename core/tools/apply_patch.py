@@ -623,8 +623,9 @@ def _file_reports(context: ToolContext, batch: _Batch) -> list[_FileReport]:
         if after.exists:
             report.notes = batch.warnings.get(path, [])
         reports.append(report)
-    context.add_display_line_changes(added=added, removed=removed)
-    context.add_display_count(len(effects), "files")
+    if effects:
+        context.add_display_line_changes(added=added, removed=removed)
+        context.add_display_count(len(effects), "files")
     return reports
 
 
@@ -690,6 +691,7 @@ def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[
 
 def _request_failure(context: ToolContext, batch: _Batch, error: _PatchError) -> JsonObject:
     message = [error.text(batch.shown)]
+    context.add_display_notice("error", message[0])
     for name, lines in error.details.get("context_only", [])[:3]:
         message.extend(_locate_context(context, batch, name, lines))
     return tool_failure(error.code, "\n".join(message) + "\nNo file was changed.")
@@ -799,7 +801,9 @@ def _execute(context: ToolContext, arguments: JsonObject, state: FileReadState) 
                 else:
                     _run_step(context, state, batch, step, paths, outcome)
                 operation_failed |= outcome["status"] in {"failed", "skipped", "partial"}
-    return patch_result(_file_reports(context, batch), batch.results, _cancelled(batch), call_notes)
+    return patch_result(
+        context, _file_reports(context, batch), batch.results, _cancelled(batch), call_notes
+    )
 
 
 def _display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
@@ -882,7 +886,7 @@ def register_apply_patch_tool(registry: ToolRegistry, *, file_state: FileReadSta
         unadvertised_parameters=PATCH_HIDDEN_PARAMETERS,
         result_schema={"type": "object", "required": ["status", "content"]},
         display=ToolDisplay(
-            parts_builder=_display_parts, hidden_argument_keys=_HIDDEN_ARGUMENT_KEYS
+            parts_builder=_display_parts, hidden_argument_keys=_HIDDEN_ARGUMENT_KEYS, details=True
         ),
     )
 

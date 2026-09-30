@@ -24,6 +24,7 @@ TOOL_DISPLAY_TRUNCATION_MODES = frozenset({"start", "end", "middle", "never"})
 TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
 TOOL_DISPLAY_FACT_UNITS = frozenset({"edits", "failures", "files", "matches", "results"})
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
+TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,10 @@ class ToolDisplay:
     parts_builder: ToolDisplayPartBuilder | None = None
     fact_builder: ToolDisplayFactBuilder | None = None
     max_characters: int = DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS
+    # The Tool records user-facing detail blocks during execution
+    # (``ToolContext.add_display_file_change``/``add_display_notice``); its
+    # expanded details show them instead of the raw arguments and result.
+    details: bool = False
 
     def __post_init__(self) -> None:
         _validate_display_strings(self.summary_fields, "summary_fields")
@@ -162,6 +167,8 @@ class ToolDisplay:
             raise ValueError("Tool display parts_builder must be callable")
         if self.fact_builder is not None and not callable(self.fact_builder):
             raise ValueError("Tool display fact_builder must be callable")
+        if not isinstance(self.details, bool):
+            raise ValueError("Tool display details must be a boolean")
         if isinstance(self.max_characters, bool) or not isinstance(self.max_characters, int):
             raise ValueError("Tool display max_characters must be an integer")
         if self.max_characters <= 0:
@@ -194,6 +201,8 @@ class ToolDisplay:
             "primary": primary,
             "facts": self._fact_payload(arguments, result=result, facts=facts),
         }
+        if self.details:
+            payload["details"] = []
         return payload
 
     def _primary_payload(
@@ -385,6 +394,23 @@ def _normalize_display_value(value: str | None) -> str:
     if len(text) <= MAX_TOOL_DISPLAY_VALUE_LENGTH:
         return text
     return f"{text[: MAX_TOOL_DISPLAY_VALUE_LENGTH - 1]}…"
+
+
+def display_notice(level: str, text: str, *, subject: str | None = None) -> JsonObject:
+    """Return one detail notice block: a short message for the user about the call.
+
+    ``subject`` names what the notice is about, such as a file or one change of it.
+    """
+    if level not in TOOL_DISPLAY_NOTICE_LEVELS:
+        raise ValueError(f"Unsupported Tool display notice level: {level}")
+    shown = _normalize_display_value(text)
+    if not shown:
+        raise ValueError("Tool display notice text must be a non-empty string")
+    block: JsonObject = {"type": "notice", "level": level, "text": shown}
+    subject_text = _normalize_display_value(subject)
+    if subject_text:
+        block["subject"] = subject_text
+    return block
 
 
 def _normalize_display_fact(value: Any) -> JsonObject | None:

@@ -73,17 +73,20 @@ export function toolDetailImages(
   });
 }
 
+// `raw` shows arguments with the keys the Tool's display hides, as sent.
 export const toolDetailPresentation = (
   value,
-  { preferPayload = false, toolName = '', tool = null } = {},
+  { preferPayload = false, raw = false, toolName = '', tool = null } = {},
 ) => {
   const processed = preferPayload
     ? preferredToolResultValue(value, toolName, tool)
     : sanitizeToolDetailNode(
         value,
-        tool
-          ? hiddenArgumentKeysForTool(tool, toolName)
-          : hiddenArgumentKeysForTool(toolName),
+        raw
+          ? null
+          : tool
+            ? hiddenArgumentKeysForTool(tool, toolName)
+            : hiddenArgumentKeysForTool(toolName),
         true,
       );
 
@@ -384,11 +387,41 @@ const FILE_CHANGE_KINDS = new Set([
 ]);
 const DIFF_LINE_KINDS = { '+': 'added', '-': 'removed', ' ': 'context' };
 
-// The server-computed diffs of the files a Tool changed (`display.file_changes`),
-// with rows numbered from each hunk's start. Malformed entries are dropped.
-export function toolFileChanges(tool) {
-  const changes = toolDisplay(tool)?.file_changes;
-  if (!Array.isArray(changes)) return [];
+const NOTICE_LEVELS = new Set(['info', 'warning', 'error']);
+
+// The user-facing detail blocks of a Tool whose display declares them
+// (`display.details`), in the Tool's order, or null for a Tool without them.
+// `file_changes` blocks carry the changed files' diffs with rows numbered
+// from each hunk's start; `notice` blocks a leveled message. Malformed blocks
+// and entries are dropped.
+export function toolDetailBlocks(tool) {
+  const blocks = toolDisplay(tool)?.details;
+  if (!Array.isArray(blocks)) return null;
+  return blocks.flatMap((block) => {
+    if (block?.type === 'file_changes' && Array.isArray(block.files)) {
+      const files = fileChanges(block.files);
+      return files.length > 0 ? [{ type: 'file_changes', files }] : [];
+    }
+    if (
+      block?.type === 'notice' &&
+      NOTICE_LEVELS.has(block.level) &&
+      typeof block.text === 'string' &&
+      block.text
+    ) {
+      return [
+        {
+          type: 'notice',
+          level: block.level,
+          text: block.text,
+          subject: typeof block.subject === 'string' ? block.subject : '',
+        },
+      ];
+    }
+    return [];
+  });
+}
+
+function fileChanges(changes) {
   return changes.flatMap((change) => {
     if (
       !isPlainObject(change) ||

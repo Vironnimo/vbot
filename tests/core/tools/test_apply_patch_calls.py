@@ -60,12 +60,12 @@ def test_display_names_the_file_and_hides_the_edit_text(tmp_path, arguments, sum
 
 
 def test_display_carries_each_changed_files_diff(tmp_path):
-    (tmp_path / "app.py").write_bytes(b"".join(b"line %d\n" % n for n in range(1, 11)))
+    (tmp_path / "app.txt").write_bytes(b"".join(b"line %d\n" % n for n in range(1, 11)))
     (tmp_path / "gone.txt").write_bytes(b"a\nb\n")
     (tmp_path / "old.txt").write_bytes(b"same\n")
     ctx = context(tmp_path)
     patch = (
-        "*** Begin Patch\n*** Update File: app.py\n@@\n line 5\n-line 6\n+line six\n line 7\n"
+        "*** Begin Patch\n*** Update File: app.txt\n@@\n line 5\n-line 6\n+line six\n line 7\n"
         "*** Add File: new.txt\n+first\n+second\n*** Delete File: gone.txt\n"
         "*** Move File: old.txt -> moved.txt\n*** End Patch"
     )
@@ -74,9 +74,11 @@ def test_display_carries_each_changed_files_diff(tmp_path):
     display = registry().display_for_call("apply_patch", {"patch": patch}, context=ctx)
 
     assert result["ok"], result
-    assert display["file_changes"] == [
+    [changes] = display["details"]
+    assert changes["type"] == "file_changes"
+    assert changes["files"] == [
         {
-            "path": "app.py",
+            "path": "app.txt",
             "change": "updated",
             "added": 1,
             "removed": 1,
@@ -133,10 +135,32 @@ def test_display_diffs_share_one_line_budget_but_count_every_change(tmp_path, mo
 
     apply(tmp_path, patch, ctx=ctx)
 
-    first, second = ctx.presentation_file_changes
+    [block] = ctx.presentation_details
+    first, second = block["files"]
     assert first["hunks"][0]["lines"] == ["+1", "+2"] and "omitted_lines" not in first
     assert second["hunks"][0]["lines"] == ["+3"] and second["omitted_lines"] == 1
     assert second["added"] == 2
+
+
+def test_display_notices_name_each_failed_change_without_the_recovery_text(tmp_path):
+    (tmp_path / "a.txt").write_bytes(b"one\ntwo\n")
+    ctx = context(tmp_path)
+    patch = (
+        "*** Begin Patch\n*** Update File: a.txt\n@@\n-one\n+ONE\n@@\n-missing\n+x\n*** End Patch"
+    )
+
+    result = apply(tmp_path, patch, ctx=ctx)
+    display = registry().display_for_call(
+        "apply_patch", {"patch": patch}, context=ctx, result=result
+    )
+
+    assert result["data"]["status"] == "partial"
+    changes, notice = display["details"]
+    assert [change["path"] for change in changes["files"]] == ["a.txt"]
+    assert notice["level"] == "error" and "subject" not in notice
+    assert notice["text"].startswith("a.txt, hunk 2: ")
+    assert notice["text"] in result["data"]["content"]
+    assert "1| ONE" not in notice["text"]
 
 
 PAYLOAD = '*** Add File: new.txt\n+{"input": "literal", "patch": "payload"}'

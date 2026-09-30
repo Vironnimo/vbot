@@ -410,6 +410,7 @@
               result={subAgentDisplayResult(child, subAgentResult)}
               resultFailed={toolStatus(child) === 'failed'}
               live={toolStatus(child) === 'running'}
+              viewKey={toolDisclosureKey(child)}
             />
           </details>
         {:else}
@@ -526,6 +527,7 @@
                 : child.result}
               resultFailed={rowDotStatus === 'failed'}
               live={toolStatus(child) === 'running'}
+              viewKey={toolDisclosureKey(child)}
             />
           </details>
           {#if isTextToSpeechTool(child)}
