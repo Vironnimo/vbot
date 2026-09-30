@@ -580,6 +580,29 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
     assert "image_files" not in _visible_message(message)["tool_display"]
 
 
+def test_tool_media_play_from_signed_urls_that_keep_their_kind(tmp_path: Path) -> None:
+    video = tmp_path / "clip.mp4"
+    video.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64)
+    references = [
+        {"path": str(video), "media_type": "video/mp4"},
+        {"path": "relative.mp3", "media_type": "audio/mpeg"},
+        {"path": str(video), "media_type": "text/plain"},
+        None,
+    ]
+    runtime = StubRuntime(tmp_path / "data", StubAdapter())
+    app = create_app(runtime=cast(Any, runtime))
+    with TestClient(app) as client:
+        delivery = cast(Any, client.app).state.file_delivery
+        [item] = delivery.project_message({"media_files": references})["media"]
+        assert (item["filename"], item["media_type"]) == ("clip.mp4", "video/mp4")
+        assert "path" not in item
+        # A player seeks with range requests and plays the file in place.
+        response = client.get(item["url"], headers={"Range": "bytes=0-3"})
+        assert response.status_code == 206
+        assert response.content == video.read_bytes()[:4]
+        assert response.headers["content-disposition"].startswith("inline")
+
+
 @pytest.mark.parametrize("surface", ["tool", "assistant"])
 def test_image_urls_change_for_same_size_overwrites_within_one_second(
     tmp_path: Path, surface: str

@@ -290,6 +290,7 @@ def make_generate_video_handler(video_service: Any):
             )
         except VideoError as exc:
             return _media_failure(exc, "video-generation", "Video generation")
+        context.add_display_media(artifact.file_path, artifact.media_type)
         return tool_success({"video": _artifact_payload(artifact)})
 
     return handler
@@ -340,6 +341,7 @@ def make_generate_music_handler(music_service: Any):
             )
         except MusicError as exc:
             return _media_failure(exc, "music-generation", "Music generation")
+        context.add_display_media(artifact.file_path, artifact.media_type)
         return tool_success({"music": _artifact_payload(artifact)})
 
     return handler
@@ -424,6 +426,7 @@ def register_generate_video_tool(registry: ToolRegistry, video_service: Any) -> 
                 ToolDisplayField("aspect_ratio"),
                 ToolDisplayField("resolution"),
             ),
+            details=True,
         ),
         definition_profile_resolver=_video_profile_resolver(video_service),
     )
@@ -458,7 +461,8 @@ def register_generate_music_tool(registry: ToolRegistry, music_service: Any) -> 
             "additionalProperties": False,
         },
         display=ToolDisplay(
-            primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),)
+            primary_candidates=(ToolDisplayField("prompt", kind="text", quote=True),),
+            details=True,
         ),
         definition_profile_resolver=_music_profile_resolver(music_service),
     )

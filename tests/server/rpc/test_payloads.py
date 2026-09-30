@@ -136,6 +136,7 @@ def test_opaque_provider_metadata_and_file_references_never_reach_a_client() -> 
         "reasoning_scope": "openai/gpt-5.6-sol::api-key:work",
         "output_files": [{"path": "/srv/data/out.png"}],
         "image_files": [{"path": "/srv/data/in.png"}],
+        "media_files": [{"path": "/srv/data/song.mp3", "media_type": "audio/mpeg"}],
         "usage": usage,
         "tool_calls": [
             {

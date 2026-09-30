@@ -233,6 +233,7 @@ export default Object.freeze({
   'chat.toolDetailLabel.scrollback': 'Scrollback',
   'chat.toolDetailLabel.task': 'Task',
   'chat.toolMatches': 'Matches',
+  'chat.toolMedia': 'Media',
   'chat.memoryScope.agent': 'Agent Memory',
   'chat.memoryScope.user': 'User Profile',
   'chat.memoryRevision': 'Revision {revision}',

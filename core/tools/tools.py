@@ -327,6 +327,8 @@ class ToolRegistry:
         )
         if context is not None and context.presentation_images:
             payload["image_files"] = [dict(image) for image in context.presentation_images]
+        if context is not None and context.presentation_media:
+            payload["media_files"] = [dict(item) for item in context.presentation_media]
         if "details" in payload:
             payload["details"].extend(_detail_blocks(context, result, payload["details"]))
         return payload

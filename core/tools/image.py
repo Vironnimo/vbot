@@ -382,6 +382,7 @@ def make_image_generation_handler(image_service: Any):
 
         image_payloads: list[JsonObject] = []
         for artifact in artifacts:
+            context.add_display_media(artifact.file_path, artifact.media_type)
             image_payloads.append(
                 {
                     "path": model_path(artifact.file_path),
@@ -424,6 +425,7 @@ def register_image_generation_tool(registry: ToolRegistry, image_service: Any) -
                 ToolDisplayField("resolution"),
             ),
             fact_builder=result_count_fact_builder("images"),
+            details=True,
         ),
         definition_profile_resolver=_image_generation_profile_resolver(image_service),
     )

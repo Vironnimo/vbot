@@ -27,6 +27,8 @@ from core.tools._tool_display import (
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
+_DISPLAY_MEDIA_PREFIXES = ("image/", "video/", "audio/")
+
 
 def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     """Remove only quoting that cannot be a legal literal in the host path grammar."""
@@ -174,6 +176,8 @@ class ToolContext:
         compare=False,
     )
     presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
+    # Files the call produced for the user to view or play, by path and media type.
+    presentation_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # User-facing detail blocks in the order recorded, for Tools whose display
     # declares ``details``.
     presentation_details: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
@@ -275,6 +279,18 @@ class ToolContext:
     def add_display_results(self, items: Sequence[Mapping[str, str | None]]) -> None:
         """Record the things a call found as one results detail block (``display_results``)."""
         self.presentation_details.append(display_results(items))
+
+    def add_display_media(self, path: Path | str, media_type: str) -> None:
+        """Record one image, video or audio file the call produced, for the user to view or play.
+
+        Other media types are not shown. The display carries the absolute path
+        only internally; the server turns it into a signed file address before
+        any client sees it.
+        """
+        if isinstance(media_type, str) and media_type.startswith(_DISPLAY_MEDIA_PREFIXES):
+            self.presentation_media.append(
+                {"path": str(Path(path).resolve()), "media_type": media_type}
+            )
 
     def add_display_memory_changes(
         self,

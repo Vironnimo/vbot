@@ -205,6 +205,59 @@ a.inline-attachment:focus-visible {
 }
 
 /* Tool media stays compact within the existing detail rail. */
+/* What a Tool produced: image previews, video and audio players. */
+.tool-media__list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-media__item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  justify-items: start;
+}
+
+.tool-media__image {
+  display: block;
+  max-width: 100%;
+  cursor: zoom-in;
+}
+
+.tool-media__image img,
+.tool-media__video {
+  display: block;
+  max-width: 100%;
+  max-height: 320px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.tool-media__audio {
+  width: min(100%, 420px);
+}
+
+.tool-media__name {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-lo);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-media__name:hover,
+.tool-media__name:focus-visible {
+  color: var(--text-hi);
+  text-decoration: underline;
+}
+
 .tool-image-previews {
   display: flex;
   flex-wrap: wrap;

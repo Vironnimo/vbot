@@ -551,6 +551,9 @@ class FileDelivery:
         image_files = projected.pop("image_files", None)
         if isinstance(image_files, list):
             projected["images"] = self._project_image_files(image_files)
+        media_files = projected.pop("media_files", None)
+        if isinstance(media_files, list):
+            projected["media"] = self._project_media_files(media_files)
         content = projected.get("content")
         references = projected.pop("output_files", None)
         if (
@@ -621,6 +624,37 @@ class FileDelivery:
                 {"url": f"{FILE_URL_PREFIX}{self._mint_token(path)}", "filename": path.name}
             )
         return images
+
+    def _project_media_files(self, references: list[Any]) -> list[JsonObject]:
+        """Expose the images, videos and audio a Tool produced as revision-aware URLs.
+
+        The recorded media type decides how the UI presents each file, so a
+        missing file still keeps its address and kind, as for Tool images.
+        """
+        media: list[JsonObject] = []
+        for reference in references:
+            if not isinstance(reference, dict):
+                continue
+            path_value = reference.get("path")
+            media_type = reference.get("media_type")
+            if (
+                not isinstance(path_value, str)
+                or "\0" in path_value
+                or not isinstance(media_type, str)
+                or not media_type.startswith(("image/", "video/", "audio/"))
+            ):
+                continue
+            path = Path(path_value)
+            if not path.is_absolute():
+                continue
+            media.append(
+                {
+                    "url": f"{FILE_URL_PREFIX}{self._mint_token(path)}",
+                    "filename": path.name,
+                    "media_type": media_type,
+                }
+            )
+        return media
 
     def resolve_token(self, token: str) -> DeliveredFile | None:
         """Verify one capability and return the original file's current facts."""

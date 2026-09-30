@@ -8,10 +8,11 @@
   // with the raw call and result behind a disclosure. Live Stdout/Stderr
   // take the place of an Output block, or follow the blocks while the call
   // runs. Any other Tool shows Args, live Stdout/Stderr and its Result.
-  import { toolDetailBlocks } from '$lib/chatToolDetails.js';
+  import { toolDetailBlocks, toolDetailMedia } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
   import ToolDiff from './ToolDiff.svelte';
+  import ToolMedia from './ToolMedia.svelte';
   import ToolMemoryChanges from './ToolMemoryChanges.svelte';
   import ToolNotice from './ToolNotice.svelte';
   import ToolResults from './ToolResults.svelte';
@@ -50,6 +51,7 @@
   };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
+  let media = $derived(toolDetailMedia(tool));
   let streamed = $derived(Boolean(stdout || stderr));
   let streamsReplaceOutput = $derived(
     streamed &&
@@ -105,6 +107,9 @@
 
 <div class="tool-event-body tool-event-details">
   {#if blocks}
+    {#if media.length > 0}
+      <ToolMedia items={media} />
+    {/if}
     {#each blocks as block, index (index)}
       {#if block.type === 'text'}
         {#if block.label === 'output' && streamed}
@@ -129,7 +134,7 @@
     {#if !streamsReplaceOutput}
       {@render outputSections()}
     {/if}
-    {#if blocks.length > 0}
+    {#if blocks.length > 0 || media.length > 0}
       <details
         class="tool-raw-call"
         open={viewState.isOpen(rawKey)}
