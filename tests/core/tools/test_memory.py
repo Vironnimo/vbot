@@ -10,6 +10,7 @@ from core.memory import MemoryService
 from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
 from core.tools.tools import (
     ToolCall,
+    ToolContext,
     ToolExecutionConfig,
     ToolExecutor,
     ToolRegistry,
@@ -171,6 +172,69 @@ def test_replace_and_remove_address_entries_by_text(workspace: Path) -> None:
         "- Project Atlas uses pytest with xdist.\n- The staging host needs VPN and an SSH key.\n",
         USER,
     )
+
+
+def test_the_user_sees_each_changed_entry_and_its_memory_revision(
+    workspace: Path, tmp_path: Path
+) -> None:
+    (tmp_path / "agents" / "main").mkdir(parents=True)
+    registry = ToolRegistry()
+    register_memory_tool(registry, MemoryService(history_root=tmp_path / "agents"))
+
+    def details(arguments: JsonObject) -> list[JsonObject]:
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-1",
+            run_id="run-1",
+            tool_call_id="call-1",
+            tool_name=MEMORY_TOOL_NAME,
+            tool_call_index=0,
+            workspace=workspace,
+            vbot_root=workspace.parent,
+            data_root=workspace.parent,
+        )
+        result = asyncio.run(registry.dispatch(context, arguments, [MEMORY_TOOL_NAME]))
+        display = registry.display_for_call(
+            MEMORY_TOOL_NAME, arguments, context=context, result=result
+        )
+        return list(display["details"])
+
+    added = details({"action": "add", "scope": "user", "content": "User works in UTC+2."})
+    replaced = details(
+        {"action": "replace", "scope": "user", "old_text": "UTC+2", "content": "User is in UTC+1."}
+    )
+    removed = details({"action": "remove", "scope": "user", "old_text": "UTC+1"})
+    unchanged = details(
+        {"action": "add", "scope": "agent", "content": "Deploys run from the release branch."}
+    )
+    listed = details({"action": "list"})
+
+    # Revision 1 records the entries that existed before the first change.
+    assert added == [
+        {
+            "type": "memory_changes",
+            "scope": "user",
+            "changes": [{"op": "added", "text": "User works in UTC+2."}],
+            "revision": 2,
+        }
+    ]
+    assert replaced[0]["changes"] == [
+        {"op": "replaced", "text": "User is in UTC+1.", "previous": "User works in UTC+2."}
+    ]
+    assert (removed[0]["changes"], removed[0]["revision"]) == (
+        [{"op": "removed", "text": "User is in UTC+1."}],
+        4,
+    )
+    assert unchanged == [
+        {
+            "type": "notice",
+            "level": "info",
+            "text": "This entry already exists; nothing changed.",
+            "subject": "Agent Memory",
+        }
+    ]
+    # A list call shows its result itself.
+    assert listed == []
 
 
 def test_replace_without_scope_uses_the_only_matching_scope(workspace: Path) -> None:

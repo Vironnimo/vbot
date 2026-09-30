@@ -423,6 +423,56 @@ describe('ChatTimeline Tools', () => {
       expect(items[1]).toBe('Untitled conversation');
     });
 
+    it('shows changed Memory entries with their scope and revision', () => {
+      const display = structuredDisplay({
+        details: [
+          {
+            type: 'memory_changes',
+            scope: 'user',
+            revision: 12,
+            changes: [
+              {
+                op: 'replaced',
+                previous: 'Works in UTC+2.',
+                text: 'Works in UTC+1.',
+              },
+              { op: 'added', text: 'Prefers German.' },
+              { op: 'replaced', text: 'No previous text.' },
+            ],
+          },
+          { type: 'memory_changes', scope: 'other', changes: [] },
+        ],
+      });
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'memory', { action: 'replace' }),
+          toolResult('call', 'memory', '{"ok": true}', { display }),
+        ]),
+      );
+
+      const sections = document.querySelectorAll('.tool-memory');
+      expect(sections).toHaveLength(1);
+      expect(sections[0].querySelector('.teb-label').textContent).toBe(
+        t('chat.memoryScope.user'),
+      );
+      expect(
+        sections[0].querySelector('.tool-memory__revision').textContent,
+      ).toBe(t('chat.memoryRevision', { revision: 12 }));
+      expect(
+        Array.from(
+          sections[0].querySelectorAll('.tool-memory__change'),
+          (row) => [
+            row.className.replace(/.*tool-memory__change--/, ''),
+            row.querySelector('.tool-memory__text').textContent,
+          ],
+        ),
+      ).toEqual([
+        ['removed', 'Works in UTC+2.'],
+        ['added', 'Works in UTC+1.'],
+        ['added', 'Prefers German.'],
+      ]);
+    });
+
     it('shows text blocks as given or read from the call, as literal text', () => {
       const display = structuredDisplay({
         details: [

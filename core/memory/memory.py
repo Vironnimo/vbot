@@ -202,20 +202,30 @@ _INTERNAL_WRITER = MemoryWriter()
 
 @dataclass(frozen=True)
 class MemoryTextChange:
-    """Outcome of one entry addressed by its text: previous text and new text or None."""
+    """Outcome of one entry addressed by its text: previous text and new text or None.
+
+    ``revision`` is the Memory history revision that recorded the change, when
+    one was recorded.
+    """
 
     scope: MemoryScope
     previous: str
     current: str | None
+    revision: int | None = None
 
 
 @dataclass(frozen=True)
 class MemoryEntry:
-    """One tool-managed pinned memory entry."""
+    """One tool-managed pinned memory entry.
+
+    A mutation's result also names the Memory history ``revision`` that
+    recorded it, when one was recorded; listed entries carry none.
+    """
 
     id: int
     scope: MemoryScope
     content: str
+    revision: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -282,8 +292,8 @@ class FilePinnedMemoryBackend:
             before = list(entries)
             entries.append(normalized)
             _enforce_scope_budget(validated_scope, entries, _total(before))
-            self._commit(path, validated_scope, "added", before, entries, writer)
-            return MemoryEntry(id=len(entries), scope=validated_scope, content=normalized)
+            revision = self._commit(path, validated_scope, "added", before, entries, writer)
+            return MemoryEntry(len(entries), validated_scope, normalized, revision)
 
     def replace_entry(
         self,
@@ -303,8 +313,8 @@ class FilePinnedMemoryBackend:
             before = list(entries)
             entries[index] = normalized
             _enforce_scope_budget(validated_scope, entries, _total(before))
-            self._commit(path, validated_scope, "replaced", before, entries, writer)
-            return MemoryEntry(id=entry_id, scope=validated_scope, content=normalized)
+            revision = self._commit(path, validated_scope, "replaced", before, entries, writer)
+            return MemoryEntry(entry_id, validated_scope, normalized, revision)
 
     def remove_entry(
         self,
@@ -321,8 +331,8 @@ class FilePinnedMemoryBackend:
             before = list(entries)
             index = _entry_index(entry_id, entries)
             removed = entries.pop(index)
-            self._commit(path, validated_scope, "removed", before, entries, writer)
-            return MemoryEntry(id=entry_id, scope=validated_scope, content=removed)
+            revision = self._commit(path, validated_scope, "removed", before, entries, writer)
+            return MemoryEntry(entry_id, validated_scope, removed, revision)
 
     def find_matches(self, workspace: Path, scope: MemoryScope, old_text: str) -> list[str]:
         """Return the entries of one scope that ``old_text`` identifies, changing nothing."""
@@ -352,6 +362,7 @@ class FilePinnedMemoryBackend:
             entries = self._read_synced(path, validated_scope, writer)
             index = _single_match(validated_scope, entries, old_text)
             previous = entries[index]
+            revision = None
             if normalized != previous:
                 before = list(entries)
                 if normalized in entries:
@@ -359,8 +370,8 @@ class FilePinnedMemoryBackend:
                 else:
                     entries[index] = normalized
                 _enforce_scope_budget(validated_scope, entries, _total(before))
-                self._commit(path, validated_scope, "replaced", before, entries, writer)
-            return MemoryTextChange(validated_scope, previous, normalized)
+                revision = self._commit(path, validated_scope, "replaced", before, entries, writer)
+            return MemoryTextChange(validated_scope, previous, normalized, revision)
 
     def remove_matching(
         self,
@@ -377,8 +388,8 @@ class FilePinnedMemoryBackend:
             entries = self._read_synced(path, validated_scope, writer)
             before = list(entries)
             removed = entries.pop(_single_match(validated_scope, entries, old_text))
-            self._commit(path, validated_scope, "removed", before, entries, writer)
-            return MemoryTextChange(validated_scope, removed, None)
+            revision = self._commit(path, validated_scope, "removed", before, entries, writer)
+            return MemoryTextChange(validated_scope, removed, None, revision)
 
     def history(self, workspace: Path, agent_id: str) -> list[MemoryRevision]:
         """Return every revision of the Agent's Memory, oldest first.
@@ -547,13 +558,14 @@ class FilePinnedMemoryBackend:
         before: list[str],
         after: list[str],
         writer: MemoryWriter,
-    ) -> None:
+    ) -> int | None:
+        """Write *after*, log it and record it; return the recorded revision's id."""
         _write_entries(path, after)
         _log_mutation(event, scope, before, after, writer)
         if self._history is None or not writer.agent_id:
-            return
+            return None
         try:
-            self._history.record(
+            revision = self._history.record(
                 writer.agent_id,
                 scope,
                 kind="edit",
@@ -565,6 +577,8 @@ class FilePinnedMemoryBackend:
             )
         except MemoryError as exc:
             _LOGGER.warning("Memory history did not record a change: %s", exc)
+            return None
+        return revision.id if revision is not None else None
 
 
 class MemoryService:

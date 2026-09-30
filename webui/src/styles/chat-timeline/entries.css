@@ -849,6 +849,59 @@
   white-space: pre-wrap;
 }
 
+/* The Memory entries a Tool changed: one row per entry, marked and tinted
+   like diff lines, in reading type because entries are sentences. */
+.tool-memory__revision {
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+}
+
+.tool-memory__changes {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-memory__change {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  padding: 3px 12px 3px 0;
+  border-radius: 4px;
+  font-size: var(--fs-label-sm);
+  line-height: 1.55;
+}
+
+.tool-memory__change--added {
+  background: var(--green-dim);
+}
+
+.tool-memory__change--removed {
+  background: var(--red-dim);
+}
+
+.tool-memory__marker {
+  font-family: var(--font-mono);
+  text-align: center;
+  user-select: none;
+}
+
+.tool-memory__change--added .tool-memory__marker {
+  color: var(--green);
+}
+
+.tool-memory__change--removed .tool-memory__marker {
+  color: var(--red);
+}
+
+.tool-memory__text {
+  min-width: 0;
+  color: var(--text-hi);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* The raw call and result behind a Tool's user-facing details: a quiet
    disclosure whose sections keep the rail of the details above. */
 .tool-raw-call__summary {

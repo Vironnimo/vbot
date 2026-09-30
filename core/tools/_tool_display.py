@@ -33,6 +33,8 @@ MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384
 MAX_TOOL_DISPLAY_RESULTS = 20
 MAX_TOOL_DISPLAY_RESULT_TEXT_LENGTH = 600
 TOOL_DISPLAY_RESULT_FIELDS = ("meta", "time", "text")
+TOOL_DISPLAY_MEMORY_SCOPES = frozenset({"agent", "user"})
+TOOL_DISPLAY_MEMORY_CHANGE_OPS = frozenset({"added", "removed", "replaced"})
 
 
 @dataclass(frozen=True)
@@ -164,7 +166,7 @@ class ToolDisplay:
     # The Tool shows user-facing detail blocks instead of the raw arguments and
     # result: built from the call by ``detail_builder``, then recorded during
     # execution (``ToolContext.add_display_file_change``/``add_display_notice``/
-    # ``add_display_text``).
+    # ``add_display_text``/``add_display_memory_changes``).
     details: bool = False
     detail_builder: ToolDisplayDetailBuilder | None = None
 
@@ -498,6 +500,42 @@ def display_results(items: Sequence[Mapping[str, str | None]]) -> JsonObject:
         if len(shown) == MAX_TOOL_DISPLAY_RESULTS:
             break
     return {"type": "results", "items": shown}
+
+
+def display_memory_changes(
+    scope: str, changes: Sequence[Mapping[str, str | None]], *, revision: int | None = None
+) -> JsonObject:
+    """Return one memory_changes detail block: the entries a call changed in one Memory scope.
+
+    Each change is ``added`` or ``removed`` with its ``text``, or ``replaced``
+    with the ``previous`` text and the new ``text``. ``revision`` is the Memory
+    history revision that recorded the change, which the user can refer to.
+    """
+    if scope not in TOOL_DISPLAY_MEMORY_SCOPES:
+        raise ValueError(f"Unsupported Tool display Memory scope: {scope}")
+    shown: list[JsonObject] = []
+    for change in changes:
+        op = change.get("op")
+        text = _normalize_display_value(change.get("text"))
+        previous = _normalize_display_value(change.get("previous"))
+        if (
+            op not in TOOL_DISPLAY_MEMORY_CHANGE_OPS
+            or not text
+            or (op == "replaced") != bool(previous)
+        ):
+            raise ValueError("Tool display Memory change needs op and text, and previous text")
+        entry: JsonObject = {"op": op, "text": text}
+        if previous:
+            entry["previous"] = previous
+        shown.append(entry)
+    if not shown:
+        raise ValueError("Tool display Memory changes must not be empty")
+    block: JsonObject = {"type": "memory_changes", "scope": scope, "changes": shown}
+    if revision is not None:
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise ValueError("Tool display Memory revision must be a positive integer")
+        block["revision"] = revision
+    return block
 
 
 def _normalize_display_fact(value: Any) -> JsonObject | None:

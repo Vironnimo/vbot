@@ -17,7 +17,12 @@ from core.tools._display_diff import (
     display_diff_line_count,
     display_file_diff,
 )
-from core.tools._tool_display import _normalize_display_fact, display_notice, display_text
+from core.tools._tool_display import (
+    _normalize_display_fact,
+    display_memory_changes,
+    display_notice,
+    display_text,
+)
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
 
@@ -265,6 +270,16 @@ class ToolContext:
     def add_display_text(self, label: str, text: str) -> None:
         """Record one labelled text detail block, such as output the result does not hold."""
         self.presentation_details.append(display_text(label, text=text))
+
+    def add_display_memory_changes(
+        self,
+        scope: str,
+        changes: Sequence[Mapping[str, str | None]],
+        *,
+        revision: int | None = None,
+    ) -> None:
+        """Record the entries a call changed in one Memory scope, and its revision."""
+        self.presentation_details.append(display_memory_changes(scope, changes, revision=revision))
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""

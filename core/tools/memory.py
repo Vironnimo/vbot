@@ -117,6 +117,8 @@ _MEMORY_MUTATION_ACTIONS = ("add", "replace", "remove")
 # budget exhaustion, re-sending the whole context each round and starving the reply.
 _MAX_MEMORY_FAILURES_PER_RUN = 3
 _PREVIEW_CHARS = 200
+# How the user sees each scope, the same headings the Memory block shows.
+_NAMES = {"agent": "Agent Memory", "user": "User Profile"}
 
 
 class _MemoryThrashTracker:
@@ -197,13 +199,7 @@ def memory_handler(
             return tool_failure("memory_error", str(error))
 
     try:
-        writer = MemoryWriter(
-            agent_id=context.agent_id,
-            actor="tool",
-            session_id=context.session_id,
-            run_id=context.run_id,
-        )
-        data = _mutate(memory_service, workspace, action, scope, arguments, writer)
+        data = _mutate(memory_service, context, action, scope, arguments)
     except _MemoryRefusalError as refusal:
         if refusal.code == "invalid_arguments":
             return tool_failure(refusal.code, str(refusal))
@@ -257,17 +253,24 @@ def _list_result(service: MemoryService, workspace: Path, scope: str | None) -> 
 
 def _mutate(
     service: MemoryService,
-    workspace: Path,
+    context: ToolContext,
     action: str,
     scope: str | None,
     arguments: JsonObject,
-    writer: MemoryWriter,
 ) -> JsonObject:
+    """Apply one mutation and show the user the entries it changed."""
+    workspace = Path(context.workspace)
+    writer = MemoryWriter(
+        agent_id=context.agent_id,
+        actor="tool",
+        session_id=context.session_id,
+        run_id=context.run_id,
+    )
     content = arguments.get("content")
     old_text = arguments.get("old_text")
     entry_id = arguments.get("entry_id")
     if action == "add":
-        return _add(service, workspace, scope, content, old_text, entry_id, writer)
+        return _add(service, context, scope, content, old_text, entry_id, writer)
     if old_text is None and entry_id is None and action == "remove" and content is not None:
         # The entry text itself, sent in the only text field the Agent had for it.
         old_text, content = content, None
@@ -296,13 +299,19 @@ def _mutate(
     if action == "replace":
         change = service.replace_matching(workspace, target, old_text, str(content), writer=writer)
         if change.current == change.previous:
+            context.add_display_notice(
+                "info", "The entry already reads this way; nothing changed.", subject=_NAMES[target]
+            )
             return {
                 "content": f"The {target} Memory entry already reads that way; nothing changed."
             }
         verb = "Replaced in"
+        shown = {"op": "replaced", "previous": change.previous, "text": change.current}
     else:
         change = service.remove_matching(workspace, target, old_text, writer=writer)
         verb = "Removed from"
+        shown = {"op": "removed", "text": change.previous}
+    context.add_display_memory_changes(target, [shown], revision=change.revision)
     used, budget = service.scope_usage(workspace, target)
     return {
         "content": (
@@ -314,7 +323,7 @@ def _mutate(
 
 def _add(
     service: MemoryService,
-    workspace: Path,
+    context: ToolContext,
     scope: str | None,
     content: Any,
     old_text: Any,
@@ -338,10 +347,17 @@ def _add(
     if not isinstance(content, str) or not content.strip():
         raise _MemoryRefusalError("invalid_arguments", "add needs content: the fact to save.")
     target = _memory_scope(scope)
+    workspace = Path(context.workspace)
     existing = {entry.content for entry in service.list_entries(workspace, target)}
     entry = service.add_entry(workspace, target, content, writer=writer)
     if entry.content in existing:
+        context.add_display_notice(
+            "info", "This entry already exists; nothing changed.", subject=_NAMES[target]
+        )
         return {"content": f"{target.capitalize()} Memory already has this entry; nothing changed."}
+    context.add_display_memory_changes(
+        target, [{"op": "added", "text": entry.content}], revision=entry.revision
+    )
     used, budget = service.scope_usage(workspace, target)
     return {"content": f"Added to {target} Memory ({used}/{budget} chars used)."}
 
@@ -520,6 +536,7 @@ def register_memory_tool(registry: ToolRegistry, memory_service: MemoryService) 
             parts_builder=_memory_display_parts,
             fact_builder=result_count_fact_builder("count", when_arguments={"action": "list"}),
             hidden_argument_keys=("content", "old_text"),
+            details=True,
         ),
     )
 
