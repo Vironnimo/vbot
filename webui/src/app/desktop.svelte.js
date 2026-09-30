@@ -2,12 +2,16 @@ import { createToastState, dismissToast, addToast } from '$lib/toastState.js';
 import { SvelteMap } from 'svelte/reactivity';
 import { CONNECTION_STATUS_DISCONNECTED } from '$lib/connectionState.js';
 import {
+  desktopErrorCode,
   disabledDesktopCapabilities,
   getDesktopCapabilities,
+  getDesktopUpdate,
   getVoiceStatus,
   isDesktopAccessor,
+  onDesktopUpdate,
   onDesktopVoicePush,
   playVoiceCue,
+  restartDesktop,
   stopVoiceRecording,
   supportsDesktopVoice,
   waitForDesktopBridge,
@@ -24,6 +28,7 @@ const TOAST_AUTO_DISMISS_MS = 3200;
 const DESKTOP_BRIDGE_PROBE_TIMEOUT_MS = 1000;
 const DESKTOP_CAPABILITY_RETRY_MS = 1000;
 const VOICE_STATUS_RETRY_MS = 1000;
+const UPDATE_STATE_RETRY_MS = 1000;
 
 /**
  * The page's copy of the Desktop Voice status, kept current from pushes.
@@ -153,6 +158,86 @@ function createDesktopVoiceSync({ onEvent, onFirstStatus }) {
     start,
     stop,
   };
+}
+
+/**
+ * The page's copy of the Desktop update state `{pending, restarting, failed}`,
+ * null until known. Pushes carry every change; a read still in flight when a
+ * push arrives is older and is dropped. The first read is retried until it or
+ * a push arrives.
+ */
+function createDesktopUpdateSync() {
+  let update = $state(null);
+  let pushes = 0;
+  let stopPushes = null;
+  let retryTimer = null;
+  let stopped = true;
+
+  function scheduleRetry() {
+    if (stopped || retryTimer !== null) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      void refresh();
+    }, UPDATE_STATE_RETRY_MS);
+  }
+
+  async function refresh() {
+    if (stopped) return;
+    const pushesBefore = pushes;
+    try {
+      const snapshot = await getDesktopUpdate();
+      if (!stopped && pushes === pushesBefore) update = snapshot;
+    } catch {
+      if (update === null) scheduleRetry();
+    }
+  }
+
+  // An accepted restart shows as in progress until the Desktop's push says
+  // otherwise.
+  function markRestarting() {
+    if (update) update = { ...update, restarting: true, failed: false };
+  }
+
+  function start() {
+    if (!stopped) return;
+    stopped = false;
+    stopPushes = onDesktopUpdate((snapshot) => {
+      pushes += 1;
+      update = snapshot;
+    });
+    void refresh();
+  }
+
+  function stop() {
+    stopped = true;
+    stopPushes?.();
+    stopPushes = null;
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
+    }
+  }
+
+  return {
+    get update() {
+      return update;
+    },
+    markRestarting,
+    refresh,
+    start,
+    stop,
+  };
+}
+
+function restartFailureMessage(error) {
+  switch (desktopErrorCode(error)) {
+    case 'no_update_pending':
+      return t('app.desktopRestart.error.noUpdate');
+    case 'restart_unavailable':
+      return t('app.desktopRestart.error.unavailable');
+    default:
+      return t('app.desktopRestart.error.generic');
+  }
 }
 
 export function createAppDesktop(context) {
@@ -295,6 +380,41 @@ export function createAppDesktop(context) {
 
   const voiceAvailable = $derived(supportsDesktopVoice(desktopCapabilities));
 
+  // Known only for a Desktop that can restart itself into a new version.
+  const updateSync = createDesktopUpdateSync();
+  let restartRequesting = $state(false);
+  // The Desktop runs an older version than the active one, or is already
+  // restarting into it.
+  const restartOffered = $derived(
+    Boolean(updateSync.update?.pending || updateSync.update?.restarting),
+  );
+
+  // Starts the restart handoff once the page is ready for it. Only a restart
+  // the user asked for (`interactive`) reports a refusal; the Desktop's idle
+  // request stays silent, and the Desktop asks again later.
+  const requestRestart = async ({ interactive = false } = {}) => {
+    if (restartRequesting) return false;
+    restartRequesting = true;
+    try {
+      const { accepted } = await restartDesktop();
+      if (accepted) updateSync.markRestarting();
+      else void updateSync.refresh();
+      return accepted;
+    } catch (error) {
+      void updateSync.refresh();
+      if (interactive) {
+        showToast({
+          title: t('app.desktopRestart.error.title'),
+          message: restartFailureMessage(error),
+          variant: 'error',
+        });
+      }
+      return false;
+    } finally {
+      restartRequesting = false;
+    }
+  };
+
   // The Voice owner the settings panel edits against: the current snapshot,
   // `adopt(snapshot)` for snapshots a bridge call returned, and `refresh()`.
   const desktopVoice = {
@@ -333,6 +453,7 @@ export function createAppDesktop(context) {
         if (cancelled) return;
         desktopCapabilities = caps;
         if (supportsDesktopVoice(caps)) voice.start();
+        if (caps.restart) updateSync.start();
       } catch {
         scheduleDesktopCapabilityRetry();
       }
@@ -354,6 +475,7 @@ export function createAppDesktop(context) {
         desktopCapabilityRetryTimer = null;
       }
       voice.stop();
+      updateSync.stop();
     };
   });
   return {
@@ -371,6 +493,21 @@ export function createAppDesktop(context) {
     },
     get voiceStatus() {
       return desktopVoice.status;
+    },
+    // `{pending, restarting, failed}` from a Desktop that can restart itself,
+    // else null.
+    get update() {
+      return updateSync.update;
+    },
+    get restartOffered() {
+      return restartOffered;
+    },
+    // A restart request is waiting for the Desktop's answer.
+    get restartRequesting() {
+      return restartRequesting;
+    },
+    get requestRestart() {
+      return requestRestart;
     },
     get dismissAppToast() {
       return dismissAppToast;
