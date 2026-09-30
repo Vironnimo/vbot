@@ -837,6 +837,27 @@ def _list_conflicted_paths(repo_path: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def _merge_conflicts(branch: str) -> list[str] | None:
+    """Return the paths merging *branch* into main would conflict on, without touching main.
+
+    None when git cannot tell; the merge itself then finds any conflict.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "merge-tree", "--write-tree", "--name-only"]
+            + ["--no-messages", PRIMARY_BRANCH, branch],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if result.returncode != 1:
+        return [] if result.returncode == 0 else None
+    # The first line names the merged tree; the conflicted paths follow.
+    return [line for line in result.stdout.splitlines()[1:] if line.strip()]
+
+
 def _print_merge_conflict_hints(name: str, *, window_open: bool) -> None:
     """Print the agent-facing recovery hints after a conflicted merge."""
     print(f"hint: freeze main first: python scripts/worktree.py repair-start {name}")
@@ -921,7 +942,8 @@ def _abort_merge(*, restore_packages: bool) -> None:
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge a finished worktree branch into main and remove the worktree.
 
-    The branch's tests run first, in the worktree and outside the merge lock.
+    A conflict with main is reported before any test runs. The branch's tests
+    run first, in the worktree and outside the merge lock.
     Concurrency contract: only one merge or protected repair window may touch
     the primary checkout at a time. A task with an active repair window merges
     under its own window; every other task waits for the lock.
@@ -966,6 +988,15 @@ def cmd_merge(args: argparse.Namespace) -> int:
             protected = True
         else:
             window_active = False
+
+    # A conflict needs a repair first; the branch's tests would run in vain.
+    conflicted = _merge_conflicts(branch)
+    if conflicted:
+        for conflict_path in conflicted:
+            print(f"conflicted: {conflict_path}")
+        print_error(f"merging '{branch}' into {PRIMARY_BRANCH} conflicts; no test ran")
+        _print_merge_conflict_hints(name, window_open=protected)
+        return MERGE_CONFLICT_EXIT_CODE
 
     if _check_branch(worktree_path) != 0:
         _print_branch_check_hints(name, window_open=protected)

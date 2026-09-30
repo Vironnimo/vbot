@@ -150,7 +150,7 @@ def test_cmd_merge_merges_removes_worktree_and_branch(real_repo, monkeypatch, ca
         assert "data-status: preserved (ownership unverified)" in capsys.readouterr().out
 
 
-def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capsys, real_repo, monkeypatch):
+def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capfd, real_repo, monkeypatch):
     module = _load_worktree_module()
     _patch_repo_globals(monkeypatch, module, real_repo)
     _commit_file(real_repo, "shared.txt", "one\n", "base file")
@@ -158,13 +158,15 @@ def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capsys, real_rep
     _commit_file(worktree_a, "shared.txt", "from-a\n", "a edit")
     worktree_b = _create_task_worktree(module, real_repo, "task-b")
     _commit_file(worktree_b, "shared.txt", "from-b\n", "b edit")
+    # The conflict is reported before the branch's tests would run and fail.
+    _commit_file(worktree_b, "scripts/commit_check.py", FAILING_BRANCH_CHECK, "branch check")
 
     assert module.cmd_merge(argparse.Namespace(name="task-a", message=None, wait_timeout=60)) == 0
 
     main_head = _git_output(real_repo, "rev-parse", "HEAD")
-    capsys.readouterr()
+    capfd.readouterr()
     result = module.cmd_merge(argparse.Namespace(name="task-b", message=None, wait_timeout=60))
-    captured = capsys.readouterr()
+    captured = capfd.readouterr()
 
     assert result == module.MERGE_CONFLICT_EXIT_CODE
     assert _git_output(real_repo, "rev-parse", "HEAD") == main_head
@@ -172,6 +174,7 @@ def test_cmd_merge_reports_conflict_hints_and_keeps_main_intact(capsys, real_rep
     assert (real_repo / "shared.txt").read_text(encoding="utf-8") == "from-a\n"
     assert worktree_b.exists()
     assert "conflicted: shared.txt" in captured.out
+    assert "FAIL: tests" not in captured.out
     assert "python scripts/worktree.py repair-start task-b" in captured.out
     assert "python scripts/worktree.py merge task-b" in captured.out
 

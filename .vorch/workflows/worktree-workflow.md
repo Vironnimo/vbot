@@ -39,7 +39,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 ## Finalize
 
-Commit every change through the commit hook; in a worktree it runs the static checks. The merge runs the tests (`AGENTS.md` -> Testing): first the tests the branch's changes affect, in the worktree, then the commit check of the merge commit against the merged result, so a failing test or a semantic conflict with newer `main` work blocks the merge instead of landing.
+Commit every change through the commit hook; in a worktree it runs the static checks. The merge runs the tests (`AGENTS.md` -> Testing), unless the branch conflicts with `main`, which it reports first: first the tests the branch's changes affect, in the worktree, then the commit check of the merge commit against the merged result, so a failing test or a semantic conflict with newer `main` work blocks the merge instead of landing.
 
 Write the Step 7 summary. Then merge yourself — no user confirmation is needed:
 
