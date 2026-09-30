@@ -157,25 +157,32 @@ async def test_rm_is_refused_while_a_run_uses_the_project(
     assert state.runtime.projects.exists("vbot")
 
 
+def _job(**fields: Any) -> SimpleNamespace:
+    """A live Cron or Bootstrap job of the Project Agent ``builder@vbot`` unless *fields* differ."""
+    return SimpleNamespace(
+        **{
+            "id": "job-1",
+            "name": "Report",
+            "agent_id": "builder",
+            "project_id": "vbot",
+            "session_id": None,
+            "status": "active",
+            **fields,
+        }
+    )
+
+
+def _cron_job(**fields: Any) -> dict[str, list[Any]]:
+    return {"cron_jobs": [_job(**fields)]}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("jobs", "project_id", "code", "named"),
     [
+        pytest.param(_cron_job(), "vbot", "project_in_use", "cron:job-1", id="cron"),
         pytest.param(
-            {"cron_jobs": [SimpleNamespace(id="job-1", agent_id="builder", project_id="vbot")]},
-            "vbot",
-            "project_in_use",
-            "cron:job-1",
-            id="cron",
-        ),
-        pytest.param(
-            {
-                "bootstrap_jobs": [
-                    SimpleNamespace(
-                        id="boot-1", agent_id="builder", project_id="vbot", status="active"
-                    )
-                ]
-            },
+            {"bootstrap_jobs": [_job(id="boot-1")]},
             "vbot",
             "project_in_use",
             "bootstrap:boot-1",
@@ -203,10 +210,6 @@ async def test_rm_refusals_keep_the_project(
     assert state.runtime.projects.exists("vbot")
 
 
-def _cron_job(**fields: Any) -> dict[str, list[Any]]:
-    return {"cron_jobs": [SimpleNamespace(id="job-1", agent_id="builder", **fields)]}
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "jobs",
@@ -214,7 +217,7 @@ def _cron_job(**fields: Any) -> dict[str, list[Any]]:
         # A bare job targets the identity Agent, not this Project's same-named
         # Team Agent.
         pytest.param(_cron_job(project_id=None), id="bare-identity-job"),
-        pytest.param(_cron_job(project_id="vbot", status="missed"), id="terminal-history"),
+        pytest.param(_cron_job(status="missed"), id="terminal-history"),
         pytest.param(_cron_job(project_id="other"), id="other-project"),
         # An action that can no longer fire, for example of a past one-time event.
         pytest.param(

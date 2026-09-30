@@ -69,7 +69,6 @@ from core.runs import ChatRunManager
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
-    identity_agent_references,
     rename_identity_agent,
 )
 from core.runtime._bootstrap import RuntimeStartupSummary, bootstrap, start_event_loop_service
@@ -771,14 +770,23 @@ class Runtime:
         return outcome
 
     def agent_references(self, agent_id: str) -> tuple[str, ...]:
-        """Name the Channels, Cron and Bootstrap jobs and Calendar actions addressing an Agent id.
+        """Name the Channels and live automations that keep an Identity Agent from deletion.
 
-        Labels are ``<kind>:<id>``, sorted. An Identity Agent they name must not
-        be deleted, and no Agent can be renamed to an id they name. Blocking: it
-        reads every Channel config.
+        Labels are ``channel:<id>`` and the ``<kind>:<id>`` labels of
+        :meth:`AutomationReferences.agent_references`, sorted; automation history
+        that never starts another Run does not count. Blocking: it reads every
+        Channel config.
         """
         self._ensure_started()
-        return identity_agent_references(self._agent_rename_services(), agent_id)
+        references = [
+            f"channel:{channel.id}"
+            for channel in self.channel_service.list_channels()
+            if channel.agent_id == agent_id
+        ]
+        references.extend(
+            reference.label for reference in self.automation_references.agent_references(agent_id)
+        )
+        return tuple(sorted(references))
 
     def _agent_rename_services(self) -> AgentRenameServices:
         """The owners an Identity Agent rename changes, also while startup builds them."""

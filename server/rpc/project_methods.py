@@ -30,8 +30,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
-from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.projects import (
     Project,
     cwd_exists,
@@ -475,7 +473,7 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
             projects.get(project_id)
             try:
                 async with _state_chat_runs(state).project_admission_guard(project_id):
-                    _ensure_no_cron_reference(state, project_id)
+                    _ensure_no_automation_reference(state, project_id)
                     rooted_agents = state.runtime.agents.agents_rooted_in(project_id)
                     completed_updates: list[tuple[Any, Any]] = []
                     try:
@@ -532,65 +530,12 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
-def _ensure_no_cron_reference(state: Any, project_id: str) -> None:
-    """Reject removal while an automation points at a Project agent.
-
-    Mirrors the Agent ``agent_in_use`` cron guard, qualified to this project by a
-    direct ``job.project_id == project_id`` match now that cron carries the
-    project dimension. A job with ``project_id=None`` targets an identity agent,
-    so it never blocks a project removal even when its bare ``agent_id`` happens
-    to match a same-named Team member.
-    """
-    from core.projects.address import parse_agent_address
-
-    actions = state.runtime.calendar_service.actions
-    # An action that can no longer fire (its one-time event passed) is history.
-    references = [
-        f"calendar:{action['id']}"
-        for action in actions.list_actions()
-        if parse_agent_address(action["target"])[1] == project_id and actions.can_fire(action["id"])
-    ]
+def _ensure_no_automation_reference(state: Any, project_id: str) -> None:
+    """Reject removal while a live automation starts Runs of an Agent of the Project."""
+    references = state.runtime.automation_references.project_references(project_id)
     if references:
-        raise RpcError(
-            RPC_ERROR_PROJECT_IN_USE,
-            f"cannot remove project referenced by {', '.join(references)}",
-        )
-    referencing = sorted(
-        f"cron:{job.id}"
-        for job in state.runtime.cron_service.list_jobs()
-        if _cron_targets_project_agent(job, project_id)
-    )
-    if referencing:
-        raise RpcError(
-            RPC_ERROR_PROJECT_IN_USE,
-            f"cannot remove project referenced by {', '.join(referencing)}",
-        )
-    bootstrap_references = sorted(
-        f"bootstrap:{job.id}"
-        for job in state.runtime.bootstrap_service.list_jobs()
-        if (
-            job.project_id == project_id
-            and getattr(job, "status", "active") not in TERMINAL_BOOTSTRAP_STATUSES
-        )
-    )
-    if bootstrap_references:
-        raise RpcError(
-            RPC_ERROR_PROJECT_IN_USE,
-            f"cannot remove project referenced by {', '.join(bootstrap_references)}",
-        )
-
-
-def _cron_targets_project_agent(job: Any, project_id: str) -> bool:
-    """Return whether a cron job points at an agent of *this* project.
-
-    Qualified match: a cron job targets a Project agent iff its ``project_id``
-    equals this project's id. A bare job (``project_id=None``) targets an identity
-    agent, never a Project agent, even when the ids collide by name.
-    """
-    return bool(
-        job.project_id == project_id
-        and getattr(job, "status", "active") not in TERMINAL_CRON_JOB_STATUSES
-    )
+        labels = ", ".join(reference.label for reference in references)
+        raise RpcError(RPC_ERROR_PROJECT_IN_USE, f"cannot remove project referenced by {labels}")
 
 
 def _scan_preview(state: Any, project: Project) -> JsonObject:

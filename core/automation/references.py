@@ -1,16 +1,17 @@
-"""Which automations start their Runs in a Session, and the lock that keeps that answer true.
+"""Which automations start Runs of an Agent, Project or Session, and the lock that keeps it true.
 
-A Bootstrap job, a Cron job and a Calendar action can each select one existing
-Session: every Run it starts goes into exactly that Session, addressed by its
-Agent and Session id. Deleting or moving such a Session would make each later
-start fail, so whoever removes or moves a Session asks this owner first, and
-every such check and every edit that selects a Session holds
-:attr:`AutomationReferences.lock`.
+A Bootstrap job, a Cron job and a Calendar action each target one Agent, either
+an Identity Agent or an Agent of a Project, and can select one existing Session
+of it: every Run it starts goes there. Deleting an Agent, removing a Project or
+deleting or moving such a Session would make each later start fail, so whoever
+does that asks this owner first, and every such check and every edit that
+chooses a target holds :attr:`AutomationReferences.lock`.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -26,10 +27,13 @@ if TYPE_CHECKING:
 
 AutomationKind = Literal["bootstrap", "cron", "calendar"]
 
+# Whether a target (Agent id, Project id or None, selected Session id or None) counts.
+_Selector = Callable[[str, str | None, str | None], bool]
+
 
 @dataclass(frozen=True, slots=True)
 class AutomationReference:
-    """One automation that starts its Runs in a given Session.
+    """One automation that starts Runs of a given Agent, Project or Session.
 
     ``name`` is how the user knows it: the job name, or the title of the event a
     Calendar action belongs to.
@@ -49,7 +53,7 @@ class AutomationReference:
 
 
 class AutomationReferences:
-    """Answer which live automations select a Session, for its removers and movers.
+    """Answer which live automations start Runs of an Agent, Project or Session.
 
     Terminal history never starts another Run and does not count: completed
     Bootstrap jobs, completed or missed Cron jobs, and Calendar actions that can
@@ -74,28 +78,41 @@ class AutomationReferences:
         self._calendar = calendar
         self.lock = asyncio.Lock()
 
+    def agent_references(self, agent_id: str) -> tuple[AutomationReference, ...]:
+        """Return the live automations that start Runs of the Identity Agent ``agent_id``.
+
+        Only a target without a Project names the Identity Agent; a target such as
+        ``builder@vbot`` names that Project's Agent, even when the ids match.
+        """
+        return self._live(lambda agent, project, _session: (agent, project) == (agent_id, None))
+
+    def project_references(self, project_id: str) -> tuple[AutomationReference, ...]:
+        """Return the live automations that start Runs of any Agent of ``project_id``."""
+        return self._live(lambda _agent, project, _session: project == project_id)
+
     def session_references(self, address: SessionAddress) -> tuple[AutomationReference, ...]:
-        """Return the live automations that start their Runs in ``address``, sorted by label."""
-        owner = (address.agent_id, address.project_id)
+        """Return the live automations that start their Runs in ``address``."""
+        owner = (address.agent_id, address.project_id, address.session_id)
+        return self._live(lambda agent, project, session: (agent, project, session) == owner)
+
+    def _live(self, selects: _Selector) -> tuple[AutomationReference, ...]:
+        """Return the live automations whose target ``selects`` accepts, sorted by label."""
         references = [
             AutomationReference("bootstrap", job.id, job.name)
             for job in self._bootstrap.list_jobs()
-            if (job.agent_id, job.project_id) == owner
-            and job.session_id == address.session_id
+            if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_BOOTSTRAP_STATUSES
         ]
         references.extend(
             AutomationReference("cron", job.id, job.name)
             for job in self._cron.list_jobs()
-            if (job.agent_id, job.project_id) == owner
-            and job.session_id == address.session_id
+            if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_CRON_JOB_STATUSES
         )
         actions = [
             action
             for action in self._calendar.actions.list_actions()
-            if action.get("session") == address.session_id
-            and parse_agent_address(action["target"]) == owner
+            if selects(*parse_agent_address(action["target"]), action.get("session"))
             and self._calendar.actions.can_fire(action["id"])
         ]
         if actions:

@@ -1,4 +1,4 @@
-"""AutomationReferences: which live automations start their Runs in a Session."""
+"""AutomationReferences: which live automations start Runs of an Agent, Project or Session."""
 
 from __future__ import annotations
 
@@ -131,3 +131,45 @@ def test_session_references_ignore_automations_that_cannot_start_in_the_session(
     arrange(automations)
 
     assert automations.references().session_references(_SESSION) == ()
+
+
+def _agent(references: AutomationReferences) -> tuple[AutomationReference, ...]:
+    return references.agent_references("builder")
+
+
+def _project(references: AutomationReferences) -> tuple[AutomationReference, ...]:
+    return references.project_references("vbot")
+
+
+@pytest.mark.parametrize(
+    ("query", "arrange", "labels"),
+    [
+        # Any Session, or a fresh one per start, of the Identity Agent counts.
+        pytest.param(_agent, _cron(session_id=None), ["cron:job-1"], id="agent-cron"),
+        pytest.param(_agent, _calendar(), ["calendar:act-1"], id="agent-calendar"),
+        # A Project target names that Project's Agent, even with the same id.
+        pytest.param(_agent, _bootstrap(project_id="vbot"), [], id="agent-not-project-agent"),
+        pytest.param(_agent, _calendar(spent=True), [], id="agent-not-used-up-action"),
+        pytest.param(_project, _bootstrap(project_id="vbot"), ["bootstrap:job-1"], id="project"),
+        pytest.param(
+            _project,
+            _calendar(target="builder@vbot", session=None),
+            ["calendar:act-1"],
+            id="project-calendar",
+        ),
+        pytest.param(_project, _cron(), [], id="project-not-identity-agent"),
+        pytest.param(_project, _cron(project_id="other"), [], id="project-not-other-project"),
+        pytest.param(
+            _project, _cron(project_id="vbot", status="missed"), [], id="project-not-history"
+        ),
+    ],
+)
+def test_agent_and_project_references_name_the_live_automations_of_their_target(
+    query: Callable[[AutomationReferences], tuple[AutomationReference, ...]],
+    arrange: Callable[[_Automations], None],
+    labels: list[str],
+) -> None:
+    automations = _Automations()
+    arrange(automations)
+
+    assert [reference.label for reference in query(automations.references())] == labels

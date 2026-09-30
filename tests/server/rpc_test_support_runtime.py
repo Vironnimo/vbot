@@ -31,11 +31,7 @@ from core.providers.accounts import (
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
-from core.runtime._agent_rename import (
-    AgentRenameServices,
-    identity_agent_references,
-    rename_identity_agent,
-)
+from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
 from core.runtime.runtime import Runtime
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
@@ -321,10 +317,13 @@ class StubTerminalManager:
 
 
 class StubJobService:
-    """Cron or Bootstrap service double that holds no jobs."""
+    """Cron or Bootstrap service double listing ``jobs``."""
+
+    def __init__(self) -> None:
+        self.jobs: list[Any] = []
 
     def list_jobs(self) -> list[Any]:
-        return []
+        return list(self.jobs)
 
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
@@ -361,10 +360,13 @@ class StubCalendarActions:
 
 
 class StubCalendarService:
-    """Calendar double that holds no actions."""
+    """Calendar double without events whose actions a test arranges."""
 
     def __init__(self) -> None:
         self.actions = StubCalendarActions()
+
+    def list_events(self) -> list[Any]:
+        return []
 
     def add_changed_callback(self, _callback: Callable[[], None]) -> Callable[[], None]:
         return _unsubscribe
@@ -451,7 +453,15 @@ class StubRuntime:
         return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
 
     def agent_references(self, agent_id: str) -> tuple[str, ...]:
-        return identity_agent_references(self._rename_services(), agent_id)
+        references = [
+            f"channel:{channel.id}"
+            for channel in self.channel_service.list_channels()
+            if channel.agent_id == agent_id
+        ]
+        references.extend(
+            reference.label for reference in self.automation_references.agent_references(agent_id)
+        )
+        return tuple(sorted(references))
 
     def _rename_services(self) -> AgentRenameServices:
         return AgentRenameServices(

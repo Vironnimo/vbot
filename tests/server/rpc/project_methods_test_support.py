@@ -6,8 +6,10 @@ import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 from core.agents.agents import AgentStore
+from core.automation import AutomationReferences
 from core.database import write_bootstrap_marker
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
 from core.projects.resolver import (
@@ -19,7 +21,7 @@ from core.projects.store import ProjectStore
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager
 from server.events import ServerEventBus
-from tests.server.rpc_test_support_runtime import StubCalendarActions
+from tests.server.rpc_test_support_runtime import StubCalendarService
 
 
 # ---------------------------------------------------------------------------
@@ -170,8 +172,8 @@ def _make_state(
     chat_runs = ChatRunManager()
     cron_service = SimpleNamespace(list_jobs=lambda: list(cron_jobs or []))
     bootstrap_service = SimpleNamespace(list_jobs=lambda: list(bootstrap_jobs or []))
-    actions = StubCalendarActions()
-    actions.actions.extend(calendar_actions or [])
+    calendar_service = StubCalendarService()
+    calendar_service.actions.actions.extend(calendar_actions or [])
     runtime = SimpleNamespace(
         projects=projects,
         agents=agents,
@@ -180,7 +182,12 @@ def _make_state(
         terminal_manager=_FakeTerminalManager(),
         cron_service=cron_service,
         bootstrap_service=bootstrap_service,
-        calendar_service=SimpleNamespace(actions=actions),
+        calendar_service=calendar_service,
+        automation_references=AutomationReferences(
+            bootstrap=cast(Any, bootstrap_service),
+            cron=cast(Any, cron_service),
+            calendar=cast(Any, calendar_service),
+        ),
         skills=SimpleNamespace(list_all=lambda: []),
         # ``project.set_override``'s model gate reads ``runtime.models`` only for a pinned
         # ``::connection`` suffix (never in these tests), but expose it so a plain
