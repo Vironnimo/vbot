@@ -71,7 +71,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts import _test_impact  # noqa: E402
-from tests import file_dependencies  # noqa: E402
+from tests import cpu_pool, file_dependencies  # noqa: E402
 
 PYTHON_SUFFIXES = {".py", ".pyi"}
 ESLINT_SUFFIXES = {".js", ".mjs", ".cjs", ".svelte"}
@@ -686,7 +686,7 @@ def _workers(seconds: float) -> list[str]:
     workers = math.ceil(seconds / SECONDS_PER_WORKER)
     if workers <= 1:
         return ["-n", "0"]
-    return ["-n", str(min(workers, os.cpu_count() or 1))]
+    return ["-n", str(min(workers, cpu_pool.pool_size()))]
 
 
 def _pytest() -> list[str]:
@@ -705,11 +705,10 @@ def _pytest_command(
     pytest = _pytest()
     if selection.complete:
         print(
-            "Commit check: running the complete suite (about 5-10 minutes): no usable "
-            "test-impact data yet, or a change that can affect any test.",
+            f"Commit check: running the complete suite (about 5-10 minutes): {selection.reason}.",
             flush=True,
         )
-        return [*pytest, "-n", "auto"]
+        return [*pytest, "-n", str(cpu_pool.pool_size())]
     arguments = selection.pytest_arguments(root, staged_tests)
     if not arguments:
         return None
@@ -723,6 +722,8 @@ def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[li
     A test that failed only among the parallel test runs of a busy machine passes
     alone. Collection errors, which name no single test, are not run again.
     """
+    env = {**env, cpu_pool.KIND_VARIABLE: "rerun"}
+    env.pop(cpu_pool.REASON_VARIABLE, None)
     tests = [test for test in failed if "::" in test and (root / test.split("::")[0]).is_file()]
     if not tests:
         return failed, []
@@ -734,8 +735,13 @@ def _rerun_alone(root: Path, failed: list[str], env: dict[str, str]) -> tuple[li
     return [test for test in failed if test not in passed], passed
 
 
-def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepResult]:
-    """Run the pytest tests affected by *changed*, the staged and deleted paths."""
+def check_tests(
+    root: Path, changed: list[str], dirty: set[str], kind: str = "commit"
+) -> list[StepResult]:
+    """Run the pytest tests affected by *changed*, the staged and deleted paths.
+
+    *kind* names the check in the test core pool's run log; a merge commit is a merge.
+    """
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
     lock_path = git_dir / TESTS_LOCK_NAME
     merged = _merged_branch_checkout(root)
@@ -752,10 +758,13 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
             _record_tested_state(root, dirty)
         return unaffected
 
-    env = _test_environment(root)
+    env = {**_test_environment(root), cpu_pool.KIND_VARIABLE: kind}
     with _exclusive(lock_path):
         if merged is not None:
+            env[cpu_pool.KIND_VARIABLE] = "merge"
             selection = _merge_selection(root, *merged, selection)
+        if selection.complete:
+            env[cpu_pool.REASON_VARIABLE] = selection.reason
         command = _pytest_command(root, selection, staged_tests, git_dir / TESTS_ARGUMENTS_NAME)
         if command is None:
             _record_tested_state(root, dirty)
@@ -775,8 +784,10 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
         if not failed:
             return [StepResult("pytest", "PASS", False)]
         commit, committed, in_progress = classify_failures(root, failed, set(changed), dirty)
-        # No checked change explains these failures; a busy machine may.
-        committed, flaky = _rerun_alone(root, committed, env)
+        # A busy machine can fail any test: only a test that fails alone as well blocks.
+        failing, flaky = _rerun_alone(root, [*commit, *committed], env)
+        commit = [test for test in commit if test in failing]
+        committed = [test for test in committed if test in failing]
 
     results: list[StepResult] = []
     if commit:
@@ -810,7 +821,7 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
         results.append(
             StepResult(
                 "pytest",
-                "NOT BLOCKING: failed on committed code, then passed when run again alone",
+                "NOT BLOCKING: failed, then passed when run again alone",
                 False,
                 _summary_lines(output, flaky),
             )
@@ -883,7 +894,7 @@ def check_branch(root: Path) -> int:
     git_dir = Path(_git(root, "rev-parse", "--absolute-git-dir").strip())
     _adopt_primary_data(root, git_dir / TESTS_LOCK_NAME)
     changed = _changed_since_tested(root, root, "HEAD") or set()
-    results = check_tests(root, sorted(changed), dirty_files(root))
+    results = check_tests(root, sorted(changed), dirty_files(root), kind="branch")
     elapsed = time.monotonic() - start
     if results:
         _print_report("Branch check", results)

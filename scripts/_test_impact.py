@@ -151,6 +151,8 @@ class Selection:
     """Recorded duration of every recorded test."""
     complete: bool
     """Every test is selected: no usable record, or a change that can affect any test."""
+    reason: str = ""
+    """Why every test is selected, when *complete*."""
 
     def selects(self, test: str) -> bool:
         """Whether *test* lacks a passing run with the code and files it has now."""
@@ -167,7 +169,7 @@ class Selection:
         """
         durations = {**other.durations, **self.durations}
         if self.complete and other.complete:
-            return Selection(frozenset(), frozenset(), durations, complete=True)
+            return Selection(frozenset(), frozenset(), durations, True, self.reason)
         candidates = self.tests | other.tests | self.failed | other.failed
         for selection in (self, other):
             if selection.complete:
@@ -209,10 +211,12 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     that are missing, unreadable or without a tested state select every test.
     """
     records = records or root
+    if not (records / TESTMON_DATA).is_file():
+        return Selection(frozenset(), frozenset(), {}, True, "there are no test records")
     try:
         return _select(root, changed, records)
     except sqlite3.Error:
-        return Selection(frozenset(), frozenset(), {}, complete=True)
+        return Selection(frozenset(), frozenset(), {}, True, "the test records are unreadable")
 
 
 def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selection:
@@ -221,33 +225,40 @@ def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selecti
     failed = frozenset(test for test, _duration, test_failed in rows if test_failed)
     # Records without a tested state may describe any state of the working tree.
     if changed is None or tested_state(records) is None:
-        return Selection(frozenset(), failed, durations, complete=True)
+        reason = "the test records describe no known state of the checkout"
+        return Selection(frozenset(), failed, durations, True, reason)
     changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
     tests = readers(root, data_files, records)
-    if FULL_SUITE_TRIGGERS & data_files or COLLECTION in tests:
-        return Selection(frozenset(), failed, durations, complete=True)
+    triggers = sorted(FULL_SUITE_TRIGGERS & data_files)
+    if triggers:
+        return Selection(frozenset(), failed, durations, True, f"{triggers[0]} changed")
+    if COLLECTION in tests:
+        reason = "a file that test modules read while they are imported changed"
+        return Selection(frozenset(), failed, durations, True, reason)
     if len(data_files) < len(changed):
         affected = _affected_by_code(root, records)
-        if affected is None:
-            return Selection(frozenset(), failed, durations, complete=True)
+        if isinstance(affected, str):
+            return Selection(frozenset(), failed, durations, True, affected)
         tests |= affected
     return Selection(frozenset(tests), failed, durations, complete=False)
 
 
-def _affected_by_code(root: Path, records: Path) -> set[str] | None:
-    """Return testmon's selection, or None when *records* holds no usable record."""
+def _affected_by_code(root: Path, records: Path) -> set[str] | str:
+    """Return testmon's selection, or why *records* holds no usable record."""
     data_file = records / TESTMON_DATA
     if not data_file.is_file():
-        return None
+        return "there are no test records"
     from testmon import db  # type: ignore[import-untyped]
     from testmon.testmon_core import TestmonData  # type: ignore[import-untyped]
 
     data = TestmonData.for_local_run(rootdir=str(root), database=db.DB(str(data_file)))
     try:
         # testmon drops the records of an environment whose packages changed.
-        if data.system_packages_change or not data.all_tests:
-            return None
+        if data.system_packages_change:
+            return "the installed Python packages changed"
+        if not data.all_tests:
+            return "there are no test records"
         data.determine_stable()
         return set(data.unstable_test_names) | set(data.failing_tests)
     finally:
