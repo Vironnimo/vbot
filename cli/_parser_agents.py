@@ -1,4 +1,4 @@
-"""CLI grammar for Agents, Projects, Sessions, and data-store maintenance."""
+"""CLI grammar for Agents, Projects, Sessions, chat, and data-store maintenance."""
 
 from __future__ import annotations
 
@@ -13,10 +13,15 @@ from cli._parser_common import (
     SESSION_HELP,
     THINKING_EFFORTS,
     _add_command_parser,
+    _add_target_arguments,
     _json_object_argument,
 )
 from core.memory import MEMORY_PROMPT_MODES
+from core.providers.reasoning import THINKING_EFFORT_ORDER
 from core.settings import PROJECT_SOURCE_FORMATS
+
+# The Identity Agent a fresh installation creates first.
+DEFAULT_CHAT_AGENT = "main"
 
 
 def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -583,6 +588,65 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         metavar="<platform-conv-id>",
         help="Platform conversation id, for example a Telegram chat id",
     )
+
+
+def _add_chat_parser(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    chat_parser = subparsers.add_parser(
+        "chat",
+        help=AREA_HELP["chat"],
+        description=(
+            f"{AREA_HELP['chat']}. Without -c or --session the message starts a new "
+            "Session. --model, --thinking-effort and --temperature are saved on the "
+            "Session and apply to its later messages too. The answer goes to stdout; "
+            "Tool calls and retries are reported on stderr. "
+            'Example: vbot chat --agent coder@vbot -c "Continue with the next step"'
+        ),
+    )
+    chat_parser.add_argument(
+        "prompt",
+        nargs="?",
+        metavar="<prompt>",
+        help="Message to send; - or omitted reads it from piped stdin",
+    )
+    chat_parser.add_argument(
+        "--agent",
+        default=DEFAULT_CHAT_AGENT,
+        metavar="<agent>",
+        help=f"Agent as agent or agent@project (default: {DEFAULT_CHAT_AGENT})",
+    )
+    session_choice = chat_parser.add_mutually_exclusive_group()
+    session_choice.add_argument(
+        "-c",
+        "--continue",
+        dest="continue_latest",
+        action="store_true",
+        help="Continue the Agent's most recently active conversation Session",
+    )
+    session_choice.add_argument(
+        "--session", metavar="<session-id>", help="Continue this Session of the Agent"
+    )
+    chat_parser.add_argument(
+        "--model",
+        metavar="<provider/model-id>",
+        help="Model for this Session, as <provider>/<model-id>",
+    )
+    chat_parser.add_argument(
+        "--thinking-effort",
+        choices=THINKING_EFFORT_ORDER,
+        help="Reasoning effort for this Session",
+    )
+    chat_parser.add_argument(
+        "--temperature",
+        type=float,
+        metavar="<0.0-2.0>",
+        help="Sampling temperature for this Session",
+    )
+    chat_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print one JSON object with the answer, Tool calls and Usage instead of text",
+    )
+    _add_target_arguments(chat_parser)
 
 
 def _add_data_store_parsers(

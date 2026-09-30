@@ -51,7 +51,8 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
         try:
             with ProgressPrinter(stream=sys.stderr) as progress:
                 progress_token = current_progress.set(progress if parsed.area != "update" else None)
-                if output_mode.get() != "plain" and parsed.area != "update":
+                # chat reports its own progress between streamed answer text.
+                if output_mode.get() != "plain" and parsed.area not in {"update", "chat"}:
                     progress.track(f"Waiting for {path}")
                 try:
                     code = function(*args, **kwargs)
@@ -82,7 +83,12 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
                     return 130
                 finally:
                     current_progress.reset(progress_token)
-            if output_mode.get() != "plain" and parsed.area not in {"server", "update", "doctor"}:
+            if output_mode.get() != "plain" and parsed.area not in {
+                "server",
+                "update",
+                "doctor",
+                "chat",
+            }:
                 result = _last_result.get()
                 attention = result.attention if result else ()
                 state: Status = "error" if code else "warning" if attention else "success"
@@ -183,6 +189,25 @@ def print_management_command_result(result: CommandResult) -> None:
 
     _last_result.set(result)
     print(_result_message(result))
+
+
+def print_chat_command_result(result: CommandResult) -> None:
+    """Report a chat outcome on stderr; the answer or JSON report is already on stdout.
+
+    A failure is always reported; the success trailer (Session, Agent, Model and how
+    to continue) replaces the generic completion line and is omitted in plain output.
+    """
+
+    _last_result.set(result)
+    if result.ok and output_mode.get() == "plain":
+        return
+    sys.stdout.flush()
+    state: Status = "success" if result.ok else "error"
+    print(
+        status_line(state, f"chat: {_result_message(result)}", stream=sys.stderr),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def print_update_command_start(version: str) -> None:

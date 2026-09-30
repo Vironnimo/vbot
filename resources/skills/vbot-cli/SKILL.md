@@ -1,6 +1,6 @@
 ---
 name: vbot-cli
-description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skill installation from links or archives, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, and extended Session search and transcript retrieval."
+description: "Configure and operate vBot: Agents, Projects, Sessions, Settings, Skill installation from links or archives, Memory, prompts, Providers and Models, Channels, scheduling, Extension authoring and management, MCP, server lifecycle, updates, storage recovery, and diagnostics. Use for changes to the application itself, investigating its current configuration or health, extended Session search and transcript retrieval, and sending a message to a vBot Agent from the shell, for example to try a prompt or Skill with another Model."
 ---
 
 # vBot CLI
@@ -25,6 +25,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Task | Read |
 |---|---|
 | Agents, Project membership, permissions, Sessions | `references/agents-projects.md` |
+| Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature | `references/chat.md` |
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |

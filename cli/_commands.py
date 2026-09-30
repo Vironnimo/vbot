@@ -11,6 +11,7 @@ from cli._dispatch_agents import (
     _project_add_fields_from_args,
     _project_set_changes_from_args,
     dispatch_agent_command,
+    dispatch_chat_command,
     dispatch_data_store_command,
     dispatch_project_command,
     dispatch_session_command,
@@ -53,6 +54,7 @@ from cli._output import (
     command_arguments,
     exit_code_for,
     print_channel_command_result,
+    print_chat_command_result,
     print_command_result,
     print_config_command_result,
     print_management_command_result,
@@ -334,6 +336,11 @@ def run(
     if args.area == "session":
         result = dispatch_session_command(args, instance)
         print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "chat":
+        result = dispatch_chat_command(args, instance)
+        print_chat_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
     if args.area == "data-store":

@@ -142,6 +142,8 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
 
 def _inspection(args: argparse.Namespace) -> list[str] | None:
     area = args.area
+    if area == "chat":
+        return ["session", "list", args.agent]
     if area in {"session", "memory"}:
         agent = getattr(args, "agent", None)
         if not agent:
