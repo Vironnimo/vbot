@@ -8,6 +8,7 @@ from functools import cache
 from typing import TYPE_CHECKING, Any
 
 from core.calendar.errors import (
+    CalendarActionTargetMissingError,
     CalendarEventNotFoundError,
     CalendarServiceError,
     CalendarStorageError,
@@ -223,8 +224,9 @@ def _normalize_calendar_arguments(arguments: Any) -> Any:
     return normalize_calendar_arguments(_repair_contract(), arguments)
 
 
-# Actions that choose an action's target Agent and Session.
-_REFERENCE_ACTIONS = frozenset({"add_action", "update_action"})
+# Actions that choose an action's target Agent and Session, or (update) can let
+# an action that no longer fires run again.
+_REFERENCE_ACTIONS = frozenset({"add_action", "update_action", "update"})
 
 
 def register_calendar_tool(
@@ -233,9 +235,9 @@ def register_calendar_tool(
     """Register the calendar tool with a vBot tool registry.
 
     ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
-    add_action and update_action hold it like the calendar RPCs, so an action
-    cannot select an Agent or Session between a removal's reference check and
-    the removal.
+    add_action, update_action and update hold it like the calendar RPCs, so an
+    action cannot select or revive a reference between a removal's reference
+    check and the removal.
     """
 
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -296,6 +298,13 @@ def _handle_calendar_tool(
             f"{kind}_not_found",
             f'No {kind} has id "{arguments.get("id")}". {{"action":"list"}} shows events, their '
             'actions and ids; add a when such as "next month" to look further ahead.',
+        )
+    except CalendarActionTargetMissingError as error:
+        return tool_failure(
+            "action_target_missing",
+            f"calendar was not run: this update would let {error.subject} run again whose "
+            f"target no longer exists: {error.listing}. Change each action's target or session "
+            "with update_action, or remove it with delete_action; then repeat this update.",
         )
     except CalendarValidationError as error:
         return tool_failure("invalid_arguments", _validation_message(arguments, error))

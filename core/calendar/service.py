@@ -235,6 +235,7 @@ class CalendarService:
         # A title/duration edit must retain the recurrence's original wall-clock zone.
         if candidate.rrule is not None and event.rrule is not None and "start" not in fields:
             candidate.tz_name = event.tz_name
+        self.actions.check_event_change(event, candidate)
         self._events[event_id] = candidate
         try:
             self._save_events()

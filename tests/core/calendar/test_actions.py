@@ -13,14 +13,23 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from core.calendar import CalendarService, CalendarStorageError, CalendarValidationError
+from core.calendar import (
+    CalendarActionTargetMissingError,
+    CalendarService,
+    CalendarStorageError,
+    CalendarValidationError,
+)
 from core.calendar import actions as actions_module
 from core.calendar.actions import (
     action_message,
     parse_action_when,
     validate_calendar_actions_file,
 )
-from core.projects import AgentResolutionError, ResolutionAgentNotFoundError
+from core.projects import (
+    AgentResolutionError,
+    ResolutionAgentNotFoundError,
+    ResolutionProjectNotFoundError,
+)
 from core.runs import RunKind, RunStatus
 from core.sessions import SessionNotFoundError
 
@@ -560,6 +569,78 @@ async def test_an_action_can_fire_until_its_occurrences_are_used_up(
 
     assert service.actions.can_fire(action["id"], now=at) is can_fire
     await service.actions.aclose()
+
+
+def _resolution_fails(error):
+    def arrange(service):
+        service.actions._resolver.resolve_agent.side_effect = error
+
+    return arrange
+
+
+def _session_deleted(service):
+    service.actions._sessions.exists.return_value = False
+
+
+@pytest.mark.parametrize(
+    ("spent", "target", "arrange", "problem"),
+    [
+        pytest.param(
+            True,
+            "main",
+            _session_deleted,
+            "Session chosen of main no longer exists",
+            id="selected-session-gone",
+        ),
+        pytest.param(
+            True,
+            "main",
+            _resolution_fails(ResolutionAgentNotFoundError("main")),
+            "Agent main no longer exists",
+            id="agent-gone",
+        ),
+        pytest.param(
+            True,
+            "builder@vbot",
+            _resolution_fails(ResolutionProjectNotFoundError("vbot")),
+            "Project vbot no longer exists",
+            id="project-gone",
+        ),
+        # A target that exists but cannot run now can recover; its occurrence records why.
+        pytest.param(
+            True,
+            "main",
+            _resolution_fails(AgentResolutionError("no usable model")),
+            None,
+            id="target-cannot-run",
+        ),
+        # An action that can still fire was checked by every removal; moving it revives nothing.
+        pytest.param(False, "main", _session_deleted, None, id="action-still-live"),
+    ],
+)
+def test_an_event_change_that_revives_an_action_checks_its_target(
+    tmp_path, spent, target, arrange, problem
+):
+    now = datetime.now(UTC)
+    start = now - timedelta(hours=3) if spent else now + timedelta(minutes=30)
+    service, event, _, _ = setup(tmp_path, start=start)
+    action = service.actions.add(
+        event.id, when="start", prompt="prepare", target=target, session="chosen"
+    )
+    arrange(service)
+    later = (now + timedelta(days=1)).isoformat()
+
+    if problem is None:
+        assert service.update_event(event.id, start=later).start_utc != event.start_utc
+        return
+    with pytest.raises(CalendarActionTargetMissingError) as refused:
+        service.update_event(event.id, start=later)
+    assert str(refused.value) == (
+        f"This event change would let an action run again whose target no longer exists: "
+        f"{action['id']} ({problem}). Change each action's target or Session, or delete the "
+        "action, first."
+    )
+    assert service.get_event(event.id) == event
 
 
 @pytest.mark.asyncio

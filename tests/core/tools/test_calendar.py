@@ -482,30 +482,57 @@ class TestActions:
         assert tool.actions() == []
         assert deleted == f"id: {action['id']}\nevent: Meeting ({event.id})\nstatus: deleted"
 
-    @pytest.mark.parametrize("change", ["add_action", "update_action"])
-    def test_action_changes_wait_for_the_reference_lock(self, tmp_path: Path, change: str) -> None:
-        """A removal that holds the lock ends before an action can select its Agent or Session."""
+    @pytest.mark.parametrize("change", ["add_action", "update_action", "update"])
+    def test_reference_changes_wait_for_the_reference_lock(
+        self, tmp_path: Path, change: str
+    ) -> None:
+        """A removal that holds the lock ends before a call can select or revive a reference."""
         tool = calendar_tool(tmp_path)
         event = tool.service.create_event(title="Meeting", start="2030-01-01T12:00")
         action = tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
-        arguments = (
-            {"action": change, "id": event.id, "when": "end", "prompt": "review"}
-            if change == "add_action"
-            else {"action": change, "id": action["id"], "when": "end"}
-        )
-        before = tool.actions()
+        arguments = {
+            "add_action": {"action": change, "id": event.id, "when": "end", "prompt": "review"},
+            "update_action": {"action": change, "id": action["id"], "when": "end"},
+            "update": {"action": change, "id": event.id, "start": "2030-01-02T12:00"},
+        }[change]
 
-        async def while_a_removal_holds_the_lock() -> list[dict[str, Any]]:
+        def state() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+            return tool.actions(), [item.to_dict() for item in tool.events()]
+
+        before = state()
+
+        async def while_a_removal_holds_the_lock() -> Any:
             async with tool.reference_lock:
                 call = asyncio.create_task(tool.call_async(arguments))
                 for _ in range(5):
                     await asyncio.sleep(0)
-                held = tool.actions()
+                held = state()
             await call
             return held
 
         assert asyncio.run(while_a_removal_holds_the_lock()) == before
-        assert tool.actions() != before
+        assert state() != before
+
+    def test_update_refuses_to_revive_an_action_whose_session_is_gone(self, tmp_path: Path) -> None:
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Old", start="2020-01-10T12:00")
+        action = tool.service.actions.add(
+            event.id, when="start", prompt="p", target="agent-one", session="chosen"
+        )
+        tool.service.actions.configure(Mock(), Mock(), Mock(exists=Mock(return_value=False)))
+
+        envelope, text = tool.call(
+            {"action": "update", "id": event.id, "start": "2030-01-10T12:00"}
+        )
+
+        assert envelope["error"]["code"] == "action_target_missing"
+        assert text.endswith(
+            "calendar was not run: this update would let an action run again whose target no "
+            f"longer exists: {action['id']} (Session chosen of agent-one no longer exists). "
+            "Change each action's target or session with update_action, or remove it with "
+            "delete_action; then repeat this update."
+        )
+        assert tool.only_event() == event
 
     def test_explicit_target_and_session_are_kept(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)

@@ -143,6 +143,36 @@ async def test_calendar_actions_roundtrip(state: SimpleNamespace) -> None:
 
 
 @pytest.mark.asyncio
+async def test_calendar_update_that_would_revive_an_action_checks_it_under_the_reference_lock(
+    state: SimpleNamespace,
+) -> None:
+    service = _configure_actions(state, session_exists=True)
+    event = service.create_event(title="Old", start="2020-01-10T12:00")
+    action = service.actions.add(
+        event.id, when="start", prompt="prepare", target="main", session="chosen"
+    )
+    _configure_actions(state, session_exists=False)
+
+    async with state.agent_delete_lock:
+        update = asyncio.create_task(
+            rpc_error(state, "calendar.update", id=event.id, start="2030-01-10T12:00")
+        )
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not update.done()
+    error = await update
+
+    assert error["code"] == "domain_error"
+    assert error["message"] == (
+        "This event change would let an action run again whose target no longer exists: "
+        f"{action['id']} (Session chosen of main no longer exists). Change each action's "
+        "target or Session, or delete the action, first."
+    )
+    assert service.get_event(event.id) == event
+    assert resource_changes(state) == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "params", "code", "named"),
     [

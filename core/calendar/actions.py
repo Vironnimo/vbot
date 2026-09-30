@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from core.calendar.errors import (
+    CalendarActionTargetMissingError,
     CalendarEventNotFoundError,
     CalendarStorageError,
     CalendarValidationError,
@@ -605,7 +606,6 @@ class CalendarActions:
         an unreadable execution row, because a repair can release it. Moving the
         event to a later time makes the action able to fire again.
         """
-        now = now or datetime.now(UTC)
         try:
             self._load()
             action = self._actions.get(action_id)
@@ -616,7 +616,66 @@ class CalendarActions:
             return False
         except CalendarStorageError:
             return True  # Unknown; never report a live action as history.
-        if any(self._executions[key]["action_id"] == action_id for key in self._workers):
+        return self._can_fire(action, event, now or datetime.now(UTC))
+
+    def check_event_change(
+        self, before: CalendarEvent, after: CalendarEvent, *, now: datetime | None = None
+    ) -> None:
+        """Refuse an event change that would revive actions into a target that is gone.
+
+        An action that can no longer fire is history, so removing its Agent,
+        Project or selected Session did not check it. When the change (for
+        example, moving a past one-time event later) lets such an action fire
+        again, its target is checked like a new action's; a target that exists
+        but cannot run now is allowed, because it can recover.
+
+        Raises:
+            CalendarActionTargetMissingError: naming each revived action and
+                what it misses.
+        """
+        try:
+            self._load()
+        except CalendarStorageError:
+            return  # Action scheduling is disabled; nothing can fire.
+        now = now or datetime.now(UTC)
+        problems = [
+            (action["id"], problem)
+            for action in self._actions.values()
+            if action["event_id"] == after.id
+            and not self._can_fire(action, before, now)
+            and self._can_fire(action, after, now)
+            and (problem := self._missing_target(action)) is not None
+        ]
+        if problems:
+            raise CalendarActionTargetMissingError(problems)
+
+    def _missing_target(self, action: dict[str, Any]) -> str | None:
+        """Say which part of the action's target no longer exists, if one does."""
+        target = action["target"]
+        agent, project = parse_agent_address(target)
+        if self._resolver is not None:
+            try:
+                self._resolver.resolve_agent(project, agent)
+            except ResolutionProjectNotFoundError:
+                return f"Project {project} no longer exists"
+            except ResolutionAgentNotFoundError:
+                return f"Agent {target} no longer exists"
+            except AgentResolutionError:
+                pass  # It exists but cannot run now; the occurrence records why.
+        session = action.get("session")
+        if (
+            session
+            and self._sessions is not None
+            and not self._sessions.exists(
+                SessionAddress(project_id=project, agent_id=agent, session_id=session)
+            )
+        ):
+            return f"Session {session} of {target} no longer exists"
+        return None
+
+    def _can_fire(self, action: dict[str, Any], event: CalendarEvent, now: datetime) -> bool:
+        """:meth:`can_fire` for ``event`` as given, which may be an unsaved edit."""
+        if any(self._executions[key]["action_id"] == action["id"] for key in self._workers):
             return True
         if self._calendar.occurs_from(event, now):
             return True
