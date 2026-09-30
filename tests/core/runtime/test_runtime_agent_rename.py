@@ -25,7 +25,7 @@ def _started(config: Config) -> Runtime:
     return runtime
 
 
-def _seed(runtime: Runtime) -> str:
+def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
     """Give ``coder`` a Session and one reference of every kind; return its current Session."""
     coder = runtime.agents.create("coder", "Coder")
     runtime.chat_sessions.create("coder", session_id="kept")
@@ -41,7 +41,7 @@ def _seed(runtime: Runtime) -> str:
                 "dm_scope": "per_conversation",
                 "allowed_chat_ids": [12345],
                 "token_env_var": "TELEGRAM_BOT_TOKEN_TG_CODER",
-                "enabled": False,
+                "enabled": channel_enabled,
             }
         ),
         encoding="utf-8",
@@ -71,18 +71,24 @@ def _assert_agent_is(runtime: Runtime, agent_id: str, current_session_id: str) -
     assert not (runtime.storage.data_dir / "agents" / "rename-pending.json").exists()
 
 
-def _record_channel_loops(
+def _record_channel_changes(
     runtime: Runtime, monkeypatch: pytest.MonkeyPatch
-) -> list[asyncio.AbstractEventLoop]:
+) -> tuple[list[asyncio.AbstractEventLoop], list[str]]:
+    """Record the loop of each Channel update and every adapter start."""
     loops: list[asyncio.AbstractEventLoop] = []
-    update_channel = runtime.channel_service.update_channel
+    started: list[str] = []
+    service = runtime.channel_service
+    update_channel = service.update_channel
 
     async def recorded(channel_id: str, **fields: Any) -> None:
         loops.append(asyncio.get_running_loop())
         await update_channel(channel_id, **fields)
 
-    monkeypatch.setattr(runtime.channel_service, "update_channel", recorded)
-    return loops
+    monkeypatch.setattr(service, "update_channel", recorded)
+    monkeypatch.setattr(
+        service, "start_channel", lambda channel_id, **_: started.append(channel_id)
+    )
+    return loops, started
 
 
 def _fail_when_retargeted_to(
@@ -101,13 +107,18 @@ def _fail_when_retargeted_to(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True], ids=["completes", "reverts"])
+@pytest.mark.parametrize("channels_running", [True, False], ids=["channels-running", "stopped"])
 async def test_a_live_rename_moves_every_reference_or_none(
-    config: Config, monkeypatch: pytest.MonkeyPatch, fails: bool
+    config: Config, monkeypatch: pytest.MonkeyPatch, fails: bool, channels_running: bool
 ) -> None:
     runtime = _started(config)
     try:
-        current_session_id = _seed(runtime)
-        channel_loops = _record_channel_loops(runtime, monkeypatch)
+        # A stopped Channel service (the test startup mode never starts it) must
+        # not start the adapter of an enabled Channel it retargets.
+        current_session_id = _seed(runtime, channel_enabled=not channels_running)
+        if channels_running:
+            runtime.channel_service.start()
+        channel_loops, started_adapters = _record_channel_changes(runtime, monkeypatch)
         if fails:
             # The last reference fails after every other one moved.
             _fail_when_retargeted_to(
@@ -127,9 +138,11 @@ async def test_a_live_rename_moves_every_reference_or_none(
             assert outcome.calendar_action_count == 1
 
         _assert_agent_is(runtime, "coder" if fails else "researcher", current_session_id)
-        # The rename worker hands every Channel change, forward and back, to this Event
-        # Loop, which owns the Channel adapters.
-        assert channel_loops == [asyncio.get_running_loop()] * (2 if fails else 1)
+        # The rename worker hands every change of a running Channel, forward and
+        # back, to this Event Loop, which owns the Channel adapters.
+        changes = (2 if fails else 1) if channels_running else 0
+        assert channel_loops == [asyncio.get_running_loop()] * changes
+        assert started_adapters == []
     finally:
         await runtime.aclose()
 

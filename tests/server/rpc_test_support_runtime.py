@@ -325,6 +325,16 @@ class StubJobService:
         return _unsubscribe
 
 
+class StubChannelService:
+    """Channel service double that holds no Channels."""
+
+    def list_channels(self) -> list[Any]:
+        return []
+
+    async def retarget_agent_async(self, _agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
+        return ()
+
+
 class StubCalendarActions:
     def list_actions(self) -> list[Any]:
         return []
@@ -383,7 +393,7 @@ class StubRuntime:
         self.cron_service: Any = StubJobService()
         self.bootstrap_service: Any = StubJobService()
         self.calendar_service: Any = StubCalendarService()
-        self.channel_service: Any = SimpleNamespace(list_channels=lambda: [])
+        self.channel_service: Any = StubChannelService()
         self.subagents: Any = SimpleNamespace(
             batch_tracker=SimpleNamespace(references_identity_agent=lambda _agent_id: False)
         )

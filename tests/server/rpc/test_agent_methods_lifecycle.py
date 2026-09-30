@@ -56,11 +56,14 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
     )
     channels = [SimpleNamespace(id="telegram", agent_id="coder")]
 
-    async def update_channel(channel_id: str, **fields: Any) -> None:
-        next(item for item in channels if item.id == channel_id).agent_id = fields["agent_id"]
+    async def retarget_agent_async(agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        moved = [channel for channel in channels if channel.agent_id == agent_id]
+        for channel in moved:
+            channel.agent_id = new_agent_id
+        return tuple(channel.id for channel in moved)
 
     state.runtime.channel_service = SimpleNamespace(
-        list_channels=lambda: channels, update_channel=update_channel
+        list_channels=lambda: channels, retarget_agent_async=retarget_agent_async
     )
     # Completed history stays as it ran; a Project-qualified job targets that
     # Project's Team Agent, not the same-named Identity Agent.

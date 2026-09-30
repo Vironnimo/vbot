@@ -515,9 +515,10 @@ class ChannelService:
     def retarget_agent(self, agent_id: str, new_agent_id: str) -> tuple[str, ...]:
         """Point every Channel that answers as ``agent_id`` at ``new_agent_id``.
 
-        One step of an Identity Agent rename that completes during startup, before
-        this service starts adapters, so only ``channel.json`` changes. Once the
-        service runs, adapters hold their config and a rename changes each Channel
+        One step of an Identity Agent rename while this service is not started,
+        such as one that completes during startup: only ``channel.json`` changes
+        and no adapter starts. Blocking. Once the service runs, adapters hold
+        their config; :meth:`retarget_agent_async` then changes each Channel
         through :meth:`update_channel`. Returns the ids of the changed Channels.
         """
         if self._started:
@@ -534,6 +535,24 @@ class ChannelService:
                 agent_id,
                 new_agent_id,
             )
+        return tuple(changed)
+
+    async def retarget_agent_async(self, agent_id: str, new_agent_id: str) -> tuple[str, ...]:
+        """Point every Channel that answers as ``agent_id`` at ``new_agent_id`` from the Event Loop.
+
+        While this service is not started, only ``channel.json`` changes, on the
+        state database's worker pool, and no adapter starts (:meth:`retarget_agent`).
+        A started service changes each Channel through :meth:`update_channel`,
+        which rebuilds a running adapter for its new Agent. Returns the ids of the
+        changed Channels.
+        """
+        if not self._started:
+            return await self._state.database.run_async(self.retarget_agent, agent_id, new_agent_id)
+        changed: list[str] = []
+        for config in await self.list_channels_async():
+            if config.agent_id == agent_id:
+                await self.update_channel(config.id, agent_id=new_agent_id)
+                changed.append(config.id)
         return tuple(changed)
 
     async def delete_channel(self, channel_id: str) -> None:

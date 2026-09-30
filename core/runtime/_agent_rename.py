@@ -205,7 +205,8 @@ def _retarget_references(
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
     Team Agent. Without ``loop`` (startup), Channels are rewritten before their
-    service starts.
+    service starts; with it, the Channel service decides on that loop whether its
+    adapters must follow.
     """
     source, target = rename.source_id, rename.target_id
     channel_ids = _retarget_channels(services.channels, source, target, loop)
@@ -236,15 +237,11 @@ def _retarget_channels(
 ) -> tuple[str, ...]:
     if loop is None:
         return channels.retarget_agent(source, target)
-    channel_ids = tuple(
-        channel.id for channel in channels.list_channels() if channel.agent_id == source
-    )
-    for channel_id in channel_ids:
-        # Each change rebuilds the Channel's adapter on the Event Loop that owns it.
-        asyncio.run_coroutine_threadsafe(
-            channels.update_channel(channel_id, agent_id=target), loop
-        ).result()
-    return channel_ids
+    # A running service rebuilds each adapter on the Event Loop that owns it; a
+    # stopped one only rewrites the configs and starts none.
+    return asyncio.run_coroutine_threadsafe(
+        channels.retarget_agent_async(source, target), loop
+    ).result()
 
 
 def _targets_identity(job: Any, agent_id: str, terminal_statuses: frozenset[str]) -> bool:
