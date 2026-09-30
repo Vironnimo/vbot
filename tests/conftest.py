@@ -180,7 +180,9 @@ def _require_loop_started_runtimes_closed(monkeypatch: pytest.MonkeyPatch) -> It
     Such a ``Runtime`` leaves periodic service tasks, such as the performance
     Event Loop monitor, on the session-scoped test Event Loop, where they keep
     running during later tests on the same worker. Close it with ``await
-    runtime.aclose()`` before the test ends.
+    runtime.aclose()`` before the test ends. A Runtime whose shutdown withdrew
+    readiness but left the performance monitor running, or a canonical database
+    its start opened still open, counts as still running.
 
     Only an already imported ``Runtime`` class is guarded, which covers every
     test module that imports ``Runtime`` at module level.
@@ -191,19 +193,25 @@ def _require_loop_started_runtimes_closed(monkeypatch: pytest.MonkeyPatch) -> It
         return
     runtime_class = runtime_module.Runtime
     original_start = runtime_class.start
-    started: dict[int, Any] = {}
+    started: list[tuple[Any, Any, tuple[Any, ...]]] = []
 
     def start(runtime: Any) -> None:
         original_start(runtime)
         if _event_loop_running():
-            started[id(runtime)] = runtime
+            started.append((runtime, runtime.performance, runtime.canonical_databases()))
 
     monkeypatch.setattr(runtime_class, "start", start)
     yield
-    leaked = sum(1 for runtime in started.values() if runtime._started)
+    leaked = {
+        id(runtime)
+        for runtime, performance, databases in started
+        if runtime._started
+        or performance.monitoring
+        or not all(database.is_closed() for database in databases)
+    }
     if leaked:
         pytest.fail(
-            f"{leaked} Runtime(s) started inside the Event Loop are still running; "
+            f"{len(leaked)} Runtime(s) started inside the Event Loop are still running; "
             "await runtime.aclose() before the test ends",
             pytrace=False,
         )

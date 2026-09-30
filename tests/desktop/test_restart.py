@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -155,13 +156,20 @@ class Harness:
         )
 
     def _spawn(self, command: tuple[str, ...]) -> FakeProcess:
-        self.spawned.append(command)
         path = self.config / restart.RESTART_REQUEST_FILE_NAME
         self.request_on_spawn = json.loads(path.read_text(encoding="utf-8"))
+        # Tests poll `spawned` from another thread, then read the request.
+        self.spawned.append(command)
         return self.process
 
     def activate(self, version: str) -> None:
-        self.contract.version_file.write_text(f"{version}\n", encoding="ascii")
+        path = self.contract.version_file
+        previous = path.stat().st_mtime_ns
+        path.write_text(f"{version}\n", encoding="ascii")
+        # The watcher compares modification time and size; a same-size rewrite
+        # within one file-time tick would otherwise look unchanged.
+        changed = previous + 1_000_000_000
+        os.utime(path, ns=(changed, changed))
 
     def wait_for_status(self, **expected: bool) -> None:
         for _ in range(400):

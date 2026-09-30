@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 import core.runtime._bootstrap as bootstrap_module
-import core.runtime.runtime as runtime_module
+import core.runtime._shutdown as shutdown_module
 from core.automation import CronService
 from core.automation import _cron_claims as cron_claims
 from core.chat import ChatMessage
@@ -693,7 +693,7 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
 
     drain_entered = asyncio.Event()
     trace_written_when_drained: list[bool] = []
-    drain = runtime_module.drain_debug_traces
+    drain = shutdown_module.drain_debug_traces
 
     async def observed_drain() -> None:
         drain_entered.set()
@@ -701,7 +701,7 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
         trace_written_when_drained.append(trace_path.is_file())
 
     monkeypatch.setattr(debug_store, "atomic_write_text", blocked_write)
-    monkeypatch.setattr(runtime_module, "drain_debug_traces", observed_drain)
+    monkeypatch.setattr(shutdown_module, "drain_debug_traces", observed_drain)
     assert store.save_trace_in_background(
         trace_id, lambda: {"trace_id": trace_id, "type": "provider_request", "timestamp": "t"}
     )
@@ -723,50 +723,196 @@ async def test_aclose_cancels_work_reaps_processes_and_persists_handed_off_trace
     assert tracked.wait_task is not None and tracked.wait_task.done()
 
 
+# Every shutdown step in dependency order, named after the recording services below.
+_ASYNC_SHUTDOWN = (
+    "extension_runtime.aclose",
+    "extension_databases.close",
+    "channels.aclose",
+    "cron.aclose",
+    "calendar_actions.aclose",
+    "bootstrap.aclose",
+    "triggers.aclose",
+    "reflection.aclose",
+    "session_titles.aclose",
+    "chat_runs.aclose",
+    "subagent_activity.drain_activity",
+    "decisions.aclose",
+    "speech.aclose",
+    "provider_usage.aclose",
+    "debug_traces.aclose",
+    "performance.aclose",
+    "processes.aclose",
+    "terminals.aclose",
+    "keep_awake.close",
+    "temporary_files.aclose",
+    "channels.close",
+    "recall.aclose",
+    "statistics_index.aclose",
+    "model_usage.aclose",
+    "sessions.close",
+    "logging.close",
+)
+# Synchronous shutdown keeps the order but cannot drain admitted work, Runs or traces.
+_SYNC_SHUTDOWN = (
+    "extensions.fire_shutdown_blocking",
+    "extension_databases.close",
+    "channels.stop",
+    "cron.stop",
+    "calendar_actions.stop",
+    "bootstrap.stop",
+    "decisions.close",
+    "speech.close",
+    "provider_usage.close",
+    "performance.stop",
+    "processes.stop",
+    "terminals.stop",
+    "keep_awake.close",
+    "temporary_files.stop",
+    "channels.close",
+    "recall.close",
+    "statistics_index.close",
+    "model_usage.close",
+    "sessions.close",
+    "logging.close",
+)
+
+
+def _recording_service(
+    label: str, *, events: list[object], failures: dict[str, BaseException]
+) -> SimpleNamespace:
+    """A fake service whose shutdown calls record themselves; a failing one raises."""
+
+    def call(method: str) -> None:
+        events.append(f"{label}.{method}")
+        if label in failures:
+            raise failures[label]
+
+    async def acall(method: str) -> None:
+        call(method)
+
+    return SimpleNamespace(
+        stop=partial(call, "stop"),
+        close=partial(call, "close"),
+        fire_shutdown_blocking=partial(call, "fire_shutdown_blocking"),
+        aclose=partial(acall, "aclose"),
+        fire_shutdown=partial(acall, "fire_shutdown"),
+        drain_activity=partial(acall, "drain_activity"),
+    )
+
+
+class _ShutdownFailureLog(logging.Handler):
+    """Record each logged shutdown failure as ``(step, error)`` among the service calls."""
+
+    def __init__(self, events: list[object]) -> None:
+        super().__init__(logging.ERROR)
+        self._events = events
+
+    def emit(self, record: logging.LogRecord) -> None:
+        error = record.exc_info[1] if record.exc_info else None
+        self._events.append((*cast(tuple[object, ...], record.args), error))
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("async_close", [False, True])
-async def test_runtime_finishes_cleanup_before_reporting_terminal_shutdown_failure(
-    config: Config, monkeypatch: pytest.MonkeyPatch, async_close: bool
+@pytest.mark.parametrize(
+    "failing",
+    [
+        {"speech": RuntimeError},
+        {"terminals": TerminalManagerError},
+        {"speech": RuntimeError, "terminals": TerminalManagerError},
+        {"speech": asyncio.CancelledError},
+    ],
+    ids=["one-early-step", "terminal-trees", "several-steps", "cancelled-step"],
+)
+async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
+    config: Config,
+    monkeypatch: pytest.MonkeyPatch,
+    async_close: bool,
+    failing: dict[str, type[BaseException]],
 ) -> None:
+    failures = {label: error_type(f"{label} failed") for label, error_type in failing.items()}
+    events: list[object] = []
+    service = partial(_recording_service, events=events, failures=failures)
     runtime = Runtime(config)
-    failure = TerminalManagerError("terminal tree is still alive")
-    terminal = SimpleNamespace(
-        stop=Mock(side_effect=failure), aclose=AsyncMock(side_effect=failure)
+    fakes: dict[str, object] = {
+        "_extension_host_factory": SimpleNamespace(databases=service("extension_databases")),
+        "_calendar_service": SimpleNamespace(actions=service("calendar_actions")),
+        "_storage": SimpleNamespace(temporary_files=service("temporary_files")),
+    }
+    for attribute, label in (
+        ("_extension_runtime", "extension_runtime"),
+        ("_extensions", "extensions"),
+        ("_channel_service", "channels"),
+        ("_cron_service", "cron"),
+        ("_bootstrap_service", "bootstrap"),
+        ("_trigger_service", "triggers"),
+        ("_reflection_service", "reflection"),
+        ("_session_title_service", "session_titles"),
+        ("_chat_run_manager", "chat_runs"),
+        ("_subagent_coordinator", "subagent_activity"),
+        ("_decisions", "decisions"),
+        ("_speech", "speech"),
+        ("_provider_usage", "provider_usage"),
+        ("_performance", "performance"),
+        ("_process_manager", "processes"),
+        ("_terminal_manager", "terminals"),
+        ("_keep_awake", "keep_awake"),
+        ("_recall", "recall"),
+        ("_statistics_index", "statistics_index"),
+        ("_usage_recorder", "model_usage"),
+        ("_chat_sessions", "sessions"),
+        ("_log_manager", "logging"),
+    ):
+        fakes[attribute] = service(label)
+    for attribute, fake in fakes.items():
+        setattr(runtime, attribute, fake)
+    monkeypatch.setattr(shutdown_module, "drain_debug_traces", service("debug_traces").aclose)
+    errors = [failure for failure in failures.values() if isinstance(failure, Exception)]
+    cancelled = len(errors) < len(failures)
+    raised_type: type[BaseException] = (
+        asyncio.CancelledError if cancelled else ExceptionGroup if len(errors) > 1 else Exception
     )
-    keep_awake = SimpleNamespace(close=Mock())
-    temporary_files = SimpleNamespace(stop=Mock(), aclose=AsyncMock())
-    sessions = SimpleNamespace(close=Mock())
-    speech = SimpleNamespace(close=Mock(), aclose=AsyncMock())
-    log_manager = SimpleNamespace(close=Mock())
-    monkeypatch.setattr(runtime, "_terminal_manager", terminal)
-    monkeypatch.setattr(runtime, "_keep_awake", keep_awake)
-    monkeypatch.setattr(runtime, "_storage", SimpleNamespace(temporary_files=temporary_files))
-    monkeypatch.setattr(runtime, "_chat_sessions", sessions)
-    monkeypatch.setattr(runtime, "_speech", speech)
-    monkeypatch.setattr(runtime, "_log_manager", log_manager)
+    failure_log = _ShutdownFailureLog(events)
+    core_logger = logging.getLogger("vbot.core")
+    core_logger.addHandler(failure_log)
+    try:
+        with pytest.raises(raised_type) as raised:
+            if async_close:
+                await runtime.aclose()
+            else:
+                runtime.stop()
+    finally:
+        core_logger.removeHandler(failure_log)
 
-    with pytest.raises(TerminalManagerError) as raised:
-        if async_close:
-            await runtime.aclose()
-        else:
-            runtime.stop()
+    # Each failure is logged with its step while logging is open, and later steps
+    # still run; cancellation ends them. References and logging are always released.
+    expected: list[object] = []
+    for call in (_ASYNC_SHUTDOWN if async_close else _SYNC_SHUTDOWN)[:-1]:
+        expected.append(call)
+        failure = failures.get(label := call.partition(".")[0])
+        if isinstance(failure, Exception):
+            expected.append((label, failure))
+        elif failure is not None:
+            break
+    expected.append("logging.close")
+    assert events == expected
+    if len(errors) == 1 and not cancelled:
+        assert raised.value is errors[0]
+    elif not cancelled:
+        assert isinstance(raised.value, ExceptionGroup)
+        assert list(raised.value.exceptions) == errors
+    _assert_not_started(runtime)
+    assert runtime.canonical_databases() == ()
 
-    assert raised.value is failure
-    keep_awake.close.assert_called_once_with()
-    sessions.close.assert_called_once_with()
-    log_manager.close.assert_called_once_with()
+    events.clear()
     if async_close:
-        terminal.aclose.assert_awaited_once_with()
-        temporary_files.aclose.assert_awaited_once_with()
-        speech.aclose.assert_awaited_once_with()
+        # A later close reports the same outcome without running any step again.
+        with pytest.raises(type(raised.value)) as again:
+            await runtime.aclose()
+        assert cancelled or again.value is raised.value
     else:
-        terminal.stop.assert_called_once_with()
-        temporary_files.stop.assert_called_once_with()
-        speech.close.assert_called_once_with()
-    with pytest.raises(RuntimeError):
-        _ = runtime.terminal_manager
-    with pytest.raises(RuntimeError):
-        _ = runtime.chat_sessions
+        runtime.stop()
+    assert events == []
 
 
 @pytest.mark.asyncio
