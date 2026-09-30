@@ -43,6 +43,6 @@ export async function expectToolFailed(page, chat, name, index = 0) {
 }
 
 export async function openToolRow(row) {
-  await row.locator("summary").click();
+  await row.locator(":scope > summary").click();
   await expect(row).toHaveAttribute("open", "");
 }
