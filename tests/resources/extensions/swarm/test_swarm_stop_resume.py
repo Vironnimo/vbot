@@ -315,3 +315,36 @@ async def test_human_post_after_stop_continues_same_session_once(
     snapshot = await lifecycle.service.store.get_swarm(sid)
     assert snapshot["state"] == "cancelled"
     assert len(lifecycle.runtime.chat_sessions.owned_runs(owner_name="swarm", group_id=sid)) == 2
+
+
+@pytest.mark.asyncio
+async def test_resume_records_a_participant_session_whose_binding_start_lost(
+    lifecycle, tmp_path, monkeypatch
+):
+    """A participant Session a failed or interrupted Start created is bound again on Resume."""
+    profile = await single_participant_profile(lifecycle, tmp_path)
+    store = lifecycle.service.store
+
+    async def lost_binding(binding: Any) -> None:
+        raise OSError("the binding was not recorded")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, "bind_participant_session", lost_binding)
+        with pytest.raises(OSError):
+            await lifecycle.service.operation(
+                "swarms.start",
+                {"profile_id": profile["id"], "prompt": "goal", "request_id": "start"},
+            )
+    swarm_id = (await store.list_swarms()).entries[0]["id"]
+    assert len(await lifecycle.groups.list(swarm_id)) == 1
+
+    resumed = await lifecycle.service.operation(
+        "swarms.resume", {"swarm_id": swarm_id, "request_id": "resume"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(resumed["runs"][0]["run_id"]).wait()
+    await lifecycle.service.operation("swarms.stop", {"swarm_id": swarm_id, "request_id": "stop"})
+    posted = await lifecycle.service.operation(
+        "board.post", {"swarm_id": swarm_id, "text": "continue-sentinel", "request_id": "post"}
+    )
+    await lifecycle.runtime.chat_run_manager.get(posted["runs"][0]["run_id"]).wait()
+    assert "continue-sentinel" in str(lifecycle.runtime.adapter.requests[-1]["messages"])
