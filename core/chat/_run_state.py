@@ -429,7 +429,7 @@ class _CompactionPromptRefresh:
     # The Project whose Skill pool the refreshed catalog advertises (qualifies its pin).
     skill_project_id: str | None
     prompt_read_paths: tuple[Path, ...]
-    available_skill_names: tuple[str, ...] | None
+    available_skill_names: tuple[str, ...]
     memory_prompt_mode: str | None = None
 
 

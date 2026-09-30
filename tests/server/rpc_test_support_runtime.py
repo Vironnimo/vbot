@@ -177,6 +177,13 @@ class StubSkills:
     def list_all(self) -> list[StubSkill]:
         return list(self._skills)
 
+    def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
+        return [
+            skill
+            for skill in self.list_all()
+            if "*" in allowed_skills or skill.name in allowed_skills
+        ]
+
     def warnings_for(self, name: str) -> list[str]:
         return list(self._warnings[name])
 
@@ -195,6 +202,13 @@ class ReloadableStubRuntimeSkills:
         return [
             StubSkill(name, f"{name} skill.")
             for name in self._runtime.storage.load_skill_directory_settings()
+        ]
+
+    def filter_allowed(self, allowed_skills: list[str]) -> list[StubSkill]:
+        return [
+            skill
+            for skill in self.list_all()
+            if "*" in allowed_skills or skill.name in allowed_skills
         ]
 
     def warnings_for(self, _name: str) -> list[str]:
