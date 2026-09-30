@@ -76,15 +76,24 @@ def test_provenance_is_stamped_into_vbot_metadata_beside_requirements(
     assert (skill.name, skill.description) == ("demo", "Do a demo task.")
 
 
-def test_edit_replaces_the_document(service: SkillAuthoringService, tmp_path: Path) -> None:
+@pytest.mark.parametrize("utf8", [True, False], ids=["text-document", "non-utf8-document"])
+def test_edit_replaces_the_document(
+    service: SkillAuthoringService, tmp_path: Path, utf8: bool
+) -> None:
     service.create(tmp_path, "demo", skill_document(), author="agent")
+    skill_file = tmp_path / "demo" / "SKILL.md"
+    if not utf8:
+        skill_file.write_bytes(b"\xff\xfe---\r\nname: demo\r\n")
+    before = skill_file.read_text(encoding="utf-8") if utf8 else None
 
-    service.edit(
+    result = service.edit(
         tmp_path, "demo", skill_document(description="Updated.", body="# New\n"), author="human"
     )
 
     assert SkillRegistry.load(tmp_path).get("demo").description == "Updated."
-    assert "# New" in (tmp_path / "demo" / "SKILL.md").read_text(encoding="utf-8")
+    assert "# New" in skill_file.read_text(encoding="utf-8")
+    [change] = result.changes
+    assert (change.change, change.before) == ("updated", before)
 
 
 def test_rewrite_applies_an_edit_of_the_lf_text(

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import UTC, datetime, tzinfo
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
@@ -164,6 +164,20 @@ def _read_id_field(arguments: dict[str, Any]) -> None:
         raise ToolContractError(_ID_MESSAGE_TEMPLATE.format(value=json.dumps(value)))
 
 
+def _configured_zone(timezone_name_loader: Callable[[], str] | None) -> tzinfo | None:
+    """The configured time zone for the reply's times; UTC when it cannot be loaded.
+
+    The reply names the zone of every time it shows, so the fallback stays visible.
+    """
+    if timezone_name_loader is None:
+        return None
+    try:
+        return ZoneInfo(timezone_name_loader())
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        _LOGGER.warning("status could not load the configured timezone; using UTC", exc_info=True)
+        return UTC
+
+
 def make_status_handler(
     agent_resolver: AgentResolver,
     sessions: ChatSessionManager,
@@ -279,9 +293,7 @@ def make_status_handler(
                     agent.temperature,
                     model_details,
                 ),
-                timezone=(
-                    ZoneInfo(timezone_name_loader()) if timezone_name_loader is not None else None
-                ),
+                timezone=_configured_zone(timezone_name_loader),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)

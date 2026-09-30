@@ -17,6 +17,7 @@ exactly.
 
 from __future__ import annotations
 
+import calendar
 import json
 import re
 from collections.abc import Mapping
@@ -507,6 +508,36 @@ def parse_date(text: str) -> date | None:
 
 def is_date(text: str) -> bool:
     return parse_date(text) is not None
+
+
+_MONTH_NAMES = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def missing_date_reason(text: str) -> str | None:
+    """Say why a YYYY-MM-DD text names no day; None when it is a day or not date-shaped."""
+    value = text.strip()
+    if not _DATE_ONLY.match(value) or parse_date(value) is not None:
+        return None
+    year, month = int(value[:4]), int(value[5:7])
+    if not 1 <= month <= 12:
+        return "a year has 12 months"
+    if year < 1:
+        return "the calendar starts at year 0001"
+    days = calendar.monthrange(year, month)[1]
+    return f"{_MONTH_NAMES[month - 1]} {year} has {days} days"
 
 
 def parse_time_of_day(text: str) -> time | None:

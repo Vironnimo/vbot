@@ -148,6 +148,17 @@ SUBAGENT_SESSION_NOT_FOUND_MESSAGE_TEMPLATE = (
     "No Session {session_id} exists for Agent {target}; nothing was started. {tracked}"
     'To start a new Session, repeat this call without "session_id".'
 )
+# ``reason`` is the Model check's or the stored value's explanation.
+SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE = (
+    "subagent was not run: Session {session_id} of Agent {target} is set to a Model that "
+    'cannot run: {reason}. To continue this Session, repeat this call with "model" set to '
+    'a Model that can run. To start a new Session instead, repeat it without "session_id".'
+)
+SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE = (
+    "subagent was not run: Session {session_id} of Agent {target} has Agent settings that "
+    "cannot be read ({reason}), so it cannot be continued. To start a new Session, repeat "
+    'this call without "session_id".'
+)
 SUBAGENT_SESSION_OWNER_HINT = (
     "If that Session belongs to another Agent, repeat the call with that Agent's agent_id. "
 )

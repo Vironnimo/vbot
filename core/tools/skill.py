@@ -10,6 +10,7 @@ from difflib import SequenceMatcher
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from core.projects import ProjectNotFoundError
 from core.skills._packages import PackageError, excluded, package_path
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
@@ -243,6 +244,16 @@ def _resolve_skill_address(requested: str, names: Collection[str]) -> tuple[str,
     return None
 
 
+def _missing_project_failure(project_id: str | None) -> JsonObject:
+    """Refuse a call whose Session takes its Skills from a Project that is gone."""
+    return tool_failure(
+        "project_not_found",
+        f"skill was not run: the Project {json.dumps(project_id)} that this Session's Skills "
+        "come from does not exist. Tell the user that this Project is missing.",
+        retryable=False,
+    )
+
+
 def make_skill_handler(
     resolve_registry: SkillRegistryResolver, refresh_skills: SkillRefresh
 ) -> Any:
@@ -272,7 +283,10 @@ def make_skill_handler(
             )
             return registry
 
-        skill_registry = await current_registry()
+        try:
+            skill_registry = await current_registry()
+        except ProjectNotFoundError:
+            return _missing_project_failure(context.skill_project_id)
         requested = arguments.get("name")
         file_path = arguments.get("file_path")
         notes = [_SKILL_ARGS_NOTE] if arguments.get("args") else []
@@ -317,7 +331,10 @@ def make_skill_handler(
                 refresh_result = await run_tool_worker(refresh_skills)
                 if inspect.isawaitable(refresh_result):
                     await refresh_result
-            skill_registry = await current_registry()
+            try:
+                skill_registry = await current_registry()
+            except ProjectNotFoundError:
+                return _missing_project_failure(context.skill_project_id)
             located = _locate_skill(skill_registry, requested, context.allowed_skills)
         if located is None:
             return tool_failure(

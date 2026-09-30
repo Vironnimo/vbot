@@ -100,14 +100,14 @@ def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
     if isinstance(error, SessionToolUnavailableError):
         return tool_failure(
             f"{tool_name}_unavailable",
-            _error_text(error) or f"Session tool unavailable: {name}",
+            _error_text(error) or f"Session tool unavailable: {name}.",
         )
     if isinstance(error, ToolNotAllowedError):
-        return tool_failure("tool_not_allowed", _error_text(error) or f"Tool not allowed: {name}")
+        return tool_failure("tool_not_allowed", _error_text(error) or f"Tool not allowed: {name}.")
     if isinstance(error, InvalidToolResultError):
         return tool_failure(
             "invalid_tool_result",
-            _error_text(error) or f"Tool handler returned an invalid result: {name}",
+            _error_text(error) or f"Tool handler returned an invalid result: {name}.",
         )
     _LOGGER.error("Tool %s crashed unexpectedly", tool_name, exc_info=error)
     return tool_failure(

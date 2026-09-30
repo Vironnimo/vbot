@@ -714,13 +714,23 @@ def _issue_update_handoff(
     """Give a call whose Tool Result has a persistence boundary its handoff token."""
     if update_handoffs is None or context.result_persisted_hook is None:
         return None
-    handoff = update_handoffs.issue(
-        run_id=context.run_id,
-        tool_call_id=context.tool_call_id,
-        agent_id=context.agent_id,
-        project_id=context.project_id,
-        session_id=context.session_id,
-    )
+    try:
+        handoff = update_handoffs.issue(
+            run_id=context.run_id,
+            tool_call_id=context.tool_call_id,
+            agent_id=context.agent_id,
+            project_id=context.project_id,
+            session_id=context.session_id,
+        )
+    except ValueError:
+        # A token is scoped to the call's Run ids. Without them the command still
+        # runs, only without the capability; nothing has started yet.
+        _LOGGER.warning(
+            "Bash call %s runs without an update handoff: its Run ids are incomplete",
+            context.tool_call_id,
+            exc_info=True,
+        )
+        return None
     context.after_result_persisted(handoff.acknowledge)
     return handoff
 

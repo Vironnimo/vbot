@@ -10,7 +10,7 @@ import pytest
 
 from core.chat.messages import JsonObject, ToolCall, ToolCallRejection
 from core.extensions import Deny, ExtensionRegistry, HookContext, Modify, Replace
-from core.runs import TOOL_CALL_STARTED_EVENT
+from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT
 from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
 from tests.core.chat.tool_dispatch_test_support import ToolDispatchHarness, call
 
@@ -34,6 +34,24 @@ def _extensions(event: str, handler: Any, extension: str = "observer") -> Extens
     registry = ExtensionRegistry()
     registry.install_handler(extension, event, handler)
     return registry
+
+
+class _FailingHookDispatch(ExtensionRegistry):
+    """Hook dispatch that raises outside the isolation of any single handler."""
+
+    def __init__(self, failing_hook: str) -> None:
+        super().__init__()
+        self._failing_hook = failing_hook
+
+    async def dispatch_tool_call(self, ctx: HookContext, **payload: Any) -> Any:
+        if self._failing_hook == "tool_call":
+            raise RuntimeError("hook dispatch broke")
+        return await super().dispatch_tool_call(ctx, **payload)
+
+    async def dispatch_tool_result(self, ctx: HookContext, **payload: Any) -> Any:
+        if self._failing_hook == "tool_result":
+            raise RuntimeError("hook dispatch broke")
+        return await super().dispatch_tool_result(ctx, **payload)
 
 
 def _sequence_call(call_id: str, index: int, **arguments: Any) -> ToolCall:
@@ -236,3 +254,24 @@ async def test_add_note_from_hook_lands_in_session(tmp_path: Path) -> None:
     await harness.dispatch([call("echo")])
 
     assert "hook was here" in [m.content for m in harness.session.load() if m.role == "note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing_hook", ["tool_call", "tool_result"])
+async def test_failing_hook_dispatch_still_yields_one_result(
+    tmp_path: Path, failing_hook: str
+) -> None:
+    executed: list[str] = []
+    harness = ToolDispatchHarness(
+        tmp_path, _recording_tool(executed), extensions=_FailingHookDispatch(failing_hook)
+    )
+
+    dispatched = await harness.dispatch([call("echo", "call-1")])
+
+    [result] = dispatched.results
+    assert result["error"]["code"] == "tool_execution_error"
+    assert "hook dispatch broke" in result["error"]["message"]
+    assert len(dispatched.events(TOOL_CALL_STARTED_EVENT)) == 1
+    [finished] = dispatched.events(TOOL_CALL_RESULT_EVENT)
+    assert finished.payload["result"] == result
+    assert executed == ([] if failing_hook == "tool_call" else ["call-1"])

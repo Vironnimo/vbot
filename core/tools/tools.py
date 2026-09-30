@@ -574,11 +574,11 @@ class ToolRegistry:
         context._retain_result_contract(tool.contract)
         context._retain_dispatch_allowlist(allowed_tools)
         if tool.session_scoped and context.tool_name not in context.session_tool_grants:
-            raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}")
+            raise SessionToolUnavailableError(f"Session tool unavailable: {context.tool_name}.")
         if (
             tool.requires_opt_in and context.tool_name not in (allowed_tools or ())
         ) or not self._is_allowed(context.tool_name, allowed_tools, internal=tool.internal):
-            raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}")
+            raise ToolNotAllowedError(f"Tool not allowed: {model_tool_name(context.tool_name)}.")
         # Readiness safety net: dispatch is not list-filtered, so a prompt built
         # moments before the credential vanished could still request a now
         # not-ready tool. Re-evaluate live and return a clean failure envelope

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import stat
 import sys
@@ -25,7 +26,8 @@ from core.tools._tool_display import (
     display_text,
 )
 from core.tools.change_tracker import ChangeTracker
-from core.tools.contracts import JsonObject, ToolContract
+from core.tools.contracts import JsonObject, ToolContract, ToolContractError
+from core.tools.model_names import model_tool_name
 
 _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 # An allowlist entry that allows every Tool.
@@ -214,8 +216,15 @@ class ToolContext:
         ``follow_final_link=False`` resolves only the parent directory, so a final
         symbolic link or junction names the link entry itself (as Delete or Move
         of that entry requires) and the final name keeps the requested spelling.
+        A path containing NUL is refused before anything touches the filesystem.
         """
-
+        if "\x00" in str(path):
+            name = model_tool_name(self.tool_name)
+            raise ToolContractError(
+                f"{name} was not run: the path {json.dumps(str(path))} contains a NUL "
+                f"character (U+0000), which no file path can contain. Remove it and call "
+                f"{name} again."
+            )
         candidate = Path(_path_argument(path, windows=os.name == "nt")).expanduser()
         target = candidate if candidate.is_absolute() else self.effective_cwd / candidate
         if follow_final_link or target.name in {"", ".", ".."}:

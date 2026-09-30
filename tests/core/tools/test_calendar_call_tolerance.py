@@ -457,8 +457,13 @@ class TestImpossibleValues:
                 '"end" 25:99 must be a local time',
             ),
             (
+                {"action": "create", "title": "E", "start": "2030-01-10", "end": "16:00"},
+                "an all-day event ends on a date; send its length in days as duration.",
+            ),
+            (
                 {"action": "create", "title": "E", "start": "2030-01-10", "end": "2030-02-30"},
-                "an all-day event ends on a date",
+                '"end" 2030-02-30 does not exist: February 2030 has 28 days. For an all-day '
+                "event, send its length in days as duration.",
             ),
             (
                 {"action": "add_action", "when": "2030-02-30", "prompt": "p"},
@@ -469,7 +474,13 @@ class TestImpossibleValues:
                 "target does not identify an agent",
             ),
         ],
-        ids=["end-time", "all-day-end", "action-date", "action-target"],
+        ids=[
+            "end-time",
+            "all-day-end-time",
+            "all-day-end-missing-date",
+            "action-date",
+            "action-target",
+        ],
     )
     def test_value_naming_no_real_time_or_agent_is_refused(
         self, tool: CalendarTool, call: dict[str, Any], reason: str

@@ -34,6 +34,7 @@ from core.projects import (
 )
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
+from core.settings.settings import SettingsValidationError
 from core.tools import ToolAccess, ToolContext, ToolRegistry
 from core.tools.status import STATUS_TOOL_NAME, register_status_tool
 from tests.core.tools.tools_test_support import dispatch_as_executor
@@ -310,6 +311,31 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         "Temperature: 1 (model recommendation)",
     ):
         assert line in text
+
+
+def _unknown_configured_zone() -> str:
+    raise SettingsValidationError("settings.timezone is not a known IANA timezone")
+
+
+@pytest.mark.parametrize(
+    ("timezone_name_loader", "zone_names"),
+    [
+        pytest.param(lambda: "Europe/Berlin", {"CET", "CEST"}, id="configured-zone"),
+        pytest.param(_unknown_configured_zone, {"UTC"}, id="unknown-zone-reports-in-utc"),
+    ],
+)
+def test_status_times_name_the_configured_zone_or_utc(
+    tmp_path: Path, timezone_name_loader: Any, zone_names: set[str]
+) -> None:
+    # status only reads: an unusable configured zone must not cost the report.
+    registry = _registry(timezone_name_loader=timezone_name_loader)
+
+    result = _dispatch(registry, tmp_path)
+
+    [current] = [
+        line for line in result["data"]["text"].splitlines() if line.startswith("Current time:")
+    ]
+    assert current.rsplit(" ", 1)[1] in zone_names
 
 
 @pytest.mark.parametrize(

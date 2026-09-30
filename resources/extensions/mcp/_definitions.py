@@ -186,6 +186,14 @@ MCP_MESSAGES = {
         "The MCP connection {connection} is disabled, so nothing was run. Tell the user to "
         f"enable it in {SETTINGS_LOCATION} if it is needed."
     ),
+    "removed": (
+        "The MCP connection {connection} was removed, so nothing was run. Tell the user if "
+        "it is needed."
+    ),
+    "not_running": (
+        "The MCP Extension is not running, so nothing was run. Try once more, and if it fails "
+        "again, tell the user that the MCP Extension is not running."
+    ),
     "unreachable": (
         "The MCP connection {connection} is not available ({detail}), so nothing was run. "
         "The next call reconnects: try once more, and if it fails again, tell the user that "

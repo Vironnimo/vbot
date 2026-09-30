@@ -57,8 +57,10 @@ from core.subagents._constants import (
     SUBAGENT_QUEUED_TIMEOUT_MESSAGE_TEMPLATE,
     SUBAGENT_REMOVED_FROM_QUEUE_MESSAGE,
     SUBAGENT_SESSION_METADATA_FLAG,
+    SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_NOT_FOUND_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_OWNER_HINT,
+    SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE,
     SUBAGENT_SESSION_STARTED_EVENT,
     SUBAGENT_SESSION_TITLE_MAX_CHARACTERS,
     SUBAGENT_STAND_IN_SESSION_NOTE_TEMPLATE,
@@ -334,6 +336,7 @@ async def _handle_subagent(
         target_agent_id,
         target_project_id,
         model=session_overrides.get("model"),
+        session_id=session_id,
         temporary_parent_binding=temporary_parent,
     )
     if validation_error is not None:
@@ -919,6 +922,7 @@ async def _validate_target_agent(
     project_id: str | None,
     *,
     model: str | None = None,
+    session_id: str | None = None,
     temporary_parent_binding: TemporarySessionBinding | None = None,
 ) -> JsonObject | None:
     """Validate the spawn target resolves under its addressed project.
@@ -931,6 +935,11 @@ async def _validate_target_agent(
     a target that cannot run (for example, a model chain that fell through)
     reports ``agent_unavailable`` with the resolver's reason. A requested *model*
     that cannot run reports ``invalid_arguments`` before any Session work.
+
+    A continued *session_id* is checked as its child Run resolves it: stored
+    Agent overrides that cannot be read, or a stored Model the call does not
+    replace and that cannot run, report ``invalid_arguments`` before the Session
+    is linked to its Parent.
     """
     try:
         if temporary_parent_binding is not None:
@@ -956,6 +965,44 @@ async def _validate_target_agent(
         )
     except ModelConfigurationError as error:
         return tool_failure("invalid_arguments", str(error))
+    if session_id is None:
+        return None
+    return await _validate_continued_session(
+        runtime,
+        SessionAddress(project_id=project_id, agent_id=target_agent_id, session_id=session_id),
+        replaces_model=model is not None,
+    )
+
+
+async def _validate_continued_session(
+    runtime: RuntimeServices, session: SessionAddress, *, replaces_model: bool
+) -> JsonObject | None:
+    """Refuse a continued Session whose stored Agent overrides stop its child Run.
+
+    A Session that does not exist stores none; its call fails or starts a new
+    Session later, without linking it.
+    """
+    target = format_agent_address(session.agent_id, session.project_id)
+    try:
+        stored = await runtime.agent_resolver.session_overrides_async(session)
+    except ValueError as error:
+        return tool_failure(
+            "invalid_arguments",
+            SUBAGENT_SESSION_SETTINGS_UNREADABLE_MESSAGE_TEMPLATE.format(
+                session_id=session.session_id, target=target, reason=error
+            ),
+        )
+    if replaces_model or stored.model is None:
+        return None
+    try:
+        await runtime.agent_resolver.require_model_configured_async(stored.model)
+    except ModelConfigurationError as error:
+        return tool_failure(
+            "invalid_arguments",
+            SUBAGENT_SESSION_MODEL_UNUSABLE_MESSAGE_TEMPLATE.format(
+                session_id=session.session_id, target=target, reason=error
+            ),
+        )
     return None
 
 
