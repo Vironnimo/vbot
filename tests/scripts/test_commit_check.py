@@ -570,10 +570,13 @@ def test_tests_run_by_the_hook_cannot_reach_the_committing_repository(
     monkeypatch.setenv("GIT_DIR", str(impact_project / ".git"))
     monkeypatch.setenv("GIT_INDEX_FILE", str(impact_project / ".git" / "index"))
     monkeypatch.setenv("GIT_REFLOG_ACTION", "merge task")
+    # worktree.py merge marks the merge commit it checks in its landing checkout.
+    monkeypatch.setenv(commit_check.LANDING_VARIABLE, "1")
     # The changed test reports whether its git call stayed in its own directory.
     probe = (
         '    head = tmp_path / "HEAD"\n'
         '    leaked = not head.is_file() or "GIT_REFLOG_ACTION" in os.environ\n'
+        f'    leaked = leaked or "{commit_check.LANDING_VARIABLE}" in os.environ\n'
         '    raise AssertionError("leaked" if leaked else "isolated")\n'
     )
     _write(impact_project, "test_git.py", "import os\n" + IMPACT_PROJECT["test_git.py"] + probe)
@@ -737,6 +740,30 @@ def test_worktree_commits_leave_the_tests_to_the_branch_check(
     assert "FAIL: tests affected by this commit" in output
     assert "test_calc.py::test_double" in output
     assert "test_wip.py" not in output
+
+
+def test_the_merge_commit_in_a_landing_checkout_runs_the_tests(
+    impact_project: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # worktree.py merge checks each merge commit in a linked landing checkout.
+    landing = tmp_path / "landing"
+    _git(impact_project, "worktree", "add", "-q", "--detach", str(landing))
+    _write(landing, "calc.py", BROKEN_CALC)
+    _git(landing, "add", "calc.py")
+    passed = [commit_check.StepResult("mypy", "PASS", False)]
+    monkeypatch.setattr(commit_check, "check_python", lambda *_arguments: passed)
+    tested = []
+
+    def check_tests(root: Path, changed: list[str], _dirty: set[str]) -> list:
+        tested.append((root, changed))
+        return [commit_check.StepResult("pytest", "PASS", False)]
+
+    monkeypatch.setattr(commit_check, "check_tests", check_tests)
+    monkeypatch.setattr(commit_check, "check_frontend_tests", lambda *_arguments: [])
+    monkeypatch.setenv(commit_check.LANDING_VARIABLE, "1")
+
+    assert commit_check.main(landing) == 0
+    assert tested == [(landing, ["calc.py"])]
 
 
 @pytest.mark.parametrize(

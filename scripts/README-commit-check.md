@@ -4,8 +4,8 @@
 
 ## When tests run
 
-- Tests run when work lands on `main`: on commits in the primary checkout and on merge commits there. Agents run the tests covering their change while they work; the hook repeats them once per landing instead of once per commit.
-- A commit in a linked worktree gets the static checks only; its report says `tests NOT RUN in a worktree`. It leaves the worktree's records untouched, which only widens the next selection.
+- Tests run when work lands on `main`: on commits in the primary checkout and on the merge commits of `worktree.py merge`, which it checks in a private landing checkout before `main` fast-forwards to them (see Merge commits). Agents run the tests covering their change while they work; the hook repeats them once per landing instead of once per commit.
+- Any other commit in a linked worktree gets the static checks only; its report says `tests NOT RUN in a worktree`. It leaves the worktree's records untouched, which only widens the next selection.
 - `worktree.py merge` first runs `commit_check.py --branch` in the worktree, outside the merge lock, so other merges do not wait for it: the pytest tests the changes since the worktree's tested state affect. It uses the branch's own copy of the script, as the branch's commits use its own hook; a branch without one skips the check. A failure stops the merge before `main` changes.
 - The merge commit then runs only the tests neither the branch check nor this checkout's runs cover as merged (see Merge commits), plus the WebUI checks for the merged WebUI changes, which have no records to reuse.
 
@@ -27,7 +27,7 @@
 - `worktree.py create` copies the primary checkout's records into the new worktree, so they describe the state it forked from and the branch check selects only the branch's changes. A worktree without records (made without the script) copies them on its first branch check.
 - Records that cannot answer select the complete suite (~10 min), whose run records afresh: no records, records SQLite cannot read (a missing `reads` table included), and records without a tested state, such as those of a plain `pytest --testmon` run, which may describe any state of the working tree. Before a test run the hook deletes a record that is no intact SQLite database, because testmon cannot open a corrupt `.testmondata`.
 - The records attribute each failure: a failed test that depends on a changed file (staged, or changed on the branch for the branch check) belongs to the change; one that depends on unstaged or untracked work and on no changed file is reported without blocking; any other failure is on committed code. Every failure of the change or on committed code first runs once more, alone in one process: a test that fails only among the parallel runs of a busy machine passes then and is reported without blocking. A test of the change that fails again blocks the commit; one on committed code blocks every commit until a separate commit fixes it.
-- A lock in the checkout's git directory serializes its test runs.
+- A lock in the checkout's git directory serializes its test runs. `worktree.py merge` takes the primary checkout's lock while it copies the records into its landing checkout and back, and while it fast-forwards `main`.
 
 ## Test core pool
 
@@ -42,10 +42,10 @@
 ## Merge commits
 
 - A merge commit selects twice: against this checkout's records, and against the records of the worktree holding the merged branch (with the changes since that worktree's tested state, normally the changes made here since the fork). It runs only the tests both select; a test either side leaves out passed there with the code and files it has now.
-- `worktree.py merge` stages the merge (`git merge --no-commit`) and commits it with `git commit`, whose pre-commit hook finds MERGE_HEAD. A hand-run `git merge` runs the pre-merge-commit hook before it writes MERGE_HEAD, so the hook takes the merged head from `GIT_REFLOG_ACTION` (`merge <branch>`).
-- The checkout adopts the branch's record of each test whose current state only the branch tested.
+- `worktree.py merge` makes the merge commit in a landing checkout: a detached linked worktree that starts from `main` with a copy of the primary checkout's records. It stages the merge there (`git merge --no-commit`) and commits it with `git commit`, whose pre-commit hook finds MERGE_HEAD. It sets `VBOT_COMMIT_CHECK_LANDING` for that commit, so the hook runs the tests although the landing checkout is a linked worktree. `main` fast-forwards to the commit only once it passed and then takes the landing checkout's records over. A hand-run `git merge` runs the pre-merge-commit hook before it writes MERGE_HEAD, so the hook takes the merged head from `GIT_REFLOG_ACTION` (`merge <branch>`).
+- The checkout that makes the merge commit adopts the branch's record of each test whose current state only the branch tested.
 
 ## Test environment
 
 - Tests start without the repository-local git variables a hook exports (`git rev-parse --local-env-vars`, such as `GIT_DIR`), so their git calls in temporary directories cannot change the committing repository; `tests/conftest.py` drops them as well.
-- The hook also drops `GIT_REFLOG_ACTION`, which a test's own `git merge` would keep.
+- The hook also drops `GIT_REFLOG_ACTION`, which a test's own `git merge` would keep, and `VBOT_COMMIT_CHECK_LANDING`, which would make the commit checks that tests run in temporary worktrees run tests.

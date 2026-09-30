@@ -16,7 +16,7 @@ The short version:
 
 `scripts/worktree.py` manages parallel vBot checkouts under `.worktrees/`.
 
-The entrypoint owns checkout creation/removal and merge orchestration. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, `_worktree_seed.py`, and `_worktree_args.py` own portable locks/repair keepers, paired-port selection, marker/Git read projections, dependency seeding from the primary checkout, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
+The entrypoint owns checkout creation/removal and merge orchestration. Private `_worktree_lock.py`, `_worktree_ports.py`, `_worktree_records.py`, `_worktree_seed.py`, and `_worktree_args.py` own portable locks/repair keepers and their leases, paired-port selection, marker/Git read projections, dependency seeding from another checkout, and command grammar. Behavioral tests are grouped under `tests/scripts/test_worktree*.py`, with reusable repository fixtures in `worktree_helpers.py`.
 
 For each created worktree it does all of the following:
 
@@ -142,13 +142,13 @@ the worktree. The important boundary is the current working directory.
 
 ### 6. Merge the finished task into `main`
 
-When every change is committed, merge from anywhere. The commits passed the static checks of the commit hook; the merge runs the tests. It first checks, without touching `main`, whether the branch conflicts with it (`git merge-tree`), and reports a conflict before any test runs. Then it runs the branch check in the worktree: the pytest tests the branch's changes affect, outside the merge lock. Then the merge commit passes the commit check against the merged result, which runs only the tests the branch check did not cover plus the WebUI checks:
+When every change is committed, merge from anywhere. The commits passed the static checks of the commit hook; the merge runs the tests. It first checks, without touching `main`, whether the branch conflicts with it (`git merge-tree`), and reports a conflict before any test runs. Then it runs the branch check in the worktree: the pytest tests the branch's changes affect, outside the merge lock. Then the merge commit passes the commit check against the merged result, in a private landing checkout, which runs only the tests the branch check did not cover plus the WebUI checks:
 
 ```bash
 python scripts/worktree.py merge my-task
 ```
 
-The command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` with `--no-ff`, removes the worktree, its dedicated data dir, and the managed branch. A merge that changes `webui/package-lock.json` also installs the merged WebUI packages in `main` (`npm ci`). See "Merging a finished task" below for the conflict flow.
+The command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` with `--no-ff`, removes the worktree, its dedicated data dir, and the managed branch. A merge that changes `webui/package-lock.json` also installs the merged WebUI packages in `main` (`npm ci`) once `main` has the merge. See "Merging a finished task" below for the conflict flow.
 
 ### 7. Stop the worktree server and delete the worktree without merging
 
@@ -223,21 +223,25 @@ worktree.
 
 `python scripts/worktree.py merge <name>` is the only supported way to land a task branch while other sessions are running. It serializes all merges and protected repair windows through an OS-level file lock in the shared Git directory — exactly one merge touches `main` at a time, and a second caller simply waits inside its own command until the first is done. Never hand-merge into `main` while sessions are running; a manual merge can collide with an automated one.
 
-The command refuses to run when the primary checkout is not on `main` or, once it holds the merge lock, has uncommitted changes; while another merge is being checked, `main` holds that merge's staged result, so a second merge waits for the lock instead of refusing. It self-heals one crash scenario: if an earlier merge was killed halfway, it aborts that leftover state before doing anything.
+The command refuses to run when the primary checkout is not on `main` or, once it holds the merge lock, has uncommitted changes.
 
-It stages the merge in `main` first (`git merge --no-ff --no-commit`) and then commits it; the commit hook checks that commit against the merged result. The WebUI checks refuse packages that differ from `webui/package-lock.json`, so when the merge changes the lock and `main` has installed WebUI packages, the command runs `npm ci` in `main`'s `webui/` between the two steps. When the merge does not land, it rolls `main` back and runs `npm ci` again, which reinstalls `main`'s own packages; if that fails too, it says so, and `npm ci` in `main`'s `webui/` fixes it later.
+`main` never holds a merge in progress. After the branch check, the command makes the merge commit in a private landing checkout, a detached linked worktree `.worktrees/.landing-<name>-<id>` that starts from `main`, and checks it there through the commit hook, which runs the tests in a landing checkout (`VBOT_COMMIT_CHECK_LANDING`). The landing checkout starts with the primary checkout's test-impact records, the task worktree's mypy cache and native executables (else the primary checkout's), and, when the merge changes WebUI files and `main` has installed WebUI packages, packages matching the merged `webui/package-lock.json`: a copy of `main`'s or the worktree's, or else a fresh `npm ci`. Only a commit that passed its check moves `main`, by a fast-forward (`git merge --ff-only`), and `main` takes the landing checkout's test-impact records over. When another commit reached `main` during the check, the command makes and checks the merge again onto the new `main`, up to three checks in all. When the merge changed `webui/package-lock.json` and `main` has installed WebUI packages, the command then runs `npm ci` in `main`'s `webui/`, because the WebUI checks refuse packages that differ from the lock.
 
-On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts, a failed branch check, or a merged result the commit check rejected; exit code 1 means refusal, timeout, a failed `npm ci` (typically a file that a dev server or test watcher using `main`'s `webui/node_modules` holds on Windows; stop it and retry), or cleanup failure.
+A merge that ends early, even a killed one, therefore leaves `main` as it was; only a kill within the fast-forward itself, which takes well under a second, can leave `main` part-way. The landing checkout is removed when the merge ends. A running merge holds its lock file `.worktrees/.landing-<name>-<id>.lock`, which the OS frees when the process dies, so `create`, `delete`, and `merge` remove every landing checkout whose lock is free. A commit check that a killed merge left running tests in its landing checkout touches nothing outside it.
 
-A failed branch check stops before the merge and prints its report; fix the reported problems in the worktree, commit, and retry the merge. A rejected merge rolls back completely and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
+Merges of earlier versions of this script staged the merge in `main`, so a killed one can leave `main` mid-merge (`.git/MERGE_HEAD`, with the merged files staged). A merge rolls such a leftover back safely before anything else: it restores only the files that merge changed, and only while each is still exactly as the merge left it, so other sessions' staged and unstaged work stays. When a file the leftover merge changed was changed again, it leaves the merge in place, lists those files as `changed-since-merge:`, and refuses; conclude or undo that merge by hand then. `git merge --abort` would discard other sessions' staged changes too.
+
+On success it prints `status: merged` with the merge commit, removes the worktree, its data dir, and the managed branch (branches borrowed via `--from` are kept), and exits 0. Exit code 2 means conflicts, a failed branch check, or a merged result the commit check rejected; exit code 1 means refusal, timeout, a failed `npm ci`, a repair window that ended during the check, a `main` that cannot be fast-forwarded (local changes to the merged files, or `main` moving during each of three checks), or cleanup failure. A failed `npm ci` for the landing checkout leaves `main` unchanged. A failed `npm ci` in `main` after the merge landed prints `status: merged` first; the worktree is still removed, and `npm ci` in `main`'s `webui/` fixes the packages later (typically a file that a dev server or test watcher using `main`'s `webui/node_modules` holds on Windows; stop it first).
+
+A failed branch check stops before the merge and prints its report; fix the reported problems in the worktree, commit, and retry the merge. A rejected merge commit leaves `main` unchanged and prints the check's report. Bring `main` into your branch (`git rebase main`), fix the reported problems, commit, and retry the merge.
 
 ### Conflicts and the protected repair window
 
 A conflicted merge rolls back completely — `main` stays untouched — and prints the conflicted files plus recovery hints:
 
-1. Open the window with `python scripts/worktree.py repair-start <name>`. A small detached keeper process holds the merge lock on your behalf, so no other session can move `main` while you fix. The window expires after 15 minutes (`--window` to change); expiry is harmless because all fixing happens in your worktree and `main` stays clean until your final merge.
+1. Open the window with `python scripts/worktree.py repair-start <name>`. A small detached keeper process holds the merge lock on your behalf, so no other session can move `main` while you fix. The window expires after 15 minutes (`--window` to change); expiry is harmless because all fixing happens in your worktree and `main` stays clean until your final merge. A merge of the task that runs when the window expires keeps it open until that merge is done.
 2. Fix in your own worktree: bring `main` into your branch (`git rebase main`), resolve, and commit.
-3. Retry `python scripts/worktree.py merge <name>`. The command recognizes its own open window and merges under it without waiting again; success closes the window automatically.
+3. Retry `python scripts/worktree.py merge <name>`. The command recognizes its own open window after the branch check and merges under it without waiting again: it holds the window's lease file (`vbot-merge.lock.lease` in the shared Git directory), and the keeper holds the merge lock on, past the window's deadline if need be, until the merge releases the lease. Success closes the window automatically. A window that ended before the branch check finished no longer protects the merge; the command then waits for the merge lock like any other merge. A keeper that stops during the merge's check makes the merge refuse to move `main`.
 
 Because `main` cannot move during a repair, every conflict is resolved exactly once against a frozen base — concurrent sessions cannot invalidate each other's resolutions into an endless loop. If you abandon the repair, close the window explicitly with `python scripts/worktree.py repair-finish <name>`; closing a window that already ended is a harmless `already-closed`.
 
@@ -498,11 +502,11 @@ When the primary checkout's `webui/node_modules` does not match the worktree's l
 
 ### `merge` reports uncommitted changes in the primary checkout
 
-The merge refuses to run while `main` carries uncommitted changes once no other merge holds the lock. Commit or clean them first; if a leftover mid-merge state from a crashed merge is present, the merge aborts that state automatically instead of refusing.
+The merge refuses to run while `main` carries uncommitted changes once no other merge holds the lock. Commit or clean them first. A merge that a killed earlier version of this script left staged in `main` is rolled back automatically first, keeping other sessions' work; see "Merging a finished task".
 
 ### A repair window did not shut down
 
-A keeper process exits when its release signal appears, when its window expires, or when it is killed — the OS frees its lock on death either way. If `repair-finish` or a successful merge reports that the keeper did not shut down, wait for the deadline; the lock then frees itself and the next merge proceeds on its own.
+A keeper process exits when its release signal appears, when its window expires while no merge of its task holds the lease, or when it is killed — the OS frees its lock on death either way. If `repair-finish` or a successful merge reports that the keeper did not shut down, wait for the deadline; the lock then frees itself and the next merge proceeds on its own.
 
 ### Merge succeeded but cleanup failed
 
