@@ -178,6 +178,8 @@ async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator
     try:
         yield fixture
     finally:
+        # Shutdown order of the Extension host: drain the owner, then close it.
+        await registry.quiesce("swarm")
         await service.close()
         databases.close()
         await manager.aclose()
@@ -265,6 +267,7 @@ async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
             earlier_tasks=earlier_tasks,
         )
     finally:
+        await extensions.quiesce("swarm")
         await service.close()
         databases.close()
         await runtime.chat_run_manager.aclose()

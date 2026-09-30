@@ -225,8 +225,8 @@ class SwarmExtension:
             after = group_ids[-1]
 
     async def close(self) -> None:
-        if self.host is not None and self.host.temporary_agents is not None:
-            await self.host.temporary_agents.quiesce()
+        # The host drains this owner (``_quiesce``) before it runs shutdown
+        # handlers, so no Swarm Run is left to stop here.
         if self._cleanup_tasks:
             await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
         # A pending title request keeps the stored local title; never delay close.
