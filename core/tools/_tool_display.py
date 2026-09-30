@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 ToolSummaryBuilder = Callable[[JsonObject], str | None]
 ToolDisplayFactBuilder = Callable[[JsonObject, JsonObject | None], Sequence[JsonObject]]
+# (arguments, result or None while the call runs) -> detail blocks
+ToolDisplayDetailBuilder = Callable[[JsonObject, JsonObject | None], Sequence[JsonObject]]
 MAX_TOOL_DISPLAY_SUMMARY_LENGTH = 120
 MAX_TOOL_DISPLAY_VALUE_LENGTH = 8192
 DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS = 64
@@ -25,6 +27,9 @@ TOOL_DISPLAY_TOOLTIP_MODES = frozenset({"always", "none", "truncated"})
 TOOL_DISPLAY_FACT_UNITS = frozenset({"edits", "failures", "files", "matches", "results"})
 TOOL_DISPLAY_LINE_CHANGES = frozenset({"added", "removed"})
 TOOL_DISPLAY_NOTICE_LEVELS = frozenset({"info", "warning", "error"})
+TOOL_DISPLAY_TEXT_LABELS = frozenset({"command", "output", "query"})
+TOOL_DISPLAY_TEXT_SOURCES = frozenset({"arguments", "result"})
+MAX_TOOL_DISPLAY_TEXT_LENGTH = 16_384
 
 
 @dataclass(frozen=True)
@@ -153,10 +158,12 @@ class ToolDisplay:
     parts_builder: ToolDisplayPartBuilder | None = None
     fact_builder: ToolDisplayFactBuilder | None = None
     max_characters: int = DEFAULT_TOOL_DISPLAY_MAX_CHARACTERS
-    # The Tool records user-facing detail blocks during execution
-    # (``ToolContext.add_display_file_change``/``add_display_notice``); its
-    # expanded details show them instead of the raw arguments and result.
+    # The Tool shows user-facing detail blocks instead of the raw arguments and
+    # result: built from the call by ``detail_builder``, then recorded during
+    # execution (``ToolContext.add_display_file_change``/``add_display_notice``/
+    # ``add_display_text``).
     details: bool = False
+    detail_builder: ToolDisplayDetailBuilder | None = None
 
     def __post_init__(self) -> None:
         _validate_display_strings(self.summary_fields, "summary_fields")
@@ -169,6 +176,8 @@ class ToolDisplay:
             raise ValueError("Tool display fact_builder must be callable")
         if not isinstance(self.details, bool):
             raise ValueError("Tool display details must be a boolean")
+        if self.detail_builder is not None and not callable(self.detail_builder):
+            raise ValueError("Tool display detail_builder must be callable")
         if isinstance(self.max_characters, bool) or not isinstance(self.max_characters, int):
             raise ValueError("Tool display max_characters must be an integer")
         if self.max_characters <= 0:
@@ -201,9 +210,18 @@ class ToolDisplay:
             "primary": primary,
             "facts": self._fact_payload(arguments, result=result, facts=facts),
         }
-        if self.details:
-            payload["details"] = []
+        if self.details or self.detail_builder is not None:
+            payload["details"] = self._detail_payload(arguments, result=result)
         return payload
+
+    def _detail_payload(self, arguments: Any, *, result: JsonObject | None) -> list[JsonObject]:
+        if self.detail_builder is None or not isinstance(arguments, dict):
+            return []
+        blocks = list(self.detail_builder(arguments, result))
+        for block in blocks:
+            if not isinstance(block, dict) or block.get("type") not in {"notice", "text"}:
+                raise ValueError("Tool display detail_builder must return notice or text blocks")
+        return blocks
 
     def _primary_payload(
         self,
@@ -410,6 +428,40 @@ def display_notice(level: str, text: str, *, subject: str | None = None) -> Json
     subject_text = _normalize_display_value(subject)
     if subject_text:
         block["subject"] = subject_text
+    return block
+
+
+def display_text(
+    label: str,
+    *,
+    text: str | None = None,
+    source: str | None = None,
+    path: Sequence[str] = (),
+) -> JsonObject:
+    """Return one text detail block, shown as a labelled code box.
+
+    The text is either ``text`` itself, or the string at ``path`` inside the
+    call's ``arguments`` or its ``result`` envelope (``source``), which the
+    display then need not copy. A missing or empty value shows no block.
+    """
+    if label not in TOOL_DISPLAY_TEXT_LABELS:
+        raise ValueError(f"Unsupported Tool display text label: {label}")
+    block: JsonObject = {"type": "text", "label": label}
+    if (text is None) == (source is None):
+        raise ValueError("Tool display text needs either text or a source")
+    if source is not None:
+        keys = list(path)
+        if source not in TOOL_DISPLAY_TEXT_SOURCES or not keys:
+            raise ValueError("Tool display text source needs arguments or result and a path")
+        if not all(isinstance(key, str) and key for key in keys):
+            raise ValueError("Tool display text source path must hold non-empty strings")
+        block["source"] = {"from": source, "path": keys}
+        return block
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("Tool display text must be a non-empty string")
+    if len(text) > MAX_TOOL_DISPLAY_TEXT_LENGTH:
+        text = f"{text[: MAX_TOOL_DISPLAY_TEXT_LENGTH - 1]}…"
+    block["text"] = text
     return block
 
 

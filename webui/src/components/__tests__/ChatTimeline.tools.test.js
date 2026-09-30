@@ -382,6 +382,40 @@ describe('ChatTimeline Tools', () => {
       expect(rawCall.contains(detailRow('chat.toolResultLabel'))).toBe(true);
     });
 
+    it('shows text blocks as given or read from the call, as literal text', () => {
+      const display = structuredDisplay({
+        details: [
+          { type: 'text', label: 'command', text: 'npm test' },
+          {
+            type: 'text',
+            label: 'output',
+            source: { from: 'result', path: ['data', 'output'] },
+          },
+          {
+            type: 'text',
+            label: 'query',
+            source: { from: 'arguments', path: ['missing'] },
+          },
+        ],
+      });
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'bash', { command: 'npm test' }),
+          toolResult(
+            'call',
+            'bash',
+            JSON.stringify({ ok: true, data: { output: '{"passed": 3}' } }),
+            { display },
+          ),
+        ]),
+      );
+
+      expect(detailText('chat.toolDetailLabel.command')).toBe('npm test');
+      expect(detailText('chat.toolDetailLabel.output')).toBe('{"passed": 3}');
+      expect(detailRow('chat.toolDetailLabel.query')).toBeNull();
+      expect(document.querySelector('.tool-raw-call')).not.toBeNull();
+    });
+
     it.each([
       [
         'write content',

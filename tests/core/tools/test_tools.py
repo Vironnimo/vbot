@@ -40,7 +40,7 @@ from core.tools.skill_manage import SKILL_MANAGE_TOOL_PARAMETERS
 from core.tools.speech import TEXT_TO_SPEECH_TOOL_PARAMETERS
 from core.tools.status import STATUS_TOOL_PARAMETERS
 from core.tools.subagent import SUBAGENT_TOOL_PARAMETERS
-from core.tools.tools import run_tool_worker
+from core.tools.tools import display_text, run_tool_worker
 from core.tools.web_fetch import WEB_FETCH_TOOL_PARAMETERS
 from core.tools.web_search import WEB_SEARCH_TOOL_PARAMETERS
 from tests.core.tools.tools_test_support import JsonObject, make_context, read_file_handler
@@ -305,28 +305,45 @@ def test_facts_recorded_by_the_handler_precede_the_display_facts() -> None:
     ]
 
 
-def test_detail_blocks_keep_the_recorded_order_and_show_an_unnoticed_failure() -> None:
-    display = ToolDisplay(details=True)
+def test_detail_blocks_follow_the_built_then_recorded_order_and_show_an_unnoticed_failure() -> None:
+    display = ToolDisplay(
+        detail_builder=lambda arguments, _result: (
+            display_text("query", source="arguments", path=("query",)),
+        )
+    )
     context = make_context("probe")
     context.add_display_notice("warning", "  Check the syntax.  ", subject="a.py")
     context.add_display_file_change("a.py", "created", None, "a\n")
+    context.add_display_text("output", "  line\n")
     context.add_display_notice("error", "Could not write b.py.")
     context.add_display_file_change("c.py", "deleted", "c\n", None)
     rejected = tool_failure("invalid_arguments", "The call was rejected.")
 
     details = _display_for_call(display, {}, context=context, result=rejected)["details"]
 
-    assert [block["type"] for block in details] == ["notice", "file_changes", "notice"]
+    assert [block["type"] for block in details] == [
+        "text",
+        "notice",
+        "file_changes",
+        "text",
+        "notice",
+    ]
     assert details[0] == {
+        "type": "text",
+        "label": "query",
+        "source": {"from": "arguments", "path": ["query"]},
+    }
+    assert details[1] == {
         "type": "notice",
         "level": "warning",
         "text": "Check the syntax.",
         "subject": "a.py",
     }
-    assert [change["path"] for change in details[1]["files"]] == ["a.py", "c.py"]
-    assert _display_for_call(display, {}, context=make_context("probe"), result=rejected)[
-        "details"
-    ] == [{"type": "notice", "level": "error", "text": "The call was rejected."}]
+    assert [change["path"] for change in details[2]["files"]] == ["a.py", "c.py"]
+    assert details[3] == {"type": "text", "label": "output", "text": "  line\n"}
+    assert _display_for_call(
+        ToolDisplay(details=True), {}, context=make_context("probe"), result=rejected
+    )["details"] == [{"type": "notice", "level": "error", "text": "The call was rejected."}]
     assert "details" not in _display_for_call(ToolDisplay(), {}, context=context)
 
 

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from core.tools._shell_arguments import normalize_shell_arguments
 from core.tools.bash_hints import annotate_failure
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.process import shape_process_output
@@ -18,6 +19,8 @@ from core.tools.process_manager import (
 from core.tools.tools import (
     JsonObject,
     ToolContext,
+    display_notice,
+    display_text,
     tool_failure,
     tool_success,
 )
@@ -294,6 +297,35 @@ def _shape_output_fields(
     )
 
 
+def bash_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the command, its output and what its exit means.
+
+    The output is the result's own field, so the display does not copy it; a
+    background command's row shows its completion output there once it exits.
+    """
+    try:
+        normalized = normalize_shell_arguments(arguments)
+    except ValueError:
+        normalized = arguments
+    blocks: list[JsonObject] = []
+    command = normalized.get("command") if isinstance(normalized, dict) else None
+    if isinstance(command, str) and command.strip():
+        blocks.append(display_text("command", text=command))
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return blocks
+    blocks.append(display_text("output", source="result", path=("data", "output")))
+    exit_code = data.get("exit_code")
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool) and exit_code != 0:
+        blocks.append(display_notice("warning", f"The command exited with code {exit_code}."))
+    hint = data.get("hint")
+    if isinstance(hint, str) and hint.strip():
+        blocks.append(display_notice("info", hint))
+    if data.get("status") == "running":
+        blocks.append(display_notice("info", "The command moved to the background."))
+    return blocks
+
+
 async def _failure_output_suffix(
     process_manager: ProcessManager,
     context: ToolContext,
@@ -302,7 +334,8 @@ async def _failure_output_suffix(
     """Build the output tail + log pointer appended to timeout-style failures.
 
     Without it a killed command fails with only the timing fact and every byte
-    of diagnostics the process printed is lost to the model.
+    of diagnostics the process printed is lost to the model. The user sees the
+    same output as a detail block.
     """
     output = await _combined_output(process_manager, context, process_id)
     tracked = process_manager.get_process(
@@ -314,6 +347,7 @@ async def _failure_output_suffix(
         fields = _shape_output_fields(tracked, output)
         label = "Output tail" if fields.get("truncated") else "Output"
         parts.append(f"\n{label}:\n{fields['output']}")
+        context.add_display_text("output", fields["output"])
     if tracked.log_file is not None:
         parts.append(f"\nComplete output: {model_path(tracked.log_file)}")
     return "".join(parts)

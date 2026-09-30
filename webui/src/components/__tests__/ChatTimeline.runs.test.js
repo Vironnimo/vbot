@@ -700,6 +700,42 @@ describe('ChatTimeline Runs', () => {
     },
   );
 
+  it('shows streamed output in place of an Output detail block', () => {
+    const sessionState = timelineSession();
+    const display = {
+      version: 1,
+      hidden_argument_keys: [],
+      primary: [],
+      facts: [],
+      details: [
+        { type: 'text', label: 'command', text: 'printf hello' },
+        {
+          type: 'text',
+          label: 'output',
+          source: { from: 'result', path: ['data', 'output'] },
+        },
+      ],
+    };
+    appendEvents(sessionState, 'run-tool-output', [
+      toolStarted('call-one', 'bash', { command: 'printf hello' }),
+      {
+        type: 'tool_call_stdout',
+        payload: { tool_call_id: 'call-one', data: 'hello\n' },
+      },
+      toolResult(
+        'call-one',
+        'bash',
+        { ok: true, data: { status: 'completed', output: 'hello\n' } },
+        { display },
+      ),
+    ]);
+    timeline.render(sessionState);
+
+    expect(detailText('chat.toolDetailLabel.command')).toBe('printf hello');
+    expect(detailRow('chat.toolStdout').textContent).toContain('hello');
+    expect(detailRow('chat.toolDetailLabel.output')).toBeNull();
+  });
+
   it('keeps interrupted Assistant output without a recovery marker', () => {
     const sessionState = timelineSession();
     appendEvents(sessionState, 'run-interrupted', [

@@ -2,9 +2,11 @@
   // The expanded body of a Tool row. Ordinary Run rows and standalone Tool
   // events share it.
   //
-  // A Tool whose display declares detail blocks shows those to the user (the
-  // files it changed, notices), with the raw call and result behind a
-  // disclosure. Any other Tool shows Args, live Stdout/Stderr and its Result.
+  // A Tool whose display declares detail blocks shows those to the user
+  // (texts such as its command and output, the files it changed, notices),
+  // with the raw call and result behind a disclosure. Live Stdout/Stderr
+  // take the place of an Output block, or follow the blocks while the call
+  // runs. Any other Tool shows Args, live Stdout/Stderr and its Result.
   import { toolDetailBlocks } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import ToolDetailSection from './ToolDetailSection.svelte';
@@ -30,7 +32,22 @@
 
   const viewState = timelineViewState();
 
-  let blocks = $derived(toolDetailBlocks(tool));
+  const TEXT_LABELS = {
+    command: () => t('chat.toolDetailLabel.command'),
+    output: () => t('chat.toolDetailLabel.output'),
+    query: () => t('chat.toolDetailLabel.query'),
+  };
+
+  let blocks = $derived(toolDetailBlocks(tool, { args, result }));
+  let streamed = $derived(Boolean(stdout || stderr));
+  let streamsReplaceOutput = $derived(
+    streamed &&
+      Boolean(
+        blocks?.some(
+          (block) => block.type === 'text' && block.label === 'output',
+        ),
+      ),
+  );
   let rawKey = $derived(`${viewKey}:raw-call`);
 </script>
 
@@ -77,14 +94,26 @@
 
 <div class="tool-event-body tool-event-details">
   {#if blocks}
-    {@render outputSections()}
     {#each blocks as block, index (index)}
-      {#if block.type === 'file_changes'}
+      {#if block.type === 'text'}
+        {#if block.label === 'output' && streamed}
+          {@render outputSections()}
+        {:else}
+          <ToolDetailSection
+            label={TEXT_LABELS[block.label]()}
+            value={block.text}
+            literal
+          />
+        {/if}
+      {:else if block.type === 'file_changes'}
         <ToolDiff changes={block.files} />
       {:else}
         <ToolNotice notice={block} />
       {/if}
     {/each}
+    {#if !streamsReplaceOutput}
+      {@render outputSections()}
+    {/if}
     {#if blocks.length > 0}
       <details
         class="tool-raw-call"

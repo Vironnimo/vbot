@@ -59,12 +59,14 @@ from core.tools._tool_display import (
     TOOL_DISPLAY_TRUNCATION_MODES,
     TOOL_DISPLAY_VALUE_KINDS,
     ToolDisplay,
+    ToolDisplayDetailBuilder,
     ToolDisplayFactBuilder,
     ToolDisplayField,
     ToolDisplayPart,
     ToolDisplayPartBuilder,
     ToolSummaryBuilder,
     display_notice,
+    display_text,
     result_count_fact_builder,
 )
 from core.tools._tool_results import (
@@ -140,11 +142,13 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
     return offloaded
 
 
-def _detail_blocks(context: ToolContext | None, result: JsonObject | None) -> list[JsonObject]:
-    """Return the call's recorded detail blocks.
+def _detail_blocks(
+    context: ToolContext | None, result: JsonObject | None, built: Sequence[JsonObject]
+) -> list[JsonObject]:
+    """Return the call's recorded detail blocks, which follow the ``built`` ones.
 
-    A failed call whose Tool recorded no error notice, such as one rejected
-    before its handler ran, shows the result's error message.
+    A failed call without an error notice, such as one rejected before its
+    handler ran, shows the result's error message.
     """
     blocks = copy.deepcopy(context.presentation_details) if context is not None else []
     error = result.get("error") if isinstance(result, dict) and result.get("ok") is False else None
@@ -152,7 +156,9 @@ def _detail_blocks(context: ToolContext | None, result: JsonObject | None) -> li
     if (
         isinstance(message, str)
         and message.strip()
-        and not any(block["type"] == "notice" and block["level"] == "error" for block in blocks)
+        and not any(
+            block["type"] == "notice" and block["level"] == "error" for block in (*built, *blocks)
+        )
     ):
         blocks.append(display_notice("error", message))
     return blocks
@@ -321,7 +327,7 @@ class ToolRegistry:
         if context is not None and context.presentation_images:
             payload["image_files"] = [dict(image) for image in context.presentation_images]
         if "details" in payload:
-            payload["details"] = _detail_blocks(context, result)
+            payload["details"].extend(_detail_blocks(context, result, payload["details"]))
         return payload
 
     def get(self, name: str) -> Tool:
@@ -1044,10 +1050,13 @@ __all__ = [
     "TOOL_DISPLAY_TRUNCATION_MODES",
     "TOOL_DISPLAY_VALUE_KINDS",
     "ToolDisplay",
+    "ToolDisplayDetailBuilder",
     "ToolDisplayFactBuilder",
     "ToolDisplayField",
     "ToolDisplayPart",
     "ToolDisplayPartBuilder",
     "ToolSummaryBuilder",
+    "display_notice",
+    "display_text",
     "result_count_fact_builder",
 ]
