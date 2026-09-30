@@ -129,6 +129,9 @@ describe('SkillDirectoryEditor', () => {
     await vi.advanceTimersByTimeAsync(900);
 
     expect(updateCalls()).toHaveLength(1);
-    expect(updateCalls()[0][1]).toEqual({ skills: { directories: [] } });
+    expect(updateCalls()[0][1]).toEqual({
+      skills: { directories: [] },
+      base: { skills: { directories: ['C:/existing'] } },
+    });
   });
 });

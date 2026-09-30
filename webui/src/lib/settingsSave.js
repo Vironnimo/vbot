@@ -1,54 +1,173 @@
-import { updateSettings } from './api.js';
+import { getSettings, updateSettings } from './api.js';
 import { t } from './i18n.js';
 
+// `settings.update` refuses a write based on values that changed meanwhile.
+export const SETTINGS_CONFLICT_CODE = 'settings_conflict';
+// A conflict re-reads Settings and retries; only a stream of concurrent
+// writers to the same section exhausts this.
+const MAX_SAVE_ATTEMPTS = 3;
+
+export function isSettingsConflict(error) {
+  return error?.code === SETTINGS_CONFLICT_CODE;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function plain(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
+function sameValue(left, right) {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((item, index) => sameValue(item, right[index]))
+    );
+  }
+  if (!isPlainObject(left) || !isPlainObject(right)) return false;
+  const keys = new Set([...Object.keys(left), ...Object.keys(right)]);
+  return [...keys].every((key) => sameValue(left[key], right[key]));
+}
+
+function mergeLeaves(draft, origin, saved, path, options) {
+  if (sameValue(draft, origin)) return plain(saved);
+  if (sameValue(saved, origin) || sameValue(saved, draft)) return plain(draft);
+  if (isPlainObject(draft) && isPlainObject(origin) && isPlainObject(saved)) {
+    const merged = {};
+    for (const key of new Set([...Object.keys(draft), ...Object.keys(saved)])) {
+      const value = mergeLeaves(
+        draft[key],
+        origin[key],
+        saved[key],
+        [...path, key],
+        options,
+      );
+      if (value !== undefined) merged[key] = value;
+    }
+    return merged;
+  }
+  if (options.draftWins) return plain(draft);
+  options.conflicts.push(path.join('.'));
+  return plain(saved);
+}
+
 /**
- * Run the shared settings-panel save lifecycle.
+ * Three-way merge of a local draft onto newer saved values, leaf by leaf.
  *
- * Every settings panel's save handler is the same shape: mark saving, clear the
- * error, push the built payload through `settings.update`, commit (and
- * optionally re-seed local state from) the result, and surface any failure
- * through `onError` — always clearing the saving flag. The panel's save state
- * confirms success. This is the one home for that lifecycle and the save-error
- * message format.
+ * A leaf the draft left at `origin` takes the saved value; a leaf only the
+ * draft changed keeps the draft. A leaf both changed differently is a
+ * conflict: the saved value wins unless `draftWins` is set. Objects merge per
+ * key; arrays and scalars are leaves.
+ *
+ * @returns {{ value: unknown, conflicts: string[] }}
+ */
+export function rebaseDraft(draft, origin, saved, { draftWins = false } = {}) {
+  const options = { draftWins, conflicts: [] };
+  const value = mergeLeaves(draft, origin, saved, [], options);
+  return { value, conflicts: options.conflicts };
+}
+
+/**
+ * A Settings editor's local draft plus the saved values it was derived from.
+ *
+ * `save()` sends the draft through `settings.update` together with its origin
+ * as `base`, so the server refuses the write when a value it would change was
+ * changed meanwhile (another editor, window, or a save that finished after the
+ * user left). The draft is then rebased onto re-read Settings: untouched
+ * values take the saved ones, a value changed on both sides takes the saved
+ * one and reports it, and the remaining edits are retried. After a successful
+ * write, values edited while it ran stay; the rest take the saved values, so
+ * normalization reaches the visible draft.
  *
  * @param {object} params
- * @param {() => object} params.buildPayload - Builds the `settings.update` params.
- * @param {(next: object) => void} params.onCommit - Receives the updated settings.
- * @param {(message: string) => void} params.onError - Sets/clears the error text.
- * @param {(saving: boolean) => void} params.setSaving - Drives the panel's saving flag.
- * @param {(next: object) => void} [params.applyResult] - Optional: re-seed local state.
- * @param {() => unknown} [params.getDraftSnapshot] - Optional: reads the current local draft.
+ * @param {object} params.settings - The Settings the draft was seeded from.
+ * @param {(settings: object) => object} params.fromSettings - Settings -> draft values.
+ * @param {() => object} params.read - Reads the current draft.
+ * @param {(values: object) => void} params.write - Replaces the draft.
+ * @param {(values: object) => object} params.toPayload - Draft values -> `settings.update` sections.
  */
-export async function runSettingsSave({
-  buildPayload,
-  onCommit,
-  onError,
-  setSaving,
-  applyResult,
-  getDraftSnapshot,
+export function createSettingsDraft({
+  settings,
+  fromSettings,
+  read,
+  write,
+  toPayload,
 }) {
-  setSaving(true);
-  onError('');
+  let origin = plain(fromSettings(settings));
 
-  try {
-    const payload = buildPayload();
-    const readDraftSnapshot = getDraftSnapshot ?? buildPayload;
-    const submittedDraftSnapshot = applyResult
-      ? JSON.stringify(readDraftSnapshot())
-      : null;
-    const nextSettings = await updateSettings(payload);
-    const draftIsCurrent =
-      !applyResult ||
-      JSON.stringify(readDraftSnapshot()) === submittedDraftSnapshot;
-    onCommit(nextSettings);
-    if (draftIsCurrent) {
-      applyResult?.(nextSettings);
-    }
-    return true;
-  } catch (error) {
-    onError(`${t('settings.saveError')} ${error.message}`);
-    return false;
-  } finally {
-    setSaving(false);
+  function replaceDraft(value) {
+    if (!sameValue(value, read())) write(value);
   }
+
+  function adopt(nextSettings) {
+    const saved = plain(fromSettings(nextSettings));
+    const { value, conflicts } = rebaseDraft(read(), origin, saved);
+    origin = saved;
+    replaceDraft(value);
+    return conflicts.length > 0;
+  }
+
+  function settle(submitted, nextSettings) {
+    const saved = plain(fromSettings(nextSettings));
+    const { value } = rebaseDraft(read(), submitted, saved, {
+      draftWins: true,
+    });
+    origin = saved;
+    replaceDraft(value);
+  }
+
+  /**
+   * Run the shared save lifecycle: mark saving, clear the error, write, and
+   * commit the returned Settings; failures surface through `onError`.
+   *
+   * @param {object} params
+   * @param {(next: object) => void} params.onCommit - Receives the saved Settings.
+   * @param {(message: string) => void} params.onError - Sets/clears the error text.
+   * @param {(saving: boolean) => void} params.setSaving - Drives the saving flag.
+   * @returns {Promise<boolean>} Whether the draft is saved.
+   */
+  async function save({ onCommit, onError, setSaving }) {
+    setSaving(true);
+    onError('');
+    let conflicted = false;
+
+    try {
+      for (let attempt = 1; ; attempt += 1) {
+        const submitted = plain(read());
+        let nextSettings;
+        try {
+          nextSettings = await updateSettings({
+            ...toPayload(submitted),
+            base: toPayload(origin),
+          });
+        } catch (error) {
+          if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
+            throw error;
+          }
+          const currentSettings = await getSettings();
+          conflicted = adopt(currentSettings) || conflicted;
+          onCommit(currentSettings);
+          if (sameValue(read(), origin)) break;
+          continue;
+        }
+        settle(submitted, nextSettings);
+        onCommit(nextSettings);
+        break;
+      }
+      if (conflicted) onError(t('settings.saveConflict'));
+      return true;
+    } catch (error) {
+      onError(`${t('settings.saveError')} ${error.message}`);
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return { save };
 }

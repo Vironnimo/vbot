@@ -10,7 +10,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t, tOr } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildWebFetchSettingsPayload,
     getWebFetchSettings,
@@ -27,6 +27,13 @@
   } = $props();
   let draft = $state(untrack(() => getWebFetchSettings(settings)));
   let saving = $state(false);
+  const webFetchDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getWebFetchSettings,
+    read: () => draft,
+    write: (next) => (draft = next),
+    toPayload: buildWebFetchSettingsPayload,
+  });
   const context = useAutosaveContext();
   const autosave = createDebouncedAutosave({
     getSnapshot: () => ({ ...draft }),
@@ -94,13 +101,10 @@
 
   async function save() {
     if (!hasChanges()) return true;
-    return runSettingsSave({
+    return webFetchDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildWebFetchSettingsPayload(draft),
-      getDraftSnapshot: () => draft,
-      applyResult: (next) => (draft = getWebFetchSettings(next)),
     });
   }
 </script>

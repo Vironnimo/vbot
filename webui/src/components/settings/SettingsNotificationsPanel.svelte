@@ -9,7 +9,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
 
   const noop = () => {};
 
@@ -62,6 +62,13 @@
     untrack(() => getNotificationSettings(settings)),
   );
   let saving = $state(false);
+  const notificationDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getNotificationSettings,
+    read: () => notificationSettings,
+    write: (next) => (notificationSettings = next),
+    toPayload: (values) => ({ notifications: { ...values } }),
+  });
 
   let saveDisabled = $derived(
     saving ||
@@ -111,14 +118,10 @@
       return true;
     }
 
-    return runSettingsSave({
+    return notificationDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => ({ notifications: { ...notificationSettings } }),
-      getDraftSnapshot: () => notificationSettings,
-      applyResult: (next) =>
-        (notificationSettings = getNotificationSettings(next)),
     });
   }
 </script>

@@ -81,6 +81,8 @@ export default Object.freeze({
   'settings.loading': 'Loading settings…',
   'settings.loadError': 'Settings could not be loaded.',
   'settings.saveError': 'Settings could not be saved.',
+  'settings.saveConflict':
+    'Some of these settings were changed elsewhere while you edited. The editor now shows the saved values.',
   'settings.sections': 'Settings sections',
   'settings.preferences.title': 'Region & setup',
   'settings.search.results': 'Search results',

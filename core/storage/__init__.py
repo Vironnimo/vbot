@@ -13,7 +13,7 @@ from core.storage.layout import (
 )
 
 if TYPE_CHECKING:
-    from core.storage.errors import StorageError
+    from core.storage.errors import SettingsConflictError, StorageError
     from core.storage.prompt_blocks import BLOCK_NAMESPACES, PromptBlockStore
     from core.storage.prompt_fragments import PROMPT_FRAGMENT_NAMES
     from core.storage.storage import DEFAULT_DATA_DIR, ConfigProtocol, StorageManager
@@ -30,6 +30,7 @@ _LAZY_EXPORTS = {
     "DEFAULT_DATA_DIR": ("core.storage.storage", "DEFAULT_DATA_DIR"),
     "PROMPT_FRAGMENT_NAMES": ("core.storage.prompt_fragments", "PROMPT_FRAGMENT_NAMES"),
     "PromptBlockStore": ("core.storage.prompt_blocks", "PromptBlockStore"),
+    "SettingsConflictError": ("core.storage.errors", "SettingsConflictError"),
     "StorageError": ("core.storage.errors", "StorageError"),
     "StorageManager": ("core.storage.storage", "StorageManager"),
     "TEMPORARY_FILE_RETENTION": (
@@ -53,6 +54,7 @@ __all__ = [
     "DataDirectoryLayout",
     "PROMPT_FRAGMENT_NAMES",
     "PromptBlockStore",
+    "SettingsConflictError",
     "StorageError",
     "StorageManager",
     "TEMPORARY_FILE_RETENTION",

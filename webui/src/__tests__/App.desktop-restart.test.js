@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount } from 'svelte';
 
+import { AUTOSAVE_STILL_SAVING_MS } from '../lib/autosave.js';
 import { t } from '../lib/i18n.js';
 import { flushComposerMemory } from '../lib/composerMemory.js';
 import {
@@ -112,7 +113,8 @@ describe('App Desktop restart', () => {
 
   // Settings whose sub-agent depth edit is saved by `settings.update`, which
   // answers through `answer` (the settled value or a rejection).
-  async function editSettings(answer = (save) => save()) {
+  // `beforeEdit` runs once the editor shows, before the edit.
+  async function editSettings(answer = (save) => save(), beforeEdit = null) {
     const settingsRpc = createSettingsRpcMock();
     rpcMock.mockImplementation((method, params) =>
       method === 'settings.update'
@@ -126,6 +128,7 @@ describe('App Desktop restart', () => {
     );
     settingsPanelButton('tools').click();
     await waitForCondition(() => expect(depthInput()).toBeTruthy());
+    beforeEdit?.();
     typeInto(depthInput(), '5');
   }
 
@@ -185,6 +188,7 @@ describe('App Desktop restart', () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     mountedComponent = await cleanupAppHarness(mountedComponent);
   });
 
@@ -350,6 +354,39 @@ describe('App Desktop restart', () => {
       }
       // The automatic path never asks.
       expect(document.querySelector('[role="dialog"]')).toBeNull();
+    },
+  );
+
+  it.each([
+    ['within', AUTOSAVE_STILL_SAVING_MS - 1, 1],
+    ['after', AUTOSAVE_STILL_SAVING_MS, 0],
+  ])(
+    'restarts on an idle request only when pending edits save %s the time a navigation waits',
+    async (_when, saveMs, restarts) => {
+      installDesktop();
+      let finishSave;
+      await editSettings(
+        (save) =>
+          new Promise((resolve) => {
+            finishSave = () => resolve(save());
+          }),
+        () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }),
+      );
+
+      expect(requestIdleRestart()).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(finishSave).toBeTypeOf('function');
+      await vi.advanceTimersByTimeAsync(saveMs);
+      finishSave();
+      await vi.advanceTimersByTimeAsync(0);
+      flushSync();
+
+      expect(api.restartDesktop).toHaveBeenCalledTimes(restarts);
+      // A declined request stays silent; the save it gave up on still lands.
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      expect(
+        rpcMock.mock.calls.filter(([method]) => method === 'settings.update'),
+      ).toHaveLength(1);
     },
   );
 

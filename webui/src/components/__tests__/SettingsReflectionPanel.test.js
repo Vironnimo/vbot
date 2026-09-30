@@ -99,6 +99,7 @@ describe('SettingsReflectionPanel', () => {
             memory_turn_interval: 5,
             skill_model_step_interval: 10,
           },
+          base: { reflection: SETTINGS.reflection },
         },
       ],
     ]);

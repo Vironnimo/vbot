@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from core.model_tasks import SUPPORTED_TASK_TYPES, task_model_targets_equal
@@ -11,6 +12,8 @@ from core.settings import (
 )
 from core.settings.normalizers import (
     coerce_defaults_section,
+    coerce_defaults_update,
+    coerce_skills_update,
     normalize_agent_default_value,
     normalize_agent_defaults,
     normalize_appearance_settings,
@@ -33,9 +36,11 @@ from core.settings.normalizers import (
     normalize_web_search_settings,
     validate_supported_agent_default_fields,
 )
-from core.settings.paths import SUBAGENT_SETTING_DEFAULTS
+from core.settings.paths import SUBAGENT_SETTING_DEFAULTS, build_effective_settings
 from core.settings.settings import effective_timezone_name, validate_timezone_name
 from core.storage.errors import StorageError
+
+_MISSING = object()
 
 
 def apply_appearance_settings(
@@ -455,3 +460,98 @@ def apply_compaction_settings(
     )
     settings["compaction"] = normalized_compaction
     return dict(normalized_compaction)
+
+
+def _apply_skills(settings: dict[str, Any], value: Any) -> dict[str, Any]:
+    directories = coerce_skills_update(value)["directories"]
+    return {"directories": apply_skill_directory_settings(settings, directories)}
+
+
+def _apply_agent_defaults(settings: dict[str, Any], value: Any) -> dict[str, Any]:
+    return apply_defaults(settings, "agent", coerce_defaults_update(value)["agent"])
+
+
+_SECTION_APPLIERS: dict[str, Callable[[dict[str, Any], Any], Any]] = {
+    "appearance": apply_appearance_settings,
+    "speech": apply_speech_settings,
+    "skills": _apply_skills,
+    "subagents": apply_subagent_settings,
+    "compaction": apply_compaction_settings,
+    "defaults": _apply_agent_defaults,
+    "recall": apply_recall_settings,
+    "web_fetch": apply_web_fetch_settings,
+    "web_search": apply_web_search_settings,
+    "model_tasks": apply_model_task_settings,
+    "providers": apply_providers_settings,
+    "debug": apply_debug_settings,
+    "server": apply_server_settings,
+    "extensions": apply_extensions_settings,
+    "reflection": apply_reflection_settings,
+    "local_models": apply_local_models_settings,
+    "session_titles": apply_session_title_settings,
+    "notifications": apply_notification_settings,
+}
+
+
+def apply_settings_update(
+    settings: dict[str, Any], settings_update: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Merge parsed public Settings sections into ``settings``; return each section's result."""
+
+    unsupported_sections = sorted(set(settings_update) - set(_SECTION_APPLIERS))
+    if unsupported_sections:
+        raise StorageError(f"Unsupported settings sections: {', '.join(unsupported_sections)}")
+    return {
+        section: apply(settings, settings_update[section])
+        for section, apply in _SECTION_APPLIERS.items()
+        if section in settings_update
+    }
+
+
+def stale_setting_paths(
+    settings: Mapping[str, Any],
+    settings_update: Mapping[str, Any],
+    base: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Public Settings paths the update would change although they no longer match ``base``.
+
+    ``base`` holds the caller's view of the sections it edited, in the update's
+    shape. Comparing effective values leaf by leaf means that only leaves the
+    update actually changes are checked: another writer's change to a leaf the
+    update leaves alone, or to the same value, is no conflict, while writing a
+    stale value over a newer one is. A leaf absent from ``base`` is not checked.
+    """
+
+    current = build_effective_settings(dict(settings))
+    candidate_settings = deepcopy(dict(settings))
+    apply_settings_update(candidate_settings, settings_update)
+    believed_settings = deepcopy(dict(settings))
+    apply_settings_update(believed_settings, base)
+    believed = build_effective_settings(believed_settings)
+    return tuple(
+        ".".join(path)
+        for path in _changed_leaves(current, build_effective_settings(candidate_settings), ())
+        if _lookup(believed, path) != _lookup(current, path)
+    )
+
+
+def _changed_leaves(before: Any, after: Any, path: tuple[str, ...]) -> list[tuple[str, ...]]:
+    if before == after:
+        return []
+    if isinstance(before, Mapping) and isinstance(after, Mapping):
+        return [
+            changed
+            for key in sorted(set(before) | set(after), key=str)
+            for changed in _changed_leaves(
+                before.get(key, _MISSING), after.get(key, _MISSING), (*path, str(key))
+            )
+        ]
+    return [path]
+
+
+def _lookup(document: Any, path: tuple[str, ...]) -> Any:
+    for key in path:
+        if not isinstance(document, Mapping) or key not in document:
+            return _MISSING
+        document = document[key]
+    return document

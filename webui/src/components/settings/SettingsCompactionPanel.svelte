@@ -13,7 +13,7 @@
     normalizeCompactionPolicy,
   } from '$lib/compactionPolicy.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildModelSelectOptions,
     modelSelectionValue,
@@ -34,6 +34,13 @@
     untrack(() => normalizeCompactionPolicy(settings?.compaction)),
   );
   let saving = $state(false);
+  const compactionDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: (next) => normalizeCompactionPolicy(next?.compaction),
+    read: () => policy,
+    write: (next) => (policy = next),
+    toPayload: (value) => ({ compaction: normalizeCompactionPolicy(value) }),
+  });
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let lastModelsRefreshToken = null;
@@ -122,11 +129,10 @@
 
   async function save() {
     if (compactionPoliciesEqual(policy, settings?.compaction)) return true;
-    return runSettingsSave({
+    return compactionDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => ({ compaction: normalizeCompactionPolicy(policy) }),
     });
   }
 </script>

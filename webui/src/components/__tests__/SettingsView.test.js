@@ -570,6 +570,13 @@ describe('SettingsView', () => {
               chat_width: 'comfortable',
               chat_working_mode: 'normal',
             },
+            base: {
+              appearance: {
+                language: 'en',
+                chat_width: 'comfortable',
+                chat_working_mode: 'normal',
+              },
+            },
           },
         ],
       ]);
@@ -686,6 +693,7 @@ describe('SettingsView', () => {
           enabled: true,
           model: 'openai/gpt-5.2::api-key',
         },
+        base: { session_titles: { enabled: false, model: '' } },
       });
       await waitForCondition(
         () => saveStateText('session_titles') === t('common.saved'),
@@ -925,6 +933,7 @@ describe('SettingsView', () => {
 
       expect(getSettingsUpdateCalls()[0][1]).toEqual({
         recall: { backend: 'vector' },
+        base: { recall: { backend: 'sqlite_fts' } },
       });
       await waitForCondition(
         () => saveStateText('recall') === t('common.saved'),
@@ -952,6 +961,13 @@ describe('SettingsView', () => {
           provider: 'searxng',
           default_count: 12,
           searxng: { base_url: 'http://localhost:9999' },
+        },
+        base: {
+          web_search: {
+            provider: 'brave',
+            default_count: 12,
+            searxng: { base_url: 'http://localhost:8888' },
+          },
         },
       });
       await waitForCondition(

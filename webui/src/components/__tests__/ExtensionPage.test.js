@@ -317,6 +317,48 @@ describe('ExtensionPage frame bridge', () => {
     await expect(interrupted).resolves.toBe(false);
   });
 
+  it('stops sharing a released flush: the next transition asks the frame again and the left flush still settles', async () => {
+    let participant;
+    const autosaveContext = {
+      register: (value) => {
+        participant = value;
+        return () => {};
+      },
+    };
+    const page = openPage({ autosaveContext });
+    page.message({
+      ...page.init,
+      type: 'vbot.extension.autosave.state',
+      pending: true,
+    });
+    const left = participant.flush();
+    const leftRequest = page.posted().at(-1);
+
+    participant.release();
+    expect(page.posted().at(-1)).toMatchObject({
+      type: 'vbot.extension.autosave.release',
+      nonce: page.init.nonce,
+      epoch: page.init.epoch,
+    });
+    const next = participant.flush();
+    const nextRequest = page.posted().at(-1);
+    expect(nextRequest.type).toBe('vbot.extension.autosave.flush');
+    expect(nextRequest.id).not.toBe(leftRequest.id);
+
+    page.message({
+      ...nextRequest,
+      type: 'vbot.extension.autosave.result',
+      saved: true,
+    });
+    await expect(next).resolves.toBe(true);
+    page.message({
+      ...leftRequest,
+      type: 'vbot.extension.autosave.result',
+      saved: true,
+    });
+    await expect(left).resolves.toBe(true);
+  });
+
   it("holds one App layer while the current frame shows dialogs and lets Back close the page's topmost one", () => {
     const layers = [];
     const shell = {

@@ -19,7 +19,7 @@
     parseModelSelectionValue,
     selectModelValue,
   } from '$lib/modelSelection.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildSessionTitleSettingsPayload,
     normalizeSessionTitleSettings,
@@ -38,6 +38,13 @@
     untrack(() => normalizeSessionTitleSettings(settings)),
   );
   let saving = $state(false);
+  const sessionTitlesDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: normalizeSessionTitleSettings,
+    read: () => formValues,
+    write: (next) => (formValues = next),
+    toPayload: buildSessionTitleSettingsPayload,
+  });
   let availableModels = $state([]);
   let availableConnections = $state([]);
   let showAllModels = $state(false);
@@ -138,13 +145,10 @@
 
   async function save() {
     if (sessionTitleSettingsMatch(formValues, settings)) return true;
-    return runSettingsSave({
+    return sessionTitlesDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildSessionTitleSettingsPayload(formValues),
-      getDraftSnapshot: () => formValues,
-      applyResult: (next) => (formValues = normalizeSessionTitleSettings(next)),
     });
   }
 </script>

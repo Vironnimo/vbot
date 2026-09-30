@@ -364,13 +364,25 @@
       return action();
     });
 
+  // Whether pending edits saved within the time a navigation waits before it
+  // offers to leave. A slower save keeps running.
+  const flushPendingWithinStillSavingLimit = () => {
+    let timer;
+    const limit = new Promise((resolve) => {
+      timer = setTimeout(() => resolve(false), AUTOSAVE_STILL_SAVING_MS);
+    });
+    return Promise.race([autosaveCoordinator.flushPending(), limit]).finally(
+      () => clearTimeout(timer),
+    );
+  };
+
   // A Desktop restart into a new version replaces this page. The Restart
   // button and the Desktop's idle request both come here. The user's restart
   // saves pending edits through the navigation's autosave gate (with its
   // Retry / Discard dialog) and asks before it discards an unsaved new Cron
   // job. The idle request declines without any UI while a Live voice call
-  // runs, a new Cron job is unsaved or edits do not save; the Desktop asks
-  // again later.
+  // runs, a new Cron job is unsaved, or edits do not save within the time a
+  // navigation waits before it offers to leave; the Desktop asks again later.
   const restartDesktopApp = async ({
     interactive = false,
     discardCronDraft = false,
@@ -396,7 +408,7 @@
     if (blocked()) return false;
     if (
       autosaveCoordinator.hasPending() &&
-      !(await autosaveCoordinator.flushPending())
+      !(await flushPendingWithinStillSavingLimit())
     )
       return false;
     // Something may have started while the edits were saved.

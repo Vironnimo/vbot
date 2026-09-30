@@ -93,7 +93,11 @@ describe('SettingsView editor saving', () => {
     await vi.advanceTimersByTimeAsync(1);
     await flushAsyncUpdates();
     expect(getSettingsUpdateCalls()).toHaveLength(1);
-    expect(getSettingsUpdateCalls()[0][1]).toEqual(subagents(7));
+    // The write names the values it replaces, so a newer save is not lost.
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      ...subagents(7),
+      base: subagents(4),
+    });
   });
 
   it('keeps a focused number editable through pauses and saves on blur', async () => {
@@ -148,6 +152,7 @@ describe('SettingsView editor saving', () => {
             max_subagents_per_turn: 12,
             subagent_timeout_minutes: 45,
           },
+          base: subagents(4),
         },
       ],
     ]);
@@ -181,7 +186,10 @@ describe('SettingsView editor saving', () => {
     vi.advanceTimersByTime(799);
     await flushAsyncUpdates();
     expect(getSettingsUpdateCalls()).toHaveLength(2);
-    expect(getSettingsUpdateCalls()[1][1]).toEqual(subagents(7));
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      ...subagents(7),
+      base: subagents(6),
+    });
   });
 
   it('keeps in-progress values while an auto-save request is in flight', async () => {
@@ -202,7 +210,62 @@ describe('SettingsView editor saving', () => {
     vi.advanceTimersByTime(800);
     await flushAsyncUpdates();
     expect(getSettingsUpdateCalls()).toHaveLength(2);
-    expect(getSettingsUpdateCalls()[1][1]).toEqual(subagents(7));
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      ...subagents(7),
+      base: subagents(6),
+    });
+  });
+
+  it('rebases onto a value saved elsewhere instead of writing it back', async () => {
+    // The backend refuses a write whose base no longer matches, like the server.
+    const backend = createSettingsRpcMock({
+      settingsUpdate: (params, current) => {
+        const stale =
+          params.base &&
+          JSON.stringify(params.base.subagents) !==
+            JSON.stringify(current.subagents);
+        if (stale) {
+          throw Object.assign(new Error('Settings changed'), {
+            code: 'settings_conflict',
+          });
+        }
+        return null;
+      },
+    });
+    await mountSubAgents(backend);
+    // Another window (or a save left running when the user navigated away)
+    // lands after this editor loaded its values.
+    await backend('settings.update', {
+      subagents: { ...subagents(4).subagents, max_subagents_per_turn: 10 },
+    });
+
+    setInputValue(DEPTH, '6');
+    getButton('Save').click();
+    await waitForCondition(() => getSettingsUpdateCalls().length === 2);
+    await flushAsyncUpdates();
+
+    expect(getSettingsUpdateCalls()[1][1]).toEqual({
+      subagents: {
+        max_subagent_depth: 6,
+        max_subagents_per_turn: 10,
+        subagent_timeout_minutes: 60,
+      },
+      base: {
+        subagents: {
+          max_subagent_depth: 4,
+          max_subagents_per_turn: 10,
+          subagent_timeout_minutes: 60,
+        },
+      },
+    });
+    const inputs = document.querySelectorAll(
+      '[data-settings-section="subagents"] input.s-input',
+    );
+    expect(Array.from(inputs, (input) => input.value)).toEqual([
+      '6',
+      '10',
+      '60',
+    ]);
   });
 
   // A cleared number field falls back to its default. It writes only when the

@@ -7,13 +7,13 @@
   import Button from '../ui/Button.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
-  import { updateSettings } from '$lib/api.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     createSkillDirectoriesUpdatePayload,
     getDefaultSkillDirectoryValue,
@@ -28,6 +28,13 @@
   let newSkillDirectory = $state('');
   let saving = $state(false);
   let addElement = $state();
+  const directoriesDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: getSkillDirectories,
+    read: () => skillDirectories,
+    write: (next) => (skillDirectories = next),
+    toPayload: createSkillDirectoriesUpdatePayload,
+  });
 
   export function focusNewDirectory() {
     addElement?.querySelector('input')?.focus();
@@ -108,21 +115,11 @@
       return true;
     }
 
-    saving = true;
-    onError('');
-
-    try {
-      const nextSettings = await updateSettings(
-        createSkillDirectoriesUpdatePayload(skillDirectories),
-      );
-      onCommit(nextSettings);
-      return true;
-    } catch (error) {
-      onError(`${t('settings.saveError')} ${error.message}`);
-      return false;
-    } finally {
-      saving = false;
-    }
+    return directoriesDraft.save({
+      onCommit,
+      onError,
+      setSaving: (value) => (saving = value),
+    });
   }
 </script>
 

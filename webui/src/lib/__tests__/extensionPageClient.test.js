@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { createAutosaveParticipant } from '../autosave.js';
 import { createExtensionPageClient } from '../extensionPageClient.js';
 
 const descriptor = { owner: 'alpha', page: 'main' };
@@ -86,6 +87,40 @@ describe('extension page client', () => {
         saved: false,
       }),
     );
+  });
+
+  it('releases the running write of the registered editor and reports edits made after it', () => {
+    const target = parent();
+    client = createExtensionPageClient({ target });
+    initialize(target);
+    let draft = 'first';
+    const participant = createAutosaveParticipant({
+      getSnapshot: () => draft,
+      hasChanges: () => draft !== '',
+      save: () => new Promise(() => {}),
+    });
+    client.registerAutosave(participant);
+    void participant.runSave();
+    const lastMessage = () => target.postMessage.mock.calls.at(-1)[0];
+
+    dispatchFrom(target, {
+      type: 'vbot.extension.autosave.release',
+      version: 1,
+      nonce: 'nonce-a',
+      epoch: 'epoch-a',
+      descriptor,
+    });
+    expect(lastMessage()).toMatchObject({
+      type: 'vbot.extension.autosave.state',
+      pending: false,
+    });
+
+    draft = 'second';
+    client.notifyAutosave();
+    expect(lastMessage()).toMatchObject({
+      type: 'vbot.extension.autosave.state',
+      pending: true,
+    });
   });
 
   it('accepts catalog replies larger than the command limit', async () => {

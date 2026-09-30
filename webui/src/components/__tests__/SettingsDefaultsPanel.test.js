@@ -88,7 +88,7 @@ describe('SettingsDefaultsPanel', () => {
 
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
-    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+    const chosen = {
       defaults: {
         agent: {
           model: 'openai/gpt-5.2::api-key',
@@ -97,6 +97,21 @@ describe('SettingsDefaultsPanel', () => {
           thinking_effort: 'high',
         },
       },
+    };
+    const cleared = {
+      defaults: {
+        agent: {
+          model: null,
+          fallback_models: null,
+          temperature: null,
+          thinking_effort: null,
+        },
+      },
+    };
+    // Each write names the saved values it replaces as its base.
+    expect(getSettingsUpdateCalls()[0][1]).toEqual({
+      ...chosen,
+      base: cleared,
     });
 
     await openSearchableDropdown('settings-defaults-model');
@@ -113,14 +128,8 @@ describe('SettingsDefaultsPanel', () => {
     getButton('Save').click();
     await waitForCondition(() => getSettingsUpdateCalls().length >= 2);
     expect(getSettingsUpdateCalls()[1][1]).toEqual({
-      defaults: {
-        agent: {
-          model: null,
-          fallback_models: null,
-          temperature: null,
-          thinking_effort: null,
-        },
-      },
+      ...cleared,
+      base: chosen,
     });
 
     // "Provider default" is an explicit empty effort, distinct from no default.
@@ -140,6 +149,7 @@ describe('SettingsDefaultsPanel', () => {
           thinking_effort: '',
         },
       },
+      base: cleared,
     });
   });
 

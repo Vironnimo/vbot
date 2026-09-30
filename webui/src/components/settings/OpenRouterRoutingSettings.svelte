@@ -2,6 +2,7 @@
   import { onDestroy, untrack } from 'svelte';
 
   import {
+    getSettings,
     listModels,
     listProviderRoutingOptions,
     updateSettings,
@@ -11,6 +12,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import { isSettingsConflict, rebaseDraft } from '$lib/settingsSave.js';
   import Dropdown from '../Dropdown.svelte';
   import SearchableDropdown from '../SearchableDropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -38,6 +40,7 @@
     },
   ];
   const noop = () => {};
+  const MAX_SAVE_ATTEMPTS = 3;
 
   let {
     provider,
@@ -48,6 +51,9 @@
   } = $props();
 
   let routing = $state(untrack(() => normalizeRouting(provider?.routing)));
+  // The saved routing the draft derives from, sent as `base`: the server
+  // refuses a write over routing that was changed meanwhile.
+  let routingOrigin = untrack(() => normalizeRouting(provider?.routing));
   let dirty = $state(false);
   let saving = $state(false);
   let loadingModels = $state(false);
@@ -119,6 +125,7 @@
     const serialized = JSON.stringify(provider?.routing ?? {});
     if (!dirty && serialized !== lastProviderRouting) {
       routing = normalizeRouting(provider?.routing);
+      routingOrigin = normalizeRouting(provider?.routing);
       lastProviderRouting = serialized;
     }
   });
@@ -347,18 +354,58 @@
     return '';
   }
 
+  function savedRouting(settings) {
+    const item = settings?.providers?.items?.find(
+      (candidate) => candidate?.id === 'openrouter',
+    );
+    return normalizeRouting(item?.routing);
+  }
+
+  // Writes the draft; on a conflict, rebases it onto the saved routing (a
+  // policy changed on both sides takes the saved one) and retries the rest.
+  // Returns whether any of the draft's changes gave way to the saved routing.
+  async function writeRouting() {
+    let conflicted = false;
+    for (let attempt = 1; ; attempt += 1) {
+      const submitted = JSON.parse(JSON.stringify(routing));
+      try {
+        await updateSettings({
+          providers: { openrouter: { routing: submitted } },
+          base: { providers: { openrouter: { routing: routingOrigin } } },
+        });
+        routingOrigin = submitted;
+        return conflicted;
+      } catch (error) {
+        if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
+          throw error;
+        }
+      }
+      const saved = savedRouting(await getSettings());
+      const rebased = rebaseDraft(routing, routingOrigin, saved);
+      conflicted ||= rebased.conflicts.length > 0;
+      routingOrigin = saved;
+      routing = rebased.value;
+      if (JSON.stringify(rebased.value) === JSON.stringify(saved)) {
+        return conflicted;
+      }
+      const invalid = validateRouting(rebased.value);
+      if (invalid) throw new Error(invalid);
+    }
+  }
+
   async function saveRouting() {
     if (!dirty) return true;
     if (saveError) return false;
-    const submitted = JSON.stringify(routing);
     saving = true;
     try {
-      await updateSettings({
-        providers: { openrouter: { routing: JSON.parse(submitted) } },
-      });
+      const conflicted = await writeRouting();
+      const written = JSON.stringify(routingOrigin);
       onError('');
       await onRefreshProviderSettings();
-      if (JSON.stringify(routing) === submitted) dirty = false;
+      if (JSON.stringify(routing) === written) dirty = false;
+      if (conflicted) {
+        onToast({ title: t('settings.saveConflict'), variant: 'error' });
+      }
       return true;
     } catch (error) {
       onToast({

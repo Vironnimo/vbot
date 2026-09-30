@@ -596,6 +596,7 @@ describe('App navigation', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       subagents: expect.objectContaining({ max_subagent_depth: 6 }),
+      base: { subagents: expect.objectContaining({ max_subagent_depth: 4 }) },
     });
   });
 
@@ -647,6 +648,13 @@ describe('App navigation', () => {
           max_subagent_depth: 5,
           max_subagents_per_turn: 8,
           subagent_timeout_minutes: 60,
+        },
+        base: {
+          subagents: {
+            max_subagent_depth: 4,
+            max_subagents_per_turn: 8,
+            subagent_timeout_minutes: 60,
+          },
         },
       });
     });

@@ -25,6 +25,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import { isSettingsConflict, rebaseDraft } from '$lib/settingsSave.js';
   import {
     applyExtensionsPanelList,
     buildExtensionsUpdatePayload,
@@ -39,6 +40,7 @@
 
   const noop = () => {};
   const AUTO_SAVE_DEBOUNCE_MS = 800;
+  const MAX_SAVE_ATTEMPTS = 3;
 
   let { onToast = noop, onError = noop } = $props();
   const uid = $props.id();
@@ -282,11 +284,79 @@
     };
   }
 
+  // Replace the persisted baseline with the saved Extensions and rebase each
+  // configuration draft onto it: untouched fields take the saved values, and a
+  // field changed on both sides takes the saved one. Returns whether any
+  // draft value gave way.
+  async function adoptSavedExtensions() {
+    const saved = applyExtensionsPanelList(await listExtensions());
+    let conflicted = false;
+    const nextFormStates = {};
+    for (const extension of saved) {
+      if (!hasSettingsSchema(extension)) {
+        continue;
+      }
+      const savedForm = buildSchemaFormState(
+        extension.settingsSchema,
+        extension.config,
+      );
+      const previous = extensionByName(extension.name);
+      const draft = formStates[extension.name];
+      if (!previous || !hasSettingsSchema(previous) || draft === undefined) {
+        nextFormStates[extension.name] = savedForm;
+        continue;
+      }
+      const rebased = rebaseDraft(
+        draft,
+        buildSchemaFormState(previous.settingsSchema, previous.config),
+        savedForm,
+      );
+      conflicted ||= rebased.conflicts.length > 0;
+      // Keep the schema's field order, which the dirty check compares.
+      nextFormStates[extension.name] = Object.fromEntries(
+        Object.keys(savedForm).map((key) => [key, rebased.value?.[key]]),
+      );
+    }
+    extensions = saved;
+    formStates = nextFormStates;
+    return conflicted;
+  }
+
+  // The panel writes the whole `extensions` section; `base` makes the server
+  // refuse it when another writer changed a value it would overwrite.
+  function extensionsUpdate(nextExtensions, override) {
+    return {
+      ...buildExtensionsUpdatePayload(nextExtensions, override),
+      base: buildExtensionsUpdatePayload(extensions),
+    };
+  }
+
   async function saveExtensionConfigs() {
     if (panelBusy) {
       return false;
     }
 
+    let conflicted = false;
+    for (let attempt = 1; ; attempt += 1) {
+      const saved = await writeExtensionConfigs();
+      if (saved !== 'conflict') {
+        if (saved && conflicted) onError(t('settings.saveConflict'));
+        return saved;
+      }
+      if (attempt >= MAX_SAVE_ATTEMPTS) {
+        onError(t('settings.saveConflict'));
+        return false;
+      }
+      try {
+        conflicted = (await adoptSavedExtensions()) || conflicted;
+      } catch (error) {
+        onError(`${t('settings.saveError')} ${error.message}`);
+        return false;
+      }
+    }
+  }
+
+  async function writeExtensionConfigs() {
     const changedExtensions = extensions.filter(extensionDraftHasChanges);
     if (changedExtensions.length === 0) {
       return true;
@@ -329,12 +399,13 @@
     );
 
     try {
-      await updateSettings(buildExtensionsUpdatePayload(nextExtensions));
+      await updateSettings(extensionsUpdate(nextExtensions));
       // Update the persisted baseline without unmounting the form or replacing
       // drafts (including another extension edited during this request).
       extensions = nextExtensions;
       return true;
     } catch (error) {
+      if (isSettingsConflict(error)) return 'conflict';
       onError(`${t('settings.saveError')} ${error.message}`);
       return false;
     } finally {
@@ -379,13 +450,20 @@
     actionName = extension.name;
     onError('');
 
-    const payload = buildExtensionsUpdatePayload(extensions, {
-      name: extension.name,
-      disabled: !extension.disabled,
-    });
+    const override = { name: extension.name, disabled: !extension.disabled };
 
     try {
-      await updateSettings(payload);
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          await updateSettings(extensionsUpdate(extensions, override));
+          break;
+        } catch (error) {
+          if (!isSettingsConflict(error) || attempt >= MAX_SAVE_ATTEMPTS) {
+            throw error;
+          }
+          await adoptSavedExtensions();
+        }
+      }
       onToast({
         title: extension.disabled
           ? t('settings.extensions.enableSuccess')

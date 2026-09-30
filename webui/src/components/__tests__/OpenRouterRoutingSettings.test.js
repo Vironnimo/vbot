@@ -117,6 +117,8 @@ describe('OpenRouterRoutingSettings', () => {
           },
         },
       },
+      // The routing the draft started from: a newer save is not overwritten.
+      base: { providers: { openrouter: { routing: defaultRouting } } },
     });
     expect(onRefreshProviderSettingsMock).toHaveBeenCalledOnce();
     await waitForCondition(
@@ -125,6 +127,60 @@ describe('OpenRouterRoutingSettings', () => {
           .querySelector('.openrouter-routing [role="status"]')
           .textContent.trim() === t('common.saved'),
     );
+  });
+
+  it('rebases onto routing saved elsewhere and retries its own change', async () => {
+    const override = {
+      mode: 'automatic',
+      providers: [],
+      blocked: ['deepinfra'],
+      allow_fallbacks: true,
+    };
+    const savedRouting = {
+      default: defaultRouting.default,
+      models: { 'retired/model': override },
+    };
+    const fallback = rpcMock.getMockImplementation();
+    let refused = false;
+    rpcMock.mockImplementation((method, params) => {
+      if (method === 'settings.update' && !refused) {
+        refused = true;
+        return Promise.reject(
+          Object.assign(new Error('Settings changed'), {
+            code: 'settings_conflict',
+          }),
+        );
+      }
+      if (method === 'settings.get') {
+        return Promise.resolve({
+          providers: { items: [{ id: 'openrouter', routing: savedRouting }] },
+        });
+      }
+      return fallback(method, params);
+    });
+    mountEditor();
+    await waitForCondition(() => routingCalls().length === 1);
+
+    clickButton('Automatic (OpenRouter managed)');
+    clickOption('Only allowed providers');
+    clickButton('Add provider…');
+    clickOption('Anthropic');
+    clickButton('Save');
+
+    await waitForCondition(() => updateCalls().length === 2);
+    const allowed = {
+      ...defaultRouting.default,
+      mode: 'allowed',
+      providers: ['anthropic'],
+    };
+    expect(updateCalls()[1][1]).toEqual({
+      providers: {
+        openrouter: {
+          routing: { default: allowed, models: { 'retired/model': override } },
+        },
+      },
+      base: { providers: { openrouter: { routing: savedRouting } } },
+    });
   });
 
   it('creates a full model override and warns when order disables stickiness', async () => {

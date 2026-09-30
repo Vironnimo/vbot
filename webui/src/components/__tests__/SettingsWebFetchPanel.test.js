@@ -121,6 +121,7 @@ describe('Web Fetch settings', () => {
     await vi.advanceTimersByTimeAsync(850);
     expect(rpcMock).toHaveBeenCalledWith('settings.update', {
       web_fetch: { provider: 'tavily', mode: 'fallback' },
+      base: { web_fetch: { provider: 'direct', mode: 'fallback' } },
     });
     await choose('settings-web-fetch-provider', PARALLEL());
     resolveSave({

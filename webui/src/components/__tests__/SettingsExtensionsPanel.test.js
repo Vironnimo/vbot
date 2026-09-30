@@ -229,11 +229,17 @@ describe('SettingsExtensionsPanel', () => {
   });
 
   it.each([
-    ['disables', guardBash(), 'true', ['guard_bash']],
-    ['enables', guardBash({ disabled: true, status: 'disabled' }), 'false', []],
+    ['disables', guardBash(), 'true', ['guard_bash'], []],
+    [
+      'enables',
+      guardBash({ disabled: true, status: 'disabled' }),
+      'false',
+      [],
+      ['guard_bash'],
+    ],
   ])(
     '%s an extension live through the disabled set',
-    async (_label, extension, checked, disabled) => {
+    async (_label, extension, checked, disabled, savedDisabled) => {
       serveExtensions([extension]);
       await mountPanel();
 
@@ -245,10 +251,76 @@ describe('SettingsExtensionsPanel', () => {
       await flushAsync();
 
       expect(settingsUpdates()).toEqual([
-        ['settings.update', { extensions: { disabled, config: {} } }],
+        [
+          'settings.update',
+          {
+            extensions: { disabled, config: {} },
+            // The saved section it replaces, so a newer write is not lost.
+            base: { extensions: { disabled: savedDisabled, config: {} } },
+          },
+        ],
       ]);
     },
   );
+
+  it('rebases a refused configuration save onto Extensions saved elsewhere', async () => {
+    const schema = [
+      { key: 'level', type: 'text', label: 'Level' },
+      { key: 'mode', type: 'text', label: 'Mode' },
+    ];
+    const other = guardBash({ name: 'other' });
+    // Another writer changes `mode` and disables `other` after the panel loaded.
+    const listings = [
+      [withSchema(schema, { config: { level: 'info', mode: 'a' } }), other],
+      [
+        withSchema(schema, { config: { level: 'info', mode: 'b' } }),
+        { ...other, disabled: true, status: 'disabled' },
+      ],
+    ];
+    let listCount = 0;
+    let refused = false;
+    serveExtensions([], {
+      'extensions.list': () =>
+        Promise.resolve({
+          extensions: listings[Math.min(listCount++, listings.length - 1)],
+        }),
+      'settings.update': () => {
+        if (refused) return Promise.resolve({});
+        refused = true;
+        return Promise.reject(
+          Object.assign(new Error('Settings changed'), {
+            code: 'settings_conflict',
+          }),
+        );
+      },
+    });
+    await mountPanel();
+
+    const level = document.querySelector('#extension-guard_bash-level');
+    level.value = 'warn';
+    level.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    document.querySelector('.s-ext-config-actions .save-status button').click();
+    for (let step = 0; step < 5 && settingsUpdates().length < 2; step += 1) {
+      await flushAsync();
+    }
+
+    expect(settingsUpdates()[1][1]).toEqual({
+      extensions: {
+        disabled: ['other'],
+        config: { guard_bash: { level: 'warn', mode: 'b' } },
+      },
+      base: {
+        extensions: {
+          disabled: ['other'],
+          config: { guard_bash: { level: 'info', mode: 'b' } },
+        },
+      },
+    });
+    expect(document.querySelector('#extension-guard_bash-mode').value).toBe(
+      'b',
+    );
+  });
 
   it('shows the waiting hint and names unset secret fields', async () => {
     serveExtensions([

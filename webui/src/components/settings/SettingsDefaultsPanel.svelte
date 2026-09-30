@@ -13,7 +13,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
-  import { runSettingsSave } from '$lib/settingsSave.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     buildModelSelectOptions,
     createModelCatalogLoader,
@@ -69,6 +69,13 @@
     untrack(() => normalizeAgentDefaultsFormValues(settings)),
   );
   let saving = $state(false);
+  const agentDefaultsDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: normalizeAgentDefaultsFormValues,
+    read: () => agentDefaults,
+    write: (next) => (agentDefaults = next),
+    toPayload: buildAgentDefaultsPayload,
+  });
   let availableModels = $state([]);
   let availableConnections = $state([]);
   // A live model reload fetches in the background but holds the visible option
@@ -307,14 +314,10 @@
       return true;
     }
 
-    return runSettingsSave({
+    return agentDefaultsDraft.save({
       onCommit,
       onError,
       setSaving: (value) => (saving = value),
-      buildPayload: () => buildAgentDefaultsPayload(agentDefaults),
-      getDraftSnapshot: () => agentDefaults,
-      applyResult: (next) =>
-        (agentDefaults = normalizeAgentDefaultsFormValues(next)),
     });
   }
 </script>

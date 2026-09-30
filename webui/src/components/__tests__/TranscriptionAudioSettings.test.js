@@ -70,6 +70,15 @@ describe('TranscriptionAudioSettings', () => {
           sample_rate_hz: 16000,
         },
       },
+      base: {
+        speech: {
+          transcription_audio: {
+            profile: 'compatibility',
+            format: 'wav',
+            sample_rate_hz: 16000,
+          },
+        },
+      },
     });
     expect(onCommit).toHaveBeenCalledOnce();
     expect(rowHidden(t('settings.voice.transcriptionFormat'))).toBe(false);
