@@ -1,6 +1,7 @@
 .claude/
 .github/*
 !.github/workflows/
+!.github/assets/
 .vscode/
 .opencode/
 .agents/
