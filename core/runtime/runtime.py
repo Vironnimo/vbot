@@ -455,46 +455,6 @@ class Runtime:
         if self.logger is not None:
             self.logger.debug("Runtime stopped")
 
-    def _cleanup_failed_startup(self) -> None:
-        """Release every started resource after a failed synchronous bootstrap."""
-        if self._calendar_service is not None:
-            self._calendar_service.actions.stop()
-        cleanup_actions = (
-            (self._decisions, "close"),
-            (self._speech, "close"),
-            (self._extensions, "fire_shutdown_blocking"),
-            (self._channel_service, "stop"),
-            (self._cron_service, "stop"),
-            (self._bootstrap_service, "stop"),
-            (self._provider_usage, "close"),
-            (self._performance, "stop"),
-            (self._process_manager, "stop"),
-            (self._terminal_manager, "stop"),
-            (self._keep_awake, "close"),
-        )
-        for service, method_name in cleanup_actions:
-            if service is None:
-                continue
-            method = getattr(service, method_name)
-            with suppress(Exception):
-                method()
-        with suppress(Exception):
-            self._close_extension_databases()
-        if self._storage is not None:
-            with suppress(Exception):
-                self._storage.temporary_files.stop()
-        if self._channel_service is not None:
-            with suppress(Exception):
-                self._channel_service.close()
-        if self._usage_recorder is not None:
-            with suppress(Exception):
-                self._usage_recorder.close()
-        if self._chat_sessions is not None:
-            with suppress(Exception):
-                self._chat_sessions.close()
-        self._clear_service_references()
-        self._close_log_manager()
-
     def _live_extension_config(self, name: str) -> dict[str, Any]:
         """Read one extension's persisted config **live** from ``settings.json``.
 

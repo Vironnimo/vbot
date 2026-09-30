@@ -33,10 +33,12 @@ from core.providers.accounts import ConnectionRef
 from core.providers.providers import ProviderRegistry
 from core.providers.usage import ProviderUsageService
 from core.runs import Run, RunStatus
+from core.runtime._recall import RecallIntegration
 from core.runtime.databases import canonical_database_specs
 from core.runtime.keep_awake import KeepAwakeController
 from core.runtime.runtime import Runtime
 from core.sessions import SessionAddress
+from core.statistics.index import StatisticsIndex
 from core.storage.layout import DataDirectoryLayout
 from core.storage.storage import StorageManager
 from core.storage.temp_files import TemporaryFileManager
@@ -368,6 +370,8 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
 ) -> None:
     released: list[str] = []
     performance_threads: list[threading.Thread | None] = []
+    # One cleanup step fails once; the later steps still release their resources.
+    cleanup_failures = {"keep_awake": OSError("cleanup sentinel")}
 
     def record(target: type, name: str, label: str) -> None:
         original = getattr(target, name)
@@ -376,7 +380,10 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
             released.append(label)
             if isinstance(self, PerformanceService):
                 performance_threads.append(self._monitor._thread)  # noqa: SLF001
-            return original(self, *args, **kwargs)
+            result = original(self, *args, **kwargs)
+            if label in cleanup_failures:
+                raise cleanup_failures.pop(label)
+            return result
 
         monkeypatch.setattr(target, name, wrapper)
 
@@ -386,6 +393,8 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     record(ProcessManager, "stop", "process_manager")
     record(TerminalManager, "stop", "terminal_manager")
     record(PerformanceService, "stop", "performance")
+    record(RecallIntegration, "close", "recall")
+    record(StatisticsIndex, "close", "statistics_index")
     failure = RuntimeError("startup sentinel")
     runtime = Runtime(config)
 
@@ -393,20 +402,16 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
         patch.setattr(owner, method, Mock(side_effect=failure))
         with pytest.raises(RuntimeError) as caught:
             runtime.start()
+    cleanup_failures.clear()
 
     assert caught.value is failure
     _assert_not_started(runtime)
+    started = {"temporary_files", "keep_awake", "speech", "process_manager"}
+    started |= {"recall", "statistics_index"}
     expected = {
         "ensure_directories": set(),
-        "_start_terminal_manager": {"temporary_files", "keep_awake", "speech", "process_manager"},
-        "_start_provider_usage_service": {
-            "temporary_files",
-            "keep_awake",
-            "speech",
-            "process_manager",
-            "terminal_manager",
-            "performance",
-        },
+        "_start_terminal_manager": started,
+        "_start_provider_usage_service": started | {"terminal_manager", "performance"},
     }[method]
     assert expected <= set(released)
     if "performance" in expected:
@@ -417,8 +422,12 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     logging.getLogger("vbot.core").warning("written after cleanup")
     contents = log_file.read_text(encoding="utf-8")
     assert contents.count("[ERROR] vbot.core - Runtime startup failed") == 1
-    assert contents.count("Traceback (most recent call last):") == 1
     assert contents.count("RuntimeError: startup sentinel") == 1
+    # A failing cleanup step is logged with its step but never replaces the startup error.
+    cleanup_failed = int("keep_awake" in expected)
+    assert contents.count("Runtime shutdown step failed (step=keep_awake)") == cleanup_failed
+    assert contents.count("OSError: cleanup sentinel") == cleanup_failed
+    assert contents.count("Traceback (most recent call last):") == 1 + cleanup_failed
     # Cleanup closed the managed handlers after the failure was recorded.
     assert "written after cleanup" not in contents
 

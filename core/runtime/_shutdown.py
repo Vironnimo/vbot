@@ -1,4 +1,4 @@
-"""Dependency-ordered Runtime shutdown shared by ``stop()`` and ``aclose()``.
+"""Dependency-ordered Runtime shutdown shared by ``stop()``, ``aclose()`` and failed starts.
 
 Every step runs even when an earlier one fails: a failed step is logged with
 its name and traceback while logging is still open, and shutdown continues.
@@ -6,6 +6,8 @@ Service references are cleared and logging is closed in every case. Only then
 is a single failure re-raised unchanged, or several as one ``ExceptionGroup``.
 Cancellation and other ``BaseException``s are not collected: they end the
 remaining steps and propagate once references are cleared and logging closed.
+A failed start runs the same synchronous steps for whatever it had built, but
+only logs their failures: the startup error is the one its caller re-raises.
 """
 
 from __future__ import annotations
@@ -37,6 +39,19 @@ class _Step:
 def run_shutdown(runtime: Runtime) -> None:
     """Run every synchronous shutdown step, release the Runtime, then report failures."""
     runtime._log_shutdown()
+    _raise_failures(_run_synchronous_steps(runtime))
+
+
+def clean_up_failed_startup(runtime: Runtime) -> None:
+    """Release what a failed start built through the synchronous shutdown steps.
+
+    Step failures are logged with their step but not raised, so the caller
+    re-raises the startup error unchanged.
+    """
+    _run_synchronous_steps(runtime)
+
+
+def _run_synchronous_steps(runtime: Runtime) -> list[tuple[str, Exception]]:
     # Synchronous shutdown cannot drain admitted Extension work, so it withdraws
     # readiness before its first step.
     runtime._started = False
@@ -51,7 +66,7 @@ def run_shutdown(runtime: Runtime) -> None:
                 _record_failure(failures, step.name, error)
     finally:
         _release(runtime, failures)
-    _raise_failures(failures)
+    return failures
 
 
 async def run_shutdown_async(runtime: Runtime) -> None:

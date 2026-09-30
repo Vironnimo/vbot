@@ -66,6 +66,7 @@ from core.runtime._prompt_blocks import (
     _StorageManagerBlockStore,
 )
 from core.runtime._recall import RecallIntegration
+from core.runtime._shutdown import clean_up_failed_startup
 from core.runtime.keep_awake import KeepAwakeController
 from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
@@ -670,10 +671,15 @@ def bootstrap(runtime: Runtime) -> None:
         if runtime.safe_startup_mode is None:
             runtime._start_provider_usage_service()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
-    except Exception:
+    except Exception as error:
         _log_startup_failure(runtime)
-        runtime._cleanup_failed_startup()
-        raise
+        startup_error = error
+    else:
+        return
+    # Outside the handler, a failed cleanup step's log entry does not repeat the
+    # startup traceback as its context.
+    clean_up_failed_startup(runtime)
+    raise startup_error
 
 
 def _build_performance_service(
