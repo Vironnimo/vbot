@@ -1,5 +1,4 @@
 <script>
-  import { toolDetailImages } from '$lib/chatToolDetails.js';
   import { t } from '$lib/i18n.js';
   import { formatMentionToken } from '$lib/fileMentions.js';
   import { isImeComposing } from '$lib/keyboard.js';
@@ -43,7 +42,6 @@
     textFromEvent,
     textFromMessage,
     toolCallFromEvent,
-    toolDetailPresentation,
     toolNameForEvent,
     toolResultValueForEvent,
     toolRowFromEvent,
@@ -60,6 +58,7 @@
   import ChatCompactionSeparator from './ChatCompactionSeparator.svelte';
   import MarkdownContent from './MarkdownContent.svelte';
   import ChatReasoning from './ChatReasoning.svelte';
+  import ToolDetails from './ToolDetails.svelte';
   import ToolPrimaryLine from './ToolPrimaryLine.svelte';
   import { timelineViewState } from './timelineViewState.svelte.js';
 
@@ -168,95 +167,6 @@
       : t('chat.userMessageCopied');
   }
 </script>
-
-{#snippet toolDetailSection(
-  label,
-  value,
-  isError = false,
-  preferPayload = false,
-  toolName = '',
-  tool = null,
-)}
-  {@const images = toolDetailImages(value, { preferPayload, tool })}
-  {@const presentation = toolDetailPresentation(value, {
-    preferPayload,
-    toolName,
-    tool,
-  })}
-  <div
-    class="teb-row teb-section"
-    class:teb-section--error={isError}
-    class:teb-section--success={preferPayload && !isError}
-  >
-    <div class="teb-section-header">
-      <span class="teb-label">{label}</span>
-      {#if presentation.copyText !== t('chat.toolNoData')}
-        <CopyButton
-          text={presentation.copyText}
-          class="chat-copy-action tool-detail-copy"
-          label={t('chat.copyToolField', { label })}
-        />
-      {/if}
-    </div>
-    {#if images.length > 0}
-      <div class="tool-image-previews">
-        {#each images as image (image.src)}
-          <a
-            class="tool-image-preview"
-            href={image.src}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={image.filename}
-          >
-            <img
-              src={image.src}
-              alt={image.filename}
-              loading="lazy"
-              onerror={(event) => {
-                event.currentTarget.hidden = true;
-              }}
-            />
-            <span
-              class="image-unavailable"
-              role="img"
-              aria-label={t('chat.image.unavailable')}
-            >
-              <svg viewBox="0 0 32 24" aria-hidden="true"
-                ><rect x="1" y="1" width="30" height="22" rx="2" /><circle
-                  cx="10"
-                  cy="8"
-                  r="2"
-                /><path d="m3 20 8-8 6 6 4-4 8 6M3 2l26 20" /></svg
-              >
-              <span>{t('chat.image.unavailable')}</span>
-            </span>
-            <span>{image.filename}</span>
-          </a>
-        {/each}
-      </div>
-    {/if}
-    {#if presentation.kind === 'fields'}
-      <div class:error={isError} class="teb-code teb-fields">
-        {#each presentation.fields as field (field.key)}
-          <div class="teb-field">
-            <span class="teb-field-key">{field.key}</span>
-            <span
-              class:error={isError}
-              class={`teb-field-value teb-field-value--${field.kind}`}
-              >{field.text}</span
-            >
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <span
-        class:error={isError}
-        class={`teb-code teb-text teb-text--${presentation.kind}`}
-        >{presentation.text}</span
-      >
-    {/if}
-  </div>
-{/snippet}
 
 {#snippet linkifiedText(text)}
   {#each linkifiedTextSegments(text) as segment, segmentIndex (segmentIndex)}
@@ -589,26 +499,14 @@
               >
             {/each}
           </summary>
-          <div class="tool-event-body tool-event-details">
-            {@render toolDetailSection(
-              t('chat.toolArgs'),
-              toolCallFromEvent(item.event)?.arguments,
-              false,
-              false,
-              toolNameForEvent(item.event),
-              eventToolRow,
-            )}
-            {#if toolResultValueForEvent(item.event)}
-              {@render toolDetailSection(
-                t('chat.toolResultLabel'),
-                toolResultValueForEvent(item.event),
-                isFailedToolEvent(item.event),
-                true,
-                toolNameForEvent(item.event),
-                eventToolRow,
-              )}
-            {/if}
-          </div>
+          <ToolDetails
+            tool={eventToolRow}
+            toolName={toolNameForEvent(item.event)}
+            args={toolCallFromEvent(item.event)?.arguments}
+            result={toolResultValueForEvent(item.event)}
+            resultFailed={isFailedToolEvent(item.event)}
+            showResult={Boolean(toolResultValueForEvent(item.event))}
+          />
         </details>
         {#if isTextToSpeechResult(item.event)}
           {@const speechArtifact = speechArtifactFromResult(item.event)}

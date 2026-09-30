@@ -10,6 +10,7 @@
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
   import { createChatScrollController } from '$lib/chatScroll.js';
+  import { nestedScrollConsumes } from '$lib/boundedScroll.js';
   import { provideMountHold } from '$lib/mountHold.js';
 
   import { assistantRunChildProgressKey } from '../lib/chatState.js';
@@ -334,8 +335,14 @@
       return undefined;
     }
     let touchY = null;
+    // Input that a nested scroll box (Tool output, diffs) moves leaves the
+    // timeline where it is, so it must not release the follow pin.
+    const movesTimelineUp = (event, upward) =>
+      upward && !nestedScrollConsumes(event.target, container, true);
     const handleWheel = (event) => {
-      controller?.noteUserInput({ upward: event.deltaY < 0 });
+      controller?.noteUserInput({
+        upward: movesTimelineUp(event, event.deltaY < 0),
+      });
     };
     const handleTouchStart = (event) => {
       controller?.noteUserInput();
@@ -344,13 +351,16 @@
     const handleTouchMove = (event) => {
       const nextTouchY = event.touches?.[0]?.clientY ?? null;
       controller?.noteUserInput({
-        upward: touchY !== null && nextTouchY !== null && nextTouchY > touchY,
+        upward: movesTimelineUp(
+          event,
+          touchY !== null && nextTouchY !== null && nextTouchY > touchY,
+        ),
       });
       touchY = nextTouchY;
     };
     const handleKeyDown = (event) => {
       controller?.noteUserInput({
-        upward: isUpwardScrollKey(event.key),
+        upward: movesTimelineUp(event, isUpwardScrollKey(event.key)),
       });
     };
     container.addEventListener('click', handleTimelineClick);

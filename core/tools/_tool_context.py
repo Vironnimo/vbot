@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import Any
 
 from core.runs import RunExecutionOwner
+from core.tools._display_diff import (
+    MAX_DISPLAY_DIFF_LINES,
+    display_diff_line_count,
+    display_file_diff,
+)
 from core.tools._tool_display import _normalize_display_fact
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract
@@ -163,6 +168,9 @@ class ToolContext:
         compare=False,
     )
     presentation_images: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
+    presentation_file_changes: list[JsonObject] = field(
+        default_factory=list, repr=False, compare=False
+    )
     # Request-only media: never included in result envelopes or lifecycle events.
     result_media: list[JsonObject] = field(default_factory=list, repr=False, compare=False)
     # Session-scoped file-content tracker for git-style change statistics.
@@ -215,6 +223,33 @@ class ToolContext:
             if fact is None:
                 raise ValueError("Invalid Tool display line change")
             self.presentation_facts.append(fact)
+
+    def add_display_file_change(
+        self,
+        path: str,
+        change: str,
+        before: str | None,
+        after: str | None,
+        *,
+        destination: str | None = None,
+    ) -> JsonObject:
+        """Record one changed file's bounded diff without changing the Tool result.
+
+        ``None`` text means absent or not text. All changes of one call share
+        one diff line budget. Returns the recorded change, whose ``added`` and
+        ``removed`` count every changed line.
+        """
+        shown = sum(display_diff_line_count(item) for item in self.presentation_file_changes)
+        recorded = display_file_diff(
+            path,
+            change,
+            before,
+            after,
+            destination=destination,
+            line_budget=max(0, MAX_DISPLAY_DIFF_LINES - shown),
+        )
+        self.presentation_file_changes.append(recorded)
+        return recorded
 
     async def emit(self, event_type: str, payload: JsonObject) -> None:
         """Emit a tool lifecycle event through the runtime hook, when present."""
