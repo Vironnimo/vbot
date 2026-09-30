@@ -519,6 +519,9 @@ class StubRuntime:
     async def maybe_refresh_local_catalogs(self, *, force: bool = False) -> None:
         return None
 
+    def local_context_windows(self) -> Mapping[str, Any]:
+        return cast(Mapping[str, Any], self.storage.load_local_models_settings()["context_windows"])
+
     def stop(self) -> None:
         return None
 
