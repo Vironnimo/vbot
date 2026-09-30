@@ -22,7 +22,7 @@ import asyncio
 import contextlib
 import threading
 import weakref
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from time import perf_counter
@@ -32,6 +32,7 @@ from core.performance.performance import measure, record_span, set_gauge
 
 _WorkerResult = TypeVar("_WorkerResult")
 _OrderedResult = TypeVar("_OrderedResult")
+_SettledResult = TypeVar("_SettledResult")
 # Admission waits shorter than this stay histogram-only in recordings.
 _WAIT_SPAN_MIN_MS = 1.0
 
@@ -116,26 +117,8 @@ class BoundedWorkerPool:
     ) -> _WorkerResult:
         loop = asyncio.get_running_loop()
         call = partial(function, *arguments, **keyword_arguments)
-        future = loop.run_in_executor(self._executor, call)
-        try:
-            return await asyncio.shield(future)
-        except asyncio.CancelledError as cancellation:
-            # Cancellation must win over a late worker failure, but only after
-            # the worker has actually settled.  A caller may cancel the Task
-            # more than once, so keep shielding until the executor Future is
-            # done instead of allowing a repeated cancellation to release the
-            # semaphore early.
-            while not future.done():
-                try:
-                    await asyncio.shield(future)
-                except asyncio.CancelledError:
-                    continue
-                except BaseException:
-                    break
-            if future.done() and not future.cancelled():
-                with contextlib.suppress(BaseException):
-                    future.exception()
-            raise cancellation
+        # Settling first keeps a cancelled caller from releasing the semaphore early.
+        return await settle_before_cancelling(loop.run_in_executor(self._executor, call))
 
     def _count_waiting(self, delta: int) -> None:
         with self._counts_lock:
@@ -201,23 +184,7 @@ class OrderedWorker:
 
     async def call_async(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
         """Run *operation* after all earlier work without blocking the Event Loop."""
-        future = asyncio.wrap_future(self._submit(operation))
-        try:
-            return await asyncio.shield(future)
-        except asyncio.CancelledError as cancellation:
-            # Wait for the operation even when the caller is cancelled repeatedly;
-            # cancellation still wins over a late failure once it has settled.
-            while not future.done():
-                try:
-                    await asyncio.shield(future)
-                except asyncio.CancelledError:
-                    continue
-                except BaseException:
-                    break
-            if future.done() and not future.cancelled():
-                with contextlib.suppress(BaseException):
-                    future.exception()
-            raise cancellation
+        return await settle_before_cancelling(asyncio.wrap_future(self._submit(operation)))
 
     def hand_off(self, operation: Callable[[], None], *, limit: int) -> bool:
         """Queue *operation* without waiting; ``False`` when *limit* hand-offs are pending.
@@ -253,6 +220,31 @@ class OrderedWorker:
 
     def _mark_worker_thread(self) -> None:
         self._local.is_worker_thread = True
+
+
+async def settle_before_cancelling(work: Awaitable[_SettledResult]) -> _SettledResult:
+    """Await *work*; when the caller is cancelled meanwhile, let *work* finish first.
+
+    For work that mutates state and must not be seen as abandoned halfway, such
+    as a started worker call or an edit that saves and then updates memory. The
+    cancellation is re-raised once *work* has settled and wins over a late
+    failure of it; repeated cancellations keep waiting.
+    """
+    future = asyncio.ensure_future(work)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError as cancellation:
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                continue
+            except BaseException:
+                break
+        if future.done() and not future.cancelled():
+            with contextlib.suppress(BaseException):
+                future.exception()
+        raise cancellation
 
 
 def _nothing() -> None:
