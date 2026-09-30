@@ -164,11 +164,18 @@ class SkillAuthoringService:
         author: SkillAuthor,
         source: str | None = None,
     ) -> SkillWriteResult:
-        """Replace an existing Skill's complete ``SKILL.md``."""
+        """Replace an existing Skill's complete ``SKILL.md``.
+
+        The new document does not depend on the old one, so a ``SKILL.md`` that
+        is not UTF-8 text is replaced too; its old text is not reported.
+        """
         with self._write_lock:
             skill_file = self._existing_skill_file(target_root, skill_name)
-            current = _read_raw_text(skill_file)
-            file_ending = _detect_line_ending(current)
+            try:
+                current: str | None = _read_raw_text(skill_file)
+            except UnicodeDecodeError:
+                current = None
+            file_ending = _detect_line_ending(current) if current else "\n"
             document, validation = self._prepare_document(
                 content,
                 skill_name=skill_name,
@@ -184,7 +191,10 @@ class SkillAuthoringService:
                 warnings=validation.warnings,
                 changes=(
                     SkillFileChange(
-                        SKILL_FILENAME, "updated", _normalize_newlines(current), document
+                        SKILL_FILENAME,
+                        "updated",
+                        None if current is None else _normalize_newlines(current),
+                        document,
                     ),
                 ),
             )
