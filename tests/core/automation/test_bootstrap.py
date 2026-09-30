@@ -252,15 +252,25 @@ _JOB_STATES = [
 ]
 
 
+def _store_job_state(data_root: Path, job_id: str, state: dict[str, Any]) -> None:
+    """Leave one stored job in ``state``, as an earlier Runtime's Runs did."""
+    jobs_path = data_root / "bootstrap" / "jobs.json"
+    payload = json.loads(jobs_path.read_text(encoding="utf-8"))
+    (stored,) = [job for job in payload["jobs"] if job["id"] == job_id]
+    stored.update(state)
+    jobs_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 @pytest.mark.parametrize("state", _JOB_STATES)
 def test_retargeting_the_agent_keeps_status_arming_and_run_history(
     tmp_path: Path, state: dict[str, Any]
 ) -> None:
     creator = make_service(StubTriggerService(), tmp_path, "creator")
     created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
-    creator.restore_job(replace(created, **state))
-    before = creator.get_job(created.id)
+    _store_job_state(tmp_path, created.id, state)
     service = make_service(StubTriggerService(), tmp_path, "later")
+    before = service.get_job(created.id)
+    assert before == replace(created, **state)
 
     retargeted = service.retarget_agent(created.id, "renamed")
 
@@ -274,7 +284,7 @@ def test_editing_a_job_rearms_it_and_clears_its_run_references(
 ) -> None:
     creator = make_service(StubTriggerService(), tmp_path, "creator")
     created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
-    creator.restore_job(replace(created, **state))
+    _store_job_state(tmp_path, created.id, state)
     service = make_service(StubTriggerService(), tmp_path, "later")
 
     edited = service.update_job(created.id, prompt="Changed")

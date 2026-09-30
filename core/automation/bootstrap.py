@@ -473,23 +473,6 @@ class BootstrapService:
         )
         return replace(candidate)
 
-    def restore_job(self, job: BootstrapJob) -> None:
-        """Restore an exact prior record during a coordinated RPC rollback."""
-        self._ensure_loaded()
-        self._require_not_running(job.id)
-        current = self._jobs.get(job.id)
-        self._jobs[job.id] = replace(job)
-        try:
-            self._save()
-        except Exception:
-            if current is None:
-                self._jobs.pop(job.id, None)
-            else:
-                self._jobs[job.id] = current
-            raise
-        # A rollback step of an Agent rename, which logs its own outcome.
-        _LOGGER.debug("Bootstrap job restored (job=%s agent=%s)", job.id, _agent_fields(job))
-
     def activate(self) -> None:
         """Start eligible jobs in the background; idempotent per Runtime startup."""
         if self._activation_task is not None and not self._activation_task.done():
