@@ -55,7 +55,7 @@ def _counting_tool(
 @pytest.mark.parametrize(
     ("allowed_tools", "result", "arguments", "failure", "ran"),
     [
-        ([], None, _VALID, tool_failure("tool_not_allowed", "Tool not allowed: probe"), False),
+        ([], None, _VALID, tool_failure("tool_not_allowed", "Tool not allowed: probe."), False),
         (
             None,
             ValueError("extension change is unavailable"),
