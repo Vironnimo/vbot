@@ -622,7 +622,11 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_cron_service()
             runtime._start_calendar_service()
         register_cron_tool(runtime._tools, runtime._cron_service)
-        register_calendar_tool(runtime._tools, runtime._calendar_service)
+        register_calendar_tool(
+            runtime._tools,
+            runtime._calendar_service,
+            reference_lock=runtime._automation_references.lock,
+        )
         register_bash_tool(
             runtime._tools,
             runtime._process_manager,

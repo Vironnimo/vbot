@@ -38,6 +38,12 @@ class _DispatchedTool:
 
     def call(self, arguments: Any, *, project_id: str | None = None) -> tuple[dict[str, Any], str]:
         """Dispatch like the Tool executor; return the envelope and the text the Model reads."""
+        return asyncio.run(self.call_async(arguments, project_id=project_id))
+
+    async def call_async(
+        self, arguments: Any, *, project_id: str | None = None
+    ) -> tuple[dict[str, Any], str]:
+        """:meth:`call` on the running Event Loop."""
         context = ToolContext(
             agent_id="agent-one",
             session_id="session-one",
@@ -50,7 +56,7 @@ class _DispatchedTool:
             data_root=self.workspace,
             project_id=project_id,
         )
-        envelope = asyncio.run(dispatch_as_executor(self.registry, context, arguments))
+        envelope = await dispatch_as_executor(self.registry, context, arguments)
         text = str(tool_result_text(json.dumps(envelope, ensure_ascii=False)))
         return envelope, text
 
@@ -98,6 +104,7 @@ class CronTool(_DispatchedTool):
 @dataclass
 class CalendarTool(_DispatchedTool):
     service: CalendarService
+    reference_lock: asyncio.Lock
 
     tool_name: ClassVar[str] = CALENDAR_TOOL_NAME
 
@@ -132,8 +139,11 @@ def cron_tool(tmp_path: Path, *, tz: str = SERVER_ZONE, agent_resolver: Any = No
 def calendar_tool(tmp_path: Path, *, tz: str = SERVER_ZONE) -> CalendarTool:
     service = CalendarService(tmp_path, tz=tz)
     registry = ToolRegistry()
-    register_calendar_tool(registry, service)
-    return CalendarTool(registry=registry, workspace=tmp_path, service=service)
+    reference_lock = asyncio.Lock()
+    register_calendar_tool(registry, service, reference_lock=reference_lock)
+    return CalendarTool(
+        registry=registry, workspace=tmp_path, service=service, reference_lock=reference_lock
+    )
 
 
 def clock_at(moment: datetime) -> type[datetime]:

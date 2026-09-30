@@ -14,7 +14,7 @@ RPC bodies group by owning surface under `server/rpc/*_methods.py`; envelope dis
 
 Failures while settling a cancelled mutation remain observable: expected RPC errors log only their code, while unexpected errors retain their traceback. Request parameters are never added to these logs.
 
-The Agent reference lock (`app.state.agent_delete_lock`) is `Runtime.automation_references.lock` (`automation.md`), so core callers that check or create references, such as the Agent Takeover, serialize with the RPC handlers below.
+The Agent reference lock (`app.state.agent_delete_lock`) is `Runtime.automation_references.lock` (`automation.md`), so core callers that check or create references, such as the Agent Takeover and the calendar Tool's action changes, serialize with the RPC handlers below.
 
 Private Skill mutations (including archive uploads) and sharing acquire the existing Agent reference lock before the Skill mutation lock. Scope validation, persistence, invalidation and publication remain protected against Agent rename/delete, including cancellation settlement; cancellation while waiting for either lock starts no mutation. Global Skill writes do not acquire the Agent reference lock (`tests/server/rpc/test_skill_methods.py`).
 

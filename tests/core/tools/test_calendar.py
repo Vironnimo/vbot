@@ -10,6 +10,8 @@ from typing import Any, cast
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from core.projects import AgentResolutionError
 from core.tools.calendar import (
     CALENDAR_TOOL_DESCRIPTION,
@@ -479,6 +481,31 @@ class TestActions:
         _, deleted = tool.call({"action": "delete_action", "id": action["id"]})
         assert tool.actions() == []
         assert deleted == f"id: {action['id']}\nevent: Meeting ({event.id})\nstatus: deleted"
+
+    @pytest.mark.parametrize("change", ["add_action", "update_action"])
+    def test_action_changes_wait_for_the_reference_lock(self, tmp_path: Path, change: str) -> None:
+        """A removal that holds the lock ends before an action can select its Agent or Session."""
+        tool = calendar_tool(tmp_path)
+        event = tool.service.create_event(title="Meeting", start="2030-01-01T12:00")
+        action = tool.service.actions.add(event.id, when="start", prompt="p", target="agent-one")
+        arguments = (
+            {"action": change, "id": event.id, "when": "end", "prompt": "review"}
+            if change == "add_action"
+            else {"action": change, "id": action["id"], "when": "end"}
+        )
+        before = tool.actions()
+
+        async def while_a_removal_holds_the_lock() -> list[dict[str, Any]]:
+            async with tool.reference_lock:
+                call = asyncio.create_task(tool.call_async(arguments))
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                held = tool.actions()
+            await call
+            return held
+
+        assert asyncio.run(while_a_removal_holds_the_lock()) == before
+        assert tool.actions() != before
 
     def test_explicit_target_and_session_are_kept(self, tmp_path: Path) -> None:
         tool = calendar_tool(tmp_path)

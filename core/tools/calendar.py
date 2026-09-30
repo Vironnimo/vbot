@@ -66,6 +66,8 @@ from core.tools.tools import (
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
+    import asyncio
+
     from core.calendar import CalendarEvent, CalendarService, EventOccurrence
 
 CALENDAR_TOOL_NAME = "calendar"
@@ -221,10 +223,25 @@ def _normalize_calendar_arguments(arguments: Any) -> Any:
     return normalize_calendar_arguments(_repair_contract(), arguments)
 
 
-def register_calendar_tool(registry: ToolRegistry, calendar_service: CalendarService) -> None:
-    """Register the calendar tool with a vBot tool registry."""
+# Actions that choose an action's target Agent and Session.
+_REFERENCE_ACTIONS = frozenset({"add_action", "update_action"})
 
-    def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+
+def register_calendar_tool(
+    registry: ToolRegistry, calendar_service: CalendarService, *, reference_lock: asyncio.Lock
+) -> None:
+    """Register the calendar tool with a vBot tool registry.
+
+    ``reference_lock`` is the Agent reference lock (``AutomationReferences.lock``).
+    add_action and update_action hold it like the calendar RPCs, so an action
+    cannot select an Agent or Session between a removal's reference check and
+    the removal.
+    """
+
+    async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        if arguments.get("action") in _REFERENCE_ACTIONS:
+            async with reference_lock:
+                return _handle_calendar_tool(calendar_service, arguments, context)
         return _handle_calendar_tool(calendar_service, arguments, context)
 
     registry.register(
