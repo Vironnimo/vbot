@@ -24,6 +24,7 @@ from cli.autostart_management import (
 from cli.main import dispatch_autostart_command
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
+from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
 
 
 def _instance() -> ServerInstance:
@@ -268,6 +269,9 @@ def test_enable_linux_writes_unit_and_enables(tmp_path: Path, lingering: bool) -
     assert f'WorkingDirectory="{escaped_repo}"' in unit
     assert "KillMode=mixed" in unit
     assert "KillMode=process" not in unit
+    # A failed startup would fail again, and a stop whose shutdown failed was requested.
+    no_restart = f"RestartPreventExitStatus={STARTUP_FAILED_EXIT_CODE} {SHUTDOWN_FAILED_EXIT_CODE}"
+    assert f"\n{no_restart}\n" in unit
     assert runner.ran("systemctl", "--user", "enable", "--now", "vbot.service")
     assert runner.ran("loginctl", "enable-linger")
     assert ("login lingering could not be enabled" in result.message) is not lingering
@@ -380,6 +384,28 @@ def test_windows_status_matches_the_task_to_the_exact_instance(
     assert message in result.message
 
 
+_UNIT_PYTHON = "/expected/python"
+_UNIT_REPO = Path("/repo")
+
+
+def _unit_for(instance: ServerInstance, *, older_version: bool = False) -> str:
+    """The unit this version writes for *instance*, or the one the previous version wrote."""
+
+    unit = autostart_management._systemd_unit(instance, _UNIT_PYTHON, _UNIT_REPO)
+    return re.sub(r"RestartPreventExitStatus=.*\n", "", unit) if older_version else unit
+
+
+def _other_instance() -> ServerInstance:
+    instance = _instance()
+    return ServerInstance(
+        host=instance.host,
+        port=9999,
+        data_dir=instance.data_dir,
+        url="http://127.0.0.1:9999",
+        log_path=instance.log_path,
+    )
+
+
 @pytest.mark.parametrize(
     ("answer", "unit", "ok", "message"),
     [
@@ -391,34 +417,83 @@ def test_windows_status_matches_the_task_to_the_exact_instance(
             "different server instance",
             id="other-instance",
         ),
-        pytest.param(_ok("enabled"), "exact", True, "enabled", id="exact-instance"),
+        pytest.param(
+            _ok("enabled"),
+            _unit_for(_other_instance(), older_version=True),
+            False,
+            "different server instance",
+            id="other-instance-older-version",
+        ),
+        pytest.param(_ok("enabled"), _unit_for(_instance()), True, "enabled", id="exact-instance"),
+        pytest.param(
+            _ok("enabled"),
+            _unit_for(_instance(), older_version=True),
+            True,
+            "is outdated; rewrite it with: vbot autostart enable --host 127.0.0.1 --port 8420",
+            id="exact-instance-older-version",
+        ),
         pytest.param(_err("no bus"), None, False, "systemctl is-enabled failed", id="failure"),
     ],
 )
 def test_linux_status_matches_the_enabled_unit_to_the_exact_instance(
     tmp_path: Path, answer: CommandRun, unit: str | None, ok: bool, message: str
 ) -> None:
-    python_executable = "/expected/python"
-    repo_root = Path("/repo")
     if unit is not None:
-        content = (
-            autostart_management._systemd_unit(_instance(), python_executable, repo_root)
-            if unit == "exact"
-            else unit
-        )
-        (tmp_path / "vbot.service").write_text(content, encoding="utf-8")
+        (tmp_path / "vbot.service").write_text(unit, encoding="utf-8")
 
     result = autostart_status(
         _instance(),
         platform="linux",
         runner=ScriptedRunner(lambda command: answer),
         unit_dir=tmp_path,
-        python_executable=python_executable,
-        repo_root=repo_root,
+        python_executable=_UNIT_PYTHON,
+        repo_root=_UNIT_REPO,
     )
 
     assert result.ok is ok
     assert message in result.message
+    # An outdated unit of this server is still enabled, and the result says so.
+    assert bool(result.attention) is ("outdated" in message)
+
+
+@pytest.mark.parametrize(
+    ("unit", "reload_ok", "rewritten"),
+    [
+        pytest.param(_unit_for(_instance(), older_version=True), True, True, id="older-version"),
+        pytest.param(_unit_for(_instance()), True, False, id="current"),
+        pytest.param(
+            _unit_for(_other_instance(), older_version=True), True, False, id="other-instance"
+        ),
+        pytest.param(None, True, False, id="missing"),
+        pytest.param(_unit_for(_instance(), older_version=True), False, False, id="reload-fails"),
+    ],
+)
+def test_linux_refresh_rewrites_only_this_installations_outdated_unit(
+    tmp_path: Path, unit: str | None, reload_ok: bool, rewritten: bool
+) -> None:
+    unit_path = tmp_path / "vbot.service"
+    if unit is not None:
+        unit_path.write_text(unit, encoding="utf-8")
+    runner = ScriptedRunner(lambda command: _ok() if reload_ok else _err("no bus"))
+
+    result = autostart_management.refresh_autostart_unit(
+        _instance(),
+        platform="linux",
+        runner=runner,
+        unit_dir=tmp_path,
+        python_executable=_UNIT_PYTHON,
+        repo_root=_UNIT_REPO,
+    )
+
+    assert result.ok is reload_ok
+    # An empty message means nothing changed.
+    assert bool(result.message) is (rewritten or not reload_ok)
+    expected = _unit_for(_instance()) if rewritten else unit
+    assert (unit_path.read_text(encoding="utf-8") if unit_path.exists() else None) == expected
+    # Only a rewrite reloads systemd; enablement is left alone either way, and a
+    # failed reload restores the previous file.
+    assert (runner.calls != []) is (rewritten or not reload_ok)
+    assert all(call[:3] == ["systemctl", "--user", "daemon-reload"] for call in runner.calls)
 
 
 def test_linux_service_name_cannot_escape_unit_directory(tmp_path: Path) -> None:

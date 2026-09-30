@@ -7,13 +7,19 @@ uses a Task Scheduler logon task; Linux uses a systemd **user** unit plus login
 lingering. ``enable`` also brings the server up immediately (Linux via the unit,
 Windows via a managed background start), so the machine ends up both running and
 boot-persistent in one step.
+
+``python -m cli.autostart_management --refresh-unit`` is the private entrypoint
+``vbot update`` runs with the updated checkout's interpreter: it rewrites this
+installation's systemd user unit when an older vBot version wrote it.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -21,6 +27,7 @@ from collections.abc import Callable, Sequence
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from cli.server_management import (
     DEFAULT_SERVICE_NAME,
@@ -28,12 +35,14 @@ from cli.server_management import (
     ServerInstance,
     decode_command_output,
     is_valid_systemd_service_name,
+    resolve_instance,
     start_server,
 )
 from core.utils.atomic import atomic_write_text
 from core.utils.config import VBOT_ROOT
-from core.utils.logging import get_logger
+from core.utils.logging import LogManager, get_logger
 from core.utils.processes import subprocess_creation_flags
+from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
 
 DEFAULT_TASK_NAME = "vBot"
 _LOGGER = get_logger("cli.autostart")
@@ -370,20 +379,29 @@ def autostart_status(
             return _fail(instance, f"autostart: systemctl is-enabled failed: {detail}")
         if enabled:
             units = unit_dir or _systemd_user_dir()
-            unit_path = units / f"{name}.service"
-            expected_unit = _systemd_unit(
-                instance,
-                python_executable,
-                repo_root or VBOT_ROOT,
+            unit_state = _systemd_unit_state(
+                _read_unit_file(units / f"{name}.service"),
+                _systemd_unit(instance, python_executable, repo_root or VBOT_ROOT),
             )
-            try:
-                unit_matches = unit_path.read_text(encoding="utf-8") == expected_unit
-            except OSError:
-                unit_matches = False
-            if not unit_matches:
+            if unit_state == "foreign":
                 return _fail(
                     instance,
                     f"autostart: systemd user unit '{name}' targets a different server instance",
+                )
+            if unit_state == "outdated":
+                command = _enable_command(instance, name)
+                return CommandResult(
+                    ok=True,
+                    message=(
+                        f"autostart: enabled (systemd user unit '{name}' is outdated; "
+                        f"rewrite it with: {command})"
+                    ),
+                    instance=instance,
+                    attention=(
+                        f"The systemd user unit '{name}' starts this server but differs from "
+                        "the unit this vBot version writes (an older version wrote it, or it "
+                        f"was edited); `{command}` rewrites it",
+                    ),
                 )
         state = "enabled" if enabled else "not enabled"
         return CommandResult(
@@ -472,21 +490,11 @@ def _linux_enable(
     units.mkdir(parents=True, exist_ok=True)
     unit_path = units / f"{service_name}.service"
     previous_content = unit_path.read_text(encoding="utf-8") if unit_path.exists() else None
-    try:
-        _write_unit_file(unit_path, _systemd_unit(instance, python_executable, repo_root))
-    except OSError as exc:
-        return _Step(False, f"autostart: writing {unit_path} failed: {exc}")
-
-    reloaded = run(["systemctl", "--user", "daemon-reload"])
-    if reloaded.returncode != 0:
-        rollback = _restore_unit_file(unit_path, previous_content)
-        run(["systemctl", "--user", "daemon-reload"])
-        rollback_note = f"; rollback failed: {rollback}" if rollback else ""
-        return _Step(
-            False,
-            f"autostart: systemctl daemon-reload failed: "
-            f"{reloaded.stderr or reloaded.stdout}{rollback_note}",
-        )
+    installed = _install_unit(
+        run, unit_path, _systemd_unit(instance, python_executable, repo_root), previous_content
+    )
+    if not installed.ok:
+        return installed
     enabled = run(["systemctl", "--user", "enable", "--now", f"{service_name}.service"])
     if enabled.returncode != 0:
         rollback = _restore_unit_file(unit_path, previous_content)
@@ -546,6 +554,48 @@ def _linux_disable(
     )
 
 
+def refresh_autostart_unit(
+    instance: ServerInstance,
+    *,
+    platform: str = sys.platform,
+    runner: Runner | None = None,
+    service_name: str | None = None,
+    unit_dir: Path | None = None,
+    python_executable: str = sys.executable,
+    repo_root: Path | None = None,
+) -> CommandResult:
+    """Rewrite this installation's systemd user unit when it is outdated.
+
+    Only a unit that runs this installation's program in its checkout for this
+    server counts; a missing, current or different unit stays untouched, and so
+    does the unit's enablement. An empty message means nothing changed; other
+    platforms have nothing to rewrite.
+    """
+
+    if not platform.startswith("linux"):
+        return CommandResult(ok=True, message="", instance=instance)
+    name = service_name or DEFAULT_SERVICE_NAME
+    if not is_valid_systemd_service_name(name):
+        return _invalid_service_name(instance)
+    unit_path = (unit_dir or _systemd_user_dir()) / f"{name}.service"
+    current = _read_unit_file(unit_path)
+    expected = _systemd_unit(instance, python_executable, repo_root or VBOT_ROOT)
+    if _systemd_unit_state(current, expected) != "outdated":
+        return CommandResult(ok=True, message="", instance=instance)
+    installed = _install_unit(runner or _default_runner, unit_path, expected, current)
+    if not installed.ok:
+        return _fail(
+            instance,
+            f"{installed.message}; `{_enable_command(instance, name)}` rewrites the unit",
+        )
+    _LOGGER.info("Autostart unit rewritten (mode=systemd)")
+    return CommandResult(
+        ok=True,
+        message=f"autostart: systemd user unit '{name}' rewritten with the current settings",
+        instance=instance,
+    )
+
+
 def _systemd_unit(instance: ServerInstance, python_executable: str, repo_root: Path) -> str:
     # Stop the main process gracefully, then let systemd remove every remaining
     # server-owned descendant from the service cgroup after TimeoutStopSec.
@@ -572,11 +622,84 @@ def _systemd_unit(instance: ServerInstance, python_executable: str, repo_root: P
         f"ExecStart={command}\n"
         "Restart=on-failure\n"
         "RestartSec=5\n"
+        # A failed startup would fail again, and a stop whose Runtime shutdown
+        # failed was requested: neither exit status restarts the server.
+        f"RestartPreventExitStatus={STARTUP_FAILED_EXIT_CODE} {SHUTDOWN_FAILED_EXIT_CODE}\n"
         "KillMode=mixed\n"
         "TimeoutStopSec=10\n\n"
         "[Install]\n"
         "WantedBy=default.target\n"
     )
+
+
+def _systemd_unit_state(
+    current: str | None, expected: str
+) -> Literal["current", "outdated", "foreign"]:
+    """Compare an installed unit with the unit this version writes for the same target.
+
+    A unit that differs only outside its ``WorkingDirectory=`` and ``ExecStart=``
+    lines (program, checkout and server target) is this installation's, outdated.
+    """
+
+    if current is None:
+        return "foreign"
+    if current == expected:
+        return "current"
+    return "outdated" if _unit_identity(current) == _unit_identity(expected) else "foreign"
+
+
+def _unit_identity(content: str) -> list[str]:
+    return [
+        line
+        for line in content.splitlines()
+        if line.startswith(("WorkingDirectory=", "ExecStart="))
+    ]
+
+
+def _read_unit_file(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _enable_command(instance: ServerInstance, service_name: str) -> str:
+    arguments = [
+        "vbot",
+        "autostart",
+        "enable",
+        "--host",
+        instance.host,
+        "--port",
+        str(instance.port),
+        "--data-dir",
+        str(instance.data_dir),
+    ]
+    if service_name != DEFAULT_SERVICE_NAME:
+        arguments.extend(["--service-name", service_name])
+    return shlex.join(arguments)
+
+
+def _install_unit(
+    run: Runner, unit_path: Path, content: str, previous_content: str | None
+) -> _Step:
+    """Write one unit file and reload systemd; a failed reload restores the previous file."""
+
+    try:
+        _write_unit_file(unit_path, content)
+    except OSError as exc:
+        return _Step(False, f"autostart: writing {unit_path} failed: {exc}")
+    reloaded = run(["systemctl", "--user", "daemon-reload"])
+    if reloaded.returncode != 0:
+        rollback = _restore_unit_file(unit_path, previous_content)
+        run(["systemctl", "--user", "daemon-reload"])
+        rollback_note = f"; rollback failed: {rollback}" if rollback else ""
+        return _Step(
+            False,
+            f"autostart: systemctl daemon-reload failed: "
+            f"{reloaded.stderr or reloaded.stdout}{rollback_note}",
+        )
+    return _Step(True, "")
 
 
 def _systemd_user_dir() -> Path:
@@ -735,3 +858,41 @@ def _invalid_service_name(instance: ServerInstance) -> CommandResult:
         "autostart: invalid systemd service name; start with a letter or number, then use "
         "only letters, numbers, '.', '_', '@', or '-', without a .service suffix",
     )
+
+
+def _run_refresh_unit(argv: Sequence[str]) -> int:
+    """Private entrypoint ``vbot update`` runs with the updated checkout's interpreter.
+
+    The updater of the previous vBot version calls it, so its arguments stay stable.
+    A rewrite prints one line on stdout, a failure one line on stderr.
+    """
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--refresh-unit", action="store_true", required=True)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--data-dir", required=True)
+    parser.add_argument("--service-name", required=True)
+    arguments = parser.parse_args(list(argv))
+    instance = resolve_instance(
+        host=arguments.host, port=arguments.port, data_dir=arguments.data_dir
+    )
+    # The rewrite is logged into the target's daily file; logging alone never
+    # initializes a data directory.
+    manager = (
+        LogManager(data_dir=instance.data_dir, enable_console=False)
+        if instance.data_dir.is_dir()
+        else None
+    )
+    try:
+        result = refresh_autostart_unit(instance, service_name=arguments.service_name)
+    finally:
+        if manager is not None:
+            manager.close()
+    if result.message:
+        print(result.message, file=sys.stdout if result.ok else sys.stderr)
+    return 0 if result.ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_refresh_unit(sys.argv[1:]))

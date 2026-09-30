@@ -28,6 +28,8 @@ from core.utils.config import (
 from core.utils.logging import LogManager, build_uvicorn_log_config, get_logger
 from core.utils.processes import activate_process_containment
 from core.utils.server_control import (
+    SHUTDOWN_FAILED_EXIT_CODE,
+    STARTUP_FAILED_EXIT_CODE,
     UNKNOWN_STOP_INITIATOR,
     create_server_control,
     remove_server_control,
@@ -41,7 +43,6 @@ __all__ = [
     "DEFAULT_HOST",
     "DEFAULT_PORT",
     "PORT_SETTING_KEYS",
-    "SHUTDOWN_FAILED_EXIT_CODE",
     "ServerBind",
     "main",
     "parse_args",
@@ -50,10 +51,6 @@ __all__ = [
 ]
 
 _LOGGER = get_logger("server")
-# A stop whose Runtime shutdown failed ends with this status (sysexits EX_SOFTWARE),
-# distinct from uvicorn's exit 1 after a failed bind. A signal stop still ends by
-# re-raising its signal.
-SHUTDOWN_FAILED_EXIT_CODE = 70
 # The directory holding this code: `app` inside an installed version of a packaged build.
 _APP_ROOT = Path(__file__).resolve().parents[1]
 
@@ -83,7 +80,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> None:
     """Start uvicorn for the vBot FastAPI app.
 
-    Exits with ``SHUTDOWN_FAILED_EXIT_CODE`` after a stop whose Runtime shutdown failed.
+    Exits with ``STARTUP_FAILED_EXIT_CODE`` when the application failed to start and
+    with ``SHUTDOWN_FAILED_EXIT_CODE`` after a stop whose Runtime shutdown failed.
     """
     if uvicorn is None:
         raise RuntimeError("uvicorn is required to start the server") from _UVICORN_IMPORT_ERROR
@@ -192,6 +190,10 @@ def main(argv: list[str] | None = None) -> None:
                 lifecycle.stopped(listening=_server_listening(server_holder))
                 log_manager.close()
             remove_server_control(control)
+    # Current uvicorn itself exits with STARTUP_FAILED_EXIT_CODE when the application
+    # fails to start; older versions return from run() instead.
+    if lifecycle.startup_failed:
+        raise SystemExit(STARTUP_FAILED_EXIT_CODE)
     if lifecycle.shutdown_failed:
         raise SystemExit(SHUTDOWN_FAILED_EXIT_CODE)
 
@@ -218,6 +220,7 @@ class _ServerLifecycle:
         self._stop_cause: dict[str, str] | None = None
         self._ready = False
         self._stopped = False
+        self.startup_failed = False
         self.shutdown_failed = False
 
     def request_stop(self, reason: str, **details: str) -> None:
@@ -262,6 +265,7 @@ class _ServerLifecycle:
         cause = self._stop_cause
         if cause is None:
             cause = {"reason": "unknown" if self._ready and listening else "startup_failed"}
+        self.startup_failed = cause["reason"] == "startup_failed"
         fields: dict[str, object] = dict(cause)
         if self.shutdown_failed:
             fields["shutdown"] = "failed"

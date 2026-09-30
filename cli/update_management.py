@@ -441,6 +441,21 @@ def run_update(
 
     announce("success", "Command launcher and shortcut checks completed")
 
+    # An outdated autostart unit keeps working, and systemctl --user can be unreachable
+    # where updates otherwise work (no user session bus), so a failed rewrite does not
+    # stop the update; the result names it.
+    autostart_unit = _refresh_autostart_unit(
+        run,
+        repo,
+        state,
+        instance,
+        service_name=service_name,
+        platform_name=effective_platform,
+    )
+    if autostart_unit.message:
+        record(autostart_unit.message, autostart_unit.ok)
+    autostart_attention = () if autostart_unit.ok else (autostart_unit.message,)
+
     if state.install_shape != DESKTOP_CLIENT_SHAPE:
         announce("busy", "Preparing WebUI and Extension pages")
         if track == "dev":
@@ -479,7 +494,7 @@ def run_update(
         record(restored.message, restored.ok)
 
     announce("busy", "Finishing the update and checking the server restart")
-    return _finish(
+    finished = _finish(
         instance,
         lines,
         restart=restart,
@@ -491,6 +506,9 @@ def run_update(
         snapshot_id=snapshot_id,
         previous_revision=before,
     )
+    if autostart_attention:
+        finished = replace(finished, attention=(*finished.attention, *autostart_attention))
+    return finished
 
 
 def _resolve_update_instance(
@@ -836,6 +854,47 @@ def _refresh_desktop_shortcut(
         detail = refreshed.stderr or refreshed.stdout
         return _Step(False, f"desktop shortcut update failed: {detail}")
     return _Step(True, "desktop shortcut refreshed")
+
+
+def _refresh_autostart_unit(
+    run: Runner,
+    repo: Path,
+    state: InstallState,
+    instance: ServerInstance,
+    *,
+    service_name: str,
+    platform_name: str,
+) -> _Step:
+    """Let the updated code rewrite an outdated systemd user unit of this server.
+
+    The updated checkout's interpreter runs the rewrite, so the unit the new
+    version generates replaces one an older version wrote. A missing, current or
+    different unit stays untouched.
+    """
+
+    if platform_name != "posix" or state.install_shape == DESKTOP_CLIENT_SHAPE:
+        return _Step(True, "")
+    refreshed = run(
+        [
+            state.python_executable,
+            "-m",
+            "cli.autostart_management",
+            "--refresh-unit",
+            "--host",
+            instance.host,
+            "--port",
+            str(instance.port),
+            "--data-dir",
+            str(instance.data_dir),
+            "--service-name",
+            service_name,
+        ],
+        repo,
+    )
+    if refreshed.returncode != 0:
+        detail = refreshed.stderr or refreshed.stdout or f"exit code {refreshed.returncode}"
+        return _Step(False, f"autostart unit update failed: {detail}")
+    return _Step(True, refreshed.stdout)
 
 
 def _windows_desktop_launcher(state: InstallState) -> Path:

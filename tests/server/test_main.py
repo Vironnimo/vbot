@@ -10,9 +10,11 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+import uvicorn.server
 
 from core.database import DataStoreMarker, read_marker
 from core.utils.logging import resolve_daily_log_path
+from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
 from core.utils.version import BuildIdentity
 from server import main as server_main
 from server.main import main, parse_args
@@ -175,7 +177,12 @@ def test_main_initializes_only_a_missing_data_directory(
     if existing:
         data_dir.mkdir()
     markers: list[DataStoreMarker | None] = []
-    _patch_serving(monkeypatch, lambda _server: markers.append(read_marker(data_dir)))
+
+    def run(server: Any) -> None:
+        markers.append(read_marker(data_dir))
+        _serve_until("control")(server)
+
+    _patch_serving(monkeypatch, run)
 
     main(["--data-dir", str(data_dir), "--port", "8765"])
 
@@ -195,7 +202,11 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
     def run(server: Any) -> None:
         app = server.config.app
         if cause == "startup_failed":
-            raise SystemExit(3)
+            # Current uvicorn exits itself when the application fails to start.
+            raise SystemExit(uvicorn.server.STARTUP_FAILURE)
+        if cause == "startup_failed_returning":
+            # Older uvicorn versions return from run() instead.
+            return
         app["on_ready"](_READY_RUNTIME)
         server.started = True
         if cause == "signal":
@@ -215,6 +226,10 @@ def _serve_until(cause: str) -> Callable[[Any], None]:
         ("signal", "[INFO] vbot.server - Server stopped (reason=signal signal=SIGINT "),
         ("startup_failed", "[WARN] vbot.server - Server stopped (reason=startup_failed "),
         (
+            "startup_failed_returning",
+            "[WARN] vbot.server - Server stopped (reason=startup_failed ",
+        ),
+        (
             "shutdown_failed",
             "[WARN] vbot.server - Server stopped (reason=control initiator=tray_quit "
             "shutdown=failed ",
@@ -226,14 +241,18 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
 ) -> None:
     _patch_serving(monkeypatch, _serve_until(cause))
     data_dir = tmp_path / "data"
+    # Supervisors such as the generated systemd unit do not restart for these statuses.
+    exit_code = {
+        "startup_failed": STARTUP_FAILED_EXIT_CODE,
+        "startup_failed_returning": STARTUP_FAILED_EXIT_CODE,
+        "shutdown_failed": SHUTDOWN_FAILED_EXIT_CODE,
+    }.get(cause)
 
-    if cause in {"startup_failed", "shutdown_failed"}:
+    if exit_code is not None:
         with pytest.raises(SystemExit) as exited:
             main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
-        # A failed Runtime shutdown, already logged per step, still fails the process.
-        assert (exited.value.code == server_main.SHUTDOWN_FAILED_EXIT_CODE) is (
-            cause == "shutdown_failed"
-        )
+        # A failed startup or Runtime shutdown, already logged, still fails the process.
+        assert exited.value.code == exit_code
         assert not (data_dir / "runtime" / "server-8765.json").exists()
     else:
         main(["--data-dir", str(data_dir), "--port", "8765", "--verification-only"])
@@ -241,7 +260,7 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     lines = resolve_daily_log_path(data_dir).read_text(encoding="utf-8").splitlines()
     started = [line for line in lines if " - Server started (" in line]
     stopped = [line for line in lines if " - Server stopped (" in line]
-    if cause == "startup_failed":
+    if cause.startswith("startup_failed"):
         assert started == []
     else:
         # The start line names the build, the mode and the Runtime's startup summary.
