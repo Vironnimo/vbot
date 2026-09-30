@@ -793,26 +793,46 @@ async def test_watch_file_skips_unchanged_timeouts_and_reconciles_metadata_chang
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "cursor",
+    ("cursor", "start_read_error", "expected"),
     [
-        pytest.param("9f86d081884c7d659a2feaa0c55ad015", id="not-a-cursor"),
-        pytest.param("v2.0." + "0" * 64, id="unknown-version"),
+        pytest.param("9f86d081884c7d659a2feaa0c55ad015", None, ValueError, id="not-a-cursor"),
+        pytest.param("v2.0." + "0" * 64, None, ValueError, id="unknown-version"),
+        # A share lock or a virus scanner denies the read after the watcher started.
+        pytest.param(None, PermissionError("locked"), PermissionError, id="unreadable-file"),
     ],
 )
-async def test_subscribe_rejects_a_malformed_cursor(tmp_path: Path, cursor: str) -> None:
+async def test_a_failed_subscribe_leaves_no_watcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cursor: str | None,
+    start_read_error: Exception | None,
+    expected: type[Exception],
+) -> None:
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "2026-05-11").write_text(
         "2026-05-11 09:00:00 [INFO] vbot.server.app - Ready\n",
         encoding="utf-8",
     )
+    watch = _FakeWatch()
+    monkeypatch.setattr(log_viewer_module, "awatch", watch.awatch)
+    monkeypatch.setattr(log_viewer_module, "_LOG_WORKERS", _InlineWorkers())
+    if start_read_error is not None:
+
+        def fail_start_read(*_arguments: object) -> None:
+            raise start_read_error
+
+        monkeypatch.setattr(log_viewer_module, "_read_subscribe_start", fail_start_read)
 
     viewer = LogViewer(tmp_path)
 
-    with pytest.raises(ValueError):
-        async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
-            await stream.__anext__()
-    assert viewer.watcher_count == 0
+    try:
+        with pytest.raises(expected):
+            async with aclosing(viewer.subscribe("2026-05-11", cursor=cursor)) as stream:
+                await stream.__anext__()
+        assert viewer.watcher_count == 0
+    finally:
+        await viewer.aclose()
 
 
 @pytest.mark.asyncio

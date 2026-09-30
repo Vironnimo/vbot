@@ -615,16 +615,29 @@ class LogViewer:
         # Finding or starting the watcher and registering the queue are one step under
         # the lock that also retires watchers. Split, the last other subscriber could
         # leave in between, evict the watcher and leave this queue on a dead one.
-        async with self._watch_lock:
-            watcher = await self._ensure_watcher(file_path.name)
-            # One read brings the watcher and this reader's cursor to the same point.
-            watcher.tail, catch_up_event, replay_event = await _LOG_WORKERS.run(
-                _read_subscribe_start, file_path, file_path.name, watcher.tail, read_cursor
-            )
-            if catch_up_event is not None:
-                catch_up_subscribers = list(watcher.subscribers)
-            watcher.subscribers.append(queue)
-            tail, catalog = watcher.tail, watcher.catalog
+        orphan: asyncio.Task[None] | None = None
+        try:
+            async with self._watch_lock:
+                watcher = await self._ensure_watcher(file_path.name)
+                # One read brings the watcher and this reader's cursor to the same point.
+                try:
+                    watcher.tail, catch_up_event, replay_event = await _LOG_WORKERS.run(
+                        _read_subscribe_start, file_path, file_path.name, watcher.tail, read_cursor
+                    )
+                except BaseException:
+                    # No subscriber would ever leave a watcher this failed read started.
+                    if not watcher.subscribers and self._watchers.get(watcher.file_name) is watcher:
+                        watcher.stop_event.set()
+                        del self._watchers[watcher.file_name]
+                        orphan = watcher.task
+                    raise
+                if catch_up_event is not None:
+                    catch_up_subscribers = list(watcher.subscribers)
+                watcher.subscribers.append(queue)
+                tail, catalog = watcher.tail, watcher.catalog
+        finally:
+            if orphan is not None:
+                await _cancel_watcher_task(orphan)
 
         if catch_up_event is not None:
             for subscriber in catch_up_subscribers:
