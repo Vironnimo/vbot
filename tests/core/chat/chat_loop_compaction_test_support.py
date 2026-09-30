@@ -213,13 +213,19 @@ async def auto_compact(
     usage: JsonObject | None,
     request: list[JsonObject] | None = None,
     run_id: str = "run-1",
+    compaction_requested: bool = False,
     continuation_tracker: ContinuationTracker | None = None,
     continuation_reminder: str | None = None,
 ) -> AutoCompaction:
-    """Evaluate one automatic boundary for ``request`` (default: the Session's request)."""
+    """Evaluate one boundary for ``request`` (default: the Session's request).
+
+    ``compaction_requested`` evaluates it with a pending user Compaction request.
+    """
     if request is None:
         request = await build_request_messages(loop, agent, session)
     run = Run(run_id=run_id, agent_id=agent.id, session_id=session.id)
+    if compaction_requested:
+        run.set_compaction_state("pending")
     context = await create_run_execution_context(
         loop._dependencies,
         loop._requests,
