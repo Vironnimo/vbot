@@ -114,13 +114,35 @@ async def test_paths_resolve_from_the_working_directory_or_are_absolute(
 
 
 @pytest.mark.asyncio
-async def test_read_rejects_unknown_argument_before_reading(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("arguments", "refusal"),
+    [
+        pytest.param(
+            {"path": "notes.txt", "encoding": "latin-1"},
+            '"encoding" is not a parameter',
+            id="unknown-argument",
+        ),
+        # A NUL makes no path on any platform; the refusal must not depend on
+        # whether this host's filesystem layer raises for it or ignores it.
+        pytest.param(
+            {"path": "notes.txt\x00"},
+            re.escape(
+                'read was not run: the path "notes.txt\\u0000" contains a NUL character '
+                "(U+0000), which no file path can contain. Remove it and call read again."
+            ),
+            id="nul-in-path",
+        ),
+    ],
+)
+async def test_read_refuses_invalid_arguments_before_reading(
+    tmp_path: Path, arguments: dict[str, Any], refusal: str
+) -> None:
     target = tmp_path / "notes.txt"
     target.write_bytes(b"hello\n")
     file_state = FileReadState()
 
-    with pytest.raises(ToolContractError, match='"encoding" is not a parameter'):
-        await read(tmp_path, {"path": "notes.txt", "encoding": "latin-1"}, file_state=file_state)
+    with pytest.raises(ToolContractError, match=refusal):
+        await read(tmp_path, arguments, file_state=file_state)
 
     assert file_state.check_stale("session-1", target.resolve()) is StaleReason.NEVER_READ
 
