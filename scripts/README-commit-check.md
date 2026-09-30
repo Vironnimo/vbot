@@ -7,7 +7,7 @@
 - Tests run when work lands on `main`: on commits in the primary checkout and on merge commits there. Agents run the tests covering their change while they work; the hook repeats them once per landing instead of once per commit.
 - A commit in a linked worktree gets the static checks only; its report says `tests NOT RUN in a worktree`. It leaves the worktree's records untouched, which only widens the next selection.
 - `worktree.py merge` first runs `commit_check.py --branch` in the worktree, outside the merge lock, so other merges do not wait for it: the pytest tests the changes since the worktree's tested state affect. It uses the branch's own copy of the script, as the branch's commits use its own hook; a branch without one skips the check. A failure stops the merge before `main` changes.
-- The merge commit then runs only the tests neither the branch check nor this checkout's runs cover as merged (see Merge commits), plus `vitest related`, the guard tests and the build for the merged WebUI changes, which have no records to reuse.
+- The merge commit then runs only the tests neither the branch check nor this checkout's runs cover as merged (see Merge commits), plus the WebUI checks for the merged WebUI changes, which have no records to reuse.
 
 ## Test selection
 
@@ -17,7 +17,8 @@
 - A change to `pyproject.toml` or to a file read while test modules are imported runs the complete suite, as do changed installed packages (testmon then drops its records).
 - It starts one pytest run only when a test is selected: on the selected and the staged test modules, deselecting their recorded unaffected tests (an arguments file in the git directory), with testmon only recording (`--testmon-noselect -p no:TestmonSelect`; its selection plugin would select and order tests inside each xdist worker from records the controller rewrites meanwhile, and workers must collect alike), in one process or with as many workers as the recorded duration warrants. Starting pytest with all workers costs 7-10 s even when every test is deselected.
 - testmon needs the C coverage tracer: `tests/conftest.py` sets `COVERAGE_CORE=ctrace`, because the default `sys.monitoring` core drops per-test dependencies. pytest-cov and testmon exclude each other.
-- For changed WebUI and Extension page sources the hook runs `vitest related` plus the guard tests, then `npm run build`; it skips them with a notice without node or `webui/node_modules`.
+- For changed WebUI and Extension page sources the hook runs Prettier and ESLint on them, `vitest related` plus the guard tests, then `npm run build`. A change to any other file under `webui/` (package manifest and lock, `vite.config.js` with the Vitest configuration, `index.html`, `public/`) runs every Vitest test (`vitest run`) and the build; a change to the package manifest or lock, `eslint.config.js` or `prettier.config.js` runs `npm run format:check` and `npm run lint` over every source, as CI does.
+- The WebUI checks run only on the locked packages: when `webui/node_modules/.package-lock.json` (npm's record of what it installed) differs from `webui/package-lock.json`, apart from optional packages for other platforms, every WebUI check blocks with the differing packages until `npm ci` in `webui/` installs the locked ones. The hook never installs packages itself: `node_modules` is shared by the checkout's sessions, `npm ci` needs the network, and on Windows it fails on files a running process holds. It skips the WebUI checks with a notice without node or `webui/node_modules`.
 
 ## Records and tested state
 

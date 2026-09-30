@@ -36,8 +36,15 @@ worktree's test runs cover as merged.
 A failing test blocks the commit when it depends on a staged file or only on
 committed code; failures that depend on another session's unstaged work are
 reported without blocking. A test failing on committed code runs once more alone
-and is reported without blocking when it passes then. Vitest runs the tests
-related to staged WebUI sources plus the guard tests, and the WebUI build runs.
+and is reported without blocking when it passes then.
+
+Vitest runs the tests related to staged WebUI sources plus the guard tests, and
+the WebUI build runs. A change to the WebUI packages or to another WebUI file that
+is no source (build and test configuration, page shell, static assets) runs every
+Vitest test and the build; a change to the packages or to the lint or format
+configuration lints and format-checks every source. The WebUI checks refuse to run
+on packages that differ from ``webui/package-lock.json`` and block the commit until
+``npm ci`` installs the locked ones; the hook never installs packages itself.
 """
 
 from __future__ import annotations
@@ -58,7 +65,7 @@ from collections.abc import Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -69,11 +76,20 @@ from tests import file_dependencies  # noqa: E402
 PYTHON_SUFFIXES = {".py", ".pyi"}
 ESLINT_SUFFIXES = {".js", ".mjs", ".cjs", ".svelte"}
 IGNORED_ROOTS = ("archive/",)
+WEBUI_ROOT = "webui/"
 WEBUI_SOURCE_ROOTS = ("webui/src/", "webui/scripts/")
 # Bundled Extension pages and their fixtures keep editable sources in <owner>/ui/.
 EXTENSION_UI_PATTERN = re.compile(
     r"^(?:resources/extensions|tests/fixtures/extension-pages)/[^/]+/ui/"
 )
+# The manifest and lock pin the linter, formatter, test runner, build and libraries.
+WEBUI_PACKAGE_FILES = frozenset({"webui/package.json", "webui/package-lock.json"})
+# Lint and format configuration can change the verdict on every source.
+WEBUI_STYLE_CONFIG = frozenset({"webui/eslint.config.js", "webui/prettier.config.js"})
+# npm records the package tree it installed here (npm 7 and later).
+INSTALLED_LOCK = Path("node_modules") / ".package-lock.json"
+# Fields that identify an installed package; npm may annotate entries otherwise.
+PACKAGE_IDENTITY = ("version", "resolved", "integrity", "link")
 # The platforms CI type-checks (.github/workflows/ci.yml, static job). mypy keeps
 # the host platform in its default cache and every other one in its own.
 MYPY_PLATFORMS = ("win32", "linux")
@@ -164,6 +180,97 @@ def dirty_files(root: Path) -> set[str]:
 
 def is_frontend_source(path: str) -> bool:
     return path.startswith(WEBUI_SOURCE_ROOTS) or EXTENSION_UI_PATTERN.match(path) is not None
+
+
+class WebUIScope(NamedTuple):
+    """The WebUI checks a set of changed paths calls for."""
+
+    sources: list[str]
+    """Changed WebUI and Extension page sources: lint and format them, run related tests."""
+    all_styles: bool
+    """Lint and format every source: the linter, the formatter or their configuration changed."""
+    all_tests: bool
+    """Run every Vitest test and the build: packages or build or test configuration changed."""
+
+
+def webui_scope(paths: Iterable[str]) -> WebUIScope:
+    """Return the WebUI checks *paths* call for.
+
+    Every WebUI file that is no source feeds the packages, the build or the tests:
+    the package manifest and lock, the Vite configuration (which holds the Vitest
+    configuration), the page shell and the static assets. The lint and format
+    configuration only affects lint and format results.
+    """
+    paths = list(paths)
+    return WebUIScope(
+        sources=[path for path in paths if is_frontend_source(path)],
+        all_styles=any(path in WEBUI_PACKAGE_FILES | WEBUI_STYLE_CONFIG for path in paths),
+        all_tests=any(
+            path.startswith(WEBUI_ROOT)
+            and not is_frontend_source(path)
+            and path not in WEBUI_STYLE_CONFIG
+            for path in paths
+        ),
+    )
+
+
+def _locked_packages(lock_file: Path) -> dict[str, dict[str, Any]]:
+    """Return the ``packages`` map of an npm lock file; raise ValueError when malformed."""
+    packages = json.loads(lock_file.read_text(encoding="utf-8")).get("packages")
+    if not isinstance(packages, dict) or not all(isinstance(e, dict) for e in packages.values()):
+        raise ValueError(f"{lock_file} holds no package map")
+    return packages
+
+
+def _installed_package_differences(webui: Path) -> list[str]:
+    """Return how ``webui/node_modules`` differs from ``webui/package-lock.json``.
+
+    An empty list means node_modules holds exactly the locked packages. npm skips
+    optional packages for other platforms, so a missing optional package is no
+    difference.
+    """
+    try:
+        locked = _locked_packages(webui / "package-lock.json")
+    except (OSError, ValueError):
+        return ["webui/package-lock.json is missing or unreadable"]
+    try:
+        installed = _locked_packages(webui / INSTALLED_LOCK)
+    except (OSError, ValueError):
+        return [f"webui/{INSTALLED_LOCK.as_posix()} is missing: npm installed nothing here"]
+    differences: list[str] = []
+    for path in sorted((locked.keys() | installed.keys()) - {""}):  # "": the WebUI itself
+        name = path.removeprefix("node_modules/")
+        if path not in installed:
+            if not (locked[path].get("optional") or locked[path].get("devOptional")):
+                differences.append(f"{name}: locked, not installed")
+        elif path not in locked:
+            differences.append(f"{name}: installed, not locked")
+        elif any(installed[path].get(key) != locked[path].get(key) for key in PACKAGE_IDENTITY):
+            installed_version = installed[path].get("version")
+            differences.append(
+                f"{name}: installed {installed_version}, locked {locked[path].get('version')}"
+            )
+    return differences
+
+
+def _stale_packages(webui: Path) -> StepResult | None:
+    """Return a blocking result when node_modules does not hold the locked packages."""
+    differences = _installed_package_differences(webui)
+    if not differences:
+        return None
+    shown = differences[:5]
+    if len(differences) > len(shown):
+        shown.append(f"... and {len(differences) - len(shown)} more")
+    return StepResult(
+        "webui deps",
+        "FAIL: webui/node_modules does not match package-lock.json; run `npm ci` in webui/",
+        True,
+        "\n".join(shown),
+    )
+
+
+def _npm() -> str | None:
+    return shutil.which("npm.cmd" if os.name == "nt" else "npm")
 
 
 def split_mypy_output(
@@ -322,13 +429,16 @@ def _node_bin(webui: Path, package: str, command: str) -> list[str] | None:
 
 
 def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepResult]:
-    files = [path for path in staged if is_frontend_source(path)]
-    if not files:
+    """Format and lint the staged WebUI sources; all of them when the tools or rules changed."""
+    scope = webui_scope(staged)
+    files = scope.sources
+    if not files and not scope.all_styles:
         return []
     webui = root / "webui"
     prettier = _node_bin(webui, "prettier", "prettier")
     eslint = _node_bin(webui, "eslint", "eslint")
-    if prettier is None or eslint is None:
+    npm = _npm()
+    if prettier is None or eslint is None or (scope.all_styles and npm is None):
         return [
             StepResult(
                 "frontend",
@@ -336,6 +446,9 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
                 False,
             )
         ]
+    stale = _stale_packages(webui)
+    if stale is not None:
+        return [stale]
     # Prettier resolves configuration per file; Extension pages live outside
     # webui/, so the WebUI policy and Svelte plugin are passed explicitly.
     prettier_options = [
@@ -367,6 +480,11 @@ def check_frontend(root: Path, staged: list[str], dirty: set[str]) -> list[StepR
     fixed = _fix_and_restage(root, "frontend", fixable, fix_commands)
     if fixed is not None:
         results.append(fixed)
+    if scope.all_styles and npm is not None:
+        # The package scripts check every source, as CI does.
+        results.append(_gate("prettier", [npm, "run", "format:check"], webui))
+        results.append(_gate("eslint", [npm, "run", "lint"], webui))
+        return results
     results.append(
         _gate("prettier", [*prettier, *prettier_options, "--check", *from_webui(files)], webui)
     )
@@ -703,13 +821,18 @@ def check_tests(root: Path, changed: list[str], dirty: set[str]) -> list[StepRes
 
 
 def check_frontend_tests(root: Path, changed: list[str]) -> list[StepResult]:
-    """Run the Vitest tests related to *changed* frontend sources, and the WebUI build."""
-    files = [path for path in changed if is_frontend_source(path)]
-    if not files:
+    """Run the Vitest tests *changed* affects, and the WebUI build.
+
+    Changed WebUI and Extension page sources run their related tests plus the guard
+    tests; a change to the packages or to the build or test configuration runs every
+    test.
+    """
+    scope = webui_scope(changed)
+    if not scope.sources and not scope.all_tests:
         return []
     webui = root / "webui"
     vitest = _node_bin(webui, "vitest", "vitest")
-    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
+    npm = _npm()
     if vitest is None or npm is None:
         return [
             StepResult(
@@ -718,15 +841,22 @@ def check_frontend_tests(root: Path, changed: list[str]) -> list[StepResult]:
                 False,
             )
         ]
-    # The guard tests scan every WebUI and Extension page source, so they relate
-    # to every change without importing it.
-    guard_tests = sorted(
-        path.relative_to(webui).as_posix() for path in webui.glob("src/**/*.guard.test.js")
-    )
-    related = [Path("..", path).as_posix() for path in files if (root / path).is_file()]
+    stale = _stale_packages(webui)
+    if stale is not None:
+        return [stale]
+    if scope.all_tests:
+        tests = [*vitest, "run"]
+    else:
+        # The guard tests scan every WebUI and Extension page source, so they relate
+        # to every change without importing it.
+        guard_tests = sorted(
+            path.relative_to(webui).as_posix() for path in webui.glob("src/**/*.guard.test.js")
+        )
+        related = [Path("..", path).as_posix() for path in scope.sources if (root / path).is_file()]
+        tests = [*vitest, "related", "--run", *related, *guard_tests]
     env = _test_environment(root)
     return [
-        _gate("vitest", [*vitest, "related", "--run", *related, *guard_tests], webui, env),
+        _gate("vitest", tests, webui, env),
         _gate("webui build", [npm, "run", "build"], webui, env),
     ]
 

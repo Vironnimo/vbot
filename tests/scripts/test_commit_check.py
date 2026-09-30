@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -97,19 +99,154 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "expected"),
+    ("path", "source", "all_styles", "all_tests"),
     [
-        ("webui/src/lib/i18n.js", True),
-        ("webui/scripts/build-extension-pages.mjs", True),
-        ("resources/extensions/swarm/ui/SwarmPage.svelte", True),
-        ("tests/fixtures/extension-pages/alpha/ui/main.js", True),
-        ("resources/extensions/swarm/web/index.js", False),
-        ("webui/package.json", False),
-        ("tests/e2e/tests/chat.spec.js", False),
+        ("webui/src/lib/i18n.js", True, False, False),
+        ("webui/scripts/build-extension-pages.mjs", True, False, False),
+        ("resources/extensions/swarm/ui/SwarmPage.svelte", True, False, False),
+        ("tests/fixtures/extension-pages/alpha/ui/main.js", True, False, False),
+        ("webui/package.json", False, True, True),
+        ("webui/package-lock.json", False, True, True),
+        ("webui/eslint.config.js", False, True, False),
+        ("webui/prettier.config.js", False, True, False),
+        ("webui/vite.config.js", False, False, True),
+        ("webui/index.html", False, False, True),
+        ("webui/public/brand/vbot-icon.png", False, False, True),
+        ("resources/extensions/swarm/web/index.js", False, False, False),
+        ("tests/e2e/tests/chat.spec.js", False, False, False),
     ],
 )
-def test_frontend_sources_match_the_checked_roots(path: str, expected: bool) -> None:
-    assert commit_check.is_frontend_source(path) is expected
+def test_webui_changes_select_the_checks_they_can_affect(
+    path: str, source: bool, all_styles: bool, all_tests: bool
+) -> None:
+    scope = commit_check.webui_scope([path])
+
+    assert (scope.sources == [path], scope.all_styles, scope.all_tests) == (
+        source,
+        all_styles,
+        all_tests,
+    )
+
+
+LOCKED_PACKAGES: dict[str, dict[str, object]] = {
+    "node_modules/vite": {
+        "version": "8.0.3",
+        "resolved": "https://registry.npmjs.org/vite/-/vite-8.0.3.tgz",
+        "integrity": "sha512-vite",
+        "dev": True,
+    },
+    # npm installs an optional package only on the platforms it names.
+    "node_modules/fsevents": {
+        "version": "2.3.3",
+        "resolved": "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz",
+        "integrity": "sha512-fsevents",
+        "optional": True,
+        "os": ["darwin"],
+    },
+}
+INSTALLED_PACKAGES = {"node_modules/vite": LOCKED_PACKAGES["node_modules/vite"]}
+
+
+def _webui_project(
+    root: Path, monkeypatch: pytest.MonkeyPatch, installed: Mapping[str, object] | None
+) -> list[str]:
+    """Give *root* a WebUI with *installed* packages; return the commands the checks start.
+
+    ``installed`` None means npm never installed into node_modules. The checks run
+    nothing: each command is recorded and succeeds.
+    """
+    webui = root / "webui"
+    for package in ("prettier", "eslint", "vitest"):
+        manifest = webui / "node_modules" / package / "package.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"bin": {package: f"bin/{package}.js"}}), encoding="utf-8")
+    lock = {"lockfileVersion": 3, "packages": {"": {"name": "vbot-webui"}, **LOCKED_PACKAGES}}
+    (webui / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    if installed is not None:
+        record = {"lockfileVersion": 3, "packages": installed}
+        (webui / "node_modules" / ".package-lock.json").write_text(
+            json.dumps(record), encoding="utf-8"
+        )
+    (webui / "src" / "lib").mkdir(parents=True)
+    _write(root, "webui/src/lib/i18n.js", "export const locale = 'en';\n")
+    commands: list[str] = []
+
+    def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> Any:
+        # "node <root>/webui/node_modules/vitest/bin/vitest.js run" -> "node vitest run"
+        shown = [
+            Path(part).stem if Path(part).suffix in {".js", ".cmd"} else part for part in command
+        ]
+        commands.append(" ".join(shown))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(commit_check, "_run", run)
+    monkeypatch.setattr(commit_check.shutil, "which", lambda name: name)
+    return commands
+
+
+def _webui_checks(root: Path, path: str) -> list[commit_check.StepResult]:
+    return [
+        *commit_check.check_frontend(root, [path], set()),
+        *commit_check.check_frontend_tests(root, [path]),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("installed", "runs"),
+    [
+        (INSTALLED_PACKAGES, True),
+        (
+            {"node_modules/vite": {**INSTALLED_PACKAGES["node_modules/vite"], "version": "8.0.1"}},
+            False,
+        ),
+        ({}, False),
+        ({**INSTALLED_PACKAGES, "node_modules/left-pad": {"version": "1.3.0"}}, False),
+        (None, False),
+    ],
+    ids=["as locked", "other version", "missing package", "extra package", "never installed"],
+)
+def test_webui_checks_refuse_packages_that_differ_from_the_lock(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    installed: Mapping[str, object] | None,
+    runs: bool,
+) -> None:
+    commands = _webui_project(repo, monkeypatch, installed)
+
+    results = _webui_checks(repo, "webui/src/lib/i18n.js")
+
+    if runs:
+        assert not any(result.blocking for result in results)
+        assert "npm run build" in commands
+    else:
+        # Every WebUI check refuses until `npm ci` installs the locked packages.
+        assert [(result.label, result.blocking) for result in results] == [
+            ("webui deps", True),
+            ("webui deps", True),
+        ]
+        assert commands == []
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("webui/vite.config.js", ["node vitest run", "npm run build"]),
+        ("webui/eslint.config.js", ["npm run format:check", "npm run lint"]),
+        (
+            "webui/package-lock.json",
+            ["npm run format:check", "npm run lint", "node vitest run", "npm run build"],
+        ),
+    ],
+)
+def test_webui_configuration_changes_run_the_complete_checks(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, path: str, expected: list[str]
+) -> None:
+    commands = _webui_project(repo, monkeypatch, INSTALLED_PACKAGES)
+
+    results = _webui_checks(repo, path)
+
+    assert commands == expected
+    assert not any(result.blocking for result in results)
 
 
 # The test step drives a real pytest-testmon run in a small project; its selection
