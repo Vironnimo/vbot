@@ -68,6 +68,10 @@ DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS = PATIENT_PROBE_TIMEOUT_SECONDS
 # neither confirmed as vBot nor known to be foreign.
 UNRESPONSIVE_LISTENER_MESSAGE = "port occupied by unresponsive process"
 
+# The control record names a live server process for the target, but the target does
+# not answer `/health`: the server is busy, still starting or already stopping.
+UNRESPONSIVE_SERVER_MESSAGE = "the server process is running but does not answer its health check"
+
 # A vBot server answers on the target port, but the target data directory's control
 # record does not name it: it belongs to another data directory and is left running.
 UNRECORDED_SERVER_MESSAGE = "port occupied by a vBot server of another data directory"
@@ -214,7 +218,10 @@ def start_server(
     logger = manager.get_logger(CLI_SERVER_LOGGER_NAME)
     try:
         initial_health = probe_health_patiently(instance)
-        if initial_health.is_vbot:
+        # Never spawn next to a server: a duplicate cannot claim the target, and the
+        # readiness probe would then report the existing server as started.
+        state = classify_server(instance, health=initial_health)
+        if state == "running":
             logger.debug("CLI-managed background server already running at %s", instance.url)
             return CommandResult(
                 ok=True,
@@ -224,30 +231,14 @@ def start_server(
                 webui=probe_webui(instance),
                 log_path=instance.log_path,
             )
-        if initial_health.reachable:
+        if state != "absent":
+            message = _start_refusal_message(state, initial_health)
             logger.warning(
-                "Refusing CLI-managed background server start because %s is occupied by"
-                " a non-vBot process",
-                instance.url,
+                "Refusing CLI-managed background server start at %s: %s", instance.url, message
             )
             return CommandResult(
                 ok=False,
-                message="port occupied by non-vBot process",
-                instance=instance,
-                health=initial_health,
-                log_path=instance.log_path,
-            )
-        if initial_health.unresponsive:
-            # A spawned duplicate would fail to bind or claim the target, and the
-            # readiness probe would then succeed against the old server.
-            logger.warning(
-                "Refusing CLI-managed background server start because %s is held by a"
-                " process that does not answer its health check",
-                instance.url,
-            )
-            return CommandResult(
-                ok=False,
-                message=UNRESPONSIVE_LISTENER_MESSAGE,
+                message=message,
                 instance=instance,
                 health=initial_health,
                 log_path=instance.log_path,
@@ -328,6 +319,18 @@ def start_server(
         return result
     finally:
         manager.close()
+
+
+def _start_refusal_message(state: ServerState, health: HealthProbeResult) -> str:
+    """Name what holds the target when ``start_server`` must not spawn."""
+
+    if state == "unresponsive":
+        return UNRESPONSIVE_SERVER_MESSAGE
+    if health.is_vbot:
+        return UNRECORDED_SERVER_MESSAGE
+    if health.reachable:
+        return "port occupied by non-vBot process"
+    return UNRESPONSIVE_LISTENER_MESSAGE
 
 
 def _create_cli_log_manager(instance: ServerInstance) -> LogManager:
@@ -1104,6 +1107,7 @@ __all__ = [
     "resolve_instance",
     "UNRECORDED_SERVER_MESSAGE",
     "UNRESPONSIVE_LISTENER_MESSAGE",
+    "UNRESPONSIVE_SERVER_MESSAGE",
     "DEFAULT_STARTUP_TIMEOUT_SECONDS",
     "DEFAULT_SHUTDOWN_TIMEOUT_SECONDS",
     "DEFAULT_CONTROL_REQUEST_TIMEOUT_SECONDS",

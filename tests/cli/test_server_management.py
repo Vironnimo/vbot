@@ -16,6 +16,7 @@ from cli import _server_target, server_management
 from cli.server_management import (
     UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
+    UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
     HealthProbeResult,
     ServerInstance,
@@ -88,6 +89,14 @@ def answer_health(monkeypatch: pytest.MonkeyPatch, *answers: HealthProbeResult) 
     remaining = iter(answers)
     for probe in ("probe_health", "probe_health_patiently"):
         monkeypatch.setattr(server_management, probe, lambda _instance: next(remaining))
+
+
+def record_server(monkeypatch: pytest.MonkeyPatch, *, recorded: bool = True) -> None:
+    """Publish the target's control record naming one live server process, or none."""
+
+    record = SimpleNamespace(pid=456, process_create_time=1000.25) if recorded else None
+    monkeypatch.setattr(server_management, "read_server_control", lambda *_args: record)
+    monkeypatch.setattr(server_management.psutil, "Process", lambda _pid: FakeProcess(pid=456))
 
 
 def script_busy_listener(
@@ -172,21 +181,32 @@ def test_start_server_process_spawns_a_detached_quiet_server(
 
 
 @pytest.mark.parametrize(
-    ("health", "ok", "message", "webui"),
+    ("health", "recorded", "ok", "message", "webui"),
     [
-        pytest.param(VBOT, True, "already running", WebUIProbeResult(False, 404), id="vbot"),
-        pytest.param(FOREIGN, False, "port occupied by non-vBot process", None, id="foreign"),
+        pytest.param(VBOT, True, True, "already running", WebUIProbeResult(False, 404), id="vbot"),
+        pytest.param(
+            FOREIGN, False, False, "port occupied by non-vBot process", None, id="foreign"
+        ),
+        pytest.param(
+            VBOT, False, False, UNRECORDED_SERVER_MESSAGE, None, id="other-data-directory"
+        ),
+        # The control record exists before the listener: the server is starting or stopping.
+        pytest.param(
+            UNREACHABLE, True, False, UNRESPONSIVE_SERVER_MESSAGE, None, id="no-listener-yet"
+        ),
     ],
 )
 def test_start_server_never_spawns_when_the_port_already_answers(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     health: HealthProbeResult,
+    recorded: bool,
     ok: bool,
     message: str,
     webui: WebUIProbeResult | None,
 ) -> None:
     answer_health(monkeypatch, health)
+    record_server(monkeypatch, recorded=recorded)
     monkeypatch.setattr(
         server_management, "probe_webui", lambda _instance: WebUIProbeResult(False, 404)
     )
@@ -204,24 +224,27 @@ def test_start_server_never_spawns_when_the_port_already_answers(
 
 
 @pytest.mark.parametrize(
-    ("patient", "ok", "message"),
+    ("patient", "recorded", "ok", "message"),
     [
         pytest.param(
-            httpx.Response(200, json={"status": "ok"}), True, "already running", id="late"
+            httpx.Response(200, json={"status": "ok"}), True, True, "already running", id="late"
         ),
-        pytest.param(None, False, UNRESPONSIVE_LISTENER_MESSAGE, id="never-answers"),
+        pytest.param(None, True, False, UNRESPONSIVE_SERVER_MESSAGE, id="busy-server"),
+        pytest.param(None, False, False, UNRESPONSIVE_LISTENER_MESSAGE, id="silent-listener"),
     ],
 )
 def test_start_server_never_spawns_a_duplicate_next_to_a_busy_listener(
     instance: ServerInstance,
     monkeypatch: pytest.MonkeyPatch,
     patient: httpx.Response | None,
+    recorded: bool,
     ok: bool,
     message: str,
 ) -> None:
     # A stalled Event Loop misses the quick probe; a duplicate child would fail to claim
     # the target and the next probe would report "started" for the old server.
     script_busy_listener(monkeypatch, instance, patient)
+    record_server(monkeypatch, recorded=recorded)
     monkeypatch.setattr(
         server_management, "probe_webui", lambda _instance: WebUIProbeResult(True, 200)
     )

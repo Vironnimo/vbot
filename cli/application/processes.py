@@ -13,6 +13,7 @@ import psutil  # type: ignore[import-untyped]
 from cli.application.operations import child_environment
 from cli.application.state import ApplicationError, Installation
 from cli.server_management import (
+    UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
     HealthProbeResult,
     ServerInstance,
@@ -31,7 +32,6 @@ from core.utils.processes import subprocess_creation_flags
 STARTUP_LOG_ROTATE_BYTES = 1024 * 1024
 
 OCCUPIED_MESSAGE = "Server port is occupied by another application version or startup mode"
-UNRESPONSIVE_MESSAGE = "the server process is running but does not answer its health check"
 
 
 def target(install: Installation) -> ServerInstance:
@@ -101,7 +101,7 @@ def start(
             message=(
                 "already running"
                 if ready
-                else UNRESPONSIVE_MESSAGE
+                else UNRESPONSIVE_SERVER_MESSAGE
                 if state == "unresponsive"
                 else OCCUPIED_MESSAGE
             ),
