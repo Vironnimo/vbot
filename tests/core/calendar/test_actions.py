@@ -22,8 +22,14 @@ from core.calendar.actions import (
 from core.runs import RunKind, RunStatus
 
 
-def setup(tmp_path: Path, *, start: datetime | None = None, recurring: bool = False):
-    now = datetime.now(UTC)
+def setup(
+    tmp_path: Path,
+    *,
+    start: datetime | None = None,
+    recurring: bool = False,
+    now: datetime | None = None,
+):
+    now = now or datetime.now(UTC)
     service = CalendarService(tmp_path, tz="Europe/Berlin")
     event = service.create_event(
         title="Meeting",
@@ -246,8 +252,19 @@ async def test_timezone_change_does_not_rearm_unchanged_single_instant(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_move_during_admitted_run_keeps_claim_until_completion(tmp_path):
-    service, event, trigger, now = setup(tmp_path)
+@pytest.mark.parametrize("recurring", [False, True])
+async def test_move_during_admitted_run_keeps_claim_until_completion(
+    tmp_path, monkeypatch, recurring
+):
+    now = datetime(2030, 10, 5, 10, tzinfo=UTC)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(actions_module, "datetime", Clock)
+    service, event, trigger, now = setup(tmp_path, now=now, recurring=recurring)
     entered, finish = asyncio.Event(), asyncio.Event()
 
     async def wait_for_finish():
@@ -258,25 +275,35 @@ async def test_move_during_admitted_run_keeps_claim_until_completion(tmp_path):
     trigger.trigger_run.return_value = SimpleNamespace(
         id="run-1", session_id="new-session", wait=wait_for_finish
     )
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
-    await service.actions.tick(now)
-    # Reconciliation before the scheduled worker starts must retain its pending row.
-    await service.actions.tick(now)
-    assert len(service.actions._executions) == 1
-    await entered.wait()
-    original = next(iter(service.actions._executions.values())).copy()
-    service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
-    await service.actions.tick(now)
-    assert next(iter(service.actions._executions.values())) == original
-    assert trigger.trigger_run.await_count == 1
-    assert service.actions.project(window(service, now))[0]["status"] == "pending"
-    finish.set()
-    await drain(service)
-    await service.actions.tick(now)
-    await drain(service)
-    assert trigger.trigger_run.await_count == 2
-    await service.actions.tick(now)
-    assert trigger.trigger_run.await_count == 2
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
+    try:
+        await service.actions.tick(now)
+        # Reconciliation before the scheduled worker starts must retain its pending row.
+        await service.actions.tick(now)
+        assert len(service.actions._executions) == 1
+        await entered.wait()
+        original = next(iter(service.actions._executions.values())).copy()
+        service.update_event(event.id, start=(now + timedelta(minutes=45)).isoformat())
+        await service.actions.tick(now)
+        assert next(iter(service.actions._executions.values())) == original
+        assert trigger.trigger_run.await_count == 1
+        assert len(service.actions._workers) == 1
+        assert service.actions.project(window(service, now))[0]["status"] == "pending"
+        finish.set()
+        await drain(service)
+        await service.actions.tick(now)
+        await drain(service)
+        assert trigger.trigger_run.await_count == 2
+        await service.actions.tick(now)
+        assert trigger.trigger_run.await_count == 2
+        if recurring:
+            now += timedelta(days=1)
+            await service.actions.tick(now)
+            await drain(service)
+            assert trigger.trigger_run.await_count == 3
+    finally:
+        finish.set()
+        await service.actions.aclose()
 
 
 @pytest.mark.asyncio
@@ -483,21 +510,47 @@ def test_failed_write_rolls_back_action_mutations(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
-    service, event, trigger, now = setup(tmp_path, recurring=True)
-    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main")
-    for day in range(3):
-        clock = now + timedelta(days=day)
+    now = datetime(2030, 10, 5, 10, tzinfo=UTC)
+    service, event, trigger, now = setup(tmp_path, recurring=True, now=now)
+    service.actions.add(event.id, when="start - 1h", prompt="prepare", target="main", now=now)
+    entered = [asyncio.Event(), asyncio.Event()]
+    finish = asyncio.Event()
 
-        class Clock(datetime):
-            @classmethod
-            def now(cls, tz=None, clock=clock):
-                return clock
+    async def admit(*args, **kwargs):
+        index = trigger.trigger_run.await_count - 1
 
-        monkeypatch.setattr("core.calendar.actions.datetime", Clock)
-        await service.actions.tick(clock)
-        await drain(service)
-    assert trigger.trigger_run.await_count == 3
-    assert all(call.args[2] is None for call in trigger.trigger_run.call_args_list)
+        async def wait():
+            if index < 2:
+                entered[index].set()
+            if index == 0:
+                await finish.wait()
+
+        return SimpleNamespace(id=f"run-{index}", session_id=f"session-{index}", wait=wait)
+
+    trigger.trigger_run.side_effect = admit
+    try:
+        for day in range(3):
+            clock = now + timedelta(days=day)
+
+            class Clock(datetime):
+                @classmethod
+                def now(cls, tz=None, clock=clock):
+                    return clock
+
+            monkeypatch.setattr("core.calendar.actions.datetime", Clock)
+            await service.actions.tick(clock)
+            if day < 2:
+                await entered[day].wait()
+            if day == 0:
+                continue
+            # An unchanged later occurrence can start while the first Run is active.
+            finish.set()
+            await drain(service)
+        assert trigger.trigger_run.await_count == 3
+        assert all(call.args[2] is None for call in trigger.trigger_run.call_args_list)
+    finally:
+        finish.set()
+        await service.actions.aclose()
 
 
 @pytest.mark.parametrize(
