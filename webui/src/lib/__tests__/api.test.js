@@ -400,6 +400,18 @@ describe('RPC wrappers', () => {
         ),
       { model_tasks: { speech_to_text: { target: 'openai/whisper' } } },
     ],
+    [
+      'task_model.update (based)',
+      (o) =>
+        api.updateTaskModelSettings(
+          { speech_to_text: { target: 'openai/whisper' } },
+          { ...o, base: { speech_to_text: { target: '' } } },
+        ),
+      {
+        model_tasks: { speech_to_text: { target: 'openai/whisper' } },
+        base: { model_tasks: { speech_to_text: { target: '' } } },
+      },
+    ],
     ['terminal.list', (o) => api.listTerminals(o), {}],
     [
       'terminal.start',

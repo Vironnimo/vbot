@@ -37,7 +37,12 @@ function sameValue(left, right) {
 function mergeLeaves(draft, origin, saved, path, options) {
   if (sameValue(draft, origin)) return plain(saved);
   if (sameValue(saved, origin) || sameValue(saved, draft)) return plain(draft);
-  if (isPlainObject(draft) && isPlainObject(origin) && isPlainObject(saved)) {
+  if (
+    path.length < options.leafDepth &&
+    isPlainObject(draft) &&
+    isPlainObject(origin) &&
+    isPlainObject(saved)
+  ) {
     const merged = {};
     for (const key of new Set([...Object.keys(draft), ...Object.keys(saved)])) {
       const value = mergeLeaves(
@@ -62,12 +67,18 @@ function mergeLeaves(draft, origin, saved, path, options) {
  * A leaf the draft left at `origin` takes the saved value; a leaf only the
  * draft changed keeps the draft. A leaf both changed differently is a
  * conflict: the saved value wins unless `draftWins` is set. Objects merge per
- * key; arrays and scalars are leaves.
+ * key; arrays and scalars are leaves, and so is every value `leafDepth` keys
+ * deep, for a value whose parts are only valid together.
  *
  * @returns {{ value: unknown, conflicts: string[] }}
  */
-export function rebaseDraft(draft, origin, saved, { draftWins = false } = {}) {
-  const options = { draftWins, conflicts: [] };
+export function rebaseDraft(
+  draft,
+  origin,
+  saved,
+  { draftWins = false, leafDepth = Infinity } = {},
+) {
+  const options = { draftWins, leafDepth, conflicts: [] };
   const value = mergeLeaves(draft, origin, saved, [], options);
   return { value, conflicts: options.conflicts };
 }
@@ -75,21 +86,28 @@ export function rebaseDraft(draft, origin, saved, { draftWins = false } = {}) {
 /**
  * A Settings editor's local draft plus the saved values it was derived from.
  *
- * `save()` sends the draft through `settings.update` together with its origin
- * as `base`, so the server refuses the write when a value it would change was
- * changed meanwhile (another editor, window, or a save that finished after the
- * user left). The draft is then rebased onto re-read Settings: untouched
- * values take the saved ones, a value changed on both sides takes the saved
- * one and reports it, and the remaining edits are retried. After a successful
- * write, values edited while it ran stay; the rest take the saved values, so
- * normalization reaches the visible draft.
+ * `save()` sends the draft through `settings.update` (or `submit`) together
+ * with its origin as `base`, so the server refuses the write when a value it
+ * would change was changed meanwhile (another editor, window, or a save that
+ * finished after the user left). The draft is then rebased onto Settings read
+ * again through `settings.get`: untouched values take the saved ones, a value
+ * changed on both sides takes the saved one and reports it, and the remaining
+ * edits are retried. After a successful write, values edited while it ran
+ * stay; the rest take the saved values, so normalization reaches the visible
+ * draft.
  *
  * @param {object} params
  * @param {object} params.settings - The Settings the draft was seeded from.
  * @param {(settings: object) => object} params.fromSettings - Settings -> draft values.
  * @param {() => object} params.read - Reads the current draft.
  * @param {(values: object) => void} params.write - Replaces the draft.
- * @param {(values: object) => object} params.toPayload - Draft values -> `settings.update` sections.
+ * @param {(values: object, origin?: object) => object} params.toPayload - Draft
+ *   values -> update sections. `toPayload(draft, origin)` builds the write, so
+ *   it may name only what changed; `toPayload(origin)` builds the `base`.
+ * @param {(params: object) => Promise<object>} [params.submit] - Sends the
+ *   sections plus `base` and resolves to the saved Settings.
+ * @param {number} [params.leafDepth] - Draft depth at which a value merges as
+ *   a whole (see `rebaseDraft`).
  */
 export function createSettingsDraft({
   settings,
@@ -97,6 +115,8 @@ export function createSettingsDraft({
   read,
   write,
   toPayload,
+  submit = updateSettings,
+  leafDepth = Infinity,
 }) {
   let origin = plain(fromSettings(settings));
 
@@ -106,7 +126,9 @@ export function createSettingsDraft({
 
   function adopt(nextSettings) {
     const saved = plain(fromSettings(nextSettings));
-    const { value, conflicts } = rebaseDraft(read(), origin, saved);
+    const { value, conflicts } = rebaseDraft(read(), origin, saved, {
+      leafDepth,
+    });
     origin = saved;
     replaceDraft(value);
     return conflicts.length > 0;
@@ -116,6 +138,7 @@ export function createSettingsDraft({
     const saved = plain(fromSettings(nextSettings));
     const { value } = rebaseDraft(read(), submitted, saved, {
       draftWins: true,
+      leafDepth,
     });
     origin = saved;
     replaceDraft(value);
@@ -141,8 +164,8 @@ export function createSettingsDraft({
         const submitted = plain(read());
         let nextSettings;
         try {
-          nextSettings = await updateSettings({
-            ...toPayload(submitted),
+          nextSettings = await submit({
+            ...toPayload(submitted, origin),
             base: toPayload(origin),
           });
         } catch (error) {

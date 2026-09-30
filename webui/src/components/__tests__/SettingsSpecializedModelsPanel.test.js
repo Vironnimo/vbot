@@ -14,6 +14,7 @@ import {
   optionLabels,
   resetSpecializedModelsHarness,
   selectTarget,
+  settle,
   targetsFor,
   waitForCondition,
 } from './SettingsSpecializedModelsPanel.support.js';
@@ -111,6 +112,96 @@ describe('SettingsSpecializedModelsPanel', () => {
       expect(button('Reset options')).toBeUndefined();
     },
   );
+
+  describe('when the bindings changed elsewhere since they were read', () => {
+    const listener = { target: 'test/stt-a', options: {} };
+    const voice = { target: 'test/tts-a', options: { voice: 'a' } };
+    const edited = { target: 'test/tts-c', options: {} };
+    const newerListener = { target: 'test/stt-b', options: {} };
+    const newerVoice = { target: voice.target, options: { voice: 'b' } };
+
+    it.each([
+      {
+        scenario: 'retries the edit over the newer bindings',
+        saved: { speech_to_text: newerListener, text_to_speech: voice },
+        retried: true,
+        shown: ['Listener B', 'Voice C'],
+      },
+      {
+        // The draft's target with the other side's options would be invalid.
+        scenario: 'keeps a binding changed on both sides as saved, as a whole',
+        saved: { speech_to_text: listener, text_to_speech: newerVoice },
+        retried: false,
+        shown: ['Listener A', 'Voice A'],
+      },
+    ])('$scenario', async ({ saved, retried, shown }) => {
+      const targets = {
+        speech_to_text: [
+          { id: listener.target, label: 'Listener A' },
+          { id: newerListener.target, label: 'Listener B' },
+        ],
+        text_to_speech: [
+          { id: voice.target, label: 'Voice A' },
+          { id: edited.target, label: 'Voice C' },
+        ],
+      };
+      api.listTaskModelTargets.mockImplementation(async (taskType) => ({
+        targets: targets[taskType],
+      }));
+      api.getSettings.mockResolvedValue({ model_tasks: saved });
+      api.updateTaskModelSettings
+        .mockRejectedValueOnce(
+          Object.assign(new Error('Settings changed since they were read'), {
+            code: 'settings_conflict',
+          }),
+        )
+        .mockImplementation(async (model_tasks) => ({
+          model_tasks: { ...saved, ...model_tasks },
+        }));
+      const onError = vi.fn();
+      const props = committingProps({
+        taskTypes: ['speech_to_text', 'text_to_speech'],
+        settings: {
+          model_tasks: { speech_to_text: listener, text_to_speech: voice },
+        },
+        onError,
+      });
+      mountPanel(props);
+      await waitForCondition(
+        () =>
+          !document.getElementById('settings-specialized-text_to_speech')
+            ?.disabled,
+      );
+
+      selectTarget('text_to_speech', 'Voice C');
+      button('Save').click();
+      await waitForCondition(() => api.getSettings.mock.calls.length === 1);
+      await settle();
+
+      const writes = api.updateTaskModelSettings.mock.calls;
+      // Only the edited binding is written, based on the values it was read from.
+      expect(writes[0]).toEqual([
+        { text_to_speech: edited },
+        { base: { speech_to_text: listener, text_to_speech: voice } },
+      ]);
+      expect(writes.slice(1)).toEqual(
+        retried ? [[{ text_to_speech: edited }, { base: saved }]] : [],
+      );
+      expect(props.settings.model_tasks).toEqual(
+        retried ? { ...saved, text_to_speech: edited } : saved,
+      );
+      expect(
+        ['speech_to_text', 'text_to_speech'].map((taskType) =>
+          document
+            .getElementById(`settings-specialized-${taskType}`)
+            .textContent.trim(),
+        ),
+      ).toEqual(shown);
+      expect(onError.mock.calls.at(-1)).toEqual([
+        retried ? '' : t('settings.saveConflict'),
+      ]);
+    });
+  });
 
   it('loads every task type including image understanding, reports a failed load, and reloads on modelsRefreshToken', async () => {
     const onError = vi.fn();

@@ -25,6 +25,7 @@
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t, tOr } from '$lib/i18n.js';
+  import { createSettingsDraft } from '$lib/settingsSave.js';
   import {
     JSON_OPTION_TYPE,
     TASK_MODEL_ROWS,
@@ -70,9 +71,40 @@
     );
   }
 
+  // Only this placement's bindings; with `origin`, only those the draft
+  // changed, so an untouched binding is never written back.
+  function taskModelPayload(bindings, origin) {
+    const payload = createTaskModelUpdatePayload(bindings, origin);
+    return {
+      model_tasks: Object.fromEntries(
+        taskRows
+          .filter((row) => Object.hasOwn(payload, row.taskType))
+          .map((row) => [row.taskType, payload[row.taskType]]),
+      ),
+    };
+  }
+
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
   let taskModelBindings = $state(untrack(() => scopedBindings(settings)));
+  // Counts user edits, so a save that finishes after another edit stays armed.
+  let taskModelEdits = 0;
+  const taskModelDraft = createSettingsDraft({
+    settings: untrack(() => settings),
+    fromSettings: scopedBindings,
+    read: () => taskModelBindings,
+    write: replaceTaskModelBindings,
+    toPayload: taskModelPayload,
+    submit: async ({ model_tasks: modelTasks, base }) => {
+      const result = await updateTaskModelSettings(modelTasks, {
+        base: base.model_tasks,
+      });
+      return { ...settings, model_tasks: result.model_tasks ?? {} };
+    },
+    // A binding is one choice: its options belong to its target, so a
+    // binding saved elsewhere replaces the draft's binding as a whole.
+    leafDepth: 1,
+  });
   let taskModelTargetsByType = $state({});
   let taskModelSchemasByType = $state({});
   let taskModelLoading = $state(false);
@@ -325,38 +357,43 @@
       return true;
     }
 
-    taskModelSaving = true;
-    onError('');
-
-    try {
-      const submitted = JSON.stringify(taskModelBindings);
-      const result = await updateTaskModelSettings(
-        createTaskModelUpdatePayload(
-          taskModelBindings,
-          scopedBindings(settings),
-        ),
-      );
-      const nextSettings = {
-        ...settings,
-        model_tasks: result.model_tasks ?? {},
-      };
-      onCommit(nextSettings);
-      if (JSON.stringify(taskModelBindings) === submitted) {
-        taskModelBindings = scopedBindings(nextSettings);
-        autoSaveArmed = false;
-      }
-      return true;
-    } catch (error) {
-      onError(`${t('settings.saveError')} ${error.message}`);
-      return false;
-    } finally {
-      taskModelSaving = false;
+    const edits = taskModelEdits;
+    const saved = await taskModelDraft.save({
+      onCommit,
+      onError,
+      setSaving: (value) => (taskModelSaving = value),
+    });
+    if (saved && taskModelEdits === edits) {
+      autoSaveArmed = false;
     }
+    return saved;
+  }
+
+  // A rebase can replace a binding with one saved elsewhere; a changed target
+  // needs its own option controls.
+  function replaceTaskModelBindings(next) {
+    const previous = taskModelBindings;
+    taskModelBindings = next;
+    for (const row of taskRows) {
+      const target = next[row.taskType]?.target ?? '';
+      if (target !== (previous[row.taskType]?.target ?? '')) {
+        loadTaskModelSchema(row.taskType, target).catch((error) => {
+          onError(
+            `${t('settings.specializedModels.optionsLoadError')} ${error.message}`,
+          );
+        });
+      }
+    }
+  }
+
+  function markTaskModelEdit() {
+    taskModelEdits += 1;
+    autoSaveArmed = true;
   }
 
   async function handleTaskModelTargetChange(taskType, target) {
     onError('');
-    autoSaveArmed = true;
+    markTaskModelEdit();
     taskModelBindings = {
       ...taskModelBindings,
       [taskType]: {
@@ -407,7 +444,7 @@
       [taskType]: { ...currentBinding, options },
     };
     onError('');
-    autoSaveArmed = true;
+    markTaskModelEdit();
   }
 
   function resetTaskModelOptions(taskType) {
@@ -417,7 +454,7 @@
     };
     clearTaskModelJsonErrors(taskType);
     onError('');
-    autoSaveArmed = true;
+    markTaskModelEdit();
   }
 
   function valueFromTaskModelOptionField(field, event) {

@@ -175,13 +175,24 @@ export async function uploadAttachment(file, options = {}) {
   };
 }
 
-export function updateTaskModelSettings(modelTasks, options = {}) {
+// `base` is the caller's view of the bindings it writes: the server refuses the
+// write with `settings_conflict` when a binding it would change differs.
+export function updateTaskModelSettings(modelTasks, { base, ...options } = {}) {
   requirePlainObject(
     modelTasks,
     'Task model settings must be an object',
     'task_model.update',
   );
-  return rpc('task_model.update', { model_tasks: modelTasks }, options);
+  const params = { model_tasks: modelTasks };
+  if (base !== undefined) {
+    requirePlainObject(
+      base,
+      'Task model base must be an object',
+      'task_model.update',
+    );
+    params.base = { model_tasks: base };
+  }
+  return rpc('task_model.update', params, options);
 }
 
 /**
