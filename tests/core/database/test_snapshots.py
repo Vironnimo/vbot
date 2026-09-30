@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import queue
 import sqlite3
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -38,7 +39,7 @@ from core.database import (
     snapshot_summaries,
 )
 from core.database import snapshots as snapshots_module
-from core.database.snapshot_barrier import capture_members
+from core.database.snapshot_barrier import CAPTURE_ATTEMPTS, capture_members
 from core.database.snapshots import SNAPSHOT_HEALTH_FILE_NAME, SNAPSHOT_MANIFEST_NAME
 from core.json_documents import document_change
 from tests.core.database.database_test_support import (
@@ -289,6 +290,7 @@ def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Pat
                 {"tally": tally.spec, "journal": journal.spec, "notes": notes.spec},
                 copy_database=copy_database,
                 copy_documents=lambda: order.append("documents"),
+                discard_copies=lambda: pytest.fail("no change entered during the freeze"),
                 cancelled=still_draining,
             ).result(timeout=20.0)
             writing.result(timeout=10.0)
@@ -303,34 +305,51 @@ def test_a_capture_freezes_held_members_until_the_anchor_is_copied(data_dir: Pat
 
 
 @pytest.mark.asyncio
-async def test_an_event_loop_write_never_waits_for_a_capture_and_fails_it_instead(
-    data_dir: Path,
+@pytest.mark.parametrize("disturbed_attempts", [1, CAPTURE_ATTEMPTS])
+async def test_a_capture_an_event_loop_write_disturbed_is_retried_a_bounded_number_of_times(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, disturbed_attempts: int
 ) -> None:
     notes = open_database(notes_spec(data_dir))
-    frozen, written = Event(), Event()
+    real_backup = notes.backup
+    copying: queue.Queue[Event] = queue.Queue()
+    disturbed: list[Path] = []
 
-    def copy_database(name: str) -> None:
-        frozen.set()
-        assert written.wait(10.0)
+    def backup(destination: Path, *, cancelled: Callable[[], bool] | None = None) -> bool:
+        if len(disturbed) < disturbed_attempts:
+            disturbed.append(destination)
+            written = Event()
+            copying.put(written)
+            assert written.wait(10.0)
+        return real_backup(destination, cancelled=cancelled)
 
+    monkeypatch.setattr(notes, "backup", backup)
     try:
-        capture = asyncio.ensure_future(
-            asyncio.to_thread(
-                capture_members,
-                data_dir,
-                {"notes": notes.spec},
-                copy_database=copy_database,
-                copy_documents=lambda: None,
-            )
+        taking = asyncio.ensure_future(
+            asyncio.to_thread(create_data_snapshot, data_dir, reason="test", databases=(notes,))
         )
-        assert await asyncio.to_thread(frozen.wait, 10.0)
-        add_note(notes, "from the Event Loop")  # a held write that would otherwise wait
-        written.set()
-        with pytest.raises(DatabaseUnavailableError, match="retry the snapshot"):
-            await capture
-        assert note_bodies(notes) == ["from the Event Loop"]
+        for attempt in range(disturbed_attempts):
+            written = await asyncio.to_thread(copying.get, timeout=10.0)
+            # A held write on the Event Loop never waits, even while the members are frozen.
+            add_note(notes, f"from the Event Loop {attempt}")
+            written.set()
+        published = await taking
+        assert note_count(notes) == disturbed_attempts
     finally:
         notes.close()
+
+    if disturbed_attempts < CAPTURE_ATTEMPTS:
+        # The disturbed copies were discarded; the next attempt holds every write.
+        assert isinstance(published, Path)
+        assert manifest_payload(published)["members"]["notes"]["facts"] == {
+            "note_count": disturbed_attempts
+        }
+        assert sorted(path.name for path in snapshot_root(data_dir).iterdir()) == sorted(
+            [published.name, SNAPSHOT_HEALTH_FILE_NAME]
+        )
+    else:
+        assert published is None
+        assert list_data_snapshots(data_dir) == []
+        assert "retry the snapshot" in read_snapshot_health(data_dir)["reason"]
 
 
 def test_an_online_snapshot_never_copies_inside_a_compound_mutation(data_dir: Path) -> None:

@@ -26,8 +26,8 @@ stall or deadlock: on an Event Loop thread, and on a thread that is already
 inside a change of the same data directory (a document written inside a
 database transaction, or a held write inside a Session transaction). Those
 enter at once. One that enters after the freeze instant would break the
-snapshot, so it fails the capture instead (``DatabaseUnavailableError``) and
-the snapshot is retried later.
+copies, so the capture discards them and starts over, up to
+:data:`CAPTURE_ATTEMPTS` times before it fails (``DatabaseUnavailableError``).
 
 **Compound barrier.** A compound mutation changes the Session database and a
 held member as one unit - an Agent rename retargets Sessions in ``sessions.db``
@@ -81,6 +81,8 @@ from core.database.spec import (
 SNAPSHOT_BARRIER_WAIT_SECONDS = 30.0
 #: How long a capture waits for the held changes in flight to finish.
 MEMBER_DRAIN_WAIT_SECONDS = 10.0
+#: How many times a capture is taken before a change during its freeze fails it.
+CAPTURE_ATTEMPTS = 3
 _CANCEL_POLL_SECONDS = 0.1
 
 
@@ -194,10 +196,12 @@ def _wake(waiter: asyncio.Future[None]) -> None:
 class MemberCapture:
     """What one capture cost the held changes of its data directory."""
 
-    #: From stopping held changes until admitting them again.
+    #: From stopping held changes until admitting them again, over every attempt.
     held_seconds: float = 0.0
     #: Held changes that arrived meanwhile and waited.
     waited_changes: int = 0
+    #: How many times the members were captured; each retry discarded the copies.
+    attempts: int = 1
 
 
 class _Freeze:
@@ -249,6 +253,7 @@ def capture_members(
     *,
     copy_database: Callable[[str], None],
     copy_documents: Callable[[], None],
+    discard_copies: Callable[[], None],
     barrier: SnapshotBarrier | None = None,
     cancelled: Callable[[], bool] | None = None,
     drain_seconds: float = MEMBER_DRAIN_WAIT_SECONDS,
@@ -259,11 +264,12 @@ def capture_members(
     (``DatabaseSpec.snapshot_capture``); one without a known spec is held. Holds
     ``barrier`` against compound mutations, then freezes the held members and
     copies the held databases (by name), the documents and the anchor; admits
-    held changes again and copies the trailing databases. Returns ``None`` when
-    ``cancelled`` reported true while waiting. Raises
+    held changes again and copies the trailing databases. When a change entered
+    during the freeze, ``discard_copies`` removes what the attempt copied and
+    the capture starts over, at most :data:`CAPTURE_ATTEMPTS` times. Returns
+    ``None`` when ``cancelled`` reported true while waiting. Raises
     ``DatabaseUnavailableError`` when compound mutations or held changes did not
-    finish within their budgets, or a held change entered after the freeze
-    instant (the copies are then inconsistent and must be discarded).
+    finish within their budgets, or every attempt was disturbed.
     """
     roles: dict[str, SnapshotCapture] = {
         name: HELD_CAPTURE if spec is None else spec.snapshot_capture
@@ -273,33 +279,38 @@ def capture_members(
     if len(anchors) > 1:
         raise ValueError(f"a data snapshot has one anchor database, not {', '.join(anchors)}")
     held = sorted(name for name, role in roles.items() if role == HELD_CAPTURE)
-    trailing = sorted(name for name, role in roles.items() if role == TRAILING_CAPTURE)
     key = Path(data_dir).resolve()
-    compound: AbstractContextManager[bool] = (
-        nullcontext(True) if barrier is None else barrier.capture(cancelled=cancelled)
-    )
-    with compound as admitted:
-        if not admitted:
-            return None
-        freeze = _freeze(key, cancelled, drain_seconds)
-        if freeze is None:
-            return None
-        try:
-            for name in held:
-                copy_database(name)
-            copy_documents()
-            for name in anchors:
-                copy_database(name)
-        finally:
-            _thaw(key, freeze)
-    if freeze.disturbed:
-        raise DatabaseUnavailableError(
-            "the data changed in a way the snapshot cannot hold while it was taken; "
-            "retry the snapshot"
+    result = MemberCapture(attempts=0)
+    while True:
+        if result.attempts:
+            discard_copies()
+        result.attempts += 1
+        compound: AbstractContextManager[bool] = (
+            nullcontext(True) if barrier is None else barrier.capture(cancelled=cancelled)
         )
-    for name in trailing:
+        with compound as admitted:
+            if not admitted or (freeze := _freeze(key, cancelled, drain_seconds)) is None:
+                return None
+            try:
+                for name in held:
+                    copy_database(name)
+                copy_documents()
+                for name in anchors:
+                    copy_database(name)
+            finally:
+                _thaw(key, freeze)
+        result.held_seconds += freeze.held_seconds
+        result.waited_changes += freeze.waited_changes
+        if not freeze.disturbed:
+            break
+        if result.attempts >= CAPTURE_ATTEMPTS:
+            raise DatabaseUnavailableError(
+                "the data changed in a way the snapshot cannot hold while it was taken; "
+                "retry the snapshot"
+            )
+    for name in sorted(name for name, role in roles.items() if role == TRAILING_CAPTURE):
         copy_database(name)
-    return MemberCapture(held_seconds=freeze.held_seconds, waited_changes=freeze.waited_changes)
+    return result
 
 
 def _admit(data_dir: Path, *, exempt: bool) -> None:

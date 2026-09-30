@@ -785,18 +785,16 @@ def create_data_snapshot(
 ) -> Path | None:
     """Capture, verify and atomically publish one snapshot of the durable data.
 
-    Every registered database and the JSON document set are captured, in the
-    order and under the freeze of ``capture_members``
-    (``core.database.snapshot_barrier``), so the copies show the data a crash at
-    one instant would leave. ``databases`` are the open handles of this process,
-    copied online; every other registered database is copied from its file,
-    which no other process may write meanwhile. A process that mutates the data
-    passes its ``barrier``. ``specs`` add owner facts and capture roles for
-    members not open here. Returns ``None`` when there is nothing to capture,
-    the attempt was cancelled, or it failed; failures are recorded in the
-    snapshot health. A registered database without its file fails the attempt
-    with the operator's next step (``describe_missing_databases``) instead of
-    being skipped. Refuses with ``DatabaseFormatError`` while data maintenance is incomplete.
+    Every registered database and the JSON document set are captured by
+    ``capture_members`` (``core.database.snapshot_barrier``), so the copies show
+    the data a crash at one instant would leave; they are made durable after
+    it. ``databases`` are this process's open handles, copied online; any other
+    registered database is copied from its file, which no other process may
+    write meanwhile. A mutating process passes its ``barrier``; ``specs`` add
+    owner facts and capture roles for members not open here. Returns ``None``
+    when there is nothing to capture, or the attempt was cancelled or failed
+    (recorded in the snapshot health, a missing database file with the
+    operator's next step). Refuses with ``DatabaseFormatError`` during maintenance.
     """
     data_dir = Path(data_dir)
     if not reason or not reason.strip():
@@ -862,11 +860,16 @@ def create_data_snapshot(
             if (documents := capture_documents(data_dir, staging, cancelled=cancelled)) is None:
                 raise _SnapshotCancelledError
 
+        def discard_copies() -> None:
+            shutil.rmtree(staging)
+            staging.mkdir()
+
         capture = capture_members(
             data_dir,
             {name: known_specs.get(name) for name in marker.databases},
             copy_database=copy_member,
             copy_documents=copy_documents,
+            discard_copies=discard_copies,
             barrier=barrier,
             cancelled=cancelled,
         )
@@ -920,13 +923,14 @@ def create_data_snapshot(
         _prune_snapshots(data_dir, protected_snapshot=final)
         _LOGGER.info(
             "Created data snapshot (snapshot=%s databases=%d documents=%d reason=%s "
-            "held_ms=%.0f waited_changes=%d)",
+            "held_ms=%.0f waited_changes=%d attempts=%d)",
             snapshot_id,
             len(members),
             len(documents),
             reason,
             capture.held_seconds * 1000,
             capture.waited_changes,
+            capture.attempts,
         )
         _record_snapshot_health(data_dir, "healthy", snapshot_id=snapshot_id)
         return final
