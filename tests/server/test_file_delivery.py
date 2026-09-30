@@ -538,7 +538,8 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
 
     image = tmp_path / "original image.png"
     image.write_bytes(b"\x89PNG\r\n\x1a\nfirst")
-    display = {"image_files": [{"path": str(image), "filename": image.name}]}
+    # A downloaded image keeps the name of its address.
+    display = {"media_files": [{"path": str(image), "kind": "image", "filename": "cat.png"}]}
     message = ChatMessage.tool(
         tool_call_id="call", name="analyze_image", content="{}", tool_display=display
     )
@@ -547,16 +548,16 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
     with TestClient(app) as client:
         delivery = cast(Any, client.app).state.file_delivery
         public = _visible_message(message, file_delivery=delivery)
-        preview = public["tool_display"]["images"][0]
-        assert preview["filename"] == image.name
+        preview = public["tool_display"]["media"][0]
+        assert (preview["filename"], preview["kind"]) == ("cat.png", "image")
         assert "path" not in preview
-        assert "image_files" not in public["tool_display"]
+        assert "media_files" not in public["tool_display"]
         url = preview["url"]
         assert client.get(url).content == image.read_bytes()
         assert _visible_message(message, file_delivery=delivery) == public
         image.write_bytes(b"\x89PNG\r\n\x1a\nchanged")
         updated = _visible_message(message, file_delivery=delivery)
-        updated_url = updated["tool_display"]["images"][0]["url"]
+        updated_url = updated["tool_display"]["media"][0]["url"]
         assert updated_url != url
         response = client.get(updated_url)
         assert response.content == image.read_bytes()
@@ -565,7 +566,7 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
         image.unlink()
         assert client.get(url).status_code == 404
         reloaded = _visible_message(message, file_delivery=delivery)
-        missing_url = reloaded["tool_display"]["images"][0]["url"]
+        missing_url = reloaded["tool_display"]["media"][0]["url"]
         assert client.get(missing_url).status_code == 404
         event = remove_opaque_provider_metadata(
             {"payload": {"display": display}}, file_delivery=delivery
@@ -573,29 +574,43 @@ def test_tool_images_deliver_originals_and_remain_addressable_when_missing(tmp_p
         assert event["payload"]["display"] == reloaded["tool_display"]
         image.write_bytes(b"\x89PNG\r\n\x1a\nrestored")
         restored = _visible_message(message, file_delivery=delivery)
-        assert restored["tool_display"]["images"][0]["url"] != missing_url
+        assert restored["tool_display"]["media"][0]["url"] != missing_url
         assert client.get(missing_url).content == image.read_bytes()
     restarted = _visible_message(message, file_delivery=FileDelivery(secret=b"restart"))
-    assert restarted["tool_display"]["images"][0]["url"] != url
-    assert "image_files" not in _visible_message(message)["tool_display"]
+    assert restarted["tool_display"]["media"][0]["url"] != url
+    assert "media_files" not in _visible_message(message)["tool_display"]
 
 
 def test_tool_media_play_from_signed_urls_that_keep_their_kind(tmp_path: Path) -> None:
+    frame = tmp_path / "frame.png"
     video = tmp_path / "clip.mp4"
     video.write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + b"\x00" * 64)
     references = [
-        {"path": str(video), "media_type": "video/mp4"},
-        {"path": "relative.mp3", "media_type": "audio/mpeg"},
-        {"path": str(video), "media_type": "text/plain"},
+        {"path": str(frame), "kind": "image", "filename": "frame.png", "role": "source"},
+        {"path": str(video), "kind": "video", "filename": "clip.mp4"},
+        # Recorded with a media type instead of a kind.
+        {"path": str(tmp_path / "song.mp3"), "media_type": "audio/mpeg"},
+        {"path": "relative.mp3", "kind": "audio"},
+        {"path": str(video), "kind": "document"},
         None,
     ]
+    # Tool displays recorded before any other media hold only images.
+    legacy = [{"path": str(tmp_path / "old.png"), "filename": "old.png"}]
     runtime = StubRuntime(tmp_path / "data", StubAdapter())
     app = create_app(runtime=cast(Any, runtime))
     with TestClient(app) as client:
         delivery = cast(Any, client.app).state.file_delivery
-        [item] = delivery.project_message({"media_files": references})["media"]
-        assert (item["filename"], item["media_type"]) == ("clip.mp4", "video/mp4")
-        assert "path" not in item
+        media = delivery.project_message({"image_files": legacy, "media_files": references})[
+            "media"
+        ]
+        assert [(item["filename"], item["kind"], item.get("role")) for item in media] == [
+            ("old.png", "image", None),
+            ("frame.png", "image", "source"),
+            ("clip.mp4", "video", None),
+            ("song.mp3", "audio", None),
+        ]
+        assert all("path" not in item for item in media)
+        item = media[2]
         # A player seeks with range requests and plays the file in place.
         response = client.get(item["url"], headers={"Range": "bytes=0-3"})
         assert response.status_code == 206
@@ -618,9 +633,9 @@ def test_image_urls_change_for_same_size_overwrites_within_one_second(
     def url() -> str:
         if surface == "tool":
             return str(
-                delivery.project_message({"image_files": [{"path": str(image)}]})["images"][0][
-                    "url"
-                ]
+                delivery.project_message({"media_files": [{"path": str(image), "kind": "image"}]})[
+                    "media"
+                ][0]["url"]
             )
         return _only_file_url(delivery.project_message(_assistant_payload(image))["content"])
 
@@ -642,15 +657,15 @@ def test_tool_image_projection_rejects_non_absolute_paths(tmp_path: Path) -> Non
     delivery = FileDelivery()
     projected = delivery.project_message(
         {
-            "image_files": [
-                {"path": "relative.png"},
-                {"path": "https://example.com/image.png"},
-                {"path": str(tmp_path / "bad\0name")},
+            "media_files": [
+                {"path": "relative.png", "kind": "image"},
+                {"path": "https://example.com/image.png", "kind": "image"},
+                {"path": str(tmp_path / "bad\0name"), "kind": "image"},
                 None,
             ]
         }
     )
-    assert projected == {"images": []}
+    assert projected == {"media": []}
 
 
 def test_extension_page_capability_is_epoch_bound_and_scopes_assets(tmp_path: Path) -> None:

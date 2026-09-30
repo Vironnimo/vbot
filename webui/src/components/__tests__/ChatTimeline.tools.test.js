@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import {
   appendEvents,
@@ -14,7 +14,7 @@ import {
 } from './ChatTimeline.support.js';
 // After the support module, which points `svelte/store` at its client build.
 import { fromStore, writable } from 'svelte/store';
-import { toolDetailImages } from '../../lib/chatToolDetails.js';
+import { toolDetailMedia } from '../../lib/chatToolDetails.js';
 import { t } from '../../lib/i18n.js';
 import {
   FLOATING_HOVER_CLOSE_DELAY_MS,
@@ -436,62 +436,6 @@ describe('ChatTimeline Tools', () => {
       expect(items[3]).toBe('Not a link');
     });
 
-    it('previews produced images and plays produced videos and audio', () => {
-      const display = structuredDisplay({
-        details: [],
-        media: [
-          {
-            url: '/api/files/clip.token',
-            filename: 'clip.mp4',
-            media_type: 'video/mp4',
-          },
-          {
-            url: '/api/files/song.token',
-            filename: 'song.mp3',
-            media_type: 'audio/mpeg',
-          },
-          {
-            url: '/api/files/cat.token',
-            filename: 'cat.png',
-            media_type: 'image/png',
-          },
-          {
-            url: 'https://example.com/x.png',
-            filename: 'remote.png',
-            media_type: 'image/png',
-          },
-          {
-            url: '/api/files/doc.token',
-            filename: 'doc.pdf',
-            media_type: 'application/pdf',
-          },
-        ],
-      });
-      timeline.render(
-        sessionWithTool([
-          toolStarted('call', 'generate_video', { prompt: 'a cat' }),
-          toolResult('call', 'generate_video', '{"ok": true}', { display }),
-        ]),
-      );
-
-      const media = document.querySelector('.tool-media');
-      expect(media.textContent).toContain(t('chat.toolMedia'));
-      expect(media.querySelector('video')?.getAttribute('src')).toBe(
-        '/api/files/clip.token',
-      );
-      expect(media.querySelector('audio')?.getAttribute('src')).toBe(
-        '/api/files/song.token',
-      );
-      expect(media.querySelector('img')?.getAttribute('src')).toBe(
-        '/api/files/cat.token',
-      );
-      // Only signed vBot file addresses of a playable kind reach the page.
-      expect(media.querySelectorAll('.tool-media__item')).toHaveLength(3);
-      expect(media.textContent).not.toContain('remote.png');
-      expect(media.textContent).not.toContain('doc.pdf');
-      expect(document.querySelector('.tool-raw-call').open).toBe(false);
-    });
-
     it('shows changed Memory entries with their scope and revision', () => {
       const display = structuredDisplay({
         details: [
@@ -877,7 +821,86 @@ describe('ChatTimeline Tools', () => {
     });
   });
 
-  describe('image previews', () => {
+  describe('media', () => {
+    it('shows the source images, then the media, with players for video and audio', () => {
+      const display = structuredDisplay({
+        details: [],
+        media: [
+          {
+            url: '/api/files/frame.token',
+            filename: 'frame.png',
+            kind: 'image',
+            role: 'source',
+          },
+          { url: '/api/files/clip.token', filename: 'clip.mp4', kind: 'video' },
+          { url: '/api/files/cat.token', filename: 'cat.png', kind: 'image' },
+          {
+            url: 'https://example.com/x.png',
+            filename: 'remote.png',
+            kind: 'image',
+          },
+          {
+            url: '/api/files/doc.token',
+            filename: 'doc.pdf',
+            kind: 'document',
+          },
+        ],
+      });
+      const result = {
+        ok: true,
+        data: {},
+        artifacts: [
+          {
+            kind: 'read_media',
+            attachment_id: 'att_0123456789ab',
+            filename: 'song.mp3',
+            media_type: 'audio/mpeg',
+          },
+        ],
+      };
+      // jsdom has no media playback.
+      const playback = ['pause', 'load'].map((method) =>
+        vi
+          .spyOn(HTMLMediaElement.prototype, method)
+          .mockImplementation(() => {}),
+      );
+      onTestFinished(() => playback.forEach((spy) => spy.mockRestore()));
+      timeline.render(
+        sessionWithTool([
+          toolStarted('call', 'generate_video', { prompt: 'a cat' }),
+          toolResult('call', 'generate_video', result, { display }),
+        ]),
+      );
+
+      const [sources, media] = document.querySelectorAll('.tool-media');
+      expect(sources.querySelector('.teb-label').textContent).toBe(
+        t('chat.toolMediaSources'),
+      );
+      expect(
+        Array.from(sources.querySelectorAll('.tool-image-preview img'), (img) =>
+          img.getAttribute('src'),
+        ),
+      ).toEqual(['/api/files/frame.token']);
+      expect(media.querySelector('.teb-label').textContent).toBe(
+        t('chat.toolMedia'),
+      );
+      expect(
+        Array.from(media.querySelectorAll('.tool-image-preview img'), (img) =>
+          img.getAttribute('src'),
+        ),
+      ).toEqual(['/api/files/cat.token']);
+      expect(media.querySelector('video').getAttribute('src')).toBe(
+        '/api/files/clip.token',
+      );
+      // Audio plays in the same player as spoken replies.
+      expect(media.querySelector('.audio-player')).toBeTruthy();
+      expect(media.textContent).toContain('song.mp3');
+      // Only signed vBot files of a playable kind reach the page.
+      expect(document.body.textContent).not.toContain('remote.png');
+      expect(document.body.textContent).not.toContain('doc.pdf');
+      expect(document.querySelector('.tool-raw-call').open).toBe(false);
+    });
+
     it.each(['read', 'analyze_image', 'web_fetch'])(
       'shows %s image previews live and after History reload',
       async (name) => {
@@ -910,13 +933,14 @@ describe('ChatTimeline Tools', () => {
         };
         const display = {
           version: 1,
-          images:
+          media:
             name !== 'web_fetch'
               ? images
                   .slice(0, name === 'read' ? 1 : 2)
                   .map((image, index) => ({
                     filename: image.filename,
                     url: `/api/files/original${index}.signature`,
+                    kind: 'image',
                   }))
               : [],
         };
@@ -1021,8 +1045,12 @@ describe('ChatTimeline Tools', () => {
         }),
         tool_display: {
           version: 1,
-          images: [
-            { filename: 'front.png', url: '/api/files/first.signature' },
+          media: [
+            {
+              filename: 'front.png',
+              url: '/api/files/first.signature',
+              kind: 'image',
+            },
           ],
         },
       };
@@ -1057,8 +1085,12 @@ describe('ChatTimeline Tools', () => {
             ...result,
             tool_display: {
               version: 1,
-              images: [
-                { filename: 'front.png', url: '/api/files/second.signature' },
+              media: [
+                {
+                  filename: 'front.png',
+                  url: '/api/files/second.signature',
+                  kind: 'image',
+                },
               ],
             },
           },
@@ -1088,24 +1120,23 @@ describe('ChatTimeline Tools', () => {
       ['x'.repeat(129), false],
     ])('accepts only an opaque Attachment identity: %s', (id, accepted) => {
       expect(
-        toolDetailImages(
-          {
-            artifacts: [
-              {
-                kind: 'read_media',
-                attachment_id: id,
-                media_type: 'image/png',
-              },
-            ],
-          },
-          { preferPayload: true },
-        ),
+        toolDetailMedia(null, {
+          artifacts: [
+            {
+              kind: 'read_media',
+              attachment_id: id,
+              media_type: 'image/png',
+            },
+          ],
+        }),
       ).toEqual(
         accepted
           ? [
               {
+                kind: 'image',
                 src: `/api/attachments/${id}`,
                 filename: t('chat.attachment.preview'),
+                source: false,
               },
             ]
           : [],

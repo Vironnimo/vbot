@@ -721,7 +721,8 @@ def _display_details(arguments: JsonObject, result: JsonObject | None) -> list[J
     """Show the user the page text or the passages found, and whether more remains.
 
     References, continuation calls and extraction notes are for the Agent and
-    stay in the raw result. A fetched image keeps the plain Args and Result.
+    stay in the raw result. A fetched image shows as media, with the Args and
+    Result behind the raw call.
     """
     ok = isinstance(result, dict) and result.get("ok") is True and not result.get("artifacts")
     data = result.get("data") if ok and isinstance(result, dict) else None

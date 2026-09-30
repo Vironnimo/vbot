@@ -278,11 +278,10 @@ def _requested_items(raw_paths: Any, field: str, one: str, many: str) -> list[st
     return [raw.strip() for raw in raw_paths]
 
 
-def _present(context: ToolContext, images: list[tuple[Path, str]]) -> None:
+def _present(context: ToolContext, images: list[tuple[Path, str]], *, source: bool) -> None:
     """Show the requested images in the Tool row, including unavailable ones."""
-    context.presentation_images.extend(
-        {"path": str(path), "filename": name} for path, name in images
-    )
+    for path, name in images:
+        context.add_display_media(path, "image", filename=name, source=source)
 
 
 def _named(paths: list[Path]) -> list[tuple[Path, str]]:
@@ -316,14 +315,15 @@ def resolve_local_images(
     """Resolve requested local image files against the working directory.
 
     Missing files fail together, each with similar existing files and, when every
-    missing file has one, the corrected call. Nothing is substituted.
+    missing file has one, the corrected call. Nothing is substituted. The Tool
+    row shows the requested files as the images the call started from.
     """
     items = _requested_items(raw_paths, field, "local image path", "local image paths")
     local = {
         index: context.resolve_path(_local_path_text(text, field))
         for index, text in enumerate(items)
     }
-    _present(context, _named(list(local.values())))
+    _present(context, _named(list(local.values())), source=True)
     _check_local(context, items, local, field, single)
     return list(local.values())
 
@@ -355,10 +355,10 @@ async def resolve_analysis_images(
             addresses, field=field, attachment_store=attachment_store, several=len(items) > 1
         )
     except UnusableImageError:
-        _present(context, _named(list(local.values())))
+        _present(context, _named(list(local.values())), source=False)
         raise
     except ImageDownloadError as error:
-        _present(context, _named(list(local.values())))
+        _present(context, _named(list(local.values())), source=False)
         raise UnusableImageError(
             error.code, str(error), retryable=error.retryable, attempts_made=error.attempts_made
         ) from error
@@ -366,7 +366,7 @@ async def resolve_analysis_images(
         (local[index], local[index].name) if index in local else downloaded[index]
         for index in range(len(items))
     ]
-    _present(context, images)
+    _present(context, images, source=False)
     return [path for path, _ in images]
 
 

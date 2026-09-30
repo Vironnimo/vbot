@@ -21,7 +21,7 @@ def test_short_view_ids_keep_previous_images_and_stale_view_rejection(computer, 
     value = 0
     for char in first["view_id"].removeprefix("view_"):
         value = value * 32 + alphabet.index(char)
-    original_path = Path(computer[1].presentation_images[-1]["path"])
+    original_path = Path(computer[1].presentation_media[-1]["path"])
     original = original_path.read_bytes()
     # Force the displayed-image allocation to collide with the previous view.
     sequence = iter((value, value, (value + 1) % (1 << 60)))
@@ -175,7 +175,7 @@ def test_zoom_maps_scaled_and_nested_crops_to_native_pixels(computer):
     client.size = (3840, 2160)
     initial = capture(computer)["data"]
     assert (initial["image_width"], initial["image_height"]) == (1600, 900)
-    assert Image.open(context.presentation_images[-1]["path"]).size == (3840, 2160)
+    assert Image.open(context.presentation_media[-1]["path"]).size == (3840, 2160)
     first = service.handle(
         context,
         {

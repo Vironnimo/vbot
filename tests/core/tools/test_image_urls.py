@@ -133,7 +133,7 @@ async def test_image_urls_and_local_files_are_analyzed_in_their_order(
     ]
     assert {limit for _, limit in web.requested} == {call.store.max_size_bytes}
     assert all(accept.startswith("image/") for accept in web.accept)
-    assert [image["filename"] for image in call.context.presentation_images] == [
+    assert [image["filename"] for image in call.context.presentation_media] == [
         "cat.png",
         "cat.png",
         "dog.jpg",
@@ -402,7 +402,7 @@ async def test_several_images_name_each_failure_and_store_nothing(
     assert call.service.analyzed is None
     assert call.stored() == []
     # The local image still appears in the row; the failed addresses do not.
-    assert [image["filename"] for image in call.context.presentation_images] == ["cat.png"]
+    assert [image["filename"] for image in call.context.presentation_media] == ["cat.png"]
 
 
 @pytest.mark.asyncio

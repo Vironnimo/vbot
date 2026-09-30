@@ -235,7 +235,7 @@ async def test_unusable_local_images_name_the_files_meant_without_substituting(
     assert result["error"] == error
     assert service.analyzed is None
     # The row still shows an unavailable-image placeholder for each requested path.
-    assert [item["filename"] for item in context.presentation_images] == [
+    assert [item["filename"] for item in context.presentation_media] == [
         Path(item).name for item in images
     ]
 
@@ -426,6 +426,8 @@ async def test_the_row_keeps_only_the_original_paths_without_writing_files(
 
     assert result["ok"] is not missing
     assert restored.tool_display is not None
-    assert restored.tool_display["image_files"] == [{"path": str(image), "filename": image.name}]
+    assert restored.tool_display["media_files"] == [
+        {"path": str(image), "kind": "image", "filename": image.name}
+    ]
     assert result["artifacts"] == []
     assert set(tmp_path.rglob("*")) == before

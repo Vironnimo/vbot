@@ -10,7 +10,7 @@ Local frame/reference files are resolved against the Run's effective cwd and upl
 
 Dialects (owner argument normalizers): `start_frame`, `start_image`, `first_frame_image` -> `first_frame`; `end_frame`, `end_image`, `last_frame_image` -> `last_frame`; `source_image`, `input_image(s)`, `reference_image(s)`, `image_path(s)` -> `source_images` (one string or path object becomes a list); `output_directory`, `out_dir`, `save_dir`, `output_folder` -> `output_dir`. Empty optional strings (`output_dir`, frames, `resolution`, `aspect_ratio`, `size`) count as omitted, and a whitespace-only `output_dir` uses the default folder.
 
-A successful call records the written file via `ToolContext.add_display_media`, so expanded details show a video or audio player (see `tools.md`).
+Requested frame and reference images are recorded via `ToolContext.add_display_media` as sources, and a successful call records the written file, so expanded details show the sources and a video or audio player (see `tools.md`).
 
 Failures keep their Task codes. `provider_error` messages use the shared Provider wording of `core/tools/_media_failures.py` (credentials, rate or usage limit, no answer, other refusal; see `tools/image.md`). Configuration errors pass through unchanged because they also carry request fixes (`duration must be one of the values supported by the configured model: ...`), and `provider_outcome_unknown` keeps its message with `retryable: false`. A missing `prompt` fails with an example prompt.
 

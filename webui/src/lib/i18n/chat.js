@@ -234,6 +234,7 @@ export default Object.freeze({
   'chat.toolDetailLabel.task': 'Task',
   'chat.toolMatches': 'Matches',
   'chat.toolMedia': 'Media',
+  'chat.toolMediaSources': 'Sources',
   'chat.memoryScope.agent': 'Agent Memory',
   'chat.memoryScope.user': 'User Profile',
   'chat.memoryRevision': 'Revision {revision}',

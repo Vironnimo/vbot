@@ -108,12 +108,18 @@ async def test_music_tool_returns_local_artifact_facts(tmp_path: Path) -> None:
     }
     assert service.source_paths == ((tmp_path / "cover.png").resolve(),)
     assert service.output_dir == tmp_path / "music-gen"
-    # The user gets a player: the display names the produced file and its kind.
+    # The user sees the cover the music started from and gets a player for the music.
     display = registry.display_for_call(
         GENERATE_MUSIC_TOOL_NAME, {"prompt": "Dreamy synthwave"}, context=context, result=result
     )
     assert display["media_files"] == [
-        {"path": str((tmp_path / "music.mp3").resolve()), "media_type": "audio/mpeg"}
+        {
+            "path": str((tmp_path / "cover.png").resolve()),
+            "kind": "image",
+            "filename": "cover.png",
+            "role": "source",
+        },
+        {"path": str(tmp_path / "music.mp3"), "kind": "audio", "filename": "music.mp3"},
     ]
     assert display["details"] == []
 

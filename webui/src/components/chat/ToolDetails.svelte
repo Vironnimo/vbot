@@ -1,6 +1,6 @@
 <script>
   // The expanded body of a Tool row. Ordinary Run rows and standalone Tool
-  // events share it.
+  // events share it. It opens with the call's images, videos and audio.
   //
   // A Tool whose display declares detail blocks shows those to the user
   // (texts such as its command and output, the files it changed, what it
@@ -51,7 +51,7 @@
   };
 
   let blocks = $derived(toolDetailBlocks(tool, { args, result }));
-  let media = $derived(toolDetailMedia(tool));
+  let media = $derived(toolDetailMedia(tool, result));
   let streamed = $derived(Boolean(stdout || stderr));
   let streamsReplaceOutput = $derived(
     streamed &&
@@ -106,10 +106,8 @@
 {/snippet}
 
 <div class="tool-event-body tool-event-details">
+  <ToolMedia items={media} />
   {#if blocks}
-    {#if media.length > 0}
-      <ToolMedia items={media} />
-    {/if}
     {#each blocks as block, index (index)}
       {#if block.type === 'text'}
         {#if block.label === 'output' && streamed}

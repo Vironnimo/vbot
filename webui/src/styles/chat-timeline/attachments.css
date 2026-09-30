@@ -204,30 +204,15 @@ a.inline-attachment:focus-visible {
   }
 }
 
-/* Tool media stays compact within the existing detail rail. */
-/* What a Tool produced: image previews, video and audio players. */
-.tool-media__list {
-  display: grid;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.tool-media__item {
+/* Tool media (ToolMedia.svelte): image thumbnails and video and audio
+   players, compact within the detail rail. */
+.tool-media__player {
   display: grid;
   gap: 4px;
   min-width: 0;
-  justify-items: start;
+  margin: 4px 0 8px;
 }
 
-.tool-media__image {
-  display: block;
-  max-width: 100%;
-  cursor: zoom-in;
-}
-
-.tool-media__image img,
 .tool-media__video {
   display: block;
   max-width: 100%;
@@ -237,23 +222,22 @@ a.inline-attachment:focus-visible {
   background: var(--surface);
 }
 
-.tool-media__audio {
-  width: min(100%, 420px);
-}
-
-.tool-media__name {
-  max-width: 100%;
+.tool-media__player figcaption {
+  min-width: 0;
   overflow: hidden;
-  color: var(--text-lo);
-  font-family: var(--font-mono);
-  font-size: var(--fs-mono-xs);
-  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-xs);
 }
 
-.tool-media__name:hover,
-.tool-media__name:focus-visible {
+.tool-media__player figcaption a {
+  color: var(--text-lo);
+  text-decoration: none;
+}
+
+.tool-media__player figcaption a:hover,
+.tool-media__player figcaption a:focus-visible {
   color: var(--text-hi);
   text-decoration: underline;
 }
