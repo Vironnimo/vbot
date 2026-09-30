@@ -84,6 +84,7 @@ An error states the lifecycle state (nothing applied, partially applied, already
 - Name the state, never a wrong cause: "already delivered" informs; "not owned" reads as a permission problem and invites retries.
 - When refusing an action, name the permitted alternative.
 - Escalate after repeated failures of the same kind: point out the loop and offer a different strategy.
+- The error code must match the lifecycle state. `invalid_arguments` promises that nothing ran; a handler raises `ToolContractError` for it only before any effect. Any other exception reports the effects as unknown and asks the Agent to check the current state before calling again (`../tools.md` -> Failure codes follow the phase). Where a handler knows more, such as an effect it already persisted, it reports that state itself instead of letting the exception escape.
 
 ### 6. Design Tool families together
 

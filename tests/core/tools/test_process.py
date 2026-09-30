@@ -25,7 +25,14 @@ from core.tools.process import (
     register_process_tool,
 )
 from core.tools.process_manager import ProcessManager
-from core.tools.tools import JsonObject, ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools.tools import (
+    JsonObject,
+    ToolContext,
+    ToolRegistry,
+    tool_failure,
+    tool_failure_for_exception,
+    tool_success,
+)
 from tests.core.tools.process_manager_test_support import (
     AGENT_A,
     AGENT_B,
@@ -76,11 +83,11 @@ def make_registry(manager: ProcessManager) -> ToolRegistry:
 async def dispatch(
     manager: ProcessManager, context: ToolContext, arguments: JsonObject
 ) -> dict[str, Any]:
-    """Call the Tool as the executor does, reporting argument errors as the Model sees them."""
+    """Call the Tool as the executor does, reporting failures as the Model sees them."""
     try:
         return await make_registry(manager).dispatch(context, arguments, [PROCESS_TOOL_NAME])
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error), retryable=False)
+    except Exception as error:
+        return tool_failure_for_exception(PROCESS_TOOL_NAME, error)
 
 
 # --- contract ----------------------------------------------------------------
@@ -217,7 +224,6 @@ async def test_input_actions_fail_with_the_alternative_and_leave_the_command_alo
                 "when they start. Run interactive programs with the terminal Tool if you have "
                 "it, or give the command its input through a file or a pipeline."
             ),
-            "retryable": False,
         }
 
     tracked = manager.get_process(process_id, AGENT_A)

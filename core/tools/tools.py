@@ -72,15 +72,17 @@ from core.tools._tool_display import (
 )
 from core.tools._tool_results import (
     READ_MEDIA_ARTIFACT_KIND,
+    TOOL_EXECUTION_ERROR_CODE,
     is_tool_result_envelope,
     read_media_artifact,
     tool_failure,
+    tool_failure_for_exception,
     tool_success,
 )
 from core.tools.availability import (
     TOOL_ACTIVATION_CONFIGURABLE,
 )
-from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import model_tool_name, reserved_model_name
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -141,6 +143,30 @@ def offload_tool_handler(handler: ToolHandler) -> ToolHandler:
         return result
 
     return offloaded
+
+
+def _checked_arguments(tool: Tool, contract: ToolContract, arguments: Any) -> Any:
+    """Return the arguments the handler receives, or refuse the call before it runs.
+
+    Whatever argument repair and validation raise refuses the call as a
+    ``ToolContractError``, because nothing has run yet. A repair that crashes
+    for another reason than a ``ValueError`` is a defect and is logged.
+    """
+    try:
+        if tool.argument_normalizer is not None:
+            arguments = tool.argument_normalizer(copy.deepcopy(arguments))
+        normalized = contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
+        if not tool.handler_validates_arguments:
+            contract.validate_arguments(normalized, unadvertised=tool.unadvertised_parameters)
+    except ToolContractError:
+        raise
+    except ValueError as error:
+        raise ToolContractError(str(error)) from error
+    except Exception as error:
+        _LOGGER.error("Tool %s argument repair crashed unexpectedly", tool.name, exc_info=error)
+        cause = str(error).strip() or type(error).__name__
+        raise ToolContractError(f"{model_tool_name(tool.name)} was not run: {cause}") from error
+    return normalized
 
 
 def _detail_blocks(
@@ -565,17 +591,12 @@ class ToolRegistry:
                 "its extension is not configured",
                 retryable=False,
             )
-        input_contract = context.input_contract or tool.contract
-        if tool.argument_normalizer is not None:
-            arguments = tool.argument_normalizer(copy.deepcopy(arguments))
-        normalized_arguments = (
-            input_contract.normalize_arguments(arguments) if tool.coerce_arguments else arguments
+        normalized_arguments = _checked_arguments(
+            tool, context.input_contract or tool.contract, arguments
         )
-        if not tool.handler_validates_arguments:
-            input_contract.validate_arguments(
-                normalized_arguments, unadvertised=tool.unadvertised_parameters
-            )
-
+        # From here on the handler runs: only a ToolContractError it raises
+        # still means nothing happened; any other exception leaves the call's
+        # effects unknown (``tool_failure_for_exception``).
         if tool.extension is not None and not inspect.iscoroutinefunction(tool.handler):
             result = await run_tool_worker(
                 _invoke_sync_tool_handler,
@@ -949,19 +970,8 @@ class ToolExecutor:
     ) -> JsonObject:
         try:
             return await self._registry.dispatch(context, tool_call.arguments, allowed_tools)
-        except ToolNotFoundError as error:
-            return tool_failure("tool_not_found", str(error))
-        except SessionToolUnavailableError as error:
-            return tool_failure(f"{context.tool_name}_unavailable", str(error))
-        except ToolNotAllowedError as error:
-            return tool_failure("tool_not_allowed", str(error))
-        except InvalidToolResultError as error:
-            return tool_failure("invalid_tool_result", str(error))
-        except ValueError as error:
-            return tool_failure("invalid_arguments", str(error))
         except Exception as error:
-            _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
-            return tool_failure("tool_execution_error", str(error))
+            return tool_failure_for_exception(context.tool_name, error)
 
 
 def _build_per_call_cancel_hooks(
@@ -1003,6 +1013,7 @@ __all__ = [
     "JsonObject",
     "SessionToolUnavailableError",
     "TOOL_ALLOWLIST_WILDCARD",
+    "TOOL_EXECUTION_ERROR_CODE",
     "Tool",
     "ToolCall",
     "ToolCancelCheckHook",
@@ -1025,6 +1036,7 @@ __all__ = [
     "is_tool_result_envelope",
     "read_media_artifact",
     "tool_failure",
+    "tool_failure_for_exception",
     "tool_is_ready",
     "tool_success",
     "ToolCallCancelCheck",

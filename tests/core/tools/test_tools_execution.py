@@ -276,32 +276,118 @@ async def test_exact_provider_contract_flows_to_dispatch_validation() -> None:
 # --- Handler outcomes -----------------------------------------------------------
 
 
-def _raise_argument_error(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
-    raise ValueError("return_format must be a string")
+def _unknown_state(cause: str) -> str:
+    return (
+        f"probe failed while running: {cause} It is unknown how much of the call took effect. "
+        "Check the current state before you call probe again."
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("handler", "result_schema", "code", "message"),
+    ("raised_by", "error", "failure", "logged"),
     [
         pytest.param(
-            _raise_argument_error,
-            None,
-            "invalid_arguments",
-            "return_format must be a string",
-            id="handler-argument-error",
+            "normalizer",
+            ValueError("probe shows one file per call. Send one call per file."),
+            tool_failure(
+                "invalid_arguments", "probe shows one file per call. Send one call per file."
+            ),
+            False,
+            id="argument-repair-refusal",
         ),
+        pytest.param(
+            "normalizer",
+            TypeError("'NoneType' object is not iterable"),
+            tool_failure(
+                "invalid_arguments", "probe was not run: 'NoneType' object is not iterable"
+            ),
+            True,
+            id="argument-repair-defect",
+        ),
+        pytest.param(
+            "handler",
+            ToolContractError("probe was not run: mode must be fast or slow."),
+            tool_failure("invalid_arguments", "probe was not run: mode must be fast or slow."),
+            False,
+            id="handler-refusal",
+        ),
+        pytest.param(
+            "handler",
+            ValueError("extension change is unavailable"),
+            tool_failure(
+                "tool_execution_error", _unknown_state("extension change is unavailable.")
+            ),
+            True,
+            id="handler-value-error",
+        ),
+        pytest.param(
+            "handler",
+            RuntimeError("boom"),
+            tool_failure("tool_execution_error", _unknown_state("boom.")),
+            True,
+            id="handler-crash",
+        ),
+        pytest.param(
+            "handler",
+            TimeoutError(),
+            tool_failure("tool_execution_error", _unknown_state("TimeoutError.")),
+            True,
+            id="handler-error-without-message",
+        ),
+    ],
+)
+async def test_failure_code_follows_the_phase_that_raised(
+    caplog: pytest.LogCaptureFixture,
+    raised_by: str,
+    error: Exception,
+    failure: JsonObject,
+    logged: bool,
+) -> None:
+    """Only argument handling and an explicit refusal report the call as not run.
+
+    Anything else a handler raises leaves the call's effects unknown, whatever
+    its type: a ValueError after an effect must not read as invalid arguments.
+    """
+    effects: list[str] = []
+
+    def normalizer(arguments: JsonObject) -> JsonObject:
+        if raised_by == "normalizer":
+            raise error
+        return arguments
+
+    def handler(_context: ToolContext, _arguments: JsonObject) -> JsonObject:
+        effects.append("sent")
+        raise error
+
+    registry = ToolRegistry()
+    registry.register(
+        "probe", "Probe failures.", {"type": "object"}, handler, argument_normalizer=normalizer
+    )
+
+    with caplog.at_level(logging.ERROR, logger="vbot.tools"):
+        result = await _run_one(registry, "probe")
+
+    assert result == failure
+    assert effects == ([] if raised_by == "normalizer" else ["sent"])
+    crashes = [record for record in caplog.records if "crashed unexpectedly" in record.getMessage()]
+    assert bool(crashes) is logged
+    assert all(record.exc_info is not None for record in crashes)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("handler", "result_schema", "message"),
+    [
         pytest.param(
             lambda _context, _arguments: {"content": "not enveloped"},
             None,
-            "invalid_tool_result",
             "envelope",
             id="not-an-envelope",
         ),
         pytest.param(
             lambda _context, _arguments: tool_success({"path": Path("README.md")}),
             None,
-            "invalid_tool_result",
             "not JSON-serializable",
             id="not-serializable",
         ),
@@ -313,16 +399,14 @@ def _raise_argument_error(_context: ToolContext, _arguments: JsonObject) -> Json
                 "required": ["value"],
                 "additionalProperties": False,
             },
-            "invalid_tool_result",
             "value",
             id="violates-result-schema",
         ),
     ],
 )
-async def test_unusable_handler_outcome_becomes_a_failed_result(
+async def test_unusable_handler_result_becomes_a_failed_result(
     handler: Callable[[ToolContext, JsonObject], JsonObject],
     result_schema: JsonObject | None,
-    code: str,
     message: str,
 ) -> None:
     registry = ToolRegistry()
@@ -333,32 +417,8 @@ async def test_unusable_handler_outcome_becomes_a_failed_result(
     result = await _run_one(registry, "probe")
 
     assert result["ok"] is False
-    assert result["error"]["code"] == code
+    assert result["error"]["code"] == "invalid_tool_result"
     assert message in result["error"]["message"]
-
-
-@pytest.mark.asyncio
-async def test_handler_crash_becomes_failed_result_and_is_logged(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    registry = ToolRegistry()
-
-    def failing_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        raise RuntimeError("boom")
-
-    registry.register("failing", "Fail for testing.", {"type": "object"}, failing_handler)
-
-    with caplog.at_level(logging.ERROR, logger="vbot.tools"):
-        result = await _run_one(registry, "failing")
-
-    assert result == tool_failure("tool_execution_error", "boom")
-    crash_records = [
-        record
-        for record in caplog.records
-        if record.levelno == logging.ERROR and "crashed unexpectedly" in record.getMessage()
-    ]
-    assert crash_records, "expected an error log for the crashing tool handler"
-    assert crash_records[0].exc_info is not None
 
 
 @pytest.mark.asyncio

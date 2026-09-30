@@ -367,8 +367,14 @@ async def test_failed_analyses_say_what_happened_and_what_to_do(
 async def test_an_unexpected_failure_is_not_masked(photos: Path) -> None:
     service = ImageService(error=RuntimeError("implementation defect"))
 
-    with pytest.raises(RuntimeError, match="implementation defect"):
-        await analyze(photos, {"prompt": "Describe", "images": ["photos/cat.png"]}, service)
+    result = await analyze(photos, {"prompt": "Describe", "images": ["photos/cat.png"]}, service)
+
+    assert result["error"] == {
+        "code": "tool_execution_error",
+        "message": "analyze_image failed while running: implementation defect. It is unknown "
+        "how much of the call took effect. Check the current state before you call "
+        "analyze_image again.",
+    }
 
 
 def test_results_carry_only_the_analysis() -> None:

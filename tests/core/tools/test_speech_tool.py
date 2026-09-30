@@ -23,7 +23,7 @@ from core.tools.speech import (
     TEXT_TO_SPEECH_TOOL_PARAMETERS,
     register_text_to_speech_tool,
 )
-from core.tools.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 from core.utils.paths import model_path
 
 _ARTIFACT_PAYLOAD = {
@@ -69,8 +69,8 @@ async def _speak(
     )
     try:
         return await registry.dispatch(replace(tool_context, **context), arguments)
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+    except Exception as error:
+        return tool_failure_for_exception(TEXT_TO_SPEECH_TOOL_NAME, error)
 
 
 @pytest.mark.asyncio

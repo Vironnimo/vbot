@@ -145,10 +145,8 @@ async def test_a_failed_or_core_tool_call_keeps_no_payload(tmp_path) -> None:
     assert results["invalid-call"]["error"]["code"] == "invalid_tool_result"
     # Only Extension Tools may attach payloads; a core Tool's attempt fails its call.
     core_error = results["core-call"]["error"]
-    assert (core_error["code"], core_error["message"]) == (
-        "tool_execution_error",
-        "Result payloads are available only to Extension Tools",
-    )
+    assert core_error["code"] == "tool_execution_error"
+    assert "Result payloads are available only to Extension Tools" in core_error["message"]
     kept = results["failed-call"]["error"]["message"]
     assert _payload_rows(runtime) == [("failed-call", kept, "owner", '{"kept":true}')]
 

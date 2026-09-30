@@ -7,7 +7,6 @@ from collections.abc import Callable
 import pytest
 
 from core.tools.arguments import (
-    ToolArgumentError,
     line_number_gutter_candidates,
     optional_bool,
     optional_int,
@@ -17,6 +16,7 @@ from core.tools.arguments import (
     required_string,
     strip_line_number_gutters,
 )
+from core.tools.contracts import ToolContractError
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,7 @@ def test_valid_values_are_returned_in_their_strict_type(
 def test_invalid_values_name_the_field_and_the_expected_value(
     read: Callable[..., object], value: object, options: dict, message: str
 ) -> None:
-    with pytest.raises(ToolArgumentError) as error:
+    with pytest.raises(ToolContractError) as error:
         read(value, field_name="x", **options)
     assert str(error.value) == message
 

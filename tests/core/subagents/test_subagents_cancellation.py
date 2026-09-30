@@ -204,7 +204,7 @@ async def test_abort_while_announcing_queued_work_keeps_its_lifecycle(
     context = make_context(nesting_depth=nesting_depth, emit_hook=abort_on_queued_event)
 
     with pytest.raises(abort):
-        await harness.call(FOLLOW_UP, context)
+        await harness.registry.dispatch(context, FOLLOW_UP)
 
     if nesting_depth and not starts_during_event:
         # A foreground call that ends before its child starts takes the child with it.

@@ -17,7 +17,7 @@ from core.chat._step_outcomes import (
 )
 from core.chat.messages import ToolCall, ToolCallRejection
 from core.runs import TOOL_CALL_RESULT_EVENT, RunStatus
-from core.tools import ToolContext, ToolRegistry, tool_failure, tool_success
+from core.tools import ToolContext, ToolContractError, ToolRegistry, tool_failure, tool_success
 from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import build_chat_loop, history, last_run, persisted_roles
 from tests.core.chat.chat_loop_tools_test_support import (
@@ -56,7 +56,36 @@ def _counting_tool(
     ("allowed_tools", "result", "arguments", "failure", "ran"),
     [
         ([], None, _VALID, tool_failure("tool_not_allowed", "Tool not allowed: probe"), False),
-        (None, RuntimeError("boom"), _VALID, tool_failure("tool_execution_error", "boom"), True),
+        (
+            None,
+            ValueError("extension change is unavailable"),
+            _VALID,
+            tool_failure(
+                "tool_execution_error",
+                "probe failed while running: extension change is unavailable. It is unknown "
+                "how much of the call took effect. Check the current state before you call "
+                "probe again.",
+            ),
+            True,
+        ),
+        (
+            None,
+            TimeoutError(),
+            _VALID,
+            tool_failure(
+                "tool_execution_error",
+                "probe failed while running: TimeoutError. It is unknown how much of the call "
+                "took effect. Check the current state before you call probe again.",
+            ),
+            True,
+        ),
+        (
+            None,
+            ToolContractError("probe was not run: value names no target."),
+            _VALID,
+            tool_failure("invalid_arguments", "probe was not run: value names no target."),
+            True,
+        ),
         (
             None,
             {"content": "not enveloped"},
@@ -68,7 +97,14 @@ def _counting_tool(
         ),
         (None, None, {"value": {"unknown": "target"}}, "invalid_arguments", False),
     ],
-    ids=["not-allowed", "handler-exception", "non-envelope-result", "invalid-arguments"],
+    ids=[
+        "not-allowed",
+        "handler-exception",
+        "handler-exception-without-message",
+        "handler-refusal",
+        "non-envelope-result",
+        "invalid-arguments",
+    ],
 )
 async def test_failed_tool_call_persists_its_failure_and_the_run_continues(
     tmp_path: Path,

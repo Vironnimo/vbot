@@ -20,6 +20,7 @@ from core.tools import (
     ToolRegistry,
     register_skill_manage_tool,
     tool_failure,
+    tool_failure_for_exception,
 )
 
 
@@ -82,9 +83,9 @@ class _Harness:
                 dict[str, Any],
                 asyncio.run(self.tools.dispatch(context, arguments, [SKILL_MANAGE_TOOL_NAME])),
             )
-        except ValueError as error:
-            # The executor reports contract violations the same way.
-            result = tool_failure("invalid_arguments", str(error), retryable=False)
+        except Exception as error:
+            # The executor reports a call that raised the same way.
+            result = tool_failure_for_exception(SKILL_MANAGE_TOOL_NAME, error)
         # What the user sees of the latest call.
         self.details = self.tools.display_for_call(
             SKILL_MANAGE_TOOL_NAME, arguments, context=context, result=result
@@ -437,7 +438,11 @@ def test_calls_that_cannot_apply_as_given_are_refused_before_writing(
 
     result = harness.run({"name": "demo", **arguments})
 
-    assert result == tool_failure("invalid_arguments", message, retryable=False)
+    assert (result["ok"], result["error"]["code"], result["error"]["message"]) == (
+        False,
+        "invalid_arguments",
+        message,
+    )
     assert skill_file.read_bytes() == before
     assert [path.name for path in harness.home("main").iterdir()] == ["demo"]
     assert [path.name for path in skill_file.parent.iterdir()] == ["SKILL.md"]

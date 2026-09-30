@@ -23,18 +23,17 @@ from core.tools import (
     READ_MEDIA_ARTIFACT_KIND,
     ChangeTracker,
     InvalidToolResultError,
-    SessionToolUnavailableError,
     ToolContext,
     ToolContract,
     ToolExecutionConfig,
     ToolExecutor,
-    ToolNotAllowedError,
     ToolNotFoundError,
     ToolRegistry,
     ToolResultPersistedCallback,
     is_tool_result_envelope,
     model_tool_name,
     tool_failure,
+    tool_failure_for_exception,
 )
 from core.tools import ToolCall as ScheduledToolCall
 from core.tools.availability import (
@@ -593,7 +592,7 @@ class _EmittingToolRegistry(ToolRegistry):
             # The failure envelope replaces whatever the handler staged.
             if self._result_payloads is not None:
                 self._result_payloads.discard_result_payloads(context.tool_call_id)
-            return _failure_envelope(context, error)
+            return tool_failure_for_exception(context.tool_name, error)
 
     async def _dispatch_with_current_registry_signature(
         self,
@@ -615,26 +614,6 @@ class _EmittingToolRegistry(ToolRegistry):
                 timer.discard()
                 raise
             return self.validate_result(context.tool_name, result, contract=context.result_contract)
-
-
-def _failure_envelope(context: ToolContext, error: Exception) -> JsonObject:
-    """Convert one failed dispatch into the Tool's failure envelope."""
-    if isinstance(error, ToolNotFoundError):
-        return tool_failure("tool_not_found", str(error))
-    if isinstance(error, SessionToolUnavailableError):
-        return tool_failure(f"{context.tool_name}_unavailable", str(error))
-    if isinstance(error, ToolNotAllowedError):
-        return tool_failure("tool_not_allowed", str(error))
-    if isinstance(error, InvalidToolResultError):
-        return tool_failure("invalid_tool_result", str(error))
-    if isinstance(error, ValueError):
-        return tool_failure("invalid_arguments", str(error))
-    # The branches above are expected tool/input failures (the normal tool
-    # contract); this is an unexpected crash inside the handler. The crash is
-    # converted to a result and the run usually continues, so Run.mark_failed
-    # never sees it — log it here.
-    _LOGGER.error("Tool %s crashed unexpectedly", context.tool_name, exc_info=error)
-    return tool_failure("tool_execution_error", str(error))
 
 
 def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:
