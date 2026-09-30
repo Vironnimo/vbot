@@ -170,8 +170,8 @@ def register_cron_tool(
     async def handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         if arguments.get("action") in _REFERENCE_ACTIONS:
             async with reference_lock:
-                return _handle_cron_tool(cron_service, context, arguments)
-        return _handle_cron_tool(cron_service, context, arguments)
+                return await _handle_cron_tool(cron_service, context, arguments)
+        return await _handle_cron_tool(cron_service, context, arguments)
 
     registry.register(
         CRON_TOOL_NAME,
@@ -189,7 +189,7 @@ def register_cron_tool(
     )
 
 
-def _handle_cron_tool(
+async def _handle_cron_tool(
     cron_service: CronService,
     context: ToolContext,
     arguments: JsonObject,
@@ -208,18 +208,20 @@ def _handle_cron_tool(
                 )
             )
         if action == "create":
-            return _handle_create(cron_service, context, arguments)
+            return await _handle_create(cron_service, context, arguments)
         if action == "list":
             return _handle_list(cron_service, arguments)
         if action == "update":
-            return _handle_update(cron_service, context, arguments)
+            return await _handle_update(cron_service, context, arguments)
         if action == "delete":
-            return _handle_delete(cron_service, arguments)
+            return await _handle_delete(cron_service, arguments)
         if action == "enable":
             return _job_success(
-                cron_service, cron_service.enable_job(arguments["id"], actor="tool")
+                cron_service, await cron_service.enable_job(arguments["id"], actor="tool")
             )
-        return _job_success(cron_service, cron_service.disable_job(arguments["id"], actor="tool"))
+        return _job_success(
+            cron_service, await cron_service.disable_job(arguments["id"], actor="tool")
+        )
     except CronCallRefusedError as error:
         return tool_failure("invalid_arguments", str(error))
     except (CronTargetError, InvalidAgentAddressError) as error:
@@ -259,7 +261,7 @@ def _target_failure(error: CronTargetError | InvalidAgentAddressError) -> JsonOb
     return tool_failure(code, f"{str(error).rstrip('. ')}. {recommendation}.")
 
 
-def _handle_create(
+async def _handle_create(
     cron_service: CronService, context: ToolContext, arguments: JsonObject
 ) -> JsonObject:
     missing = [name for name in ("prompt", "schedule") if name not in arguments]
@@ -283,7 +285,7 @@ def _handle_create(
             )
         )
     paused = arguments.get(ENABLED_FIELD) is False
-    job = cron_service.create_job(
+    job = await cron_service.create_job(
         agent_id=agent_id,
         name=arguments.get("name"),
         prompt=arguments["prompt"],
@@ -315,7 +317,7 @@ def _handle_list(cron_service: CronService, arguments: JsonObject) -> JsonObject
     return tool_success(data)
 
 
-def _handle_update(
+async def _handle_update(
     cron_service: CronService, context: ToolContext, arguments: JsonObject
 ) -> JsonObject:
     job_id = arguments["id"]
@@ -356,7 +358,7 @@ def _handle_update(
         updates["remaining_runs"] = arguments["repeat"]
     if ENABLED_FIELD in arguments:
         updates["status"] = "active" if arguments[ENABLED_FIELD] else "paused"
-    job = cron_service.update_job(job_id, actor="tool", **updates)
+    job = await cron_service.update_job(job_id, actor="tool", **updates)
     return _job_success(cron_service, job, [note] if note else [])
 
 
@@ -367,9 +369,9 @@ def _target_agent(context: ToolContext, target: str) -> tuple[str, str | None]:
     return parse_agent_address(target)
 
 
-def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
+async def _handle_delete(cron_service: CronService, arguments: JsonObject) -> JsonObject:
     job = cron_service.get_job(arguments["id"])
-    cron_service.delete_job(job.id, actor="tool")
+    await cron_service.delete_job(job.id, actor="tool")
     return tool_success({"id": job.id, "name": job.name, "status": "deleted"})
 
 

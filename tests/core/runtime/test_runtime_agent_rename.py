@@ -26,7 +26,7 @@ def _started(config: Config) -> Runtime:
     return runtime
 
 
-def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
+async def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
     """Give ``coder`` a Session and one reference of every kind; return its current Session."""
     coder = runtime.agents.create("coder", "Coder")
     runtime.chat_sessions.create("coder", session_id="kept")
@@ -47,7 +47,7 @@ def _seed(runtime: Runtime, *, channel_enabled: bool = False) -> str:
         ),
         encoding="utf-8",
     )
-    runtime.cron_service.create_job(
+    await runtime.cron_service.create_job(
         agent_id="coder", prompt="Check in", schedule_type="interval", interval_seconds=3600
     )
     runtime.bootstrap_service.create_job(agent_id="coder", prompt="Verify", mode="once")
@@ -122,7 +122,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
     try:
         # A stopped Channel service (the test startup mode never starts it) must
         # not start the adapter of an enabled Channel it retargets.
-        current_session_id = _seed(runtime, channel_enabled=not channels_running)
+        current_session_id = await _seed(runtime, channel_enabled=not channels_running)
         if channels_running:
             runtime.channel_service.start()
         channel_loops, started_adapters = _record_channel_changes(runtime, monkeypatch)
@@ -160,11 +160,11 @@ async def test_a_rename_to_an_id_that_references_still_name_changes_nothing(
 ) -> None:
     runtime = _started(config)
     try:
-        current_session_id = _seed(runtime)
+        current_session_id = await _seed(runtime)
         # A deleted ``researcher`` left a Cron job and a delegation grant behind:
         # the renamed Agent would adopt them, and a revert would take them along.
         runtime.agents.create("researcher", "Researcher")
-        leftover = runtime.cron_service.create_job(
+        leftover = await runtime.cron_service.create_job(
             agent_id="researcher", prompt="Report", schedule_type="interval", interval_seconds=60
         )
         runtime.agents.update("coder", tools={"subagent": {"allowed_agents": ["researcher"]}})
@@ -232,7 +232,7 @@ async def test_a_rename_killed_at_any_step_ends_on_the_next_start(
 ) -> None:
     runtime = _started(config)
     try:
-        current_session_id = _seed(runtime)
+        current_session_id = await _seed(runtime)
         with monkeypatch.context() as patch:
             kill(runtime, patch)
             with pytest.raises(_Killed):

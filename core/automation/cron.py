@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from functools import partial
 from pathlib import Path
@@ -25,7 +25,7 @@ from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress, SessionNotFoundError
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
-from core.utils.workers import OrderedWorker
+from core.utils.workers import OrderedWorker, settle_before_cancelling
 
 if TYPE_CHECKING:
     from core.automation.automation import TriggerService
@@ -119,17 +119,19 @@ _LOGGER = get_logger("automation.cron")
 # Who caused a mutation when the caller does not say (direct in-process callers).
 _DEFAULT_ACTOR = "internal"
 
-# Every jobs.json and fire-claim write runs here in submission order: job fires
-# await their writes off the Event Loop, and a job edit's blocking save still
-# lands after them.
+# Every jobs.json and fire-claim write runs here in submission order. Job fires
+# and edits await their writes off the Event Loop; the blocking saves of startup
+# and of the Agent rename worker still land after everything submitted earlier.
 _CRON_WRITER = OrderedWorker(name="cron")
 
 
 class CronService:
     """Manage cron jobs, persistence, and per-job scheduling tasks.
 
-    Job tasks run on the Event Loop and await their writes on the ``cron``
-    ordered writer; job edits save through the same writer and wait for it.
+    Job tasks and job edits run on the Event Loop and await their writes on the
+    ``cron`` ordered writer. An edit applies to memory and the job tasks at once,
+    then saves; a failed save undoes both. Edits run one at a time and finish
+    even when their caller is cancelled, so that undo is exact.
     """
 
     def __init__(
@@ -160,6 +162,8 @@ class CronService:
         self._timezone = _resolve_timezone(tz)
         self._timezone_changed = asyncio.Event()
         self._started = False
+        self._edits = asyncio.Lock()
+        self._crash_saves: set[asyncio.Task[bool]] = set()
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Subscribe to persisted Cron changes and return an unsubscribe function."""
@@ -170,7 +174,7 @@ class CronService:
 
         return unsubscribe
 
-    def create_job(
+    async def create_job(
         self,
         *,
         agent_id: str,
@@ -192,43 +196,42 @@ class CronService:
         ``project_id=None`` is a global/identity target (unchanged); a set value
         scopes the fired Session/Run to that project's anchor.
         """
-        self._ensure_jobs_loaded()
-        if len(self._jobs) >= MAX_STORED_CRON_JOBS:
-            raise CronJobValidationError(
-                f"Cron stores at most {MAX_STORED_CRON_JOBS} jobs; delete history first"
+        async with self._edits:
+            self._ensure_jobs_loaded()
+            if len(self._jobs) >= MAX_STORED_CRON_JOBS:
+                raise CronJobValidationError(
+                    f"Cron stores at most {MAX_STORED_CRON_JOBS} jobs; delete history first"
+                )
+            if schedule_type == "interval" and interval_anchor_at is None:
+                interval_anchor_at = _timing._utc_now_iso()
+            job = CronJob(
+                id=new_id("cron", claim=lambda candidate: candidate not in self._jobs),
+                agent_id=agent_id,
+                name=name if name is not None else _derive_cron_job_name(prompt),
+                prompt=prompt,
+                schedule_type=schedule_type,
+                cron_expression=cron_expression,
+                interval_seconds=interval_seconds,
+                interval_anchor_at=interval_anchor_at,
+                run_at=run_at,
+                remaining_runs=remaining_runs,
+                session_id=session_id,
+                status=status,
+                last_fired_at=None,
+                created_at=_timing._utc_now_iso(),
+                project_id=project_id,
             )
-        if schedule_type == "interval" and interval_anchor_at is None:
-            interval_anchor_at = _timing._utc_now_iso()
-        job = CronJob(
-            id=new_id("cron", claim=lambda candidate: candidate not in self._jobs),
-            agent_id=agent_id,
-            name=name if name is not None else _derive_cron_job_name(prompt),
-            prompt=prompt,
-            schedule_type=schedule_type,
-            cron_expression=cron_expression,
-            interval_seconds=interval_seconds,
-            interval_anchor_at=interval_anchor_at,
-            run_at=run_at,
-            remaining_runs=remaining_runs,
-            session_id=session_id,
-            status=status,
-            last_fired_at=None,
-            created_at=_timing._utc_now_iso(),
-            project_id=project_id,
-        )
-        self._validate_job(job)
-        self._reject_past_once_run(job)
-        self._validate_capacity(job)
-        self._jobs[job.id] = job
-        try:
-            self._save_jobs()
-        except Exception:
-            self._jobs.pop(job.id, None)
-            raise
-        self._notify_changed()
+            self._validate_job(job)
+            self._reject_past_once_run(job)
+            self._validate_capacity(job)
+            self._jobs[job.id] = job
 
-        if self._started and job.status == "active":
-            self._start_job_task(job)
+            async def save() -> None:
+                await self._save_edit(lambda: self._jobs.pop(job.id, None))
+                if self._started and job.status == "active":
+                    self._start_job_task(job)
+
+            await settle_before_cancelling(save())
 
         _LOGGER.info(
             "Cron job created (job=%s agent=%s%s schedule_type=%s status=%s actor=%s)",
@@ -318,9 +321,26 @@ class CronService:
         occurrences.sort(key=lambda item: (item.fire_at_utc, item.job_id))
         return occurrences
 
-    def update_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any) -> CronJob:
+    async def update_job(
+        self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
+    ) -> CronJob:
         """Update mutable cron job fields and persist changes."""
-        updated, changed_fields = self._update_job(job_id, fields)
+        async with self._edits:
+            job, candidate, changed_fields, restart_task = self._stage_update(job_id, fields)
+            if changed_fields:
+                self._jobs[job_id] = candidate
+                # Job tasks follow memory at once, so a fire in flight sees the edit.
+                if self._started and restart_task:
+                    self._restart_job_task(candidate)
+
+                def undo() -> None:
+                    if self._jobs.get(job_id) is candidate:
+                        self._jobs[job_id] = job
+                        if self._started and restart_task:
+                            self._restart_job_task(job)
+
+                await settle_before_cancelling(self._save_edit(undo))
+        updated = self._clone_job(candidate)
         if changed_fields == ["status"] and updated.status in {"active", "paused"}:
             _LOGGER.info(
                 "Cron job %s (job=%s actor=%s)",
@@ -344,15 +364,34 @@ class CronService:
         summary line, so this step logs at DEBUG only.
         """
         previous = self.get_job(job_id).agent_id
-        updated, changed_fields = self._update_job(job_id, {"agent_id": agent_id})
+        job, candidate, changed_fields, restart_task = self._stage_update(
+            job_id, {"agent_id": agent_id}
+        )
         if changed_fields:
+            # The rename worker is no Event Loop; it waits for its own save.
+            self._jobs[job_id] = candidate
+            try:
+                self._save_jobs()
+            except Exception:
+                self._jobs[job_id] = job
+                raise
+            self._notify_changed()
+            if self._started and restart_task:
+                self._restart_job_task(candidate)
             _LOGGER.debug(
                 "Cron job retargeted (job=%s agent=%s new_agent=%s)", job_id, previous, agent_id
             )
-        return updated
+        return self._clone_job(candidate)
 
-    def _update_job(self, job_id: str, fields: dict[str, Any]) -> tuple[CronJob, list[str]]:
-        """Apply and persist ``fields``; return the job and the names that changed."""
+    def _stage_update(
+        self, job_id: str, fields: dict[str, Any]
+    ) -> tuple[CronJob, CronJob, list[str], bool]:
+        """Validate ``fields`` against a job without applying them.
+
+        Returns the current job, the updated candidate, the names that changed
+        and whether the job's task must restart. Without changes the candidate
+        is the current job itself.
+        """
         self._ensure_jobs_loaded()
         job = self._jobs.get(job_id)
         if job is None:
@@ -364,7 +403,7 @@ class CronService:
             raise CronJobValidationError(f"Unsupported cron job fields: {joined}")
 
         if not fields:
-            return self._clone_job(job), []
+            return job, job, [], False
 
         candidate = self._clone_job(job)
         restart_task = any(field in _RESTART_FIELDS for field in fields)
@@ -403,7 +442,7 @@ class CronService:
             if getattr(job, field_name) != getattr(candidate, field_name)
         )
         if not changed_fields:
-            return self._clone_job(job), []
+            return job, job, [], False
 
         self._validate_job(candidate)
         if {"run_at", "schedule_type"} & set(changed_fields) or (
@@ -412,36 +451,34 @@ class CronService:
             # Arming a one-time job for an elapsed instant would fire it at once.
             self._reject_past_once_run(candidate)
         self._validate_capacity(candidate, replacing_id=job_id)
-        self._jobs[job_id] = candidate
-        try:
-            self._save_jobs()
-        except Exception:
-            self._jobs[job_id] = job
-            raise
-        self._notify_changed()
+        return job, candidate, changed_fields, restart_task
 
-        if self._started and restart_task:
-            self._restart_job_task(candidate)
-        return self._clone_job(candidate), changed_fields
-
-    def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
+    async def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         """Delete one cron job and cancel any active task."""
-        self._ensure_jobs_loaded()
-        if job_id not in self._jobs:
-            raise CronJobNotFoundError(f"Cron job not found: {job_id}")
+        async with self._edits:
+            self._ensure_jobs_loaded()
+            if job_id not in self._jobs:
+                raise CronJobNotFoundError(f"Cron job not found: {job_id}")
 
-        removed = self._jobs.pop(job_id)
-        try:
-            self._save_jobs()
-        except Exception:
-            self._jobs[job_id] = removed
-            raise
-        self._notify_changed()
-        _CRON_WRITER.call(partial(_claims.remove, self._once_fire_claims_dir, job_id))
-        self._cancel_job_task(job_id)
+            removed = self._jobs.pop(job_id)
+            # A fire in flight withdraws at once; the claim removal follows the save.
+            self._cancel_job_task(job_id)
+
+            def undo() -> None:
+                self._jobs[job_id] = removed
+                if self._started and removed.status == "active":
+                    self._restart_job_task(removed)
+
+            async def save() -> None:
+                await self._save_edit(undo)
+                await _CRON_WRITER.call_async(
+                    partial(_claims.remove, self._once_fire_claims_dir, job_id)
+                )
+
+            await settle_before_cancelling(save())
         _LOGGER.info("Cron job deleted (job=%s actor=%s)", job_id, actor)
 
-    def enable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
+    async def enable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
         """Set a cron job status to active."""
         self._ensure_jobs_loaded()
         existing = self._jobs.get(job_id)
@@ -449,9 +486,9 @@ class CronService:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be re-enabled")
-        return self.update_job(job_id, status="active", actor=actor)
+        return await self.update_job(job_id, status="active", actor=actor)
 
-    def disable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
+    async def disable_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> CronJob:
         """Set a cron job status to paused."""
         self._ensure_jobs_loaded()
         existing = self._jobs.get(job_id)
@@ -459,7 +496,7 @@ class CronService:
             raise CronJobNotFoundError(f"Cron job not found: {job_id}")
         if existing.status in {"completed", "missed"}:
             raise CronJobValidationError("Completed or missed jobs cannot be paused")
-        return self.update_job(job_id, status="paused", actor=actor)
+        return await self.update_job(job_id, status="paused", actor=actor)
 
     def start(self) -> None:
         """Load jobs and start per-job scheduling tasks. Idempotent."""
@@ -556,13 +593,15 @@ class CronService:
         self._started = False
 
     async def aclose(self) -> None:
-        """Stop cron scheduling and await canceled job tasks."""
+        """Stop cron scheduling and await canceled job tasks and pending saves."""
         tasks = list(self._job_tasks.values())
         self.stop()
 
         pending_tasks = [task for task in tasks if not task.done()]
         if pending_tasks:
             await asyncio.gather(*pending_tasks, return_exceptions=True)
+        if self._crash_saves:
+            await asyncio.gather(*self._crash_saves, return_exceptions=True)
 
     def _load_jobs(self) -> dict[str, CronJob]:
         """Load valid jobs while preserving invalid sibling entries verbatim."""
@@ -596,12 +635,25 @@ class CronService:
         return jobs
 
     def _save_jobs(self) -> None:
-        """Persist the jobs, blocking until this and every earlier write landed."""
+        """Persist the jobs, blocking until this and every earlier write landed.
+
+        Only for startup and worker threads: on a running Event Loop the wait
+        would block the loop for as long as a data snapshot holds the file.
+        """
         _CRON_WRITER.call(partial(self._write_jobs, self._jobs_snapshot()))
 
     async def _save_jobs_async(self) -> None:
         """Event-Loop-safe :meth:`_save_jobs`; the snapshot is taken before the first await."""
         await _CRON_WRITER.call_async(partial(self._write_jobs, self._jobs_snapshot()))
+
+    async def _save_edit(self, undo: Callable[[], object]) -> None:
+        """Persist an edit already applied in memory; call ``undo`` when the save fails."""
+        try:
+            await self._save_jobs_async()
+        except Exception:
+            undo()
+            raise
+        self._notify_changed()
 
     def _jobs_snapshot(self) -> list[Any]:
         return [
@@ -1101,6 +1153,11 @@ class CronService:
                 f"Cannot initialize cron storage at {self._cron_dir}: {error}"
             ) from error
 
+    def _track_crash_save(self, save: Awaitable[bool]) -> None:
+        task = asyncio.ensure_future(save)
+        self._crash_saves.add(task)
+        task.add_done_callback(self._crash_saves.discard)
+
     def _restart_job_task(self, job: CronJob) -> None:
         if job.id in self._executing_jobs:
             self._pending_restarts.add(job.id)
@@ -1150,13 +1207,8 @@ class CronService:
             job.status = "failed"
             self._jobs[job_id] = job
         if self._note_run_failure(job_id, error):
-            # A crashed job task leaves only this callback: a blocking save, like an edit.
-            try:
-                self._save_jobs()
-            except CronStorageError as save_error:
-                _log_fire_save_failure(job_id, save_error)
-            else:
-                self._notify_changed()
+            # A crashed job task leaves only this callback, which must not wait for the file.
+            self._track_crash_save(self._save_jobs_after_fire(job_id))
 
         job = self._jobs.get(job_id)
         if self._started and job is not None and job.status == "active":

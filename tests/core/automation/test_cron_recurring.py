@@ -21,7 +21,7 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
 ) -> None:
     # Arrange
     service, trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Cron prompt",
         schedule_type="cron",
@@ -68,13 +68,14 @@ async def test_run_cron_job_fires_and_continues_after_trigger_failure(
     assert updated.last_fired_at.endswith("+00:00")
 
 
-def test_crud_status_or_schedule_changes_restart_tasks(
+@pytest.mark.asyncio
+async def test_crud_status_or_schedule_changes_restart_tasks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Arrange
     service, _trigger_service = make_service(tmp_path)
-    job = service.create_job(
+    job = await service.create_job(
         agent_id="agent-one",
         prompt="Cron prompt",
         schedule_type="cron",
@@ -95,9 +96,9 @@ def test_crud_status_or_schedule_changes_restart_tasks(
     monkeypatch.setattr(service, "_cancel_job_task", record_cancel)
 
     # Act
-    service.update_job(job.id, cron_expression="*/5 * * * *")
-    service.disable_job(job.id)
-    service.enable_job(job.id)
+    await service.update_job(job.id, cron_expression="*/5 * * * *")
+    await service.disable_job(job.id)
+    await service.enable_job(job.id)
 
     # Assert
     assert cancelled_jobs == [job.id, job.id, job.id]

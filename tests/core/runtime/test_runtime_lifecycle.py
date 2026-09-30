@@ -503,7 +503,7 @@ async def test_loop_started_runtime_survives_corrupt_agent_and_automation_state(
 ) -> None:
     data_dir = config.data_dir
     seed_cron = CronService(cast(Any, SimpleNamespace()), data_dir)
-    once = seed_cron.create_job(
+    once = await seed_cron.create_job(
         agent_id="main",
         prompt="Once prompt",
         schedule_type="once",

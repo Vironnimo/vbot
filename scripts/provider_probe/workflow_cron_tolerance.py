@@ -44,7 +44,7 @@ async def cron_case(adapter: Any, args: argparse.Namespace, case: dict[str, Any]
         service = CronService(Mock(), root, tz="UTC")  # Scheduler is never started.
         request = json.loads(json.dumps(case["arguments"]))
         if "id" in request:
-            seed = service.create_job(
+            seed = await service.create_job(
                 agent_id="probe",
                 prompt="Original",
                 schedule_type="interval",

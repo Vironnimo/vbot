@@ -10,7 +10,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -54,6 +54,8 @@ def _cron_state(cron_service: Any | None = None, *, resolver: Any | None = None)
         cron_service = Mock()
         cron_service.format_schedule.side_effect = CronService.format_schedule
         cron_service.next_fire_at.return_value = None
+        for edit in ("create_job", "update_job", "delete_job", "enable_job", "disable_job"):
+            setattr(cron_service, edit, AsyncMock())
     return SimpleNamespace(
         runtime=SimpleNamespace(cron_service=cron_service, agent_resolver=resolver),
         event_bus=ServerEventBus(),
