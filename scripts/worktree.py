@@ -60,6 +60,7 @@ from scripts._worktree_records import (  # noqa: E402
     _read_worktree_registrations,
     _worktree_server_port,
 )
+from scripts._worktree_seed import seed_native_resources, seed_webui_packages  # noqa: E402
 
 
 def _script_checkout_root() -> Path:
@@ -602,7 +603,7 @@ def cmd_create(args: argparse.Namespace) -> int:
         return 1
 
     _adopt_test_records(worktree_path)
-    npm_command = shutil.which("npm") or "npm"
+    seed_native_resources(PROJECT_ROOT, worktree_path)
     print("installing the verified search engine...", flush=True)
     return_code, stderr = _run_command(
         [sys.executable, "-m", "cli.search_runtime"], cwd=worktree_path
@@ -617,34 +618,26 @@ def cmd_create(args: argparse.Namespace) -> int:
         )
         print_error(f"search engine installation failed: {stderr}")
         return 1
-    print(
-        "installing webui dependencies (cold npm cache: several minutes, no output until done)...",
-        flush=True,
-    )
-    return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")
-    if return_code != 0:
-        cleanup_failed_create(
-            name,
-            worktree_path,
-            data_dir,
-            managed_branch=managed_branch,
-            marker_data=marker_data,
+    # The WebUI is not built here: `test-env.py start` builds it before every start.
+    print("copying webui dependencies from the primary checkout...", flush=True)
+    if not seed_webui_packages(PROJECT_ROOT, worktree_path):
+        print(
+            "installing webui dependencies instead: the primary checkout's differ "
+            "(cold npm cache: several minutes, no output until done)...",
+            flush=True,
         )
-        print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
-        return 1
-
-    print("building webui (a few minutes, no output until done)...", flush=True)
-    return_code, stderr = _run_command([npm_command, "run", "build"], cwd=worktree_path / "webui")
-    if return_code != 0:
-        cleanup_failed_create(
-            name,
-            worktree_path,
-            data_dir,
-            managed_branch=managed_branch,
-            marker_data=marker_data,
-        )
-        print_error(f"npm run build failed: {stderr}" if stderr else "npm run build failed")
-        return 1
+        npm_command = shutil.which("npm") or "npm"
+        return_code, stderr = _run_command([npm_command, "install"], cwd=worktree_path / "webui")
+        if return_code != 0:
+            cleanup_failed_create(
+                name,
+                worktree_path,
+                data_dir,
+                managed_branch=managed_branch,
+                marker_data=marker_data,
+            )
+            print_error(f"npm install failed: {stderr}" if stderr else "npm install failed")
+            return 1
 
     branch = name if managed_branch else args.from_branch
     print_ok(
