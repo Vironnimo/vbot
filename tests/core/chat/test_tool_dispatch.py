@@ -360,7 +360,7 @@ async def test_unexpected_tool_crash_is_logged_and_becomes_an_error_result(
     tools = ToolRegistry()
     tools.register("boom", "Tool that crashes.", {"type": "object"}, crashing_handler)
     harness = ToolDispatchHarness(tmp_path, tools)
-    caplog.set_level(logging.ERROR, logger="vbot.chat")
+    caplog.set_level(logging.ERROR, logger="vbot.tools")
 
     dispatched = await harness.dispatch([call("boom")])
 
@@ -369,7 +369,7 @@ async def test_unexpected_tool_crash_is_logged_and_becomes_an_error_result(
     [record] = [
         record
         for record in caplog.records
-        if record.name == "vbot.chat"
+        if record.name == "vbot.tools"
         and record.levelno == logging.ERROR
         and "crashed unexpectedly" in record.getMessage()
     ]

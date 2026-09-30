@@ -1,10 +1,26 @@
-"""Tool result envelopes and media artifact validation."""
+"""Tool result envelopes, failures for exceptions, and media artifact validation."""
 
 from __future__ import annotations
 
 from typing import Any
 
-from core.tools.contracts import JsonObject
+from core.tools._tool_definitions import (
+    InvalidToolResultError,
+    SessionToolUnavailableError,
+    ToolNotAllowedError,
+    ToolNotFoundError,
+)
+from core.tools.contracts import JsonObject, ToolContractError
+from core.tools.model_names import model_tool_name
+from core.utils.logging import get_logger
+
+_LOGGER = get_logger("tools")
+
+TOOL_EXECUTION_ERROR_CODE = "tool_execution_error"
+_EXECUTION_FAILURE_MESSAGE = (
+    "{tool} failed while running: {cause} It is unknown how much of the call took effect. "
+    "Check the current state before you call {tool} again."
+)
 
 
 def tool_success(data: JsonObject, artifacts: list[JsonObject] | None = None) -> JsonObject:
@@ -60,6 +76,57 @@ def tool_failure(
         "data": None,
         "artifacts": _copy_artifacts(artifacts),
     }
+
+
+def tool_failure_for_exception(tool_name: str, error: Exception) -> JsonObject:
+    """Return the failure envelope for an exception that ended one Tool call.
+
+    The error code follows what the exception says about the call's state:
+    ``ToolContractError`` refused the call before it had any effect
+    (``invalid_arguments``); the registry errors refused it before it ran; an
+    ``InvalidToolResultError`` rejects what a finished handler returned. Every
+    other exception escaped a running handler, so the call's effects are
+    unknown (``tool_execution_error``); it is logged with its traceback.
+    Building the envelope never raises, even for an exception without a message.
+    """
+    name = model_tool_name(tool_name)
+    if isinstance(error, ToolContractError):
+        return tool_failure(
+            "invalid_arguments",
+            _error_text(error) or f"{name} was not run: its arguments are invalid.",
+        )
+    if isinstance(error, ToolNotFoundError):
+        return tool_failure("tool_not_found", _error_text(error) or f"Unknown Tool: {name}.")
+    if isinstance(error, SessionToolUnavailableError):
+        return tool_failure(
+            f"{tool_name}_unavailable",
+            _error_text(error) or f"Session tool unavailable: {name}",
+        )
+    if isinstance(error, ToolNotAllowedError):
+        return tool_failure("tool_not_allowed", _error_text(error) or f"Tool not allowed: {name}")
+    if isinstance(error, InvalidToolResultError):
+        return tool_failure(
+            "invalid_tool_result",
+            _error_text(error) or f"Tool handler returned an invalid result: {name}",
+        )
+    _LOGGER.error("Tool %s crashed unexpectedly", tool_name, exc_info=error)
+    return tool_failure(
+        TOOL_EXECUTION_ERROR_CODE,
+        _EXECUTION_FAILURE_MESSAGE.format(tool=name, cause=_sentence(_cause_text(error))),
+    )
+
+
+def _error_text(error: BaseException) -> str:
+    return str(error).strip()
+
+
+def _cause_text(error: BaseException) -> str:
+    """Return the exception's message, or its type name when it has none."""
+    return _error_text(error) or type(error).__name__
+
+
+def _sentence(text: str) -> str:
+    return text if text.endswith((".", "!", "?")) else f"{text}."
 
 
 READ_MEDIA_ARTIFACT_KIND = "read_media"

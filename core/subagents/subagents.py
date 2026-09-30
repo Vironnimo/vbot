@@ -91,11 +91,9 @@ from core.subagents.tracker import (
     ParentKey,
     SubAgentBatchTracker,
 )
-from core.tools.arguments import (
-    ToolArgumentError,
-    optional_string,
-)
+from core.tools.arguments import optional_string
 from core.tools.availability import subagent_allowed_agents
+from core.tools.contracts import ToolContractError
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -279,7 +277,7 @@ async def _handle_subagent(
                 run_target.agent_address or context.agent_id, context.project_id
             )
         session_overrides = _parse_session_overrides(arguments)
-    except (ToolArgumentError, InvalidAgentAddressError, SettingsValidationError) as error:
+    except (ToolContractError, InvalidAgentAddressError, SettingsValidationError) as error:
         return tool_failure("invalid_arguments", str(error))
     notes = run_target.notes
     target_address = run_target.agent_address or format_agent_address(

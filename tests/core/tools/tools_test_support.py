@@ -11,7 +11,7 @@ from core.tools import (
     ToolContext,
     ToolExecutionConfig,
     ToolRegistry,
-    tool_failure,
+    tool_failure_for_exception,
     tool_success,
 )
 
@@ -80,9 +80,9 @@ async def dispatch_as_executor(
 ) -> JsonObject:
     """Dispatch ``context.tool_name`` as the Tool executor does.
 
-    Argument errors become the ``invalid_arguments`` failure the Model reads.
+    An exception that ends the call becomes the failure the Model reads.
     """
     try:
         return await registry.dispatch(context, arguments, [context.tool_name])
-    except ValueError as error:
-        return tool_failure("invalid_arguments", str(error))
+    except Exception as error:
+        return tool_failure_for_exception(context.tool_name, error)

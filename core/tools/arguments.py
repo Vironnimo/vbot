@@ -1,10 +1,16 @@
-"""Strict semantic helpers for already schema-validated Tool arguments."""
+"""Strict semantic helpers for already schema-validated Tool arguments.
+
+An invalid value raises ``ToolContractError``, which refuses the call as
+``invalid_arguments``; call these helpers before the call has any effect.
+"""
 
 from __future__ import annotations
 
 import math
 import re
 from typing import overload
+
+from core.tools.contracts import ToolContractError
 
 # The read tool prefixes every line with an unpadded ``N| `` reference gutter. This
 # separator is the single source of truth shared by the read builder and the
@@ -23,20 +29,12 @@ _LINE_NUMBER_GUTTER_MIN_LINES = 2
 _SUPPORTED_LINE_ENDINGS = ("\r\n", "\n", "\r")
 
 
-class ToolArgumentError(ValueError):
-    """An invalid tool argument supplied by the model.
-
-    Subclasses ``ValueError`` so the existing ``except ValueError`` parsing
-    guards in tool handlers keep catching it without change.
-    """
-
-
 def optional_string(value: object, *, field_name: str) -> str | None:
     """Return a trimmed optional string, preserving a present blank as blank."""
     if value is None:
         return None
     if not isinstance(value, str):
-        raise ToolArgumentError(f"{field_name} must be a string")
+        raise ToolContractError(f"{field_name} must be a string")
     return value.strip()
 
 
@@ -47,7 +45,7 @@ def required_string(value: object, *, field_name: str, strip: bool = True) -> st
     or trailing whitespace is meaningful) while still rejecting a blank value.
     """
     if not isinstance(value, str) or not value.strip():
-        raise ToolArgumentError(f"{field_name} must be a non-empty string")
+        raise ToolContractError(f"{field_name} must be a non-empty string")
     return value.strip() if strip else value
 
 
@@ -98,7 +96,7 @@ def required_int(
 ) -> int:
     """Return a required strict integer with inclusive bounds."""
     if value is None:
-        raise ToolArgumentError(f"{field_name} must be an integer")
+        raise ToolContractError(f"{field_name} must be an integer")
     number = _to_int(value, field_name)
     _check_int_range(number, field_name=field_name, minimum=minimum, maximum=maximum)
     return number
@@ -150,7 +148,7 @@ def optional_bool(value: object, *, field_name: str, default: bool) -> bool:
         return default
     if isinstance(value, bool):
         return value
-    raise ToolArgumentError(f"{field_name} must be a boolean")
+    raise ToolContractError(f"{field_name} must be a boolean")
 
 
 def split_text_lines(text: str, *, keepends: bool = False) -> list[str]:
@@ -264,19 +262,19 @@ def strip_line_number_gutters(text: str) -> str | None:
 
 def _to_int(value: object, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ToolArgumentError(f"{field_name} must be an integer")
+        raise ToolContractError(f"{field_name} must be an integer")
     return value
 
 
 def _to_float(value: object, field_name: str) -> float:
     if isinstance(value, bool):
-        raise ToolArgumentError(f"{field_name} must be a number")
+        raise ToolContractError(f"{field_name} must be a number")
     if isinstance(value, (int, float)):
         number = float(value)
     else:
-        raise ToolArgumentError(f"{field_name} must be a number")
+        raise ToolContractError(f"{field_name} must be a number")
     if not math.isfinite(number):
-        raise ToolArgumentError(f"{field_name} must be a finite number")
+        raise ToolContractError(f"{field_name} must be a finite number")
     return number
 
 
@@ -284,11 +282,11 @@ def _check_int_range(
     number: int, *, field_name: str, minimum: int | None, maximum: int | None
 ) -> None:
     if minimum is not None and maximum is not None and not (minimum <= number <= maximum):
-        raise ToolArgumentError(f"{field_name} must be between {minimum} and {maximum}")
+        raise ToolContractError(f"{field_name} must be between {minimum} and {maximum}")
     if minimum is not None and number < minimum:
-        raise ToolArgumentError(f"{field_name} must be >= {minimum}")
+        raise ToolContractError(f"{field_name} must be >= {minimum}")
     if maximum is not None and number > maximum:
-        raise ToolArgumentError(f"{field_name} must be <= {maximum}")
+        raise ToolContractError(f"{field_name} must be <= {maximum}")
 
 
 def _check_float_minimum(
@@ -297,15 +295,14 @@ def _check_float_minimum(
     if minimum is None:
         return
     if exclusive and number <= minimum:
-        raise ToolArgumentError(f"{field_name} must be > {minimum}")
+        raise ToolContractError(f"{field_name} must be > {minimum}")
     if not exclusive and number < minimum:
-        raise ToolArgumentError(f"{field_name} must be >= {minimum}")
+        raise ToolContractError(f"{field_name} must be >= {minimum}")
 
 
 __all__ = [
     "LINE_NUMBER_GUTTER_SEPARATOR",
     "TEXT_LINE_BREAK",
-    "ToolArgumentError",
     "line_number_gutter_candidates",
     "strip_line_number_gutters",
     "optional_bool",

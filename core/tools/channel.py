@@ -39,7 +39,7 @@ from core.tools._channel_send_arguments import (
 )
 from core.tools._path_suggestions import similar_entries
 from core.tools.arguments import optional_string, required_string
-from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -71,7 +71,7 @@ _LISTED_CHATS = 10
 _WEB_ADDRESS = re.compile(r"^(?:[a-z][a-z0-9+.-]*://|data:|/api/)", re.IGNORECASE)
 
 
-class ChannelSendRefusedError(ValueError):
+class ChannelSendRefusedError(ToolContractError):
     """A ``channel_send`` call was refused before anything was sent; the message names the fix."""
 
 
@@ -359,7 +359,7 @@ async def _handle_channel_send_tool(
             platform_target,
             **send_options,
         )
-    except ValueError as error:
+    except ToolContractError as error:
         return tool_failure("invalid_arguments", str(error))
     except ChannelNotFoundError as error:
         return tool_failure("channel_not_found", str(error))
@@ -828,7 +828,7 @@ def _build_file_data(
     files: list[FileData] = []
     for index, raw_path in enumerate(value):
         if not raw_path.strip():
-            raise ValueError(f"file_paths[{index}] must be a non-empty string")
+            raise ChannelSendRefusedError(f"file_paths[{index}] must be a non-empty string")
         path_text = raw_path.strip()
         if path_text.lower().startswith("file://"):
             path_text = url2pathname(urlsplit(path_text).path)
@@ -858,7 +858,9 @@ def _build_file_data(
         try:
             data = resolved_path.read_bytes()
         except OSError as error:
-            raise ValueError(f"cannot read file_paths[{index}] {raw_path}: {error}") from error
+            raise ChannelSendRefusedError(
+                f"cannot read file_paths[{index}] {raw_path}: {error}"
+            ) from error
 
         files.append(
             FileData(
@@ -896,7 +898,7 @@ def _build_buttons(
 
     Returns ``None`` when omitted. The input schema guarantees non-empty rows of
     buttons with non-empty ``label`` and ``data``; since it leaves button objects
-    open, another field raises ``ValueError`` (mapped to a clean
+    open, another field raises ``ChannelSendRefusedError`` (mapped to a clean
     ``invalid_arguments`` tool failure). The callback data's byte-length and
     platform support are enforced downstream by the channel service and adapter.
     """
@@ -910,7 +912,7 @@ def _build_buttons(
             unknown_fields = sorted(set(button) - _INTERACTION_BUTTON_ARGUMENTS)
             if unknown_fields:
                 names = ", ".join(unknown_fields)
-                raise ValueError(
+                raise ChannelSendRefusedError(
                     f"buttons[{row_index}][{button_index}] has unknown field(s): {names}"
                 )
             buttons.append(InteractionButton(label=button["label"], data=button["data"]))

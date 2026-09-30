@@ -20,8 +20,8 @@ from core.tools._calendar_arguments import (
     STAND_INS,
     TIMEZONE_FIELD,
     CalendarCallRefusedError,
-    is_date,
     minutes_text,
+    parse_date,
     parse_local,
     refusal,
     render_call,
@@ -181,7 +181,8 @@ def _relative_when(
     """Keep a relative when; turn a clock time for a single event into one."""
     when = str(arguments["when"])
     moment = parse_local(when)
-    if moment is None and not is_date(when):
+    day = parse_date(when)
+    if moment is None and day is None:
         return when, None
     server = server_zone(calendar_service)
     zone: tzinfo = server
@@ -192,7 +193,8 @@ def _relative_when(
             raise CalendarCallRefusedError(unknown_zone(name, server, arguments))
         zone = found
     if moment is None:
-        moment = datetime.combine(date.fromisoformat(when), time.min)
+        assert day is not None
+        moment = datetime.combine(day, time.min)
     if moment.tzinfo is None and isinstance(name, str):
         moment = named_instant(arguments, "when", moment, name, zone)
     elif moment.tzinfo is None:

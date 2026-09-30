@@ -117,7 +117,7 @@ def interpret_run(
 ) -> RunTarget | JsonObject:
     """Settle the target of one ``run`` call, or refuse it before side effects.
 
-    Raises ``ToolArgumentError`` for a target field that is not a string.
+    Raises ``ToolContractError`` for a target field that is not a string.
     """
     agent_address = _optional_text(arguments, "agent_id")
     session_id = _optional_text(arguments, "session_id")

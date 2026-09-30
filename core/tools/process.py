@@ -11,7 +11,7 @@ from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools._shell_arguments import resolve_timeout
 from core.tools.arguments import optional_number, optional_string, required_string
-from core.tools.contracts import compile_tool_contract
+from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_manager import (
     ProcessManager,
@@ -264,12 +264,8 @@ async def _handle_process_tool(
         )
     except ProcessTerminationError as error:
         return tool_failure("process_kill_failed", str(error), retryable=True)
-    except ValueError as error:
-        return tool_failure(
-            "invalid_arguments",
-            str(error),
-            retryable=False,
-        )
+    except ToolContractError as error:
+        return tool_failure("invalid_arguments", str(error), retryable=False)
 
 
 async def _handle_status(
@@ -296,7 +292,7 @@ async def _handle_wait(
 ) -> JsonObject:
     process_id = optional_string(arguments.get("process_id"), field_name="process_id")
     if not process_id:
-        raise ValueError(
+        raise ToolContractError(
             "wait needs the process_id of the command to wait for. "
             + _owned_commands_text(process_manager, context)
         )

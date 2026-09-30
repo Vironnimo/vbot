@@ -42,7 +42,7 @@ from core.storage import TemporaryFileManager
 from core.subagents import SubAgentBatchTracker, SubAgentCoordinator
 from core.subagents._constants import SUBAGENT_ACTIVITY_NOTE_TEMPLATE
 from core.tools.subagent import SUBAGENT_TOOL_NAME, register_subagent_tools
-from core.tools.tools import ToolContext, ToolRegistry, tool_failure
+from core.tools.tools import ToolContext, ToolRegistry, tool_failure_for_exception
 
 JsonObject = dict[str, Any]
 
@@ -551,13 +551,11 @@ class SubAgentHarness:
         self, arguments: JsonObject, context: ToolContext | None = None, **context_options: Any
     ) -> JsonObject:
         """Dispatch one Agent call and return what the Agent receives."""
+        context = context or make_context(**context_options)
         try:
-            return cast(
-                JsonObject,
-                await self.registry.dispatch(context or make_context(**context_options), arguments),
-            )
-        except ValueError as error:  # The Tool executor's contract-refusal envelope.
-            return tool_failure("invalid_arguments", str(error))
+            return cast(JsonObject, await self.registry.dispatch(context, arguments))
+        except Exception as error:  # The Tool executor's failure envelope.
+            return tool_failure_for_exception(context.tool_name, error)
 
     def call_in_background(
         self, arguments: JsonObject, context: ToolContext | None = None, **context_options: Any

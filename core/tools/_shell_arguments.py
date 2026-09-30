@@ -22,7 +22,7 @@ from typing import Any
 
 from core.tools._argument_repair import normalize_call_arguments
 from core.tools._call_vocabulary import SpellingAliases, spelling
-from core.tools.contracts import ToolContract, compile_tool_contract
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.tools import JsonObject, ToolDisplayPart
 
@@ -274,11 +274,14 @@ def _set_mode(arguments: dict[str, Any], wanted: str, source: str) -> None:
 def resolve_timeout(
     timeout: float | None, timeout_ms: float | None, *, tool_name: str = SHELL_MODEL_NAME
 ) -> tuple[float | None, str | None]:
-    """Return the timeout in seconds and a note when a value was read as milliseconds."""
+    """Return the timeout in seconds and a note when a value was read as milliseconds.
+
+    Raises ``ToolContractError`` when the two values disagree.
+    """
     if timeout_ms is not None:
         seconds = timeout_ms / 1000
         if timeout is not None and timeout not in (seconds, timeout_ms):
-            raise ValueError(
+            raise ToolContractError(
                 f"{tool_name} was not run: timeout ({timeout:g} s) and timeout_ms "
                 f"({timeout_ms:g} ms) disagree; send one of them."
             )

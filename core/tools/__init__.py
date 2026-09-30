@@ -165,6 +165,7 @@ from core.tools.tools import (
     read_media_artifact,
     result_count_fact_builder,
     tool_failure,
+    tool_failure_for_exception,
     tool_is_ready,
     tool_success,
 )
@@ -330,6 +331,7 @@ __all__ = [
     "register_web_search_tool",
     "project_bash_tool_definitions",
     "tool_failure",
+    "tool_failure_for_exception",
     "tool_is_ready",
     "tool_success",
     "compile_tool_contract",
