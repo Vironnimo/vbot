@@ -54,4 +54,3 @@ def _agent_reference_ids(state: Any, agent_id: str) -> list[str]:
 def _subagents_reference_identity_agent(state: Any, agent_id: str) -> bool:
     """Return whether live Sub-Agent coordination still addresses an identity."""
     return bool(state.runtime.subagents.batch_tracker.references_identity_agent(agent_id))
-

@@ -14,6 +14,7 @@ from core.runtime.runtime import Runtime
 from core.skills import authoring as authoring_module
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext
 from core.utils.config import Config
+from server.events import ServerEventBus
 from server.rpc import agent_methods
 from tests.core.runtime.runtime_test_support import call_rpc
 
@@ -61,7 +62,12 @@ async def test_shared_write_serializes_with_owner_lifecycle(
         if reload_tools:
             runtime.reload_skills()
         before = runtime.skills_for(None, "receiver")
-        state = SimpleNamespace(runtime=runtime, chat_runs=runtime.chat_runs)
+        state = SimpleNamespace(
+            runtime=runtime,
+            chat_runs=runtime.chat_runs,
+            agent_delete_lock=asyncio.Lock(),
+            event_bus=ServerEventBus(),
+        )
         context = ToolContext(
             agent_id="receiver",
             session_id="receiver-session",
