@@ -39,7 +39,8 @@ _SESSION_STATE_COLUMNS = """
     s.subagent_parent_tool_call_id, s.subagent_parent_tool_call_index,
     s.list_visibility_mask, s.latest_completion_run_key, s.latest_completion_status,
     s.latest_completion_at, s.read_completion_run_key, s.prompt_cache_affinity_id,
-    s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json
+    s.seen_skills_initialized, s.compaction_policy_json, s.metadata_json,
+    s.agent_overrides_json
 """
 # Derived facade values: the direct fork source's address and the Run kinds.
 _DERIVED_METADATA_COLUMNS = """
@@ -135,6 +136,7 @@ _AUTO_TITLE_INITIALIZED_KEY = "auto_title_initialized"
 _SUBAGENT_FLAG_KEY = "is_subagent_session"
 _SUBAGENT_PARENT_KEY = "subagent_parent"
 _COMPACTION_POLICY_KEY = "compaction_policy"
+_AGENT_OVERRIDES_KEY = "agent_overrides"
 # Facade keys derived from relations; a write may repeat but never change them.
 _FORK_SOURCE_KEY = "fork_source"
 _RUN_KINDS_KEY = "run_kinds"
@@ -162,6 +164,7 @@ _METADATA_WRITE_COLUMNS = (
     "is_subagent",
     *(column for _key, column in _SUBAGENT_PARENT_FIELDS),
     "compaction_policy_json",
+    "agent_overrides_json",
     "metadata_json",
     "list_visibility_mask",
 )
@@ -287,6 +290,9 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
     policy = residual.get(_COMPACTION_POLICY_KEY)
     if policy is not None and not isinstance(policy, dict):
         raise ChatSessionError("Session metadata compaction_policy must be an object")
+    overrides = residual.get(_AGENT_OVERRIDES_KEY)
+    if overrides is not None and not isinstance(overrides, dict):
+        raise ChatSessionError("Session metadata agent_overrides must be an object")
     for key in (
         *_TITLE_KEYS,
         *_CHANNEL_KEYS,
@@ -294,6 +300,7 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
         _SUBAGENT_FLAG_KEY,
         _SUBAGENT_PARENT_KEY,
         _COMPACTION_POLICY_KEY,
+        _AGENT_OVERRIDES_KEY,
     ):
         residual.pop(key, None)
     visibility = dict(metadata)
@@ -306,6 +313,7 @@ def _session_metadata_storage(metadata: JsonObject, derived: JsonObject) -> _Met
             int(subagent is True),
             *parent,
             None if policy is None else _json_object(policy, "compaction policy"),
+            None if not overrides else _json_object(overrides, "agent overrides"),
             _json_object(residual, "session metadata"),
             _session_list_visibility_mask(visibility),
         )
@@ -346,6 +354,10 @@ def _session_metadata_from_state(state: sqlite3.Row) -> JsonObject:
     if state["compaction_policy_json"] is not None:
         metadata[_COMPACTION_POLICY_KEY] = _json_from_payload(
             str(state["compaction_policy_json"]), "Session compaction policy"
+        )
+    if state["agent_overrides_json"] is not None:
+        metadata[_AGENT_OVERRIDES_KEY] = _json_from_payload(
+            str(state["agent_overrides_json"]), "Session agent overrides"
         )
     metadata.update(_derived_metadata_from_state(state))
     return metadata

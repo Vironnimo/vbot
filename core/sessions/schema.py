@@ -86,6 +86,7 @@ CREATE TABLE sessions (
   seen_skills_initialized INTEGER NOT NULL DEFAULT 0 CHECK (seen_skills_initialized IN (0, 1)),
   compaction_policy_json TEXT CHECK (compaction_policy_json IS NULL OR (json_valid(compaction_policy_json) AND json_type(compaction_policy_json) = 'object')),
   metadata_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata_json) AND json_type(metadata_json) = 'object'),
+  agent_overrides_json TEXT CHECK (agent_overrides_json IS NULL OR (json_valid(agent_overrides_json) AND json_type(agent_overrides_json) = 'object')),
   CHECK ((latest_completion_run_key IS NULL) = (latest_completion_status IS NULL)),
   CHECK ((forked_at IS NULL) = (fork_point_seq IS NULL)),
   CHECK ((fork_parent_key IS NULL) OR (forked_at IS NOT NULL))
