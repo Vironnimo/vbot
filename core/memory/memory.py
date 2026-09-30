@@ -17,6 +17,7 @@ from core.memory._history import (
     MemoryHistory,
     MemoryRevertConflict,
     MemoryRevision,
+    MemoryRevisionKind,
     diff_entries,
     revert_revisions,
     state_at,
@@ -466,15 +467,12 @@ class FilePinnedMemoryBackend:
             for scope in changed:
                 _write_entries(paths[scope], reverted[scope])
                 _log_mutation("reverted", scope, current[scope], reverted[scope], writer)
-                revision = history.record(
-                    agent_id,
+                revision = self._record(
                     scope,
-                    kind="revert",
-                    actor=writer.actor,
-                    changes=diff_entries(current[scope], reverted[scope]),
-                    entries=reverted[scope],
-                    session_id=writer.session_id,
-                    run_id=writer.run_id,
+                    "revert",
+                    current[scope],
+                    reverted[scope],
+                    writer,
                     reverts=[target.id for target in targets if target.scope == scope],
                 )
                 if revision is not None:
@@ -546,8 +544,8 @@ class FilePinnedMemoryBackend:
         if self._history is not None and writer.agent_id:
             try:
                 self._history.sync(writer.agent_id, scope, entries, path)
-            except MemoryError as exc:
-                _LOGGER.warning("Memory history not updated before a change: %s", exc)
+            except Exception as exc:  # the change goes ahead without its history
+                _log_history_failure("not updated before a change", exc)
         return entries
 
     def _commit(
@@ -562,23 +560,41 @@ class FilePinnedMemoryBackend:
         """Write *after*, log it and record it; return the recorded revision's id."""
         _write_entries(path, after)
         _log_mutation(event, scope, before, after, writer)
+        revision = self._record(scope, "edit", before, after, writer)
+        return revision.id if revision is not None else None
+
+    def _record(
+        self,
+        scope: MemoryScope,
+        kind: MemoryRevisionKind,
+        before: list[str],
+        after: list[str],
+        writer: MemoryWriter,
+        *,
+        reverts: Sequence[int] = (),
+    ) -> MemoryRevision | None:
+        """Record a written change in the writer's Agent history, when it has one.
+
+        The change is already on disk, so a history failure only logs; the
+        unrecorded change is noticed as ``external`` by a later operation.
+        """
         if self._history is None or not writer.agent_id:
             return None
         try:
-            revision = self._history.record(
+            return self._history.record(
                 writer.agent_id,
                 scope,
-                kind="edit",
+                kind=kind,
                 actor=writer.actor,
                 changes=diff_entries(before, after),
                 entries=after,
                 session_id=writer.session_id,
                 run_id=writer.run_id,
+                reverts=reverts,
             )
-        except MemoryError as exc:
-            _LOGGER.warning("Memory history did not record a change: %s", exc)
+        except Exception as exc:  # never fail the change the history describes
+            _log_history_failure("did not record a change", exc)
             return None
-        return revision.id if revision is not None else None
 
 
 class MemoryService:
@@ -786,14 +802,14 @@ def _read_entries(path: Path) -> list[str]:
     The file holds only entries now (no preamble, no section heading), so every
     line whose left-stripped content starts with ``- `` is an entry and anything
     else is ignored. A not-yet-created file reads as no entries — lazy ownership:
-    the file is created only on the first write. An unreadable file raises
-    :class:`MemoryError`.
+    the file is created only on the first write. A file that cannot be read, or
+    whose content is not UTF-8 text, raises :class:`MemoryError`.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise MemoryError(f"failed to read memory file {path}: {exc}") from exc
     return _parse_entries(text)
 
@@ -869,6 +885,14 @@ def _log_mutation(
         len(after),
         _total(after) - _total(before),
     )
+
+
+def _log_history_failure(event: str, error: Exception) -> None:
+    """Log a history failure that a Memory change went ahead without."""
+    if isinstance(error, MemoryError):
+        _LOGGER.warning("Memory history %s: %s", event, error)
+    else:
+        _LOGGER.error("Memory history %s", event, exc_info=error)
 
 
 def _total(entries: Sequence[str]) -> int:

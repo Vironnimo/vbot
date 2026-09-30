@@ -1,12 +1,14 @@
 """Memory history: recorded revisions, external edits, past states and reverts."""
 
 import json
+import logging
 import os
 from pathlib import Path
 
 import pytest
 
 from core.memory import MemoryError, MemoryRevertError, MemoryService, MemoryWriter
+from core.memory._history import MemoryHistory
 
 _TOOL = MemoryWriter(agent_id="coder", actor="tool", session_id="s-1", run_id="r-1")
 _RPC = MemoryWriter(agent_id="coder", actor="rpc")
@@ -212,14 +214,70 @@ def test_memory_without_an_agent_directory_works_without_history(tmp_path: Path)
         service.history(workspace, "coder")
 
 
+@pytest.mark.parametrize(
+    "damage",
+    [
+        pytest.param(b'{"v": 1, "id": "broken"}\nnot json\n', id="invalid-lines"),
+        pytest.param('{"v":1,"id":2,"at":"ä'.encode()[:-1], id="torn-utf-8-sequence"),
+        pytest.param(b'{"v":1,"id":2,"at":"', id="incomplete-last-line"),
+        pytest.param(
+            b'{"v":1,"id":2,"at":"x","scope":["agent"],"kind":"edit","actor":"tool","state":"s"}\n',
+            id="mistyped-field",
+        ),
+    ],
+)
 def test_unreadable_history_lines_are_skipped(
-    service: MemoryService, workspace: Path, agents_root: Path
+    service: MemoryService, workspace: Path, agents_root: Path, damage: bytes
 ) -> None:
     service.add_entry(workspace, "agent", "A", writer=_TOOL)
     history_file = agents_root / "coder" / "memory-history.jsonl"
-    with history_file.open("a", encoding="utf-8") as handle:
-        handle.write('{"v": 1, "id": "broken"}\nnot json\n')
+    with history_file.open("ab") as handle:
+        handle.write(damage)
 
     service.add_entry(workspace, "agent", "B", writer=_TOOL)
 
-    assert [r.id for r in service.history(workspace, "coder")] == [1, 2]
+    assert [(r.id, r.kind, r.run_id) for r in service.history(workspace, "coder")] == [
+        (1, "edit", "r-1"),
+        (2, "edit", "r-1"),
+    ]
+    # The new revision is a line of its own, so it is read back after a restart.
+    last = json.loads(history_file.read_bytes().splitlines()[-1])
+    assert (last["id"], last["actor"], last["run_id"]) == (2, "tool", "r-1")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [MemoryError("failed to write Memory history"), RuntimeError("history defect")],
+    ids=["history-io-failure", "unexpected-history-error"],
+)
+def test_a_failing_history_never_fails_a_change(
+    service: MemoryService,
+    workspace: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
+    service.add_entry(workspace, "agent", "Uses pytest.", writer=_TOOL)
+
+    def failing_record(*_args: object, **_kwargs: object) -> None:
+        raise error
+
+    with monkeypatch.context() as patch, caplog.at_level(logging.WARNING, logger="vbot.memory"):
+        patch.setattr(MemoryHistory, "record", failing_record)
+        added = service.add_entry(workspace, "agent", "Deploys from main.", writer=_TOOL)
+        reverted = service.revert(workspace, [1, 2], writer=_RPC)
+
+    assert (added.revision, reverted) == (None, [])
+    # Every change the history missed is noticed as an external one.
+    assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
+        (3, "agent", "external"),
+        (4, "user", "external"),
+        (5, "agent", "external"),
+    ]
+    assert service.entries_at(workspace, "coder", None) == {
+        "user": [],
+        "agent": ["Deploys from main."],
+    }
+    logged = [r for r in caplog.records if r.name == "vbot.memory" and r.levelno >= logging.WARNING]
+    assert len(logged) == 3
