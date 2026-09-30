@@ -36,7 +36,14 @@ def _job_service(jobs: list[SimpleNamespace]) -> SimpleNamespace:
         job.agent_id = agent_id
         return job
 
-    return SimpleNamespace(list_jobs=lambda: jobs, retarget_agent=retarget_agent)
+    async def retarget_agent_async(job_id: str, agent_id: str) -> SimpleNamespace:
+        return retarget_agent(job_id, agent_id)
+
+    return SimpleNamespace(
+        list_jobs=lambda: jobs,
+        retarget_agent=retarget_agent,
+        retarget_agent_async=retarget_agent_async,
+    )
 
 
 @pytest.mark.asyncio
@@ -72,8 +79,13 @@ async def test_agent_rename_publishes_the_mapping_of_retargeted_references(
             snapshots_during_rename.append("held off")
         return tuple(channel.id for channel in moved)
 
+    async def list_channels_async() -> list[SimpleNamespace]:
+        return channels
+
     state.runtime.channel_service = SimpleNamespace(
-        list_channels=lambda: channels, retarget_agent_async=retarget_agent_async
+        list_channels=lambda: channels,
+        list_channels_async=list_channels_async,
+        retarget_agent_async=retarget_agent_async,
     )
     # Completed history stays as it ran; a Project-qualified job targets that
     # Project's Team Agent, not the same-named Identity Agent.
@@ -170,7 +182,15 @@ def _references(service: str, *entries: JsonObject) -> Callable[[Any], None]:
 
     def arrange(state: Any) -> None:
         listed = [SimpleNamespace(**entry) for entry in entries]
-        fake = SimpleNamespace(list_channels=lambda: listed, list_jobs=lambda: listed)
+
+        async def list_channels_async() -> list[SimpleNamespace]:
+            return listed
+
+        fake = SimpleNamespace(
+            list_channels=lambda: listed,
+            list_channels_async=list_channels_async,
+            list_jobs=lambda: listed,
+        )
         setattr(state.runtime, service, fake)
 
     return arrange

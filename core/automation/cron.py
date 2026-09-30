@@ -120,8 +120,8 @@ _LOGGER = get_logger("automation.cron")
 _DEFAULT_ACTOR = "internal"
 
 # Every jobs.json and fire-claim write runs here in submission order. Job fires
-# and edits await their writes off the Event Loop; the blocking saves of startup
-# and of the Agent rename worker still land after everything submitted earlier.
+# and edits await their writes off the Event Loop; the blocking saves of a
+# service that is not started yet still land after everything submitted earlier.
 _CRON_WRITER = OrderedWorker(name="cron")
 
 
@@ -325,22 +325,7 @@ class CronService:
         self, job_id: str, *, actor: str = _DEFAULT_ACTOR, **fields: Any
     ) -> CronJob:
         """Update mutable cron job fields and persist changes."""
-        async with self._edits:
-            job, candidate, changed_fields, restart_task = self._stage_update(job_id, fields)
-            if changed_fields:
-                self._jobs[job_id] = candidate
-                # Job tasks follow memory at once, so a fire in flight sees the edit.
-                if self._started and restart_task:
-                    self._restart_job_task(candidate)
-
-                def undo() -> None:
-                    if self._jobs.get(job_id) is candidate:
-                        self._jobs[job_id] = job
-                        if self._started and restart_task:
-                            self._restart_job_task(job)
-
-                await settle_before_cancelling(self._save_edit(undo))
-        updated = self._clone_job(candidate)
+        _job, updated, changed_fields = await self._edit(job_id, fields)
         if changed_fields == ["status"] and updated.status in {"active", "paused"}:
             _LOGGER.info(
                 "Cron job %s (job=%s actor=%s)",
@@ -358,17 +343,20 @@ class CronService:
         return updated
 
     def retarget_agent(self, job_id: str, agent_id: str) -> CronJob:
-        """Point a job at another Agent id as one step of a coordinated Agent rename.
+        """Point a job at another Agent id as one step of an Identity Agent rename.
 
-        The same change as ``update_job(job_id, agent_id=...)``; the rename logs one
-        summary line, so this step logs at DEBUG only.
+        For a service that is not started, such as during a rename that completes
+        at startup: blocking. The jobs of a started service belong to the Event
+        Loop, so :meth:`retarget_agent_async` changes them there. The same change
+        as ``update_job(job_id, agent_id=...)``; the rename logs one summary line,
+        so this step logs at DEBUG only.
         """
-        previous = self.get_job(job_id).agent_id
-        job, candidate, changed_fields, restart_task = self._stage_update(
+        if self._started:
+            raise RuntimeError("Retarget the jobs of a started Cron service on its Event Loop")
+        job, candidate, changed_fields, _restart = self._stage_update(
             job_id, {"agent_id": agent_id}
         )
         if changed_fields:
-            # The rename worker is no Event Loop; it waits for its own save.
             self._jobs[job_id] = candidate
             try:
                 self._save_jobs()
@@ -376,12 +364,43 @@ class CronService:
                 self._jobs[job_id] = job
                 raise
             self._notify_changed()
-            if self._started and restart_task:
-                self._restart_job_task(candidate)
-            _LOGGER.debug(
-                "Cron job retargeted (job=%s agent=%s new_agent=%s)", job_id, previous, agent_id
-            )
+            _log_retarget(job_id, job.agent_id, agent_id)
         return self._clone_job(candidate)
+
+    async def retarget_agent_async(self, job_id: str, agent_id: str) -> CronJob:
+        """:meth:`retarget_agent` for a started service, on the Event Loop that owns its jobs.
+
+        An edit like :meth:`update_job`: it applies at once and awaits its save off
+        the loop.
+        """
+        job, updated, changed_fields = await self._edit(job_id, {"agent_id": agent_id})
+        if changed_fields:
+            _log_retarget(job_id, job.agent_id, agent_id)
+        return updated
+
+    async def _edit(
+        self, job_id: str, fields: dict[str, Any]
+    ) -> tuple[CronJob, CronJob, list[str]]:
+        """Apply ``fields`` to memory and the job tasks at once, then save; undo both on failure.
+
+        Returns the job before and after the edit and the names that changed.
+        """
+        async with self._edits:
+            job, candidate, changed_fields, restart_task = self._stage_update(job_id, fields)
+            if changed_fields:
+                self._jobs[job_id] = candidate
+                # Job tasks follow memory at once, so a fire in flight sees the edit.
+                if self._started and restart_task:
+                    self._restart_job_task(candidate)
+
+                def undo() -> None:
+                    if self._jobs.get(job_id) is candidate:
+                        self._jobs[job_id] = job
+                        if self._started and restart_task:
+                            self._restart_job_task(job)
+
+                await settle_before_cancelling(self._save_edit(undo))
+        return self._clone_job(job), self._clone_job(candidate), changed_fields
 
     def _stage_update(
         self, job_id: str, fields: dict[str, Any]
@@ -1296,6 +1315,13 @@ def _count_consecutive_failure(job: CronJob) -> None:
 def _missing_session_text(job: CronJob) -> str:
     target = format_agent_address(job.agent_id, job.project_id)
     return f"Session does not exist for cron target {target}: {job.session_id}"
+
+
+def _log_retarget(job_id: str, agent_id: str, new_agent_id: str) -> None:
+    # One step of an Agent rename, which logs its own summary line.
+    _LOGGER.debug(
+        "Cron job retargeted (job=%s agent=%s new_agent=%s)", job_id, agent_id, new_agent_id
+    )
 
 
 def _log_fire_save_failure(job_id: str, error: CronStorageError) -> None:

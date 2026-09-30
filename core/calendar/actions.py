@@ -74,8 +74,8 @@ _MAX_ERROR_CHARS = 500
 _RETENTION = timedelta(days=30)
 _EXECUTION_STATUSES = _TERMINAL | {"pending", "claimed", "running"}
 # Every actions.json write runs here in the order its snapshot was taken. The
-# scheduler's, a Run's and an operator edit's saves never block the Event Loop;
-# the Agent rename worker's blocking save still lands after them.
+# scheduler's, a Run's and an edit's saves never block the Event Loop; the
+# blocking save of a scheduler that is not started still lands after them.
 _ACTIONS_WRITER = OrderedWorker(name="calendar-actions")
 
 CALENDAR_ACTIONS_FORMAT_VERSION = 1
@@ -578,42 +578,88 @@ class CalendarActions:
         longer targets ``destination`` keeps its target, so reverting a rename
         leaves rows that named ``destination`` before it alone. Returns the number
         of retargeted actions for the rename's summary line.
+
+        For a scheduler that is not started, such as during a rename that
+        completes at startup: blocking. A started scheduler's actions belong to the
+        Event Loop, so :meth:`retarget_identity_async` changes them there.
         """
+        if self._task is not None:
+            raise RuntimeError("Retarget the actions of a started scheduler on its Event Loop")
         self._load()
-        previous = copy.deepcopy((self._actions, self._executions))
-        retargeted = 0
-        for action in self._actions.values():
-            if action["target"] == source:
-                action["target"] = destination
-                retargeted += 1
-        rows = [row for row in self._executions.values() if row["target"] == source]
-        moved_sessions = self._live_session_ids(destination, rows)
-        for row in rows:
+        sessions, addresses = self._sessions, self._row_sessions(source, destination)
+        live = (
+            sessions.existing_addresses(addresses) if sessions is not None and addresses else set()
+        )
+        retargeted, undo = self._retarget(source, destination, live)
+        try:
+            self._save()
+        except Exception:
+            undo()
+            raise
+        self._calendar._notify_changed()
+        return retargeted
+
+    async def retarget_identity_async(self, source: str, destination: str) -> int:
+        """:meth:`retarget_identity` for a started scheduler, on the Event Loop that owns it.
+
+        An edit like :meth:`update`: the Session lookup runs on the Session pool,
+        the change applies at once and its save is awaited off the loop.
+        """
+        async with self._edits:
+            self._load()
+            sessions, addresses = self._sessions, self._row_sessions(source, destination)
+            live = (
+                await sessions.run_async(sessions.existing_addresses, addresses)
+                if sessions is not None and addresses
+                else set()
+            )
+            retargeted, undo = self._retarget(source, destination, live)
+            self._calendar._notify_changed()
+            await self._save_edit(undo)
+        return retargeted
+
+    def _row_sessions(self, source: str, destination: str) -> list[SessionAddress]:
+        """Address under ``destination`` each Session that a row targeting ``source`` names."""
+        return [
+            SessionAddress(project_id=None, agent_id=destination, session_id=row["session"])
+            for row in self._executions.values()
+            if row["target"] == source and row.get("session")
+        ]
+
+    def _retarget(
+        self, source: str, destination: str, live: set[SessionAddress]
+    ) -> tuple[int, Callable[[], None]]:
+        """Apply :meth:`retarget_identity` in memory.
+
+        ``live`` holds the Sessions the rows name that are live under
+        ``destination``. Returns the number of retargeted actions and the undo of
+        the change.
+        """
+        live_ids = {address.session_id for address in live}
+        action_ids = [key for key, action in self._actions.items() if action["target"] == source]
+        for key in action_ids:
+            self._actions[key]["target"] = destination
+        row_keys = []
+        for key, row in self._executions.items():
+            if row["target"] != source:
+                continue
             if row.get("session"):
-                follows = row["session"] in moved_sessions
+                follows = row["session"] in live_ids
             else:
                 owner = self._actions.get(row["action_id"])
                 follows = owner is not None and owner["target"] == destination
             if follows:
                 row["target"] = destination
-        try:
-            self._save()
-        except Exception:
-            self._actions, self._executions = previous
-            raise
-        self._calendar._notify_changed()
-        return retargeted
+                row_keys.append(key)
 
-    def _live_session_ids(self, agent_id: str, rows: list[dict[str, Any]]) -> set[str]:
-        """Return which Sessions named by ``rows`` are live under Identity Agent ``agent_id``."""
-        addresses = [
-            SessionAddress(project_id=None, agent_id=agent_id, session_id=row["session"])
-            for row in rows
-            if row.get("session")
-        ]
-        if not addresses or self._sessions is None:
-            return set()
-        return {address.session_id for address in self._sessions.existing_addresses(addresses)}
+        def undo() -> None:
+            for entries, keys in ((self._actions, action_ids), (self._executions, row_keys)):
+                for key in keys:
+                    entry = entries.get(key)
+                    if entry is not None and entry["target"] == destination:
+                        entry["target"] = source
+
+        return len(action_ids), undo
 
     def list_actions(self, event_id: str | None = None) -> list[dict[str, Any]]:
         try:

@@ -6,7 +6,9 @@ delegation allow-lists (``AgentStore.rename``). Channels, Cron, Bootstrap and
 Calendar each hold references to the Agent id that their owners retarget. Runtime
 owns every one of these services, so it orders the two halves: the Agent-owned
 half first, so references always name an existing Agent, then the references,
-then the record is finished.
+then the record is finished. The running Channel, Cron, Bootstrap and Calendar
+services keep their state on the Event Loop, so a live rename reads and changes
+their references there, while its blocking work runs on a worker.
 
 Every step selects only what still names the id it replaces, so repeating a
 direction converges and reversing the ids reverts it. A failure reverts the whole
@@ -19,8 +21,9 @@ still names the new id (:func:`identity_agent_references`, ``AgentStore.rename``
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 from core.agents import Agent, AgentRename, AgentStore
 from core.automation import BootstrapService, CronService
@@ -33,6 +36,8 @@ from core.sessions import ChatSessionManager
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("runtime.agent_rename")
+
+_Result = TypeVar("_Result")
 
 
 @dataclass(frozen=True)
@@ -75,40 +80,42 @@ async def rename_identity_agent(
 ) -> AgentRenameOutcome:
     """Rename one Identity Agent and every reference to it as one recoverable change.
 
-    Blocking work runs on the Session database's pool; Channel changes run on this
-    Event Loop, which owns the Channel adapters. The caller holds the Run admission
-    guards of both ids. A failure reverts every change before it is raised. The
-    rename, every reference change and any revert form one compound mutation, so a
-    data snapshot copies the Sessions and the documents either before or after all
-    of it.
+    Blocking work runs on the Session database's pool; the Channel, Cron, Bootstrap
+    and Calendar references are read and changed on this Event Loop, which owns
+    those running services. The caller holds the Run admission guards of both ids.
+    A failure reverts every change before it is raised. The rename, every
+    reference change and any revert form one compound mutation, so a data
+    snapshot copies the Sessions and the documents either before or after all of
+    it.
     """
     loop = asyncio.get_running_loop()
     return await services.sessions.run_async(_rename, services, agent_id, new_agent_id, loop)
 
 
-def identity_agent_references(services: AgentRenameServices, agent_id: str) -> tuple[str, ...]:
+async def identity_agent_references(
+    services: AgentRenameServices, agent_id: str
+) -> tuple[str, ...]:
     """Name the Channels, jobs and Calendar actions outside the Agent store that address an id.
 
     This is the selection a rename retargets, labelled ``channel:<id>``,
     ``cron:<id>``, ``bootstrap:<id>`` and ``calendar:<action id>`` and sorted:
     Channels that answer as the Identity Agent, its non-terminal identity Cron and
-    Bootstrap jobs, and the actions of live Calendar events that target it.
-    Blocking: it reads every Channel config.
+    Bootstrap jobs, and the actions of live Calendar events that target it. Runs
+    on the Event Loop that owns the jobs and actions; the Channel configs are
+    read off it.
     """
     references = [
         f"channel:{channel.id}"
-        for channel in services.channels.list_channels()
+        for channel in await services.channels.list_channels_async()
         if channel.agent_id == agent_id
     ]
     references.extend(
-        f"cron:{job.id}"
-        for job in services.cron.list_jobs()
-        if _targets_identity(job, agent_id, TERMINAL_CRON_JOB_STATUSES)
+        f"cron:{job_id}"
+        for job_id in _identity_job_ids(services.cron, agent_id, TERMINAL_CRON_JOB_STATUSES)
     )
     references.extend(
-        f"bootstrap:{job.id}"
-        for job in services.bootstrap.list_jobs()
-        if _targets_identity(job, agent_id, TERMINAL_BOOTSTRAP_STATUSES)
+        f"bootstrap:{job_id}"
+        for job_id in _identity_job_ids(services.bootstrap, agent_id, TERMINAL_BOOTSTRAP_STATUSES)
     )
     references.extend(
         f"calendar:{action['id']}"
@@ -175,7 +182,7 @@ def _rename_and_retarget(
     result = services.agents.rename(
         agent_id,
         new_agent_id,
-        external_references=identity_agent_references(services, new_agent_id),
+        external_references=_on_loop(loop, identity_agent_references(services, new_agent_id)),
     )
     try:
         references = _retarget_references(services, result.rename, loop)
@@ -257,49 +264,63 @@ def _retarget_references(
 
     Only non-terminal jobs that target the Identity Agent itself move: completed
     history stays as it ran, and a Project-qualified job targets that Project's
-    Team Agent. Without ``loop`` (startup), Channels are rewritten before their
-    service starts; with it, the Channel service decides on that loop whether its
-    adapters must follow.
+    Team Agent. Without ``loop`` (startup), no owner has started yet and each
+    changes its stored references directly; with it, the changes run on that
+    loop, which owns the state of the started owners.
     """
     source, target = rename.source_id, rename.target_id
-    channel_ids = _retarget_channels(services.channels, source, target, loop)
-    cron_job_ids: list[str] = []
-    for cron_job in services.cron.list_jobs():
-        if _targets_identity(cron_job, source, TERMINAL_CRON_JOB_STATUSES):
-            services.cron.retarget_agent(cron_job.id, target)
-            cron_job_ids.append(cron_job.id)
-    bootstrap_job_ids: list[str] = []
-    for bootstrap_job in services.bootstrap.list_jobs():
-        if _targets_identity(bootstrap_job, source, TERMINAL_BOOTSTRAP_STATUSES):
-            services.bootstrap.retarget_agent(bootstrap_job.id, target)
-            bootstrap_job_ids.append(bootstrap_job.id)
-    calendar_action_count = services.calendar.actions.retarget_identity(source, target)
+    if loop is not None:
+        return _on_loop(loop, _retarget_on_loop(services, source, target))
+    channel_ids = services.channels.retarget_agent(source, target)
+    cron_job_ids = _identity_job_ids(services.cron, source, TERMINAL_CRON_JOB_STATUSES)
+    for job_id in cron_job_ids:
+        services.cron.retarget_agent(job_id, target)
+    bootstrap_job_ids = _identity_job_ids(services.bootstrap, source, TERMINAL_BOOTSTRAP_STATUSES)
+    for job_id in bootstrap_job_ids:
+        services.bootstrap.retarget_agent(job_id, target)
     return _References(
         channel_ids=channel_ids,
-        cron_job_ids=tuple(cron_job_ids),
-        bootstrap_job_ids=tuple(bootstrap_job_ids),
-        calendar_action_count=calendar_action_count,
+        cron_job_ids=cron_job_ids,
+        bootstrap_job_ids=bootstrap_job_ids,
+        calendar_action_count=services.calendar.actions.retarget_identity(source, target),
     )
 
 
-def _retarget_channels(
-    channels: ChannelService,
-    source: str,
-    target: str,
-    loop: asyncio.AbstractEventLoop | None,
+async def _retarget_on_loop(services: AgentRenameServices, source: str, target: str) -> _References:
+    """:func:`_retarget_references` on the Event Loop of the started owners."""
+    # A running Channel service rebuilds each adapter; a stopped one only
+    # rewrites the configs and starts none.
+    channel_ids = await services.channels.retarget_agent_async(source, target)
+    cron_job_ids = _identity_job_ids(services.cron, source, TERMINAL_CRON_JOB_STATUSES)
+    for job_id in cron_job_ids:
+        await services.cron.retarget_agent_async(job_id, target)
+    bootstrap_job_ids = _identity_job_ids(services.bootstrap, source, TERMINAL_BOOTSTRAP_STATUSES)
+    for job_id in bootstrap_job_ids:
+        # Bootstrap changes its jobs synchronously on the Event Loop.
+        services.bootstrap.retarget_agent(job_id, target)
+    return _References(
+        channel_ids=channel_ids,
+        cron_job_ids=cron_job_ids,
+        bootstrap_job_ids=bootstrap_job_ids,
+        calendar_action_count=await services.calendar.actions.retarget_identity_async(
+            source, target
+        ),
+    )
+
+
+def _on_loop(loop: asyncio.AbstractEventLoop, step: Coroutine[Any, Any, _Result]) -> _Result:
+    """Run ``step`` on ``loop`` from the rename's worker and wait for its result."""
+    return asyncio.run_coroutine_threadsafe(step, loop).result()
+
+
+def _identity_job_ids(
+    service: CronService | BootstrapService, agent_id: str, terminal_statuses: frozenset[str]
 ) -> tuple[str, ...]:
-    if loop is None:
-        return channels.retarget_agent(source, target)
-    # A running service rebuilds each adapter on the Event Loop that owns it; a
-    # stopped one only rewrites the configs and starts none.
-    return asyncio.run_coroutine_threadsafe(
-        channels.retarget_agent_async(source, target), loop
-    ).result()
-
-
-def _targets_identity(job: Any, agent_id: str, terminal_statuses: frozenset[str]) -> bool:
-    return bool(
-        job.agent_id == agent_id
+    """Return the ids of the non-terminal jobs that target the Identity Agent ``agent_id``."""
+    return tuple(
+        job.id
+        for job in service.list_jobs()
+        if job.agent_id == agent_id
         and job.project_id is None
         and getattr(job, "status", "active") not in terminal_statuses
     )

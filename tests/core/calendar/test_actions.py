@@ -742,9 +742,17 @@ async def test_restart_recovers_terminal_run_from_session(tmp_path):
     assert trigger.trigger_run.await_count == 1
 
 
+@pytest.mark.parametrize("started", [False, True], ids=["before-start", "on-the-loop"])
 @pytest.mark.asyncio
-async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp_path):
+async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp_path, started):
     service, event, _, now = setup(tmp_path)
+
+    async def retarget(source, destination):
+        # A rename completed at startup blocks; a live one awaits on the Event Loop.
+        if started:
+            return await service.actions.retarget_identity_async(source, destination)
+        return service.actions.retarget_identity(source, destination)
+
     action = await service.actions.add(
         event.id, when="start - 1h", prompt="prepare", target="coder"
     )
@@ -776,7 +784,7 @@ async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp
         stored = json.loads(service.actions._path.read_text(encoding="utf-8"))["executions"]
         return {key: row["target"] for key, row in stored.items()}
 
-    assert service.actions.retarget_identity("coder", "researcher") == 1
+    assert await retarget("coder", "researcher") == 1
     assert service.actions.list_actions()[0]["target"] == "researcher"
     assert targets() == {
         ran_key: "researcher",
@@ -786,7 +794,7 @@ async def test_identity_retarget_moves_actions_and_the_rows_that_follow_them(tmp
         "leftover": "researcher",
     }
 
-    assert service.actions.retarget_identity("researcher", "coder") == 1
+    assert await retarget("researcher", "coder") == 1
     assert service.actions.list_actions()[0]["target"] == "coder"
     assert targets() == {
         ran_key: "coder",

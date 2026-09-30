@@ -335,6 +335,9 @@ class StubChannelService:
     def list_channels(self) -> list[Any]:
         return []
 
+    async def list_channels_async(self) -> list[Any]:
+        return []
+
     async def retarget_agent_async(self, _agent_id: str, _new_agent_id: str) -> tuple[str, ...]:
         return ()
 
@@ -355,7 +358,7 @@ class StubCalendarActions:
     def can_fire(self, action_id: str) -> bool:
         return not any(action["id"] == action_id and action.get("spent") for action in self.actions)
 
-    def retarget_identity(self, _old_agent_id: str, _new_agent_id: str) -> int:
+    async def retarget_identity_async(self, _old_agent_id: str, _new_agent_id: str) -> int:
         return 0
 
 

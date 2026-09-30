@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -96,14 +98,45 @@ def _fail_when_retargeted_to(
     service: Any, name: str, agent_id: str, error: BaseException, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Make ``service.name`` raise ``error`` whenever it moves a reference to ``agent_id``."""
-    original: Callable[[Any, str], Any] = getattr(service, name)
+    original = getattr(service, name)
+    failing: Any
+    if inspect.iscoroutinefunction(original):
 
-    def failing(reference: Any, target: str) -> Any:
-        if target == agent_id:
-            raise error
-        return original(reference, target)
+        async def failing(reference: Any, target: str) -> Any:
+            if target == agent_id:
+                raise error
+            return await original(reference, target)
+
+    else:
+
+        def failing(reference: Any, target: str) -> Any:
+            if target == agent_id:
+                raise error
+            return original(reference, target)
 
     monkeypatch.setattr(service, name, failing)
+
+
+def _record_threads(
+    owner: Any, names: tuple[str, ...], threads: set[int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Record the thread of every call of the ``names`` of ``owner``."""
+    for name in names:
+        original = getattr(owner, name)
+        recorded: Any
+        if inspect.iscoroutinefunction(original):
+
+            async def recorded(*args: Any, _original: Any = original) -> Any:
+                threads.add(threading.get_ident())
+                return await _original(*args)
+
+        else:
+
+            def recorded(*args: Any, _original: Any = original) -> Any:
+                threads.add(threading.get_ident())
+                return _original(*args)
+
+        monkeypatch.setattr(owner, name, recorded)
 
 
 @pytest.mark.asyncio
@@ -126,11 +159,21 @@ async def test_a_live_rename_moves_every_reference_or_none(
         if channels_running:
             runtime.channel_service.start()
         channel_loops, started_adapters = _record_channel_changes(runtime, monkeypatch)
+        # Every read and change of the jobs and actions the running services keep
+        # on the Event Loop happens there, never on the rename's worker.
+        automation_threads: set[int] = set()
+        for owner, names in (
+            (runtime.cron_service, ("list_jobs", "retarget_agent_async", "_notify_changed")),
+            (runtime.bootstrap_service, ("list_jobs", "retarget_agent")),
+            (runtime.calendar_service.actions, ("list_actions", "retarget_identity_async")),
+            (runtime.calendar_service, ("_notify_changed",)),
+        ):
+            _record_threads(owner, names, automation_threads, monkeypatch)
         if fails:
             # The last reference fails after every other one moved.
             _fail_when_retargeted_to(
                 runtime.calendar_service.actions,
-                "retarget_identity",
+                "retarget_identity_async",
                 "researcher",
                 OSError("calendar storage is read-only"),
                 monkeypatch,
@@ -150,6 +193,7 @@ async def test_a_live_rename_moves_every_reference_or_none(
         changes = (2 if fails else 1) if channels_running else 0
         assert channel_loops == [asyncio.get_running_loop()] * changes
         assert started_adapters == []
+        assert automation_threads == {threading.get_ident()}
     finally:
         await runtime.aclose()
 
@@ -205,7 +249,7 @@ def _kill_moving_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> 
 def _kill_reverting_bootstrap_jobs(runtime: Runtime, patch: pytest.MonkeyPatch) -> None:
     _fail_when_retargeted_to(
         runtime.calendar_service.actions,
-        "retarget_identity",
+        "retarget_identity_async",
         "researcher",
         OSError("calendar storage is read-only"),
         patch,
