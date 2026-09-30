@@ -330,8 +330,7 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
     tmp_path: Path,
 ) -> None:
     """A self-delegated child is a normal child Session under its parent's temporary config."""
-    from core.subagents.subagents import _handle_subagent
-    from core.subagents.tracker import SubAgentBatchTracker
+    from core.subagents import SubAgentBatchTracker, SubAgentCoordinator
     from core.tools import tool_success
     from core.tools.tools import ToolContext
 
@@ -363,8 +362,11 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
             delivered.set_result(None)
             return delivered
 
+    coordinator = SubAgentCoordinator(
+        runtime_any, TriggerService(), batch_tracker=SubAgentBatchTracker(TriggerService())
+    )
     try:
-        result = await _handle_subagent(
+        result = await coordinator.spawn(
             ToolContext(
                 agent_id=binding.address.agent_id,
                 session_id=binding.address.session_id,
@@ -384,8 +386,6 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
                 "model": "openai/gpt-override",
                 "thinking_effort": "low",
             },
-            runtime=runtime_any,
-            batch_tracker=SubAgentBatchTracker(TriggerService()),
         )
 
         assert result["ok"] is True
@@ -423,6 +423,7 @@ async def test_temporary_self_delegation_uses_parent_configuration_without_priva
         assert runtime.system_prompts.render_soul_calls == 0
         assert runtime.system_prompts.render_memory_files_calls == 0
     finally:
+        await coordinator.drain_activity()
         runtime.chat_sessions.close()
 
 
