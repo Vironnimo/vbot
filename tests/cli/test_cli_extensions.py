@@ -57,6 +57,15 @@ def _extensions_payload() -> list[dict[str, Any]]:
     ]
 
 
+_GUARD_CONFIG = {"guard_bash": {"deny": ["rm -rf"]}}
+
+
+def _extension_settings(*disabled: str) -> dict[str, Any]:
+    """A ``settings.values`` result whose persisted ``extensions`` section disables *disabled*."""
+    section = {"directories": [], "disabled": list(disabled), "config": _GUARD_CONFIG}
+    return {"settings": {"extensions": section}}
+
+
 def _with_legacy(**fields: Any) -> dict[str, Any]:
     payload = _extensions_payload()
     payload[2].update(fields)
@@ -172,20 +181,51 @@ def test_extensions_disable_writes_the_settings_and_applies_live(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
     rpc.reply("extensions.list", {"extensions": _extensions_payload()})
+    rpc.reply("settings.values", _extension_settings("legacy"))
     rpc.reply("settings.update", {})
 
     code, out, _err = run_cli("extensions", "disable", "guard_bash")
 
     assert code == 0
-    assert rpc.methods == ["extensions.list", "settings.update"]
+    assert rpc.methods == ["extensions.list", "settings.values", "settings.update"]
+    # The full section is written based on the persisted one it was derived from.
     assert rpc.params("settings.update") == {
-        "extensions": {
-            "disabled": ["legacy", "guard_bash"],
-            "config": {"guard_bash": {"deny": ["rm -rf"]}},
-        }
+        "extensions": {"disabled": ["legacy", "guard_bash"], "config": _GUARD_CONFIG},
+        "base": {"extensions": {"disabled": ["legacy"], "config": _GUARD_CONFIG}},
     }
     # Disabling applies live and no longer mentions a restart.
     assert "guard_bash" in out and "restart" not in out
+
+
+@pytest.mark.parametrize(
+    ("conflicts", "code", "shown"),
+    [
+        pytest.param(1, 0, "extension 'guard_bash' disabled", id="resolved-by-reading-again"),
+        pytest.param(3, 1, "extension 'guard_bash' was not disabled", id="kept-changing"),
+    ],
+)
+def test_extensions_disable_reads_again_after_a_concurrent_settings_change(
+    rpc: FakeRpc, run_cli: RunCli, conflicts: int, code: int, shown: str
+) -> None:
+    rpc.reply("extensions.list", {"extensions": _extensions_payload()})
+    rpc.reply("settings.values", _extension_settings("legacy"))
+    # Another writer disabled 'broken' after the first read.
+    rpc.reply("settings.values", _extension_settings("legacy", "broken"))
+    for _ in range(conflicts):
+        rpc.fail("settings.update", "settings_conflict", "Settings changed since they were read")
+    rpc.reply("settings.update", {})
+
+    exit_code, out, err = run_cli("extensions", "disable", "guard_bash")
+
+    updates = [params for method, params in rpc.calls if method == "settings.update"]
+    assert exit_code == code
+    assert len(updates) == min(conflicts + 1, 3)
+    # Each attempt keeps the other writer's change instead of overwriting it.
+    assert updates[-1] == {
+        "extensions": {"disabled": ["legacy", "broken", "guard_bash"], "config": _GUARD_CONFIG},
+        "base": {"extensions": {"disabled": ["legacy", "broken"], "config": _GUARD_CONFIG}},
+    }
+    assert shown in out + err
 
 
 @pytest.mark.parametrize(
@@ -199,11 +239,12 @@ def test_extensions_disable_writes_nothing_for_an_unknown_or_disabled_extension(
     rpc: FakeRpc, run_cli: RunCli, name: str, code: int, shown: str
 ) -> None:
     rpc.reply("extensions.list", {"extensions": _extensions_payload()})
+    rpc.reply("settings.values", _extension_settings("legacy"))
 
     exit_code, out, _err = run_cli("extensions", "disable", name)
 
     assert exit_code == code
-    assert rpc.methods == ["extensions.list"]
+    assert "settings.update" not in rpc.methods
     assert name in out and shown in out
 
 
@@ -245,12 +286,18 @@ def test_extensions_enable_saves_the_setting_and_reports_the_observed_load(
 ) -> None:
     rpc.reply("extensions.list", {"extensions": _extensions_payload()})
     rpc.respond("extensions.list", observation)
+    rpc.reply("settings.values", _extension_settings("legacy"))
     rpc.reply("settings.update", {})
 
     exit_code, out, _err = run_cli("extensions", "enable", "legacy")
 
     assert exit_code == code
-    assert rpc.methods == ["extensions.list", "settings.update", "extensions.list"]
+    assert rpc.methods == [
+        "extensions.list",
+        "settings.values",
+        "settings.update",
+        "extensions.list",
+    ]
     assert rpc.params("settings.update")["extensions"]["disabled"] == []
     for text in shown:
         assert text in out
@@ -409,7 +456,7 @@ def test_extensions_set_rejects_non_utf8_stdin_before_any_request(
         pytest.param("timeout", "30", 30, id="number"),
     ],
 )
-def test_extensions_set_writes_the_coerced_value_into_the_merged_config(
+def test_extensions_set_writes_only_the_coerced_field(
     rpc: FakeRpc, run_cli: RunCli, field: str, raw: str, saved: object
 ) -> None:
     rpc.reply(
@@ -419,14 +466,15 @@ def test_extensions_set_writes_the_coerced_value_into_the_merged_config(
             {"key": "timeout", "type": "number", "label": "Timeout", "required": False},
         ),
     )
-    rpc.reply("settings.update", {})
+    rpc.reply("settings.patch", {})
 
     code, out, _err = run_cli("extensions", "homeassistant", "set", field, raw)
 
     assert code == 0
-    merged = {"url": "http://homeassistant.local:8123", field: saved}
-    assert rpc.params("settings.update") == {
-        "extensions": {"disabled": [], "config": {"homeassistant": merged}}
+    # One field, so a concurrent change to any other setting is kept.
+    path = f'extensions.config["homeassistant"]["{field}"]'
+    assert rpc.params("settings.patch") == {
+        "operations": [{"op": "set", "path": path, "value": saved}]
     }
     assert f"homeassistant.{field}" in out
 
