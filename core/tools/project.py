@@ -28,6 +28,8 @@ from core.tools.tools import (
     ToolDisplayField,
     ToolPromptBlockRegistry,
     ToolRegistry,
+    display_notice,
+    display_text,
     offload_tool_handler,
     tool_failure,
     tool_success,
@@ -196,6 +198,20 @@ def make_project_handler(
     return project_handler
 
 
+def _project_detail_blocks(arguments: JsonObject, result: JsonObject | None) -> list[JsonObject]:
+    """Show the user the Project path and the Project Context the Agent received."""
+    data = result.get("data") if isinstance(result, dict) and result.get("ok") is True else None
+    if not isinstance(data, dict):
+        return []
+    path = data.get("project_path")
+    return [
+        display_notice(
+            "info", "Project Context loaded.", subject=path if isinstance(path, str) else None
+        ),
+        display_text("content", source="result", path=("data", "content")),
+    ]
+
+
 def register_project_tool(
     registry: ToolRegistry,
     projects: ProjectStore,
@@ -222,7 +238,8 @@ def register_project_tool(
         display=ToolDisplay(
             primary_candidates=(
                 ToolDisplayField("project_id", kind="identifier", truncate="middle"),
-            )
+            ),
+            detail_builder=_project_detail_blocks,
         ),
         parallel_safe=True,
     )
