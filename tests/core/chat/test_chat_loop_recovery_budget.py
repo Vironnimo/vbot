@@ -34,8 +34,6 @@ from tests.core.chat.chat_loop_support import (
     session_address,
 )
 
-pytestmark = pytest.mark.usefixtures("recovery_waits")
-
 
 def stream(text="Done", outcome="stop", *, reasoning=False):
     return [
