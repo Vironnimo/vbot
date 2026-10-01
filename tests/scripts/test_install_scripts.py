@@ -144,8 +144,13 @@ function Get-FileHash {
 }
 function Start-Process {
     param($FilePath, $ArgumentList, $WindowStyle, [switch]$Wait, [switch]$PassThru)
+    if ($WindowStyle -ne "Hidden") { throw "window was not hidden" }
+    if ($FilePath -eq (Join-Path $InstallDir "vBot.exe")) {
+        if ($null -ne $ArgumentList -or $Wait) { throw "the tray must start detached" }
+        $script:trayStarts++
+        return
+    }
     $script:calls = @($ArgumentList)
-    if ($WindowStyle -ne "Hidden") { throw "installer window was not hidden" }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     @{schema_version=1; install_shape=$Shape; server_host=$HostName; server_port=$Port} |
         ConvertTo-Json | Set-Content (Join-Path $InstallDir "application.json")
@@ -159,11 +164,13 @@ foreach ($Mode in ($Modes -split ",")) {
     $DataDir = Join-Path $InstallDir "data"
     $NoAutostart = $Mode -eq "no-autostart"
     $Shape = if ($Mode -eq "desktop-client") { "desktop-client" } else { "server" }
-    $calls = @(); $statuses = @(); $healthCalls = 0; $releaseUri = $null; $failure = $null
+    $calls = @(); $statuses = @(); $healthCalls = 0; $trayStarts = 0; $releaseUri = $null
+    $failure = $null
     try { Install-NativeRelease -Tag "" -Shape $Shape -MainBuild ($Mode -eq "main") }
     catch { $failure = $_.Exception.Message }
     $results[$Mode] = @{ok=($null -eq $failure); error=$failure; calls=$calls
-        statuses=$statuses; healthCalls=$healthCalls; releaseUri=$releaseUri}
+        statuses=$statuses; healthCalls=$healthCalls; trayStarts=$trayStarts
+        releaseUri=$releaseUri}
 }
 $results | ConvertTo-Json -Compress -Depth 5
 """,
@@ -191,7 +198,8 @@ $results | ConvertTo-Json -Compress -Depth 5
             "/VBOTPORT=9134",
             "/TASKS=startup" if starts else "/TASKS=",
         ], mode
-        # Only a server started at logon is awaited.
+        # Autostart also starts the tray now, and only then is its server awaited.
+        assert payload["trayStarts"] == (1 if starts else 0), mode
         assert payload["healthCalls"] == (1 if starts else 0), mode
         (status,) = payload["statuses"]
         assert status.startswith("OK:"), mode

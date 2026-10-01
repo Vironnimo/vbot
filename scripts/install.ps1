@@ -200,6 +200,10 @@ function Install-NativeRelease {
         throw "The installed vBot shape does not match the requested installer."
     }
     if ($tasks -eq "startup") {
+        # The logon task starts vBot only at the next sign-in; start the tray,
+        # which starts the server, now.
+        Write-Step "Starting vBot"
+        Start-Process -FilePath (Join-Path $InstallDir "vBot.exe") -WindowStyle Hidden | Out-Null
         $ready = $false
         for ($attempt = 0; $attempt -lt 30 -and -not $ready; $attempt++) {
             try {
