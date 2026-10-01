@@ -70,6 +70,7 @@ from core.settings.normalizers import (
 )
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
+    ARCHIVE_RETENTION_DAYS_RULE,
     NOTIFICATION_FIELDS,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
@@ -77,6 +78,7 @@ from core.settings.settings import (
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
     SettingsValidationError,
+    is_archive_retention_days,
     parse_openrouter_routing,
     validate_temperature,
     validate_thinking_effort,
@@ -92,6 +94,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "PORT",
         "SERVER_PORT",
         "appearance",
+        "archive",
         "attachment_max_size_bytes",
         "compaction",
         "debug",
@@ -126,6 +129,7 @@ SUBAGENT_SETTING_FIELDS = (
     "subagent_timeout_minutes",
 )
 APPEARANCE_FIELDS = frozenset({"language", "chat_width", "chat_working_mode"})
+ARCHIVE_FIELDS = frozenset({"retention_days"})
 COMPACTION_FIELDS = frozenset({"enabled", "trigger", "strategy"})
 DEFAULTS_SECTIONS = frozenset({"agent"})
 RECALL_FIELDS = frozenset({"backend"})
@@ -179,6 +183,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
     KNOWN_RAW_SETTINGS_KEYS,
     {
         "appearance": json_object(APPEARANCE_FIELDS),
+        "archive": json_object(ARCHIVE_FIELDS),
         "compaction": COMPACTION_POLICY_SHAPE,
         "debug": json_object(DEBUG_FIELDS),
         "defaults": json_object(DEFAULTS_SECTIONS, {"agent": json_object(AGENT_DEFAULT_FIELDS)}),
@@ -448,6 +453,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
             _error(diagnostics, "$.web_fetch", str(error))
     _validate_model_tasks(diagnostics, data.get("model_tasks"))
     _validate_debug(diagnostics, data.get("debug"))
+    _validate_archive(diagnostics, data.get("archive"))
     _validate_reflection(diagnostics, data.get("reflection"))
     _validate_local_models(diagnostics, data.get("local_models"))
     _validate_providers(diagnostics, data.get("providers"))
@@ -949,6 +955,18 @@ def _validate_debug(diagnostics: list[JsonDiagnostic], value: Any) -> None:
                 "$.debug.trace_limit",
                 f"must be at most {MAX_TRACE_LIMIT}",
             )
+
+
+def _validate_archive(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.archive", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.archive", value, ARCHIVE_FIELDS, "archive field")
+    if "retention_days" in value and not is_archive_retention_days(value["retention_days"]):
+        _error(diagnostics, "$.archive.retention_days", ARCHIVE_RETENTION_DAYS_RULE)
 
 
 def _validate_local_models(diagnostics: list[JsonDiagnostic], value: Any) -> None:

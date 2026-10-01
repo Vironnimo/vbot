@@ -35,6 +35,7 @@ from core.settings._path_types import (
 )
 from core.settings.normalizers import (
     normalize_appearance_settings,
+    normalize_archive_settings,
     normalize_compaction_settings,
     normalize_debug_settings,
     normalize_defaults_settings,
@@ -182,6 +183,7 @@ def build_effective_settings(raw_settings: JsonObject) -> JsonObject:
         "web_search": normalize_web_search_settings(raw_settings.get("web_search")),
         "web_fetch": normalize_web_fetch_settings(raw_settings.get("web_fetch")),
         "debug": normalize_debug_settings(raw_settings.get("debug")),
+        "archive": normalize_archive_settings(raw_settings.get("archive")),
         "session_titles": normalize_session_title_settings(raw_settings.get("session_titles")),
         "local_models": normalize_local_models_settings(raw_settings.get("local_models")),
         "model_tasks": normalize_model_task_settings(raw_settings.get("model_tasks")),

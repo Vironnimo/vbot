@@ -94,6 +94,11 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
         {"enabled": False, "trace_limit": 50},
     ),
     (
+        StorageManager.load_archive_settings,
+        {"archive": {"retention_days": 0}},
+        {"retention_days": 30},
+    ),
+    (
         StorageManager.load_reflection_settings,
         {"reflection": {"memory_turn_interval": 0}},
         REFLECTION_DEFAULTS,
@@ -301,6 +306,18 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         StorageManager.load_debug_settings,
         {"enabled": True, "trace_limit": 200},
     ),
+    "archive-null-disables-retention": (
+        {"archive": {"retention_days": 14}},
+        {"archive": {"retention_days": None}},
+        StorageManager.load_archive_settings,
+        {"retention_days": None},
+    ),
+    "archive-empty-update-keeps-disabled-retention": (
+        {"archive": {"retention_days": None}},
+        {"archive": {}},
+        StorageManager.load_archive_settings,
+        {"retention_days": None},
+    ),
     "server-keeps-unmentioned-flat-key": (
         {"keep_awake": True},
         {"server": {"timezone": "America/New_York"}},
@@ -437,6 +454,8 @@ def test_section_update_merges_into_stored_settings_and_returns_what_is_read_bac
         ),
         pytest.param({"debug": "not a dict"}, id="debug-not-a-mapping"),
         pytest.param({"debug": {"enabled": True, "extra": 1}}, id="debug-unknown-field"),
+        pytest.param({"archive": {"retention_days": 3651}}, id="archive-out-of-range"),
+        pytest.param({"archive": {"days": 7}}, id="archive-unknown-field"),
         pytest.param({"reflection": {"enabled": True, "unknown": 1}}, id="reflection-unknown"),
         pytest.param({"local_models": {"context_windows": {"ollama/m": -5}}}, id="window"),
         pytest.param({"local_models": {"context_windows": {}, "extra": 1}}, id="local-unknown"),

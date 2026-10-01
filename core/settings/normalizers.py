@@ -46,11 +46,13 @@ from core.settings._provider_settings import (
 )
 from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, normalize_agent_default_value
 from core.settings.settings import (
+    ARCHIVE_RETENTION_DAYS_RULE,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     NOTIFICATION_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
+    is_archive_retention_days,
 )
 from core.utils.errors import StorageError
 
@@ -71,6 +73,10 @@ DEFAULT_WEB_SEARCH_SETTINGS = {
 
 
 DEFAULT_SESSION_TITLE_SETTINGS = {"enabled": False, "model": ""}
+
+
+# Archived items rest 30 days before vBot deletes them permanently.
+ARCHIVE_SETTING_DEFAULTS: dict[str, Any] = {"retention_days": 30}
 
 
 DEBUG_SETTING_DEFAULTS: dict[str, Any] = {
@@ -373,6 +379,25 @@ def _coerce_recall_section(recall: Any) -> dict[str, Any]:
     return dict(recall)
 
 
+def normalize_archive_settings(archive: Any) -> dict[str, Any]:
+    """Return the normalized archive settings section.
+
+    A missing ``retention_days`` takes the default; an explicit ``None`` stays
+    ``None`` and keeps archived items until they are deleted.
+    """
+
+    if archive is None:
+        section: Mapping[str, Any] = {}
+    elif isinstance(archive, Mapping):
+        section = archive
+    else:
+        raise StorageError("Expected settings.archive to be an object")
+    retention_days = section.get("retention_days", ARCHIVE_SETTING_DEFAULTS["retention_days"])
+    if not is_archive_retention_days(retention_days):
+        raise StorageError(f"Archive setting retention_days {ARCHIVE_RETENTION_DAYS_RULE}")
+    return {"retention_days": retention_days}
+
+
 def normalize_debug_settings(debug: Any) -> dict[str, Any]:
     """Return the normalized debug settings section."""
 
@@ -631,6 +656,7 @@ def is_absolute_or_home_relative_path(path: str) -> bool:
 
 
 __all__ = [
+    "ARCHIVE_SETTING_DEFAULTS",
     "COMPACTION_SETTING_DEFAULTS",
     "CUSTOM_MODEL_CAPABILITY_FIELDS",
     "CUSTOM_PROVIDER_ADAPTERS",
@@ -652,6 +678,7 @@ __all__ = [
     "is_absolute_or_home_relative_path",
     "normalize_agent_defaults",
     "normalize_appearance_settings",
+    "normalize_archive_settings",
     "normalize_compaction_policy",
     "normalize_compaction_settings",
     "normalize_custom_provider_id",

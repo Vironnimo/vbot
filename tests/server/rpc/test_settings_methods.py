@@ -369,6 +369,7 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "trace_limit": 50,
             "trace_count": 0,
         },
+        "archive": {"retention_days": 30},
         "reflection": {
             "enabled": True,
             "memory_turn_interval": 10,

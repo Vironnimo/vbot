@@ -29,6 +29,7 @@ from core.settings._path_types import (
 )
 from core.settings.agent_defaults import agent_default_catalog
 from core.settings.normalizers import (
+    ARCHIVE_SETTING_DEFAULTS,
     COMPACTION_SETTING_DEFAULTS,
     DEBUG_SETTING_DEFAULTS,
     DEFAULT_APPEARANCE_LANGUAGE,
@@ -41,6 +42,8 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    MAX_ARCHIVE_RETENTION_DAYS,
+    MIN_ARCHIVE_RETENTION_DAYS,
     OPENROUTER_ROUTING_MODES,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
@@ -341,6 +344,17 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Base URL of the SearXNG instance used by web_search.",
         default=DEFAULT_SEARXNG_BASE_URL,
         non_empty=True,
+    ),
+    _static(
+        "archive.retention_days",
+        "integer",
+        "Days before vBot deletes an archive entry permanently; null keeps entries until "
+        "they are purged. Entries of kind files and entries that may hold the user's own "
+        "folders are never deleted automatically.",
+        default=ARCHIVE_SETTING_DEFAULTS["retention_days"],
+        minimum=MIN_ARCHIVE_RETENTION_DAYS,
+        maximum=MAX_ARCHIVE_RETENTION_DAYS,
+        nullable=True,
     ),
     _static(
         "debug.enabled",

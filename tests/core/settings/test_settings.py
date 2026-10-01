@@ -73,6 +73,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "config": {"guard_bash": {"deny": ["rm -rf"], "nested": finite_values}},
             },
             "debug": {"enabled": True, "trace_limit": 100},
+            "archive": {"retention_days": 14},
             "reflection": {
                 "enabled": True,
                 "memory_turn_interval": 5,
@@ -137,6 +138,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "config": {"guard_bash": {"deny": ["rm -rf"], "nested": finite_values}},
         },
         "debug": {"enabled": True, "trace_limit": 100},
+        "archive": {"retention_days": 14},
         "reflection": {
             "enabled": True,
             "memory_turn_interval": 5,
@@ -171,6 +173,11 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         pytest.param({"debug": {}}, None, id="empty-debug"),
         pytest.param({"debug": {"trace_limit": 1}}, None, id="trace-limit-minimum"),
         pytest.param({"debug": {"trace_limit": 500}}, None, id="trace-limit-maximum"),
+        pytest.param({"archive": {}}, None, id="empty-archive"),
+        pytest.param({"archive": {"retention_days": 1}}, None, id="retention-minimum"),
+        pytest.param({"archive": {"retention_days": 3650}}, None, id="retention-maximum"),
+        # ``null`` keeps archived items until they are deleted.
+        pytest.param({"archive": {"retention_days": None}}, None, id="retention-disabled"),
         pytest.param({"reflection": {}}, None, id="empty-reflection"),
         pytest.param({"reflection": {"memory_turn_interval": 3}}, None, id="one-interval"),
         pytest.param({"server": {}}, None, id="empty-server"),
@@ -435,6 +442,17 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"debug": {"trace_limit": True}}, "params.debug.trace_limit must be a positive integer"),
         ({"debug": {"trace_limit": 0}}, "params.debug.trace_limit must be a positive integer"),
         ({"debug": {"trace_limit": 501}}, "params.debug.trace_limit must not exceed 500"),
+        ({"archive": []}, "params.archive must be an object"),
+        ({"archive": {"days": 7}}, "unsupported archive settings: days"),
+        *[
+            pytest.param(
+                {"archive": {"retention_days": value}},
+                "params.archive.retention_days must be an integer from 1 to 3650, "
+                "or null to keep archived items until they are deleted",
+                id=f"retention-{value!r}",
+            )
+            for value in (0, 3651, True, "30", 7.5)
+        ],
         ({"reflection": []}, "params.reflection must be an object"),
         ({"reflection": {"extra": 1}}, "unsupported reflection settings: extra"),
         ({"reflection": {"enabled": "yes"}}, "params.reflection.enabled must be a boolean"),

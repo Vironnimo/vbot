@@ -307,6 +307,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 "notifications": {"run_completed": False, "server_stopped": True},
                 "local_models": {"context_windows": {"ollama/m": 16384}},
                 "debug": {"enabled": True, "trace_limit": 500},
+                "archive": {"retention_days": None},
                 # Custom Provider records hold secret-free Model facts.
                 "providers": {
                     "custom": {
@@ -459,6 +460,19 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
             {"debug": {"trace_limit": 501}},
             [("error", "$.debug.trace_limit", "must be at most 500")],
             id="trace-limit-above-range",
+        ),
+        pytest.param(
+            {"archive": {"retention_days": 3651, "extra": 1}},
+            [
+                ("warning", "$.archive.extra", "unknown archive field: extra"),
+                (
+                    "error",
+                    "$.archive.retention_days",
+                    "must be an integer from 1 to 3650, "
+                    "or null to keep archived items until they are deleted",
+                ),
+            ],
+            id="archive-retention-out-of-range",
         ),
         pytest.param(
             {"reflection": []},

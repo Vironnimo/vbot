@@ -34,6 +34,7 @@ from core.settings import (
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
     normalize_appearance_settings,
+    normalize_archive_settings,
     normalize_compaction_settings,
     normalize_custom_provider_id,
     normalize_custom_provider_settings,
@@ -588,6 +589,12 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_debug_settings(settings.get("debug"))
+
+    def load_archive_settings(self) -> dict[str, Any]:
+        """Return normalized persisted archive settings."""
+
+        settings = self.load_settings()
+        return normalize_archive_settings(settings.get("archive"))
 
     def load_reflection_settings(self) -> dict[str, Any]:
         """Return normalized persisted background-reflection settings."""
