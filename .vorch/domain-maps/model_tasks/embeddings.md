@@ -37,6 +37,10 @@ Recall pins `EmbeddingSpaceIdentity.fingerprint` together with provider, model, 
 
 Model-card evidence lives in comments beside non-obvious entries (for example, Qwen3's official query prompt ends in `Query:` without a trailing space, while Harrier's ends in `Query: ` with one). `input_type` is used only for families whose server-side handling was verified: OpenRouter documents the field only as "The type of input (e.g. search_query, search_document)". A live probe on 2026-10-01 compared query and document vectors for the same text: `voyage-4`/`voyage-4-lite`, `gemini-embedding-001`, `gemini-embedding-2`, and `nemotron-3-embed-1b` changed (cosine 0.69-0.91; Gemini and Nemotron treat an omitted field like a query), while `qwen3-embedding-8b`/`-4b`, `text-embedding-3-small`, `pplx-embed`, `bge-m3`, `mistral-embed-2312`, and `multilingual-e5-large` returned identical vectors. Families that ignore the field rely on their documented prefixes instead, or are symmetric.
 
+### Target facts
+
+`task_model.list_targets` descriptors (`TaskModelTarget.facts`) for `text_embedding` carry the selection facts a settings UI shows per target, for Provider and local targets alike: `local` (the Model runs on this machine: every local target, and Provider Models whose metadata flags locality, such as Ollama and LM Studio installs; proxied Ollama Cloud Models are not local), `multilingual`, `recommended_rank`, and `note` from the profile, `max_input_tokens` (profile limit, else the Model's catalog `context_window`, else `null`), and `input_price_per_million` (USD from the Model DB's base input rate, `null` when unknown). Coverage: `tests/core/model_tasks/test_model_task_targets.py`.
+
 ## Provider Wire Behavior
 
 `ProviderEmbeddingClient` subclasses `core.providers.task_client.ProviderTaskClient`, the shared plumbing it has in common with `core/model_tasks/image_providers.py` and `core/model_tasks/speech_providers.py` (constructor tuple, `from_runtime` factory, auth headers, POST/classify/parse cycle, retry policy - see `providers.md`). This module owns only the embeddings payload shape and response parsing:

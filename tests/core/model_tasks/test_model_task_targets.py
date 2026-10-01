@@ -11,12 +11,14 @@ from core.model_tasks import (
     TASK_IMAGE_UNDERSTANDING,
     TASK_LIVE_VOICE,
     TASK_SPEECH_TO_TEXT,
+    TASK_TEXT_EMBEDDING,
     TASK_TEXT_TO_SPEECH,
     TASK_VIDEO_GENERATION,
     LocalTaskTargetDescriptor,
     LocalTaskTargetRegistry,
     TaskModelService,
 )
+from core.models.pricing import TokenPricing
 from tests.core.model_tasks.model_tasks_test_support import (
     _Credentials,
     _live_voice_registry,
@@ -318,6 +320,66 @@ def test_list_targets_merges_local_targets_with_provider_targets() -> None:
     assert [(target.kind, target.id) for target in targets] == [
         ("local", "local/whisper-local"),
         ("provider", "openrouter/openai/gpt-4o-transcribe::api-key"),
+    ]
+
+
+def test_embedding_targets_carry_selection_facts() -> None:
+    hosted = _model("qwen/qwen3-embedding-8b", (TASK_TEXT_EMBEDDING,), name="Qwen3 Embedding")
+    hosted.metadata = {"openrouter": {"modality": "text->embeddings"}}
+    hosted.pricing = TokenPricing.from_cost({"input": 0.01}, source="openrouter:qwen")
+    on_machine = _model(
+        "nomic-embed-text:latest", (TASK_TEXT_EMBEDDING,), provider_id="ollama", name="Nomic"
+    )
+    on_machine.metadata = {"ollama": {"local": True}}
+    on_machine.pricing = None
+    unprofiled = _model("example/embed-x", (TASK_TEXT_EMBEDDING,), name="Embed X")
+    unprofiled.metadata = {}
+    unprofiled.pricing = None
+    service = TaskModelService(
+        _Providers(
+            [
+                _provider("openrouter", "OpenRouter", [("api-key", "API Key")]),
+                _provider("ollama", "Ollama", [("local", "Local")]),
+            ]
+        ),
+        _Models([hosted, on_machine, unprofiled, _model("openai/whisper", (TASK_SPEECH_TO_TEXT,))]),
+        _Credentials({"openrouter:api-key", "ollama:local"}),
+        _Storage(),
+        local_targets=LocalTaskTargetRegistry(
+            [
+                LocalTaskTargetDescriptor(
+                    id="granite-embedding-r2",
+                    label="Granite Embedding",
+                    task_types=(TASK_TEXT_EMBEDDING,),
+                )
+            ]
+        ),
+    )
+
+    facts = {
+        target.id: target.to_dict()["facts"] for target in service.list_targets(TASK_TEXT_EMBEDDING)
+    }
+
+    assert {
+        target_id: (
+            fact["local"],
+            fact["multilingual"],
+            fact["recommended_rank"],
+            fact["max_input_tokens"],
+            fact["input_price_per_million"],
+            bool(fact["note"]),
+        )
+        for target_id, fact in facts.items()
+    } == {
+        "local/granite-embedding-r2": (True, True, 1, 32768, None, True),
+        "ollama/nomic-embed-text:latest::local": (True, False, None, 8192, None, True),
+        "openrouter/qwen/qwen3-embedding-8b::api-key": (False, True, 4, 32768, 0.01, True),
+        # An unprofiled Model keeps its catalog context window and has no curated facts.
+        "openrouter/example/embed-x::api-key": (False, None, None, 128000, None, False),
+    }
+    # Other task types carry no facts yet.
+    assert [target.to_dict()["facts"] for target in service.list_targets(TASK_SPEECH_TO_TEXT)] == [
+        {}
     ]
 
 
