@@ -172,8 +172,6 @@ def provision_dependencies(runtime: Path, lock: Path) -> None:
     result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8")
     if result.returncode:
         raise BuildError(f"dependency installation failed:\n{result.stdout}\n{result.stderr}")
-    for package in ("core", "server", "cli", "desktop"):
-        shutil.rmtree(site / package, ignore_errors=True)
 
 
 def check_runtime(runtime: Path) -> None:

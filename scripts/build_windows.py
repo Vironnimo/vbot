@@ -114,10 +114,6 @@ def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: st
             str(lock),
         ]
     )
-    for package in ("core", "server", "cli", "desktop"):
-        shutil.rmtree(site / package, ignore_errors=True)
-    for metadata in site.glob("vbot-*.dist-info"):
-        shutil.rmtree(metadata)
     write_inventory(destination, site)
 
 
