@@ -61,6 +61,7 @@ class ArchiveWorld:
     team: _Team
     usage_imports: list[None] = field(default_factory=list)
     recall_removals: list[tuple[str | None, str, str | None]] = field(default_factory=list)
+    skill_invalidations: list[str] = field(default_factory=list)
     changes: list[None] = field(default_factory=list)
     services: ArchiveServices = field(init=False)
     service: ArchiveService = field(init=False)
@@ -132,7 +133,7 @@ def world(tmp_path: Path, current_session_store_template: Path) -> Iterator[Arch
         import_usage=lambda: world.usage_imports.append(None),
         remove_agent_from_recall=forget_agent,
         remove_session_from_recall=forget_session,
-        invalidate_agent_skills=lambda _agent_id: None,
+        invalidate_agent_skills=world.skill_invalidations.append,
         invalidate_project=lambda _project_id: None,
     )
     world.service = ArchiveService(world.services)

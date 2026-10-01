@@ -4,7 +4,9 @@ Blocking steps for the Session database's pool. Each archive records the entry
 first (``archiving``, with the payload tree it will create), moves the files,
 then archives the Sessions and marks the entry ``archived`` in one transaction.
 A failure before that commit moves the files back and deletes the entry; when a
-compensation step fails, the entry stays ``archiving`` for startup recovery.
+compensation step fails, the entry stays ``archiving`` for startup recovery. Once
+that commit succeeds, the archive has succeeded: a failed cleanup afterwards is
+logged and left ``cleanup_pending`` for startup recovery.
 """
 
 from __future__ import annotations
@@ -87,8 +89,15 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
         except BaseException:
             _abandon_unless_retained(services, ref, (tree,))
             raise
-    entry = ledger.entry_by_key(ref.entry_key)
-    policy_agent_ids = cleanup_agent(services, entry) if entry is not None else ()
+    policy_agent_ids: tuple[str, ...] = ()
+    try:
+        entry = ledger.entry_by_key(ref.entry_key)
+        if entry is not None:
+            policy_agent_ids = cleanup_agent(services, entry)
+    except Exception:
+        _LOGGER.exception(
+            "Archive cleanup failed; it completes at the next start (entry=%s)", ref.entry_id
+        )
     return AgentArchiveOutcome(ref.entry_id, agent_id, session_count, policy_agent_ids)
 
 
@@ -111,9 +120,14 @@ def cleanup_agent(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, 
 
     The removed grants are recorded in the entry before any config changes, and
     merged with grants an interrupted earlier run recorded, so a restore can add
-    every one back. Repeating it is harmless.
+    every one back. Repeating it is harmless. When a live Agent has meanwhile
+    taken the id, the delegation lists naming it are that Agent's grants: the
+    cleanup finishes without touching or recording them.
     """
     ledger = services.sessions.archive_ledger
+    if services.agents.exists(entry.subject_id):
+        ledger.finish_cleanup(entry.entry_key)
+        return ()
     recorded = [grant for grant in entry.facts.get("grants") or () if isinstance(grant, Mapping)]
 
     def record(grants: Iterable[Mapping[str, Any]]) -> None:

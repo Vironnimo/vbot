@@ -80,24 +80,38 @@ def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_an_interrupted_agent_cleanup_completes(
-    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("id_reused", [False, True], ids=["id-free", "id-reused"])
+async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_next_start(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, id_reused: bool
 ) -> None:
     world.agents.create("coder")
     world.agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     monkeypatch.setattr(world.agents, "remove_delegation_grants", _fail)
-    with pytest.raises(OSError, match="stopped here"):
-        await world.service.archive_agent("coder")
-    [listing] = (await world.service.list(ArchiveEntryFilter())).entries
+
+    archived = await world.service.archive_agent("coder")
+
     monkeypatch.undo()
-    assert world.entry(listing.entry.entry_id).cleanup_pending
+    entry = world.entry(archived.entry_id)
+    assert (entry.state, entry.cleanup_pending) == ("archived", True)
+    assert not world.agents.exists("coder")
+    assert (world.skill_invalidations, world.recall_removals) == (
+        ["coder"],
+        [(None, "coder", None)],
+    )
+    assert world.changes
+    if id_reused:
+        # A new Agent took the free id; the delegation lists naming it are now its grants.
+        world.agents.create("coder")
 
     world.service.recover()
 
-    entry = world.entry(listing.entry.entry_id)
+    entry = world.entry(archived.entry_id)
     assert (entry.state, entry.cleanup_pending) == ("archived", False)
-    assert entry.facts["grants"] == [{"agent_id": "manager", "index": 0}]
-    assert world.agents.get("manager").tools["subagent"]["allowed_agents"] == []
+    allowed = world.agents.get("manager").tools["subagent"]["allowed_agents"]
+    if id_reused:
+        assert (allowed, entry.facts.get("grants")) == (["coder"], None)
+    else:
+        assert (allowed, entry.facts["grants"]) == ([], [{"agent_id": "manager", "index": 0}])
 
 
 @pytest.mark.asyncio

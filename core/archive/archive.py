@@ -123,7 +123,12 @@ class ArchiveService:
             outcome = await services.sessions.run_async(
                 _operations.archive_agent, services, agent_id
             )
-            services.invalidate_agent_skills(agent_id)
+            # The archive has succeeded; what follows only brings caches, listeners
+            # and the Recall index in step, so a failure there never hides it.
+            try:
+                services.invalidate_agent_skills(agent_id)
+            except Exception:
+                _LOGGER.exception("Could not drop an archived Agent's Skills (agent=%s)", agent_id)
         self._notify()
         _LOGGER.info(
             "Archive entry created (entry=%s kind=agent subject=%s sessions=%d policies=%d "
@@ -165,7 +170,12 @@ class ArchiveService:
                     services, project_id, copy_identity_files=copy_identity_files
                 )
             )
-        services.invalidate_project(project_id)
+        try:
+            services.invalidate_project(project_id)
+        except Exception:
+            _LOGGER.exception(
+                "Could not drop an archived Project's caches (project=%s)", project_id
+            )
         self._notify()
         _LOGGER.info(
             "Archive entry created (entry=%s kind=project subject=%s sessions=%d "
