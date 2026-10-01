@@ -23,6 +23,7 @@ from cli.application.state import (
     Installation,
     contained,
     current_platform,
+    package_name,
     read_json,
     safe_id,
 )
@@ -311,11 +312,6 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             # This path was created exclusively under our validated staging root.
             contained(staging, temporary.name)
             shutil.rmtree(temporary)
-
-
-def package_name(shape: str, platform: str | None = None) -> str:
-    """The update archive of one shape for one platform, as releases publish it."""
-    return f"vbot-{platform or current_platform()}-{shape}.zip"
 
 
 def download_release(

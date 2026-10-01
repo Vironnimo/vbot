@@ -23,8 +23,8 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cli.application.packages import package_name
 from cli.application.payload import copy_application
+from cli.application.state import package_name
 from scripts.package_build import (
     CHANNELS,
     INVENTORY_NAME,

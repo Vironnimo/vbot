@@ -77,6 +77,11 @@ def current_platform() -> str:
     raise ApplicationError(f"vBot packages are not available for {sys.platform} {machine}")
 
 
+def package_name(shape: str, platform: str | None = None) -> str:
+    """The update archive of one shape for one platform, as releases publish it."""
+    return f"vbot-{platform or current_platform()}-{shape}.zip"
+
+
 def timestamp() -> str:
     return datetime.now(UTC).isoformat()
 

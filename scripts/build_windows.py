@@ -13,9 +13,9 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cli.application.packages import package_name
 from cli.application.payload import APP_FILES, SHAPES, app_paths, copy_application
 from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
+from cli.application.state import package_name
 from core.utils.processes import subprocess_creation_flags
 from scripts.package_build import (
     CHANNELS,

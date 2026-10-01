@@ -20,11 +20,10 @@ from cli.application.packages import (
     RELEASE_IDENTITY_ASSET,
     digest_files,
     download_release,
-    package_name,
     stage_package,
     validate_release,
 )
-from cli.application.state import ApplicationError, Installation, current_platform
+from cli.application.state import ApplicationError, Installation, current_platform, package_name
 
 _VERSION = "rel_example"
 _CACHE = "app/cli/__pycache__/main.cpython-313.pyc"
