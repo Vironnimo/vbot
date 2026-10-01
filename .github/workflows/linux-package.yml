@@ -28,18 +28,6 @@ on:
         required: false
         default: false
         type: boolean
-  pull_request:
-    paths:
-      - "core/**"
-      - "server/**"
-      - "cli/**"
-      - "resources/**"
-      - "webui/**"
-      - "scripts/build_linux.py"
-      - "scripts/package_build.py"
-      - "scripts/linux/**"
-      - "pyproject.toml"
-      - ".github/workflows/linux-package.yml"
 
 permissions:
   contents: read

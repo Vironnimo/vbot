@@ -11,7 +11,6 @@ from cli._parser_common import (
     SERVER_COMMANDS,
     SERVER_HELP,
     _add_command_parser,
-    _add_target_arguments,
 )
 
 
@@ -65,7 +64,6 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
         help=AREA_HELP["update"],
         description=f"{AREA_HELP['update']}. Example: vbot update",
     )
-    _add_target_arguments(update_parser, default_host=None)
     update_parser.add_argument("update_action", nargs="?", choices=("status", "activate"))
     update_parser.add_argument("operation_id", nargs="?")
     update_parser.add_argument(
@@ -126,13 +124,6 @@ def _add_uninstall_parser(
         action="store_true",
         help="Skip the confirmation prompt (a removal mode is still required without a TTY)",
     )
-    uninstall_parser.add_argument(
-        "--host", help="Server host; defaults to the recorded installation target"
-    )
-    uninstall_parser.add_argument(
-        "--port", type=int, help="Server port; defaults to the recorded installation target"
-    )
-    uninstall_parser.add_argument("--data-dir", help="Exact data directory to keep or delete")
 
 
 def _add_autostart_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:

@@ -203,8 +203,8 @@ def smoke(package: Path, *, speech: bool = False) -> None:
         installed = json.loads(
             _run([str(cli), "application", "status"], environment, temporary, transcript)
         )
-        if installed["shape"] != shape or (root / ".git").exists():
-            raise RuntimeError("Native installation has the wrong shape or includes a checkout")
+        if installed["shape"] != shape:
+            raise RuntimeError("Native installation has the wrong shape")
         initial = root / "versions" / installed["version"]
         python = initial / "runtime" / "vBot.Python.exe"
         _run(

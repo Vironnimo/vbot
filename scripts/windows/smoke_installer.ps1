@@ -41,7 +41,6 @@ try {
     if ($active -notmatch '^[a-z0-9_]+$') { throw 'Invalid active version pointer' }
     $release = Get-Content -LiteralPath (Join-Path $installDir "versions/$active/release.json") -Raw | ConvertFrom-Json
     if ($release.version -cne $Version) { throw 'Installer selected the wrong version' }
-    if (Test-Path -LiteralPath (Join-Path $installDir '.git')) { throw 'Installer copied a Git checkout' }
     $verifiedInstall = $true
     New-Item -ItemType Directory -Path $dataDir -Force | Out-Null
     Set-Content -LiteralPath $sentinel -Value 'preserve user data' -NoNewline

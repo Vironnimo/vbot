@@ -46,7 +46,7 @@ _Result = TypeVar("_Result")
 
 
 def version_label(manifest: dict[str, Any]) -> str:
-    """Distinguish source builds sharing a release version without internal IDs."""
+    """Distinguish builds sharing a release version, such as main builds, by revision."""
     version = manifest.get("version")
     label = version if isinstance(version, str) and version else "unknown version"
     label = "".join(character for character in label[:100] if character.isprintable())
@@ -337,12 +337,8 @@ def download_release(
         release = response.json()
         assets = {item["name"]: item["browser_download_url"] for item in release.get("assets", [])}
         identity = _release_identity(client, assets.get(RELEASE_IDENTITY_ASSET))
-        label = (
-            version_label(identity)
-            if identity is not None
-            else version_label({"version": release.get("tag_name")})
-        )
-        if identity is not None and identity["version_id"] == install.version().name:
+        label = version_label(identity)
+        if identity["version_id"] == install.version().name:
             if progress:
                 progress("The published version is already installed", label)
             return None
@@ -358,10 +354,13 @@ def download_release(
     return directory / expected
 
 
-def _release_identity(client: httpx.Client, url: object) -> dict[str, Any] | None:
-    """Read the published version identity; a release without one has none."""
+def _release_identity(client: httpx.Client, url: object) -> dict[str, Any]:
+    """Read the version identity every release publishes beside its packages."""
     if not isinstance(url, str) or not url.startswith("https://"):
-        return None
+        raise ApplicationError(
+            f"The channel's release publishes no {RELEASE_IDENTITY_ASSET} version identity, "
+            "so vbot update cannot install it"
+        )
     response = client.get(url)
     response.raise_for_status()
     if len(response.content) > 4096:

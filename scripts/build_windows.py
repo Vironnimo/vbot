@@ -62,9 +62,7 @@ def _site_packages(runtime: Path) -> Path:
     return runtime / "Lib" / "site-packages"
 
 
-def copy_runtime(
-    source: Path, destination: Path, *, provision: bool, app_source: Path, shape: str
-) -> None:
+def copy_runtime(source: Path, destination: Path, *, app_source: Path, shape: str) -> None:
     if not source.is_dir():
         raise BuildError("runtime must be a prepared CPython directory")
     root_aliases = (
@@ -84,35 +82,27 @@ def copy_runtime(
         provision_runtime_sqlite(destination, app_source)
     except (OSError, RuntimeSQLiteError) as error:
         raise BuildError(f"runtime SQLite provisioning failed: {error}") from error
+    lock = app_source / "scripts" / "windows" / f"requirements-{shape}.lock"
+    if not lock.is_file():
+        raise BuildError(f"missing locked Windows runtime requirements: {lock}")
     site = _site_packages(destination)
     source_site = _site_packages(source)
-    has_packages = source_site.is_dir() and any(
+    if source_site.is_dir() and any(
         item.name not in {"pip", "setuptools", "wheel"}
         and not item.name.startswith(("pip-", "setuptools-", "wheel-"))
         for item in source_site.iterdir()
-    )
-    if has_packages and not (source / INVENTORY_NAME).is_file():
-        if provision:
-            shutil.rmtree(site, ignore_errors=True)
-            has_packages = False
-        else:
-            raise BuildError(
-                f"runtime site-packages has no {INVENTORY_NAME}; "
-                "use a clean runtime and --provision-dependencies"
-            )
-    if provision:
-        site.mkdir(parents=True, exist_ok=True)
-        lock = app_source / "scripts" / "windows" / f"requirements-{shape}.lock"
-        if not lock.is_file():
-            raise BuildError(f"missing locked Windows runtime requirements: {lock}")
-        python = _runtime_python(source)
-        command = [
+    ):
+        # Only the shape's lock provisions packages; the input runtime's never ship.
+        shutil.rmtree(site, ignore_errors=True)
+    site.mkdir(parents=True, exist_ok=True)
+    run_tool(
+        [
             sys.executable,
             "-B",
             "-m",
             "pip",
             "--python",
-            str(python),
+            str(_runtime_python(source)),
             "install",
             "--disable-pip-version-check",
             "--no-input",
@@ -124,11 +114,7 @@ def copy_runtime(
             "-r",
             str(lock),
         ]
-        run_tool(command)
-        for package in ("core", "server", "cli", "desktop"):
-            shutil.rmtree(site / package, ignore_errors=True)
-        for metadata in site.glob("vbot-*.dist-info"):
-            shutil.rmtree(metadata)
+    )
     write_inventory(destination, site)
 
 
@@ -182,22 +168,11 @@ def build(args: argparse.Namespace) -> Path:
         shutil.rmtree(package)
     version_root = package / "versions" / safe_version_id(args.version, args.revision)
     copy_application(source, version_root / "app", args.shape, search_target=SEARCH_TARGET)
-    copy_runtime(
-        runtime,
-        version_root / "runtime",
-        provision=args.provision_dependencies,
-        app_source=source,
-        shape=args.shape,
-    )
+    copy_runtime(runtime, version_root / "runtime", app_source=source, shape=args.shape)
     remove_bytecode_caches(version_root / "runtime")
     compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
-    if args.authenticode_command:
-        for executable in [*package.glob("*.exe"), *version_root.glob("runtime/*.exe")]:
-            run_tool(
-                [part.replace("{file}", str(executable)) for part in args.authenticode_command]
-            )
     manifest = write_manifest(
         version_root,
         version=args.version,
@@ -236,11 +211,9 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--shape", required=True, choices=SHAPES)
     value.add_argument("--version", required=True)
     value.add_argument("--revision", required=True)
-    value.add_argument("--provision-dependencies", action="store_true")
     value.add_argument("--release-mode", action="store_true")
     value.add_argument("--channel", choices=CHANNELS, default="release")
     value.add_argument("--signing-key-env", default="VBOT_RELEASE_SIGNING_KEY")
-    value.add_argument("--authenticode-command", nargs="+", metavar="ARG")
     return value
 
 

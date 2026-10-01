@@ -81,7 +81,7 @@ vbot model refresh [<provider-id>]
 
 - `model list` returns only Models served by at least one usable Connection (enabled and authenticated when required). Rows include the exact id accepted by `agent create --model` / `agent update --model`, effective context window, useful capabilities/task types, and `reachable: no` when a local service is currently down. For an Agent's primary Model, use `vbot model list --task chat`; repeat filter flags to require every listed value.
 - `model show` returns the complete public Model record, including modalities, task types, supported parameters and voices, typed task options, reasoning controls, context/output limits, connection restrictions, usable Connections, family, and metadata. Use it instead of web search when the question is about the Model data currently loaded by vBot.
-- `refresh` fetches Provider model catalogs using the selected Connections’ authentication; omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never writes the installed checkout.
+- `refresh` fetches Provider model catalogs using the selected Connections’ authentication; omitting the provider id refreshes all refreshable Providers. It publishes a complete Model DB, including its Override files, under the target data directory and never changes the Model DB bundled with vBot.
 
 ## Task models
 

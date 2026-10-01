@@ -28,19 +28,6 @@ on:
         required: false
         default: false
         type: boolean
-  pull_request:
-    paths:
-      - "core/**"
-      - "server/**"
-      - "cli/**"
-      - "desktop/**"
-      - "resources/**"
-      - "webui/**"
-      - "scripts/build_windows.py"
-      - "scripts/package_build.py"
-      - "scripts/windows/**"
-      - "pyproject.toml"
-      - ".github/workflows/windows-package.yml"
 
 permissions:
   contents: read
@@ -53,16 +40,16 @@ jobs:
       matrix:
         shape: [server, server-desktop, desktop-client]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 1
           ref: ${{ inputs.ref || github.sha }}
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: 24
           cache: npm
           cache-dependency-path: webui/package-lock.json
       - name: Build WebUI assets
@@ -88,8 +75,7 @@ jobs:
             "--shape", "${{ matrix.shape }}",
             "--version", $version,
             "--revision", $revision,
-            "--channel", "${{ inputs.channel || 'release' }}",
-            "--provision-dependencies"
+            "--channel", "${{ inputs.channel || 'release' }}"
           )
           if ("${{ inputs.release_mode }}" -eq "true") {
             $arguments += "--release-mode"
@@ -107,7 +93,7 @@ jobs:
           python scripts/windows/smoke.py @arguments
       - name: Upload packaged smoke evidence
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vbot-windows-smoke-evidence-${{ matrix.shape }}
           path: build/windows/smoke-evidence/${{ matrix.shape }}
@@ -150,7 +136,7 @@ jobs:
           Copy-Item "build/windows/artifacts/vbot-release.json" $releaseFiles
           $signature = "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}.zip.sig"
           if (Test-Path $signature) { Copy-Item $signature $releaseFiles }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: vbot-windows-${{ matrix.shape }}
           path: build/windows/release-files/*

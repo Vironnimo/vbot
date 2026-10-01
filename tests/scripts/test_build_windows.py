@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from cli.application.payload import SHAPES
 from scripts import build_windows
 from scripts.windows import native_hosts
 
@@ -52,6 +53,9 @@ def test_build_tool_has_no_console_when_builder_has_none(tmp_path: Path) -> None
     assert result.stdout.strip() == "windowless-build-completed"
 
 
+_PINNED_SQLITE = b"pinned sqlite"
+
+
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     for directory in ("core", "cli", "server", "desktop", "resources", "webui/dist"):
@@ -60,6 +64,22 @@ def _source(tmp_path: Path) -> Path:
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
     (source / "scripts" / "windows").mkdir(parents=True)
+    for shape in SHAPES:
+        (source / "scripts" / "windows" / f"requirements-{shape}.lock").write_text(
+            "example==1.0 --hash=sha256:abc\n", encoding="utf-8"
+        )
+    # The runtime fixture already carries the pinned library, so nothing downloads.
+    (source / "scripts/windows/sqlite.lock.json").write_text(
+        json.dumps(
+            {
+                "version": "3.53.4",
+                "url": "https://sqlite.org/never-download.zip",
+                "archive_sha3_256": "0" * 64,
+                "library_sha256": hashlib.sha256(_PINNED_SQLITE).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
@@ -90,7 +110,17 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "Lib" / "ensurepip" / "__init__.py").write_text("", encoding="utf-8")
     (runtime / "python.exe").write_bytes(b"python")
     (runtime / build_windows.RUNTIME_DLL).write_bytes(b"dll")
+    (runtime / "DLLs").mkdir()
+    (runtime / "DLLs" / "sqlite3.dll").write_bytes(_PINNED_SQLITE)
     return runtime
+
+
+@pytest.fixture(autouse=True)
+def pip_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Record the builder's dependency installs instead of running pip."""
+    commands: list[list[str]] = []
+    monkeypatch.setattr(build_windows, "run_tool", lambda command: commands.append(command))
+    return commands
 
 
 def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
@@ -154,52 +184,15 @@ def test_copy_application_rejects_source_links(tmp_path: Path) -> None:
         )
 
 
-def test_reused_assets_replace_generated_pages_without_overwriting_extension_source(tmp_path):
-    from cli.application.payload import copy_application
-
-    source = _source(tmp_path)
-    assets = tmp_path / "verified-app"
-    page = "resources/extensions/demo"
-    for relative, value in {
-        "webui/dist/index.html": "verified UI",
-        f"{page}/web/page.html": "verified Extension page",
-    }.items():
-        target = assets / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(value, encoding="utf-8")
-    for relative, value in {
-        f"{page}/ui/page.html": "unchanged UI source",
-        f"{page}/backend.py": "new backend",
-        f"{page}/web/stale.js": "stale generated file",
-    }.items():
-        target = source / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(value, encoding="utf-8")
-    shutil.rmtree(source / "webui" / "dist")
-    destination = tmp_path / "candidate"
-    copy_application(
-        source, destination, "server", search_target=build_windows.SEARCH_TARGET, assets=assets
-    )
-    assert (destination / "webui/dist/index.html").read_text(encoding="utf-8") == "verified UI"
-    assert (destination / page / "web/page.html").read_text(
-        encoding="utf-8"
-    ) == "verified Extension page"
-    assert not (destination / page / "web/stale.js").exists()
-    assert (destination / page / "backend.py").read_text(encoding="utf-8") == "new backend"
-
-
-def test_runtime_with_unowned_site_packages_is_rejected(tmp_path: Path) -> None:
+def test_runtime_ships_only_locked_packages(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     (runtime / "Lib" / "site-packages" / "ambient_package").mkdir()
 
-    with pytest.raises(build_windows.BuildError, match="no vbot-runtime-inventory.json"):
-        build_windows.copy_runtime(
-            runtime,
-            tmp_path / "copy",
-            provision=False,
-            app_source=_source(tmp_path),
-            shape="server",
-        )
+    destination = tmp_path / "copy"
+    build_windows.copy_runtime(runtime, destination, app_source=_source(tmp_path), shape="server")
+
+    assert not (destination / "Lib" / "site-packages" / "ambient_package").exists()
+    assert (runtime / "Lib" / "site-packages" / "ambient_package").is_dir()
 
 
 def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
@@ -210,7 +203,6 @@ def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
         build_windows.copy_runtime(
             runtime,
             tmp_path / "copy",
-            provision=False,
             app_source=_source(tmp_path),
             shape="server",
         )
@@ -229,7 +221,6 @@ def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
     build_windows.copy_runtime(
         runtime,
         destination,
-        provision=False,
         app_source=_source(tmp_path),
         shape="server",
     )
@@ -243,33 +234,22 @@ def test_runtime_copy_installs_the_pinned_sqlite_without_touching_the_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _runtime(tmp_path)
-    (runtime / "DLLs").mkdir()
     (runtime / "DLLs" / "sqlite3.dll").write_bytes(b"cpython sqlite")
     source = _source(tmp_path)
-    pinned = b"pinned sqlite"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as bundle:
-        bundle.writestr("sqlite3.dll", pinned)
+        bundle.writestr("sqlite3.dll", _PINNED_SQLITE)
     archive = buffer.getvalue()
-    (source / "scripts/windows/sqlite.lock.json").write_text(
-        json.dumps(
-            {
-                "version": "3.53.4",
-                "url": "https://sqlite.org/fixture.zip",
-                "archive_sha3_256": hashlib.sha3_256(archive).hexdigest(),
-                "library_sha256": hashlib.sha256(pinned).hexdigest(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    lock_path = source / "scripts/windows/sqlite.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["archive_sha3_256"] = hashlib.sha3_256(archive).hexdigest()
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
     monkeypatch.setattr("cli.application.runtime_sqlite._download", lambda _url: archive)
 
     destination = tmp_path / "copy"
-    build_windows.copy_runtime(
-        runtime, destination, provision=False, app_source=source, shape="server"
-    )
+    build_windows.copy_runtime(runtime, destination, app_source=source, shape="server")
 
-    assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == pinned
+    assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == _PINNED_SQLITE
     assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite"
 
 
@@ -286,33 +266,21 @@ def test_runtime_rejects_unexcluded_links(tmp_path: Path, relative: str) -> None
         build_windows.copy_runtime(
             runtime,
             tmp_path / "copy",
-            provision=False,
             app_source=_source(tmp_path),
             shape="server",
         )
 
 
 def test_runtime_provisioning_uses_shape_lock_with_hashes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, pip_commands: list[list[str]]
 ) -> None:
     source = _source(tmp_path)
     lock = source / "scripts" / "windows" / "requirements-server.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text("example==1.0 --hash=sha256:abc\n", encoding="utf-8")
-    commands: list[list[str]] = []
-    monkeypatch.setattr(build_windows, "run_tool", lambda command: commands.append(command))
     runtime = _runtime(tmp_path)
 
-    build_windows.copy_runtime(
-        runtime,
-        tmp_path / "copy",
-        provision=True,
-        app_source=source,
-        shape="server",
-    )
+    build_windows.copy_runtime(runtime, tmp_path / "copy", app_source=source, shape="server")
 
-    assert commands
-    command = commands[0]
+    (command,) = pip_commands
     assert command[:6] == [
         sys.executable,
         "-B",
@@ -348,11 +316,9 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         shape="server",
         version="0.4.0",
         revision="abcdef1234567890",
-        provision_dependencies=False,
         release_mode=False,
         channel="main",
         signing_key_env="UNUSED",
-        authenticode_command=None,
     )
     package = build_windows.build(args)
     version_root = package / "versions" / "v0_4_0_abcdef123456"
@@ -410,11 +376,9 @@ def test_release_build_fails_closed_without_signing_key(
         shape="desktop-client",
         version="1.0.0",
         revision="abcdef",
-        provision_dependencies=False,
         release_mode=True,
         channel="release",
         signing_key_env="MISSING_SIGNING_KEY",
-        authenticode_command=None,
     )
     with pytest.raises(build_windows.BuildError, match="requires signing key environment"):
         build_windows.build(args)
@@ -436,11 +400,9 @@ def test_release_archive_signature_covers_raw_sha256(
         shape="desktop-client",
         version="1.0.0",
         revision="abcdef",
-        provision_dependencies=False,
         release_mode=True,
         channel="release",
         signing_key_env="TEST_SIGNING_KEY",
-        authenticode_command=None,
     )
     build_windows.build(args)
 

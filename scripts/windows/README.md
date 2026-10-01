@@ -6,8 +6,8 @@ sources and a private CPython 3.14 runtime. Native hosts load CPython in-process
 the stable root `vBot.exe` starts the tray with no arguments and the CLI with
 arguments. Its stable `vBot.GUI.exe` companion uses the Windows GUI subsystem;
 the Desktop shortcut invokes it with `desktop` and follows `active-version`.
-Install/update integration adds the companion and repairs the owned default
-Desktop shortcut while preserving customized targets. Desktop is independently launched and does not own server lifetime.
+Installation places both stable executables; updates never replace them.
+Desktop is independently launched and does not own server lifetime.
 No Windows service is installed.
 
 ## Build inputs and outputs
@@ -26,7 +26,7 @@ For example, from the repository root after building the WebUI:
 
 ```powershell
 $revision = git rev-parse HEAD
-python scripts/build_windows.py --source . --runtime C:\Python314 --output build/windows --shape server --version 0.1.0 --revision $revision --provision-dependencies
+python scripts/build_windows.py --source . --runtime C:\Python314 --output build/windows --shape server --version 0.1.0 --revision $revision
 ```
 
 The runtime argument is an input directory: the builder copies it and provisions
@@ -81,10 +81,8 @@ builder signs the raw SHA256 digest of each archive and emits its public key for
 the installer. Keep this private key in repository secrets. The installer stores
 only the public key; official updates fail closed without it. `--channel release|main`
 and the installer's `UpdateChannel` definition record the update channel the
-installed package follows. Optional
-`--authenticode-command` integrates an externally configured executable-signing
-tool. A development build without a release key is usable with an explicitly
-selected local `vbot update --package <archive>`.
+installed package follows. A development build without a release key is usable
+with an explicitly selected local `vbot update --package <archive>`.
 
 CI builds and signs every published package; nothing is published from a local
 build. The [Windows package workflow](../../.github/workflows/windows-package.yml)

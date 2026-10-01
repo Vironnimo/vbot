@@ -76,7 +76,7 @@ the engine's worker, so a transcription arriving meanwhile queues behind it and
 reuses the model; a pending load with the same load identity is not started
 twice; failures are logged and left for the next transcription to report.
 Shutdown cancels a preload that has not started and kills a managed STT child
-that is still loading; an in-process load (source install) cannot be interrupted
+that is still loading; an in-process load (development checkout) cannot be interrupted
 and delays shutdown until it finishes. The real load, including a managed
 child's, logs one INFO line with the engine and load seconds after it completes
 (its start only at DEBUG). Coverage: `test_speech_local.py` (prepare states, dedupe, waiting
@@ -119,13 +119,13 @@ isolated mode alone ignores `PYTHONDONTWRITEBYTECODE` and would allow STT import
 to create bytecode inside the release. Managed STT installs both the declared core dependencies and the
 local-speech extra because its worker imports vBot source. Its startup imports only
 the local speech implementation through the lazy Task Model package facade, so
-unrelated task dependencies do not become STT requirements. The source-install STT path
+unrelated task dependencies do not become STT requirements. The development-checkout STT path
 retains its legacy server-interpreter pip recipe. Fixed recipes preserve compatible Torch
 or install the selected CUDA/CPU build and verify
 imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
 navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
 reaps the package subprocess. Raw package output stays private. Local execution remains unavailable
-during installation, failure and the verified restart-required state. Source-install STT
+during installation, failure and the verified restart-required state. Development-checkout STT
 rechecks package metadata; managed STT/TTS require the environment interpreter and a
 `verified.json` completion receipt, written atomically only after successful verification
 and removed before package changes. Receipt contents are not runtime compatibility data:
@@ -165,7 +165,7 @@ voices/languages, 1.7B style instructions) and `local/chatterbox` (Multilingual 
 language, expressiveness/guidance). Their incompatible SDK dependencies are
 installed into managed Python 3.12 environments under the Runtime-injected
 `DataDirectoryLayout.speech_engines` root. `local-tts` installs only uv in the
-source-install server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
+development-checkout server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
 matched Torch/audio packages inside the managed environment. Verification writes a completion
 receipt, never loads weights, and makes TTS immediately available without restarting the server. A missing
 interpreter or incomplete setup requires setup again. Fixed upstream revisions

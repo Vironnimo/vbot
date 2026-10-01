@@ -37,9 +37,7 @@ def _reject_link(path: Path, source: Path) -> None:
         raise PayloadError(f"source payload contains a link: {path.relative_to(source)}")
 
 
-def _copy_tree(
-    source: Path, destination: Path, payload_root: Path, *, assets: Path | None = None
-) -> None:
+def _copy_tree(source: Path, destination: Path, payload_root: Path) -> None:
     _reject_link(source, payload_root)
     destination.mkdir(parents=True, exist_ok=True)
     for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
@@ -47,75 +45,42 @@ def _copy_tree(
         if child.name in IGNORED_NAMES or child.suffix in {".pyc", ".pyo"}:
             continue
         target = destination / child.name
-        relative = child.relative_to(payload_root)
-        if relative.parts == ("resources", "native"):
-            continue
-        if (
-            assets is not None
-            and relative.parts[:2] == ("resources", "extensions")
-            and (
-                len(relative.parts) == 4
-                and child.name == "web"
-                and (child.parent / "ui" / "page.html").is_file()
-            )
-        ):
+        if child.relative_to(payload_root).parts == ("resources", "native"):
             continue
         if child.is_dir():
-            _copy_tree(child, target, payload_root, assets=assets)
+            _copy_tree(child, target, payload_root)
         elif child.is_file():
             shutil.copy2(child, target)
 
 
-def copy_application(
-    source: Path,
-    destination: Path,
-    shape: str,
-    *,
-    search_target: str,
-    assets: Path | None = None,
-) -> None:
+def copy_application(source: Path, destination: Path, shape: str, *, search_target: str) -> None:
     """Copy the safe runtime source surface while preserving repository-relative paths.
 
     *search_target* names the ripgrep build the package's platform runs.
     """
     source = source.resolve()
     for relative in app_paths(shape):
-        origin = assets if assets is not None and relative == "webui/dist" else source
-        item = origin / relative
+        item = source / relative
         if not item.exists():
             raise PayloadError(f"required application payload is missing: {relative}")
-        _reject_link(item, origin)
+        _reject_link(item, source)
         target = destination / relative
         if item.is_dir():
-            _copy_tree(item, target, origin, assets=assets)
+            _copy_tree(item, target, source)
         else:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(item, target)
     if shape != "desktop-client":
-        # Native-host compilation imports this module from a stdlib-only build
-        # environment. Load search provisioning only when assembling assets;
-        # it must also work without installed application dependencies.
+        # Imported here, not at module level: native-host compilation imports
+        # this module from a stdlib-only build environment. Search provisioning
+        # must also work without installed application dependencies.
         from cli.search_runtime import provision_search_runtime
         from core.utils.search_binary import binary_spec
 
-        native_target = search_target
-        output, _ = binary_spec(destination / "resources", native_target)
-        for native_origin in (source, assets):
-            if (
-                native_origin is None
-                or not (native_origin / "resources/ripgrep.lock.json").is_file()
-            ):
-                continue
-            candidate, _ = binary_spec(native_origin / "resources", native_target)
+        output, _ = binary_spec(destination / "resources", search_target)
+        if (source / "resources/ripgrep.lock.json").is_file():
+            candidate, _ = binary_spec(source / "resources", search_target)
             if candidate.is_file() and not candidate.is_symlink():
                 output.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(candidate, output)
-                break
-        provision_search_runtime(destination / "resources", target=native_target)
-    if assets is not None and shape != "desktop-client":
-        for page in (source / "resources" / "extensions").glob("*/ui/page.html"):
-            page_assets = page.parent.parent.relative_to(source) / "web"
-            cached = assets / page_assets
-            if not (cached / "page.html").is_file():
-                raise PayloadError(f"required Extension page payload is missing: {page_assets}")
-            _copy_tree(cached, destination / page_assets, assets)
+        provision_search_runtime(destination / "resources", target=search_target)
