@@ -30,55 +30,6 @@ from core.utils.server_control import process_started
 _LOGGER = logging.getLogger("vbot.application.integration")
 
 
-def refresh_gui_entrypoints(install: Installation) -> None:
-    """Publish the protocol-1 GUI companion and repair only our Desktop shortcut.
-
-    Called under the installation operation lock after payload verification.
-    Older protocol-1 payloads may predate the additive GUI companion.
-    """
-    source = install.version() / "runtime" / "vBot.GUI.exe"
-    if not source.is_file():
-        return
-    launcher = contained(install.root, "vBot.GUI.exe")
-    changed = []
-    if not launcher.exists():
-        temporary = contained(install.root, f".gui-{uuid.uuid4().hex}.tmp")
-        try:
-            shutil.copy2(source, temporary)
-            os.replace(temporary, launcher)
-        finally:
-            temporary.unlink(missing_ok=True)
-        changed.append("gui_launcher")
-    if sys.platform == "win32" and install.install_shape != "server":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            shortcut = Path(appdata) / "Microsoft/Windows/Start Menu/Programs/vBot/vBot Desktop.lnk"
-            if shortcut.is_file():
-                import pythoncom  # type: ignore[import-untyped]
-                from win32com.client import Dispatch  # type: ignore[import-untyped]
-
-                pythoncom.CoInitialize()
-                try:
-                    link = Dispatch("WScript.Shell").CreateShortcut(str(shortcut))
-                    # Preserve foreign targets and user-customized arguments.
-                    if (
-                        Path(link.TargetPath).resolve() == (install.root / "vBot.exe").resolve()
-                        and link.Arguments.strip() == "desktop"
-                    ):
-                        link.TargetPath = str(launcher)
-                        link.Save()
-                        changed.append("desktop_shortcut")
-                finally:
-                    link = None  # Release the COM interface before uninitializing its apartment.
-                    pythoncom.CoUninitialize()
-    if changed:
-        logging.getLogger("vbot.application.integration").info(
-            "Application GUI entrypoints refreshed (root=%s fields=%s)",
-            install.root,
-            ",".join(changed),
-        )
-
-
 # The tray's toasts carry this identity. Its registry entry names them "vBot"
 # with the application icon; the tray of the last started installation owns it.
 NOTIFICATION_APP_ID = "vBot.Tray"

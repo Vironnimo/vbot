@@ -115,16 +115,15 @@ def install_payload(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(payload, destination)
         validate_release(destination, shape=shape)
-        bootstrap = destination / "runtime" / install.bootstrap.name
-        if bootstrap.is_file() and not install.bootstrap.exists():
-            shutil.copy2(bootstrap, install.bootstrap)
+        # The stable root bootstraps; the Windows installer has already placed its own.
+        for name in (install.bootstrap.name, "vBot.GUI.exe"):
+            bootstrap = destination / "runtime" / name
+            if bootstrap.is_file() and not (root / name).exists():
+                shutil.copy2(bootstrap, root / name)
         if install.owns_server and not resolved_data.exists():
             _initialize_data(resolved_data, destination / "app" / "resources")
         install.save()
         install.activate(manifest["version_id"])
-        from cli.application.integration import refresh_gui_entrypoints
-
-        refresh_gui_entrypoints(install)
     return install
 
 
