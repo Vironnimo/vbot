@@ -4,8 +4,9 @@ Every purge runs on the one ``archive`` worker, so two purges never overlap in
 this process; the entry's compare-and-set state keeps restores out. A purge
 first brings the usage ledger up to date (recorded usage outlives the Sessions;
 when that fails, no entry changes), then claims its entries (``purging``), then
-deletes each entry's member Sessions newest first, one transaction each, then
-its payload trees, then the entry. It holds no compound mutation: an entry left
+finishes an Agent archive's cleanup that did not complete, then deletes each
+entry's member Sessions newest first, one transaction each, then its payload
+trees, then the entry. It holds no compound mutation: an entry left
 ``purging`` by a failure, a stop request or a crash keeps what is not deleted
 yet, and a later purge of it, manual or by the retention sweep, continues.
 """
@@ -16,9 +17,10 @@ import threading
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-from core.archive._operations import prune_empty_parents, stored_path
+from core.archive._operations import cleanup_agent, prune_empty_parents, stored_path
 from core.archive._types import PendingPurge, PurgedEntry, PurgeOutcome, SkippedPurge
 from core.sessions import (
+    ARCHIVE_KIND_AGENT,
     ARCHIVE_ROOT,
     ARCHIVE_STATE_PURGING,
     ArchiveEntry,
@@ -147,6 +149,10 @@ def _purge_claimed(
 
     try:
         check_stop()
+        if entry.kind == ARCHIVE_KIND_AGENT and entry.cleanup_pending:
+            # The archive's cleanup did not finish: the id leaves the delegation
+            # lists before the entry, which records the grants, is deleted.
+            cleanup_agent(services, entry)
         while ledger.purge_next_session(entry.entry_key):
             check_stop()
         for tree in entry.trees:

@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -380,6 +381,40 @@ async def test_a_purge_that_stops_partway_stays_purging_and_continues_later(
     assert ([item.entry_id for item in resumed.purged], resumed.pending) == ([entry_id], ())
     assert world.sessions.archive_ledger.entry(entry_id) is None
     assert not world.payload(entry_id, "agent").exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["id-free", "id-reused", "cleanup-fails"])
+async def test_purging_an_agent_whose_cleanup_did_not_finish_completes_it_first(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    def fail(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("delegation lists unavailable")
+
+    world.agents.create("coder")
+    world.agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
+    monkeypatch.setattr(world.agents, "remove_delegation_grants", fail)
+    entry_id = (await world.service.archive_agent("coder")).entry_id
+    assert world.entry(entry_id).cleanup_pending
+    if case != "cleanup-fails":
+        monkeypatch.undo()
+    if case == "id-reused":
+        world.agents.create("coder")
+
+    outcome = await world.service.purge([entry_id])
+
+    allowed = world.agents.get("manager").tools["subagent"]["allowed_agents"]
+    if case == "cleanup-fails":
+        # Nothing is deleted without the cleanup; the retention sweep continues it.
+        assert outcome.pending == (PendingPurge(entry_id, "OSError"),)
+        assert world.entry(entry_id).state == "purging"
+        assert world.payload(entry_id, "agent").is_dir()
+        assert allowed == ["coder"]
+    else:
+        assert [item.entry_id for item in outcome.purged] == [entry_id]
+        assert world.sessions.archive_ledger.entry(entry_id) is None
+        # A live Agent that took the id keeps the grants naming it.
+        assert allowed == (["coder"] if case == "id-reused" else [])
 
 
 @pytest.mark.asyncio
