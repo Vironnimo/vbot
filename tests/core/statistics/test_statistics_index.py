@@ -533,7 +533,10 @@ def test_busy_index_raises_retryable_error_without_discarding(
     statistics: StatisticsFactory,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Detecting the busy index waits out the kernel's SQLite busy timeout (~1-2 s).
+    # The busy index is detected after the SQLite busy timeout and the write
+    # patience; both shrink so the test does not wait out the real ones.
+    monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
+    monkeypatch.setattr("core.statistics.index._WRITE_PATIENCE_S", 0.05)
     service = statistics()
     service.report()
     _append_run(session, "run-two", minutes=1, input_tokens=5)

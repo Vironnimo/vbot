@@ -939,7 +939,9 @@ async def test_index_damaged_during_a_search_is_rebuilt_once(
 async def test_busy_index_fails_the_search_without_discarding_it(
     tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.2)
+    # Neither the SQLite busy timeout nor the write patience is waited out in full.
+    monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
+    monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.05)
     session = sessions.create("coder", session_id="busy")
     session.append(ChatMessage.user("needle one", timestamp=timestamp(1)))
     recall = literal_backend(tmp_path, sessions)
