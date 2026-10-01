@@ -32,6 +32,7 @@ from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
+from resources.extensions.swarm import _store_values
 from resources.extensions.swarm._store_database import DATABASE_NAME
 from resources.extensions.swarm.extension import register
 from resources.extensions.swarm.store import SCHEMA_SQL, SwarmStore
@@ -69,6 +70,16 @@ def _clone_swarm_data(template: Path, data_dir: Path, *, sessions: bool = True) 
             shutil.copy2(template / name, data_dir)
 
 
+def _wake_without_default_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give profiles without their own ``coalesce_ms`` no wake delay.
+
+    Otherwise each test that enqueues a wake waits out the 250 ms default, at the
+    latest when Extension close awaits the pending wake. Tests of coalescing set
+    ``coalesce_ms`` themselves.
+    """
+    monkeypatch.setitem(_store_values._DELIVERY_DEFAULTS, "coalesce_ms", 0)
+
+
 @pytest.fixture
 def swarm_database(tmp_path: Path, swarm_data_template: Path) -> Iterator[Database]:
     _clone_swarm_data(swarm_data_template, tmp_path, sessions=False)
@@ -87,7 +98,10 @@ async def store(swarm_database: Database) -> AsyncIterator[SwarmStore]:
 
 @pytest_asyncio.fixture
 async def board(
-    tmp_path: Path, swarm_data_template: Path, request: pytest.FixtureRequest
+    tmp_path: Path,
+    swarm_data_template: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[SimpleNamespace]:
     """Register the Extension and bind three participants of one open Swarm.
 
@@ -97,6 +111,7 @@ async def board(
 
     inbox = getattr(request, "param", True)
     _clone_swarm_data(swarm_data_template, tmp_path)
+    _wake_without_default_delay(monkeypatch)
     sessions = ChatSessionManager(tmp_path)
     manager = ChatRunManager()
     identity = SimpleNamespace(name="swarm", epoch="registration")
@@ -222,12 +237,15 @@ async def board(
 
 
 @pytest_asyncio.fixture
-async def lifecycle(tmp_path: Path, swarm_data_template: Path) -> AsyncIterator[SimpleNamespace]:
+async def lifecycle(
+    tmp_path: Path, swarm_data_template: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[SimpleNamespace]:
     """Load the production Extension into a real ChatLoop whose Provider answers forty Runs."""
 
     # Tasks of earlier tests on this worker's shared Event Loop, which ``settled`` ignores.
     earlier_tasks = asyncio.all_tasks()
     _clone_swarm_data(swarm_data_template, tmp_path)
+    _wake_without_default_delay(monkeypatch)
     responses = [{"content": "Run finished"} for index in range(40)] + [
         {"content": "completion recorded"} for _ in range(40)
     ]
