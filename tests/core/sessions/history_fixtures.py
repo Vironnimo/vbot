@@ -118,11 +118,15 @@ def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
                     calls.append(ToolCall(id=message.tool_call_id, name=message.name))
                     segment[parent_index] = replace(parent, tool_calls=calls)
         declared: dict[str, ChatMessage] = {}
+        # Consecutive plain Messages share one append: one transaction instead of one each.
+        pending: list[ChatMessage] = []
         for index, message in enumerate(segment, start=offset):
             message = replace(message, run_id=run_id)
             messages[index] = message
             if message.role == "assistant":
                 declared.update((call.id, message) for call in message.tool_calls or [])
+            if message.role in ("tool", "run_summary"):
+                _append_pending(writer, pending)
             if message.role == "tool":
                 call_id = message.tool_call_id
                 assert call_id is not None and message.name is not None
@@ -143,8 +147,15 @@ def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
             if message.role == "tool":
                 writer.append_many([message], tool_results=tool_result_facts([message]))
                 continue
-            writer.append(message)
+            pending.append(message)
+        _append_pending(writer, pending)
         offset = end
+
+
+def _append_pending(writer: ChatSession, pending: list[ChatMessage]) -> None:
+    if pending:
+        writer.append_many(list(pending))
+        pending.clear()
 
 
 def declare_tool(session: ChatSession, message: ChatMessage) -> None:

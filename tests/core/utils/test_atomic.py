@@ -44,6 +44,7 @@ def test_atomic_write_cleans_staging_file_after_success(tmp_path: Path) -> None:
     assert list(layout.atomic_temporary.iterdir()) == []
 
 
+@pytest.mark.durable
 @pytest.mark.parametrize("write_text", [False, True])
 def test_atomic_write_fsyncs_data_before_replace_and_directories_after(
     tmp_path: Path,
@@ -75,6 +76,7 @@ def test_atomic_write_fsyncs_data_before_replace_and_directories_after(
     assert len(events[2:]) == (2 if os.name == "posix" else 0)
 
 
+@pytest.mark.durable
 def test_write_new_bytes_fsyncs_the_file_then_its_directory_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

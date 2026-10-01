@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -39,11 +39,6 @@ from core.model_tasks.speech_types import (
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-
-# Tests that import real torch/transformers: whichever case runs first on an xdist
-# worker pays the cold native imports, which take 20-30 s under parallel load and
-# would exceed the gate's 30 s per-test timeout.
-_cold_native_imports = pytest.mark.timeout(120)
 
 
 def wav(samples: Any = None, *, rate: int = 16_000, channels: int = 1) -> bytes:
@@ -267,16 +262,12 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
-@_cold_native_imports
 @pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The native adapters are version-bound: the declared local-speech extra pins
-    # the minor releases whose Auto classes these engines import.
-    torch = pytest.importorskip("torch", minversion="2.10")
-    transformers = pytest.importorskip("transformers", minversion="5.16.1")
-
+    # Stand-in torch and transformers modules: the adapters import both lazily, and
+    # the real native imports cost several seconds without adding adapter coverage.
     from core.model_tasks.speech_local import (
         _PROGRESS,
         _NemotronEngine,
@@ -292,35 +283,43 @@ def test_native_transformers_adapter_contracts_without_weights(
     engine_type = engine_types[engine_name]
     snapshot = MagicMock(return_value=engine_type.default_model)
     monkeypatch.setattr("core.model_tasks.speech_local.resolve_snapshot", snapshot)
-    # Resolve actual native auto classes: this catches unsupported extra versions.
-    auto_class = getattr(transformers, engine_type.model_class)
-    model = MagicMock(device=torch.device("cpu"), dtype=torch.float32)
+    torch = ModuleType("torch")
+    torch.float32 = "float32"  # type: ignore[attr-defined]
+    torch.cuda = SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    torch.backends = SimpleNamespace(  # type: ignore[attr-defined]
+        mps=SimpleNamespace(is_available=lambda: False)
+    )
+    torch.inference_mode = contextlib.nullcontext  # type: ignore[attr-defined]
+    torch.nn = SimpleNamespace(functional=SimpleNamespace(pad=_pad))  # type: ignore[attr-defined]
+    model = MagicMock(device="cpu", dtype=torch.float32, max_symbols_per_step=10)
     model.to.return_value = model
     model.eval.return_value = model
     processor = MagicMock(num_mel_frames_first_audio_chunk=49, num_mel_frames_per_audio_chunk=56)
-    model.max_symbols_per_step = 10
-    inputs = transformers.BatchFeature(
-        {
-            "input_ids": torch.tensor([[1, 2]]),
-            "input_features": torch.ones(1, 57, 8),
-            "attention_mask": torch.ones(1, 57, dtype=torch.long),
-            "prompt_ids": torch.tensor([9]),
-        }
+    inputs = _Features(
+        input_ids=np.array([[1, 2]]),
+        input_features=np.ones((1, 57, 8), dtype=np.float32),
+        attention_mask=np.ones((1, 57), dtype=np.int64),
+        prompt_ids=np.array([9]),
     )
     processor.apply_transcription_request.return_value = inputs
     processor.return_value = inputs
     model.generate.return_value = (
-        torch.tensor([[1, 2, 3]])
+        np.array([[1, 2, 3]])
         if engine_name == "qwen"
-        else SimpleNamespace(sequences=torch.tensor([[3]]))
+        else SimpleNamespace(sequences=np.array([[3]]))
     )
     processor.decode.return_value = (
         [{"transcription": "Hallo", "language": None}] if engine_name == "qwen" else ["Hallo"]
     )
     load_model = MagicMock(return_value=model)
     load_processor = MagicMock(return_value=processor)
-    monkeypatch.setattr(auto_class, "from_pretrained", load_model)
-    monkeypatch.setattr(transformers.AutoProcessor, "from_pretrained", load_processor)
+    transformers = ModuleType("transformers")
+    transformers.AutoProcessor = SimpleNamespace(  # type: ignore[attr-defined]
+        from_pretrained=load_processor
+    )
+    setattr(transformers, engine_type.model_class, SimpleNamespace(from_pretrained=load_model))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
     options = {"device": "cpu", "language": "de", "prompt": "vBot"}
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
@@ -331,15 +330,19 @@ def test_native_transformers_adapter_contracts_without_weights(
     try:
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"
-        assert load_model.call_args.kwargs["local_files_only"] is True
+        assert load_model.call_args.kwargs == {
+            "dtype": "float32",
+            "local_files_only": True,
+            "trust_remote_code": False,
+        }
+        model.to.assert_called_once_with("cpu")
+        model.eval.assert_called_once_with()
         assert "model.safetensors" in snapshot.call_args.args[1]
         progress_class = snapshot.call_args.args[2]
         with progress_class(total=10, unit="B", disable=True) as bar:
             bar.update(5)
         assert progress.snapshot()["phase"] == "downloading"
-        assert load_model.call_args.kwargs["trust_remote_code"] is False
         assert load_processor.call_args.args == (engine_type.default_model,)
-        assert inputs["input_ids"].dtype == torch.int64
         if engine_name == "qwen":
             assert result.language == "de"
             assert processor.apply_transcription_request.call_args.kwargs["audio_kwargs"] == {

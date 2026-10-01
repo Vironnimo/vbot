@@ -195,6 +195,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         server: FakeVoiceServer | None = None,
         sd: FakeSoundDevice | None = None,
         echo_factory: Callable[[], Any] | None = None,
+        echo_stage_wait: float | None = None,
         mock: bool = False,
         stack_available: Callable[[], bool] | None = None,
         server_url: str = SERVER,
@@ -228,7 +229,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             return engine
 
         server = server or FakeVoiceServer()
-        sd = sd or FakeSoundDevice()
+        sd = sd or FakeSoundDevice(pace=0.0025)
         now = [1000.0]
         runtime = VoiceRuntime(
             audio_backend=sd,
@@ -238,6 +239,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
             transport=server.transport(),
             echo_stage_factory=echo_factory or (lambda: None),
             reconnect_interval=0.05,
+            echo_stage_wait=echo_stage_wait,
             join_timeout=5.0,
             mock_frame_seconds=0.005,
             mock_stage_seconds=0.02,
@@ -916,7 +918,9 @@ def test_a_slow_echo_stage_does_not_delay_listening(voice_rig: Callable[..., Rig
         assert ready.wait(5)
         return FakeEchoStage()
 
-    rig = voice_rig(settings={"echo_cancellation": True}, echo_factory=factory)
+    rig = voice_rig(
+        settings={"echo_cancellation": True}, echo_factory=factory, echo_stage_wait=0.05
+    )
     try:
         listening = rig.wait_state("listening")
     finally:

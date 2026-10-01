@@ -54,7 +54,7 @@ _WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024
 PERFORMANCE_TRACK = "sqlite"
 _LOCK_WAIT_SPAN_MIN_MS = 1.0
 
-Synchronous = Literal["FULL", "NORMAL"]
+Synchronous = Literal["FULL", "NORMAL", "OFF"]
 
 
 class ConnectionRuntime:

@@ -64,6 +64,45 @@ def _isolated_home(_home_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
 
 
+_REAL_FSYNC = os.fsync
+
+
+def _skip_fsync(_descriptor: int) -> None:
+    """Stand in for ``os.fsync``: written data stays visible within the process."""
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_disk_syncs() -> Iterator[None]:
+    """Skip the disk syncs that protect data only against power loss and OS crashes.
+
+    Kernel databases sync SQLite commits, and atomic file writes fsync before
+    they publish. The data is visible within the process either way, and the
+    syncs cost most of the time of storage-heavy tests. For the whole session,
+    so that databases of module- and session-scoped fixtures are covered too,
+    the kernel opens every database with ``synchronous=OFF`` and
+    ``os.fsync`` does nothing. ``os.fsync`` is patched process-wide because
+    many modules call it through ``os``. A test marked ``durable`` gets the
+    production syncs back.
+    """
+    import core.database.database as database_kernel
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(database_kernel, "SYNCHRONOUS_OVERRIDE", "OFF")
+        patch.setattr(os, "fsync", _skip_fsync)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _durable_disk_syncs(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, _no_disk_syncs: None
+) -> None:
+    """Restore the production disk syncs for a test marked ``durable``."""
+    if request.node.get_closest_marker("durable") is None:
+        return
+    monkeypatch.setattr("core.database.database.SYNCHRONOUS_OVERRIDE", None)
+    monkeypatch.setattr(os, "fsync", _REAL_FSYNC)
+
+
 @pytest.fixture(scope="session")
 def current_session_store_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     """Build one empty current-format store per test worker."""

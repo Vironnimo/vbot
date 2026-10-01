@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-import subprocess
+import runpy
 import sys
 from pathlib import Path
 
@@ -246,24 +246,23 @@ def test_storage_manager_resolves_data_dir_from_config(tmp_path: Path, source: s
     assert StorageManager(config=config).data_dir == data_dir
 
 
-def test_layout_cli_initializes_data_directory(tmp_path: Path) -> None:
+def test_layout_cli_initializes_data_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The setup scripts run this file as a script; run it as ``__main__`` in-process.
     data_dir = tmp_path / "cli-data"
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(PROJECT_ROOT / "core" / "storage" / "layout.py"),
-            str(data_dir),
-            "--resources-dir",
-            str(PROJECT_ROOT / "resources"),
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    script = PROJECT_ROOT / "core" / "storage" / "layout.py"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(script), str(data_dir), "--resources-dir", str(PROJECT_ROOT / "resources")],
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "created_directories=" in result.stdout
+    with pytest.raises(SystemExit) as exit_info:
+        runpy.run_path(str(script), run_name="__main__")
+
+    assert exit_info.value.code == 0, capsys.readouterr().err
+    assert "created_directories=" in capsys.readouterr().out
     assert all((data_dir / path).is_dir() for path in DATA_DIRECTORY_RELATIVE_PATHS)
 
 
