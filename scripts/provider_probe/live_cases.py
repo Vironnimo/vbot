@@ -30,9 +30,14 @@ JsonObject = dict[str, Any]
 
 @dataclass(frozen=True)
 class Contains:
-    """A text argument that contains *text*, ignoring case."""
+    """A text argument that contains *text*, ignoring case, and not *without*.
+
+    *without* catches request parts that do not belong in the argument, such
+    as the program a task was passed on with.
+    """
 
     text: str
+    without: str = ""
 
 
 class _Absent:
@@ -85,12 +90,11 @@ def live_cases() -> list[LiveCase]:
     return [
         LiveCase(
             id="sessions_count",
-            request="Schick dreimal den Coder los: prüf, ob die Login-Tests unter Windows grün "
-            "sind.",
+            request="Schick dreimal den Coder los: prüf, ob der PDF-Export unter Windows klappt.",
             right=(
                 Expected(
                     TOOL_START_AGENT_SESSION,
-                    {"agent": "Coder", "count": 3, "task": Contains("Login")},
+                    {"agent": "Coder", "count": 3, "task": Contains("Export", without="dreimal")},
                 ),
             ),
         ),
@@ -100,7 +104,11 @@ def live_cases() -> list[LiveCase]:
             right=(
                 Expected(
                     TOOL_START_CODING_TERMINAL,
-                    {"program": "codex", "folder": Contains("vbot"), "task": Contains("test")},
+                    {
+                        "program": "codex",
+                        "folder": Contains("vbot"),
+                        "task": Contains("test", without="codex"),
+                    },
                 ),
             ),
         ),
@@ -221,7 +229,9 @@ def _value_matches(want: Any, have: Any) -> bool:
     if want is ABSENT:
         return have is ABSENT or have is None or have == ""
     if isinstance(want, Contains):
-        return isinstance(have, str) and want.text.casefold() in have.casefold()
+        if not isinstance(have, str) or want.text.casefold() not in have.casefold():
+            return False
+        return not want.without or want.without.casefold() not in have.casefold()
     if isinstance(want, str):
         return isinstance(have, str) and have.strip().casefold() == want.casefold()
     return bool(have == want)
@@ -231,7 +241,8 @@ def _describe_value(value: Any) -> str:
     if value is ABSENT:
         return "left out"
     if isinstance(value, Contains):
-        return f"contains {value.text!r}"
+        without = f" without {value.without!r}" if value.without else ""
+        return f"contains {value.text!r}{without}"
     return repr(value)
 
 

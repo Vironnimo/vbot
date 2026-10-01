@@ -5,7 +5,9 @@ Tools, call preparation) on one voice-style request against a scripted vBot,
 so nothing in vBot changes. The verdict judges only the first Tool call:
 ``ideal`` (a right call), ``lookup`` (a valid read-only call first, accepted),
 ``wrong``, or ``error`` (the backend model request failed). Later calls and the
-spoken answer are kept for review.
+spoken answer are kept for review; an answer that claims a start, send, or stop
+although no Tool call changed anything is flagged as an unconfirmed claim and
+fails the probe.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -27,6 +30,13 @@ JsonObject = dict[str, Any]
 # Enough for a lookup, the action, and the answer.
 MAX_TRIAL_STEPS = 4
 _CALL_FIELDS = ("called", "tool", "arguments", "run_arguments", "ok", "result")
+# Words of a spoken answer that report an action as done (German and English);
+# a heuristic, so flagged answers need a look.
+_DONE_CLAIM = re.compile(
+    r"\b(gestartet|losgeschickt|geschickt|gesendet|beauftragt|gestoppt|angehalten|erledigt"
+    r"|started|sent|stopped|launched)\b",
+    re.IGNORECASE,
+)
 
 
 class _Borrowed:
@@ -63,6 +73,18 @@ def verdict(case: LiveCase, records: list[JsonObject]) -> str:
     if case.lookup_ok and tool in LIVE_READ_ONLY_TOOLS and first.get("ok"):
         return "lookup"
     return "wrong"
+
+
+def unconfirmed_claim(records: list[JsonObject], answer: str) -> bool:
+    """Whether *answer* reports an action as done although no Tool call changed anything."""
+
+    changed = any(
+        record.get("type") == "tool"
+        and record.get("ok")
+        and record.get("tool") not in LIVE_READ_ONLY_TOOLS
+        for record in records
+    )
+    return not changed and _DONE_CLAIM.search(answer or "") is not None
 
 
 async def evaluate_live_case(
@@ -105,6 +127,7 @@ async def evaluate_live_case(
         )
     )
     judged = verdict(case, records)
+    claim = unconfirmed_claim(records, answer)
     calls = [
         {key: record.get(key) for key in _CALL_FIELDS}
         for record in records
@@ -116,7 +139,8 @@ async def evaluate_live_case(
         "repetition": repetition,
         "request": case.request,
         "verdict": judged,
-        "right": judged in {"ideal", "lookup"},
+        "right": judged in {"ideal", "lookup"} and not claim,
+        "unconfirmed_claim": claim,
         "expected": [describe(expected) for expected in case.right],
         "first_call": calls[0] if calls else None,
         "calls": calls,
@@ -146,6 +170,7 @@ async def _probe_live_tools(
         counts = dict.fromkeys(("ideal", "lookup", "wrong", "error"), 0)
         for row in ordered:
             counts[row["verdict"]] += 1
+        claims = sum(1 for row in ordered if row["unconfirmed_claim"])
         return {
             "scenario": "live_tools",
             "evaluation": "first_tool_call",
@@ -156,12 +181,15 @@ async def _probe_live_tools(
             "trials": len(ordered),
             "planned_trials": len(cases) * args.repetitions,
             **counts,
+            "unconfirmed_claims": claims,
             "passed": len(ordered) == len(cases) * args.repetitions
             and all(row["right"] for row in ordered),
             "fixture_limits": (
                 "Production LiveBrain with the delegation instructions and Live Tools; a "
                 "scripted vBot answers from one fixed state, so nothing changes. Only the "
-                "first Tool call is judged; later calls and the answer need review."
+                "first Tool call is judged; later calls and the answer need review. An "
+                "answer claiming a start, send, or stop without a changing Tool call fails "
+                "(a word heuristic)."
             ),
             "results": ordered,
         }
