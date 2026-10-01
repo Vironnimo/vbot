@@ -12,11 +12,11 @@ Fetch remote tags before inspecting the latest release. Never infer the next ver
 
 ```bash
 git fetch --prune --tags origin
-git describe --tags --abbrev=0 origin/main
+git describe --tags --abbrev=0 --match 'v[0-9]*' origin/main
 gh release view --json tagName,publishedAt,url
 ```
 
-The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` → `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
+The `--match` skips the rolling `main-build` tag. The reachable remote tag and GitHub's latest published release must agree. Resolve any mismatch before continuing. If the user names a version, use that version after confirming it is a new valid SemVer. If the user does not name a version, increment only the patch component of the confirmed latest release by exactly one (`X.Y.Z` → `X.Y.(Z+1)`); do not infer a minor or major bump from the changes. Never reuse an existing tag.
 
 Model DB maintenance is independent of releases. Do not run `scripts/refresh_model_db.py`, modify `resources/models/`, or include incidental Model DB changes while cutting a release.
 
