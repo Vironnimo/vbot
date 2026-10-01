@@ -22,25 +22,24 @@ from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import write_settings
 
 
+# The unconfigured default is the starting point of the reload test below.
 @pytest.mark.parametrize(
     ("configured", "expected"),
     [
-        (None, SqliteFtsRecallBackend),
         ("team_backend", SqliteFtsRecallBackend),
         ("broken_backend", SqliteFtsRecallBackend),
         ("vector", VectorRecallBackend),
     ],
-    ids=["default", "unknown-falls-back", "failing-factory-falls-back", "vector"],
+    ids=["unknown-falls-back", "failing-factory-falls-back", "vector"],
 )
 def test_runtime_selects_the_configured_recall_backend_at_start(
     config: Config,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
-    configured: str | None,
+    configured: str,
     expected: type,
 ) -> None:
-    if configured is not None:
-        write_settings(config.data_dir, {"recall": {"backend": configured}})
+    write_settings(config.data_dir, {"recall": {"backend": configured}})
     if configured == "broken_backend":
         registry = RecallBackendRegistry()
         registry.register("sqlite_fts", SqliteFtsRecallBackend)
@@ -85,8 +84,10 @@ def test_reload_recall_backend_swaps_backend_and_tools_and_keeps_the_shared_inde
     runtime.start()
     try:
         index = runtime.recall.index
+        # Without a configured backend the Runtime starts on lexical search.
         initial = runtime.recall_backend
         assert isinstance(initial, SqliteFtsRecallBackend)
+        assert runtime.recall.indexer.enabled is False
         lexical_tool = runtime.tools.get("session_search")
         lexical_parameters = lexical_tool.parameters
         assert set(lexical_parameters["properties"]) == {
