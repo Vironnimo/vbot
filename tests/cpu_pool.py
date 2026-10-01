@@ -3,7 +3,7 @@
 Several Agents test in checkouts of their own at the same time, and every pytest
 run would otherwise start as many workers as the machine has cores; together they
 overload it until tests time out. So before it starts its workers, each local run
-claims cores from one pool per machine: one lock file per physical core, held until
+claims cores from one pool per machine: one lock file per pool slot, held until
 the run ends. The operating system releases a lock when its process dies, so a
 crashed run never keeps its cores. A run waits until the cores it asks for are
 free instead of starting beside the others; waiting runs take their turn one
@@ -37,14 +37,24 @@ RUN_LOG = "runs.jsonl"
 # The log starts afresh beside one previous generation once it grows beyond this.
 RUN_LOG_LIMIT = 2_000_000
 LOCAL_AUTO_WORKERS = 2
+# Logical cores the pool leaves to the rest of the machine.
+POOL_HEADROOM = 2
 # Set while a run holds cores; the pytest processes it starts inherit it.
 HELD_VARIABLE = "VBOT_TEST_CORES_HELD"
 _POLL_SECONDS = 0.2
 
 
 def pool_size() -> int:
-    """The number of physical cores, the most workers local runs may use together."""
-    return psutil.cpu_count(logical=False) or os.cpu_count() or 1
+    """The most workers local runs may use together.
+
+    All logical cores but ``POOL_HEADROOM``, at least the physical ones. Measured
+    2026-10-01 on 6 cores with 12 threads, the full suite took about 117 s at 6
+    workers, 110 s at 8, 92 s at 10 and 94 s at 12; the headroom keeps the machine
+    responsive for the work beside the tests.
+    """
+    logical = psutil.cpu_count() or os.cpu_count() or 1
+    physical = psutil.cpu_count(logical=False) or logical
+    return max(physical, logical - POOL_HEADROOM)
 
 
 def active() -> bool:
