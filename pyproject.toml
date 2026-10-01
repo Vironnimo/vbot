@@ -28,9 +28,6 @@ dependencies = ["psutil", "pillow>=12.3,<13", "pillow-heif>=1.8,<2", "mcp==2.1.1
 [project.scripts]
 vbot = "cli.main:main"
 
-[project.gui-scripts]
-vbot-desktop = "desktop.main:main"
-
 [project.urls]
 Homepage = "https://github.com/Vironnimo/vbot"
 Repository = "https://github.com/Vironnimo/vbot"

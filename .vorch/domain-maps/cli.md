@@ -30,7 +30,7 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 **Local accessor actions**
 
 - `desktop [--host] [--port]` opens the pywebview Desktop window pointed at a local or remote server. It is neither an RPC command nor server lifecycle: it branches before the shared resolver, lazily imports `desktop.main` (the default CLI path needs no pywebview), forwards only the flags actually supplied - bare `vbot desktop` reaches the launcher's last-used auto-connect path instead of a silent localhost target - takes no `--data-dir` (Desktop has its own per-user config dir; see `desktop.md`), and blocks until the window closes, then prints `desktop window closed`.
-- Package installation separately exposes `vbot-desktop` as a GUI-script entrypoint for windowless Start-menu launch; the CLI `desktop` remains the console launch surface.
+- The installed Windows Desktop shortcut runs the stable GUI bootstrap `vBot.GUI.exe desktop` without a console (`cli/application.md`); the CLI `desktop` remains the console launch surface.
 
 **Bootstrap**
 
