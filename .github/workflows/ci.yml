@@ -1,16 +1,22 @@
 name: CI
 
-# Complete verification on every supported platform and Python version: nightly
-# on main, as the release gate (release.yml), and by hand. Work landing on main
-# runs only the tests it affects (scripts/commit_check.py).
+# Complete verification on every supported platform and Python version: on every
+# push to main, as the release gate (release.yml), and by hand. Before it pushes
+# main, scripts/push.py runs its static checks, test suites and WebUI build locally.
 on:
-  schedule:
-    - cron: "23 2 * * *"
+  push:
+    branches: [main]
   workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A newer push supersedes the run of an older one that is still in progress;
+# runs started by hand or by a release always run to the end.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   static:

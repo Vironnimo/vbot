@@ -38,7 +38,7 @@ npm run build
 cd ..
 ```
 
-`cli.search_runtime` provisions the ripgrep executable that the search Tools need. The Git hooks format, lint and type-check your staged files and run the tests your commit affects. The first commit in a new clone runs the complete Python suite once, which takes about ten minutes.
+`cli.search_runtime` provisions the ripgrep executable that the search Tools need. The Git hooks format, lint and type-check your staged files.
 
 Start a development server with its own data directory and port, so it never touches an installed vBot at `~/.vbot` on port 8420:
 
@@ -62,4 +62,4 @@ npx vitest run src/lib
 npm run lint
 ```
 
-CI runs the complete suites on Linux and Windows for every release and every night. More details, including the Vite development server and Windows packaging, are in [Development and verification](USAGE.md#development-and-verification).
+CI runs the complete suites on Linux and Windows on every push to `main` and for every release. More details, including the Vite development server and Windows packaging, are in [Development and verification](USAGE.md#development-and-verification).

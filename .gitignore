@@ -29,7 +29,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
-# Test-impact data of this checkout (scripts/commit_check.py)
+# Test-impact data that earlier commit checks kept in each checkout
 .testmondata*
 .testfiledeps
 

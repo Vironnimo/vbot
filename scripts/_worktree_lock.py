@@ -121,18 +121,11 @@ def _acquire_within(lock_file, timeout_seconds: float) -> bool:
 
 
 @contextmanager
-def _held_file_lock(lock_path: Path, *, notice: str | None = None) -> Iterator[None]:
-    """Hold an OS file lock, waiting for it as long as it takes.
-
-    *notice* is printed once when the lock is busy.
-    """
+def _held_file_lock(lock_path: Path) -> Iterator[None]:
+    """Hold an OS file lock, waiting for it as long as it takes."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as lock_file:
-        waiting = False
         while not _acquire_file_lock(lock_file):
-            if notice is not None and not waiting:
-                print(notice, flush=True)
-                waiting = True
             time.sleep(random.uniform(MERGE_LOCK_POLL_MIN_SECONDS, MERGE_LOCK_POLL_MAX_SECONDS))
         try:
             yield

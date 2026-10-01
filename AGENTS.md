@@ -83,11 +83,7 @@ Tests guard behavior against regressions from concurrent and later work. Every t
 - When a change makes tests obsolete or redundant, delete or merge them in the same change.
 - Documentation-only edits need no tests; review content, references, and the diff.
 
-**Tests run automatically when work lands on `main`.**
-
-- Commits on `main` and worktree merges run the pytest tests whose executed code or read files the change affects, the Vitest tests related to changed WebUI and Extension page sources plus the WebUI guard tests, and the WebUI build; a change to the WebUI packages or configuration runs every Vitest test and lints and format-checks every source, and WebUI packages that differ from the lock block these checks until `npm ci` (PROJECT.md -> Testing). Commits inside a worktree get the static checks only; `worktree.py merge` runs the branch's tests before it merges. No separate test run is needed before committing or merging.
-- While working, run the tests that cover your change with the test runners directly; they are your feedback before the merge. Run the complete suites only when the user asks; CI runs them every night and as the release gate.
-- Report the test result of your merge, or of your commits on `main`.
+**Tests run at push, not at commit or merge.** Commits and merges get static checks only: run the tests covering your change yourself and commit once they pass; leave failures your change cannot explain to the push and mention them in your report.
 
 ## Dependencies
 
@@ -115,8 +111,7 @@ Maintain terminology as part of relevant work when a missing, stale, or ambiguou
 ## Git
 
 - Work directly on `main` — no feature branches by default. When you finish a task, commit it (the user may also ask you to commit mid-way); you don't need to wait to be asked.
-- **Small, quick, low-risk changes go directly on `main`; use a worktree for larger or uncertain tasks, or when concurrent work could interfere.** Create worktrees with `python scripts/worktree.py create <task-name>` (see PROJECT.md → Development), then work and commit inside them. Once everything is committed, run `python scripts/worktree.py merge <task-name>` to merge into `main` and remove the worktree; it first runs the tests the branch affects, and the merge commit passes the commit check. For conflicts, follow `.vorch/workflows/worktree-workflow.md`. No user confirmation is needed before merging.
+- **Small, quick, low-risk changes go directly on `main`; use a worktree for larger or uncertain tasks, or when concurrent work could interfere.** Create worktrees with `python scripts/worktree.py create <task-name>` (see PROJECT.md → Development), then work and commit inside them. Once everything is committed, run `python scripts/worktree.py merge <task-name>` to merge into `main` and remove the worktree; the merge commit passes the commit check. For conflicts, follow `.vorch/workflows/worktree-workflow.md`. No user confirmation is needed before merging.
 - Conventional format: `<type>(<scope>): <what>` — lowercase, ≤72 chars, no trailing period. Types: `feat` `fix` `docs` `refactor` `perf` `test` `chore`. Breaking change → `!`.
-- One logical unit per commit; never batch unrelated changes; never commit broken code.
-- **The commit hook checks every commit.** It formats, lints, and type-checks the staged files and re-stages its fixes for completely staged files; on `main` it then runs the tests the commit affects (PROJECT.md -> Testing). Stage whole files and review its fixes. When it blocks, fix the reported problems, stage, and commit again; never bypass it with `--no-verify`. It reports mypy errors and test failures that depend only on another session's uncommitted work without blocking; leave those files alone. If a commit of Python or WebUI files prints no `Commit check` report, the hook is not enabled: enable it (PROJECT.md -> Development).
-- **Fix failures caused by the task or trivially related.** When the hook reports tests failing on committed code, fix them in a separate commit before committing your own work; if that fix is beyond the task, stop and report it to the user. Never work around a real failure.
+- One logical unit per commit; never batch unrelated changes; commit once the tests covering your change pass.
+- **The commit hook checks every commit.** It formats, lints, and type-checks the staged files and re-stages its fixes for completely staged files (PROJECT.md -> Testing). Stage whole files and review its fixes. When it blocks, fix the reported problems, stage, and commit again; never bypass it with `--no-verify`. It reports mypy errors in another session's uncommitted work without blocking; leave those files alone. If a commit of Python or WebUI files prints no `Commit check` report, the hook is not enabled: enable it (PROJECT.md -> Development).
