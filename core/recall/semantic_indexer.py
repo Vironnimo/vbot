@@ -589,7 +589,7 @@ class SemanticIndexer:
     async def _drain(self, binding: VectorHeader, batch_size: int, totals: _PassTotals) -> None:
         started_at = self._monotonic()
         started = False
-        header = await self._pinned(binding)
+        header = await self._enter_space(binding)
         while self._enabled and not self._closed:
             batch = await self._index.pending_texts(limit=batch_size)
             if not batch:
@@ -656,6 +656,21 @@ class SemanticIndexer:
         """The pinned header when it belongs to the binding's space."""
         stored = await self._index.read_header()
         return stored if stored is not None and stored.same_space(binding) else None
+
+    async def _enter_space(self, binding: VectorHeader) -> VectorHeader | None:
+        """The binding's pinned header; another space's vectors are dropped.
+
+        Without this a binding change that leaves nothing waiting would keep
+        the old space's vectors, which no search of the new space can use.
+        """
+        stored = await self._index.read_header()
+        if stored is None or stored.same_space(binding):
+            return stored
+        await self._index.reset_vectors()
+        self._log_info(
+            "Reset Recall Passage vectors (reason=%s)", space_change_reason(stored, binding)
+        )
+        return None
 
     async def _embed(
         self,

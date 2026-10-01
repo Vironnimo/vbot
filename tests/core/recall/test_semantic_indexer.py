@@ -243,11 +243,20 @@ async def test_status_estimates_waiting_texts_and_keeps_spent_usage_per_space(
     finally:
         reopened.close()
 
-    # Another embedding model starts a new space: every text waits again, spent restarts.
+    # Another embedding model starts a new space even when nothing waits: every
+    # text is embedded again and spent restarts.
+    await indexer.run_pass()
+    embedded = len(embeddings.embed_calls)
     embeddings.model_id = "other-embed"
     await indexer.run_pass()
     moved = await indexer.status()
 
+    header = await index.read_header()
+    assert header is not None and header.model_id == "other-embed"
+    assert sorted(text for call in embeddings.embed_calls[embedded:] for text in call) == [
+        "banana fruit 1",
+        "banana fruit 22",
+    ]
     assert (moved.model, moved.indexed, moved.waiting) == ("other-embed", 2, 0)
     assert moved.spent_input_tokens == 29
     assert moved.spent_cost is None
