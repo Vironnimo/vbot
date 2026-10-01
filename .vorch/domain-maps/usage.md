@@ -6,11 +6,12 @@ Statistics consumes it as a source; the Statistics index remains disposable.
 ## Ownership and lifetime
 
 The request lifetime differs from the Session lifetime: Task Models and background
-requests may have no Session, and archiving or deleting a Session must not erase
-already incurred consumption. `UsageRecorder` therefore owns its canonical
-database independently of Sessions, Model catalog pricing, and Provider quota
-observations (`providers/usage.md`). Runtime constructs one recorder and injects
-it into the request owners and Statistics.
+requests may have no Session, and archiving, deleting or purging a Session must not
+erase already incurred consumption (an archive purge imports first, `archive.md`).
+`UsageRecorder` therefore owns its canonical database independently of Sessions,
+Model catalog pricing, and Provider quota observations (`providers/usage.md`).
+Runtime constructs one recorder and injects it into the request owners and
+Statistics.
 
 No request/response payloads, Tool arguments or credentials are stored.
 Optional Agent, Project, Session, Run and Extension/group references are

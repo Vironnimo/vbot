@@ -63,7 +63,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | attachments.md | `core/attachments/` | Blob storage, MIME sniffing, text extraction |
 | extensions.md | `core/extensions/` | Extension kernel boundary, loading/lifecycle, management operations, live Tool catalogs, bundled MCP |
 | agent.md | `core/agents/` | Agent schema, workspace lifecycle, archive and restore files |
-| archive.md | `core/archive/` | Archive entries: archive on delete, restore, purge, recovery |
+| archive.md | `core/archive/` | Archive entries: archive on delete, restore, purge, retention, recovery |
 | projects.md | `core/projects/` | Project boundary, anchor/ceiling invariants |
 | subagents.md | `core/subagents/` | Sub-agent coordinator, batch tracking, run linkage |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |

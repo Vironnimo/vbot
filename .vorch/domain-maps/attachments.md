@@ -38,7 +38,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 - Media resolution lives in the chat layer as a provider-agnostic intersection: native only when current turn AND model modality AND adapter wire support align; otherwise degraded - always one block in, one or more out, every attachment leaving a `Path:` handle, degradation never aborting a Run. Per-modality policies live in `chat/request-building.md`.
 - Tool-produced images use the same resolver without becoming user content: `web_fetch` and remote Tool media persist compact artifacts resolved into request-only content for the active Run. Local `read` images bypass blob storage and transfer loaded pixels in memory; file mentions are not attachment-backed either.
 - Text attachments persist as one `FileBlock`; request build reads the blob rendering through the shared capped text renderer, omitting a following duplicate TextBlock. The Model-facing path note rides natively-sent media too by design - agents open blobs with `read`.
-- Cleanup of orphaned attachments is explicitly out of scope: no index, GC, or reference counting. Local image reads create no new attachments.
+- Cleanup of orphaned attachments is explicitly out of scope: no index, GC, or reference counting. Deleting a Session or purging an archive entry (`archive.md`) leaves the blobs its Messages referenced. Local image reads create no new attachments.
 
 ## Image conversion
 
