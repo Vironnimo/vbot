@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
+from core.sessions._archive_types import ArchiveEntryRef
 from core.sessions._io import _SessionWriteLock
 from core.sessions._metadata import (
     _normalize_session_title,
@@ -43,6 +44,7 @@ from core.sessions._types import (
     TemporarySessionBinding,
     ToolResultFacts,
 )
+from core.sessions.archive_ledger import SessionArchiveLedger
 from core.sessions.errors import FtsHealth, SessionNotFoundError
 from core.sessions.session import ChatSession
 from core.sessions.store import SessionStore
@@ -67,6 +69,7 @@ class ChatSessionManager:
         self.data_dir = data_dir
         self._store = store or SessionStore(store_path or data_dir / "sessions.db")
         self._owns_store = store is None
+        self._archive_ledger = SessionArchiveLedger(self._store)
         self._title_changed_callbacks: list[Callable[[SessionAddress], None]] = []
         self._completion_read_callbacks: list[Callable[[SessionAddress, str], None]] = []
         self._write_locks: dict[SessionAddress, _SessionWriteLock] = {}
@@ -82,6 +85,11 @@ class ChatSessionManager:
     def database(self) -> Database:
         """The Session database handle, for data snapshots and data-store status."""
         return self._store.database
+
+    @property
+    def archive_ledger(self) -> SessionArchiveLedger:
+        """The archive entries kept beside the Sessions they hold."""
+        return self._archive_ledger
 
     def usage_history(
         self, after_entry_key: int = 0, *, limit: int = 1000
@@ -496,24 +504,32 @@ class ChatSessionManager:
                 group_id,
                 deleted,
             )
+            self._archive_ledger.notify_changed()
         return deleted
 
-    async def archive_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+    async def archive_temporary_group(self, *, owner_name: str, group_id: str, reason: str) -> int:
         """Archive bound participant Sessions after their owner has drained execution.
 
-        Their bindings stay, so the Sessions remain owner-managed provenance:
-        usage keeps its attribution and a later group delete still removes them.
+        They become one ``owner_group`` archive entry; ``reason`` records why
+        (``extension`` when the owner asked, ``extension_removed`` when vBot
+        cleaned up after a removed Extension). Their bindings stay, so the
+        Sessions remain owner-managed provenance: usage keeps its attribution
+        and a later group delete still removes them.
         """
-        archived = await self._store.run_async(
-            lambda: self._store.archive_temporary_group(owner_name=owner_name, group_id=group_id)
+        archived, entry = await self._store.run_async(
+            lambda: self._store.archive_temporary_group(
+                owner_name=owner_name, group_id=group_id, reason=reason
+            )
         )
-        if archived:
+        if entry is not None:
             _LOGGER.info(
-                "Temporary Sessions archived (owner=%s group=%s sessions=%d)",
+                "Temporary Sessions archived (owner=%s group=%s sessions=%d entry=%s)",
                 owner_name,
                 group_id,
                 archived,
+                entry.entry_id,
             )
+            self._archive_ledger.notify_changed()
         return archived
 
     async def temporary_groups_async(
@@ -792,9 +808,15 @@ class ChatSessionManager:
     def delete(self, address: SessionAddress) -> None:
         self._store.delete(address)
 
-    async def archive(self, address: SessionAddress) -> None:
+    async def archive(self, address: SessionAddress) -> ArchiveEntryRef:
+        """Archive one live Session as its own ``session`` archive entry.
+
+        An owner-managed Session refuses with a ``ChatSessionError``.
+        """
         async with self.write_lock(address):
-            await self._store.run_async(self._store.archive, address)
+            entry = await self._store.run_async(self._store.archive, address)
+        self._archive_ledger.notify_changed()
+        return entry
 
     def restore(self, address: SessionAddress) -> None:
         self._store.restore(address)

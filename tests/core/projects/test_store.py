@@ -811,7 +811,11 @@ def test_delete_waits_for_owner_managed_sessions_to_leave_the_project(
     assert store.get("vbot").display_name == "vBot"
 
     # Archiving the group, by its owner or after the owner was removed, releases the Project.
-    asyncio.run(sessions.archive_temporary_group(owner_name="swarm", group_id="swr_group"))
+    asyncio.run(
+        sessions.archive_temporary_group(
+            owner_name="swarm", group_id="swr_group", reason="extension"
+        )
+    )
     store.delete("vbot")
     with pytest.raises(ProjectNotFoundError):
         store.get("vbot")

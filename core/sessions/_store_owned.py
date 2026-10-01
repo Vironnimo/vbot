@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunExecutionOwner
-from core.sessions import _store_codec, _store_mutations, _store_queries, _store_values
+from core.sessions import (
+    _store_archive,
+    _store_codec,
+    _store_mutations,
+    _store_queries,
+    _store_values,
+)
+from core.sessions._archive_types import ArchiveEntryRef
 from core.sessions._metadata import _decode_state_object
 from core.sessions._types import (
     DeliveryReceipt,
@@ -113,12 +120,17 @@ def temporary_binding_by_participant(
 def delete_temporary_group(
     connection: sqlite3.Connection, *, owner_name: str, group_id: str
 ) -> int:
-    """Delete only this owner's bound participant generations; return how many."""
+    """Delete only this owner's bound participant generations; return how many.
+
+    Newest generations go first, so a fork inside the group is deleted before
+    its source and never receives copies only to be deleted. The group's
+    archive entries that no longer hold a Session go with it.
+    """
     keys = [
         int(row[0])
         for row in connection.execute(
             "SELECT session_key FROM temporary_session_bindings WHERE owner_name = ? "
-            "AND group_id = ? ORDER BY session_key",
+            "AND group_id = ? ORDER BY session_key DESC",
             (owner_name, group_id),
         )
     ]
@@ -128,23 +140,25 @@ def delete_temporary_group(
         "DELETE FROM temporary_group_titles WHERE owner_name = ? AND group_id = ?",
         (owner_name, group_id),
     )
+    _store_archive.delete_empty_owner_group_entries(
+        connection, owner_name=owner_name, group_id=group_id
+    )
     return len(keys)
 
 
 def archive_temporary_group(
-    connection: sqlite3.Connection, *, owner_name: str, group_id: str
-) -> int:
-    """Archive this owner's live bound participant Sessions; return how many.
+    connection: sqlite3.Connection, *, owner_name: str, group_id: str, reason: str
+) -> tuple[int, ArchiveEntryRef | None]:
+    """Archive this owner's live bound participant Sessions as one archive entry.
 
-    Bindings, titles, receipts and Run records stay as provenance, so usage
-    keeps its attribution and the owner can still delete the group.
+    Returns how many Sessions it archived and their ``owner_group`` entry, or
+    ``(0, None)`` when the group has no live Session. Bindings, titles,
+    receipts and Run records stay as provenance, so usage keeps its
+    attribution and the owner can still delete the group.
     """
-    return connection.execute(
-        "UPDATE sessions SET state = 'archived', archived_at = ?, "
-        "state_revision = state_revision + 1 WHERE state = 'live' AND session_key IN "
-        "(SELECT session_key FROM temporary_session_bindings WHERE owner_name = ? AND group_id = ?)",
-        (utc_now_timestamp(), owner_name, group_id),
-    ).rowcount
+    return _store_archive.archive_owner_group(
+        connection, owner_name=owner_name, group_id=group_id, reason=reason
+    )
 
 
 def temporary_groups(

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 from core.database import Database, DatabaseError, open_database
 from core.sessions import (
+    _store_archive,
     _store_continuation,
     _store_fts,
     _store_history,
@@ -26,6 +27,7 @@ from core.sessions import (
     _store_usage,
     _store_values,
 )
+from core.sessions._archive_types import ArchiveEntryRef
 from core.sessions._store_schema import session_database_spec
 from core.sessions._types import (
     JsonObject,
@@ -184,8 +186,11 @@ class SessionStore:
             )
         )
 
-    def archive(self, address: SessionAddress) -> None:
-        return self._execute_write(lambda connection: _store_mutations.archive(connection, address))
+    def archive(self, address: SessionAddress) -> ArchiveEntryRef:
+        """Archive one live Session as its own ``session`` archive entry."""
+        return self._execute_write(
+            lambda connection: _store_archive.archive_session(connection, address, None)
+        )
 
     def move(self, source: SessionAddress, target: SessionAddress) -> None:
         return self._execute_write(
@@ -536,10 +541,12 @@ class SessionStore:
             )
         )
 
-    def archive_temporary_group(self, *, owner_name: str, group_id: str) -> int:
+    def archive_temporary_group(
+        self, *, owner_name: str, group_id: str, reason: str
+    ) -> tuple[int, ArchiveEntryRef | None]:
         return self._execute_write(
             lambda connection: _store_owned.archive_temporary_group(
-                connection, owner_name=owner_name, group_id=group_id
+                connection, owner_name=owner_name, group_id=group_id, reason=reason
             )
         )
 

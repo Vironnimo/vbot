@@ -15,6 +15,7 @@ import re
 import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 
@@ -23,7 +24,13 @@ import pytest
 from core.chat.messages import ChatMessage, ToolCall
 from core.runs import RunExecutionOwner
 from core.sessions import (
+    ArchiveEntryCursor,
+    ArchiveEntryFilter,
+    ArchiveScope,
+    ArchiveTree,
     ChatSessionManager,
+    _store_archive,
+    _store_archive_backfill,
     _store_history,
     _store_owned,
     _store_queries,
@@ -511,3 +518,98 @@ def test_payload_reads_start_from_the_payload_id(history) -> None:
         detail for detail in _plans(connection, statements) if "tool_result_payloads" in detail
     ]
     assert plans == ["SEARCH p USING INDEX tool_result_payloads_by_id (payload_id=?)"]
+
+
+def test_archive_entry_reads_and_transitions_use_their_indexes(manager) -> None:
+    """Each archive statement probes the index that names it as its reader."""
+    ledger = manager.archive_ledger
+    for session_id in ("one", "two"):
+        manager.create("agent", session_id=session_id, project_id="project")
+    manager.create("agent", session_id="identity")
+    entry = ledger.begin(
+        "project",
+        subject_id="project",
+        project_id="project",
+        trees=lambda entry_id: [ArchiveTree(f"archive/entries/{entry_id}/project", "project")],
+    )
+    ledger.commit_scope(entry.entry_key, ArchiveScope(project_id="project"), cleanup_pending=True)
+    with sqlite3.connect(manager._store.path) as connection:
+        connection.execute(
+            "UPDATE sessions SET state = 'archived', archived_at = ? WHERE session_id = 'identity'",
+            (utc_now_timestamp(),),
+        )
+    connection = sqlite3.connect(manager._store.path)
+    connection.row_factory = sqlite3.Row
+    try:
+
+        def plans(action: Callable[[sqlite3.Connection], Any], *, scans: str = "") -> list[str]:
+            """Run ``action`` rolled back; only a walk of the partial index ``scans`` may scan."""
+            connection.execute("SAVEPOINT plan")
+            recorder, statements = _recording(connection)
+            try:
+                action(recorder)
+            finally:
+                connection.execute("ROLLBACK TO plan")
+                connection.execute("RELEASE plan")
+            assert statements
+            for sql, params in statements:
+                violations = _violations(connection, sql, params)
+                assert [v for v in violations if not scans or f"INDEX {scans}" not in v] == [], sql
+            return _plans(connection, statements)
+
+        filters = {
+            "archive_entries_by_archived": ArchiveEntryFilter(),
+            "archive_entries_by_scope": ArchiveEntryFilter(project_id="project"),
+        }
+        cursor = ArchiveEntryCursor(utc_now_timestamp(), "arc_zzzz")
+        for index, page_filter in filters.items():
+            details = plans(
+                partial(_store_archive.page, filters=page_filter, cursor=cursor, limit=10)
+            )
+            assert any(index in detail for detail in details), details
+            assert any("archive_entry_trees_by_entry" in detail for detail in details), details
+            assert any("archive_entry_sessions_by_entry" in detail for detail in details), details
+        assert any(
+            "archive_entries_by_subject" in detail
+            for detail in plans(
+                lambda recorder: _store_archive.newest_entry_id(recorder, "project", "project")
+            )
+        )
+        assert any(
+            "archive_entries_due" in detail
+            for detail in plans(lambda recorder: _store_archive.due(recorder, "9999", 10))
+        )
+        assert any(
+            "archive_entries_unsettled" in detail
+            for detail in plans(_store_archive.unsettled, scans="archive_entries_unsettled")
+        )
+        assert any(
+            "archive_entry_trees" in detail
+            for detail in plans(
+                lambda recorder: _store_archive.is_recorded(
+                    recorder, f"archive/entries/{entry.entry_id}"
+                )
+            )
+        )
+        purge = plans(
+            lambda recorder: (
+                _store_archive.begin_purge(recorder, entry.entry_id),
+                _store_archive.purge_next_session(recorder, entry.entry_key),
+            )
+        )
+        assert any("archive_entry_sessions_by_entry" in detail for detail in purge), purge
+        # Startup repair reads archived rows through the archived-address index only.
+        repair = plans(
+            _store_archive_backfill.adopt_unrecorded_archived_rows,
+            scans="sessions_archived_address",
+        )
+        assert any("sessions_archived_address" in detail for detail in repair), repair
+        # Id allocation still probes archived generations by address.
+        allocation = plans(
+            lambda recorder: _store_values._allocate_address(
+                recorder, SessionAddress("project", "agent", "")
+            )
+        )
+        assert any("sessions_archived_address" in detail for detail in allocation), allocation
+    finally:
+        connection.close()

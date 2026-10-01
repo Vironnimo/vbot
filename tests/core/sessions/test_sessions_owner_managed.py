@@ -438,8 +438,18 @@ async def test_archived_group_leaves_live_reads_but_keeps_its_bindings(manager) 
     with pytest.raises(ValueError):
         await manager.temporary_groups_async(owner_name="fixture", limit=0)
 
-    assert await manager.archive_temporary_group(owner_name="fixture", group_id="group-a") == 2
-    assert await manager.archive_temporary_group(owner_name="fixture", group_id="group-a") == 0
+    assert (
+        await manager.archive_temporary_group(
+            owner_name="fixture", group_id="group-a", reason="extension"
+        )
+        == 2
+    )
+    assert (
+        await manager.archive_temporary_group(
+            owner_name="fixture", group_id="group-a", reason="extension"
+        )
+        == 0
+    )
 
     assert await manager.temporary_groups_async(owner_name="fixture") == ["group-b"]
     assert await manager.temporary_owners_async() == ["fixture", "other"]
