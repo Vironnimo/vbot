@@ -161,3 +161,7 @@ class LiveContext:
                 VOICE_STOPPED,
                 "The voice call ended before this could continue; nothing further was done.",
             )
+
+
+def count_phrase(count: int, noun: str) -> str:
+    return f"a {noun}" if count == 1 else f"{count} {noun}s"

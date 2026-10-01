@@ -94,7 +94,7 @@ from server._streams import (
     _unregister_ws_client,
 )
 from server.file_delivery import PREVIEW_URL_PREFIX
-from server.live.registry import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
+from server.live.owner import LIVE_SOCKET_CLOSE_UNKNOWN_CALL
 from server.rpc.errors import RPC_ERROR_INTERNAL, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.methods import dispatch_rpc
 from server.rpc.operations_methods import FILE_PREVIEW_WORKERS

@@ -22,16 +22,14 @@ from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
 from server.app import create_app
 from server.events import ServerEventBus
 from server.live._record import LiveCallRecorder
-from server.live.registry import (
+from server.live.owner import (
     LIVE_AUDIO_FRAME_MAX_BYTES,
     LIVE_SOCKET_CLOSE_ENDED,
     LIVE_SOCKET_CLOSE_LAGGED,
     LIVE_SOCKET_CLOSE_REPLACED,
-    LiveCallLimits,
-    LiveCallRegistry,
     LiveOwnerStream,
-    LiveRegistryClosedError,
 )
+from server.live.registry import LiveCallLimits, LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.errors import RpcError
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
