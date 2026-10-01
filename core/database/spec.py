@@ -25,6 +25,8 @@ TRAILING_CAPTURE: SnapshotCapture = "trailing"
 
 #: The SQLite ``application_id`` of every vBot database family: "VB" plus two
 #: letters. Every Extension database shares one id; ``kernel_meta`` names it.
+#: Retired ids are never reused: 0x56425256 (VBRV) named the separate Recall
+#: vector store that the one Recall Passage index replaced.
 APPLICATION_IDS: Mapping[str, int] = MappingProxyType(
     {
         "sessions": 0x56425353,  # VBSS
@@ -35,7 +37,6 @@ APPLICATION_IDS: Mapping[str, int] = MappingProxyType(
         "extensions": 0x56424558,  # VBEX
         "statistics": 0x56425354,  # VBST
         "recall_index": 0x56425249,  # VBRI
-        "recall_vectors": 0x56425256,  # VBRV
     }
 )
 

@@ -11,6 +11,7 @@ from core.sessions import ChatSessionManager
 from tests.core.recall.recall_test_support import (
     ALL_ROLES,
     StubEmbeddings,
+    embed_documents,
     request,
     timestamp,
     vector_backend,
@@ -32,10 +33,11 @@ async def test_match_in_the_middle_of_a_long_session_anchors_at_its_passage(
         )
     last = ChatMessage.user("I love bananas and fruit", timestamp=timestamp(5))
     session.append(last)
+    embeddings = StubEmbeddings()
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
 
-    page = await vector_backend(tmp_path, sessions, embeddings=StubEmbeddings()).search_page(
-        request("fruit", limit=2)
-    )
+    page = await recall.search_page(request("fruit", limit=2))
 
     assert page.hits[0].session_id == "mixed"
     assert page.hits[0].end_message_id == last.id
@@ -59,10 +61,11 @@ async def test_tool_output_and_recall_results_never_become_hits(
         )
     user = ChatMessage.user("I bought some carrots", timestamp=timestamp(3))
     session.append(user)
+    embeddings = StubEmbeddings()
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
 
-    page = await vector_backend(tmp_path, sessions, embeddings=StubEmbeddings()).search_page(
-        request("fruit", roles=ALL_ROLES)
-    )
+    page = await recall.search_page(request("fruit", roles=ALL_ROLES))
 
     assert [(hit.role, hit.end_message_id, hit.text) for hit in page.hits] == [
         ("user", user.id, "I bought some carrots")

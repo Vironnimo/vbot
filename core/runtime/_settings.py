@@ -6,6 +6,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.runtime._recall import text_embedding_binding
 from core.settings.normalizers import normalize_debug_settings
 from core.utils.logging import get_logger
 
@@ -62,6 +63,8 @@ async def apply_settings_change(
     recall_changed = "recall" in refresh_sections or previous.get("recall") != current.get("recall")
     if recall_changed and not rebuild_extensions:
         runtime.reload_recall_backend()
+    if text_embedding_binding(previous) != text_embedding_binding(current):
+        runtime.recall.embedding_binding_changed()
 
     if previous.get("keep_awake") != current.get("keep_awake"):
         runtime.reload_keep_awake()

@@ -1,4 +1,4 @@
-"""The ``vector`` backend's derived index: lazy refresh, reuse, pruning and recovery."""
+"""The semantic index lifecycle: reuse, pruning and recovery across indexing passes and searches."""
 
 from __future__ import annotations
 
@@ -10,9 +10,11 @@ import pytest
 from core.chat import ChatMessage
 from core.recall import _passage_catalog
 from core.recall.passages import build_session_passages
+from core.recall.vector import SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.recall.recall_test_support import (
     StubEmbeddings,
+    embed_documents,
     passage_rows,
     request,
     timestamp,
@@ -22,7 +24,7 @@ from tests.core.recall.recall_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
-async def test_first_search_embeds_the_scope_and_later_searches_reuse_it(
+async def test_indexing_embeds_documents_once_and_searches_embed_only_queries(
     tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
     sessions.create("coder", session_id="carrots").append(
@@ -34,18 +36,18 @@ async def test_first_search_embeds_the_scope_and_later_searches_reuse_it(
     embeddings = StubEmbeddings()
     recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
 
+    await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("carrot"))
-    # The query embeds first: it pins the live dimension and served model every
-    # document vector of the search must match.
-    assert embeddings.embed_purposes == ["query", "document"]
-    assert sorted(embeddings.document_inputs) == [
+    await embed_documents(recall.index, sessions, embeddings)
+    second = await recall.search_page(request("fruit"))
+
+    # Newest first: the most recent conversation is searchable soonest.
+    assert embeddings.document_inputs == [
         "Bananas and other fruit are tasty",
         "I bought some carrots",
     ]
+    assert embeddings.embed_purposes == ["document", "query", "query"]
     assert first.hits[0].session_id == "carrots"
-
-    second = await recall.search_page(request("fruit"))
-    assert embeddings.embed_purposes == ["query", "document", "query"]
     assert second.hits[0].session_id == "fruit"
 
 
@@ -57,13 +59,15 @@ async def test_append_embeds_only_new_passages_and_surfaces_them(
         session.append(ChatMessage.user(f"turn {day} lorem ipsum " * 150, timestamp=timestamp(day)))
     embeddings = StubEmbeddings()
     recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("lorem", limit=2))
     old_passages = build_session_passages(session.load_active())
-    before = passage_rows(recall.store.path, "coder", "growing")
+    before = passage_rows(recall.index.path, "coder", "growing")
     assert sorted(before.values()) == sorted(passage.text for passage in old_passages)
 
     session.append(ChatMessage.user("brand new banana content " * 20, timestamp=timestamp(8)))
     documents_before = len(embeddings.document_inputs)
+    await embed_documents(recall.index, sessions, embeddings)
     page = await recall.search_page(request("banana", limit=2))
 
     # The former tail Passage may grow and new Passages cover the appended turn;
@@ -76,7 +80,7 @@ async def test_append_embeds_only_new_passages_and_surfaces_them(
         {passage.text for passage in added} - {passage.text for passage in old_passages}
     )
     assert 0 < len(embedded) < len(new_passages)
-    after = passage_rows(recall.store.path, "coder", "growing")
+    after = passage_rows(recall.index.path, "coder", "growing")
     assert sorted(after.values()) == sorted(passage.text for passage in new_passages)
     # Every unchanged Passage keeps its row; only vanished Passages lose theirs.
     assert len(set(before.items()) & set(after.items())) == len(old_passages) - len(vanished)
@@ -94,17 +98,18 @@ async def test_history_edit_replaces_changed_and_vanished_passages(
     session.append(ChatMessage.user("car repair advice " * 150, timestamp=timestamp(3)))
     embeddings = StubEmbeddings()
     recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
-    await recall.search_page(request("car"))
+    await embed_documents(recall.index, sessions, embeddings)
     old_passages = build_session_passages(session.load_active())
 
     session.apply_edit(
         target.id, [ChatMessage.user("I bought some carrots", timestamp=timestamp(4))]
     )
     documents_before = len(embeddings.document_inputs)
+    await embed_documents(recall.index, sessions, embeddings)
     page = await recall.search_page(request("car"))
 
     new_passages = build_session_passages(session.load_active())
-    rows = passage_rows(recall.store.path, "coder", "edited")
+    rows = passage_rows(recall.index.path, "coder", "edited")
     assert sorted(rows.values()) == sorted(passage.text for passage in new_passages)
     assert not any("broke down" in text or "repair" in text for text in rows.values())
     assert all("broke down" not in hit.text and "repair" not in hit.text for hit in page.hits)
@@ -123,24 +128,25 @@ async def test_filtered_search_keeps_other_sessions_and_prunes_the_whole_scope(
         sessions.create("coder", session_id=session_id).append(
             ChatMessage.user(text, timestamp=timestamp(1))
         )
-    recall = vector_backend(tmp_path, sessions, embeddings=StubEmbeddings())
-    await recall.search_page(request("fruit"))
+    embeddings = StubEmbeddings()
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
 
     filtered = await recall.search_page(request("fruit", session_id="fruit"))
     assert {hit.session_id for hit in filtered.hits} == {"fruit"}
-    assert set(await recall.store.list_indexed_sessions("coder")) == {"carrots", "fruit"}
+    assert set(await recall.index.list_indexed_sessions("coder")) == {"carrots", "fruit"}
 
     # Pruning follows the complete live scope, not the request's Session filter.
     sessions.delete(SessionAddress(project_id=None, agent_id="coder", session_id="carrots"))
     await recall.search_page(request("fruit", session_id="fruit"))
 
-    assert set(await recall.store.list_indexed_sessions("coder")) == {"fruit"}
-    assert passage_rows(recall.store.path, "coder", "carrots") == {}
+    assert set(await recall.index.list_indexed_sessions("coder")) == {"fruit"}
+    assert passage_rows(recall.index.path, "coder", "carrots") == {}
     page = await recall.search_page(request("carrot"))
     assert {hit.session_id for hit in page.hits} == {"fruit"}
 
 
-async def test_fork_reuses_its_origins_stored_passages(
+async def test_fork_reuses_its_origins_stored_vectors(
     tmp_path: Path, sessions: ChatSessionManager
 ) -> None:
     source = sessions.create("coder", session_id="source")
@@ -148,48 +154,22 @@ async def test_fork_reuses_its_origins_stored_passages(
         source.append(ChatMessage.user(f"fruit story {day} " * 120, timestamp=timestamp(day)))
     embeddings = StubEmbeddings()
     recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit", limit=20))
     documents_before = len(embeddings.document_inputs)
 
     fork = await sessions.fork(source.address)
+    await embed_documents(recall.index, sessions, embeddings)
     page = await recall.search_page(request("fruit", limit=20))
 
     assert embeddings.document_inputs[documents_before:] == []
-    assert passage_rows(recall.store.path, "coder", fork.id) == passage_rows(
-        recall.store.path, "coder", "source"
+    assert passage_rows(recall.index.path, "coder", fork.id) == passage_rows(
+        recall.index.path, "coder", "source"
     )
     # The origin owns the shared history and is eligible, so it keeps every hit.
     assert [(hit.session_id, hit.passage_id) for hit in page.hits] == [
         (hit.session_id, hit.passage_id) for hit in first.hits
     ]
-
-
-async def test_excluded_session_is_not_embedded_until_it_is_included(
-    tmp_path: Path, sessions: ChatSessionManager
-) -> None:
-    current = sessions.create("coder", session_id="current")
-    current.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
-    sessions.create("coder", session_id="other").append(
-        ChatMessage.user("I bought some carrots", timestamp=timestamp(2))
-    )
-    embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
-    excluding = request("fruit", excluded_session_ids=("current",))
-
-    first = await recall.search_page(excluding)
-    current.append(ChatMessage.user("more fruit talk", timestamp=timestamp(3)))
-    documents_before = len(embeddings.document_inputs)
-    second = await recall.search_page(excluding)
-
-    assert set(await recall.store.list_indexed_sessions("coder")) == {"other"}
-    assert embeddings.document_inputs[documents_before:] == []
-    assert "current" not in {hit.session_id for hit in (*first.hits, *second.hits)}
-
-    included = await recall.search_page(request("fruit"))
-
-    assert set(await recall.store.list_indexed_sessions("coder")) == {"current", "other"}
-    assert included.hits[0].session_id == "current"
-    assert "more fruit talk" in included.hits[0].text
 
 
 async def test_session_without_passages_is_stamped_and_not_reread(
@@ -213,8 +193,9 @@ async def test_session_without_passages_is_stamped_and_not_reread(
     await recall.search_page(request("carrot"))
 
     assert first.hits == ()
+    assert first.degraded is False
     assert builds == [1]
-    assert set(await recall.store.list_indexed_sessions("coder")) == {"inert"}
+    assert set(await recall.index.list_indexed_sessions("coder")) == {"inert"}
 
 
 async def test_session_that_stops_yielding_passages_loses_its_rows(
@@ -222,7 +203,9 @@ async def test_session_that_stops_yielding_passages_loses_its_rows(
 ) -> None:
     session = sessions.create("coder", session_id="becomes-empty")
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
-    recall = vector_backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    embeddings = StubEmbeddings()
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit"))
     assert [hit.session_id for hit in first.hits] == ["becomes-empty"]
 
@@ -232,7 +215,7 @@ async def test_session_that_stops_yielding_passages_loses_its_rows(
     second = await recall.search_page(request("fruit"))
 
     assert second.hits == ()
-    assert passage_rows(recall.store.path, "coder", "becomes-empty") == {}
+    assert passage_rows(recall.index.path, "coder", "becomes-empty") == {}
 
 
 async def test_corrupt_index_is_discarded_once_and_rebuilt(
@@ -241,11 +224,17 @@ async def test_corrupt_index_is_discarded_once_and_rebuilt(
     sessions.create("coder", session_id="one").append(
         ChatMessage.user("banana fruit", timestamp=timestamp(1))
     )
-    recall = vector_backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    embeddings = StubEmbeddings()
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     await recall.search_page(request("fruit"))
-    recall.store.path.write_bytes(b"not a sqlite database")
+    recall.index.path.write_bytes(b"not a sqlite database")
 
+    rebuilt = await recall.search_page(request("fruit"))
+
+    # The search rebuilt the catalog; its vectors wait for the next indexing pass.
+    assert (rebuilt.hits, rebuilt.degradation_reason) == ((), SEMANTIC_PARTIAL_REASON)
+    assert await recall.index.read_header() is not None
+    await embed_documents(recall.index, sessions, embeddings)
     page = await recall.search_page(request("fruit"))
-
     assert [hit.session_id for hit in page.hits] == ["one"]
-    assert await recall.store.read_header() is not None

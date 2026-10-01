@@ -507,6 +507,9 @@ class Runtime:
     def _start_performance_service(self) -> None:
         start_event_loop_service(self._performance, "Performance service not available")
 
+    def _start_recall_indexing(self) -> None:
+        start_event_loop_service(self._recall, "Recall is not available")
+
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
 
@@ -753,8 +756,8 @@ class Runtime:
         with ``AgentReferencedError`` before anything changes; a delegation
         allow-list entry naming the unused id is a leftover the rename removes
         instead. The caller holds the Run admission guards of both ids.
-        Afterwards Skills of both ids are invalidated and the active Recall index
-        forgets the moved Sessions' old addresses.
+        Afterwards Skills of both ids are invalidated and the Recall indexes
+        forget the moved Sessions' old addresses.
         """
         self._ensure_started()
         outcome = await rename_identity_agent(self._agent_rename_services(), agent_id, new_agent_id)
@@ -1120,6 +1123,10 @@ class Runtime:
     recall_backend: _StartedService[RecallBackend] = _StartedService(
         lambda runtime: runtime._recall.backend if runtime._recall is not None else None,
         "Recall backend is not available",
+    )
+
+    recall: _StartedService[RecallIntegration] = _StartedService(
+        lambda runtime: runtime._recall, "Recall is not available"
     )
 
     chat_run_manager: _StartedService[ChatRunManager] = _StartedService(
