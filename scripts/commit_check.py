@@ -31,8 +31,9 @@ work in progress are reported without blocking.
 pytest runs the tests affected by the working tree through pytest-testmon, which
 compares the code each test executed last time with the current code, plus the
 tests that read a data file changed since the tree the checkout's records describe
-(``tests/file_dependencies.py``, ``scripts/_test_impact.py``). A change to
-``pyproject.toml`` or to a file read during collection runs the complete suite, as
+(``tests/file_dependencies.py``, ``scripts/_test_impact.py``). A change to the
+pytest or coverage configuration in ``pyproject.toml`` or to a file read during
+collection runs the complete suite, as
 do records that are missing, unreadable or without a tested state. A
 merge commit runs only the tests that neither this checkout's nor the merged
 worktree's test runs cover as merged.
