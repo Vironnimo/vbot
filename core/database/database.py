@@ -40,7 +40,7 @@ from core.database._connections import (
     has_live_connection,
     remove_database_files,
 )
-from core.database._runtime import WRITE_PATIENCE_S, ConnectionRuntime
+from core.database._runtime import WRITE_PATIENCE_S, ConnectionRuntime, Synchronous
 from core.database._schema import (
     KERNEL_SCHEMA_SQL,
     DeclaredSchema,
@@ -83,6 +83,10 @@ _LOGGER = logging.getLogger("vbot.database")
 _Result = TypeVar("_Result")
 
 IO_WORKERS = 8
+#: Test seam: the SQLite ``synchronous`` level with which the kernel creates and
+#: opens every database instead of its profile's (canonical ``FULL``, disposable
+#: ``NORMAL``). ``None`` in production; ``tests/conftest.py`` sets ``OFF``.
+SYNCHRONOUS_OVERRIDE: Synchronous | None = None
 
 
 def database_worker_pool(spec: DatabaseSpec) -> BoundedWorkerPool:
@@ -476,6 +480,8 @@ def _create_database_file(spec: DatabaseSpec) -> None:
     try:
         connection = sqlite3.connect(temporary, isolation_level=None)
         try:
+            if SYNCHRONOUS_OVERRIDE is not None:
+                connection.execute(f"PRAGMA synchronous={SYNCHRONOUS_OVERRIDE}")
             connection.execute("BEGIN IMMEDIATE")
             for _kind, _name, sql in declared.objects:
                 connection.execute(sql)
@@ -532,7 +538,7 @@ def _open_existing(
     runtime = ConnectionRuntime(
         spec.path,
         name=spec.name,
-        synchronous="FULL" if spec.profile == CANONICAL else "NORMAL",
+        synchronous=SYNCHRONOUS_OVERRIDE or ("FULL" if spec.profile == CANONICAL else "NORMAL"),
         application_id=spec.application_id,
         format_generation=spec.format_generation,
         connection_setup=spec.connection_setup,

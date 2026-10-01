@@ -50,6 +50,7 @@ def _synchronous(database: Any) -> int:
     return int(database.writer.execute("PRAGMA synchronous").fetchone()[0])
 
 
+@pytest.mark.durable
 def test_canonical_databases_sync_fully_and_disposable_ones_normally(
     data_dir: Path, tmp_path: Path
 ) -> None:

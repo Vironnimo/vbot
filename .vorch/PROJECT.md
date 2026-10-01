@@ -137,6 +137,8 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 
 **Home isolation:** The root `tests/conftest.py` gives every test an empty home directory (`HOME` and `USERPROFILE`, `XDG_CONFIG_HOME` unset), so `Path.home()` and `~` never reach the real home, its `~/.vbot` data or its Git configuration. A value computed from the home at import time, such as `core.storage.storage.DEFAULT_DATA_DIR`, still names the real home: tests pass an explicit data directory.
 
+**Disk syncs:** The root `tests/conftest.py` skips the disk syncs that protect data only against power loss: for the whole session, the database kernel creates and opens every database with `synchronous=OFF` (the test seam `core.database.database.SYNCHRONOUS_OVERRIDE`) and `os.fsync` does nothing. A test that observes the production syncs (SQLite `synchronous` levels, `os.fsync` calls) carries the `durable` marker, which restores them for that test.
+
 **Running tests and checks:** Call the tools directly; their configuration lives in `pyproject.toml` (pytest, Ruff, mypy) and `webui/package.json` (scripts). What to test and run: `AGENTS.md` -> Testing.
 ```bash
 python -m pytest tests/core/tools/test_bash.py         # file, directory, node id; -k/-x/--lf as usual
