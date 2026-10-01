@@ -82,10 +82,8 @@ builder signs the raw SHA256 digest of each archive and emits its public key for
 the installer. Keep this private key in repository secrets. The installer stores
 only the public key; official updates fail closed without it. `--channel release|main`
 and the installer's `UpdateChannel` definition record the update channel the
-installed package follows. Optional
-`--authenticode-command` integrates an externally configured executable-signing
-tool. A development build without a release key is usable with an explicitly
-selected local `vbot update --package <archive>`.
+installed package follows. A development build without a release key is usable
+with an explicitly selected local `vbot update --package <archive>`.
 
 CI builds and signs every published package; nothing is published from a local
 build. The [Windows package workflow](../../.github/workflows/windows-package.yml)

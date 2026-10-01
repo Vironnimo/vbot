@@ -172,11 +172,6 @@ def build(args: argparse.Namespace) -> Path:
     compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
-    if args.authenticode_command:
-        for executable in [*package.glob("*.exe"), *version_root.glob("runtime/*.exe")]:
-            run_tool(
-                [part.replace("{file}", str(executable)) for part in args.authenticode_command]
-            )
     manifest = write_manifest(
         version_root,
         version=args.version,
@@ -218,7 +213,6 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--release-mode", action="store_true")
     value.add_argument("--channel", choices=CHANNELS, default="release")
     value.add_argument("--signing-key-env", default="VBOT_RELEASE_SIGNING_KEY")
-    value.add_argument("--authenticode-command", nargs="+", metavar="ARG")
     return value
 
 

@@ -319,7 +319,6 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         release_mode=False,
         channel="main",
         signing_key_env="UNUSED",
-        authenticode_command=None,
     )
     package = build_windows.build(args)
     version_root = package / "versions" / "v0_4_0_abcdef123456"
@@ -380,7 +379,6 @@ def test_release_build_fails_closed_without_signing_key(
         release_mode=True,
         channel="release",
         signing_key_env="MISSING_SIGNING_KEY",
-        authenticode_command=None,
     )
     with pytest.raises(build_windows.BuildError, match="requires signing key environment"):
         build_windows.build(args)
@@ -405,7 +403,6 @@ def test_release_archive_signature_covers_raw_sha256(
         release_mode=True,
         channel="release",
         signing_key_env="TEST_SIGNING_KEY",
-        authenticode_command=None,
     )
     build_windows.build(args)
 
