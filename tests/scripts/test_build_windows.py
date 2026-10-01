@@ -53,6 +53,9 @@ def test_build_tool_has_no_console_when_builder_has_none(tmp_path: Path) -> None
     assert result.stdout.strip() == "windowless-build-completed"
 
 
+_PINNED_SQLITE = b"pinned sqlite"
+
+
 def _source(tmp_path: Path) -> Path:
     source = tmp_path / "source"
     for directory in ("core", "cli", "server", "desktop", "resources", "webui/dist"):
@@ -65,6 +68,18 @@ def _source(tmp_path: Path) -> Path:
         (source / "scripts" / "windows" / f"requirements-{shape}.lock").write_text(
             "example==1.0 --hash=sha256:abc\n", encoding="utf-8"
         )
+    # The runtime fixture already carries the pinned library, so nothing downloads.
+    (source / "scripts/windows/sqlite.lock.json").write_text(
+        json.dumps(
+            {
+                "version": "3.53.4",
+                "url": "https://sqlite.org/never-download.zip",
+                "archive_sha3_256": "0" * 64,
+                "library_sha256": hashlib.sha256(_PINNED_SQLITE).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
@@ -95,6 +110,8 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "Lib" / "ensurepip" / "__init__.py").write_text("", encoding="utf-8")
     (runtime / "python.exe").write_bytes(b"python")
     (runtime / "python313.dll").write_bytes(b"dll")
+    (runtime / "DLLs").mkdir()
+    (runtime / "DLLs" / "sqlite3.dll").write_bytes(_PINNED_SQLITE)
     return runtime
 
 
@@ -217,31 +234,22 @@ def test_runtime_copy_installs_the_pinned_sqlite_without_touching_the_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = _runtime(tmp_path)
-    (runtime / "DLLs").mkdir()
     (runtime / "DLLs" / "sqlite3.dll").write_bytes(b"cpython sqlite")
     source = _source(tmp_path)
-    pinned = b"pinned sqlite"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as bundle:
-        bundle.writestr("sqlite3.dll", pinned)
+        bundle.writestr("sqlite3.dll", _PINNED_SQLITE)
     archive = buffer.getvalue()
-    (source / "scripts/windows/sqlite.lock.json").write_text(
-        json.dumps(
-            {
-                "version": "3.53.4",
-                "url": "https://sqlite.org/fixture.zip",
-                "archive_sha3_256": hashlib.sha3_256(archive).hexdigest(),
-                "library_sha256": hashlib.sha256(pinned).hexdigest(),
-            }
-        ),
-        encoding="utf-8",
-    )
+    lock_path = source / "scripts/windows/sqlite.lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["archive_sha3_256"] = hashlib.sha3_256(archive).hexdigest()
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
     monkeypatch.setattr("cli.application.runtime_sqlite._download", lambda _url: archive)
 
     destination = tmp_path / "copy"
     build_windows.copy_runtime(runtime, destination, app_source=source, shape="server")
 
-    assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == pinned
+    assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == _PINNED_SQLITE
     assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite"
 
 

@@ -40,13 +40,9 @@ def provision_runtime_sqlite(
     """Install the SQLite library pinned by *source* into *runtime*.
 
     A library that already matches the pin is kept. Returns whether the file
-    was replaced. A source without a pin (a revision that predates it) leaves
-    the runtime unchanged.
+    was replaced.
     """
-    lock_path = source / SQLITE_LOCK
-    if not lock_path.is_file():
-        return False
-    lock = _read_lock(lock_path)
+    lock = _read_lock(source / SQLITE_LOCK)
     destination = runtime / "DLLs" / _LIBRARY
     if not destination.parent.is_dir():
         raise RuntimeSQLiteError("the runtime has no DLLs directory")

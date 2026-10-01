@@ -83,15 +83,6 @@ def test_keeps_an_already_pinned_library_without_downloading(tmp_path: Path) -> 
     assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == _LIBRARY
 
 
-def test_source_without_a_pin_leaves_the_runtime_unchanged(tmp_path: Path) -> None:
-    runtime = _runtime(tmp_path)
-    source = tmp_path / "older-source"
-    source.mkdir()
-
-    assert provision_runtime_sqlite(runtime, source, fetch=_unexpected_fetch) is False
-    assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite library"
-
-
 @pytest.mark.parametrize("tampered", ["archive", "library"])
 def test_rejects_tampered_downloads_and_keeps_the_existing_library(
     tmp_path: Path, tampered: str
