@@ -32,15 +32,19 @@ class ArchiveSubjectInUseError(ArchiveEntryError):
 
 
 class ArchiveRestoreConflictError(ArchiveEntryError):
-    """The restore target's id or Session addresses are taken; another target id avoids it."""
+    """The restore target's id or Session addresses are taken; another target id avoids it.
 
-    def __init__(self, entry_id: str, conflicts: Sequence[RestoreProblem]) -> None:
+    ``kind`` is the entry's kind, so a caller can say which id the new target id replaces.
+    """
+
+    def __init__(self, entry_id: str, kind: str, conflicts: Sequence[RestoreProblem]) -> None:
         super().__init__(
             f"cannot restore archive entry {entry_id}: "
             + "; ".join(conflict.message for conflict in conflicts)
             + "; restore it under another id (target_id)"
         )
         self.entry_id = entry_id
+        self.kind = kind
         self.conflicts = tuple(conflicts)
 
 

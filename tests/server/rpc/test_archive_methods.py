@@ -179,6 +179,7 @@ async def test_restore_refuses_a_taken_id_and_restores_under_a_new_one(tmp_path:
         "restore it under another id (target_id)",
         "data": {
             "entry_id": entry_id,
+            "kind": "agent",
             "conflicts": [
                 {
                     "code": "agent_id_taken",

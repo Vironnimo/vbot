@@ -22,10 +22,8 @@ from core.archive import (
 )
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
-    ARCHIVE_KIND_FILES,
-    ARCHIVE_KIND_OWNER_GROUP,
     ARCHIVE_KIND_PROJECT,
-    ARCHIVE_KIND_SESSION,
+    ARCHIVE_KINDS,
     ArchiveEntryCursor,
     ArchiveEntryFilter,
 )
@@ -52,13 +50,6 @@ from server.rpc.validation import (
 
 JsonObject = dict[str, Any]
 
-ARCHIVE_KINDS = (
-    ARCHIVE_KIND_AGENT,
-    ARCHIVE_KIND_PROJECT,
-    ARCHIVE_KIND_SESSION,
-    ARCHIVE_KIND_OWNER_GROUP,
-    ARCHIVE_KIND_FILES,
-)
 _LIST_LIMIT_MAX = 200
 _SHOW_SESSION_LIMIT_MAX = 500
 _PURGE_IDS_MAX = 100

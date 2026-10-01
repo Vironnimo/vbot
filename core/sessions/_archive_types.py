@@ -20,6 +20,14 @@ ARCHIVE_KIND_PROJECT = "project"
 ARCHIVE_KIND_SESSION = "session"
 ARCHIVE_KIND_OWNER_GROUP = "owner_group"
 ARCHIVE_KIND_FILES = "files"
+# Every kind, in the order lists and filters name them.
+ARCHIVE_KINDS = (
+    ARCHIVE_KIND_AGENT,
+    ARCHIVE_KIND_PROJECT,
+    ARCHIVE_KIND_SESSION,
+    ARCHIVE_KIND_OWNER_GROUP,
+    ARCHIVE_KIND_FILES,
+)
 
 # Files may be moving; the Sessions are still live.
 ARCHIVE_STATE_ARCHIVING = "archiving"

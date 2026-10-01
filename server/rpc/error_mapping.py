@@ -113,6 +113,7 @@ def _map_archive_error(error: ArchiveEntryError) -> RpcError:
             str(error),
             data={
                 "entry_id": error.entry_id,
+                "kind": error.kind,
                 "conflicts": [_restore_conflict_payload(conflict) for conflict in error.conflicts],
                 "fix": "target_id",
             },

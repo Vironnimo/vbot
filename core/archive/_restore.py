@@ -123,7 +123,7 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
         except ArchiveAddressTakenError as error:
             _abort(services, plan)
             raise ArchiveRestoreConflictError(
-                entry.entry_id, (_addresses_taken(error.addresses),)
+                entry.entry_id, entry.kind, (_addresses_taken(error.addresses),)
             ) from error
         except ArchiveMembersManagedError as error:
             _abort(services, plan)
@@ -547,7 +547,7 @@ def _raise_blockers(plan: _Plan) -> None:
     if busy is not None:
         raise ArchiveEntryBusyError(plan.entry.entry_id, plan.entry.state)
     if all(blocker.code in RESTORE_CONFLICT_CODES for blocker in blockers):
-        raise ArchiveRestoreConflictError(plan.entry.entry_id, blockers)
+        raise ArchiveRestoreConflictError(plan.entry.entry_id, plan.entry.kind, blockers)
     raise ArchiveNotRestorableError(plan.entry.entry_id, blockers)
 
 
