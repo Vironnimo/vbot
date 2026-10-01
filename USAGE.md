@@ -724,9 +724,9 @@ Settings centralizes validated runtime policy. Major areas include:
 - Sub-Agent authorization and depth, per-turn, and timeout limits
 - Reflection cadence and review behavior for Identity Agents
 - Compaction strategy, trigger, Model selection, and Agent, Project, or Session overrides
-- Recall backend and semantic search configuration
+- Conversation search (Recall): keyword search, optional search by meaning with its embedding Model, and the search index status with a rebuild
 - Web Search Provider configuration
-- Specialized Models for speech, embeddings, and images
+- Specialized Models for speech, decisions, and images
 - Provider Connections, Accounts, credentials, enabled state, and local reachability
 - Channels and denied-chat discovery
 - trusted Extensions and Extension settings
