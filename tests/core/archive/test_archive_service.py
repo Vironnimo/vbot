@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import shutil
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,7 @@ from core.archive import (
     ArchiveRestoreConflictError,
     ArchiveService,
     PendingPurge,
+    _purge,
 )
 from core.chat import ChatSessionError
 from core.sessions import ArchiveEntryFilter, ArchiveTree, SessionAddress
@@ -347,6 +349,32 @@ async def test_purge_deletes_the_sessions_payload_and_entry_after_importing_usag
     assert world.session_rows("coder") == []
     assert world.sessions.archive_ledger.entry(archived.entry_id) is None
     assert not (world.data_dir / "archive" / "entries").exists()
+
+
+@pytest.mark.asyncio
+async def test_a_purge_that_stops_partway_stays_purging_and_continues_later(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world.agents.create("coder")
+    entry_id = (await world.service.archive_agent("coder")).entry_id
+
+    def refuse(_path: Path, *, within: Path) -> None:
+        raise PermissionError(errno.EACCES, "held open by another program")
+
+    monkeypatch.setattr(_purge, "remove_tree", refuse)
+    stopped = await world.service.purge([entry_id])
+    monkeypatch.undo()
+
+    assert stopped.pending == (PendingPurge(entry_id, "PermissionError"),)
+    assert world.entry(entry_id).state == "purging"
+    assert world.session_rows("coder") == []
+    assert world.payload(entry_id, "agent").is_dir()
+
+    resumed = await world.service.purge([entry_id])
+
+    assert ([item.entry_id for item in resumed.purged], resumed.pending) == ([entry_id], ())
+    assert world.sessions.archive_ledger.entry(entry_id) is None
+    assert not world.payload(entry_id, "agent").exists()
 
 
 @pytest.mark.asyncio
