@@ -115,7 +115,11 @@ async def test_no_retry_starts_when_wait_would_exceed_remaining_budget(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_backoff_is_cancellable_without_spending_an_attempt():
+async def test_backoff_is_cancellable_without_spending_an_attempt(monkeypatch):
+    async def endless_backoff(delay):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("core.chat.recovery._sleep", endless_backoff)
     waiting = asyncio.Event()
     budget = RecoveryBudget()
     await budget.begin("primary", lambda notice: None)
