@@ -62,7 +62,7 @@ Local command-line accessor for server lifecycle and RPC-backed management areas
 **Model area**
 
 - `model list` exposes Provider/capability/task/modality/minimum-context filters; the server includes only Models with at least one usable Connection. `model list --task chat` is the primary recovery/discovery command for an Agent without an effective Model. `model show` prints the complete loaded projection as deterministic JSON.
-- `model refresh [<provider-id>]` stages a complete copy of the active Model DB, refreshes requested Provider projections, atomically publishes under `<data_dir>/artifacts/models/`, and never writes the installed checkout. `scripts/refresh_model_db.py` is the maintainer-only client for the tracked `resources/models/` root; the RPC rejects cross-checkout targets. Snapshot mechanics live in `models.md`.
+- `model refresh [<provider-id>]` stages a complete copy of the active Model DB, refreshes requested Provider projections, atomically publishes under `<data_dir>/artifacts/models/`, and never writes the bundled `resources/models/` root. `scripts/refresh_model_db.py` is the maintainer-only client for the tracked `resources/models/` root; the RPC rejects cross-checkout targets. Snapshot mechanics live in `models.md`.
 
 **Project area**
 
