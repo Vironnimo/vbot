@@ -41,10 +41,17 @@ def _payload(root: Path, shape: str = "server") -> Path:
     return payload
 
 
+# A new data directory starts with the fresh-install Agent defaults; an existing one
+# keeps its settings.
+@pytest.mark.parametrize("existing_data", [False, True], ids=["new_data", "existing_data"])
 @pytest.mark.parametrize("channel", ["release", "main"])
 def test_install_accepts_inno_registration_files_and_persists_key_and_channel(
-    tmp_path: Path, channel: str
+    tmp_path: Path, channel: str, existing_data: bool
 ) -> None:
+    data = tmp_path / "data"
+    if existing_data:
+        data.mkdir()
+        (data / "settings.json").write_text('{"format_version": 1}', encoding="utf-8")
     root = tmp_path / "application"
     root.mkdir()
     (root / "vBot.exe").write_bytes(b"bootstrap")
@@ -56,7 +63,7 @@ def test_install_accepts_inno_registration_files_and_persists_key_and_channel(
         root,
         _payload(tmp_path),
         shape="server",
-        data_dir=tmp_path / "data",
+        data_dir=data,
         public_key=public_key,
         channel=channel,
     )
@@ -67,6 +74,10 @@ def test_install_accepts_inno_registration_files_and_persists_key_and_channel(
     assert saved["release_url"] == CHANNEL_URLS[channel]
     assert install.channel == channel
     assert install.version().name == "v1_test"
+    settings = json.loads((data / "settings.json").read_text(encoding="utf-8"))
+    expected = {} if existing_data else {"agent": {"thinking_effort": "high"}}
+    assert settings.get("defaults", {}) == expected
+    assert settings["format_version"] == 1
 
 
 @pytest.mark.parametrize("relationship", ["same", "parent", "child", "normalized_child"])

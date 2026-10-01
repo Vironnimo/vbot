@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import json
 import shutil
 import zipfile
 from pathlib import Path
@@ -18,6 +19,11 @@ from cli.application.state import (
     exclusive,
     load_installation,
 )
+from core.utils.atomic import atomic_write_text
+
+#: Global Agent defaults a new data directory starts with. An install-time seed,
+#: not a Runtime fallback: an existing data directory keeps its settings.
+FRESH_AGENT_DEFAULTS = {"thinking_effort": "high"}
 
 
 def archive_payload(install: Installation, version_id: str) -> Path:
@@ -113,17 +119,24 @@ def install_payload(
         if bootstrap.is_file() and not install.bootstrap.exists():
             shutil.copy2(bootstrap, install.bootstrap)
         if install.owns_server and not resolved_data.exists():
-            from core.storage import initialize_data_directory
-
-            initialize_data_directory(
-                resolved_data, resources_dir=destination / "app" / "resources"
-            )
+            _initialize_data(resolved_data, destination / "app" / "resources")
         install.save()
         install.activate(manifest["version_id"])
         from cli.application.integration import refresh_gui_entrypoints
 
         refresh_gui_entrypoints(install)
     return install
+
+
+def _initialize_data(data_dir: Path, resources: Path) -> None:
+    from core.storage import initialize_data_directory
+
+    created = initialize_data_directory(data_dir, resources_dir=resources)
+    settings = created.layout.settings_file
+    if settings in created.created_files:
+        document = json.loads(settings.read_text(encoding="utf-8"))
+        document["defaults"] = {"agent": dict(FRESH_AGENT_DEFAULTS)}
+        atomic_write_text(settings, json.dumps(document, indent=2) + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
