@@ -188,3 +188,46 @@ def test_server_start_never_spawns_next_to_an_existing_server(
     assert result.health is health
     assert (result.webui is not None) is ok
     print_command_result("start", result)
+
+
+def test_a_systemd_unit_owns_the_normal_server_but_never_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install = _install(tmp_path)
+    commands: list[list[str]] = []
+    spawned: list[dict] = []
+    _spawned_server_becomes_ready(monkeypatch, tmp_path, spawned)
+    monkeypatch.setattr(processes, "owned_unit", lambda _install: tmp_path / "vbot.service")
+
+    def run(command: list[str]) -> SimpleNamespace:
+        commands.append(command)
+        spawned.append({})  # The unit's server publishes its control record.
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    def spawn(_args, **kwargs):
+        spawned.append(kwargs)
+        return SimpleNamespace(pid=123, poll=lambda: None)
+
+    monkeypatch.setattr(processes, "run_command", run)
+    monkeypatch.setattr(processes.subprocess, "Popen", spawn)
+    monkeypatch.setattr(
+        processes,
+        "stop_server",
+        lambda instance, **_kwargs: server_management.CommandResult(
+            ok=True, message="stopped", instance=instance
+        ),
+    )
+
+    assert processes.start(install).message == "started via systemd"
+    assert processes.stop(install).ok
+    assert commands == [
+        ["systemctl", "--user", "start", "vbot.service"],
+        # Stopping the unit also cancels a restart it might schedule.
+        ["systemctl", "--user", "stop", "vbot.service"],
+    ]
+
+    commands.clear()
+    spawned.clear()
+    _record_server(monkeypatch, tmp_path, command=_VERIFICATION, recorded=lambda: bool(spawned))
+    assert processes.start(install, verification=True).message == "started"
+    assert commands == []

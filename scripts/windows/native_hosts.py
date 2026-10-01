@@ -1,10 +1,6 @@
 """Compile the native Windows hosts from ``launcher.c`` with LLVM and the Windows SDK.
 
-This module is the complete native-host recipe: ``payload.NATIVE_SOURCE_FILES``
-fingerprints it together with the launcher sources, so an update recompiles
-the hosts exactly when something here or in those sources changes. It imports
-only the standard library and stdlib-only vBot helpers, because source updates
-run it in the private build environment without application dependencies.
+This module is the complete native-host recipe the Windows package builder runs.
 """
 
 from __future__ import annotations
@@ -39,12 +35,9 @@ def compile_hosts(source: Path, runtime: Path, *, version: str) -> None:
         compile_host(source, runtime / filename, role=role, version=version)
 
 
-def compile_host(
-    source: Path, output: Path, *, role: str, version: str, stable: bool = False
-) -> None:
-    # The GUI companion always resolves the installation pointer, including
-    # when an older source updater invokes this compiler without the new flag.
-    stable = stable or role in STABLE_ROLES
+def compile_host(source: Path, output: Path, *, role: str, version: str) -> None:
+    # The stable bootstraps resolve the installation's active version.
+    stable = role in STABLE_ROLES
     windows = source / "scripts" / "windows"
     icon = (source / "desktop" / "icon.ico").resolve()
     manifest = (

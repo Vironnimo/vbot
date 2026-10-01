@@ -259,38 +259,52 @@ def test_local_status_reports_invalid_recovery_evidence_without_changing_it(
     assert evidence.read_text(encoding="utf-8") == "[]"
 
 
-# A busy server runs too: it must be started again, never left stopped.
+# A busy server runs too: it must be started again, never left stopped. The server
+# of a packaged installation stops and starts through that installation, so a
+# systemd unit or native host keeps owning it.
 @pytest.mark.parametrize("state", ["running", "unresponsive"], ids=["answering", "busy"])
+@pytest.mark.parametrize("packaged", [False, True], ids=["checkout", "installation"])
 def test_restore_stops_verifies_and_restarts_the_previously_running_server(
-    tmp_path: Path, monkeypatch, state: ServerState
+    tmp_path: Path, monkeypatch, state: ServerState, packaged: bool
 ) -> None:
-    instance = _instance(tmp_path)
-    snapshot = _snapshot_with_one_session(tmp_path)
-    sessions = ChatSessionManager(tmp_path)
+    from cli.application import processes as application_processes
+    from cli.application.state import Installation
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    instance = _instance(data_dir)
+    snapshot = _snapshot_with_one_session(data_dir)
+    sessions = ChatSessionManager(data_dir)
     sessions.create("agent", session_id="later").append(ChatMessage.user("after the snapshot"))
     sessions.close()
     calls: list[str] = []
+    install = Installation(tmp_path / "app", "server", "127.0.0.1", 8420, str(data_dir))
+    install.root.mkdir()
 
-    def stop(resolved: ServerInstance) -> CommandResult:
-        calls.append("stop")
-        return CommandResult(ok=True, message="stopped", instance=resolved)
+    def record(action: str) -> Callable[[object], CommandResult]:
+        def run(_target: object) -> CommandResult:
+            calls.append(action)
+            return CommandResult(ok=True, message=action, instance=instance)
 
-    def start(resolved: ServerInstance) -> CommandResult:
-        calls.append("start")
-        return CommandResult(ok=True, message="started", instance=resolved)
+        return run
 
     _classified(monkeypatch, state, "absent")
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
-    monkeypatch.setattr(data_store_management, "stop_server", stop)
-    monkeypatch.setattr(data_store_management, "start_server", start)
+    monkeypatch.setattr(
+        application_processes, "owning_installation", lambda _target: install if packaged else None
+    )
+    prefix = "installation " if packaged else ""
+    monkeypatch.setattr(data_store_management, "stop_server", record("stop"))
+    monkeypatch.setattr(data_store_management, "start_server", record("start"))
+    monkeypatch.setattr(application_processes, "stop", record("installation stop"))
+    monkeypatch.setattr(application_processes, "start", record("installation start"))
 
     result = data_store_management.data_store_snapshot_restore(instance, snapshot.name, True)
 
     assert result.ok is True, result.message
-    assert calls == ["stop", "start"]
+    assert calls == [f"{prefix}stop", f"{prefix}start"]
     assert "(sessions)" in result.message
     assert "restarted the server" in result.message
-    restored = ChatSessionManager(tmp_path)
+    restored = ChatSessionManager(data_dir)
     try:
         assert restored.exists(SessionAddress(None, "agent", "restore"))
         assert not restored.exists(SessionAddress(None, "agent", "later"))
@@ -332,7 +346,6 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
         return SnapshotRestore("snapshot")
 
     _classified(monkeypatch, "absent")
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(data_store_management, "stop_server", stop)
     monkeypatch.setattr(data_store_management, "restore_data_snapshot", restore)
     monkeypatch.setattr(
@@ -425,7 +438,6 @@ def test_unregister_releases_locally_and_a_restore_registers_it_again(
     path = notes_spec(tmp_path, name=_EXTENSION).path
     _stopped_server(monkeypatch, instance)
     monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(
         data_store_management,
         "stop_server",

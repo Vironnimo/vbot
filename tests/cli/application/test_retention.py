@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -87,8 +86,6 @@ def test_cleanup_retires_only_versions_nothing_can_still_use(
         "rel_failed_since",
         "rel_prepared_since",
         "rel_unfinished",
-        "rel_customized",
-        "rel_build_env",
         "rel_speech_env",
         "rel_embedding_env",
         "rel_tray",
@@ -101,24 +98,11 @@ def test_cleanup_retires_only_versions_nothing_can_still_use(
     _operation(install, "upd_failed", "rolled_back", "rel_active", "rel_failed_since", at=4)
     _operation(install, "upd_prepared", "prepared", "rel_active", "rel_prepared_since", at=5)
     _operation(install, "upd_current", "completed", "rel_active", "rel_active", at=6)
-    (root / "development").mkdir()
-    (root / "development" / "state.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "base_version": "rel_customized",
-                "base_revision": "a" * 40,
-                "working_revision": "a" * 40,
-                "candidate_version": None,
-            }
-        ),
-        encoding="utf-8",
-    )
     versions = root / "versions"
     _environment(
-        root / "development" / "environment", versions / _other_case("rel_build_env") / "runtime"
+        root / "data" / "speech-engines" / "stt",
+        versions / _other_case("rel_speech_env") / "runtime",
     )
-    _environment(root / "data" / "speech-engines" / "stt", versions / "rel_speech_env" / "runtime")
     _environment(root / "data" / "speech-engines" / "tts", tmp_path / "uv" / "cpython")
     _environment(
         root / "data" / "embedding-engines" / "onnx", versions / "rel_embedding_env" / "runtime"

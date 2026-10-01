@@ -25,4 +25,4 @@ Updating execution fields or enabling a paused/failed job rearms it for the next
 
 ## Restart and update checks
 
-For a deliberate restart, make the prompt self-contained and idempotent. Tell the Agent what changed, which CLI checks to perform, what constitutes success, and not to repeat the disruptive operation. For `vbot update`, use the exact workflow in `references/server.md`: create with `--current-session`, verify the returned id with `bootstrap show <job-id>`, then start the update.
+For a deliberate restart, make the prompt self-contained and idempotent. Tell the Agent what changed, which CLI checks to perform, what constitutes success, and not to repeat the disruptive operation. `vbot update` needs no Bootstrap: it arranges its own continuation in the current Session (`references/server.md`).

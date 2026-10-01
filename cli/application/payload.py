@@ -1,8 +1,7 @@
-"""Source-readable application payload collection shared by builds and customization."""
+"""Source-readable application payload collection for the package builders."""
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from pathlib import Path
 
@@ -12,37 +11,10 @@ APP_SERVER = ("server", "resources", "webui/dist")
 APP_DESKTOP = ("desktop",)
 APP_FILES = ("pyproject.toml", "LICENSE", "THIRD_PARTY_NOTICES.md")
 IGNORED_NAMES = {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
-NATIVE_SOURCE_FILES = (
-    "scripts/windows/launcher.c",
-    "scripts/windows/launcher.rc",
-    "scripts/windows/launcher.manifest",
-    "scripts/windows/desktop.manifest",
-    "desktop/icon.ico",
-    # The complete compile recipe; the rest of the release builder is not an input.
-    "scripts/windows/native_hosts.py",
-)
 
 
 class PayloadError(RuntimeError):
     """Application source cannot form a safe, complete payload."""
-
-
-def native_source_digest(source: Path) -> str:
-    """Fingerprint every source input that can change a compiled native host."""
-
-    source = source.resolve()
-    value = hashlib.sha256()
-    for relative in NATIVE_SOURCE_FILES:
-        path = source / relative
-        if not path.is_file():
-            raise PayloadError(f"required native host source is missing: {relative}")
-        value.update(relative.encode("utf-8"))
-        value.update(b"\0")
-        contents = path.read_bytes()
-        if path.suffix != ".ico":
-            contents = contents.replace(b"\r\n", b"\n")
-        value.update(hashlib.sha256(contents).digest())
-    return value.hexdigest()
 
 
 def app_paths(shape: str) -> tuple[str, ...]:
@@ -95,9 +67,17 @@ def _copy_tree(
 
 
 def copy_application(
-    source: Path, destination: Path, shape: str, *, assets: Path | None = None
+    source: Path,
+    destination: Path,
+    shape: str,
+    *,
+    search_target: str,
+    assets: Path | None = None,
 ) -> None:
-    """Copy the safe runtime source surface while preserving repository-relative paths."""
+    """Copy the safe runtime source surface while preserving repository-relative paths.
+
+    *search_target* names the ripgrep build the package's platform runs.
+    """
     source = source.resolve()
     for relative in app_paths(shape):
         origin = assets if assets is not None and relative == "webui/dist" else source
@@ -118,7 +98,7 @@ def copy_application(
         from cli.search_runtime import provision_search_runtime
         from core.utils.search_binary import binary_spec
 
-        native_target = "x86_64-pc-windows-msvc"
+        native_target = search_target
         output, _ = binary_spec(destination / "resources", native_target)
         for native_origin in (source, assets):
             if (

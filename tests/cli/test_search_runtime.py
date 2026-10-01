@@ -148,7 +148,8 @@ def test_clean_builder_downloads_asset_without_site_packages(tmp_path):
         probe = (
             "import sys; from pathlib import Path; "
             "from cli.application.payload import copy_application; "
-            "copy_application(Path(sys.argv[1]), Path(sys.argv[2]), 'server')"
+            "copy_application(Path(sys.argv[1]), Path(sys.argv[2]), 'server', "
+            "search_target='x86_64-pc-windows-msvc')"
         )
         result = subprocess.run(
             [sys.executable, "-S", "-c", probe, str(root), str(destination)],

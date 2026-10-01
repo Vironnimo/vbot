@@ -6,6 +6,7 @@ import importlib
 import json
 import logging
 import os
+import platform as _platform
 import sys
 import time
 from collections.abc import Iterator
@@ -47,8 +48,33 @@ NATIVE_HOST_NAMES = frozenset(
 )
 
 
+#: Where each update channel publishes its signed packages. CI publishes every
+#: green ``main`` commit to the rolling ``main-build`` prerelease.
+CHANNEL_URLS = {
+    "release": "https://api.github.com/repos/Vironnimo/vbot/releases/latest",
+    "main": "https://api.github.com/repos/Vironnimo/vbot/releases/tags/main-build",
+}
+
+
 class ApplicationError(ValueError):
     """An installation cannot safely perform the requested operation."""
+
+
+def current_platform() -> str:
+    """Name the package platform of this host, as release manifests record it."""
+    machine = _platform.machine().lower()
+    if sys.platform == "win32" and machine in {"amd64", "x86_64"}:
+        return "windows-x86_64"
+    if sys.platform.startswith("linux"):
+        architecture = {
+            "x86_64": "x86_64",
+            "amd64": "x86_64",
+            "aarch64": "aarch64",
+            "arm64": "aarch64",
+        }
+        if machine in architecture:
+            return f"linux-{architecture[machine]}"
+    raise ApplicationError(f"vBot packages are not available for {sys.platform} {machine}")
 
 
 def timestamp() -> str:
@@ -99,12 +125,24 @@ class Installation:
     server_host: str | None
     server_port: int | None
     server_data_directory: str | None
-    release_url: str = "https://api.github.com/repos/Vironnimo/vbot/releases/latest"
+    release_url: str = CHANNEL_URLS["release"]
     release_public_key: str = ""
 
     @property
     def owns_server(self) -> bool:
         return self.install_shape != "desktop-client"
+
+    @property
+    def bootstrap(self) -> Path:
+        """The stable protocol-1 bootstrap that always runs the active version."""
+        return self.root / ("vBot.exe" if os.name == "nt" else "vbot")
+
+    @property
+    def channel(self) -> str:
+        """``release``, ``main``, or ``custom`` for a deliberately configured URL."""
+        return next(
+            (name for name, url in CHANNEL_URLS.items() if url == self.release_url), "custom"
+        )
 
     def version(self, version_id: str | None = None) -> Path:
         if version_id is None:
@@ -161,7 +199,7 @@ def load_installation(root: Path) -> Installation:
         or not Path(data).is_absolute()
     ):
         raise ApplicationError("Application server target is incomplete")
-    url = value.get("release_url", "https://api.github.com/repos/Vironnimo/vbot/releases/latest")
+    url = value.get("release_url", CHANNEL_URLS["release"])
     key = value.get("release_public_key", "")
     if not isinstance(url, str) or not url.startswith("https://") or not isinstance(key, str):
         raise ApplicationError("Invalid application release configuration")

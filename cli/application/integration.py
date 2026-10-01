@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import shutil
@@ -12,32 +10,24 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from cli.application import processes
+from cli.application.autostart import Runner, autostart, same_path
 from cli.application.state import (
     ApplicationError,
     Installation,
     contained,
-    ensure_not_removing,
     exclusive,
     operations,
     read_json,
     write_json,
 )
-from cli.autostart_management import (
-    DEFAULT_TASK_NAME,
-    Runner,
-    _default_runner,
-    _windows_task_command,
-    autostart_status,
-    disable_autostart,
-)
-from cli.install_state import InstallState, read_install_state
-from cli.server_management import ServerState, resolve_instance, stop_server
-from core.utils.processes import subprocess_creation_flags
+from cli.server_management import ServerState
+from core.utils.server_control import process_started
+
+_LOGGER = logging.getLogger("vbot.application.integration")
 
 
 def refresh_gui_entrypoints(install: Installation) -> None:
@@ -87,105 +77,6 @@ def refresh_gui_entrypoints(install: Installation) -> None:
             install.root,
             ",".join(changed),
         )
-
-
-AUTOSTART_ACTIONS = frozenset({"status", "enable", "disable"})
-
-
-def task_name(install: Installation) -> str:
-    """Return a stable Task Scheduler name scoped to the exact install root."""
-    identity = hashlib.sha256(os.path.normcase(str(install.root)).encode("utf-8")).hexdigest()[:12]
-    return f"vBot Application {identity}"
-
-
-def _task_lookup(run: Runner, name: str) -> tuple[bool, str, str]:
-    result = run(_windows_task_command("inspect", task_name=name))
-    if result.returncode == 3:
-        return False, "", ""
-    if result.returncode != 0:
-        detail = result.stdout or result.stderr or f"exit code {result.returncode}"
-        raise ApplicationError(f"Task Scheduler query failed: {detail}")
-    try:
-        value = json.loads(result.stdout)
-        launcher, arguments = value["launcher"], value["arguments"]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ApplicationError("Task Scheduler returned invalid application ownership") from exc
-    if not isinstance(launcher, str) or not isinstance(arguments, str):
-        raise ApplicationError("Task Scheduler returned invalid application ownership")
-    return True, launcher, arguments
-
-
-def _same_path(left: str | Path, right: str | Path) -> bool:
-    try:
-        # Windows process APIs may report an existing executable through its
-        # 8.3 alias even when the installation record uses the long path.
-        return os.path.samefile(left, right)
-    except OSError:
-        # Registry and Task Scheduler ownership checks also compare targets
-        # that may not exist. Retain a stable lexical comparison for those.
-        pass
-    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
-
-
-def autostart(
-    install: Installation,
-    action: str,
-    *,
-    platform: str = sys.platform,
-    runner: Runner | None = None,
-) -> dict[str, Any]:
-    """Inspect or mutate the exact per-user packaged logon registration."""
-    if action not in AUTOSTART_ACTIONS:
-        raise ApplicationError("Unknown application Autostart action")
-    if action == "enable":
-        ensure_not_removing(install.root)
-    if platform != "win32":
-        raise ApplicationError("Packaged application Autostart is supported only on Windows")
-    run = runner or _default_runner
-    name = task_name(install)
-    launcher = install.root / "vBot.exe"
-    if not launcher.is_file():
-        raise ApplicationError("Application bootstrap is missing")
-    exists, registered_launcher, arguments = _task_lookup(run, name)
-    owned = exists and _same_path(registered_launcher, launcher) and arguments == ""
-    if exists and not owned:
-        raise ApplicationError(f"Task Scheduler entry '{name}' belongs to another application")
-    if action == "status":
-        return {"ok": True, "enabled": owned, "task_name": name, "launcher": str(launcher)}
-    if action == "disable":
-        if not exists:
-            return {"ok": True, "enabled": False, "task_name": name, "changed": False}
-        result = run(_windows_task_command("delete", task_name=name))
-        if result.returncode not in {0, 3}:
-            raise ApplicationError(
-                f"Could not disable application Autostart: {result.stdout or result.stderr}"
-            )
-        logging.getLogger("vbot.application.integration").info(
-            "Application Autostart disabled (mode=task_scheduler)"
-        )
-        return {"ok": True, "enabled": False, "task_name": name, "changed": True}
-    result = run(
-        _windows_task_command(
-            "enable",
-            task_name=name,
-            launcher=str(launcher),
-            arguments="",
-            restart_count=3,
-            restart_interval="PT1M",
-        )
-    )
-    if result.returncode != 0:
-        raise ApplicationError(
-            f"Could not enable application Autostart: {result.stdout or result.stderr}"
-        )
-    verified, verified_launcher, verified_arguments = _task_lookup(run, name)
-    if not verified or not _same_path(verified_launcher, launcher) or verified_arguments:
-        raise ApplicationError("Application Autostart registration could not be verified")
-    if not owned:
-        logging.getLogger("vbot.application.integration").info(
-            "Application Autostart enabled (mode=task_scheduler)"
-        )
-    return {"ok": True, "enabled": True, "task_name": name, "changed": not owned}
 
 
 # The tray's toasts carry this identity. Its registry entry names them "vBot"
@@ -259,9 +150,9 @@ def request_host_exit(
         import psutil  # type: ignore[import-untyped]
 
         process = psutil.Process(pid)
-        if abs(process.create_time() - created) > 0.01:
+        if abs(process_started(process) - created) > 0.01:
             raise ApplicationError("Application host ownership record is stale")
-        if not _same_path(process.exe(), install.root / "vBot.exe"):
+        if not same_path(process.exe(), install.root / "vBot.exe"):
             raise ApplicationError("Application host ownership record targets another executable")
     except psutil.NoSuchProcess:
         state_path.unlink(missing_ok=True)
@@ -306,13 +197,21 @@ def uninstall(
     exit_host: Callable[[Installation], Any] = request_host_exit,
     launcher: UninstallerLauncher = _launch_uninstaller,
     remove_tree: RemoveTree = _remove_tree,
+    command_link: Path | None = None,
 ) -> dict[str, Any]:
-    """Stop the exact owned server, optionally remove data, then launch Inno removal."""
-    if platform != "win32":
-        raise ApplicationError("Packaged application removal is supported only on Windows")
+    """Stop the exact owned server, optionally remove data, then remove the application.
+
+    Windows hands the application removal to its registered Inno uninstaller.
+    Linux removes the logon unit, the ``vbot`` command link and the
+    installation directory itself.
+    """
+    if platform != "win32" and not platform.startswith("linux"):
+        raise ApplicationError(f"Packaged application removal is not supported on {platform}")
     if remove_data and data_only:
         raise ApplicationError("Choose application-and-data removal or data-only reset")
-    uninstaller = None if data_only else registered_uninstaller(install.root)
+    uninstaller = (
+        registered_uninstaller(install.root) if platform == "win32" and not data_only else None
+    )
     if Path.cwd().resolve().is_relative_to(install.root.resolve()):
         raise ApplicationError("Change to a directory outside the application before uninstalling")
     # Keep dispatch closed from the pending-operation check through removal. The
@@ -388,8 +287,22 @@ def uninstall(
                     "data_removed": removed_data,
                     "server_restarted": restarted,
                 }
-            autostart(install, "disable", platform=platform, runner=runner)
-            assert uninstaller is not None
+            if platform == "win32" or install.owns_server:
+                autostart(install, "disable", platform=platform, runner=runner)
+            if uninstaller is None:
+                link = command_link or Path.home() / ".local" / "bin" / "vbot"
+                if link.is_symlink() and same_path(link, install.bootstrap):
+                    link.unlink()
+                # Logged first: the installation's own log goes with it.
+                _LOGGER.info("Application removal started (root=%s)", install.root)
+                remove_tree(install.root)
+                return {
+                    "ok": True,
+                    "completed": True,
+                    "removed": True,
+                    "data_removed": removed_data,
+                    "data_preserved": not remove_data,
+                }
             launcher(uninstaller)
             return {
                 "ok": True,
@@ -399,119 +312,6 @@ def uninstall(
                 "data_removed": removed_data,
                 "data_preserved": not remove_data,
             }
-
-
-@dataclass(frozen=True)
-class CheckoutTransition:
-    """Verified source-install facts retained until packaged registration succeeds."""
-
-    state: InstallState
-    old_autostart_enabled: bool = False
-    old_autostart_launcher: str | None = None
-
-
-GitRunner = Callable[[Path], subprocess.CompletedProcess[str]]
-
-
-def _git_status(checkout: Path) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=checkout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            creationflags=subprocess_creation_flags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ApplicationError("Could not inspect the source checkout before transition") from exc
-
-
-def prepare_checkout_transition(
-    checkout: Path,
-    *,
-    shape: str,
-    platform: str = sys.platform,
-    git_runner: GitRunner = _git_status,
-    runner: Runner | None = None,
-    stop: Callable[[Any], Any] = stop_server,
-) -> CheckoutTransition:
-    """Refuse local changes and stop the exact source-owned server before cutover."""
-    checkout = checkout.resolve()
-    state = read_install_state(checkout)
-    if state is None or state.install_shape != shape:
-        raise ApplicationError("The existing checkout has no matching installation manifest")
-    status = git_runner(checkout)
-    if status.returncode != 0:
-        raise ApplicationError("Could not inspect the source checkout before transition")
-    if status.stdout.strip():
-        raise ApplicationError(
-            "The source checkout has local changes; use 'vbot customize prepare' to migrate them"
-        )
-    if shape == "desktop-client":
-        return CheckoutTransition(state)
-    if not state.server_host or not state.server_port or not state.server_data_directory:
-        raise ApplicationError("The source installation has no exact server target")
-    instance = resolve_instance(
-        host=state.server_host,
-        port=state.server_port,
-        data_dir=state.server_data_directory,
-    )
-    stopped = stop(instance)
-    if not stopped.ok:
-        raise ApplicationError(
-            f"Source transition aborted because the server could not stop: {stopped.message}"
-        )
-    old_launcher = str(Path(state.python_executable).parent / "vbot-autostart.exe")
-    enabled = False
-    if platform == "win32":
-        existing = autostart_status(
-            instance,
-            platform=platform,
-            runner=runner,
-            task_name=DEFAULT_TASK_NAME,
-            windows_launcher_path=old_launcher,
-        )
-        if not existing.ok:
-            raise ApplicationError(
-                f"Could not verify source Autostart ownership: {existing.message}"
-            )
-        enabled = existing.message.startswith("autostart: enabled ")
-    return CheckoutTransition(state, enabled, old_launcher)
-
-
-def finish_checkout_transition(
-    install: Installation,
-    transition: CheckoutTransition,
-    *,
-    platform: str = sys.platform,
-    runner: Runner | None = None,
-) -> None:
-    """Move owned logon registration only after packaged registration verifies."""
-    if not transition.old_autostart_enabled:
-        return
-    autostart(install, "enable", platform=platform, runner=runner)
-    state = transition.state
-    assert state.server_host and state.server_port and state.server_data_directory
-    instance = resolve_instance(
-        host=state.server_host, port=state.server_port, data_dir=state.server_data_directory
-    )
-    status = autostart_status(
-        instance,
-        platform=platform,
-        runner=runner,
-        task_name=DEFAULT_TASK_NAME,
-        windows_launcher_path=transition.old_autostart_launcher,
-    )
-    if not status.ok or not status.message.startswith("autostart: enabled "):
-        raise ApplicationError("Source Autostart ownership changed during transition")
-    removed = disable_autostart(
-        instance, platform=platform, runner=runner, task_name=DEFAULT_TASK_NAME
-    )
-    if not removed.ok:
-        raise ApplicationError(f"Could not retire source Autostart: {removed.message}")
 
 
 def begin_removal(install: Installation) -> dict[str, Any]:
@@ -550,9 +350,9 @@ def begin_removal(install: Installation) -> dict[str, Any]:
             owned_uninstaller = (
                 second_phase.name.casefold() == "_unins.tmp"
                 and len(second_phase_targets) == 1
-                and _same_path(Path(second_phase_targets[0]).resolve(), uninstaller.resolve())
+                and same_path(Path(second_phase_targets[0]).resolve(), uninstaller.resolve())
                 and first_phase is not None
-                and _same_path(Path(first_phase.exe()).resolve(), uninstaller.resolve())
+                and same_path(Path(first_phase.exe()).resolve(), uninstaller.resolve())
             )
         except (OSError, psutil.Error):
             owned_uninstaller = False
@@ -577,7 +377,7 @@ def begin_removal(install: Installation) -> dict[str, Any]:
                 )
         write_json(
             contained(install.root, "removal-pending.json"),
-            {"schema_version": 1, "pid": parent.pid, "process_created": parent.create_time()},
+            {"schema_version": 1, "pid": parent.pid, "process_created": process_started(parent)},
         )
         # The tray has exited; if removal is cancelled, its next start registers again.
         remove_notification_identity(install)
@@ -612,7 +412,7 @@ def reset_removal(install: Installation) -> dict[str, Any]:
             raise ApplicationError("Removal ownership is invalid; preserve it for inspection")
         try:
             process = psutil.Process(record["pid"])
-            if abs(process.create_time() - created) < 0.001 and process.is_running():
+            if abs(process_started(process) - created) < 0.001 and process.is_running():
                 raise ApplicationError("The uninstaller is still running")
         except psutil.NoSuchProcess:
             pass

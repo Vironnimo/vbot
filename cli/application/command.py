@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -27,15 +29,12 @@ def add_parsers(subparsers) -> None:
     install.add_argument("--port", type=int, default=8420)
     install.add_argument("--data-dir", type=Path)
     install.add_argument("--public-key", default="")
-    install.add_argument("--from-checkout", type=Path)
+    install.add_argument("--channel", choices=("release", "main"), default="release")
     commands.add_parser("status", help="Show the installed version and latest update")
-    source = commands.add_parser(
-        "source", help="Select release or main updates for this installation"
+    channel = commands.add_parser(
+        "channel", help="Select whether updates install releases or the newest main build"
     )
-    source.add_argument("source_track", choices=("main", "release"))
-    source.add_argument(
-        "--from-checkout", type=Path, help="Retain an existing Git branch as the update source"
-    )
+    channel.add_argument("update_channel", choices=("main", "release"))
     commands.add_parser("tray", help="Run the vBot tray application")
     commands.add_parser("exit", help="Stop the owned tray application cleanly")
     commands.add_parser("removal-begin", help="Guard the native uninstaller's removal phase")
@@ -45,33 +44,25 @@ def add_parsers(subparsers) -> None:
     dependencies.add_argument(
         "--requirements", type=Path, help="Complete replacement requirements recipe"
     )
-    custom = subparsers.add_parser(
-        "customize", help="Prepare, check and activate local vBot features"
-    )
-    actions = custom.add_subparsers(dest="command", required=True)
-    prepare = actions.add_parser(
-        "prepare", help="Create a development copy of the exact installed version"
-    )
-    prepare.add_argument("--source", type=Path, help="Use an existing source repository")
-    actions.add_parser("status", help="Show local customization state")
-    check = actions.add_parser(
-        "check", help="Validate local changes and prepare an application candidate"
-    )
-    check.add_argument(
-        "--intent", required=True, help="Describe the intended behavior of these changes"
-    )
-    activate = actions.add_parser(
-        "activate", help="Activate the previously checked local candidate"
-    )
-    activate.add_argument("--detach", action="store_true")
-    rebase = actions.add_parser("rebase", help="Check a manually resolved update reconciliation")
-    rebase.add_argument("--intent", required=True)
-    test = actions.add_parser(
-        "test", help="Start an isolated test instance without external producers"
-    )
-    test.add_argument(
-        "--port", type=int, default=0, help="Test port; omitted selects a free local port"
-    )
+
+
+# Commands that manage an installed application, and what a source checkout,
+# which is no installation, does instead.
+_INSTALLATION_AREAS = {
+    "application": "This command requires a packaged vBot installation",
+    "update": (
+        "vbot update updates a packaged vBot installation. "
+        "This is a source checkout: update it with git"
+    ),
+    "uninstall": (
+        "vbot uninstall removes a packaged vBot installation. "
+        "This is a source checkout: stop its server and delete the checkout yourself"
+    ),
+    "autostart": (
+        "vbot autostart registers a packaged vBot installation. "
+        "This is a source checkout: start its server with: vbot server start"
+    ),
+}
 
 
 def _print(value, *, lines: list[str] | None = None) -> None:
@@ -134,7 +125,7 @@ def dispatch(args: argparse.Namespace) -> int | None:
             port=args.port,
             data_dir=args.data_dir,
             public_key=args.public_key,
-            from_checkout=args.from_checkout,
+            channel=args.channel,
         )
         _print(
             {"installed": True, "root": str(installed.root), "version": installed.version().name},
@@ -143,18 +134,8 @@ def dispatch(args: argparse.Namespace) -> int | None:
         return 0
     install = discover()
     if install is None:
-        if args.area in {"application", "customize"} or (
-            args.area == "update"
-            and (
-                getattr(args, "update_action", None)
-                or getattr(args, "detach", False)
-                or getattr(args, "package", None)
-            )
-        ):
-            raise ApplicationError(
-                "This command requires a packaged vBot installation; "
-                "source-checkout updates retain their existing workflow"
-            )
+        if args.area in _INSTALLATION_AREAS:
+            raise ApplicationError(_INSTALLATION_AREAS[args.area])
         return None
     from core.utils.logging import LogManager
 
@@ -170,25 +151,29 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
     from cli.application import operations, processes
 
     if args.area == "application":
-        if args.command == "source":
-            from cli.application.source_updates import select_source
+        if args.command == "channel":
+            from cli.application.state import CHANNEL_URLS
             from cli.application.state import operations as saved_operations
 
             with exclusive(install.root, "dispatch"), exclusive(install.root):
                 if any(not item.terminal for item in saved_operations(install)):
-                    raise ApplicationError("Wait for the pending update before changing its source")
-                selected = select_source(
-                    install, args.source_track, from_checkout=args.from_checkout
+                    raise ApplicationError(
+                        "Wait for the pending update before changing its channel"
+                    )
+                selected = dataclasses.replace(
+                    install, release_url=CHANNEL_URLS[args.update_channel]
                 )
-                label = (
-                    f"branch {selected.get('branch', 'main')}"
-                    if args.source_track == "main"
-                    else "published releases"
+                selected.save()
+                logging.getLogger("vbot.application.update").info(
+                    "Application update channel changed (from=%s to=%s)",
+                    install.channel,
+                    selected.channel,
                 )
-                _print(
-                    {**selected, "next_command": "vbot update"},
-                    lines=[f"Updates now follow {label}.", "Apply an update with: vbot update"],
-                )
+            label = "the newest main build" if args.update_channel == "main" else "releases"
+            _print(
+                {"channel": args.update_channel, "next_command": "vbot update"},
+                lines=[f"Updates now install {label}.", "Apply an update with: vbot update"],
+            )
             return 0
         if args.command in {"removal-begin", "removal-reset"}:
             from cli.application.integration import begin_removal, reset_removal
@@ -236,15 +221,12 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             main()
             return 0
         operation = operations.status(install)
-        from cli.application.source_updates import read_binding
-
-        source = read_binding(install)
         _print(
             {
                 "root": str(install.root),
                 "version": install.version().name,
                 "shape": install.install_shape,
-                "update_source": {"kind": "checkout", **source} if source else {"kind": "release"},
+                "channel": install.channel,
                 "update": operations.public_result(operation) if operation else None,
             }
         )
@@ -273,48 +255,36 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             "Packaged lifecycle commands must target this installation's recorded server"
         )
     if args.area == "autostart":
-        from cli.application.integration import autostart
+        from cli.application.autostart import autostart
 
-        if args.task_name or args.service_name:
-            raise ApplicationError(
-                "Packaged Autostart uses this installation's owned logon registration"
-            )
         registration = autostart(install, args.command)
-        _print(
-            registration,
-            lines=[f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."],
-        )
+        lines = [f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."]
+        if "unit" in registration:
+            lines.append(f"systemd user unit: {registration['unit']}")
+        if "attention" in registration:
+            lines.append(f"Attention: {registration['attention']}")
+        _print(registration, lines=lines)
         return 0
     if args.area == "uninstall":
         from cli.application.integration import uninstall
-        from cli.uninstall_management import (
-            UninstallMode,
-            UninstallResult,
-            _choose_mode,
-            _confirm_mode,
-        )
 
         data = Path(install.server_data_directory) if install.server_data_directory else None
         if args.uninstall_mode is None:
             if not sys.stdin.isatty():
                 raise ApplicationError("Select --app-only, --data-only or --all explicitly")
             print(f"Application: {install.root}")
-            choice = _choose_mode(data, input_fn=input, output_fn=print)
-            if isinstance(choice, UninstallResult):
-                print(choice.message)
-                return 0 if choice.ok else 1
-            mode = choice.value
+            mode = _choose_removal(data)
         else:
             mode = args.uninstall_mode
         if mode in {"all", "data-only"} and data is None:
             raise ApplicationError("This Desktop Client does not own server data")
-        if not args.yes:
+        if mode is not None and not args.yes:
             if not sys.stdin.isatty():
                 raise ApplicationError("Use --yes to confirm the explicitly selected removal mode")
-            confirmed = _confirm_mode(UninstallMode(mode), data, input_fn=input, output_fn=print)
-            if confirmed is not None:
-                print(confirmed.message)
-                return 0 if confirmed.ok else 1
+            mode = mode if _confirm_removal(mode, data) else None
+        if mode is None:
+            print("uninstall: cancelled; no changes made")
+            return 0
         removal = uninstall(install, remove_data=mode == "all", data_only=mode == "data-only")
         lines = (
             [
@@ -322,6 +292,13 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
                 "Server: restarted." if removal["server_restarted"] else "Server: stopped.",
             ]
             if mode == "data-only"
+            else [
+                f"vBot has been removed from {install.root}.",
+                "Server data was removed."
+                if removal["data_removed"]
+                else "Server data is preserved.",
+            ]
+            if removal.get("removed")
             else [
                 "The uninstaller has started. Application removal is not yet confirmed.",
                 "Server data was removed."
@@ -367,11 +344,6 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
                 else {"message": "No update operation has been recorded"}
             )
             return 0
-        if args.discard or args.stash:
-            raise ApplicationError(
-                "Packaged updates preserve managed local changes automatically; "
-                "--discard and --stash apply only to source checkouts"
-            )
         if args.operation_id and args.update_action != "activate":
             raise ApplicationError(
                 "An operation id is only valid with update status or update activate"
@@ -399,49 +371,6 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         outcome = _wait_update(install, operation)
         _print_update_result(install, outcome)
         return 0 if outcome.phase in {"completed", "prepared"} else 1
-    if args.area == "customize":
-        from cli.application import customize
-
-        if args.command == "prepare":
-            prepared_source = customize.prepare(install, source=args.source)
-            _print(
-                {"source": str(prepared_source)},
-                lines=[
-                    f"Development source: {prepared_source}",
-                    "After editing, run: vbot customize check --intent <description>",
-                ],
-            )
-        elif args.command == "status":
-            _print(customize.development_state(install) or {"message": "No local changes prepared"})
-        elif args.command == "check":
-            _print(
-                customize.check(install, intent=args.intent),
-                lines=[
-                    "Your changes passed validation. The active version has not changed.",
-                    "Test: vbot customize test",
-                    "Activate: vbot customize activate",
-                ],
-            )
-        elif args.command == "rebase":
-            _print(
-                customize.finish_rebase(install, intent=args.intent),
-                lines=[
-                    "The resolved changes passed validation. The active version has not changed.",
-                    "Activate: vbot customize activate",
-                ],
-            )
-        elif args.command == "activate":
-            archive = customize.activation_archive(install)
-            operation = operations.request_update(
-                install, package=archive, handoff_token=os.environ.get("VBOT_UPDATE_HANDOFF")
-            )
-            if not args.detach and not operation.handoff_ticket:
-                operation = _wait_update(install, operation)
-            _print_update_result(install, operation, handoff=bool(operation.handoff_ticket))
-            return 0 if not operation.terminal or operation.phase == "completed" else 1
-        elif args.command == "test":
-            customize.run_test_instance(install, port=args.port)
-        return 0
     # Ordinary management RPCs use the installed target by default. Client-only
     # remains a remote accessor, whose explicit host/port is resolved normally.
     if install.owns_server:
@@ -452,3 +381,45 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         if getattr(args, "host", None) in {None, "127.0.0.1"}:
             args.host = install.server_host
     return None
+
+
+def _answer(prompt: str) -> str | None:
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _choose_removal(data: Path | None) -> str | None:
+    """Ask what to remove; ``None`` cancels."""
+    if data is None:
+        print("This Desktop Client owns no local server or server data directory.")
+        choices = {"1": "app-only"}
+        print("  1) Application only")
+        print("  2) Cancel")
+        cancel = "2"
+    else:
+        choices = {"1": "app-only", "2": "data-only", "3": "all"}
+        print("What do you want to remove?")
+        print(f"  1) Application only (keep data at {data})")
+        print(f"  2) Data only (reset {data}, keep the application)")
+        print("  3) Application and data")
+        print("  4) Cancel")
+        cancel = "4"
+    while True:
+        answer = _answer(f"Selection [{cancel}]: ")
+        if answer is None or answer in {"", cancel, "q", "quit", "cancel"}:
+            return None
+        if answer in choices:
+            return choices[answer]
+        print(f"Enter {', '.join([*choices, cancel])}.")
+
+
+def _confirm_removal(mode: str, data: Path | None) -> bool:
+    if mode == "app-only":
+        return _answer("Remove the vBot application and keep its data? Type YES to continue: ") == (
+            "YES"
+        )
+    print("WARNING: This permanently deletes settings, credentials, Agents, and Sessions.")
+    print(f"Data directory: {data}")
+    return _answer("Type DELETE to continue: ") == "DELETE"

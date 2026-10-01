@@ -193,6 +193,28 @@ def subprocess_creation_flags(
     return flags
 
 
+def _service_cgroup() -> bool:
+    """Whether this process runs inside a systemd service, such as the server's unit."""
+    try:
+        with open("/proc/self/cgroup", encoding="utf-8") as handle:
+            groups = handle.read().splitlines()
+    except OSError:
+        return False
+    return any(line.rsplit(":", 1)[-1].endswith(".service") for line in groups)
+
+
+def outside_service_unit(arguments: list[str], *, platform_name: str = os.name) -> list[str]:
+    """Return *arguments* so that the process they start survives this systemd service.
+
+    Everything left in a service's control group ends when the service stops. A
+    detached process that must outlive the server it was started from runs in a
+    scope of its own instead, the counterpart of a Windows job breakaway.
+    """
+    if platform_name == "nt" or not _service_cgroup():
+        return arguments
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--", *arguments]
+
+
 @functools.cache
 def _launch_workers() -> BoundedWorkerPool:
     # Imported on first launch: update and install paths import this module in an

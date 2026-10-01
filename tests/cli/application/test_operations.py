@@ -12,6 +12,7 @@ import pytest
 
 from cli.application import operations
 from cli.application.state import ApplicationError, Installation, Operation, load_operation
+from core.utils import processes as core_processes
 
 
 def _install(root: Path) -> Installation:
@@ -64,10 +65,12 @@ def test_request_coalesces_a_live_operation_and_recovers_an_orphan(
     assert spawned == [pending.id, pending.id]
 
 
+@pytest.mark.parametrize("in_service", [False, True], ids=["shell", "systemd-service"])
 def test_worker_spawn_is_detached_and_strips_run_caller_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, in_service: bool
 ):
     install = _install(tmp_path)
+    monkeypatch.setattr(core_processes, "_service_cgroup", lambda: in_service)
     operation = Operation(id="upd_spawn")
     captured: dict[str, object] = {}
     monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-secret")
@@ -102,6 +105,11 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     assert captured["creationflags"] == 73
     assert captured["stdin"] is operations.subprocess.DEVNULL
     assert load_operation(install, operation.id).worker_pid == 123
+    # A worker started inside a service, such as the server's systemd unit, leaves
+    # it, so that stopping the server does not end the worker too.
+    arguments = cast(list[str], captured["arguments"])
+    scoped = in_service and os.name != "nt"
+    assert arguments[0] == ("systemd-run" if scoped else str(install.interpreter(role="Update")))
 
 
 def test_pending_update_rejects_incompatible_request(

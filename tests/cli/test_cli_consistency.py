@@ -146,7 +146,6 @@ AREAS = [
     ("config", ["list"]),
     ("debug", ["status"]),
     ("performance", ["status"]),
-    ("autostart", ["status"]),
 ]
 
 

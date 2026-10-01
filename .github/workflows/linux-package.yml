@@ -1,0 +1,115 @@
+name: Linux package
+
+on:
+  workflow_call:
+    inputs:
+      release_mode:
+        description: Sign update archives with the configured release key
+        required: false
+        default: false
+        type: boolean
+      channel:
+        description: Update channel the packages follow (release or main)
+        required: false
+        default: release
+        type: string
+      ref:
+        description: Commit to build; the triggering commit when empty
+        required: false
+        default: ""
+        type: string
+    secrets:
+      VBOT_RELEASE_SIGNING_KEY:
+        required: false
+  workflow_dispatch:
+    inputs:
+      release_mode:
+        description: Sign update archives with the configured release key
+        required: false
+        default: false
+        type: boolean
+  pull_request:
+    paths:
+      - "core/**"
+      - "server/**"
+      - "cli/**"
+      - "resources/**"
+      - "webui/**"
+      - "scripts/build_linux.py"
+      - "scripts/package_build.py"
+      - "scripts/linux/**"
+      - "pyproject.toml"
+      - ".github/workflows/linux-package.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # A package is built on its own architecture: the builder runs the
+          # runtime it packages.
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Build WebUI assets
+        run: |
+          npm ci --prefix webui
+          npm run build --prefix webui
+      - name: Install the builder's dependencies
+        run: python -m pip install httpx cryptography psutil
+      - name: Build package and dependency inventory
+        env:
+          VBOT_RELEASE_SIGNING_KEY: ${{ secrets.VBOT_RELEASE_SIGNING_KEY }}
+        run: |
+          revision="$(git rev-parse HEAD)"
+          version="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          arguments=(
+            --source .
+            --output build/linux
+            --platform "${{ matrix.platform }}"
+            --version "$version"
+            --revision "$revision"
+            --channel "${{ inputs.channel || 'release' }}"
+            --cache "${RUNNER_TEMP}/vbot-runtime-cache"
+          )
+          if [ "${{ inputs.release_mode }}" = "true" ]; then
+            arguments+=(--release-mode)
+          fi
+          python scripts/build_linux.py "${arguments[@]}"
+      - name: Smoke packaged install, update, lifecycle and uninstall
+        run: python scripts/linux/smoke.py --package "build/linux/${{ matrix.platform }}/server"
+      - name: Stage flat release assets
+        run: |
+          files=build/linux/release-files
+          mkdir -p "$files"
+          cp "build/linux/artifacts/vbot-${{ matrix.platform }}-server.zip" "$files/"
+          cp "build/linux/artifacts/vbot-${{ matrix.platform }}-server-runtime-inventory.json" "$files/"
+          cp build/linux/artifacts/vbot-release.json "$files/"
+          signature="build/linux/artifacts/vbot-${{ matrix.platform }}-server.zip.sig"
+          if [ -f "$signature" ]; then cp "$signature" "$files/"; fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vbot-${{ matrix.platform }}
+          path: build/linux/release-files/*
+          if-no-files-found: error

@@ -23,14 +23,7 @@ def _add_server_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     server_subparsers = server_parser.add_subparsers(dest="command", required=True)
     for command in SERVER_COMMANDS:
-        command_parser = _add_command_parser(server_subparsers, command, SERVER_HELP[command])
-        if command == "restart":
-            command_parser.add_argument(
-                "--service-name",
-                help=(
-                    "systemd user unit to restart when the install is unit-managed (default: vbot)"
-                ),
-            )
+        _add_command_parser(server_subparsers, command, SERVER_HELP[command])
 
 
 def _add_desktop_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -83,25 +76,10 @@ def _add_update_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     update_parser.add_argument(
         "--package", help="Use this deliberately selected local application package"
     )
-    local_changes = update_parser.add_mutually_exclusive_group()
-    local_changes.add_argument(
-        "--discard",
-        action="store_true",
-        help="Discard local changes to tracked files before updating",
-    )
-    local_changes.add_argument(
-        "--stash",
-        action="store_true",
-        help="Stash local changes, update, then reapply them",
-    )
     update_parser.add_argument(
         "--no-restart",
         action="store_true",
-        help="Prepare a packaged update without activation; source installs update without restart",
-    )
-    update_parser.add_argument(
-        "--service-name",
-        help="systemd user unit to restart when the install is unit-managed (default: vbot)",
+        help="Prepare the update without activating it; activate it later with: update activate",
     )
 
 
@@ -155,12 +133,6 @@ def _add_uninstall_parser(
         "--port", type=int, help="Server port; defaults to the recorded installation target"
     )
     uninstall_parser.add_argument("--data-dir", help="Exact data directory to keep or delete")
-    uninstall_parser.add_argument(
-        "--task-name", help="Windows Task Scheduler task name (default: vBot)"
-    )
-    uninstall_parser.add_argument(
-        "--service-name", help="Linux systemd user unit name without .service (default: vbot)"
-    )
 
 
 def _add_autostart_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -171,14 +143,8 @@ def _add_autostart_parsers(subparsers: argparse._SubParsersAction[argparse.Argum
     )
     autostart_subparsers = autostart_parser.add_subparsers(dest="command", required=True)
     for command in ("enable", "disable", "status"):
-        command_parser = _add_command_parser(
+        _add_command_parser(
             autostart_subparsers, command, AUTOSTART_HELP[command], example=f"autostart {command}"
-        )
-        command_parser.add_argument(
-            "--task-name", help="Windows Task Scheduler task name (default: vBot)"
-        )
-        command_parser.add_argument(
-            "--service-name", help="systemd user unit name without .service (default: vbot)"
         )
 
 

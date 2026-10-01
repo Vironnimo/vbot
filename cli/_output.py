@@ -13,11 +13,9 @@ from typing import TYPE_CHECKING, ParamSpec
 
 from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
-from cli._update_types import UpdateResult
 from cli.formatting import output_mode
 from cli.parser import parse_args
 from cli.server_management import CommandResult, ServerInstance
-from cli.update_management import UNKNOWN_VBOT_VERSION
 from core.utils.errors import ConfigError
 
 if TYPE_CHECKING:
@@ -210,60 +208,6 @@ def print_chat_command_result(result: CommandResult) -> None:
     )
 
 
-def print_update_command_start(version: str) -> None:
-    """Announce the self-update before its long-running work begins."""
-
-    if output_mode.get() == "plain":
-        return
-
-    if version == UNKNOWN_VBOT_VERSION:
-        print(
-            status_line("busy", "Updating vBot. The current version could not be determined..."),
-            flush=True,
-        )
-        return
-    print(status_line("busy", f"Updating vBot from version {version}..."), flush=True)
-
-
-def print_update_command_result(
-    result: CommandResult,
-    *,
-    version_before: str,
-    version_after: str,
-    shown_messages: set[str] | None = None,
-) -> None:
-    """Print update details followed by one readable completion sentence."""
-
-    _last_result.set(result)
-    remaining = [
-        line
-        for line in _result_message(result).splitlines()
-        if line not in (shown_messages or set())
-    ]
-    if remaining:
-        print("\n".join(remaining))
-    state: Status = "success" if result.ok else "error"
-    if result.ok and (
-        not isinstance(result, UpdateResult)
-        or result.restart_state in {"pending", "skipped"}
-        or result.forced
-        or result.attention
-        or (result.webui is not None and not result.webui.available)
-    ):
-        state = "warning"
-    print()
-    print(status_line(state, _update_completion_message(result)))
-    print(f"  Version: {version_before} -> {version_after}")
-    if not isinstance(result, UpdateResult) or result.restart_state != "not_applicable":
-        print(f"  Server: {result.instance.url}")
-    if result.webui is not None:
-        print(f"  WebUI: {_webui_text(result)}")
-    if result.forced:
-        print("  Attention: stopping the old server required forced termination.")
-    for note in result.attention:
-        print(f"  Attention: {note}.")
-
-
 def _operation_duration(operation: Operation) -> str | None:
     """Time from the update request to its saved outcome, e.g. ``2m 05s``."""
     try:
@@ -284,15 +228,14 @@ def print_application_update_result(
     from cli.application.operations import result_summary
     from cli.application.packages import version_label
     from cli.application.state import read_json
-    from cli.update_management import read_checkout_version
 
     def installed_label(version_id: str | None) -> str:
         if version_id is None:
             return "unknown"
-        root = install.version(version_id)
-        if (root / "release.json").is_file():
-            return version_label(read_json(root / "release.json", limit=32 * 1024**2))
-        return read_checkout_version(root / "app")
+        manifest = install.version(version_id) / "release.json"
+        if not manifest.is_file():
+            return "unknown"
+        return version_label(read_json(manifest, limit=32 * 1024**2))
 
     unchanged = (
         operation.phase == "completed"
@@ -399,37 +342,6 @@ def _server_completion_message(command: str, result: CommandResult) -> str:
             return f"The vBot server is running and healthy at {url}."
         return f"The vBot server is not running at {url}."
     raise ValueError(f"Unsupported server command: {command}")
-
-
-def _update_completion_message(result: CommandResult) -> str:
-    if result.ok:
-        if isinstance(result, UpdateResult):
-            if result.restart_state == "pending":
-                return (
-                    "Update installed — server restart pending. "
-                    "Availability has not yet been verified."
-                )
-            if result.restart_state == "skipped":
-                return (
-                    "Update installed — server was not restarted (--no-restart). "
-                    "Restart it to use the update."
-                )
-            if result.restart_state == "unchanged":
-                return "vBot is already up to date — nothing changed, so the server kept running."
-            if result.restart_state == "not_applicable":
-                return (
-                    "Update completed — Desktop client is current; "
-                    "no local server restart is needed."
-                )
-            if result.restart_state == "completed":
-                if result.webui is not None and not result.webui.available:
-                    return "Update completed — server is healthy, but the WebUI is unavailable."
-                return "Update completed — server restarted and passed its health check."
-        return "Update steps completed. Server readiness has not been verified."
-    return (
-        "Update stopped with an error. Earlier steps may already be applied; "
-        "follow the recovery details above."
-    )
 
 
 def exit_code_for(command: str, result: CommandResult) -> int:

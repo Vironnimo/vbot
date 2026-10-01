@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 import pytest
 
 from cli.application import command, operations, processes
-from cli.application.state import ApplicationError, Installation, Operation
+from cli.application.state import ApplicationError, Installation, Operation, load_installation
 from cli.main import run
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
@@ -103,41 +102,32 @@ def test_tray_style_no_restart_update_does_not_forward_handoff_or_detach(
     assert captured == [(False, None)]
 
 
-def test_source_checkout_update_dispatch_remains_unclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(command, "discover", lambda: None)
-
-    assert command.dispatch(parse_args(["update", "--no-restart"])) is None
-
-
-def test_source_selection_records_mode_without_starting_or_updating(tmp_path, monkeypatch, capsys):
+def test_channel_selection_records_the_channel_without_starting_or_updating(
+    tmp_path, monkeypatch, capsys
+):
     install = _install(tmp_path)
+    install.save()
     monkeypatch.setattr(command, "discover", lambda: install)
-    selected = []
-
-    def select(candidate, mode, *, from_checkout):
-        selected.append((candidate.root, mode, from_checkout))
-        logging.getLogger("vbot.application.source_updates").info("probe-record")
-        return {"source_track": mode}
-
-    monkeypatch.setattr("cli.application.source_updates.select_source", select)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: pytest.fail("not an update"))
-    assert run(["application", "source", "main", "--output", "plain"]) == 0
-    assert selected == [(install.root, "main", None)]
+
+    assert run(["application", "channel", "main", "--output", "plain"]) == 0
+
+    assert load_installation(install.root).channel == "main"
     assert json.loads(capsys.readouterr().out)["next_command"] == "vbot update"
     # A command on an installation logs into that installation's daily file.
-    assert "probe-record" in resolve_daily_log_path(install.root).read_text(encoding="utf-8")
+    log = resolve_daily_log_path(install.root).read_text(encoding="utf-8")
+    assert "update channel changed (from=release to=main)" in log
 
 
-def test_source_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
+def test_channel_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
     install = _install(tmp_path)
+    install.save()
     Operation(id="upd_pending", phase="queued").save(install)
     monkeypatch.setattr(command, "discover", lambda: install)
-    monkeypatch.setattr(
-        "cli.application.source_updates.select_source",
-        lambda *a, **kw: pytest.fail("must not change"),
-    )
+
     with pytest.raises(ApplicationError):
-        command.dispatch(parse_args(["application", "source", "release"]))
+        command.dispatch(parse_args(["application", "channel", "main"]))
+    assert load_installation(install.root).channel == "release"
 
 
 def test_packaged_lifecycle_refuses_a_target_other_than_its_recorded_server(
@@ -223,6 +213,10 @@ def test_native_update_readable_output_uses_shared_status_markers(
     tmp_path, monkeypatch, capsys, phase, code
 ):
     install = _install(tmp_path)
+    (tmp_path / "versions" / "rel_next").mkdir()
+    (tmp_path / "versions" / "rel_next" / "release.json").write_text(
+        '{"version":"1.2.4"}', encoding="utf-8"
+    )
     terminal = Operation(
         id="upd_output",
         phase=phase,
@@ -235,10 +229,6 @@ def test_native_update_readable_output_uses_shared_status_markers(
     monkeypatch.setattr(command, "discover", lambda: install)
     monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: Operation(id=terminal.id))
-    monkeypatch.setattr(
-        "cli.update_management.read_checkout_version",
-        lambda path: "1.2.3" if "rel_current" in str(path) else "1.2.4",
-    )
 
     def wait(_install, operation_id, *, progress):
         assert operation_id == terminal.id

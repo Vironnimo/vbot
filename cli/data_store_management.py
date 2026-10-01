@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cli.rpc_client import rpc_call
 from cli.server_management import (
-    DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
     classify_server,
-    is_systemd_managed,
     probe_health,
     probe_health_patiently,
     start_server,
-    start_systemd_server,
     stop_server,
-    stop_systemd_server,
 )
 from core.database import (
     DatabaseError,
@@ -251,17 +247,13 @@ def data_store_snapshot_restore(
             instance=instance,
             health=health,
         )
-    systemd_managed = is_systemd_managed(instance, DEFAULT_SERVICE_NAME)
     # A busy server runs as well: it is stopped like an answering one and started
     # again afterwards, never left stopped as if it had not been running.
-    was_running = systemd_managed or state != "absent"
+    was_running = state != "absent"
+    stop, start = _lifecycle(instance)
     # A closed listener can still belong to a Runtime draining its databases.
     # The lifecycle owner also waits for that exact control-record process.
-    stopped = (
-        stop_systemd_server(instance, DEFAULT_SERVICE_NAME)
-        if systemd_managed
-        else stop_server(instance)
-    )
+    stopped = stop()
     if not stopped.ok or classify_server(instance) != "absent":
         return CommandResult(
             ok=False,
@@ -281,11 +273,7 @@ def data_store_snapshot_restore(
         )
     restarted: CommandResult | None = None
     if was_running:
-        restarted = (
-            start_systemd_server(instance, DEFAULT_SERVICE_NAME)
-            if systemd_managed
-            else start_server(instance)
-        )
+        restarted = start()
         if not restarted.ok:
             return CommandResult(
                 ok=False,
@@ -305,6 +293,28 @@ def data_store_snapshot_restore(
         instance=instance,
         health=health,
     )
+
+
+def _lifecycle(
+    instance: ServerInstance,
+) -> tuple[Callable[[], CommandResult], Callable[[], CommandResult]]:
+    """Stop and start *instance* the way its owner does."""
+    from cli.application import processes
+    from cli.application.state import exclusive
+
+    install = processes.owning_installation(instance)
+    if install is None:
+        return (lambda: stop_server(instance)), (lambda: start_server(instance))
+
+    def stop() -> CommandResult:
+        with exclusive(install.root):
+            return processes.stop(install)
+
+    def start() -> CommandResult:
+        with exclusive(install.root):
+            return processes.start(install)
+
+    return stop, start
 
 
 def _describe_restore(restored: SnapshotRestore) -> str:

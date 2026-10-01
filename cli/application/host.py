@@ -34,6 +34,7 @@ from cli.application.tray import TraySink, TrayState, run_tray
 from cli.server_management import HealthProbeResult, ServerInstance, ServerState, classify_server
 from core.utils.logging import LogManager
 from core.utils.processes import subprocess_creation_flags
+from core.utils.server_control import process_started
 
 _LOGGER = logging.getLogger("vbot.application.host")
 _ACTIVITY_LIMIT = 200
@@ -406,18 +407,18 @@ class ApplicationFacade:
 
     def _update_source(self) -> str:
         if self._source_label is None:
-            from cli.application.source_updates import read_binding
+            from cli.application.state import load_installation
 
+            # `vbot application channel` rewrites the record while the tray runs.
             try:
-                binding = read_binding(self._install)
+                channel = load_installation(self._install.root).channel
             except ApplicationError as error:
-                self._source_label = f"Unreadable source binding: {error}"
+                self._source_label = f"Unreadable installation record: {error}"
             else:
-                self._source_label = (
-                    "Published releases"
-                    if binding is None
-                    else f"Branch {binding['branch']} of {binding['checkout']}"
-                )
+                self._source_label = {
+                    "release": "Published releases",
+                    "main": "Newest main builds",
+                }.get(channel, "A custom release source")
         return self._source_label
 
 
@@ -455,7 +456,7 @@ def main() -> int:
                 {
                     "schema_version": 1,
                     "pid": os.getpid(),
-                    "process_created": psutil.Process().create_time(),
+                    "process_created": process_started(psutil.Process()),
                 },
             )
             manager = LogManager(data_dir=install.root, enable_console=False)

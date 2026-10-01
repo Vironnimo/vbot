@@ -97,11 +97,10 @@ AREA_HELP = {
     "server": "Start, stop, restart, and inspect the local server",
     "desktop": "Open the desktop window pointed at a local or remote server",
     "home": "Show the application and data directories",
-    "update": "Update this installation and inspect or activate a prepared packaged update",
+    "update": "Update this installation and inspect or activate a prepared update",
     "application": "Inspect and manage the packaged local vBot application",
-    "customize": "Prepare, check, test and activate local vBot features",
     "uninstall": "Remove the application, its data, or both with explicit confirmation",
-    "autostart": "Enable, disable, or inspect OS autostart for the server",
+    "autostart": "Enable, disable, or inspect starting this installation at logon or boot",
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
@@ -328,9 +327,9 @@ DOCTOR_HELP = {
 
 
 AUTOSTART_HELP = {
-    "enable": "Register OS autostart and start the server now",
-    "disable": "Remove the OS autostart entry",
-    "status": "Show whether OS autostart is registered",
+    "enable": "Start vBot at logon (Windows) or at boot as a systemd user unit (Linux)",
+    "disable": "Remove this installation's logon registration",
+    "status": "Show whether this installation starts at logon or boot",
 }
 
 

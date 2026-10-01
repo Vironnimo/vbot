@@ -16,8 +16,15 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cli.application.packages import digest_files, stage_package, validate_release
-from cli.application.state import ApplicationError, Installation
+from cli.application.packages import (
+    RELEASE_IDENTITY_ASSET,
+    digest_files,
+    download_release,
+    package_name,
+    stage_package,
+    validate_release,
+)
+from cli.application.state import ApplicationError, Installation, current_platform
 
 _VERSION = "rel_example"
 _CACHE = "app/cli/__pycache__/main.cpython-313.pyc"
@@ -59,6 +66,7 @@ def _archive(
     additions: dict[str, bytes] | None = None,
     symlink: str | None = None,
     hash_override: dict[str, str] | None = None,
+    platform: str | None = None,
 ) -> Path:
     payload = _payload(shape=shape, marker=marker)
     files = {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()}
@@ -67,7 +75,7 @@ def _archive(
         "bootstrap_protocol": 1,
         "version_id": version,
         "install_shape": shape,
-        "platform": "windows-x86_64",
+        "platform": platform or current_platform(),
         "files": files,
     }
     if hash_override:
@@ -293,6 +301,7 @@ def test_an_unsigned_or_forged_archive_stages_only_in_explicit_local_mode(
             id="digest-mismatch",
         ),
         pytest.param({"shape": "desktop-client"}, "shape", id="other-shape"),
+        pytest.param({"platform": "linux-riscv64"}, "platform", id="other-platform"),
     ],
 )
 def test_local_archive_rejects_unsafe_or_non_exact_payloads(
@@ -318,7 +327,7 @@ def test_release_rejects_missing_mistyped_or_incompatible_bootstrap_protocol(
         "schema_version": 1,
         "version_id": _VERSION,
         "install_shape": "server",
-        "platform": "windows-x86_64",
+        "platform": current_platform(),
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in payload.items()},
     }
     if protocol is not None:
@@ -341,3 +350,38 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
     assert not cache.exists()
     with pytest.raises(ApplicationError, match="different payload"):
         stage_package(install, changed, local=True)
+
+
+@pytest.mark.parametrize("published", ["rel_active", "rel_newer"])
+def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active(
+    tmp_path: Path, published: str
+) -> None:
+    respx = pytest.importorskip("respx")
+    install = _install(tmp_path / "install", public_key="key")
+    (install.root / "versions" / "rel_active").mkdir(parents=True)
+    (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
+    archive = package_name("server")
+    base = "https://downloads.example"
+    assets = [
+        {"name": name, "browser_download_url": f"{base}/{name}"}
+        for name in (archive, archive + ".sig", RELEASE_IDENTITY_ASSET)
+    ]
+    identity = {"schema_version": 1, "version_id": published, "version": "1.0.0"}
+    with respx.mock(assert_all_called=False) as router:
+        router.get(install.release_url).respond(json={"tag_name": "main-build", "assets": assets})
+        router.get(f"{base}/{RELEASE_IDENTITY_ASSET}").respond(json=identity)
+        package = router.get(f"{base}/{archive}").respond(content=b"zip")
+        router.get(f"{base}/{archive}.sig").respond(content=b"sig")
+        labels: list[str | None] = []
+
+        result = download_release(
+            install, "upd_test", progress=lambda _message, label: labels.append(label)
+        )
+
+    assert labels == ["1.0.0"]
+    if published == "rel_active":
+        assert result is None
+        assert not package.called
+    else:
+        assert result is not None and result.name == archive
+        assert result.read_bytes() == b"zip"

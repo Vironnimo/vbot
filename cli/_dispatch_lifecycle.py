@@ -11,17 +11,7 @@ from cli._output import (
     FAILURE_EXIT_CODE,
     SUCCESS_EXIT_CODE,
 )
-from cli._update_types import Progress
-from cli.autostart_management import autostart_status, disable_autostart, enable_autostart
-from cli.server_management import (
-    DEFAULT_SERVICE_NAME,
-    CommandResult,
-    ServerInstance,
-    restart_via_systemd_if_managed,
-)
-from cli.update_management import run_update
-from core.utils.config import DEFAULT_HOST
-from core.utils.logging import LogManager
+from cli.server_management import CommandResult, ServerInstance
 
 
 def _launch_desktop(argv: Sequence[str]) -> None:
@@ -46,7 +36,6 @@ class ServerCommandContext:
     host: str
     port: int | None
     data_dir: str | None
-    service_name: str
     resolve: Callable[..., ServerInstance]
     start: Callable[[ServerInstance], CommandResult]
     stop: Callable[[ServerInstance], CommandResult]
@@ -66,72 +55,6 @@ def dispatch_doctor_command(
     if args.command == "config":
         return doctor_config_fn(args.data_dir)
     raise ValueError(f"Unsupported doctor command: {args.command}")
-
-
-def dispatch_autostart_command(
-    args: argparse.Namespace,
-    *,
-    resolve: Callable[..., ServerInstance],
-    start: Callable[[ServerInstance], CommandResult],
-    enable_fn: Callable[..., CommandResult] = enable_autostart,
-    disable_fn: Callable[..., CommandResult] = disable_autostart,
-    status_fn: Callable[..., CommandResult] = autostart_status,
-) -> CommandResult:
-    """Dispatch one parsed autostart command against the local OS."""
-
-    instance = resolve(host=args.host, port=args.port, data_dir=args.data_dir)
-    if args.command in {"enable", "disable"}:
-        # The change is logged into the target's daily file; logging alone never
-        # initializes a data directory.
-        manager = (
-            LogManager(data_dir=instance.data_dir, enable_console=False)
-            if instance.data_dir.is_dir()
-            else None
-        )
-        try:
-            if args.command == "enable":
-                return enable_fn(
-                    instance, start=start, task_name=args.task_name, service_name=args.service_name
-                )
-            return disable_fn(instance, task_name=args.task_name, service_name=args.service_name)
-        finally:
-            if manager is not None:
-                manager.close()
-    if args.command == "status":
-        return status_fn(instance, task_name=args.task_name, service_name=args.service_name)
-    raise ValueError(f"Unsupported autostart command: {args.command}")
-
-
-def dispatch_update_command(
-    args: argparse.Namespace,
-    *,
-    resolve: Callable[..., ServerInstance],
-    stop: Callable[[ServerInstance], CommandResult],
-    start: Callable[[ServerInstance], CommandResult],
-    run_update_fn: Callable[..., CommandResult] = run_update,
-    progress: Progress | None = None,
-) -> CommandResult:
-    """Run the local self-update against the resolved server target."""
-
-    instance = resolve(
-        host=args.host if args.host is not None else DEFAULT_HOST,
-        port=args.port,
-        data_dir=args.data_dir,
-    )
-    return run_update_fn(
-        instance,
-        **({"progress": progress} if progress is not None else {}),
-        discard=args.discard,
-        stash=args.stash,
-        restart=not args.no_restart,
-        stop=stop,
-        start=start,
-        service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
-        resolve=resolve,
-        host=args.host,
-        port=args.port,
-        data_dir=args.data_dir,
-    )
 
 
 def dispatch_desktop_command(
@@ -188,10 +111,6 @@ def dispatch_server_command(
     if context.command == "restart":
         from cli._progress import operation_progress
 
-        operation_progress("Checking how the server is managed")
-        via_systemd = restart_via_systemd_if_managed(instance, service_name=context.service_name)
-        if via_systemd is not None:
-            return via_systemd
         operation_progress("Stopping the current server")
         stop_result = context.stop(instance)
         if not stop_result.ok:

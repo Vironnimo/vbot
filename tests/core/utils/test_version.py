@@ -26,22 +26,20 @@ def _source(root: Path) -> Path:
     return root
 
 
-def _package(tmp_path: Path, manifest: Mapping[str, object], binding: str | None = None) -> Path:
+def _package(tmp_path: Path, manifest: Mapping[str, object]) -> Path:
     install = tmp_path / "install"
     app = _source(install / "versions" / "v1" / "app")
     _write(install / "versions" / "v1" / "release.json", json.dumps(manifest))
-    if binding is not None:
-        _write(install / "source-update.json", json.dumps({"branch": binding}))
     return app
 
 
 def _official_package(tmp_path: Path) -> Path:
-    return _package(tmp_path, {"version": VERSION, "revision": RELEASE, "files": {}})
+    manifest = {"version": VERSION, "revision": RELEASE, "channel": "release", "files": {}}
+    return _package(tmp_path, manifest)
 
 
 def _main_package(tmp_path: Path) -> Path:
-    manifest = {"version": VERSION, "revision": MAIN, "official_base": "v1"}
-    return _package(tmp_path, manifest, binding="main")
+    return _package(tmp_path, {"version": VERSION, "revision": MAIN, "channel": "main"})
 
 
 def _branch_checkout(tmp_path: Path) -> Path:

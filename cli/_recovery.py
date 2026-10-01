@@ -194,11 +194,6 @@ def _target_options(args: argparse.Namespace, result: CommandResult | None, area
         value = getattr(result.instance, field) if result else getattr(args, field, None)
         if value is not None:
             options.extend(["--" + field.replace("_", "-"), str(value)])
-    if area in {"server", "autostart"}:
-        for field in ("service_name", "task_name") if area == "autostart" else ("service_name",):
-            value = getattr(args, field, None)
-            if value:
-                options.extend(["--" + field.replace("_", "-"), value])
     return options
 
 

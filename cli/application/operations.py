@@ -22,7 +22,8 @@ from cli.application.state import (
     load_operation,
     operations,
 )
-from core.utils.processes import subprocess_creation_flags
+from core.utils.processes import outside_service_unit, subprocess_creation_flags
+from core.utils.server_control import process_started
 
 #: Set only for a tray host started by its predecessor's restart handoff.
 HOST_SUCCESSOR_ENV = "VBOT_HOST_SUCCESSOR"
@@ -46,6 +47,9 @@ def child_environment(install: Installation) -> dict[str, str]:
     environment["VBOT_INSTALL_ROOT"] = str(install.root)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    if os.name != "nt":
+        # Native Windows hosts run in UTF-8 mode; a POSIX runtime needs it requested.
+        environment["PYTHONUTF8"] = "1"
     return environment
 
 
@@ -57,7 +61,8 @@ def worker_alive(operation: Operation) -> bool:
     try:
         process = psutil.Process(operation.worker_pid)
         return bool(
-            abs(process.create_time() - operation.worker_created) < 0.001 and process.is_running()
+            abs(process_started(process) - operation.worker_created) < 0.001
+            and process.is_running()
         )
     except psutil.Error:
         return False
@@ -65,15 +70,19 @@ def worker_alive(operation: Operation) -> bool:
 
 def spawn_worker(install: Installation, operation: Operation) -> None:
     executable = install.interpreter(role="Update")
-    args = [
-        str(executable),
-        "-m",
-        "cli.application.worker",
-        "--root",
-        str(install.root),
-        "--operation",
-        operation.id,
-    ]
+    # The worker stops the server; started from inside the server's systemd
+    # unit, it leaves the unit so that the stop does not end it too.
+    args = outside_service_unit(
+        [
+            str(executable),
+            "-m",
+            "cli.application.worker",
+            "--root",
+            str(install.root),
+            "--operation",
+            operation.id,
+        ]
+    )
     startup_log = install.root / "logs" / f"{operation.id}-startup.log"
     startup_log.parent.mkdir(parents=True, exist_ok=True)
     with startup_log.open("ab") as output:
@@ -96,7 +105,7 @@ def spawn_worker(install: Installation, operation: Operation) -> None:
         raise ApplicationError(f"The update process could not start. Details: {startup_log}")
     try:
         operation.worker_pid = process.pid
-        operation.worker_created = psutil.Process(process.pid).create_time()
+        operation.worker_created = process_started(psutil.Process(process.pid))
     except (AttributeError, psutil.Error) as exc:
         raise ApplicationError(
             "The independent update process identity could not be verified"

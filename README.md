@@ -94,15 +94,15 @@ Windows (normal, non-elevated PowerShell):
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 ```
 
-Debian-like Linux and Raspberry Pi:
+Linux on ARM64 or x86-64, including a Raspberry Pi with the 64-bit Raspberry Pi OS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-When the Installer reports that vBot is ready, open [http://127.0.0.1:8420/](http://127.0.0.1:8420/) and follow the setup guide to connect a Provider and choose a Model.
+When the Installer reports that the server is running, open [http://127.0.0.1:8420/](http://127.0.0.1:8420/) and follow the setup guide to connect a Provider and choose a Model.
 
-The Installer adds the `vbot` command and starts the server in the background; `vbot update` and `vbot uninstall` keep it current or remove it. Prefer to read scripts before running them? Inspect [install.ps1](scripts/install.ps1) or [install.sh](scripts/install.sh) first. Desktop, remote-client, development and custom-port installations are covered in the [Installation guide](USAGE.md#installation).
+The Installer downloads the signed package of the latest release, which brings its own Python runtime and WebUI, adds the `vbot` command, starts the server and sets it to start automatically: at sign-in on Windows, at boot through a systemd user service on Linux. `vbot update` installs new versions and keeps the previous one if a new version fails its startup check; `vbot uninstall` removes vBot. To follow the newest build of `main` instead of releases, install with `-Main` or `--main`. Prefer to read scripts before running them? Inspect [install.ps1](scripts/install.ps1) or [install.sh](scripts/install.sh) first. Desktop, remote-client and custom-port installations are covered in the [Installation guide](USAGE.md#installation).
 
 ## Security
 

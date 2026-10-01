@@ -1,6 +1,6 @@
 # Windows Tray Host
 
-Supplementary to `cli/windows-application.md`. Read when changing the `vBot.exe` tray: its state, menu, status window, toasts, its server connection, or its restart into a newly activated version.
+Supplementary to `cli/application.md`. Read when changing the `vBot.exe` tray: its state, menu, status window, toasts, its server connection, or its restart into a newly activated version.
 
 ## Owners
 
@@ -46,7 +46,7 @@ The tray does no periodic server I/O. Server state comes from the event stream; 
 
 ## Restart after activation
 
-A tray host keeps running the code it started with, so after any change of `<install>/active-version` (an update, `update activate` or `customize activate` operation, or an installer run) it hands itself over to a successor on the active version. The Desktop has its own restart handoff (`desktop/update-restart.md`).
+A tray host keeps running the code it started with, so after any change of `<install>/active-version` (an update or `update activate` operation, or an installer run) it hands itself over to a successor on the active version. The Desktop has its own restart handoff (`desktop/update-restart.md`).
 
 - Detection: the facade's `running_version` is the version whose payload holds its loaded module (`state.loaded_version_id`); `None` (a source checkout) disables restarts. `TrayState.restart_pending` is true when the active id cached by `_version()` differs from it and the newest operation is terminal or absent; an unreadable operation record counts as busy. It reuses the `active-version` mtime/size signature, so polling costs no extra file or process work.
 - Safe point: `TrayController` starts the restart only while no update is active or requested, no tray action is queued and `TrayView.interacting()` is false. `WindowsTray.interacting()` is true while the popup menu is open, a toast is shown or the status window is open and not minimized. It reads flags only, without Win32 calls off the UI thread. A toast counts as shown from `show_toast` (before the UI thread shows it) until balloon hide, timeout or click, but at most 300 s, so a close event Windows never sends cannot block restarts.

@@ -16,6 +16,7 @@ from core.utils.server_control import (
     create_server_control,
     is_authorized_control_token,
     live_server_ports,
+    process_started,
     read_server_control,
     remove_server_control,
     server_control_claim,
@@ -79,6 +80,22 @@ def test_invalid_or_oversized_control_record_is_ignored(tmp_path: Path) -> None:
 
     path.write_bytes(b"x" * 20_000)
     assert read_server_control(tmp_path, 8420) is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux boot-time clock")
+def test_recorded_process_start_survives_a_system_clock_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import psutil._pslinux as linux  # type: ignore[import-untyped]
+
+    created = psutil.Process().create_time()
+    recorded = process_started(psutil.Process())
+    # Setting the clock moves Linux's boot time, which psutil adds to creation times.
+    stepped = linux.boot_time() + 3600
+    monkeypatch.setattr(linux, "boot_time", lambda: stepped)
+
+    assert psutil.Process().create_time() == pytest.approx(created + 3600, abs=0.01)
+    assert process_started(psutil.Process()) == pytest.approx(recorded, abs=0.01)
 
 
 def test_control_token_authorization_requires_exact_nonempty_secret() -> None:
@@ -157,7 +174,7 @@ def test_claim_refuses_live_legacy_control_owner(tmp_path: Path) -> None:
             tmp_path,
             8420,
             pid=child.pid,
-            process_create_time=psutil.Process(child.pid).create_time(),
+            process_create_time=process_started(psutil.Process(child.pid)),
             token="legacy",
         )
         with (

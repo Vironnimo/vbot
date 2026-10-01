@@ -8,6 +8,16 @@ on:
         required: false
         default: false
         type: boolean
+      channel:
+        description: Update channel the packages follow (release or main)
+        required: false
+        default: release
+        type: string
+      ref:
+        description: Commit to build; the triggering commit when empty
+        required: false
+        default: ""
+        type: string
     secrets:
       VBOT_RELEASE_SIGNING_KEY:
         required: false
@@ -27,6 +37,7 @@ on:
       - "resources/**"
       - "webui/**"
       - "scripts/build_windows.py"
+      - "scripts/package_build.py"
       - "scripts/windows/**"
       - "pyproject.toml"
       - ".github/workflows/windows-package.yml"
@@ -45,6 +56,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          ref: ${{ inputs.ref || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
@@ -76,6 +88,7 @@ jobs:
             "--shape", "${{ matrix.shape }}",
             "--version", $version,
             "--revision", $revision,
+            "--channel", "${{ inputs.channel || 'release' }}",
             "--provision-dependencies"
           )
           if ("${{ inputs.release_mode }}" -eq "true") {
@@ -116,6 +129,7 @@ jobs:
             "/DInstallShape=${{ matrix.shape }}" `
             "/DVersionId=$versionId" `
             "/DReleasePublicKey=$publicKey" `
+            "/DUpdateChannel=${{ inputs.channel || 'release' }}" `
             scripts/windows/vbot.iss
       - name: Smoke native installer and uninstall
         shell: pwsh
@@ -133,6 +147,7 @@ jobs:
           Copy-Item "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}.zip" $releaseFiles
           Copy-Item "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}-runtime-inventory.json" $releaseFiles
           Copy-Item "build/windows/installers/vBot-*-windows-x86_64-${{ matrix.shape }}.exe" $releaseFiles
+          Copy-Item "build/windows/artifacts/vbot-release.json" $releaseFiles
           $signature = "build/windows/artifacts/vbot-windows-x86_64-${{ matrix.shape }}.zip.sig"
           if (Test-Path $signature) { Copy-Item $signature $releaseFiles }
       - uses: actions/upload-artifact@v4
