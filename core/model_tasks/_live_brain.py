@@ -40,6 +40,10 @@ _LOGGER = get_logger(__name__)
 
 MAX_MODEL_STEPS = 8
 HISTORY_PAIRS = 10
+# Every answer ends with this label and what the Tools reported changing.
+EFFECTS_LABEL = "vBot changes for this request (from the Tool results):"
+_MAX_EFFECTS = 8
+_EFFECT_CHARS = 240
 _MODEL_RETRY_DELAYS_SECONDS = (0.5, 1.5)
 
 
@@ -62,20 +66,26 @@ class DelegationInput:
     """What one delegation knows: the request (when given) and recent context.
 
     ``refs`` lists the refs earlier Tool results of the call named, one labeled
-    line each; the answers in the history do not carry them.
+    line each; the answers in the history do not carry them. ``state`` is what
+    vBot shows right now (see ``LiveCallHost.current_state``).
     """
 
     request: str | None
     conversation: str
     updates: str
     refs: str = ""
+    state: str = ""
 
 
 @dataclass
 class _Progress:
-    """What one delegation did so far; failure notes list the Tools that may change things."""
+    """What one delegation did so far.
 
-    performed: list[str] = field(default_factory=list)
+    ``effects`` holds what each Tool call that may have changed something
+    reported, in order; every answer ends with them.
+    """
+
+    effects: list[str] = field(default_factory=list)
     model_ms: list[int] = field(default_factory=list)
     tool_ms: list[int] = field(default_factory=list)
 
@@ -143,7 +153,8 @@ class LiveBrain:
                 type(exc).__name__,
             )
             failure = _failure_reason(exc)
-            answer = _failure_note(failure, progress.performed)
+            answer = _failure_note(failure)
+        answer = f"{answer}\n\n{_effects_line(progress.effects)}"
         self._record_delegation(delegation, answer, progress, failure, started)
         self._history.append((request_label, answer))
         return answer
@@ -196,7 +207,7 @@ class LiveBrain:
                     }
                 )
         reason = f"the request needed more than {self._max_steps} steps and was stopped"
-        return _failure_note(reason, progress.performed), reason
+        return _failure_note(reason), reason
 
     async def _send(
         self, adapter: Any, messages: list[JsonObject], request_context: JsonObject
@@ -263,7 +274,7 @@ class LiveBrain:
         )
         progress.tool_ms.append(_milliseconds(self._clock() - started))
         if run.changed:
-            progress.performed.append(run.changed)
+            progress.effects.append(_effect(run.result))
         return run.result
 
     def _record_delegation(
@@ -302,6 +313,11 @@ def _render_input(delegation: DelegationInput, request_label: str) -> str:
     sections = [
         "Recent conversation (quoted speech):\n" + (delegation.conversation or "(none)"),
     ]
+    if delegation.state:
+        sections.append(
+            "vBot right now (quoted data, the overview taken just before this request):\n"
+            + delegation.state
+        )
     if delegation.updates:
         sections.append("Recent vBot updates (quoted data):\n" + delegation.updates)
     if delegation.refs:
@@ -310,6 +326,31 @@ def _render_input(delegation: DelegationInput, request_label: str) -> str:
         )
     sections.append(f"Delegated request: {request_label}")
     return "\n\n".join(sections)
+
+
+def _effect(result: JsonObject) -> str:
+    """One Tool result as a short fact: its text, or its failure marked as such."""
+    if result.get("ok") is True:
+        data = result.get("data")
+        text = str(data.get("content") or "") if isinstance(data, dict) else ""
+    else:
+        error = result.get("error")
+        message = str(error.get("message") or "") if isinstance(error, dict) else ""
+        text = f"Failed: {message}" if message else "Failed."
+    text = " ".join(text.split())
+    if len(text) > _EFFECT_CHARS:
+        text = text[: _EFFECT_CHARS - 3].rstrip() + "..."
+    return text or "Done."
+
+
+def _effects_line(effects: list[str]) -> str:
+    """The closing line of every answer: what vBot changed, taken from the Tool results."""
+    if not effects:
+        return f"{EFFECTS_LABEL} nothing."
+    shown = effects[:_MAX_EFFECTS]
+    if len(effects) > len(shown):
+        shown.append(f"and {len(effects) - len(shown)} more")
+    return f"{EFFECTS_LABEL} " + " | ".join(shown)
 
 
 def _request_context(adapter: Any, conversation_id: str) -> JsonObject:
@@ -324,17 +365,9 @@ def _failure_reason(error: BaseException) -> str:
     return "the backend model request failed"
 
 
-def _failure_note(reason: str, performed: list[str]) -> str:
-    note = f"The request could not be completed: {reason}."
-    if performed:
-        note += (
-            " Actions already performed, possibly with uncertain results: "
-            + ", ".join(performed)
-            + ". Nothing was retried."
-        )
-    else:
-        note += " Nothing in the app was changed."
-    return note
+def _failure_note(reason: str) -> str:
+    """The answer when the loop gave up; the effects line says what already happened."""
+    return f"The request could not be completed: {reason}. Nothing was retried."
 
 
 async def _close_adapter(adapter: Any) -> None:

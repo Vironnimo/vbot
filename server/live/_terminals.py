@@ -44,6 +44,7 @@ from server.live._programs import (
     program_input_visible,
     program_prompt,
     program_ready,
+    program_start_failure,
     program_text_pending,
     selected_answer,
 )
@@ -230,28 +231,37 @@ class LiveTerminals:
         )
         if not await self._layout.show_quietly("show", terminal_id=started[0]):
             head += " The app did not switch to it."
-        if not task:
-            return live_success(head)
         # Waiting for the programs takes up to the ready timeout: other calls run
-        # meanwhile, but none writes to these Terminals until the task is typed.
+        # meanwhile, but none writes to these Terminals until the program is
+        # ready and the task is typed.
         self._typing.update(started)
         try:
             self._ctx.let_others_run()
             outcomes = [
                 _outcome(item)
                 for item in await asyncio.gather(
-                    *(self._start_task(terminal_id, program, task) for terminal_id in started),
+                    *(
+                        self._start_task(terminal_id, program, task)
+                        if task
+                        else self._await_ready(terminal_id, program)
+                        for terminal_id in started
+                    ),
                     return_exceptions=True,
                 )
             ]
         finally:
             self._typing.difference_update(started)
-        report = _task_report(
-            program, refs, outcomes, timeout_seconds=self._timings.ready_timeout_seconds
+        timeout = self._timings.ready_timeout_seconds
+        done = "sent" if task else "ready"
+        report = (
+            _task_report(program, refs, outcomes, timeout_seconds=timeout)
+            if task
+            else _ready_report(program, refs, outcomes, timeout_seconds=timeout)
         )
-        if all(outcome.status == "sent" for outcome in outcomes):
+        if all(outcome.status == done for outcome in outcomes):
             return live_success(f"{head} {report}")
-        # The Terminals run, but the call's task did not reach every one of them.
+        # The Terminals run, but the program or the call's task is not ready in
+        # every one of them.
         return live_failure("partial", f"{head} {report}")
 
     def _start_failure(
@@ -306,6 +316,8 @@ class LiveTerminals:
                 return _Outcome("prompt", prompt=prompt)
             if stable and program_ready(program, snapshot.screen):
                 return _Outcome("ready")
+            if stable and (shown := program_start_failure(program, snapshot.screen)) is not None:
+                return _Outcome("not_started", detail=shown)
             if now >= deadline:
                 return _Outcome("not_ready", prompt=prompt)
             await self._sleep(timings.poll_seconds)
@@ -627,6 +639,11 @@ def _task_sentence(
     others = f" Do the same for {join_words(refs[1:])}." if len(refs) > 1 else ""
     if status == "sent":
         return f"Typed the task into {who} and sent it."
+    if status == "not_started":
+        return (
+            f"{program.label} did not start in {who}, so the task was not typed. The Terminal "
+            f'shows: "{detail}" Tell the user.'
+        )
     if prompt is not None and status in {"prompt", "not_ready", "not_at_input"}:
         return f"{_prompt_sentence(program, who, first, prompt)} Afterwards, call {later}.{others}"
     if status == "not_ready":
@@ -669,23 +686,71 @@ def _task_sentence(
     )
 
 
-def _prompt_sentence(program: CodingProgram, who: str, first: str, prompt: CliPrompt) -> str:
+def _ready_report(
+    program: CodingProgram,
+    refs: list[str],
+    outcomes: list[_Outcome],
+    *,
+    timeout_seconds: float,
+) -> str:
+    """Sentences grouping the Terminals by whether the program is ready in them."""
+    groups: dict[tuple[str, str, str], list[str]] = {}
+    for ref, outcome in zip(refs, outcomes, strict=True):
+        kind = outcome.prompt.kind if outcome.prompt else ""
+        groups.setdefault((outcome.status, kind, outcome.detail), []).append(ref)
+    sentences = []
+    for (status, kind, detail), members in groups.items():
+        who, first = join_words(members), members[0]
+        prompt = next((item for item in program.prompts if item.kind == kind), None)
+        if status == "ready":
+            sentences.append(f"{program.label} is ready in {who}.")
+        elif prompt is not None:
+            sentences.append(_prompt_sentence(program, who, first, prompt, consequence=""))
+        elif status == "not_started":
+            sentences.append(
+                f'{program.label} did not start in {who}. The Terminal shows: "{detail}" Tell '
+                "the user."
+            )
+        elif status == "not_ready":
+            sentences.append(
+                f"{who} did not show {program.label}'s input line within "
+                f"{round(timeout_seconds)} seconds. Call read with {first} to check it."
+            )
+        elif status == "exited":
+            sentences.append(f"{who} ended before {program.label} was ready.")
+        elif status == "stopped":
+            sentences.append(f"The voice call ended before {program.label} was ready in {who}.")
+        elif status == "uncertain":
+            sentences.append(f"Checking {who} failed unexpectedly. Call read with {first}.")
+        else:
+            sentences.append(f"Checking {who} failed: {detail} Call read with {first}.")
+    return " ".join(sentences)
+
+
+def _prompt_sentence(
+    program: CodingProgram,
+    who: str,
+    first: str,
+    prompt: CliPrompt,
+    *,
+    consequence: str = ", so the task was not typed",
+) -> str:
     keys = " then ".join(
         f'{{"action": "key", "target": "{first}", "key": "{key}"}}' for key in prompt.keys
     )
     if prompt.kind == "trust":
         return (
-            f"{program.label} in {who} asks whether to trust the folder, so the task was not "
-            f"typed. Ask the user; if they agree, call terminal with {keys}."
+            f"{program.label} in {who} asks whether to trust the folder{consequence}. Ask the "
+            f"user; if they agree, call terminal with {keys}."
         )
     if prompt.kind == "update":
         return (
-            f"{program.label} in {who} offers an update and waits, so the task was not typed. "
-            f"Ask the user; to skip the update, call terminal with {keys}."
+            f"{program.label} in {who} offers an update and waits{consequence}. Ask the user; "
+            f"to skip the update, call terminal with {keys}."
         )
     return (
-        f"{program.label} in {who} asks a question, so the task was not typed. Call read with "
-        f"{first} and ask the user."
+        f"{program.label} in {who} asks a question{consequence}. Call read with {first} and "
+        "ask the user."
     )
 
 

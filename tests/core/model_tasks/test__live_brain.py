@@ -9,7 +9,12 @@ from typing import Any
 
 import pytest
 
-from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
+from core.model_tasks._live_brain import (
+    EFFECTS_LABEL,
+    BrainTarget,
+    DelegationInput,
+    LiveBrain,
+)
 from core.model_tasks.live import LiveToolRun
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
@@ -30,6 +35,8 @@ TOOLS = (
 )
 # Tools the fake host reports as possibly changing something.
 CHANGING = {"send_message", "start_coding_terminal"}
+# The closing line of an answer whose Tools changed nothing.
+NOTHING = f"\n\n{EFFECTS_LABEL} nothing."
 
 
 class FakeAdapter:
@@ -140,7 +147,7 @@ async def test_backend_usage_counts_each_retry_and_model_step(recorder: UsageRec
         ],
         usage_recorder=recorder,
     )
-    assert await harness.brain.answer(DELEGATION) == "Done"
+    assert await harness.brain.answer(DELEGATION) == "Done" + NOTHING
     _, records = read_ledger(recorder)
     assert len(records) == 3
     assert [record.status for record in records] == ["failed", "completed", "completed"]
@@ -162,7 +169,8 @@ async def test_tool_loop_runs_host_tools_and_replays_reasoning_to_the_same_conne
 
     answer = await harness.brain.answer(DELEGATION)
 
-    assert answer == "One Codex terminal is running."
+    # The answer ends with what the changing Tool reported.
+    assert answer == f"One Codex terminal is running.\n\n{EFFECTS_LABEL} Started Codex: t1."
     assert harness.connections == [ConnectionRef("openai", "subscription")]
     # The host gets the call as the Model made it.
     assert harness.calls == [("start_coding_terminal", '{"program": "codex"}', None)]
@@ -230,14 +238,19 @@ async def test_history_keeps_previous_requests_and_answers_of_the_call():
             conversation="User: and now?",
             updates="vBot update: x",
             refs="- t1: Codex Terminal",
+            state="Terminals: t1 Codex working",
         )
     )
 
     first, messages = harness.adapter.requests[0][0], harness.adapter.requests[1][0]
     assert messages[1:3] == [
         {"role": "user", "content": "Delegated request: Start a Codex terminal"},
-        {"role": "assistant", "content": "First."},
+        {"role": "assistant", "content": "First." + NOTHING},
     ]
+    assert (
+        "vBot right now (quoted data, the overview taken just before this request):\n"
+        "Terminals: t1 Codex working" in messages[-1]["content"]
+    )
     assert "Recent vBot updates (quoted data):\nvBot update: x" in messages[-1]["content"]
     assert "infer it from the conversation" in messages[-1]["content"]
     # Earlier Tool results are not replayed; their refs reach the next request.
@@ -255,36 +268,35 @@ async def test_retryable_model_failures_are_retried_but_tools_never_replayed():
         ]
     )
 
-    assert await harness.brain.answer(DELEGATION) == "Sent."
+    assert await harness.brain.answer(DELEGATION) == f"Sent.\n\n{EFFECTS_LABEL} Done."
     assert harness.sleeps == [0.5]
     assert len(harness.calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_failure_note_lists_only_actions_that_may_have_changed_something():
+async def test_failure_note_ends_with_only_what_changing_tools_reported():
     harness = Harness(
         [
             _tool_turn(("overview", {}), ("read", {"target": "t1"})),
-            _tool_turn(("send_message", {"target": "t1", "text": "go"})),
+            _tool_turn(
+                ("send_message", {"target": "t1", "text": "go"}),
+                ("send_message", {"target": "t2", "text": "go"}),
+            ),
             ProviderError("broken", retryable=False),
         ]
     )
+    harness.tool_results += [
+        {"ok": True, "data": {"content": "Terminals: t1, t2"}},
+        {"ok": True, "data": {"content": "t1 shows a prompt"}},
+        {"ok": True, "data": {"content": "Sent to t1."}},
+        {"ok": False, "error": {"message": "t2 is not running."}},
+    ]
 
     answer = await harness.brain.answer(DELEGATION)
 
     assert answer == (
-        "The request could not be completed: the backend model request failed. Actions already "
-        "performed, possibly with uncertain results: send_message. Nothing was retried."
-    )
-
-
-@pytest.mark.asyncio
-async def test_failure_without_actions_says_nothing_changed():
-    harness = Harness([ProviderError("broken", retryable=False)])
-
-    assert await harness.brain.answer(DELEGATION) == (
-        "The request could not be completed: the backend model request failed. "
-        "Nothing in the app was changed."
+        "The request could not be completed: the backend model request failed. Nothing was "
+        f"retried.\n\n{EFFECTS_LABEL} Sent to t1. | Failed: t2 is not running."
     )
 
 
@@ -343,7 +355,7 @@ async def test_adapter_rejections_reach_the_host_with_the_call(
         lambda response, **_kwargs: normalize_responses_response(response),
     )
 
-    assert await harness.brain.answer(DELEGATION) == "Done"
+    assert await harness.brain.answer(DELEGATION) == "Done" + NOTHING
 
     (rejected_name, _, rejection), (valid_name, _, no_rejection) = harness.calls
     assert (rejected_name, valid_name) == (name, "overview")
@@ -361,7 +373,7 @@ async def test_records_the_delegation_with_its_step_timings():
     assert delegation == {
         "type": "delegation",
         "request": "Start a Codex terminal",
-        "answer": "Done.",
+        "answer": f"Done.\n\n{EFFECTS_LABEL} Done.",
         "steps": 2,
         "tool_calls": 2,
         "model_ms": [250, 250],
@@ -383,4 +395,4 @@ async def test_records_a_failed_delegation_with_its_reason_and_survives_a_broken
 
     harness.brain._record = broken
     harness.adapter.responses.append(_answer("Still answers."))
-    assert await harness.brain.answer(DELEGATION) == "Still answers."
+    assert await harness.brain.answer(DELEGATION) == "Still answers." + NOTHING

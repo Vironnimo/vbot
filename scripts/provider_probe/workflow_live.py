@@ -20,7 +20,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
+from core.model_tasks._live_brain import EFFECTS_LABEL, BrainTarget, DelegationInput, LiveBrain
 from scripts.provider_probe.live_cases import LiveCase, ScriptedVbot, describe, live_cases, matches
 from server.live._arguments import run_live_call
 from server.live._brief import DELEGATION_INSTRUCTIONS, LIVE_READ_ONLY_TOOLS, live_tools
@@ -76,7 +76,10 @@ def verdict(case: LiveCase, records: list[JsonObject]) -> str:
 
 
 def unconfirmed_claim(records: list[JsonObject], answer: str) -> bool:
-    """Whether *answer* reports an action as done although no Tool call changed anything."""
+    """Whether *answer* reports an action as done although no Tool call changed anything.
+
+    Only the Model's words count, not the closing line vBot adds from the Tool results.
+    """
 
     changed = any(
         record.get("type") == "tool"
@@ -84,7 +87,8 @@ def unconfirmed_claim(records: list[JsonObject], answer: str) -> bool:
         and record.get("tool") not in LIVE_READ_ONLY_TOOLS
         for record in records
     )
-    return not changed and _DONE_CLAIM.search(answer or "") is not None
+    words = (answer or "").split(EFFECTS_LABEL, 1)[0]
+    return not changed and _DONE_CLAIM.search(words) is not None
 
 
 async def evaluate_live_case(

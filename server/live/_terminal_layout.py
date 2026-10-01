@@ -19,6 +19,7 @@ from server.live._context import (
     LiveToolError,
     LiveUiError,
     count_phrase,
+    join_words,
     text_field,
 )
 from server.live._targets import (
@@ -36,6 +37,8 @@ _LOGGER = logging.getLogger("vbot.server.live")
 
 EDITABLE_GROUP_KINDS = frozenset({"user", "agent"})
 FINISHED_STATES = frozenset({"exited", "error"})
+# The Terminal manager's state while the program in a Terminal is busy.
+WORKING = "working"
 
 
 async def action_target(
@@ -73,8 +76,25 @@ class LiveTerminalLayout:
             return await self._reorder(arguments, catalog)
         if action in {"rename_group", "delete_group"}:
             target = await action_target(arguments, action, {GROUP}, self._refs, catalog)
-            assert target.group is not None
-            return await self._group_change(action, target.group, text_field(arguments, "name"))
+            group = target.group
+            assert group is not None
+            if action == "delete_group" and arguments.get("confirm") is not True:
+                working = [
+                    self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
+                    for item in await catalog.terminals()
+                    if item.get("group_id") == group["group_id"] and item.get("state") == WORKING
+                ]
+                if working:
+                    label = str(group.get("name") or group["group_id"])
+                    raise LiveToolError(
+                        "terminal_working",
+                        f'The group "{label}" has Terminals that are still working: '
+                        f"{join_words(working)}. Deleting the group stops them and breaks off "
+                        "that work, for example a task or an update. Ask the user whether to "
+                        "delete it anyway; only if they agree, call terminal again with "
+                        f'{{"action": "delete_group", "target": "{label}", "confirm": true}}.',
+                    )
+            return await self._group_change(action, group, text_field(arguments, "name"))
         target = await action_target(arguments, action, {TERMINAL}, self._refs, catalog)
         terminal = target.terminal
         assert terminal is not None
@@ -82,6 +102,14 @@ class LiveTerminalLayout:
         if action == "maximize":
             await self._ctx.view("maximize", terminal_id=terminal["terminal_id"])
             return live_success(f"Maximized {ref} in the Terminals view.")
+        if terminal.get("state") == WORKING and arguments.get("confirm") is not True:
+            raise LiveToolError(
+                "terminal_working",
+                f"{ref} is still working. Closing it stops it and breaks off that work, for "
+                "example a task or an update. Ask the user whether to close it anyway; only if "
+                "they agree, call terminal again with "
+                f'{{"action": "close", "target": "{ref}", "confirm": true}}.',
+            )
         return await self._close(terminal, ref)
 
     async def _create_group(self, name: str) -> JsonObject:

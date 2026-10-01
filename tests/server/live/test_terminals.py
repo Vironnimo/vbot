@@ -167,6 +167,20 @@ async def test_reports_a_program_that_exits_before_it_is_ready(fx: Fixture) -> N
     assert text.endswith("t1 ended before Codex was ready; the task was not typed.")
 
 
+@pytest.mark.asyncio
+async def test_reports_what_the_shell_shows_when_the_program_did_not_start(fx: Fixture) -> None:
+    fx.app.screens["term_start1"] = [
+        SHELL,
+        SHELL + " codex\ncodex: The term 'codex' is not recognized.\nPS C:\\work\\vbot>",
+    ]
+    # A start without a task also waits until the program is ready.
+    text = await fx.partial("start_coding_terminal", program="codex")
+    assert text.endswith(
+        "Codex did not start in t1. The Terminal shows: \"codex: The term 'codex' is not "
+        'recognized." Tell the user.'
+    )
+
+
 # -- messages, reading and stopping ------------------------------------------------------
 
 
@@ -272,6 +286,21 @@ async def test_closes_a_terminal_by_stopping_then_removing_it(fx: Fixture) -> No
     )
     assert fx.app.effects() == ["terminal.kill", "terminal.forget"]
     assert fx.ui.of("terminal_view")[-1] == {"op": "refresh"}
+
+
+@pytest.mark.asyncio
+async def test_closes_working_terminals_only_after_the_user_agreed(fx: Fixture) -> None:
+    fx.app.add_terminal("term_a", state="working")
+    code, message = await fx.failed("terminal", action="close", target="term_a")
+    assert code == "terminal_working"
+    assert message.endswith('{"action": "close", "target": "t1", "confirm": true}.')
+    code, message = await fx.failed("terminal", action="delete_group", target="Mine")
+    assert code == "terminal_working"
+    assert '{"action": "delete_group", "target": "Mine", "confirm": true}' in message
+    assert fx.app.effects() == []
+
+    await fx.ok("terminal", action="close", target="t1", confirm=True)
+    assert fx.app.effects() == ["terminal.kill", "terminal.forget"]
 
 
 @pytest.mark.asyncio
@@ -809,7 +838,11 @@ async def test_an_update_is_skipped_but_never_installed_by_position(call: Call) 
         "✨ Update available! 0.153.2 -> 0.157.0",
         ["Update now (runs `npm install -g @openai/codex`)", "Skip", "Skip until next version"],
     )
-    terminal = await call.start("codex")
+    code, message = await call.failed("start_coding_terminal", program="codex")
+    assert code == "partial"
+    assert "Codex in t1 offers an update and waits. Ask the user;" in message
+    terminal = call.terminals.all[-1]
+    await call.settled(terminal)
     code, _message = await call.failed("terminal", action="key", target="t1", key="enter")
     assert code == "answer_not_selected"
     await call.ok("terminal", action="key", target="t1", key="down")

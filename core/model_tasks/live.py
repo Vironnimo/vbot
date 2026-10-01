@@ -167,10 +167,13 @@ class LiveCallHost(Protocol):
     arguments) and never raises for operation failures: they come back as a
     failure result naming the next valid call. *rejection* is the failure a
     Provider Adapter already reported for unusable arguments; the host returns
-    it as the result without running anything. Concurrent delegations may call
-    ``run_tool`` concurrently. ``known_refs`` lists the refs earlier Tool
-    results named (one ``- s1: Session at Coder`` line each, empty when none),
-    so a later delegation can target them without reading them again.
+    it as the result without running anything. Delegations run one at a time;
+    direct Tool calls may call ``run_tool`` concurrently. ``known_refs`` lists
+    the refs earlier Tool results named (one ``- s1: Session at Coder`` line
+    each, empty when none), so a later delegation can target them without
+    reading them again. ``current_state`` returns what the app and vBot show
+    right now as text (the full overview), given to each delegation so it need
+    not look first; empty when unknown.
     ``publish`` delivers an accessor update, ``publish_audio`` relayed
     assistant audio (PCM16 mono 24 kHz), and ``record`` one delegation record
     for local measurement, all without blocking.
@@ -183,6 +186,8 @@ class LiveCallHost(Protocol):
     ) -> LiveToolRun: ...
 
     def known_refs(self) -> str: ...
+
+    async def current_state(self) -> str: ...
 
     def publish(self, update: JsonObject) -> None: ...
 
