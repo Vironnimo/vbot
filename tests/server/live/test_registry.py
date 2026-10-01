@@ -666,9 +666,9 @@ async def test_end_call_closes_the_call_gracefully_after_the_goodbye(live: Harne
     result = await run_tool(call, "end_call", {})
     assert result["ok"] is True
     assert call.close_calls == 0
-    await settle(lambda: call.close_calls == 1)
+    await settle(lambda: live.registry.active_call_id is None)
+    assert call.close_calls == 1
     assert call.abort_calls == 0
-    assert live.registry.active_call_id is None
     # The owner learns that the voice model hung up, not that the user stopped.
     await settle(lambda: reader.done)
     assert reader.frames[-1] == {
