@@ -298,6 +298,12 @@ export default Object.freeze({
     'The search index could not be read or written.',
   'settings.recall.indexError.space_unstable':
     'The embedding model kept changing during indexing.',
+  'settings.recall.indexError.local_model_missing':
+    'The local embedding model is not installed yet. Install it under On this computer, or choose another model.',
+  'settings.recall.indexError.local_engine_failed':
+    'The local embedding model failed to run on this computer.',
+  'settings.recall.status.etaSoon': 'less than a minute left',
+  'settings.recall.status.eta': 'about {duration} left',
   'settings.recall.rebuild': 'Rebuild index',
   'settings.recall.rebuildTitle': 'Rebuild the search index?',
   'settings.recall.rebuildBody':

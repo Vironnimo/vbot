@@ -216,6 +216,51 @@ describe('recall index status line', () => {
       },
     ],
     [
+      'the time left while indexing',
+      status({
+        state: 'indexing',
+        indexed: 300,
+        waiting: 700,
+        estimate: { tokens: 70_000 },
+        eta_seconds: 754,
+      }),
+      {
+        state: 'indexing',
+        summary:
+          'Indexing: 300 of 1,000 passages · about 13 min left · about 70K tokens waiting',
+        problem: '',
+      },
+    ],
+    [
+      'hours left while indexing',
+      status({ state: 'indexing', waiting: 9000, eta_seconds: 9000 }),
+      expect.objectContaining({
+        summary: expect.stringContaining('about 2.5 hr left'),
+      }),
+    ],
+    [
+      'less than a minute left while indexing',
+      status({ state: 'indexing', indexed: 990, waiting: 10, eta_seconds: 12 }),
+      expect.objectContaining({
+        summary: expect.stringContaining(' · less than a minute left · '),
+      }),
+    ],
+    [
+      'a local Model that is not installed',
+      status({
+        state: 'error',
+        waiting: 2,
+        estimate: { tokens: 10 },
+        last_error: { code: 'local_model_missing', message: 'English' },
+      }),
+      {
+        state: 'error',
+        summary: 'Indexed 0 of 2 passages · about 10 tokens waiting',
+        problem:
+          'The local embedding model is not installed yet. Install it under On this computer, or choose another model.',
+      },
+    ],
+    [
       'waiting without a known price',
       status({ indexed: 10, waiting: 5, estimate: { tokens: 1200 } }),
       {
