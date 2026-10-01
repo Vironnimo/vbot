@@ -60,6 +60,7 @@ from server.events import ServerEventBus
 from server.live._brief import live_brief
 from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
 from server.live._feed import LiveRunFeed
+from server.live._memory import LiveMemory
 from server.live._record import LiveCallRecorder
 from server.live._tools import LiveToolExecutor
 
@@ -235,11 +236,14 @@ class _LiveCallEntry:
         on_finalized: Callable[[_LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
+        memory: LiveMemory,
+        recap: str = "",
         wake_phrases: tuple[str, ...] = (),
         recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
         self._recorder = recorder
+        self._recap = recap
         self._wake_phrases = wake_phrases
         self._rpc = rpc
         self._events = events
@@ -266,6 +270,7 @@ class _LiveCallEntry:
             is_active=self._is_active,
             started_at=started_at,
             end_call=self.end_soon,
+            memory=memory,
             record=self.record if recorder is not None else None,
         )
         self._ending = False
@@ -295,7 +300,9 @@ class _LiveCallEntry:
     def brief(self, *, direct_tools: bool) -> LiveBrief:
         """The call's instructions and Live Tools."""
         self._executor.mode = "direct" if direct_tools else "delegated"
-        return live_brief(direct_tools=direct_tools, wake_phrases=self._wake_phrases)
+        return live_brief(
+            direct_tools=direct_tools, wake_phrases=self._wake_phrases, recap=self._recap
+        )
 
     async def run_tool(
         self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
@@ -304,7 +311,7 @@ class _LiveCallEntry:
         return await self._executor.run(name, arguments, rejection=rejection)
 
     def known_refs(self) -> str:
-        """The refs this call's Tool results named so far, one labeled line each."""
+        """The refs Tool results named so far, one labeled line each."""
         return self._executor.known_refs()
 
     def publish(self, update: JsonObject) -> None:
@@ -635,7 +642,8 @@ class LiveCallRegistry:
     ``rpc`` dispatches one registered RPC method in-process; the call's Tools
     and Run announcements go through it so they behave like any accessor call.
     ``recorder`` keeps the Tool call and delegation records of calls that start
-    while ``recording()`` is true (Debug Mode).
+    while ``recording()`` is true (Debug Mode). ``memory`` carries refs and the
+    operator's assignments from one call to the next (see ``_memory.py``).
     """
 
     def __init__(
@@ -647,8 +655,10 @@ class LiveCallRegistry:
         clock: Callable[[], datetime] = _utc_now,
         recorder: LiveCallRecorder | None = None,
         recording: Callable[[], bool] = lambda: True,
+        memory: LiveMemory | None = None,
     ) -> None:
         self._events = events
+        self._memory = memory or LiveMemory()
         self._rpc = rpc
         self._recorder = recorder
         self._recording = recording
@@ -693,6 +703,8 @@ class LiveCallRegistry:
                 on_finalized=self._entry_finalized,
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
+                memory=self._memory,
+                recap=self._memory.begin_call(),
                 wake_phrases=wake_phrases,
                 recorder=self._recorder if self._recording_enabled() else None,
             )
@@ -769,6 +781,8 @@ class LiveCallRegistry:
                 await self._recorder.drain()
 
     def _entry_finalized(self, entry: _LiveCallEntry) -> None:
+        # The idle period of the operator's memory starts when a call ends.
+        self._memory.touch()
         if self._active is entry:
             self._active = None
         if self._closed or not entry.has_undelivered_updates:

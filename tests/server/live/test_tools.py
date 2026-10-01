@@ -303,7 +303,7 @@ async def test_unknown_refs_and_targets_name_the_next_call(fx: Fixture) -> None:
     code, message = await fx.failed("send_message", target="s7", text="yes")
     assert (code, message) == (
         "unknown_ref",
-        "There is no s7 in this call. Call overview to see the current refs, then call "
+        "There is no s7. Call overview to see the current refs, then call "
         "send_message again with one of them as target.",
     )
     code, message = await fx.failed("send_message", target="the other one", text="yes")

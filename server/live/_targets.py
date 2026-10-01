@@ -161,7 +161,7 @@ class LiveRefs:
         self._labels.move_to_end(ref)
 
     def touched(self) -> list[SessionKey]:
-        """Sessions Live started or addressed in this call, oldest first."""
+        """Sessions Live started or addressed, oldest first."""
         return list(self._touched)
 
     def is_touched(self, key: SessionKey) -> bool:
@@ -502,7 +502,7 @@ async def _ref_target(
     if found is None:
         raise LiveToolError(
             "unknown_ref",
-            f"There is no {ref} in this call. Call overview to see the current refs, then call "
+            f"There is no {ref}. Call overview to see the current refs, then call "
             f"{tool} again with one of them as {field}.",
         )
     if isinstance(found, SessionKey):

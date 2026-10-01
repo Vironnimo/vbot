@@ -59,6 +59,7 @@ from server.live._context import (
     join_words,
     text_field,
 )
+from server.live._memory import LiveMemory
 from server.live._programs import CODING_PROGRAMS
 from server.live._targets import (
     AGENT,
@@ -69,7 +70,6 @@ from server.live._targets import (
     LiveAgent,
     LiveCatalog,
     LiveProject,
-    LiveRefs,
     SessionKey,
     Target,
     TeamCache,
@@ -117,8 +117,9 @@ class LiveToolExecutor:
     ``is_active`` turns false once the call stops or is replaced; multi-step
     operations check it before each further effect. ``started_at`` bounds the
     recently finished Sessions ``overview`` shows. ``end_call`` ends the voice
-    call after a short goodbye. ``record``, when given, receives one record per
-    Tool call, labeled with ``mode``.
+    call after a short goodbye. ``memory`` holds the refs and assignments
+    shared with earlier and later calls (a fresh one by default). ``record``,
+    when given, receives one record per Tool call, labeled with ``mode``.
     """
 
     def __init__(
@@ -130,13 +131,15 @@ class LiveToolExecutor:
         is_active: Callable[[], bool],
         started_at: datetime,
         end_call: Callable[[], None],
+        memory: LiveMemory | None = None,
         record: Recorder | None = None,
         timings: TerminalTimings | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._ctx = LiveContext(rpc=rpc, ui=ui, app_context=app_context, is_active=is_active)
-        self._refs = LiveRefs()
+        self._memory = memory or LiveMemory(clock=clock)
+        self._refs = self._memory.refs
         self._teams = TeamCache(clock=clock)
         self._started_at = started_at
         self._end_call = end_call
@@ -159,11 +162,11 @@ class LiveToolExecutor:
         }
 
     def session_ref(self, address: str, session_id: str) -> str:
-        """The call's ref for a Session, assigned on first mention."""
+        """The Session's ref, assigned on first mention and kept across calls."""
         return self._refs.session(SessionKey(address=address, session_id=session_id))
 
     def known_refs(self) -> str:
-        """The refs named so far in this call, one labeled line each, most recent last."""
+        """The refs named so far, one labeled line each, most recent last."""
         return self._refs.legend()
 
     async def run(
@@ -182,6 +185,12 @@ class LiveToolExecutor:
 
     async def execute(self, name: str, arguments: JsonObject) -> JsonObject:
         """Run one canonical Live Tool call and return its Tool Result envelope."""
+        result = await self._execute(name, arguments)
+        if name in self._handlers:
+            self._memory.note(name, arguments, result)
+        return result
+
+    async def _execute(self, name: str, arguments: JsonObject) -> JsonObject:
         handler = self._handlers.get(name)
         if handler is None:
             return live_failure(

@@ -146,6 +146,7 @@ class FakeRpc:
             raise self.error
         answers: dict[str, JsonObject] = {
             "chat.run_result": {"content": "Done.", "truncated": True},
+            "session.create": {"session_id": "ses_new"},
             "agent.list": {"agents": [{"id": "joel", "name": "Joel"}]},
             "project.list": {"projects": []},
             "terminal.list": {"terminals": [], "groups": []},
@@ -606,6 +607,23 @@ async def test_the_brief_carries_the_wake_phrases_of_the_start(live: Harness) ->
         brief = call.host.brief(direct_tools=direct_tools)
         assert '"Hey Nabu", "Hey Jarvis"' in brief.voice_instructions
         assert "end_call" in [tool["name"] for tool in brief.tools]
+
+
+@pytest.mark.asyncio
+async def test_a_later_call_keeps_the_refs_and_assignments_of_the_earlier_one(
+    live: Harness,
+) -> None:
+    first = await live.start()
+    assert "Earlier calls" not in first.host.brief(direct_tools=True).voice_instructions
+    await run_tool(first, "start_agent_session", {"agent": "joel", "task": "Plan the trip"})
+
+    second = await live.start()
+    for direct_tools in (False, True):
+        brief = second.host.brief(direct_tools=direct_tools)
+        for instructions in (brief.voice_instructions, brief.delegation_instructions):
+            assert '"task": "Plan the trip"' in instructions
+            assert "- s1: Session at Joel" in instructions
+    assert second.host.known_refs() == "- s1: Session at Joel"
 
 
 @pytest.mark.asyncio

@@ -104,6 +104,22 @@ def test_a_brief_gives_both_models_their_instructions_and_every_live_tool(
     assert [tool["name"] for tool in brief.tools] == list(LIVE_TOOL_NAMES)
 
 
+@pytest.mark.parametrize("direct_tools", [False, True], ids=["delegate", "direct-tools"])
+def test_a_recap_of_earlier_calls_reaches_both_models_as_one_block(direct_tools: bool) -> None:
+    recap = "Refs:\n- s1: Session at Coder"
+    brief = live_brief(direct_tools=direct_tools, wake_phrases=("Hey Nabu",), recap=recap)
+
+    blocks = brief.voice_instructions.split("\n\n")
+    earlier = blocks[-3]
+    assert earlier.startswith("Earlier calls: ")
+    assert earlier.endswith("\n" + recap)
+    # It goes before the wake phrases and the backchannel policy and changes nothing else.
+    assert [block for block in blocks if block != earlier] == voice_instructions(
+        direct_tools=direct_tools, wake_phrases=("Hey Nabu",)
+    ).split("\n\n")
+    assert brief.delegation_instructions == DELEGATION_INSTRUCTIONS + "\n\n" + earlier
+
+
 @MODES
 def test_voice_instructions_without_wake_phrases_are_the_mode_text(
     direct_tools: bool, constant: str
