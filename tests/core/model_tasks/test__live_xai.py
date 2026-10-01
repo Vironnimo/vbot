@@ -26,7 +26,8 @@ from core.model_tasks._live_wire import (
     WireUsage,
     relay_media,
 )
-from core.model_tasks._live_xai import XaiLiveWire, _XaiSession, open_xai_live_wire
+from core.model_tasks._live_xai import XaiLiveWire, open_xai_live_wire
+from core.model_tasks._live_xai_session import XaiSession
 from core.model_tasks.model_tasks import parse_task_model_target_id
 from core.providers.errors import (
     NetworkError,
@@ -74,8 +75,8 @@ class Clock:
         return self.now
 
 
-def _session(*, direct: bool = False, clock: Clock | None = None) -> _XaiSession:
-    session = _XaiSession(
+def _session(*, direct: bool = False, clock: Clock | None = None) -> XaiSession:
+    session = XaiSession(
         tools=TOOLS if direct else [REQUEST_TOOL],
         direct_tools=direct,
         clock=clock or Clock(),
@@ -140,7 +141,7 @@ def _decoded(output: str) -> Any:
 
 
 def test_session_update_configures_voice_vad_audio_transcription_and_delegation_tool():
-    update = _XaiSession(tools=[REQUEST_TOOL], direct_tools=False).configure(INSTRUCTIONS, "eve")
+    update = XaiSession(tools=[REQUEST_TOOL], direct_tools=False).configure(INSTRUCTIONS, "eve")
 
     assert update == {
         "type": "session.update",
@@ -166,7 +167,7 @@ def test_session_update_configures_voice_vad_audio_transcription_and_delegation_
 
 
 def test_direct_tools_mode_registers_the_app_tools_in_flat_shape():
-    update = _XaiSession(tools=TOOLS, direct_tools=True).configure(INSTRUCTIONS, None)
+    update = XaiSession(tools=TOOLS, direct_tools=True).configure(INSTRUCTIONS, None)
 
     assert "voice" not in update["session"]
     assert update["session"]["tools"] == [{"type": "function", **tool} for tool in TOOLS]
@@ -175,11 +176,11 @@ def test_direct_tools_mode_registers_the_app_tools_in_flat_shape():
 
 def test_a_delegating_session_offers_exactly_one_tool():
     with pytest.raises(ValueError):
-        _XaiSession(tools=TOOLS, direct_tools=False)
+        XaiSession(tools=TOOLS, direct_tools=False)
 
 
 def test_session_starts_on_session_updated_and_drops_audio_before():
-    session = _XaiSession(
+    session = XaiSession(
         tools=[REQUEST_TOOL], direct_tools=False, clock=Clock(), wall_clock=lambda: 1000.0
     )
 
@@ -697,7 +698,7 @@ def test_max_duration_closes_the_socket_and_confirms_the_close():
 
 
 def test_a_rejected_setup_is_a_problem_that_ends_the_call():
-    session = _XaiSession(tools=[REQUEST_TOOL], direct_tools=False)
+    session = XaiSession(tools=[REQUEST_TOOL], direct_tools=False)
     step = session.receive(
         {"type": "error", "error": {"type": "invalid_request_error", "message": "bad voice"}}
     )
