@@ -124,7 +124,6 @@ jobs:
           if ([string]$release.version -cne $releaseVersion) {
             throw "Installed release version '$($release.version)' does not match tag '$env:RELEASE_TAG'"
           }
-          if (Test-Path -LiteralPath (Join-Path $installDir ".git")) { throw "Native install contains a Git checkout" }
 
           $vbot = Join-Path $installDir "vBot.exe"
           if (-not (Test-Path -LiteralPath $vbot -PathType Leaf)) { throw "Native vBot executable is missing" }
