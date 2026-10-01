@@ -446,13 +446,13 @@ Bare `vbot config` is equivalent to `config list`; `config get`, `set`, `unset`,
 
 ## Running the server
 
-Run in the foreground from a checkout:
+Run in the foreground from a development checkout:
 
 ```bash
 python server/main.py
 ```
 
-Use the installed lifecycle commands for a managed background process:
+Use the lifecycle commands for a managed background process:
 
 ```bash
 vbot server start
@@ -461,10 +461,10 @@ vbot server restart
 vbot server stop
 ```
 
-Override the target at the leaf command:
+An installation's lifecycle commands always act on its recorded server, with the host, port and data directory chosen at installation; a `--host`, `--port` or `--data-dir` that names another target is rejected. In a development checkout, select the target at the leaf command:
 
 ```bash
-vbot server start --host 127.0.0.1 --port 9000 --data-dir ~/.vbot-alt
+python cli/main.py server start --host 127.0.0.1 --port 9000 --data-dir ~/.vbot-alt
 ```
 
 Manage Autostart of an installation separately when needed:
@@ -1306,7 +1306,7 @@ not publish them; CI builds and signs the published packages.
 - vBot is alpha software. Back up the data directory before upgrades or manual config surgery.
 - Agents and trusted Extensions run with the OS permissions of the account that starts vBot. Keep the server on localhost unless a deliberately secured remote topology is required.
 - A remote Desktop Client should reach the server only through a trusted LAN or VPN plus restrictive firewalling, or through an authenticated TLS reverse proxy. Never expose the unauthenticated vBot port to the public internet.
-- Bind conflicts normally mean another process already owns the selected port. Use `vbot server status`, choose another `--port`, or stop the conflicting process.
+- Bind conflicts normally mean another process already owns the selected port. Use `vbot server status` and stop the conflicting process. A development checkout can also choose another `--port`; an installation keeps the port chosen at installation.
 - Process environment credentials override values in `<data-dir>/.env`; removing a data-directory key may therefore leave a Connection configured through the process environment.
 - Attachment, speech, and image artifacts are durable. Attachments currently have no garbage collector or reference counting, including attachments promoted from images read from disk.
 - Complete Bash process output under `temp/bash/` is retained for 72 hours after completion; Sub-Agent activity files under `temp/subagents/` are retained for 24 hours. These temporary files supplement canonical Session history.

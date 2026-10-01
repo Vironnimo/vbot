@@ -7,6 +7,7 @@ These commands run locally. Management commands in other areas normally contact 
 - For RPC-backed management commands, append `--host <host> --port <port>` after the command to select the server. Keep those options on subsequent calls; the CLI does not remember a target from the previous command.
 - Host normally defaults to `127.0.0.1`. Port resolves from `--port`, then `VBOT_SERVER_PORT`, then the selected local Settings, then `8420`.
 - The local data directory resolves from `--data-dir`, then `VBOT_DATA_DIR`, then an applicable checkout/worktree marker, then `~/.vbot`. Use `vbot home [--data-dir <path>]` to inspect it. `--data-dir` selects local configuration and lifecycle state; it is not sent to the server to redirect a management request.
+- An installation with its own server (shape `server` or `server-desktop` in `vbot application status`) replaces both resolution chains: omitted options select its recorded host, port and data directory. Its `server` and `autostart` commands always act on that recorded server and reject a `--host`, `--port` or `--data-dir` that names another target.
 - Keep local lifecycle commands on the machine that owns the server. For a remote server, management uses its host/port; local paths still refer to the machine running the CLI. Do not treat `home`, `doctor`, or local snapshot results as remote filesystem observations.
 - `home` and `doctor` accept only `--data-dir`; `desktop` accepts only host/port and has its own last-used-server default. `update` and `uninstall` take no target options: they act on the installation that runs the command, with its recorded server and data directory.
 
@@ -19,7 +20,7 @@ vbot server restart
 vbot server status
 ```
 
-- `start` refuses to launch over a non-vBot process on the target port. Don't kill the occupant — report the conflict or target a different port/data-dir.
+- `start` refuses to launch over a non-vBot process on the target port. Don't kill the occupant — report the conflict. Only a development checkout may instead target a different port/data-dir; an installation's server keeps its recorded target.
 - `status` can exit 0 when the server is stopped or a non-vBot process occupies the port. Read the reported state; exit 0 alone does not establish readiness.
 - On a Linux installation with Autostart, these commands control the systemd user unit `vbot.service`. Use them instead of `systemctl` or killing processes.
 
