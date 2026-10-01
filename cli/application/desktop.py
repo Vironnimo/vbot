@@ -67,16 +67,12 @@ def relaunch_contract(install: Installation, version_id: str) -> str:
     """Return the JSON contract a Desktop running ``version_id`` restarts with.
 
     The command is the stable GUI companion with exactly ``desktop``, which
-    resolves the active version again; an installation from before the GUI
-    companion falls back to the console bootstrap.
+    resolves the active version again.
     """
-    launcher = install.root / "vBot.GUI.exe"
-    if not launcher.is_file():
-        launcher = install.root / "vBot.exe"
     return json.dumps(
         {
             "version_file": str(install.root / "active-version"),
             "version": version_id,
-            "command": [str(launcher), "desktop"],
+            "command": [str(install.root / "vBot.GUI.exe"), "desktop"],
         }
     )

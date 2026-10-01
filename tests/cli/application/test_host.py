@@ -83,7 +83,7 @@ def test_tray_version_and_pending_restart_refresh_only_on_activation(tmp_path, m
     update.transition(install, "completed", "Updated")
     assert facade.state().restart_pending is True
     assert reads == [manifest, next_version / "release.json"]
-    # A tray running from a source checkout never restarts.
+    # A tray running from a development checkout never restarts.
     assert host.ApplicationFacade(install, running_version=None).state().restart_pending is False
 
 
@@ -376,7 +376,7 @@ def test_open_desktop_uses_the_versioned_desktop_host_and_shape_target(
     assert json.loads(environment[desktop.RELAUNCH_ENV]) == {
         "version_file": str(install.root / "active-version"),
         "version": install.version().name,
-        "command": [str(install.root / "vBot.exe"), "desktop"],
+        "command": [str(install.root / "vBot.GUI.exe"), "desktop"],
     }
 
 
