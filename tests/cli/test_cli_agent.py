@@ -301,14 +301,55 @@ def test_agent_update_rejects_incomplete_changes_before_any_request(
         assert option in out
 
 
-def test_agent_delete_deletes_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:
-    rpc.reply("agent.delete", {"agent_id": "writer"})
+@pytest.mark.parametrize(
+    ("options", "params", "deleted", "shown"),
+    [
+        pytest.param(
+            (),
+            {"id": "writer"},
+            {"archive_entry_id": "arc_7k2m9q4xw1ab", "purged": False},
+            [
+                "archived agent writer as archive entry arc_7k2m9q4xw1ab (12 sessions); "
+                "restore with: vbot archive restore arc_7k2m9q4xw1ab"
+            ],
+            id="archived",
+        ),
+        pytest.param(
+            ("--permanent", "--yes"),
+            {"id": "writer", "permanent": True},
+            {"archive_entry_id": None, "purged": True, "external_workspace": "C:/notes/writer"},
+            [
+                "deleted agent writer permanently (12 sessions)",
+                "external Workspace left in place: C:/notes/writer",
+            ],
+            id="permanent",
+        ),
+    ],
+)
+def test_agent_delete_archives_or_deletes_the_agent(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    deleted: dict[str, Any],
+    shown: list[str],
+) -> None:
+    rpc.reply(
+        "agent.delete",
+        {
+            "agent_id": "writer",
+            "session_count": 12,
+            "external_workspace": None,
+            "purge_pending": False,
+        }
+        | deleted,
+    )
 
-    code, out, _err = run_cli("agent", "delete", "writer")
+    code, out, _err = run_cli("agent", "delete", "writer", *options)
 
     assert code == 0
-    assert rpc.calls == [("agent.delete", {"id": "writer"})]
-    assert "writer" in out
+    assert rpc.calls == [("agent.delete", params)]
+    assert out.splitlines() == shown
 
 
 def test_agent_rename_renames_the_agent(rpc: FakeRpc, run_cli: RunCli) -> None:

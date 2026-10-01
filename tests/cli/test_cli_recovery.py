@@ -164,6 +164,8 @@ def test_connection_failure_never_proposes_remote_lifecycle(tmp_path, host, area
         ("channel_not_found", "channel"),
         ("oauth_not_supported", "provider"),
         ("agent_order_conflict", "agent"),
+        # A permanent delete purges the entry it created; the archive lists it.
+        ("archive_entry_busy", "archive"),
     ],
 )
 def test_server_code_selects_the_actual_failed_resource(tmp_path, code, area):

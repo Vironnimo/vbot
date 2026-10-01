@@ -1,4 +1,4 @@
-"""CLI grammar for Agents, Projects, Sessions, chat, and data-store maintenance."""
+"""CLI grammar for Agents, Projects, Sessions, the archive, chat, and data-store maintenance."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import argparse
 
 from cli._parser_common import (
     AGENT_HELP,
+    ARCHIVE_HELP,
     AREA_HELP,
     DATA_STORE_HELP,
     DATA_STORE_SNAPSHOT_HELP,
+    PERMANENT_DELETE_HELP,
     PROJECT_HELP,
     SESSION_HELP,
     THINKING_EFFORTS,
@@ -18,6 +20,7 @@ from cli._parser_common import (
 )
 from core.memory import MEMORY_PROMPT_MODES
 from core.providers.reasoning import THINKING_EFFORT_ORDER
+from core.sessions import ARCHIVE_KINDS
 from core.settings import PROJECT_SOURCE_FORMATS
 
 # The Identity Agent a fresh installation creates first.
@@ -85,6 +88,10 @@ def _add_agent_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         agent_subparsers, "delete", AGENT_HELP["delete"], example="agent delete coder"
     )
     delete_parser.add_argument("id", metavar="<agent-id>", help="Agent id to delete")
+    delete_parser.add_argument("--permanent", action="store_true", help=PERMANENT_DELETE_HELP)
+    delete_parser.add_argument(
+        "--yes", action="store_true", help="Confirm a permanent deletion (with --permanent)"
+    )
 
     reorder_parser = _add_command_parser(
         agent_subparsers,
@@ -422,6 +429,10 @@ def _add_project_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
             "Identity Agents are reset to their default Workspace"
         ),
     )
+    rm_parser.add_argument("--permanent", action="store_true", help=PERMANENT_DELETE_HELP)
+    rm_parser.add_argument(
+        "--yes", action="store_true", help="Confirm a permanent deletion (with --permanent)"
+    )
 
     _add_command_parser(
         project_subparsers,
@@ -518,8 +529,9 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
     delete_parser.add_argument(
         "--yes",
         action="store_true",
-        help="Confirm deletion; the session is archived (recoverable), not erased",
+        help="Confirm deletion; without --permanent the session moves to the archive",
     )
+    delete_parser.add_argument("--permanent", action="store_true", help=PERMANENT_DELETE_HELP)
 
     fork_parser = _add_command_parser(
         session_subparsers,
@@ -587,6 +599,104 @@ def _add_session_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         required=True,
         metavar="<platform-conv-id>",
         help="Platform conversation id, for example a Telegram chat id",
+    )
+
+
+def _add_archive_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    archive_parser = subparsers.add_parser(
+        "archive",
+        help=AREA_HELP["archive"],
+        description=(
+            f"{AREA_HELP['archive']}. Deleting an Agent, Project or Session moves it into "
+            "the archive as one archive entry (arc_...), which is restored or deleted "
+            "permanently as a unit."
+        ),
+    )
+    archive_subparsers = archive_parser.add_subparsers(dest="command", required=True)
+
+    list_parser = _add_command_parser(
+        archive_subparsers, "list", ARCHIVE_HELP["list"], example="archive list --kind agent"
+    )
+    _add_archive_filter_arguments(list_parser, selects="List")
+    list_parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Page size (default: 50; the server accepts 1 to 200)",
+    )
+    list_parser.add_argument(
+        "--cursor",
+        type=_json_object_argument,
+        metavar="<json-object>",
+        help="Continuation JSON a previous list printed for its next page",
+    )
+    list_parser.add_argument(
+        "--all", action="store_true", help="Fetch every page; output may be large"
+    )
+
+    show_parser = _add_command_parser(
+        archive_subparsers,
+        "show",
+        ARCHIVE_HELP["show"],
+        example="archive show arc_7k2m9q4xw1ab",
+    )
+    show_parser.add_argument("entry_id", metavar="<entry-id>", help="Archive entry id (arc_...)")
+
+    restore_parser = _add_command_parser(
+        archive_subparsers,
+        "restore",
+        ARCHIVE_HELP["restore"],
+        example="archive restore arc_7k2m9q4xw1ab --as coder-2",
+    )
+    restore_parser.add_argument("entry_id", metavar="<entry-id>", help="Archive entry id (arc_...)")
+    restore_parser.add_argument(
+        "--as",
+        dest="target_id",
+        metavar="<new-id>",
+        help="Restore under this new Agent, Project or Session id when the original is in use",
+    )
+
+    purge_parser = _add_command_parser(
+        archive_subparsers,
+        "purge",
+        ARCHIVE_HELP["purge"],
+        example="archive purge arc_7k2m9q4xw1ab --yes",
+    )
+    purge_parser.add_argument(
+        "entry_ids",
+        nargs="*",
+        metavar="<entry-id>",
+        help="Archive entry ids to delete; or use --all",
+    )
+    purge_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Delete every archive entry, or with filters every matching one",
+    )
+    _add_archive_filter_arguments(purge_parser, selects="With --all, delete")
+    purge_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Confirm the permanent deletion; it cannot be undone",
+    )
+
+
+def _add_archive_filter_arguments(parser: argparse.ArgumentParser, *, selects: str) -> None:
+    parser.add_argument(
+        "--kind", choices=ARCHIVE_KINDS, help=f"{selects} only entries of this kind"
+    )
+    parser.add_argument(
+        "--agent",
+        metavar="<agent-id>",
+        help=(
+            f"{selects} only entries of this Agent: an Identity Agent id, or agent@project "
+            "for a Project Agent"
+        ),
+    )
+    parser.add_argument(
+        "--project",
+        metavar="<project-id>",
+        help=f"{selects} only entries of this Project, including the Sessions of its Agents",
     )
 
 

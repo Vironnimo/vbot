@@ -20,6 +20,7 @@ class RecoveryGuidance:
 _INSPECTIONS = {
     "agent": ("agent", "list"),
     "project": ("project", "list"),
+    "archive": ("archive", "list"),
     "channel": ("channel", "list"),
     "provider": ("provider", "list"),
     "model": ("model", "list"),
@@ -74,7 +75,23 @@ _CODE_GUIDANCE = {
     "and stop it before starting another.",
     "performance_recording_inactive": "No performance recording is running. Inspect the "
     "current status or list stored recordings.",
+    "archive_restore_conflict": "The id is taken by a live resource. Re-run with --as <new-id> "
+    "to restore under a new id, or remove the conflicting resource first.",
+    "archive_not_restorable": "This entry cannot be restored; the blockers above say why. "
+    "'vbot archive show <entry-id>' shows its contents; 'vbot archive purge <entry-id> --yes' "
+    "deletes it.",
+    "archive_entry_busy": "Another operation on this archive entry is in progress. Inspect it "
+    "with 'vbot archive show' and retry after it finished.",
 }
+
+_ARCHIVE_CODES = frozenset(
+    {
+        "archive_entry_not_found",
+        "archive_entry_busy",
+        "archive_restore_conflict",
+        "archive_not_restorable",
+    }
+)
 
 # Names both lists without parsing the address: 'agent list' holds only Identity Agents.
 _AGENT_NOT_FOUND_EXPLANATION = (
@@ -119,6 +136,8 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["session", "list", args.id]
     elif code == "oauth_not_supported":
         inspection = ["provider", "list"]
+    elif code in _ARCHIVE_CODES:
+        inspection = ["archive", "list"]
 
     if failure and failure.request_state in {"not_sent", "unknown"}:
         # The transport result already explains delivery and possible partial effects.

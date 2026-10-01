@@ -308,9 +308,19 @@ def test_project_override_set_coerces_the_value(
         pytest.param(
             (),
             {"project_id": "vbot"},
-            {"archive_entry_id": "arc_7k2m9q4xw1ab"},
-            ["removed project vbot (archived as archive entry arc_7k2m9q4xw1ab)"],
+            {"archive_entry_id": "arc_7k2m9q4xw1ab", "session_count": 3},
+            [
+                "removed project vbot (archived as archive entry arc_7k2m9q4xw1ab, 3 sessions); "
+                "restore with: vbot archive restore arc_7k2m9q4xw1ab"
+            ],
             id="archived",
+        ),
+        pytest.param(
+            ("--permanent", "--yes"),
+            {"project_id": "vbot", "permanent": True},
+            {"archive_entry_id": None, "purged": True, "session_count": 3},
+            ["removed project vbot permanently (3 sessions); the repo is untouched"],
+            id="permanent",
         ),
         pytest.param(
             ("--copy-rooted-agent-files",),

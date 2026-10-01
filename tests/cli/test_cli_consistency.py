@@ -129,6 +129,7 @@ AREAS = [
     ("agent", ["list"]),
     ("project", ["list"]),
     ("session", ["list", "a"]),
+    ("archive", ["list"]),
     ("data-store", ["status"]),
     ("channel", ["list"]),
     ("tool", ["list"]),

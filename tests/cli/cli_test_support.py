@@ -43,8 +43,18 @@ class FakeRpc:
         self._replies.setdefault(method, []).append(response)
         return self
 
-    def fail(self, method: str, code: str, message: str, *, status: int = 400) -> FakeRpc:
-        error = {"code": code, "message": message}
+    def fail(
+        self,
+        method: str,
+        code: str,
+        message: str,
+        *,
+        status: int = 400,
+        data: dict[str, Any] | None = None,
+    ) -> FakeRpc:
+        error: dict[str, Any] = {"code": code, "message": message}
+        if data is not None:
+            error["data"] = data
         response = httpx.Response(status, json={"ok": False, "error": error})
         self._replies.setdefault(method, []).append(response)
         return self

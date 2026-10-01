@@ -17,9 +17,11 @@ RPC_TIMEOUT_SECONDS = 10.0
 
 # Methods that legitimately run far longer than the default cap. Model refreshes
 # fan out across Provider endpoints, while data snapshots copy and verify
-# databases whose size is user-controlled. These calls leave the read phase
-# unbounded after the local server accepts them, while the ordinary connect,
-# write, and pool limits still fail fast when the server cannot be reached.
+# databases whose size is user-controlled. Archiving, restoring and permanently
+# deleting move or delete every Session and file of an Agent, Project or Session,
+# and a purge of the whole archive is one request. These calls leave the read
+# phase unbounded after the local server accepts them, while the ordinary
+# connect, write, and pool limits still fail fast when the server cannot be reached.
 _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
     {
         "model.refresh_db",
@@ -27,6 +29,11 @@ _LONG_RUNNING_METHODS: frozenset[str] = frozenset(
         "performance.heap",
         "data_store.snapshot_create",
         "skill.install",
+        "agent.delete",
+        "project.rm",
+        "session.delete",
+        "archive.restore",
+        "archive.purge",
     }
 )
 RPC_LONG_RUNNING_TIMEOUT = httpx.Timeout(RPC_TIMEOUT_SECONDS, read=None)
@@ -41,11 +48,15 @@ _PROGRESS_PHASES = {
     "extensions.reload": "Reloading Extensions and checking their load results",
     "provider.usage": "Checking live Provider usage limits",
     "performance.recording_stop": "Writing the performance trace file",
+    "archive.purge": "Deleting archived Sessions and files",
 }
 
 
 class RpcPayload:
-    """Normalized server RPC success or failure payload."""
+    """Normalized server RPC success or failure payload.
+
+    ``error_data`` is the server error's structured ``data`` object, when it sent one.
+    """
 
     def __init__(
         self,
@@ -55,12 +66,14 @@ class RpcPayload:
         data: Mapping[str, Any] | None = None,
         message: str = "",
         failure: RpcFailure | None = None,
+        error_data: Mapping[str, Any] | None = None,
     ) -> None:
         self.ok = ok
         self.instance = instance
         self.data = data or {}
         self.message = message
         self.failure = failure
+        self.error_data = error_data or {}
 
     def to_command_result(self) -> CommandResult:
         return CommandResult(
@@ -114,11 +127,13 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
         and isinstance(error, dict)
         and (isinstance(error.get("code"), str) and isinstance(error.get("message"), str))
     ):
+        error_data = error.get("data")
         return RpcPayload(
             ok=False,
             instance=instance,
             message=_rpc_error_message(error, fallback="RPC request failed"),
             failure=RpcFailure(method, "responded", error["code"], response.status_code),
+            error_data=error_data if isinstance(error_data, dict) else None,
         )
     if response.status_code != httpx.codes.OK:
         return _transport_failure(

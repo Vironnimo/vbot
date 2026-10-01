@@ -8,6 +8,7 @@ from typing import Any
 
 from cli._input import _read_stdin_utf8
 from cli.agent_management import agent_reorder
+from cli.archive_management import archive_list, archive_purge, archive_restore, archive_show
 from cli.chat_management import ChatRequest, chat
 from cli.data_store_management import (
     data_store_incident_acknowledge,
@@ -50,7 +51,7 @@ def dispatch_agent_command(
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult],
     rename_agent: Callable[[ServerInstance, str, str], CommandResult],
     reorder_agent: Callable[[ServerInstance, Sequence[str]], CommandResult] = agent_reorder,
-    delete_agent: Callable[[ServerInstance, str], CommandResult],
+    delete_agent: Callable[[ServerInstance, str, bool, bool], CommandResult],
 ) -> CommandResult:
     """Dispatch one parsed agent command against the server RPC client."""
 
@@ -70,7 +71,7 @@ def dispatch_agent_command(
     if args.command == "reorder":
         return reorder_agent(instance, list(args.ids))
     if args.command == "delete":
-        return delete_agent(instance, args.id)
+        return delete_agent(instance, args.id, args.permanent, args.yes)
     raise ValueError(f"Unsupported agent command: {args.command}")
 
 
@@ -163,7 +164,9 @@ def dispatch_project_command(
     clear_override_fn: Callable[
         [ServerInstance, str, str, str], CommandResult
     ] = project_clear_override,
-    remove_project_fn: Callable[[ServerInstance, str, bool], CommandResult] = project_remove,
+    remove_project_fn: Callable[
+        [ServerInstance, str, bool, bool, bool], CommandResult
+    ] = project_remove,
 ) -> CommandResult:
     """Dispatch one parsed project command against the server RPC client."""
 
@@ -180,7 +183,9 @@ def dispatch_project_command(
     if args.command == "clear-override":
         return clear_override_fn(instance, args.id, args.agent, args.field)
     if args.command == "rm":
-        return remove_project_fn(instance, args.id, args.copy_rooted_agent_files)
+        return remove_project_fn(
+            instance, args.id, args.copy_rooted_agent_files, args.permanent, args.yes
+        )
     if args.command == "detect":
         return project_detect(instance, getattr(args, "cwd", None))
     raise ValueError(f"Unsupported project command: {args.command}")
@@ -265,7 +270,9 @@ def dispatch_session_command(
     create_session_fn: Callable[
         [ServerInstance, str, str | None, bool], CommandResult
     ] = session_create,
-    delete_session_fn: Callable[[ServerInstance, str, str, bool], CommandResult] = session_delete,
+    delete_session_fn: Callable[
+        [ServerInstance, str, str, bool, bool], CommandResult
+    ] = session_delete,
     link_session_fn: Callable[
         [ServerInstance, str, str, str, str], CommandResult
     ] = session_link_channel,
@@ -286,7 +293,7 @@ def dispatch_session_command(
     if args.command == "create":
         return create_session_fn(instance, args.agent, args.id, args.make_current)
     if args.command == "delete":
-        return delete_session_fn(instance, args.agent, args.session, args.yes)
+        return delete_session_fn(instance, args.agent, args.session, args.yes, args.permanent)
     if args.command == "fork":
         return fork_session_fn(instance, args.agent, args.session, args.target_agent)
     if args.command == "rename":
@@ -296,6 +303,36 @@ def dispatch_session_command(
     if args.command == "link-channel":
         return link_session_fn(instance, args.agent, args.session, args.channel, args.conversation)
     raise ValueError(f"Unsupported session command: {args.command}")
+
+
+def dispatch_archive_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
+    """Dispatch one parsed archive command against the server RPC client."""
+
+    if args.command == "list":
+        return archive_list(
+            instance,
+            kind=args.kind,
+            agent_id=args.agent,
+            project_id=args.project,
+            limit=args.limit,
+            cursor=args.cursor,
+            all_pages=args.all,
+        )
+    if args.command == "show":
+        return archive_show(instance, args.entry_id)
+    if args.command == "restore":
+        return archive_restore(instance, args.entry_id, args.target_id)
+    if args.command == "purge":
+        return archive_purge(
+            instance,
+            args.entry_ids,
+            all_matching=args.all,
+            kind=args.kind,
+            agent_id=args.agent,
+            project_id=args.project,
+            confirm=args.yes,
+        )
+    raise ValueError(f"Unsupported archive command: {args.command}")
 
 
 def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) -> CommandResult:
