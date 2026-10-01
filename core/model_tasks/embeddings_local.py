@@ -527,12 +527,13 @@ class LocalEmbeddingExecutor:
                     THREADS_OPTION,
                     "number",
                     "CPU threads",
-                    default=0,
-                    min_value=0,
+                    min_value=1,
                     max_value=256,
                     step=1,
-                    description="How many CPU threads the model may use. 0 uses all physical "
-                    "cores but one.",
+                    description="How many CPU threads the model may use. Leave empty to use "
+                    "all physical cores but one; fewer threads keep more of the computer "
+                    "free while indexing runs.",
+                    placeholder=f"Automatic ({default_threads()})",
                 ),
             ),
         )

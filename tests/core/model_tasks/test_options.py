@@ -28,9 +28,10 @@ from core.model_tasks.options import (
 from core.models import Capabilities, Model, ReasoningCapabilities
 
 
-def test_field_types_are_the_renderable_set_and_json_defaults_pass_through() -> None:
+def test_field_types_are_the_renderable_set_and_render_hints_pass_through() -> None:
     """The Settings UI renders exactly these field types; a ``json`` field hands
-    its raw array/object default to the frontend unchanged."""
+    its raw array/object default to the frontend unchanged, and a placeholder
+    reaches the frontend only when set."""
 
     assert {"text", "textarea", "select", "number", "boolean", "json"} == ALLOWED_OPTION_TYPES
     default = [{"text": "hi", "bbox": [[0, 0], [1, 0], [1, 1], [0, 1]]}]
@@ -40,6 +41,11 @@ def test_field_types_are_the_renderable_set_and_json_defaults_pass_through() -> 
 
     assert field.to_dict()["type"] == "json"
     assert field.to_dict()["default"] == default
+    assert "placeholder" not in field.to_dict()
+    hinted = TaskModelOptionField(
+        name="threads", type="number", label="Threads", placeholder="Automatic (5)"
+    )
+    assert hinted.to_dict()["placeholder"] == "Automatic (5)"
 
 
 @pytest.mark.parametrize(

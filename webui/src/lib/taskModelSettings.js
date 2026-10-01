@@ -170,6 +170,7 @@ export function normalizeOptionSchema(result) {
       default: field?.default ?? '',
       required: field?.required === true,
       description: textOrEmpty(field?.description),
+      placeholder: textOrEmpty(field?.placeholder),
       min: Number.isFinite(field?.min) ? field.min : null,
       max: Number.isFinite(field?.max) ? field.max : null,
       step: Number.isFinite(field?.step) ? field.step : null,

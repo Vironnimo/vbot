@@ -97,6 +97,7 @@
           id={formField.controlId}
           type="number"
           ariaLabel={field.label}
+          placeholder={field.placeholder}
           aria-describedby={formField.describedBy}
           min={field.min ?? undefined}
           max={field.max ?? undefined}
@@ -118,6 +119,7 @@
           id={formField.controlId}
           value={editor.optionValue(taskType, field)}
           ariaLabel={field.label}
+          placeholder={field.placeholder}
           aria-describedby={formField.describedBy}
           onInput={(_next, event) =>
             editor.handleOptionInput(taskType, field, event)}
