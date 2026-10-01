@@ -24,7 +24,7 @@ Thanks for your interest in vBot. It is alpha software maintained by a small tea
 
 ## Development setup
 
-Requirements: Python 3.11 or newer, Node.js 22 or newer with npm, and Git.
+Requirements: Python 3.14 (the version the packages bundle; vBot supports no other), Node.js 22 or newer with npm, and Git.
 
 ```bash
 git clone https://github.com/Vironnimo/vbot.git

@@ -28,6 +28,7 @@ from cli.application.state import package_name
 from scripts.package_build import (
     CHANNELS,
     INVENTORY_NAME,
+    PYTHON_VERSION,
     BuildError,
     remove_bytecode_caches,
     sign_archive,
@@ -44,7 +45,7 @@ PLATFORMS = {
     "linux-aarch64": "aarch64-unknown-linux-gnu",
     "linux-x86_64": "x86_64-unknown-linux-musl",
 }
-PYTHON = "python3.13"
+PYTHON = f"python{PYTHON_VERSION}"
 #: Lets every runtime invocation, also in isolated mode, import the application.
 APPLICATION_PATH_FILE = "vbot-application.pth"
 # Runtime parts a headless server never loads: headers, manuals, Tcl/Tk, the
@@ -55,8 +56,8 @@ _PRUNED = frozenset(
         "share",
         "lib/pkgconfig",
         "lib/libpython3.so",
-        "lib/libpython3.13.so",
-        "lib/libpython3.13.so.1.0",
+        f"lib/lib{PYTHON}.so",
+        f"lib/lib{PYTHON}.so.1.0",
         f"lib/{PYTHON}/test",
         f"lib/{PYTHON}/idlelib",
         f"lib/{PYTHON}/tkinter",
@@ -221,7 +222,7 @@ def build(args: argparse.Namespace) -> Path:
         runtime, source / "scripts" / "linux" / f"requirements-{SHAPE}-{platform}.lock"
     )
     site = site_packages(runtime)
-    # site-packages -> python3.13 -> lib -> runtime -> the version's app.
+    # site-packages -> python3.X -> lib -> runtime -> the version's app.
     (site / APPLICATION_PATH_FILE).write_text("../../../../app\n", encoding="utf-8")
     write_inventory(runtime, site)
     bootstrap = runtime / "vbot"

@@ -7,7 +7,7 @@ name = "vbot"
 version = "0.4.6"
 description = "A local-first agent harness: an async Python runtime giving AI agents a workspace, persistent state, host tool access, and server/WebUI/desktop/CLI accessors."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "The vBot Authors" }]
@@ -17,9 +17,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
@@ -67,6 +65,10 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
+# Deliberately below the one supported Python (3.14): its target makes the
+# formatter drop the parentheses of multi-exception `except` clauses (PEP 758),
+# which earlier Pythons cannot parse, and managed environments run vBot modules
+# on their own Python (PROJECT.md -> Development -> Python version).
 target-version = "py311"
 line-length = 100
 
@@ -80,10 +82,7 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 quote-style = "double"
 
 [tool.mypy]
-# 3.12 rather than our 3.11 runtime floor: current third-party stubs (numpy)
-# use `type` statements and cannot be parsed under 3.11. Floor syntax stays
-# guarded by ruff's py311 target and the real 3.11 test runs in CI.
-python_version = "3.12"
+python_version = "3.14"
 files = ["core", "server", "cli", "desktop", "tests"]
 mypy_path = "scripts"
 warn_return_any = true

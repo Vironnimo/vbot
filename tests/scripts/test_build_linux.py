@@ -12,23 +12,24 @@ import pytest
 from scripts import build_linux
 
 _BOOTSTRAP = Path(build_linux.__file__).parent / "linux" / "vbot"
+_PYTHON = build_linux.PYTHON  # python3.<minor>, as python-build-standalone names it
 
 
 def _runtime_archive(path: Path) -> None:
     files = {
-        "python/bin/python3.13": b"interpreter",
+        f"python/bin/{_PYTHON}": b"interpreter",
         "python/bin/pip3": b"#!/build/machine/python\n",
-        "python/lib/python3.13/os.py": b"os",
-        "python/lib/python3.13/test/test_os.py": b"test",
-        "python/lib/python3.13/tkinter/__init__.py": b"tk",
-        "python/lib/libpython3.13.so.1.0": b"embedding",
+        f"python/lib/{_PYTHON}/os.py": b"os",
+        f"python/lib/{_PYTHON}/test/test_os.py": b"test",
+        f"python/lib/{_PYTHON}/tkinter/__init__.py": b"tk",
+        f"python/lib/lib{_PYTHON}.so.1.0": b"embedding",
         "python/lib/tcl9.0/init.tcl": b"tcl",
-        "python/include/python3.13/Python.h": b"header",
+        f"python/include/{_PYTHON}/Python.h": b"header",
     }
     links = {
-        "python/bin/python3": "python3.13",
-        "python/bin/python": "python3.13",
-        "python/lib/python3.13/linked.py": "os.py",
+        "python/bin/python3": _PYTHON,
+        "python/bin/python": _PYTHON,
+        f"python/lib/{_PYTHON}/linked.py": "os.py",
     }
     with tarfile.open(path, "w:gz") as bundle:
         for name, content in files.items():
@@ -51,10 +52,10 @@ def test_runtime_is_a_pruned_link_free_tree_with_one_interpreter(tmp_path: Path)
     files = sorted(
         path.relative_to(runtime).as_posix() for path in runtime.rglob("*") if not path.is_dir()
     )
-    assert files == ["bin/python3", "lib/python3.13/linked.py", "lib/python3.13/os.py"]
+    assert files == ["bin/python3", f"lib/{_PYTHON}/linked.py", f"lib/{_PYTHON}/os.py"]
     assert not any(path.is_symlink() for path in runtime.rglob("*"))
     assert (runtime / "bin" / "python3").read_bytes() == b"interpreter"
-    assert (runtime / "lib" / "python3.13" / "linked.py").read_bytes() == b"os"
+    assert (runtime / "lib" / _PYTHON / "linked.py").read_bytes() == b"os"
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="POSIX bootstrap")

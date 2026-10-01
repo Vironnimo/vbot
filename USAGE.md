@@ -67,7 +67,7 @@ vBot runs on 64-bit Linux for ARM64 (aarch64) and x86-64, for example on a Raspb
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-The Installer needs only `curl` and `python3`; the package brings its own CPython 3.13. It downloads the server package `vbot-linux-<arch>-server.zip` of the latest release, checks it against its published SHA-256 digest, installs it into `~/.local/share/vbot` and links the `vbot` command to `~/.local/bin/vbot`. It then registers the systemd user unit `vbot.service`, enables login lingering with `sudo loginctl enable-linger` so that the server starts at boot without anyone logging in, and starts the server. When lingering cannot be enabled, the Installer warns and prints the command; until then the server starts only once you log in. If vBot is already installed in the selected directory, the Installer says so and points to `vbot update`.
+The Installer needs only `curl` and `python3`; the package brings its own CPython 3.14. It downloads the server package `vbot-linux-<arch>-server.zip` of the latest release, checks it against its published SHA-256 digest, installs it into `~/.local/share/vbot` and links the `vbot` command to `~/.local/bin/vbot`. It then registers the systemd user unit `vbot.service`, enables login lingering with `sudo loginctl enable-linger` so that the server starts at boot without anyone logging in, and starts the server. When lingering cannot be enabled, the Installer warns and prints the command; until then the server starts only once you log in. If vBot is already installed in the selected directory, the Installer says so and points to `vbot update`.
 
 Linux packages contain the server only. Use the WebUI in a browser, or connect a Windows Desktop Client from another computer.
 
@@ -1240,6 +1240,7 @@ retained for recovery.
 ### Source checkout development
 
 A development checkout is a Git clone of this repository, not an installation.
+It runs on Python 3.14, the version the packages bundle; vBot supports no other.
 Install the development dependencies, the search engine the search Tools need,
 and the WebUI packages:
 

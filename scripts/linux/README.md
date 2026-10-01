@@ -26,7 +26,7 @@ The WebUI must be built first (`npm ci --prefix webui && npm run build --prefix 
   ```bash
   for arch in aarch64 x86_64; do
     cp scripts/windows/requirements-server.lock scripts/linux/requirements-server-linux-$arch.lock
-    python -m uv pip compile pyproject.toml --extra server --extra application --python-version 3.13 --python-platform $arch-unknown-linux-gnu --generate-hashes --no-emit-package vbot --output-file scripts/linux/requirements-server-linux-$arch.lock
+    python -m uv pip compile pyproject.toml --extra server --extra application --python-version 3.14 --python-platform $arch-unknown-linux-gnu --generate-hashes --no-emit-package vbot --output-file scripts/linux/requirements-server-linux-$arch.lock
   done
   ```
 
