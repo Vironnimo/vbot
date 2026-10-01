@@ -53,7 +53,7 @@ class ApplicationFacade:
     event-stream monitor that :meth:`watch` starts.
 
     ``running_version`` names the installed version whose code this tray runs,
-    by default derived from the loaded module; ``None`` (a source checkout)
+    by default derived from the loaded module; ``None`` (a development checkout)
     disables restarts into a newly activated version.
     """
 

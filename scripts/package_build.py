@@ -95,7 +95,7 @@ def verify_release_source(source: Path, revision: str) -> None:
     """Bind a signed artifact to the exact clean tracked source revision."""
     head = _git(source, "rev-parse", "HEAD")
     if head.returncode or revision.lower() != head.stdout.strip().lower():
-        raise BuildError("release revision must equal the source checkout HEAD")
+        raise BuildError("release revision must equal the checkout HEAD")
     status = _git(
         source, "status", "--porcelain", "--untracked-files=all", "--", *RELEASE_SOURCE_PATHS
     )

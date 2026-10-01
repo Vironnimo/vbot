@@ -827,7 +827,7 @@ def test_vbot_run_context_requires_agent_and_session_identity() -> None:
     )
 
 
-@pytest.mark.parametrize("packaged", [False, True], ids=["source-checkout", "installation"])
+@pytest.mark.parametrize("packaged", [False, True], ids=["development-checkout", "installation"])
 def test_scheduled_restart_waits_then_runs_once_and_logs_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged: bool
 ) -> None:

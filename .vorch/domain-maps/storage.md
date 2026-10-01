@@ -4,7 +4,7 @@ Data-directory bootstrap, temporary-file lifecycle, atomic settings and credenti
 
 ## Overview
 
-`core/storage/` owns the process-local filesystem services and the canonical placement contract for the runtime data root. It resolves the data directory (explicit value -> `DATA_DIR`/`VBOT_DATA_DIR` -> config -> checkout markers -> `~/.vbot`; a `cwd_only` marker applies only in its own step, letting a source checkout carry a dev data dir without redirecting installed CLIs), initializes the complete canonical structure, manages categorized temporary files, and reads/writes `settings.json`, the data-dir `.env`, prompt fragments, and System Prompt block persistence. Storage owns placement but not schemas (`core/settings/`), prompt assembly rules (`core/prompts/`), or domain records stored in those directories; generated images are caller-owned Workspace/Project files outside the layout.
+`core/storage/` owns the process-local filesystem services and the canonical placement contract for the runtime data root. It resolves the data directory (explicit value -> `DATA_DIR`/`VBOT_DATA_DIR` -> config -> checkout markers -> `~/.vbot`; a `cwd_only` marker applies only in its own step, letting a development checkout carry a dev data dir without redirecting installed CLIs), initializes the complete canonical structure, manages categorized temporary files, and reads/writes `settings.json`, the data-dir `.env`, prompt fragments, and System Prompt block persistence. Storage owns placement but not schemas (`core/settings/`), prompt assembly rules (`core/prompts/`), or domain records stored in those directories; generated images are caller-owned Workspace/Project files outside the layout.
 
 ## Canonical layout
 

@@ -12,7 +12,7 @@ No Windows service is installed.
 
 ## Build inputs and outputs
 
-Use a clean source checkout, a full CPython 3.14 x86-64 runtime with `venv` and
+Use a clean checkout, a full CPython 3.14 x86-64 runtime with `venv` and
 `ensurepip`, LLVM's `clang-cl` and `llvm-rc` with the Windows SDK/linker libraries,
 Node.js/npm for server WebUI assets, and Inno Setup 6 for the installer. The
 [Windows package workflow](../../.github/workflows/windows-package.yml) records

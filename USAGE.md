@@ -153,7 +153,7 @@ Both Installers report each step with a status label; `NO_COLOR=1` disables colo
 
 ### Development checkout
 
-A Git clone of this repository is a development checkout, not an installation. Set it up with `pip install -e ".[dev]"` as described in [Source checkout development](#source-checkout-development), and update it with Git, not with `vbot update`. In a checkout, `vbot update`, `vbot uninstall`, `vbot autostart` and `vbot application` refuse and name what to do instead; start its server with `vbot server start` or `python server/main.py`.
+A Git clone of this repository is a development checkout, not an installation. Set it up with `pip install -e ".[dev]"` as described in [Development checkout](#development-checkout), and update it with Git, not with `vbot update`. In a checkout, `vbot update`, `vbot uninstall`, `vbot autostart` and `vbot application` refuse and name what to do instead; start its server with `vbot server start` or `python server/main.py`.
 
 ## Requirements
 
@@ -1061,7 +1061,7 @@ vbot provider connect openai
 
 The last command starts OpenAI Subscription sign-in. OAuth commands select the only OAuth Connection automatically; when there are multiple candidates, specify `--connection` using an id from the displayed list. `vbot provider list --details` preserves all Connection and Account fields; `provider status <provider-id>` narrows those details to one Provider. The Provider overview distinguishes configured, disabled, missing-credential and local reachability states; configured does not establish live upstream access.
 
-Installed commands use `vbot`. From a source checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `data-store` offline maintenance include local work and do not merely proxy management RPC.
+Installed commands use `vbot`. From a development checkout, `python cli/main.py` and `python -m cli.main` expose the same parser. Most management commands call the running server through RPC and accept `--host`, `--port`, and `--data-dir` on the leaf command. Server lifecycle, home, desktop, update, uninstall, autostart, doctor, and `data-store` offline maintenance include local work and do not merely proxy management RPC.
 
 | Area | Commands |
 |---|---|
@@ -1215,7 +1215,7 @@ compatible with the base runtime's packages. Updates prepare a compatible
 dependency generation before stopping the server; previous generations are
 retained for recovery.
 
-### Source checkout development
+### Development checkout
 
 A development checkout is a Git clone of this repository, not an installation.
 It runs on Python 3.14, the version the packages bundle; vBot supports no other.

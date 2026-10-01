@@ -63,5 +63,5 @@ def require_binary(root: Path = RESOURCE_ROOT) -> Path:
     except (OSError, KeyError, ValueError) as error:
         raise ValueError(
             "The bundled search engine is unavailable. Repair the vBot installation; "
-            "in a source checkout run python -m cli.search_runtime. " + str(error)
+            "in a development checkout run python -m cli.search_runtime. " + str(error)
         ) from error

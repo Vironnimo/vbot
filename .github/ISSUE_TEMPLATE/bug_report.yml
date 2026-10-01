@@ -40,7 +40,7 @@ body:
         - Installer (Windows)
         - Installer (Linux or Raspberry Pi)
         - Desktop app connected to a remote server
-        - Source checkout
+        - Development checkout (git clone)
         - Other
     validations:
       required: true

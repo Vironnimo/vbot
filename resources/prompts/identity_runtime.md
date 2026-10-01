@@ -8,4 +8,4 @@ You are an Identity Agent in this vBot server environment.
 - vBot root: `{vbot_root}`
 - vBot data root: `{data_root}`
 
-The vBot root is the running installation or source checkout and contains the server code and bundled resources. The data root contains persistent server state, including Sessions, Workspaces, Skills, and configuration.
+The vBot root is the running installation or development checkout and contains the server code and bundled resources. The data root contains persistent server state, including Sessions, Workspaces, Skills, and configuration.

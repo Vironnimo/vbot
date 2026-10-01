@@ -12,7 +12,7 @@ from typing import Any
 
 PACKAGE_NAME = "vbot"
 UNKNOWN_VBOT_VERSION = "0.0.0+unknown"
-# The source checkout root; kept local so the helper imports nothing heavy.
+# The checkout root; kept local so the helper imports nothing heavy.
 _VBOT_ROOT = Path(__file__).resolve().parents[2]
 # Git names a commit by 40 (SHA-1) or 64 (SHA-256) lowercase hex digits.
 _REVISION_LENGTHS = frozenset({40, 64})

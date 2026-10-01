@@ -121,7 +121,7 @@ def active_record(data_dir: Path, runtime: RuntimeDependencies) -> dict[str, Any
 def activate(data_dir: Path) -> None:
     """Append compatible managed dependencies without processing ``.pth`` files.
 
-    A source checkout has neither a release manifest nor the runtime inventory,
+    A development checkout has neither a release manifest nor the runtime inventory,
     and remains untouched. Invalid optional dependencies are logged and leave
     unrelated Extensions available.
     """
