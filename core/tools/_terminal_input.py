@@ -137,7 +137,7 @@ async def _await_shell_ready(session: TerminalSession) -> bool:
 _SHELL_PROMPT_MARKERS = ("$ ", "# ", "> ", "PS ")
 
 
-_SHELL_BARE_PROMPT_MARKERS = frozenset(("$", "#", ">", "❯", "➜", "❄", "λ"))
+_SHELL_BARE_PROMPT_MARKERS = frozenset(("$", "#", "%", ">", "❯", "➜", "❄", "λ"))
 
 
 def _screen_has_prompt_marker(text: str) -> bool:
@@ -155,6 +155,7 @@ def _screen_has_prompt_marker(text: str) -> bool:
 _KNOWN_PROMPT_PATTERNS = (
     r"[A-Za-z0-9_\-\./\\~]+:\s*$",  # pwsh "PS C:\work> " last line after the chevron
     r"[A-Za-z0-9_\-\./\\~]+(>|#|\$)\s*$",  # cmd "C:\work>", sh "user@host:~/x$"
+    r"\S+@\S+ [^\s%]+ %\s*$",  # zsh default "user@host ~ %"
 )
 
 
