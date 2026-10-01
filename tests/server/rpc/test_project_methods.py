@@ -555,10 +555,10 @@ async def test_list_returns_projects(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_project_skill_cache_follows_settings_and_repo_changes(tmp_path: Path) -> None:
     # The minimal ``_make_state`` runtime has no skill seam, so this one test starts
-    # a real Runtime (about a second) to exercise the per-Project skill cache
-    # behind ``skills_for`` and ``project_skill_names`` end to end.
+    # a real test-mode Runtime to exercise the per-Project skill cache behind
+    # ``skills_for`` and ``project_skill_names`` end to end.
     logging.getLogger("vbot").handlers = []
-    runtime = Runtime(Config(data_dir=tmp_path / "data"))
+    runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
     runtime.start()
     try:
         state = SimpleNamespace(
