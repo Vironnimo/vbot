@@ -272,32 +272,38 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _check_archive_purge_selection(
     parser: argparse.ArgumentParser, args: argparse.Namespace
 ) -> None:
-    """A purge names its entries or selects them with --all, never both."""
+    """A purge names its entries or selects them with --all, never both.
+
+    The errors never offer an --all command: deleting a whole selection stays the
+    caller's explicit choice, so they point to the list and to deleting by id.
+    """
     filters = [
         option
         for name in ("kind", "agent", "project")
         if getattr(args, name) is not None
         for option in (f"--{name}", getattr(args, name))
     ]
+    listing = format_command(("vbot", "archive", "list", *filters))
     by_ids = (
         format_command(("vbot", "archive", "purge", *args.entry_ids, "--yes"))
         if args.entry_ids
         else "vbot archive purge <entry-id>... --yes"
     )
-    by_filter = format_command(("vbot", "archive", "purge", "--all", *filters, "--yes"))
     if args.all and args.entry_ids:
         parser.error(
-            f"archive purge takes entry ids or --all, not both; run either {by_ids} or {by_filter}"
+            f"archive purge takes entry ids or --all, not both; to delete the named entries, "
+            f"run '{by_ids}'"
         )
     if not args.all and not args.entry_ids:
-        selection = "every matching archive entry" if filters else "every archive entry"
+        shown = "the matching entries" if filters else "the entries"
         parser.error(
-            f"archive purge needs entry ids or --all; run either {by_ids}, or {by_filter} "
-            f"to delete {selection}"
+            f"archive purge needs entry ids or --all; '{listing}' shows {shown} and their "
+            f"ids, then run '{by_ids}'"
         )
     if filters and not args.all:
         parser.error(
-            f"{', '.join(filters[::2])} only apply with --all; run either {by_ids} or {by_filter}"
+            f"{', '.join(filters[::2])} only apply with --all; to delete the named entries, "
+            f"run '{by_ids}'"
         )
 
 

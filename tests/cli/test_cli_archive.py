@@ -475,11 +475,21 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
 @pytest.mark.parametrize(
     ("tokens", "reason"),
     [
-        pytest.param(("arc_7k2m9q4xw1ab", "--all"), "not both", id="ids-and-all"),
-        pytest.param((), "to delete every archive entry", id="neither"),
+        pytest.param(
+            ("arc_7k2m9q4xw1ab", "--all"),
+            "not both; to delete the named entries, run "
+            "'vbot archive purge arc_7k2m9q4xw1ab --yes'",
+            id="ids-and-all",
+        ),
+        pytest.param(
+            (),
+            "'vbot archive list' shows the entries and their ids, then run "
+            "'vbot archive purge <entry-id>... --yes'",
+            id="neither",
+        ),
         pytest.param(
             ("--kind", "session"),
-            "vbot archive purge --all --kind session --yes to delete every matching archive entry",
+            "'vbot archive list --kind session' shows the matching entries",
             id="filters-only",
         ),
         pytest.param(
@@ -502,3 +512,5 @@ def test_archive_purge_takes_entry_ids_or_all(
     error = capsys.readouterr().err
     assert "No command was executed." in error
     assert reason in error
+    # Deleting a whole selection stays an explicit choice: no error offers an --all call.
+    assert "purge --all" not in error
