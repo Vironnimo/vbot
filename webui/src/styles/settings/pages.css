@@ -38,8 +38,11 @@
 .settings-nav .snav-item--active {
   font-weight: 600;
 }
+/* `--settings-content-inset-top` lets a sticky element in a page reach the
+   top of the scrollport across the top padding. */
 .settings-content {
-  padding: 36px 40px 48px;
+  --settings-content-inset-top: 36px;
+  padding: var(--settings-content-inset-top) 40px 48px;
 }
 .settings-content .s-doc {
   max-width: 860px;
@@ -66,8 +69,15 @@
   line-height: 1.6;
 }
 .settings-page[hidden],
+.settings-page-heading[hidden],
+.settings-section-heading[hidden],
 .settings-editor[hidden] {
   display: none;
+}
+/* A shown sub-page (an Archive entry) replaces its page's heading and other
+   sections, so its section starts the page. */
+.settings-page--sub-page > .settings-editor {
+  margin-top: 0;
 }
 /* Settings sections use the shared `.s-section` grammar (sections.css).
    Panels render their save state as the section body's `.s-footer`; on a
@@ -196,7 +206,8 @@
 }
 @media (max-width: 1100px) {
   .settings-content {
-    padding: 28px;
+    --settings-content-inset-top: 28px;
+    padding: var(--settings-content-inset-top) 28px 28px;
   }
 }
 @media (max-width: 960px) {
@@ -228,8 +239,9 @@
     min-width: 0;
   }
   .settings-content {
+    --settings-content-inset-top: 28px;
     min-height: 0;
-    padding: 28px 24px;
+    padding: var(--settings-content-inset-top) 24px 28px;
   }
 }
 @media (max-width: 640px) {
@@ -239,7 +251,8 @@
     gap: 8px;
   }
   .settings-content {
-    padding: 24px 20px;
+    --settings-content-inset-top: 24px;
+    padding: var(--settings-content-inset-top) 20px 24px;
   }
   .settings-page-heading {
     margin-bottom: 24px;

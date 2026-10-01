@@ -5,6 +5,7 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
 import {
+  applyArchiveSettings,
   archiveDeletionNotice,
   archiveRetention,
 } from '../../lib/archiveRetention.svelte.js';
@@ -31,7 +32,8 @@ vi.mock('$lib/api.js', () => ({
   purgeArchiveEntries: (...args) => purgeMock(...args),
 }));
 
-const { default: ArchiveView } = await import('../ArchiveView.svelte');
+const { default: ArchiveEntriesPanel } =
+  await import('../archive/ArchiveEntriesPanel.svelte');
 
 const NO_FILTERS = { kind: '', agentId: '', projectId: '' };
 
@@ -193,14 +195,14 @@ function select(name) {
   flushSync();
 }
 
-describe('ArchiveView', () => {
+describe('ArchiveEntriesPanel', () => {
   let mounted;
 
   // `props` may be a reactive bag a test changes after mounting.
   function mountView(props = {}) {
     props.agents ??= [{ id: 'main', name: 'Main' }];
     props.projects ??= [];
-    mounted = mount(ArchiveView, { target: document.body, props });
+    mounted = mount(ArchiveEntriesPanel, { target: document.body, props });
     flushSync();
   }
 
@@ -235,9 +237,6 @@ describe('ArchiveView', () => {
     expect(listMock).toHaveBeenCalledWith({ ...NO_FILTERS, limit: 50 });
     // The period the list carries is the app-wide one the delete dialogs use.
     expect(archiveRetention.days).toBe(30);
-    expect(document.body.textContent).toContain(
-      t('archive.retention.days', { days: 30 }),
-    );
     expect(row('e-coder').textContent).toContain(
       t('archive.row.sessions', { count: 2 }),
     );
@@ -278,7 +277,7 @@ describe('ArchiveView', () => {
     });
   });
 
-  it('says automatic deletion is paused while vBot cannot read the period', async () => {
+  it('adopts that automatic deletion is paused while vBot cannot read the period', async () => {
     // Settings still report the default period; only the list knows vBot cannot read it.
     archiveRetention.days = 30;
     const kept = entry({ ...CODER, purge_at: null });
@@ -291,25 +290,61 @@ describe('ArchiveView', () => {
     mountView(props);
 
     await waitForCondition(() => rowIds().length === 1);
-    expect(document.body.textContent).toContain(t('archive.retention.unknown'));
-    // Neither "never deleted" nor "automatic deletion off".
+    expect(archiveRetention.unknown).toBe(true);
+    // Neither "never deleted" nor a deletion date.
     expect(row('e-coder').textContent).not.toContain(
       t('archive.row.neverDeleted'),
     );
-    expect(document.body.textContent).not.toContain(t('archive.retention.off'));
+    expect(row('e-coder').textContent).not.toContain('Deleted automatically');
     expect(archiveDeletionNotice()).toBe(t('archive.deleteNotice.unknown'));
 
     // A later answer with a readable period ends the pause.
     props.archiveRefreshToken += 1;
     flushSync();
-    await waitForCondition(() =>
-      document.body.textContent.includes(
-        t('archive.retention.days', { days: 30 }),
-      ),
-    );
+    await waitForCondition(() => !archiveRetention.unknown);
     expect(archiveDeletionNotice()).toBe(
       t('archive.deleteNotice.days', { days: 30 }),
     );
+  });
+
+  it('loads when first shown and reloads after archive changes and a new retention period, once shown again when hidden', async () => {
+    listMock.mockResolvedValue(page([CODER]));
+    const props = reactiveProps({ active: false, archiveRefreshToken: 0 });
+    mountView(props);
+    await Promise.resolve();
+    flushSync();
+    expect(listMock).not.toHaveBeenCalled();
+
+    props.active = true;
+    flushSync();
+    await waitForCondition(() => rowIds().length === 1);
+    expect(listMock).toHaveBeenCalledTimes(1);
+
+    // A period saved in Settings moves the deletion dates; the answer's own
+    // period changes nothing further.
+    listMock.mockResolvedValue(page([CODER], { retention_days: 14 }));
+    applyArchiveSettings({ retention_days: 14 });
+    flushSync();
+    await waitForCondition(() => listMock.mock.calls.length === 2);
+    await Promise.resolve();
+    flushSync();
+    expect(listMock).toHaveBeenCalledTimes(2);
+
+    // Hidden, a change only marks the list; showing it again reloads once.
+    props.active = false;
+    flushSync();
+    props.archiveRefreshToken += 1;
+    applyArchiveSettings({ retention_days: 7 });
+    flushSync();
+    expect(listMock).toHaveBeenCalledTimes(2);
+    props.active = true;
+    flushSync();
+    await waitForCondition(() => listMock.mock.calls.length === 3);
+    props.active = false;
+    flushSync();
+    props.active = true;
+    flushSync();
+    expect(listMock).toHaveBeenCalledTimes(3);
   });
 
   it('opens Restore as when a restore meets a taken ID and restores under the new ID', async () => {

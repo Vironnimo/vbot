@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { archiveRetention } from '../../lib/archiveRetention.svelte.js';
 import { init, t } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
@@ -23,6 +24,7 @@ describe('SettingsArchivePanel', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
     init('en');
+    archiveRetention.unknown = false;
     rpcMock.mockReset();
     rpcMock.mockImplementation(async (method, params) => ({
       archive: params.archive,
@@ -101,6 +103,17 @@ describe('SettingsArchivePanel', () => {
     toggle().click();
     flushSync();
     expect(daysField().value).toBe('7');
+  });
+
+  it('says that automatic deletion is paused while vBot cannot read the period', () => {
+    mountPanel({ settings: { archive: { retention_days: 30 } } });
+    expect(document.querySelector('.banner--warn')).toBeNull();
+
+    archiveRetention.unknown = true;
+    flushSync();
+    expect(document.querySelector('.banner--warn').textContent).toBe(
+      t('archive.retention.unknown'),
+    );
   });
 
   it('reports a period the server refuses', async () => {

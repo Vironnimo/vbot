@@ -119,6 +119,12 @@
     cursor: pointer;
   }
 
+  /* Focus scrolls a row clear of the panel's sticky list head. */
+  .archive-row__main,
+  .archive-row :global(.archive-row__select) {
+    scroll-margin-top: 64px;
+  }
+
   .archive-row__main:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);

@@ -2,9 +2,11 @@
 // deletion is off, `undefined` until Settings were read. `unknown` is true
 // while vBot cannot read the period from its settings file; it then deletes
 // nothing automatically. The App seeds the days from `settings.get` and
-// Settings commits; the Archive view adopts what each `archive.list` answer
-// carries, the only answer that reports an unknown period. Delete dialogs
-// read it to say when the Archive deletes what they move there.
+// Settings commits; the Archive's entries panel adopts what each
+// `archive.list` answer carries, the only answer that reports an unknown
+// period, and the retention panel above it says when that pauses automatic
+// deletion. Delete dialogs read it to say how long the Archive keeps what
+// they move there.
 import { t } from './i18n.js';
 
 export const archiveRetention = $state({ days: undefined, unknown: false });

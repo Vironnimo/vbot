@@ -8,7 +8,6 @@ import {
   permanentDeleteNotice,
   purgeResultToast,
   restoreProblemText,
-  retentionNotice,
   RETENTION_UNKNOWN,
 } from '../archiveView.js';
 import { init, t } from '../i18n.js';
@@ -98,19 +97,11 @@ describe('archive view rules', () => {
   );
 
   it.each([
-    [null, 'archive.retention.off', 'archive.retention.off'],
-    [
-      RETENTION_UNKNOWN,
-      'archive.retention.unknown',
-      'archive.detail.retentionUnknown',
-    ],
-  ])(
-    'says what retention does while the period is %s',
-    (days, noticeKey, detailKey) => {
-      expect(retentionNotice(days)).toBe(t(noticeKey));
-      expect(archiveDeletionText(entry({}), days)).toBe(t(detailKey));
-    },
-  );
+    [null, 'archive.retention.off'],
+    [RETENTION_UNKNOWN, 'archive.detail.retentionUnknown'],
+  ])('says what retention does while the period is %s', (days, detailKey) => {
+    expect(archiveDeletionText(entry({}), days)).toBe(t(detailKey));
+  });
 
   it.each([
     ['an Agent', { kind: 'agent' }, null, true],

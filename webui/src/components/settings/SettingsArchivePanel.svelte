@@ -1,11 +1,14 @@
 <script>
-  // Settings -> System -> Archive: whether and after how many days vBot
-  // deletes archived Agents, Projects and Sessions automatically
-  // (`archive.retention_days`, 1-3650 or null for never). The Archive keeps
-  // files from older vBot versions and items that may hold the user's own
-  // folders regardless; the panel says so.
+  // Settings -> Archive, above the archived items: whether and after how
+  // many days vBot deletes archived Agents, Projects and Sessions
+  // automatically (`archive.retention_days`, 1-3650 or null for never). The
+  // Archive keeps files from older vBot versions and items that may hold the
+  // user's own folders regardless; the panel says so. While vBot cannot read
+  // the period from its settings file, automatic deletion is paused and the
+  // panel says that too.
   import { onDestroy, untrack } from 'svelte';
 
+  import Banner from '../ui/Banner.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
@@ -13,6 +16,7 @@
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
+  import { archiveRetention } from '$lib/archiveRetention.svelte.js';
   import { t } from '$lib/i18n.js';
   import { createSettingsDraft } from '$lib/settingsSave.js';
 
@@ -126,6 +130,10 @@
     }
   }
 </script>
+
+{#if archiveRetention.unknown}
+  <Banner variant="warn">{t('archive.retention.unknown')}</Banner>
+{/if}
 
 <div class="s-group">
   <div class="s-row s-row--compact">

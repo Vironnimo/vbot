@@ -1,7 +1,8 @@
-// Pure presentation rules of the Archive view: filter options and request
-// filters, row facts, the retention texts, restore problem texts and the
-// purge confirmation. The view (`components/ArchiveView.svelte`) owns requests
-// and state; these helpers own only how server data reads.
+// Pure presentation rules of the Archive in Settings: filter options and
+// request filters, row facts, the retention texts, restore problem texts and
+// the purge confirmation. The entries panel
+// (`components/archive/ArchiveEntriesPanel.svelte`) owns requests and state;
+// these helpers own only how server data reads.
 import { activeLocaleTag, t } from './i18n.js';
 import { formatDateTimeInApplicationZone } from './dateTimePrefs.svelte.js';
 
@@ -262,19 +263,9 @@ export function archiveRow(entry, { retentionDays, agentNames, projectNames }) {
   return row;
 }
 
-// What the Archive view passes as `retentionDays` while vBot cannot read the
+// What the Archive passes as `retentionDays` while vBot cannot read the
 // period: it then deletes nothing automatically, and no entry has a date.
 export const RETENTION_UNKNOWN = 'unknown';
-
-export function retentionNotice(retentionDays) {
-  if (retentionDays === RETENTION_UNKNOWN)
-    return t('archive.retention.unknown');
-  if (retentionDays === null) return t('archive.retention.off');
-  if (!Number.isInteger(retentionDays)) return '';
-  return retentionDays === 1
-    ? t('archive.retention.oneDay')
-    : t('archive.retention.days', { days: retentionDays });
-}
 
 // What an entry's detail says about its automatic deletion.
 export function archiveDeletionText(entry, retentionDays, userFolders = []) {

@@ -115,7 +115,6 @@
 
   {#if notFound}
     <EmptyState
-      fill
       title={t('archive.detail.notFound')}
       description={t('archive.detail.notFoundDescription')}
     >
@@ -134,7 +133,7 @@
       ></Banner
     >
   {:else if detail}
-    <div class="archive-detail__scroll">
+    <div class="archive-detail__body">
       <header class="view-header archive-detail__header">
         <div class="view-header__intro">
           <h2
@@ -379,8 +378,7 @@
 <style>
   .archive-detail {
     display: flex;
-    min-height: 0;
-    flex: 1;
+    min-width: 0;
     flex-direction: column;
     gap: 14px;
     outline: none;
@@ -453,20 +451,11 @@
     white-space: nowrap;
   }
 
-  .archive-detail__scroll {
+  .archive-detail__body {
     display: flex;
-    min-height: 0;
-    flex: 1;
+    min-width: 0;
     flex-direction: column;
     gap: 18px;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding: 4px 4px 24px 0;
-  }
-
-  .archive-detail__scroll > :global(*) {
-    width: 100%;
-    max-width: 860px;
   }
 
   .archive-detail__title {

@@ -204,6 +204,7 @@ describe('SettingsView', () => {
         'Memory',
         'Tools',
         'Integrations',
+        'Archive',
         'System',
       ]);
       const expectedSections = {
@@ -228,7 +229,8 @@ describe('SettingsView', () => {
           'subagents',
         ],
         integrations: ['channels', 'extensions'],
-        system: ['server', 'archive', 'debug'],
+        archive: ['archive_retention', 'archive_entries'],
+        system: ['server', 'debug'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
         const page = document.querySelector(`[data-settings-page="${pageId}"]`);
@@ -269,6 +271,98 @@ describe('SettingsView', () => {
       document.querySelector('.settings-defaults-link').click();
       expect(navigate).toHaveBeenCalledWith('defaults');
       expect(document.querySelector('#settings-defaults-model')).toBeNull();
+    });
+
+    it('finds the Archive retention and opens an archived item as a sub-page of the Archive page', async () => {
+      const navigation = createStandaloneNavigation();
+      await mountSettings(
+        {
+          archiveEntries: [
+            {
+              entry_id: 'e-coder',
+              kind: 'agent',
+              subject_id: 'coder',
+              agent_id: 'coder',
+              project_id: null,
+              owner_name: null,
+              label: 'Coder',
+              state: 'archived',
+              archived_at: '2026-09-20T10:00:00+00:00',
+              purge_at: '2026-10-20T10:00:00+00:00',
+              session_count: 0,
+              restorable: true,
+              not_restorable_reason: null,
+              may_hold_user_folders: false,
+            },
+          ],
+        },
+        { navigation },
+      );
+      // The hidden Archive page does not load its items.
+      expect(rpcMock.mock.calls.map(([method]) => method)).not.toContain(
+        'archive.list',
+      );
+
+      search('archive');
+      expect(searchResultRows()).toEqual(
+        expect.arrayContaining([
+          {
+            title: t('settings.archive.title'),
+            location: t('settings.pages.archiveDescription'),
+          },
+          {
+            title: t('settings.archive.days'),
+            location: searchLocation(
+              t('settings.archive.title'),
+              t('settings.archive.retentionTitle'),
+            ),
+          },
+        ]),
+      );
+      search('days archive');
+      await openFirstSearchResult();
+      expect(navigation.place).toEqual(['archive', 'archive_retention']);
+      expect(document.activeElement.id).toBe('settings-archive-retention-days');
+
+      const archivePage = document.querySelector(
+        '[data-settings-page="archive"]',
+      );
+      const pageHeading = archivePage.querySelector('.settings-page-heading');
+      await waitForCondition(() =>
+        document.querySelector('.archive-row[data-entry-id="e-coder"]'),
+      );
+      document
+        .querySelector(
+          '.archive-row[data-entry-id="e-coder"] .archive-row__main',
+        )
+        .click();
+      await waitForCondition(() =>
+        document.activeElement?.classList.contains('archive-detail'),
+      );
+      // The item replaces the page heading and the retention setting.
+      expect(navigation.place).toEqual(['archive', 'e-coder']);
+      expect(document.getElementById('archive-detail-title').textContent).toBe(
+        'Coder',
+      );
+      expect(pageHeading.hidden).toBe(true);
+      expect(isSectionHidden('archive_retention')).toBe(true);
+      expect(isSectionHidden('archive_entries')).toBe(false);
+      expect(
+        document
+          .getElementById('settings-section-archive_entries')
+          .closest('header').hidden,
+      ).toBe(true);
+      expect(
+        document.querySelector('.snav-item[aria-current="page"]').textContent,
+      ).toBe('Archive');
+
+      buttonByAriaLabel(t('archive.detail.backToList')).click();
+      await waitForCondition(() =>
+        document.activeElement?.classList.contains('archive-row__main'),
+      );
+      expect(navigation.place).toEqual(['archive']);
+      expect(pageHeading.hidden).toBe(false);
+      expect(isSectionHidden('archive_retention')).toBe(false);
     });
 
     it('opens a section place inside its page and records opened sections as steps', async () => {

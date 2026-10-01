@@ -1,23 +1,23 @@
 <script>
-  // Configure -> Archive: the deleted Agents, Projects and Sessions (and
-  // older archived files) that vBot keeps until they are deleted permanently.
-  // The list pages `archive.list` newest first under a kind and an
-  // Agent/Project filter; an entry opens in place of the list. Restore,
-  // "Restore as" (also opened by a restore that meets a taken id) and
-  // permanent deletion of one entry, a selection or every matching entry run
-  // from here, each deletion after a confirmation.
-  import { onDestroy, onMount, tick, untrack } from 'svelte';
+  // Settings -> Archive, below the retention setting: the deleted Agents,
+  // Projects and Sessions (and older archived files) that vBot keeps until
+  // they are deleted permanently. The list pages `archive.list` newest first
+  // under a kind and an Agent/Project filter; an entry opens as a sub-page in
+  // place of the list. Restore, "Restore as" (also opened by a restore that
+  // meets a taken id) and permanent deletion of one entry, a selection or
+  // every matching entry run from here, each deletion after a confirmation.
+  import { onDestroy, tick, untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
-  import ArchiveEntryDetail from './archive/ArchiveEntryDetail.svelte';
-  import ArchiveEntryList from './archive/ArchiveEntryList.svelte';
-  import ArchiveRestoreDialog from './archive/ArchiveRestoreDialog.svelte';
-  import Dropdown from './Dropdown.svelte';
-  import Banner from './ui/Banner.svelte';
-  import Button from './ui/Button.svelte';
-  import Checkbox from './ui/Checkbox.svelte';
-  import ConfirmDialog from './ui/ConfirmDialog.svelte';
-  import EmptyState from './ui/EmptyState.svelte';
+  import ArchiveEntryDetail from './ArchiveEntryDetail.svelte';
+  import ArchiveEntryList from './ArchiveEntryList.svelte';
+  import ArchiveRestoreDialog from './ArchiveRestoreDialog.svelte';
+  import Dropdown from '../Dropdown.svelte';
+  import Banner from '../ui/Banner.svelte';
+  import Button from '../ui/Button.svelte';
+  import Checkbox from '../ui/Checkbox.svelte';
+  import ConfirmDialog from '../ui/ConfirmDialog.svelte';
+  import EmptyState from '../ui/EmptyState.svelte';
   import {
     listArchiveEntries,
     purgeArchiveEntries,
@@ -44,7 +44,6 @@
     purgeResultToast,
     restoreConflictText,
     restoreWarningsText,
-    retentionNotice,
     RETENTION_UNKNOWN,
   } from '$lib/archiveView.js';
   import { t } from '$lib/i18n.js';
@@ -58,6 +57,9 @@
     // The place is the shown entry; an empty place shows the list. Filters
     // are not places.
     navigation = createStandaloneNavigation(),
+    // Whether the panel is on screen. It loads its list when first shown;
+    // archive changes while hidden reload it when it is shown again.
+    active = true,
     agents = [],
     projects = [],
     archiveRefreshToken = 0,
@@ -65,7 +67,6 @@
     projectsRefreshToken = 0,
     sessionsRefreshToken = 0,
     onToast = noop,
-    onOpenRetentionSettings = noop,
   } = $props();
 
   let filters = $state({ kind: '', scope: '' });
@@ -98,6 +99,10 @@
   let disposed = false;
   let lastArchiveToken = null;
   let lastScopeTokens = null;
+  // The list misses archive changes while hidden.
+  let listStale = true;
+  // The retention period the shown dates were read with.
+  let listedRetentionDays = untrack(() => archiveRetention.days);
 
   let shownEntryId = $derived(navigation.place[0] ?? '');
   let retentionDays = $derived(
@@ -125,14 +130,21 @@
       : t('archive.count.many', { count: entries.length });
   });
 
-  onMount(() => {
-    void loadList();
-  });
-
   onDestroy(() => {
     disposed = true;
     listRequest += 1;
     detailRequest += 1;
+  });
+
+  // Showing the panel loads a list it has not loaded yet or that missed
+  // archive changes.
+  $effect(() => {
+    if (!active) return;
+    untrack(() => {
+      if (!listStale) return;
+      listStale = false;
+      void loadList({ keepCount: listLoaded });
+    });
   });
 
   // Any archive change reloads the list and the shown entry.
@@ -144,8 +156,18 @@
         return;
       }
       lastArchiveToken = token;
-      void loadList({ keepCount: true });
-      if (detailEntryId) void loadDetail(detailEntryId, { quiet: true });
+      reloadChanged();
+    });
+  });
+
+  // A period saved in Settings moves every automatic deletion date; one an
+  // `archive.list` answer brought is already in that answer.
+  $effect(() => {
+    const days = archiveRetention.days;
+    untrack(() => {
+      if (days === listedRetentionDays) return;
+      listedRetentionDays = days;
+      if (listLoaded) reloadChanged();
     });
   });
 
@@ -185,6 +207,15 @@
     applyArchiveRetention(result?.retention_days, {
       unknown: result?.retention_unknown === true,
     });
+    listedRetentionDays = archiveRetention.days;
+  }
+
+  // Reloads what a change made stale: the list (while hidden, once it is
+  // shown again) and the shown entry.
+  function reloadChanged() {
+    if (active) void loadList({ keepCount: true });
+    else listStale = true;
+    if (detailEntryId) void loadDetail(detailEntryId, { quiet: true });
   }
 
   async function loadList({ keepCount = false } = {}) {
@@ -533,12 +564,7 @@
   }
 </script>
 
-<section
-  class="archive-view view-frame"
-  class:archive-view--entry={Boolean(shownEntryId)}
-  aria-labelledby={shownEntryId ? undefined : 'archive-title'}
-  aria-label={shownEntryId ? t('archive.title') : undefined}
->
+<div class="archive-entries">
   {#if shownEntryId}
     <ArchiveEntryDetail
       bind:this={detailView}
@@ -559,16 +585,7 @@
       onOpenEntry={openEntry}
     />
   {:else}
-    <header class="view-header">
-      <div class="view-header__intro">
-        <h2 id="archive-title" class="view-header__title">
-          {t('archive.title')}
-        </h2>
-        <p class="view-header__subtitle">{t('archive.description')}</p>
-      </div>
-    </header>
-
-    <div class="archive-toolbar view-toolbar view-toolbar--split">
+    <div class="archive-toolbar">
       <div class="archive-filters">
         <Dropdown
           value={filters.kind}
@@ -586,17 +603,6 @@
           onValueChange={(value) => setFilter('scope', value)}
         />
       </div>
-      {#if retentionNotice(retentionDays)}
-        <p class="archive-retention">
-          <span>{retentionNotice(retentionDays)}</span>
-          <button
-            type="button"
-            class="archive-retention__link"
-            onclick={onOpenRetentionSettings}
-            >{t('archive.retention.change')}</button
-          >
-        </p>
-      {/if}
     </div>
 
     {#if listError}
@@ -613,7 +619,6 @@
       <Banner variant="neutral">{t('common.loading')}</Banner>
     {:else if listLoaded && entries.length === 0}
       <EmptyState
-        fill
         title={filtered ? t('archive.emptyFiltered') : t('archive.empty')}
         description={filtered ? '' : t('archive.emptyDescription')}
       />
@@ -653,7 +658,7 @@
           {/if}
         </div>
       </div>
-      <div class="archive-list-scroll">
+      <div class="archive-list-body">
         <ArchiveEntryList
           {entries}
           {retentionDays}
@@ -676,7 +681,7 @@
       </div>
     {/if}
   {/if}
-</section>
+</div>
 
 {#if purgeConfirm}
   <ConfirmDialog
@@ -705,18 +710,11 @@
 {/if}
 
 <style>
-  .archive-view {
+  .archive-entries {
     display: flex;
     min-width: 0;
-    min-height: 0;
-    flex: 1;
     flex-direction: column;
-    overflow: hidden;
-    background: var(--bg);
-  }
-
-  .archive-toolbar {
-    max-width: 1100px;
+    gap: 12px;
   }
 
   .archive-filters {
@@ -729,47 +727,21 @@
     min-width: 180px;
   }
 
-  .archive-retention {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 2px 8px;
-    margin: 0;
-    color: var(--text-lo);
-    font-size: var(--fs-body-sm);
-  }
-
-  .archive-retention__link {
-    padding: 0;
-    border: 0;
-    border-radius: var(--r-sm);
-    background: transparent;
-    color: var(--accent);
-    font: inherit;
-    cursor: pointer;
-  }
-
-  .archive-retention__link:hover {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-  }
-
-  .archive-retention__link:focus-visible {
-    outline: none;
-    box-shadow: var(--focus-ring);
-  }
-
+  /* The selection and its actions stay at the top of the Settings content
+     while it scrolls the list below them. */
   .archive-list-head {
+    position: sticky;
+    z-index: 1;
+    top: calc(-1 * var(--settings-content-inset-top, 0px));
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px 12px;
-    max-width: 1100px;
-    min-height: 36px;
-    flex-shrink: 0;
-    padding: 0 18px;
+    min-height: 44px;
+    padding: 4px 18px;
     color: var(--text-med);
+    background: var(--bg);
     font-size: var(--fs-body-sm);
   }
 
@@ -781,15 +753,6 @@
     display: flex;
     align-items: center;
     gap: 8px;
-  }
-
-  .archive-list-scroll {
-    min-height: 0;
-    max-width: 1100px;
-    flex: 1;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding-bottom: 16px;
   }
 
   .archive-more {
@@ -810,7 +773,7 @@
     }
 
     .archive-list-head {
-      padding: 0 12px;
+      padding: 4px 12px;
     }
   }
 </style>

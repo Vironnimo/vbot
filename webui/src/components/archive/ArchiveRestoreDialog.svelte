@@ -1,7 +1,7 @@
 <script>
   // "Restore as": restores an Agent, Project or single-Session entry under a
   // new id, for example when its own id is taken again. Opens with the
-  // conflict that made it necessary; the Archive view sends the restore and
+  // conflict that made it necessary; the entries panel sends the restore and
   // passes back its refusal.
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';

@@ -198,6 +198,14 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     debugTraceList: () => call('debug.trace_list'),
     debugTraceGet: (traceId) => call('debug.trace_get', { trace_id: traceId }),
     debugTraceClear: () => call('debug.trace_clear'),
+    listArchiveEntries: (params = {}) => call('archive.list', params),
+    showArchiveEntry: (entryId) => call('archive.show', { entry_id: entryId }),
+    restoreArchiveEntry: (entryId, { targetId = '' } = {}) =>
+      call('archive.restore', {
+        entry_id: entryId,
+        ...(targetId ? { target_id: targetId } : {}),
+      }),
+    purgeArchiveEntries: (params = {}) => call('archive.purge', params),
     ...overrides,
   };
 }

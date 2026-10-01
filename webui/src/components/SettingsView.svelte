@@ -3,6 +3,7 @@
 
   import WakewordVoiceSettings from './WakewordVoiceSettings.svelte';
   import TranscriptionAudioSettings from './voice/TranscriptionAudioSettings.svelte';
+  import ArchiveEntriesPanel from './archive/ArchiveEntriesPanel.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
@@ -52,8 +53,10 @@
   const SEARCH_HIT_MS = 1600;
 
   let {
-    // The place is `[page]` or `[page, section]`; an App deep link may name a
-    // page or a section id alone. An empty place shows the General page.
+    // The place is `[page]` or `[page, section]`, or `[page, subPage]` on a
+    // page with sub-pages (an Archive entry: `['archive', entryId]`); an App
+    // deep link may name a page or a section id alone. An empty place shows
+    // the General page.
     navigation = createStandaloneNavigation(),
     providerAuthEvent = null,
     connectProvider = null,
@@ -62,6 +65,7 @@
     onSettingsCommit = noop,
     onNavigateToAgentDefaults = noop,
     agents = [],
+    projects = [],
     desktopCapabilities = null,
     // The app-level Desktop Voice owner (see app/desktop.svelte.js).
     desktopVoice = null,
@@ -73,6 +77,10 @@
     recallIndexStatus = null,
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
+    archiveRefreshToken = 0,
+    agentsRefreshToken = 0,
+    projectsRefreshToken = 0,
+    sessionsRefreshToken = 0,
     initialScrollPosition = null,
     onScrollPositionChange = noop,
   } = $props();
@@ -162,7 +170,11 @@
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),
     },
-    { id: 'archive', label: () => t('settings.archive.title') },
+    {
+      id: 'archive_retention',
+      label: () => t('settings.archive.retentionTitle'),
+    },
+    { id: 'archive_entries', label: () => t('archive.listLabel') },
     { id: 'debug', label: () => t('debug.settings') },
   ];
   const panelById = new Map(sections.map((section) => [section.id, section]));
@@ -236,13 +248,21 @@
       sections: ['channels', 'extensions'],
     },
     {
+      id: 'archive',
+      label: () => t('settings.archive.title'),
+      description: () => t('settings.pages.archiveDescription'),
+      // The retention period first, then the archived items; an item opens
+      // as a sub-page of this page in place of everything else.
+      sections: ['archive_retention', 'archive_entries'],
+      subPages: 'archive_entries',
+    },
+    {
       id: 'system',
       label: () => t('settings.pages.system'),
       description: () => t('settings.pages.systemDescription'),
       sections: [
         'server',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
-        'archive',
         'debug',
       ],
     },
@@ -263,6 +283,7 @@
   let documentRoot = $state(null);
   let shownPlace = $derived(resolvePlace(navigation.place));
   let activePageId = $derived(shownPlace.page.id);
+  let subPageShown = $derived(shownPlace.subPlace.length > 0);
   let editorsElement = $state(null);
   let searchQuery = $state('');
   // Results hold DOM element references, which must not become proxies.
@@ -284,6 +305,12 @@
   let restoreAnchor = null;
   // The canonical place last shown; null until the loaded content shows one.
   let appliedPlaceKey = null;
+  // The target of that place.
+  let appliedTarget = null;
+  // The scroll position of the last scroll event, and the one a page's
+  // sub-pages return to.
+  let lastScrollTop = 0;
+  let subPageReturnTop = 0;
   // Invalidates an earlier target still waiting for the page to update.
   let showGeneration = 0;
 
@@ -313,10 +340,14 @@
       const key = canonical.join('/');
       if (appliedPlaceKey === null) {
         appliedPlaceKey = key;
+        appliedTarget = target;
         showFirstTarget(target, place);
       } else if (key !== appliedPlaceKey || !samePlace(place, canonical)) {
+        const previous = appliedTarget;
         appliedPlaceKey = key;
-        void showTarget(target);
+        appliedTarget = target;
+        if (isSubPageStep(previous, target)) showSubPageStep(previous, target);
+        else void showTarget(target);
       }
       if (!samePlace(place, canonical)) navigation.replace(canonical);
     });
@@ -499,6 +530,7 @@
   }
 
   function handleContentScroll() {
+    lastScrollTop = scrollContainer?.scrollTop ?? 0;
     if (!restorePending && !searchActive)
       onScrollPositionChange(captureScrollPosition());
   }
@@ -511,12 +543,21 @@
   }
 
   // The page and section a place names. A page with a single section has no
-  // section headings, so the page itself is the target there; anything
-  // unknown shows the start page.
+  // section headings, so the page itself is the target there; on a page with
+  // sub-pages, a second segment that names no section is the shown sub-page;
+  // anything unknown shows the start page.
   function resolvePlace(place) {
     const [first = '', second = ''] = place;
     const page = pageForDestination(first);
-    if (!page) return { page: pages[0], sectionId: '' };
+    if (!page) return { page: pages[0], sectionId: '', subPlace: [] };
+    if (
+      page.subPages &&
+      page.id === first &&
+      second &&
+      !page.sections.includes(second)
+    ) {
+      return { page, sectionId: '', subPlace: [second] };
+    }
     const sectionId = page.id === first ? second : first;
     return {
       page,
@@ -524,11 +565,58 @@
         page.sections.length > 1 && page.sections.includes(sectionId)
           ? sectionId
           : '',
+      subPlace: [],
     };
   }
 
-  function placeFor({ page, sectionId }) {
+  function placeFor({ page, sectionId, subPlace = [] }) {
+    if (subPlace.length) return [page.id, ...subPlace];
     return sectionId ? [page.id, sectionId] : [page.id];
+  }
+
+  // The handle a page's sub-page panel moves with: its place is the shown
+  // sub-page of that page (empty otherwise), and its steps stay below it.
+  function subPageNavigation(pageId) {
+    return {
+      get place() {
+        return shownPlace.page.id === pageId ? shownPlace.subPlace : [];
+      },
+      navigate: (place = []) => navigation.navigate([pageId, ...place]),
+      replace: (place = []) => navigation.replace([pageId, ...place]),
+      up: (place = []) => navigation.up([pageId, ...place]),
+    };
+  }
+
+  const archiveNavigation = subPageNavigation('archive');
+
+  // Opening a sub-page, another one, or returning from one to its page.
+  function isSubPageStep(previous, target) {
+    return (
+      previous?.page.id === target.page.id &&
+      !target.sectionId &&
+      (previous.subPlace.length > 0 || target.subPlace.length > 0)
+    );
+  }
+
+  // A sub-page opens at its top, where its panel puts the focus; returning
+  // to the page resumes the position it was opened from, and the panel
+  // returns the focus to what opened it.
+  function showSubPageStep(previous, target) {
+    showGeneration += 1;
+    pendingReveal = null;
+    releaseRestore();
+    setSearchQuery('');
+    if (!scrollContainer) return;
+    if (target.subPlace.length) {
+      if (!previous.subPlace.length) subPageReturnTop = lastScrollTop;
+      scrollContainer.scrollTop = 0;
+    } else {
+      restoreTop = subPageReturnTop;
+      restorePending = true;
+      scrollContainer.scrollTop = restoreTop;
+      queueRestore();
+    }
+    onScrollPositionChange(captureScrollPosition());
   }
 
   function samePlace(left, right) {
@@ -557,19 +645,24 @@
     }
   }
 
-  async function showTarget({ page, sectionId }) {
+  async function showTarget({ page, sectionId, subPlace = [] }) {
     const generation = ++showGeneration;
-    const key = placeFor({ page, sectionId }).join('/');
+    const key = placeFor({ page, sectionId, subPlace }).join('/');
     const reveal = pendingReveal?.key === key ? pendingReveal.result : null;
     pendingReveal = null;
     releaseRestore();
     setSearchQuery('');
+    // A sub-page opened from elsewhere opens at its top, and its panel owns
+    // the focus there.
+    if (subPlace.length) subPageReturnTop = 0;
     await tick();
     if (generation !== showGeneration) return;
     const headingId = sectionId
       ? 'settings-section-' + sectionId
       : 'settings-page-' + page.id;
-    const heading = documentRoot?.querySelector('#' + headingId);
+    const heading = subPlace.length
+      ? null
+      : documentRoot?.querySelector('#' + headingId);
     if (reveal && (await revealResult(reveal, heading, generation))) return;
     if (scrollContainer) {
       scrollContainer.scrollTop =
@@ -880,11 +973,23 @@
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
     />
-  {:else if panelId === 'archive'}
+  {:else if panelId === 'archive_retention'}
     <SettingsArchivePanel
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'archive_entries'}
+    <ArchiveEntriesPanel
+      navigation={archiveNavigation}
+      active={activePageId === 'archive'}
+      {agents}
+      {projects}
+      {archiveRefreshToken}
+      {agentsRefreshToken}
+      {projectsRefreshToken}
+      {sessionsRefreshToken}
+      {onToast}
     />
   {:else if panelId === 'debug'}
     <SettingsDebugPanel
@@ -1006,13 +1111,16 @@
         {/if}
         <div class="settings-editors" bind:this={editorsElement}>
           {#each pages as page (page.id)}
+            <!-- A shown sub-page replaces its page's heading and other sections. -->
+            {@const subPage = subPageShown && activePageId === page.id}
             <article
               class="settings-page"
+              class:settings-page--sub-page={subPage}
               data-settings-page={page.id}
               hidden={searchActive || activePageId !== page.id}
               aria-labelledby={'settings-page-' + page.id}
             >
-              <header class="settings-page-heading">
+              <header class="settings-page-heading" hidden={subPage}>
                 <h2 id={'settings-page-' + page.id} tabindex="-1">
                   {page.label()}
                 </h2>
@@ -1035,13 +1143,18 @@
                 <section
                   class="settings-editor s-section"
                   data-settings-section={panelId}
-                  hidden={searchActive || activePageId !== page.id}
+                  hidden={searchActive ||
+                    activePageId !== page.id ||
+                    (subPage && panelId !== page.subPages)}
                   aria-labelledby={page.sections.length === 1
                     ? 'settings-page-' + page.id
                     : 'settings-section-' + panelId}
                 >
                   {#if page.sections.length > 1}
-                    <header class="settings-section-heading s-section__head">
+                    <header
+                      class="settings-section-heading s-section__head"
+                      hidden={subPage}
+                    >
                       <h3
                         class="s-section__title"
                         id={'settings-section-' + panelId}

@@ -53,11 +53,6 @@
       section: 'configure',
     },
     {
-      id: 'archive',
-      label: () => t('navigation.archive'),
-      section: 'configure',
-    },
-    {
       id: 'statistics',
       label: () => t('navigation.statistics'),
       section: 'insights',
@@ -95,7 +90,6 @@
   import SkillsView from './components/skills/SkillsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import SettingsView from './components/SettingsView.svelte';
-  import ArchiveView from './components/ArchiveView.svelte';
   import LogsView from './components/LogsView.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import DebugView from './components/DebugView.svelte';
@@ -1042,6 +1036,7 @@
           {providerAuthEvent}
           onToast={desktop.showToast}
           agents={selection.agents}
+          projects={selection.projects}
           desktopCapabilities={desktop.desktopCapabilities}
           desktopVoice={desktop.desktopVoice}
           onDebugEnabledChange={handleDebugEnabledChange}
@@ -1050,20 +1045,12 @@
           {recallIndexStatus}
           {clientsRefreshToken}
           {channelsRefreshToken}
-          initialScrollPosition={settingsScrollPosition}
-          onScrollPositionChange={rememberSettingsScrollPosition}
-        />
-      {:else if activeViewId === 'archive'}
-        <ArchiveView
-          navigation={navigator.view('archive')}
-          agents={selection.agents}
-          projects={selection.projects}
           {archiveRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
           {sessionsRefreshToken}
-          onToast={desktop.showToast}
-          onOpenRetentionSettings={() => navigateToSettingsPanel('archive')}
+          initialScrollPosition={settingsScrollPosition}
+          onScrollPositionChange={rememberSettingsScrollPosition}
         />
       {:else if activeViewId === 'logs'}
         <LogsView navigation={navigator.view('logs')} />

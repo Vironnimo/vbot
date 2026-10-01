@@ -829,14 +829,15 @@ export default Object.freeze({
   'archive.deleteOption.permanent':
     'Delete permanently instead of moving it to the Archive',
   'archive.deleteNotice.days':
-    'The Archive deletes it automatically after {days} days.',
+    'It stays in Settings › Archive for {days} days, then vBot deletes it automatically.',
   'archive.deleteNotice.oneDay':
-    'The Archive deletes it automatically after one day.',
-  'archive.deleteNotice.off': 'The Archive keeps it until you delete it there.',
+    'It stays in Settings › Archive for one day, then vBot deletes it automatically.',
+  'archive.deleteNotice.off':
+    'It stays in Settings › Archive until you delete it there.',
   'archive.deleteNotice.unknown':
-    'The Archive keeps it for now: vBot cannot read the retention period from its settings file, so automatic deletion is paused.',
+    'It stays in Settings › Archive for now: vBot cannot read the retention period from its settings file, so automatic deletion is paused.',
   'archive.deleteNotice.kept':
-    'Settings › System sets how long the Archive keeps it.',
+    'It stays in Settings › Archive for the retention period set there.',
   'archive.deletePending':
     'Deleted. vBot finishes removing its data in the background.',
   'archive.deleteGone':
@@ -844,10 +845,8 @@ export default Object.freeze({
   'archive.deleteBusy':
     'Moved to the Archive, but another action, such as a restore, is using it there, so it was not deleted permanently.',
   'archive.deleteKept':
-    'Moved to the Archive, but it could not be deleted permanently. Delete it in the Archive later.',
+    'Moved to the Archive, but it could not be deleted permanently. Delete it later in Settings › Archive.',
   'archive.title': 'Archive',
-  'archive.description':
-    'Deleted Agents, Projects and Sessions rest here until they are deleted permanently. Restore them or delete them for good.',
   'archive.listLabel': 'Archived items',
   'archive.empty': 'The Archive is empty',
   'archive.emptyDescription':
@@ -871,14 +870,9 @@ export default Object.freeze({
   'archive.kind.session': 'Session',
   'archive.kind.ownerGroup': 'Extension Sessions',
   'archive.kind.files': 'Files',
-  'archive.retention.days':
-    'Archived items are deleted automatically {days} days after they were archived, except files from older vBot versions, items that may hold folders of your own and items vBot found without a record of when they were archived.',
-  'archive.retention.oneDay':
-    'Archived items are deleted automatically one day after they were archived, except files from older vBot versions, items that may hold folders of your own and items vBot found without a record of when they were archived.',
   'archive.retention.off': 'Archived items are never deleted automatically.',
   'archive.retention.unknown':
     'Automatic deletion is paused: vBot cannot read the retention period from its settings file, so it deletes nothing automatically until it can.',
-  'archive.retention.change': 'Change in Settings',
   'archive.count.one': '1 item',
   'archive.count.many': '{count} items',
   'archive.count.shown': '{count} items shown',
