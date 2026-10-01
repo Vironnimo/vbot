@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
 import json
+import shutil
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -581,6 +584,36 @@ class StubProcessManager:
         self.scope_events.append(("release", run_id))
 
 
+_empty_session_store: Path | None = None
+
+
+def _prepare_session_store(data_dir: Path) -> None:
+    """Give a new data directory an empty current-format Session store.
+
+    Creating the schema costs tens of milliseconds of durable SQLite writes, so
+    the first call builds one empty store per process and later calls copy it,
+    like the ``current_format_data_directory`` fixture. A directory that already
+    holds a marker or a Session database opens as it is.
+    """
+    global _empty_session_store
+    marker = data_dir / "data-store.json"
+    database = data_dir / "sessions.db"
+    if marker.exists():
+        return
+    if database.exists():
+        write_bootstrap_marker(data_dir)
+        return
+    if _empty_session_store is None:
+        template = Path(tempfile.mkdtemp(prefix="vbot-empty-session-store-"))
+        atexit.register(shutil.rmtree, template, ignore_errors=True)
+        write_bootstrap_marker(template)
+        ChatSessionManager(template).close()
+        _empty_session_store = template
+    data_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_empty_session_store / "data-store.json", marker)
+    shutil.copy2(_empty_session_store / "sessions.db", database)
+
+
 class StubRuntime:
     def __init__(
         self,
@@ -600,8 +633,7 @@ class StubRuntime:
         projects: Any | None = None,
         available_task_models: set[str] | None = None,
     ) -> None:
-        if not (data_dir / "data-store.json").exists():
-            write_bootstrap_marker(data_dir)
+        _prepare_session_store(data_dir)
         self.agents = StubAgents(agent)
         self.agent_resolver = StubAgentResolver(self.agents, project_agents, unresolvable_agents)
         self.projects = projects if projects is not None else StubProjects({})

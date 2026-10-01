@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +15,11 @@ from core.chat._step_outcomes import (
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
     _FailedToolCallCircuitBreaker,
+    tool_result_facts,
 )
 from core.chat.messages import ToolCall, ToolCallRejection
 from core.runs import TOOL_CALL_RESULT_EVENT, RunStatus
+from core.sessions import ToolResultFacts
 from core.tools import ToolContext, ToolContractError, ToolRegistry, tool_failure, tool_success
 from core.utils.errors import ProviderError
 from tests.core.chat.chat_loop_support import build_chat_loop, history, last_run, persisted_roles
@@ -443,3 +446,15 @@ def test_failed_tool_call_circuit_breaker_keys_error_class_schema_and_rejection(
     assert rejected_breaker.observe([first], [_tool_message(first, malformed)]) is None
     assert rejected_breaker.observe([second], [_tool_message(second, malformed)]) is None
     assert rejected_breaker.observe([second], [_tool_message(second, malformed)]) == "write"
+
+
+def test_tool_result_facts_skip_messages_that_are_not_tool_results() -> None:
+    call = ToolCall(id="call", name="probe", arguments={})
+    # The role alone marks a Tool Result: a tool_call_id on another role is invalid
+    # but unchecked until persistence, and must not produce facts.
+    stray = replace(
+        ChatMessage.assistant(model="openai/gpt-5.2", content="{}"), tool_call_id="call-stray"
+    )
+    messages = [ChatMessage.user("Run it"), stray, _tool_message(call, tool_success({}))]
+
+    assert tool_result_facts(messages) == {"call": ToolResultFacts(status="completed", ok=True)}

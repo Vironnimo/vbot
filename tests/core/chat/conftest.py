@@ -7,9 +7,14 @@ import asyncio
 import pytest
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def recovery_waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
-    """Record every Chat recovery backoff instead of waiting for it."""
+    """Record every Chat recovery backoff instead of waiting for it.
+
+    Autouse, so no Chat test waits out a real backoff; a test that asserts the
+    waits requests this fixture by name, and one that observes real waits patches
+    ``core.chat.recovery._sleep`` itself.
+    """
     waits: list[float] = []
 
     async def record(delay: float) -> None:

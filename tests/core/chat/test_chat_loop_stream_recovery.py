@@ -44,8 +44,6 @@ from tests.core.chat.chat_loop_support import (
     session_address,
 )
 
-pytestmark = pytest.mark.usefixtures("recovery_waits")
-
 
 def _classified_responses_error() -> ProviderError:
     event = {

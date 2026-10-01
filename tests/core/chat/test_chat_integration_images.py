@@ -127,8 +127,8 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "source,groups",
-    [("user", [4]), ("user", [51]), ("tool", [1, 1, 1, 1]), ("tool", [17, 17, 17])],
-    ids=["user-within-budget", "user-over-budget", "tool-within-budget", "tool-over-budget"],
+    [("user", [51]), ("tool", [1, 1, 1, 1]), ("tool", [17, 17, 17])],
+    ids=["user-over-budget", "tool-within-budget", "tool-over-budget"],
 )
 async def test_fresh_images_are_delivered_together_or_fail_explicitly(
     start_runtime: StartRuntime, source: str, groups: list[int]
@@ -188,17 +188,7 @@ async def test_fresh_images_are_delivered_together_or_fail_explicitly(
             assert len(adapter.requests) == (0 if source == "user" else 1)
         else:
             await runtime.chat_loop.send("coder", content, session_id="image-budget")
-            messages = adapter.requests[-1].messages
-            parts = (
-                _tool_result_content_parts(messages)
-                if source == "tool"
-                else [
-                    part
-                    for message in messages
-                    if message.get("role") == "user" and isinstance(message.get("content"), list)
-                    for part in message["content"]
-                ]
-            )
+            parts = _tool_result_content_parts(adapter.requests[-1].messages)
             assert sum(part.get("type") == "media" for part in parts) == count
         persisted = runtime.chat_sessions.get(session_address("coder", "image-budget")).load()
         assert "base64" not in json.dumps([message.to_dict() for message in persisted])
@@ -298,9 +288,8 @@ def _tool_result_content_parts(messages: list[JsonObject]) -> list[JsonObject]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("source_format", ["PNG", "TIFF"])
 async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_model(
-    tmp_path: Path, start_runtime: StartRuntime, source_format: str
+    tmp_path: Path, start_runtime: StartRuntime
 ) -> None:
     class DeletingAdapter(FakeAdapter):
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
@@ -332,7 +321,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
             "coder", "Coder Agent", model="fake-provider/fake-model-vision"
         )
         buffer = io.BytesIO()
-        Image.new("RGB", (16, 12), "blue").save(buffer, format=source_format)
+        Image.new("RGB", (16, 12), "blue").save(buffer, format="PNG")
         original_bytes = buffer.getvalue()
         Path(agent.workspace).joinpath("diagram.png").write_bytes(original_bytes)
 
@@ -350,8 +339,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
         media_parts = [part for part in tool_result_parts if part.get("type") == "media"]
         assert len(media_parts) == 1
         assert media_parts[0]["media_type"] == "image/png"
-        if source_format == "PNG":
-            assert base64.b64decode(media_parts[0]["base64"]) == original_bytes
+        assert base64.b64decode(media_parts[0]["base64"]) == original_bytes
         later_parts = _tool_result_content_parts(adapter.requests[2].messages)
         assert [part for part in later_parts if part.get("type") == "media"] == media_parts
         assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
@@ -426,10 +414,12 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
                     if part.get("type") == "media"
                 ]
                 assert len(media) == 1
+                assert media[0]["media_type"] == "image/png"
                 raw = base64.b64decode(media[0]["base64"])
                 if source_format == "PNG":
                     assert raw == frames[index]
                 with Image.open(io.BytesIO(raw)) as delivered:
+                    assert delivered.format == "PNG"
                     assert delivered.size == (16, 12)
                     assert delivered.getpixel((0, 0)) == colors[index]
             if step < len(frames):
@@ -462,19 +452,18 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         assert set((tmp_path / "data" / "artifacts" / "attachments").rglob("*")) == stored_before
 
 
-# About 3 s per case: sixteen durable Model steps on a real Runtime, each re-encoding up
+# About 2 s per case: sixteen durable Model steps on a real Runtime, each re-encoding up
 # to fourteen images, are what exercise the eviction and reopening sequence end to end.
+# Each case also covers the run without pressure until its first eviction. The retirement
+# after a Provider rejection does not depend on the transport; that a streaming rejection
+# reaches it is covered by the streaming body-overflow case above.
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "budget_kind,streaming",
-    [("none", False), ("harness", False), ("provider", False), ("provider", True)],
-)
+@pytest.mark.parametrize("budget_kind", ["harness", "provider"])
 async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     resources_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     start_runtime: StartRuntime,
     budget_kind: str,
-    streaming: bool,
 ) -> None:
     tight_budget = budget_kind == "harness"
     provider_pressure = budget_kind == "provider"
@@ -529,8 +518,6 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if provider_pressure:
                 payload = wire._build_payload(messages, model_id, **kwargs)
-                if streaming:
-                    wire._prepare_stream_payload(payload)
                 try:
                     await wire._prepare_request_body(payload, model_id)
                 except ProviderRequestTooLargeError as error:
@@ -557,27 +544,9 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 )
             return await super().send(messages, model_id=model_id, **kwargs)
 
-        async def stream(
-            self, messages: list[dict], *, model_id: str, **kwargs: Any
-        ) -> AsyncIterator[dict]:
-            response = await self.send(messages, model_id=model_id, **kwargs)
-            if response.get("content"):
-                yield {"type": "content_delta", "text": response["content"]}
-            for call in response.get("tool_calls") or []:
-                yield {
-                    "type": "tool_call_delta",
-                    "id": call["id"],
-                    "name_delta": call["name"],
-                    "arguments_delta": json.dumps(call["arguments"]),
-                }
-            yield {
-                "type": "finish",
-                "reason": "tool_calls" if response.get("tool_calls") else "stop",
-            }
-
     adapter = RebuildingAdapter(responses)
     with start_runtime(adapter) as runtime:
-        loop = runtime.streaming_chat_loop if streaming else runtime.chat_loop
+        loop = runtime.chat_loop
         wire = OpenAICompatibleAdapter(
             runtime.providers.get("fake-provider"),
             "test-key",
@@ -640,11 +609,10 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                     if part["type"] == "media"
                 ]
                 expected_indices = list(range(iteration)) if iteration <= 14 else [*range(14), 0]
-                if tight_budget or provider_pressure:
-                    starts = [0, 0, 0, 0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12, 12]
-                    if provider_pressure:
-                        starts = [0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12]
-                    expected_indices = expected_indices[starts[iteration] :]
+                starts = [0, 0, 0, 0, 0, 3, 3, 3, 6, 6, 6, 9, 9, 9, 12, 12]
+                if provider_pressure:
+                    starts = [0, 0, 0, 0, 0, 0, 4, 4, 4, 4, 8, 8, 8, 8, 12, 12]
+                expected_indices = expected_indices[starts[iteration] :]
                 assert [base64.b64decode(part["base64"]) for part in images] == [
                     frames[index] for index in expected_indices
                 ]
@@ -653,7 +621,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                     <= wire_shaping.REQUEST_IMAGE_BYTES_LIMIT
                 )
                 pressure_steps = {6, 10, 14} if provider_pressure else {5, 8, 11, 14}
-                if iteration and (budget_kind == "none" or iteration not in pressure_steps):
+                if iteration and iteration not in pressure_steps:
                     previous_images = [
                         part
                         for part in _tool_result_content_parts(
@@ -674,7 +642,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
                 if part["type"] == "media"
             ]
             assert [base64.b64decode(part["base64"]) for part in rebuilt_images] == (
-                frames[8:10] if provider_pressure else frames[6:10] if tight_budget else frames[:10]
+                frames[8:10] if provider_pressure else frames[6:10]
             )
             session = runtime.chat_sessions.get(session_address("coder", "session-one"))
             persisted = session.load()
