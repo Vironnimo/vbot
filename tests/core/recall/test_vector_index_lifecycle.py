@@ -228,7 +228,10 @@ async def test_corrupt_index_is_discarded_once_and_rebuilt(
     recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     await recall.search_page(request("fruit"))
+    # Corrupt at rest: under WAL an open connection keeps reading its own pages.
+    await recall.aclose()
     recall.index.path.write_bytes(b"not a sqlite database")
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
 
     rebuilt = await recall.search_page(request("fruit"))
 

@@ -112,19 +112,20 @@ def _without_generated_at(result: Any) -> dict[str, Any]:
 
 
 def test_a_corrupt_kernel_projection_is_discarded_and_rebuilt_once(
-    tmp_path: Path, session: ChatSession, statistics: StatisticsFactory
+    tmp_path: Path, session: ChatSession, statistics: StatisticsFactory, index: StatisticsIndex
 ) -> None:
-    service = statistics()
-    service.report()
+    statistics(index=index).report()
     expected_identity = {
         "application_id": APPLICATION_IDS["statistics"],
         "database_name": "statistics",
         "projection_version": "2",
     }
     assert _index_identity(tmp_path).items() >= expected_identity.items()
+    # Corrupt at rest: under WAL an open connection keeps reading its own pages.
+    index.close()
     _index_path(tmp_path).write_bytes(b"not a sqlite database")
 
-    report = service.report()
+    report = statistics().report()
 
     assert report.overview.total_runs == 1
     assert _index_identity(tmp_path).items() >= expected_identity.items()
