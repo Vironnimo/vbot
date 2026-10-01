@@ -12,20 +12,23 @@ Archiving the same id again creates another entry; no operation replaces or
 deletes another entry's payload. Callers hold the automation reference lock
 (``AutomationReferences.lock``) across an archive or restore, so the reference
 checks here and the change they admit are one step; the Run admission guards are
-taken here.
+taken here. Once started, the retention sweep deletes entries whose retention
+period has ended (``_retention.py``).
 """
 
 from __future__ import annotations
 
 import builtins
+import threading
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.archive import _operations, _purge, _read_model, _recovery, _restore
-from core.archive._retention import default_retention_days
+from core.archive._retention import RetentionSweeper, default_retention_days
 from core.archive._types import (
     AgentArchiveOutcome,
     ArchiveEntryDetail,
@@ -68,6 +71,10 @@ _LOGGER = get_logger("archive")
 _PURGE_PAGE = 200
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True)
 class ArchiveServices:
     """The owners an archive operation composes.
@@ -75,8 +82,9 @@ class ArchiveServices:
     ``agent_references`` names the Channels and live automations that keep an
     Identity Agent from being archived; ``import_usage`` brings the usage ledger
     up to date before a purge; ``invalidate_project`` drops a Project's Team and
-    Skill caches; ``retention_days`` is the retention period in days (``None``
-    keeps entries until they are deleted).
+    Skill caches; ``retention_days`` reads the current retention period in days
+    (``None`` keeps entries until they are deleted); ``clock`` is the current
+    UTC time retention compares with.
     """
 
     data_dir: Path
@@ -95,13 +103,39 @@ class ArchiveServices:
     invalidate_agent_skills: Callable[[str], None]
     invalidate_project: Callable[[str], None]
     retention_days: Callable[[], int | None] = default_retention_days
+    clock: Callable[[], datetime] = _utc_now
 
 
 class ArchiveService:
-    """Archive, restore, purge and read archive entries."""
+    """Archive, restore, purge and read archive entries, and delete them after retention."""
 
     def __init__(self, services: ArchiveServices) -> None:
         self._services = services
+        # Set by stop(): purges end before their next Session or tree.
+        self._stopping = threading.Event()
+        self._retention = RetentionSweeper(services, self._stopping, self._notify)
+
+    # -- Retention ---------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the retention sweep; call inside the serving Event Loop.
+
+        The first sweep runs a minute later, then one every hour. Never started
+        in a safe startup mode.
+        """
+        self._retention.start()
+
+    def stop(self) -> None:
+        """Stop the retention sweep; a purge in progress ends before its next Session."""
+        self._retention.stop()
+
+    async def aclose(self) -> None:
+        """Stop the retention sweep and wait for the purge in progress to end."""
+        await self._retention.aclose()
+
+    def retention_changed(self) -> None:
+        """Sweep at once because the retention period changed; any thread."""
+        self._retention.wake()
 
     def add_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         """Call ``callback`` after any archive entry changed; returns its removal."""
@@ -331,20 +365,29 @@ class ArchiveService:
         that is neither ``archived`` nor ``purging`` with ``ArchiveEntryBusyError``,
         before anything is deleted; ``all_matching`` skips such entries. Recorded
         usage first reaches the usage ledger, so usage totals stay; when that
-        fails, nothing is deleted and every entry is reported pending. An entry
-        whose deletion stops partway is reported pending and stays ``purging``
-        with what is left; purging it again continues.
+        fails, nothing is deleted. An entry whose deletion does not finish, because
+        of that, a failure partway or :meth:`stop`, is reported pending and stays
+        ``purging`` with what is left; the retention sweep continues it, and
+        purging it again continues it at once.
         """
         services = self._services
         entries = await services.sessions.run_async(self._purge_targets, entry_ids, all_matching)
         if not entries:
             return PurgeOutcome()
         try:
-            return await _purge.PURGE_WORKERS.run(
-                _purge.purge_entries, services, entries, reason=reason, actor=actor
+            outcome = await _purge.PURGE_WORKERS.run(
+                _purge.purge_entries,
+                services,
+                entries,
+                reason=reason,
+                actor=actor,
+                stopping=self._stopping,
             )
         finally:
             self._notify()
+        if outcome.pending:
+            self._retention.wake()
+        return outcome
 
     def _purge_targets(
         self, entry_ids: Sequence[str], all_matching: ArchiveEntryFilter | None

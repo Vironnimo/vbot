@@ -402,6 +402,8 @@ async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str
         service = ArchiveService(replace(world.services, import_usage=fail))
         outcome = await service.purge([archived.entry_id])
         assert outcome.pending == (PendingPurge(archived.entry_id, "usage_import_failed"),)
+        # Claimed first: the retention sweep continues the purge.
+        assert world.entry(archived.entry_id).state == "purging"
 
     assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
     assert world.payload(archived.entry_id, "agent").is_dir()

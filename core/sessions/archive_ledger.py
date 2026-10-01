@@ -273,9 +273,17 @@ class SessionArchiveLedger:
         """Entries an interrupted operation left in a transient state or with pending cleanup."""
         return self._store._read(_store_archive.unsettled)
 
-    def due(self, before: str, *, limit: int = 100) -> tuple[ArchiveEntry, ...]:
-        """``archived`` entries whose retention clock started at or before ``before``."""
-        return self._store._read(lambda connection: _store_archive.due(connection, before, limit))
+    def due(
+        self, before: str, *, after: ArchiveEntry | None = None, limit: int = 100
+    ) -> tuple[ArchiveEntry, ...]:
+        """``archived`` entries whose retention clock started at or before ``before``.
+
+        Oldest retention start first; ``after`` (the last entry of the previous
+        call) continues the walk behind it.
+        """
+        return self._store._read(
+            lambda connection: _store_archive.due(connection, before, after, limit)
+        )
 
     def taken_addresses(
         self,

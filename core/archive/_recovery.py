@@ -121,7 +121,7 @@ def _settle(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         _restore.follow_up(services, entry)
         _LOGGER.info("Interrupted restore completed (entry=%s kind=%s)", entry.entry_id, entry.kind)
         return True
-    # ``purging`` entries keep what is not deleted yet; a later purge continues them.
+    # ``purging`` entries keep what is not deleted yet; the retention sweep continues them.
     return False
 
 

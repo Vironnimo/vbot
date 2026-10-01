@@ -810,13 +810,22 @@ def unsettled(connection: sqlite3.Connection) -> tuple[ArchiveEntry, ...]:
     return _entries(connection, sorted(rows, key=lambda row: int(row["entry_key"])))
 
 
-def due(connection: sqlite3.Connection, before: str, limit: int) -> tuple[ArchiveEntry, ...]:
-    """``archived`` entries whose retention started at or before ``before``, oldest first."""
+def due(
+    connection: sqlite3.Connection, before: str, after: ArchiveEntry | None, limit: int
+) -> tuple[ArchiveEntry, ...]:
+    """``archived`` entries whose retention started at or before ``before``, oldest first.
+
+    With ``after``, the walk continues behind that entry.
+    """
+    clauses = ["e.state = 'archived'", "e.retention_start <= ?"]
+    params: list[Any] = [before]
+    if after is not None:
+        clauses.append("(e.retention_start, e.entry_key) > (?, ?)")
+        params.extend((after.retention_start, after.entry_key))
     rows = connection.execute(
-        f"SELECT {_ENTRY_COLUMNS} FROM archive_entries AS e "
-        "WHERE e.state = 'archived' AND e.retention_start <= ? "
+        f"SELECT {_ENTRY_COLUMNS} FROM archive_entries AS e WHERE {' AND '.join(clauses)} "
         "ORDER BY e.retention_start, e.entry_key LIMIT ?",
-        (before, limit),
+        (*params, limit),
     ).fetchall()
     return _entries(connection, rows)
 

@@ -575,10 +575,9 @@ def test_archive_entry_reads_and_transitions_use_their_indexes(manager) -> None:
                 lambda recorder: _store_archive.newest_entry_id(recorder, "project", "project")
             )
         )
-        assert any(
-            "archive_entries_due" in detail
-            for detail in plans(lambda recorder: _store_archive.due(recorder, "9999", 10))
-        )
+        for after in (None, ledger.entry(entry.entry_id)):
+            due = partial(_store_archive.due, before="9999", after=after, limit=10)
+            assert any("archive_entries_due" in detail for detail in plans(due))
         assert any(
             "archive_entries_unsettled" in detail
             for detail in plans(_store_archive.unsettled, scans="archive_entries_unsettled")

@@ -717,6 +717,7 @@ def bootstrap(runtime: Runtime) -> None:
         if runtime.safe_startup_mode is None:
             runtime._start_provider_usage_service()
             runtime._start_recall_indexing()
+            runtime._start_archive_retention()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
     except Exception as error:
         _log_startup_failure(runtime)
@@ -764,6 +765,10 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         resolver.invalidate_team_cache(project_id)
         runtime.invalidate_project_skills(project_id)
 
+    def retention_days() -> int | None:
+        days: int | None = storage.load_archive_settings()["retention_days"]
+        return days
+
     return ArchiveServices(
         data_dir=storage.data_dir,
         sessions=sessions,
@@ -780,6 +785,7 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         remove_session_from_recall=runtime.remove_session_from_recall,
         invalidate_agent_skills=runtime.invalidate_agent_skills,
         invalidate_project=invalidate_project,
+        retention_days=retention_days,
     )
 
 

@@ -512,6 +512,9 @@ class Runtime:
     def _start_recall_indexing(self) -> None:
         start_event_loop_service(self._recall, "Recall is not available")
 
+    def _start_archive_retention(self) -> None:
+        start_event_loop_service(self._archive, "Archive is not available")
+
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
 

@@ -109,7 +109,14 @@ class PurgedEntry:
 
 @dataclass(frozen=True)
 class PendingPurge:
-    """An entry whose permanent deletion stopped; it stays ``purging`` and is retried."""
+    """An entry whose permanent deletion did not finish.
+
+    It stays ``purging`` and the retention sweep continues it, unless ``reason``
+    is ``ArchiveEntryBusyError`` or ``ArchiveEntryNotFoundError``: then another
+    operation held or removed the entry before the purge could claim it.
+    ``reason`` is ``usage_import_failed``, ``stopped`` or the failure's exception
+    class.
+    """
 
     entry_id: str
     reason: str
