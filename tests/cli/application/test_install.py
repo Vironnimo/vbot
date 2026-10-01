@@ -8,10 +8,7 @@ from pathlib import Path
 import pytest
 
 from cli.application.install import install_payload
-from cli.application.integration import CheckoutTransition
-from cli.application.state import ApplicationError
-from cli.install_state import build_install_state, write_install_state
-from tests.cli.application.git_repositories import SourceRepositories
+from cli.application.state import CHANNEL_URLS, ApplicationError, current_platform
 
 
 def _payload(root: Path, shape: str = "server") -> Path:
@@ -36,7 +33,7 @@ def _payload(root: Path, shape: str = "server") -> Path:
         "version_id": "v1_test",
         "version": "1.0",
         "revision": "abcdef",
-        "platform": "windows-x86_64",
+        "platform": current_platform(),
         "install_shape": shape,
         "files": {name: hashlib.sha256(content).hexdigest() for name, content in files.items()},
     }
@@ -44,8 +41,9 @@ def _payload(root: Path, shape: str = "server") -> Path:
     return payload
 
 
-def test_install_accepts_inno_registration_files_and_persists_actual_public_key(
-    tmp_path: Path,
+@pytest.mark.parametrize("channel", ["release", "main"])
+def test_install_accepts_inno_registration_files_and_persists_key_and_channel(
+    tmp_path: Path, channel: str
 ) -> None:
     root = tmp_path / "application"
     root.mkdir()
@@ -60,11 +58,14 @@ def test_install_accepts_inno_registration_files_and_persists_actual_public_key(
         shape="server",
         data_dir=tmp_path / "data",
         public_key=public_key,
+        channel=channel,
     )
 
     assert (root / "vBot.GUI.exe").read_bytes() == b"gui-bootstrap"
     saved = json.loads((root / "application.json").read_text(encoding="utf-8"))
     assert saved["release_public_key"] == public_key
+    assert saved["release_url"] == CHANNEL_URLS[channel]
+    assert install.channel == channel
     assert install.version().name == "v1_test"
 
 
@@ -89,9 +90,6 @@ def test_install_rejects_overlapping_payload_before_mutations(
         pytest.fail("Overlapping paths reached installation mutation")
 
     monkeypatch.setattr("cli.application.install.shutil.copytree", unexpected_mutation)
-    monkeypatch.setattr(
-        "cli.application.integration.prepare_checkout_transition", unexpected_mutation
-    )
 
     with pytest.raises(ApplicationError):
         install_payload(
@@ -99,7 +97,6 @@ def test_install_rejects_overlapping_payload_before_mutations(
             payload,
             shape="server",
             data_dir=tmp_path / "data",
-            from_checkout=tmp_path / "checkout",
         )
 
     assert {
@@ -108,65 +105,6 @@ def test_install_rejects_overlapping_payload_before_mutations(
         if path.is_file()
     } == original_files
     assert not (root / "application.json").exists()
-
-
-@pytest.mark.parametrize("track", ["main", "release"])
-def test_checkout_transition_keeps_the_recorded_target_and_binds_only_main(
-    tmp_path: Path,
-    source_repositories: SourceRepositories,
-    monkeypatch: pytest.MonkeyPatch,
-    track: str,
-) -> None:
-    # A release source is no Git branch checkout: it keeps its target but binds no updates.
-    checkout = source_repositories.checkout if track == "main" else tmp_path / "release-source"
-    checkout.mkdir(exist_ok=True)
-    state = build_install_state(
-        checkout,
-        install_shape="server",
-        dependency_groups=("server", "cli"),
-        python_executable=str(checkout / ".venv/Scripts/python.exe"),
-        server_host="127.0.0.7",
-        server_port=9123,
-        server_data_directory=str((tmp_path / "recorded-data").resolve()),
-    )
-    write_install_state(checkout, state)
-    completed: list[CheckoutTransition] = []
-    monkeypatch.setattr(
-        "cli.application.integration.prepare_checkout_transition",
-        lambda source, shape: CheckoutTransition(state),
-    )
-    monkeypatch.setattr(
-        "cli.application.integration.finish_checkout_transition",
-        lambda install, value: completed.append(value),
-    )
-    checkout_files = {path.name: path.read_bytes() for path in checkout.iterdir() if path.is_file()}
-
-    install = install_payload(
-        tmp_path / "application",
-        _payload(tmp_path),
-        shape="server",
-        host="wrong",
-        port=9999,
-        data_dir=tmp_path / "wrong-data",
-        from_checkout=checkout,
-    )
-
-    assert (install.server_host, install.server_port, install.server_data_directory) == (
-        "127.0.0.7",
-        9123,
-        str((tmp_path / "recorded-data").resolve()),
-    )
-    assert len(completed) == 1
-    assert {
-        path.name: path.read_bytes() for path in checkout.iterdir() if path.is_file()
-    } == checkout_files
-    binding_path = install.root / "source-update.json"
-    if track == "release":
-        assert not binding_path.exists()
-        return
-    binding = json.loads(binding_path.read_text(encoding="utf-8"))
-    assert (binding["remote"], binding["branch"]) == ("origin", "main")
-    assert Path(binding["checkout"]) == checkout.resolve()
 
 
 def test_a_nonempty_destination_is_refused_before_any_change(tmp_path: Path) -> None:

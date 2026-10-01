@@ -1,10 +1,6 @@
 """Compile the native Windows hosts from ``launcher.c`` with LLVM and the Windows SDK.
 
-This module is the complete native-host recipe: ``payload.NATIVE_SOURCE_FILES``
-fingerprints it together with the launcher sources, so an update recompiles
-the hosts exactly when something here or in those sources changes. It imports
-only the standard library and stdlib-only vBot helpers, because source updates
-run it in the private build environment without application dependencies.
+This module is the complete native-host recipe the Windows package builder runs.
 """
 
 from __future__ import annotations

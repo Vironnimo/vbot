@@ -3,50 +3,39 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import json
 import os
-import re
 import shutil
 import subprocess
 import sys
-import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from cli.application.payload import (
-    APP_FILES,
-    SHAPES,
-    PayloadError,
-    app_paths,
-    copy_application,
-    native_source_digest,
-)
+from cli.application.packages import package_name
+from cli.application.payload import APP_FILES, SHAPES, app_paths, copy_application
 from cli.application.runtime_sqlite import RuntimeSQLiteError, provision_runtime_sqlite
 from core.utils.processes import subprocess_creation_flags
-from scripts.windows.native_hosts import HOSTS, compile_host, compile_hosts, run_tool
+from scripts.package_build import (
+    CHANNELS,
+    INVENTORY_NAME,
+    BuildError,
+    sign_archive,
+    verify_release_source,
+    write_archive,
+    write_inventory,
+    write_manifest,
+    write_release_identity,
+)
+from scripts.package_build import version_id as safe_version_id
+from scripts.windows.native_hosts import compile_hosts, run_tool
 
-# Updaters of earlier versions compile a new source's hosts through
-# ``from scripts.build_windows import HOSTS, compile_host``.
-__all__ = ["APP_FILES", "HOSTS", "BuildError", "app_paths", "compile_host", "copy_application"]
+__all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
 
-INVENTORY_NAME = "vbot-runtime-inventory.json"
+PLATFORM = "windows-x86_64"
+SEARCH_TARGET = "x86_64-pc-windows-msvc"
 RUNTIME_DLL = "python313.dll"
-
-BuildError = PayloadError
-
-
-def _safe_version_id(version: str, revision: str) -> str:
-    clean_version = re.sub(r"[^a-z0-9]+", "_", version.lower()).strip("_")
-    clean_revision = re.sub(r"[^a-z0-9]", "", revision.lower())[:12]
-    value = f"v{clean_version}_{clean_revision}"
-    if not clean_version or not clean_revision or len(value) > 128:
-        raise BuildError("version and revision must form a safe application version id")
-    return value
 
 
 def _copy_tree(
@@ -86,7 +75,7 @@ def copy_runtime(
     if not all(
         (destination / "Lib" / module / "__init__.py").is_file() for module in ("venv", "ensurepip")
     ):
-        raise BuildError("runtime must include venv and ensurepip for customization")
+        raise BuildError("runtime must include venv and ensurepip for managed environments")
     if not (destination / RUNTIME_DLL).is_file():
         raise BuildError("runtime must be CPython 3.13 x64")
     try:
@@ -138,10 +127,7 @@ def copy_runtime(
             shutil.rmtree(site / package, ignore_errors=True)
         for metadata in site.glob("vbot-*.dist-info"):
             shutil.rmtree(metadata)
-    inventory = dependency_inventory(site)
-    (destination / INVENTORY_NAME).write_text(
-        json.dumps({"schema_version": 1, "packages": inventory}, indent=2) + "\n", encoding="utf-8"
-    )
+    write_inventory(destination, site)
 
 
 def _runtime_python(runtime: Path) -> Path:
@@ -150,26 +136,6 @@ def _runtime_python(runtime: Path) -> Path:
         if candidate.is_file():
             return candidate
     raise BuildError("runtime does not contain python.exe")
-
-
-def dependency_inventory(site: Path) -> list[dict[str, str]]:
-    packages: list[dict[str, str]] = []
-    if not site.is_dir():
-        return packages
-    for metadata in sorted(site.glob("*.dist-info"), key=lambda item: item.name.casefold()):
-        name = version = None
-        metadata_file = metadata / "METADATA"
-        if metadata_file.is_file():
-            for line in metadata_file.read_text(encoding="utf-8", errors="replace").splitlines():
-                if line.startswith("Name: "):
-                    name = line[6:].strip()
-                elif line.startswith("Version: "):
-                    version = line[9:].strip()
-                if name and version:
-                    break
-        if name and version:
-            packages.append({"name": name, "version": version})
-    return packages
 
 
 def _sign_with_packaged_runtime(
@@ -208,62 +174,6 @@ def _remove_runtime_caches(runtime: Path) -> None:
             path.unlink()
 
 
-def verify_release_source(source: Path, revision: str) -> None:
-    """Bind a signed artifact to the exact clean tracked source revision."""
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=source,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-        creationflags=subprocess_creation_flags(),
-    )
-    if head.returncode or revision.lower() != head.stdout.strip().lower():
-        raise BuildError("release revision must equal the source checkout HEAD")
-    tracked_paths = [
-        "core",
-        "server",
-        "cli",
-        "desktop",
-        "resources",
-        "pyproject.toml",
-        "LICENSE",
-        "THIRD_PARTY_NOTICES.md",
-        "scripts/build_windows.py",
-        "scripts/windows",
-    ]
-    status = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=all", "--", *tracked_paths],
-        cwd=source,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=30,
-        creationflags=subprocess_creation_flags(),
-    )
-    if status.returncode or status.stdout.strip():
-        raise BuildError("release mode requires clean tracked application sources")
-
-
-def _hashes(version_root: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    seen: set[str] = set()
-    for base in (version_root / "app", version_root / "runtime"):
-        for path in sorted(base.rglob("*"), key=lambda item: item.as_posix().casefold()):
-            if not path.is_file():
-                continue
-            relative = path.relative_to(version_root).as_posix()
-            folded = relative.casefold()
-            if folded in seen:
-                raise BuildError(f"case-colliding payload path: {relative}")
-            seen.add(folded)
-            values[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return values
-
-
 def build(args: argparse.Namespace) -> Path:
     source = Path(str(args.source)).resolve()
     runtime = Path(str(args.runtime)).resolve()
@@ -274,12 +184,11 @@ def build(args: argparse.Namespace) -> Path:
                 f"--release-mode requires signing key environment {args.signing_key_env}"
             )
         verify_release_source(source, str(args.revision))
-    version_id = _safe_version_id(args.version, args.revision)
-    package: Path = output / "windows-x86_64" / str(args.shape)
+    package: Path = output / PLATFORM / str(args.shape)
     if package.exists():
         shutil.rmtree(package)
-    version_root = package / "versions" / version_id
-    copy_application(source, version_root / "app", args.shape)
+    version_root = package / "versions" / safe_version_id(args.version, args.revision)
+    copy_application(source, version_root / "app", args.shape, search_target=SEARCH_TARGET)
     copy_runtime(
         runtime,
         version_root / "runtime",
@@ -291,75 +200,37 @@ def build(args: argparse.Namespace) -> Path:
     compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
-    manifest = {
-        "schema_version": 1,
-        "bootstrap_protocol": 1,
-        "version_id": version_id,
-        "version": args.version,
-        "revision": args.revision,
-        "platform": "windows-x86_64",
-        "install_shape": args.shape,
-        "native_source_digest": native_source_digest(source),
-        "files": _hashes(version_root),
-    }
-    (version_root / "release.json").write_text(
-        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-    )
     if args.authenticode_command:
         for executable in [*package.glob("*.exe"), *version_root.glob("runtime/*.exe")]:
             run_tool(
                 [part.replace("{file}", str(executable)) for part in args.authenticode_command]
             )
-        manifest["files"] = _hashes(version_root)
-        (version_root / "release.json").write_text(
-            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
-        )
+    manifest = write_manifest(
+        version_root,
+        version=args.version,
+        revision=args.revision,
+        platform=PLATFORM,
+        shape=args.shape,
+        channel=args.channel,
+    )
     artifacts = output / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=True)
     shutil.copy2(
         version_root / "runtime" / INVENTORY_NAME,
-        artifacts / f"vbot-windows-x86_64-{args.shape}-runtime-inventory.json",
+        artifacts / f"vbot-{PLATFORM}-{args.shape}-runtime-inventory.json",
     )
-    archive = artifacts / f"vbot-windows-x86_64-{args.shape}.zip"
-    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as bundle:
-        for path in sorted(version_root.rglob("*"), key=lambda item: item.as_posix().casefold()):
-            if path.is_file():
-                bundle.write(path, path.relative_to(version_root).as_posix())
+    archive = artifacts / package_name(args.shape, PLATFORM)
+    write_archive(version_root, archive)
+    write_release_identity(artifacts, manifest)
     public_key = ""
     if args.release_mode:
-        encoded_key = os.environ.get(args.signing_key_env)
-        assert encoded_key is not None
-        signature = archive.with_suffix(archive.suffix + ".sig")
-        try:
-            from cryptography.hazmat.primitives import serialization
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        except ImportError:
-            public_key = _sign_with_packaged_runtime(
-                version_root / "runtime" / "vBot.Python.exe",
-                archive,
-                signature,
-                args.signing_key_env,
-            )
-        else:
-            try:
-                key = Ed25519PrivateKey.from_private_bytes(
-                    base64.b64decode(encoded_key, validate=True)
-                )
-            except ValueError as exc:
-                raise BuildError(
-                    "release signing key must be a base64 raw Ed25519 private key"
-                ) from exc
-            digest = hashlib.sha256(archive.read_bytes()).digest()
-            signature.write_text(
-                base64.b64encode(key.sign(digest)).decode("ascii") + "\n", encoding="ascii"
-            )
-            public_key = base64.b64encode(
-                key.public_key().public_bytes(
-                    serialization.Encoding.Raw, serialization.PublicFormat.Raw
-                )
-            ).decode("ascii")
-        if not public_key:
-            raise BuildError("release signing key must be a base64 raw Ed25519 private key")
+        public_key = sign_archive(
+            archive,
+            args.signing_key_env,
+            fallback=lambda archive, signature, key_environment: _sign_with_packaged_runtime(
+                version_root / "runtime" / "vBot.Python.exe", archive, signature, key_environment
+            ),
+        )
     (artifacts / "release-public-key.txt").write_text(public_key + "\n", encoding="ascii")
     return package
 
@@ -374,6 +245,7 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--revision", required=True)
     value.add_argument("--provision-dependencies", action="store_true")
     value.add_argument("--release-mode", action="store_true")
+    value.add_argument("--channel", choices=CHANNELS, default="release")
     value.add_argument("--signing-key-env", default="VBOT_RELEASE_SIGNING_KEY")
     value.add_argument("--authenticode-command", nargs="+", metavar="ARG")
     return value

@@ -370,9 +370,6 @@ def recover_interrupted(install: Installation, operation: Operation) -> bool:
         validate_release(
             install.version(candidate), shape=install.install_shape, remove_bytecode_caches=True
         )
-        from cli.application.customize import finalize_activation
-
-        finalize_activation(install, candidate)
         refresh_gui_entrypoints(install)
         operation.transition(
             install, "completed", "Recovered the verified active application update"
@@ -412,24 +409,12 @@ def execute(install: Installation, operation: Operation) -> None:
         progress("Unpacking and verifying the selected package")
         candidate = stage_package(install, Path(operation.package), local=operation.local_package)
     else:
-        from cli.application.source_updates import prepare_update, read_binding
-
-        binding = read_binding(install)
-        if binding is None:
-            archive = download_release(install, operation.id, progress=progress)
+        archive = download_release(install, operation.id, progress=progress)
+        if archive is None:
+            candidate = install.version().name
+        else:
             progress("Unpacking and verifying the downloaded package")
             candidate = stage_package(install, archive, local=False)
-        else:
-            candidate = prepare_update(install, operation.id, progress=progress)
-    operation.candidate_version = candidate
-    operation.target_label = version_label(
-        read_json(install.version(candidate) / "release.json", limit=32 * 1024**2)
-    )
-    operation.save(install)
-    # Local changes are reconciled before touching the running installation.
-    from cli.application.customize import carry_forward
-
-    candidate = carry_forward(install, candidate)
     from cli.application.dependencies import prepare_for_version
 
     progress("Checking Extension dependencies")
@@ -531,9 +516,6 @@ def execute(install: Installation, operation: Operation) -> None:
     if install.owns_server and operation.server_was_running:
         require_ok(processes.start(install, breakaway=False))
     validate_release(install.version(), shape=install.install_shape, remove_bytecode_caches=True)
-    from cli.application.customize import finalize_activation
-
-    finalize_activation(install, candidate)
     refresh_gui_entrypoints(install)
     operation.transition(
         install,
@@ -564,7 +546,7 @@ def run(install: Installation, operation_id: str) -> None:
         operation.save(install)
     retired: list[Path] = []
     try:
-        # This lifetime lock also excludes manual lifecycle/customization mutations.
+        # This lifetime lock also excludes manual lifecycle mutations.
         # Dispatch uses its separate short lock so callers can observe/coalesce work.
         with exclusive(install.root, "operation", timeout=3600):
             execute(install, operation)

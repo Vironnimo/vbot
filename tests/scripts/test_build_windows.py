@@ -15,7 +15,6 @@ from xml.etree import ElementTree
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from cli.application.payload import NATIVE_SOURCE_FILES
 from scripts import build_windows
 from scripts.windows import native_hosts
 
@@ -60,11 +59,7 @@ def _source(tmp_path: Path) -> Path:
         path.mkdir(parents=True)
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
-    for relative in NATIVE_SOURCE_FILES:
-        native_path = source / relative
-        if not native_path.exists():
-            native_path.parent.mkdir(parents=True, exist_ok=True)
-            native_path.write_text(relative, encoding="utf-8")
+    (source / "scripts" / "windows").mkdir(parents=True)
     (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
@@ -96,41 +91,6 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "python.exe").write_bytes(b"python")
     (runtime / "python313.dll").write_bytes(b"dll")
     return runtime
-
-
-def test_native_source_fingerprint_ignores_checkout_line_endings_but_detects_changes(tmp_path):
-    source = _source(tmp_path)
-    launcher = source / "scripts/windows/launcher.c"
-    launcher.write_bytes(b"int main(void) {\n return 0;\n}\n")
-    expected = build_windows.native_source_digest(source)
-    launcher.write_bytes(launcher.read_bytes().replace(b"\n", b"\r\n"))
-    assert build_windows.native_source_digest(source) == expected
-    launcher.write_bytes(b"int main(void) { return 1; }\n")
-    assert build_windows.native_source_digest(source) != expected
-
-
-def test_native_source_fingerprint_covers_the_compile_recipe_but_not_the_release_builder(
-    tmp_path: Path,
-) -> None:
-    source = _source(tmp_path)
-    builder = source / "scripts" / "build_windows.py"
-    builder.parent.mkdir(parents=True, exist_ok=True)
-    builder.write_text("# release builder\n", encoding="utf-8")
-    expected = build_windows.native_source_digest(source)
-
-    builder.write_text("# release builder with a new runtime step\n", encoding="utf-8")
-    assert build_windows.native_source_digest(source) == expected
-
-    recipe = source / "scripts" / "windows" / "native_hosts.py"
-    recipe.write_text("# changed compiler flags\n", encoding="utf-8")
-    assert build_windows.native_source_digest(source) != expected
-
-
-def test_updaters_of_earlier_versions_still_find_the_native_compiler() -> None:
-    # Their candidate step runs `from scripts.build_windows import HOSTS, compile_host`
-    # against the new source checkout.
-    assert build_windows.HOSTS is native_hosts.HOSTS
-    assert build_windows.compile_host is native_hosts.compile_host
 
 
 def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
@@ -167,7 +127,9 @@ def test_copy_application_respects_shape_and_exclusions(
     tmp_path: Path, shape: str, present: tuple[str, ...], absent: tuple[str, ...]
 ) -> None:
     destination = tmp_path / "app"
-    build_windows.copy_application(_source(tmp_path), destination, shape)
+    build_windows.copy_application(
+        _source(tmp_path), destination, shape, search_target=build_windows.SEARCH_TARGET
+    )
 
     for relative in present:
         assert (destination / relative).exists()
@@ -187,7 +149,9 @@ def test_copy_application_rejects_source_links(tmp_path: Path) -> None:
         pytest.skip("creating symlinks is unavailable")
 
     with pytest.raises(build_windows.BuildError, match="contains a link"):
-        build_windows.copy_application(source, tmp_path / "app", "server")
+        build_windows.copy_application(
+            source, tmp_path / "app", "server", search_target=build_windows.SEARCH_TARGET
+        )
 
 
 def test_reused_assets_replace_generated_pages_without_overwriting_extension_source(tmp_path):
@@ -213,7 +177,9 @@ def test_reused_assets_replace_generated_pages_without_overwriting_extension_sou
         target.write_text(value, encoding="utf-8")
     shutil.rmtree(source / "webui" / "dist")
     destination = tmp_path / "candidate"
-    copy_application(source, destination, "server", assets=assets)
+    copy_application(
+        source, destination, "server", search_target=build_windows.SEARCH_TARGET, assets=assets
+    )
     assert (destination / "webui/dist/index.html").read_text(encoding="utf-8") == "verified UI"
     assert (destination / page / "web/page.html").read_text(
         encoding="utf-8"
@@ -384,6 +350,7 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         revision="abcdef1234567890",
         provision_dependencies=False,
         release_mode=False,
+        channel="main",
         signing_key_env="UNUSED",
         authenticode_command=None,
     )
@@ -395,6 +362,15 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
     assert manifest["bootstrap_protocol"] == 1
     assert manifest["platform"] == "windows-x86_64"
     assert manifest["install_shape"] == "server"
+    assert manifest["channel"] == "main"
+    identity = json.loads((tmp_path / "build" / "artifacts" / "vbot-release.json").read_text())
+    assert identity == {
+        "schema_version": 1,
+        "version_id": "v0_4_0_abcdef123456",
+        "version": "0.4.0",
+        "revision": "abcdef1234567890",
+        "channel": "main",
+    }
     assert set(manifest["files"]) == {
         path.relative_to(version_root).as_posix()
         for base in (version_root / "app", version_root / "runtime")
@@ -436,6 +412,7 @@ def test_release_build_fails_closed_without_signing_key(
         revision="abcdef",
         provision_dependencies=False,
         release_mode=True,
+        channel="release",
         signing_key_env="MISSING_SIGNING_KEY",
         authenticode_command=None,
     )
@@ -461,6 +438,7 @@ def test_release_archive_signature_covers_raw_sha256(
         revision="abcdef",
         provision_dependencies=False,
         release_mode=True,
+        channel="release",
         signing_key_env="TEST_SIGNING_KEY",
         authenticode_command=None,
     )
@@ -546,42 +524,6 @@ def test_compile_host_constructs_msvc_abi_commands(
     commands.clear()
     native_hosts.compile_host(source, tmp_path / "vBot.Python.exe", role="python", version="2.3.4")
     assert "/SUBSYSTEM:CONSOLE" in commands[2]
-
-
-@pytest.mark.skipif(
-    sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
-    reason="Windows native compiler required",
-)
-def test_source_update_compiles_host_without_application_dependencies(tmp_path):
-    # The stdlib-only import path does not depend on the role. The Desktop host is the
-    # one build with its own manifest; the runtime test below compiles the host,
-    # update, GUI and server builds, and test_compile_host_constructs_msvc_abi_commands
-    # checks the per-role compiler commands.
-    filename, role = "vBot.Desktop.exe", native_hosts.HOSTS["vBot.Desktop.exe"]
-    source = Path(build_windows.__file__).parent.parent
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-E",
-            "-S",
-            "-c",
-            "import sys\n"
-            "from pathlib import Path\n"
-            "from scripts.windows.native_hosts import compile_host\n"
-            "filename, role = sys.argv[2:4]\n"
-            "compile_host(Path.cwd(), Path(sys.argv[1]) / filename, "
-            "role=role, version='0.4.3', stable=filename == 'vBot.exe')\n",
-            str(tmp_path / "native hosts"),
-            filename,
-            role,
-        ],
-        cwd=source,
-        capture_output=True,
-        creationflags=subprocess.CREATE_NO_WINDOW,
-        timeout=60,
-    )
-    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
-    assert {path.name for path in (tmp_path / "native hosts").glob("*.exe")} == {filename}
 
 
 @pytest.mark.skipif(

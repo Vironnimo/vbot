@@ -10,9 +10,11 @@ from pathlib import Path
 
 from cli.application.packages import validate_release
 from cli.application.state import (
+    CHANNEL_URLS,
     ApplicationError,
     Installation,
     contained,
+    current_platform,
     exclusive,
     load_installation,
 )
@@ -39,7 +41,7 @@ def install_payload(
     port: int = 8420,
     data_dir: Path | None = None,
     public_key: str = "",
-    from_checkout: Path | None = None,
+    channel: str = "release",
 ) -> Installation:
     root, payload = root.expanduser().absolute(), payload.expanduser().resolve()
     resolved_root = root.resolve()
@@ -56,9 +58,10 @@ def install_payload(
         shape not in {"server", "server-desktop", "desktop-client"}
         or type(port) is not int
         or not 1 <= port <= 65535
+        or channel not in CHANNEL_URLS
     ):
         raise ApplicationError("Invalid application installation options")
-    manifest = validate_release(payload, shape=shape)
+    manifest = validate_release(payload, shape=shape, platform=current_platform())
     if (root / "application.json").exists():
         install = load_installation(root)
         raise ApplicationError(
@@ -73,7 +76,7 @@ def install_payload(
             raise ApplicationError(
                 "Release public key must be base64 raw Ed25519 public key"
             ) from exc
-    allowed = {"vBot.exe", "vBot.GUI.exe", ".operation.lock"}
+    allowed = {"vBot.exe", "vBot.GUI.exe", "vbot", ".operation.lock"}
     if root.exists() and any(
         path.name not in allowed
         and not (
@@ -84,22 +87,6 @@ def install_payload(
         for path in root.iterdir()
     ):
         raise ApplicationError("The application destination is not empty")
-    transition = None
-    if from_checkout is not None:
-        from cli.application.integration import prepare_checkout_transition
-        from cli.install_state import read_install_state
-
-        source_state = read_install_state(from_checkout)
-        if source_state is not None and source_state.source_track == "dev":
-            from cli.application.source_updates import inspect_checkout
-
-            inspect_checkout(from_checkout)
-        transition = prepare_checkout_transition(from_checkout, shape=shape)
-        previous = transition.state
-        if previous.server_data_directory:
-            data_dir = Path(previous.server_data_directory)
-        host = previous.server_host or host
-        port = previous.server_port or port
     resolved_data = (data_dir or Path.home() / ".vbot").expanduser().absolute()
     if shape != "desktop-client" and (
         resolved_data == root
@@ -113,6 +100,7 @@ def install_payload(
         None if shape == "desktop-client" else host,
         None if shape == "desktop-client" else port,
         None if shape == "desktop-client" else str(resolved_data),
+        release_url=CHANNEL_URLS[channel],
         release_public_key=public_key,
     )
     root.mkdir(parents=True, exist_ok=True)
@@ -121,29 +109,20 @@ def install_payload(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(payload, destination)
         validate_release(destination, shape=shape)
-        bootstrap = destination / "runtime/vBot.exe"
-        if bootstrap.is_file() and not (root / "vBot.exe").exists():
-            shutil.copy2(bootstrap, root / "vBot.exe")
+        bootstrap = destination / "runtime" / install.bootstrap.name
+        if bootstrap.is_file() and not install.bootstrap.exists():
+            shutil.copy2(bootstrap, install.bootstrap)
         if install.owns_server and not resolved_data.exists():
             from core.storage import initialize_data_directory
 
             initialize_data_directory(
                 resolved_data, resources_dir=destination / "app" / "resources"
             )
-        if transition is not None and transition.state.source_track == "dev":
-            from cli.application.source_updates import bind_checkout
-
-            assert from_checkout is not None
-            bind_checkout(install, from_checkout)
         install.save()
         install.activate(manifest["version_id"])
         from cli.application.integration import refresh_gui_entrypoints
 
         refresh_gui_entrypoints(install)
-    if transition is not None:
-        from cli.application.integration import finish_checkout_transition
-
-        finish_checkout_transition(install, transition)
     return install
 
 
@@ -156,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8420)
     parser.add_argument("--data-dir", type=Path)
     parser.add_argument("--public-key", default="")
-    parser.add_argument("--from-checkout", type=Path)
+    parser.add_argument("--channel", choices=sorted(CHANNEL_URLS), default="release")
     args = parser.parse_args(argv)
     install_payload(
         args.root,
@@ -166,7 +145,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         data_dir=args.data_dir,
         public_key=args.public_key,
-        from_checkout=args.from_checkout,
+        channel=args.channel,
     )
     return 0
 

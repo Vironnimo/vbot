@@ -16,6 +16,9 @@
 #ifndef ReleasePublicKey
   #define ReleasePublicKey ""
 #endif
+#ifndef UpdateChannel
+  #define UpdateChannel "release"
+#endif
 
 [Setup]
 AppId={{2F5A5391-1314-4E26-A37D-88A18049F235}
@@ -55,7 +58,6 @@ Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "deskt
 Type: files; Name: "{app}\vBot.GUI.exe"
 Type: files; Name: "{app}\application.json"
 Type: files; Name: "{app}\active-version"
-Type: files; Name: "{app}\source-update.json"
 Type: files; Name: "{app}\.operation.lock"
 Type: files; Name: "{app}\host.json"
 Type: files; Name: "{app}\host-exit-request.json"
@@ -141,7 +143,7 @@ begin
 #if InstallShape == "desktop-client"
   Parameters := 'application install --root "' + ExpandConstant('{app}') +
     '" --payload "' + ExpandConstant('{tmp}\vbot-payload') +
-    '" --shape {#InstallShape} --public-key "{#ReleasePublicKey}"';
+    '" --shape {#InstallShape} --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}';
 #else
   ServerHost := ExpandConstant('{param:VBOTHOST|127.0.0.1}');
   ServerPort := ExpandConstant('{param:VBOTPORT|8420}');
@@ -155,7 +157,7 @@ begin
   Parameters := 'application install --root "' + ExpandConstant('{app}') +
     '" --payload "' + ExpandConstant('{tmp}\vbot-payload') +
     '" --shape {#InstallShape} --host "' + ServerHost + '" --port "' + ServerPort +
-    '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}"';
+    '" --data-dir "' + ServerData + '" --public-key "{#ReleasePublicKey}" --channel {#UpdateChannel}';
 #endif
   if not ExecAndLogOutput(ExpandConstant('{app}\vBot.exe'), Parameters, '', SW_HIDE,
     ewWaitUntilTerminated, ExitCode, nil) or (ExitCode <> 0) then

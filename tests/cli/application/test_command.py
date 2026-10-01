@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 import pytest
 
 from cli.application import command, operations, processes
-from cli.application.state import ApplicationError, Installation, Operation
+from cli.application.state import ApplicationError, Installation, Operation, load_installation
 from cli.main import run
 from cli.parser import parse_args
 from cli.server_management import CommandResult, HealthProbeResult, WebUIProbeResult
@@ -109,35 +108,32 @@ def test_source_checkout_update_dispatch_remains_unclaimed(monkeypatch: pytest.M
     assert command.dispatch(parse_args(["update", "--no-restart"])) is None
 
 
-def test_source_selection_records_mode_without_starting_or_updating(tmp_path, monkeypatch, capsys):
+def test_channel_selection_records_the_channel_without_starting_or_updating(
+    tmp_path, monkeypatch, capsys
+):
     install = _install(tmp_path)
+    install.save()
     monkeypatch.setattr(command, "discover", lambda: install)
-    selected = []
-
-    def select(candidate, mode, *, from_checkout):
-        selected.append((candidate.root, mode, from_checkout))
-        logging.getLogger("vbot.application.source_updates").info("probe-record")
-        return {"source_track": mode}
-
-    monkeypatch.setattr("cli.application.source_updates.select_source", select)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: pytest.fail("not an update"))
-    assert run(["application", "source", "main", "--output", "plain"]) == 0
-    assert selected == [(install.root, "main", None)]
+
+    assert run(["application", "channel", "main", "--output", "plain"]) == 0
+
+    assert load_installation(install.root).channel == "main"
     assert json.loads(capsys.readouterr().out)["next_command"] == "vbot update"
     # A command on an installation logs into that installation's daily file.
-    assert "probe-record" in resolve_daily_log_path(install.root).read_text(encoding="utf-8")
+    log = resolve_daily_log_path(install.root).read_text(encoding="utf-8")
+    assert "update channel changed (from=release to=main)" in log
 
 
-def test_source_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
+def test_channel_selection_refuses_pending_update_before_mutation(tmp_path, monkeypatch):
     install = _install(tmp_path)
+    install.save()
     Operation(id="upd_pending", phase="queued").save(install)
     monkeypatch.setattr(command, "discover", lambda: install)
-    monkeypatch.setattr(
-        "cli.application.source_updates.select_source",
-        lambda *a, **kw: pytest.fail("must not change"),
-    )
+
     with pytest.raises(ApplicationError):
-        command.dispatch(parse_args(["application", "source", "release"]))
+        command.dispatch(parse_args(["application", "channel", "main"]))
+    assert load_installation(install.root).channel == "release"
 
 
 def test_packaged_lifecycle_refuses_a_target_other_than_its_recorded_server(

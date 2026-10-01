@@ -99,7 +99,6 @@ AREA_HELP = {
     "home": "Show the application and data directories",
     "update": "Update this installation and inspect or activate a prepared packaged update",
     "application": "Inspect and manage the packaged local vBot application",
-    "customize": "Prepare, check, test and activate local vBot features",
     "uninstall": "Remove the application, its data, or both with explicit confirmation",
     "autostart": "Enable, disable, or inspect OS autostart for the server",
     "agent": "Inspect and manage agent configs",

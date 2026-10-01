@@ -406,18 +406,18 @@ class ApplicationFacade:
 
     def _update_source(self) -> str:
         if self._source_label is None:
-            from cli.application.source_updates import read_binding
+            from cli.application.state import load_installation
 
+            # `vbot application channel` rewrites the record while the tray runs.
             try:
-                binding = read_binding(self._install)
+                channel = load_installation(self._install.root).channel
             except ApplicationError as error:
-                self._source_label = f"Unreadable source binding: {error}"
+                self._source_label = f"Unreadable installation record: {error}"
             else:
-                self._source_label = (
-                    "Published releases"
-                    if binding is None
-                    else f"Branch {binding['branch']} of {binding['checkout']}"
-                )
+                self._source_label = {
+                    "release": "Published releases",
+                    "main": "Newest main builds",
+                }.get(channel, "A custom release source")
         return self._source_label
 
 

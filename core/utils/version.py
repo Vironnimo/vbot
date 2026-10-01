@@ -47,11 +47,11 @@ def detect_vbot_version(root: Path = _VBOT_ROOT) -> str:
     """Resolve the running vBot version from its single source of truth.
 
     The version lives once, in ``pyproject.toml`` -> ``project.version``. Read
-    that file directly when it sits next to the running code (the dev and
-    clone-based deployments vBot actually ships as): it is the *live* value, so a
-    version bump - or a ``vbot update`` git pull - flows through without a
-    reinstall. Installed package metadata is only a fallback for a pure wheel
-    install where the source tree is absent; it is a snapshot frozen at install
+    that file directly when it sits next to the running code (development
+    checkouts and packaged versions both carry it): it is the *live* value, so a
+    version bump in a checkout flows through without a reinstall. Installed
+    package metadata is only a fallback for a pure wheel install where the
+    source tree is absent; it is a snapshot frozen at install
     time and would otherwise drift behind an edited ``pyproject.toml``.
     """
     try:
@@ -71,9 +71,9 @@ def detect_build_identity(root: Path = _VBOT_ROOT) -> BuildIdentity:
     """Identify the build whose code runs from ``root``.
 
     Read it once at startup: the code a process runs never changes, while a
-    checkout's HEAD moves with every later commit. A packaged Windows version
-    describes itself in its ``release.json``; a Git checkout (development,
-    Worktree or clone-based install) in its HEAD. A branch checkout names its
+    checkout's HEAD moves with every later commit. A packaged version
+    describes itself in its ``release.json``; a Git checkout (development or
+    Worktree) in its HEAD. A branch checkout names its
     branch; a detached HEAD is a release when the release tag ``v<version>``
     points at it. Anything unreadable leaves the version alone.
     """
@@ -93,15 +93,10 @@ def _packaged_identity(root: Path, version: str) -> BuildIdentity | None:
     if manifest is None:
         return None
     revision = _revision(manifest.get("revision"))
-    # Only a version built locally from source records the official version it
-    # started from; an official release archive has no such base.
-    if "official_base" not in manifest:
-        return BuildIdentity(version, revision, release=True)
-    binding = _read_json_object(root.parent.parent.parent / "source-update.json") or {}
-    branch = binding.get("branch")
-    return BuildIdentity(
-        version, revision, branch=branch if isinstance(branch, str) and branch else None
-    )
+    # The builder records the channel it published to; main builds come from main.
+    if manifest.get("channel") == "main":
+        return BuildIdentity(version, revision, branch="main")
+    return BuildIdentity(version, revision, release=True)
 
 
 def _checkout_identity(root: Path, version: str) -> BuildIdentity | None:

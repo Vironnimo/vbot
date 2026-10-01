@@ -8,9 +8,8 @@ complete version outside the needed set:
 - versions named by operations since the last one that changed the active
   version, including that operation's previous version as a known-good
   fallback, and by every unfinished operation;
-- versions named by the local customization state;
-- versions that a private Python environment is based on (the customization
-  build environment and the managed speech environments);
+- versions that a private Python environment is based on (the managed speech
+  and embedding environments);
 - versions a running process of this installation uses: its executable, or,
   for the root bootstraps, a module it has loaded.
 
@@ -125,7 +124,6 @@ def _needed_versions(install: Installation) -> set[str]:
     try:
         needed = {install.version().name}
         needed |= _operation_versions(install)
-        needed |= _customization_versions(install)
         needed |= _environment_versions(install)
     except (OSError, ValueError) as exc:
         raise _UndecidableError(str(exc)) from exc
@@ -150,24 +148,8 @@ def _operation_versions(install: Installation) -> set[str]:
     return needed
 
 
-def _customization_versions(install: Installation) -> set[str]:
-    from cli.application.customize import development_state
-
-    state = development_state(install)
-    if state is None:
-        return set()
-    records = [state, state.get("pending_rebase")]
-    return {
-        value
-        for record in records
-        if isinstance(record, dict)
-        for key, value in record.items()
-        if key.endswith("_version") and isinstance(value, str) and is_safe_id(value)
-    }
-
-
 def _environment_versions(install: Installation) -> set[str]:
-    configurations = list(contained(install.root, "development").glob("*/pyvenv.cfg"))
+    configurations: list[Path] = []
     if install.server_data_directory is not None:
         from core.storage.layout import DataDirectoryLayout
 

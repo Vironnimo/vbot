@@ -4,7 +4,6 @@ import base64
 import ctypes
 import json
 import re
-import subprocess
 import sys
 import uuid
 from contextlib import nullcontext, suppress
@@ -18,13 +17,11 @@ import pytest
 from cli.application import integration
 from cli.application.integration import (
     autostart,
-    prepare_checkout_transition,
     request_host_exit,
     uninstall,
 )
 from cli.application.state import ApplicationError, Installation
 from cli.autostart_management import CommandRun
-from cli.install_state import build_install_state, write_install_state
 from cli.server_management import ServerState
 
 
@@ -261,48 +258,3 @@ def test_data_only_reset_preserves_application_autostart_and_running_state(
             "data_removed": True,
             "server_restarted": state == "running",
         }
-
-
-def test_checkout_transition_refuses_dirty_source_before_stop(tmp_path: Path) -> None:
-    checkout = tmp_path / "checkout"
-    checkout.mkdir()
-    state = build_install_state(
-        checkout,
-        install_shape="server",
-        dependency_groups=("server", "cli"),
-        python_executable=str(checkout / ".venv/Scripts/python.exe"),
-        server_host="127.0.0.1",
-        server_port=8420,
-        server_data_directory=str(tmp_path / "data"),
-    )
-    write_install_state(checkout, state)
-    stopped: list[object] = []
-
-    with pytest.raises(ApplicationError, match="customize prepare"):
-        prepare_checkout_transition(
-            checkout,
-            shape="server",
-            platform="linux",
-            git_runner=lambda path: subprocess.CompletedProcess([], 0, " M core/file.py\n", ""),
-            stop=lambda instance: stopped.append(instance),
-        )
-    assert stopped == []
-
-
-def test_checkout_status_runs_windowless_and_retains_captured_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    options: dict[str, object] = {}
-
-    def run(arguments: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        options.update(kwargs)
-        return subprocess.CompletedProcess(arguments, 0, " M retained.py\n", "")
-
-    monkeypatch.setattr(integration, "subprocess_creation_flags", lambda: 456)
-    monkeypatch.setattr(integration.subprocess, "run", run)
-
-    result = integration._git_status(tmp_path)
-
-    assert options["creationflags"] == 456
-    assert options["capture_output"] is True
-    assert result.stdout == " M retained.py\n"

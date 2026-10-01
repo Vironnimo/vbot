@@ -57,15 +57,6 @@ def _install(root: Path, *, shape: str = "server") -> Installation:
     return install
 
 
-def _patch_carry_forward(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "cli.application.customize.carry_forward", lambda _install, candidate: candidate
-    )
-    monkeypatch.setattr(
-        "cli.application.customize.finalize_activation", lambda _install, _candidate: None
-    )
-
-
 @pytest.fixture(autouse=True)
 def _exact_installed_server(monkeypatch: pytest.MonkeyPatch):
     """The previous version's normal server runs and answers; no other server exists."""
@@ -122,7 +113,6 @@ def _target_data(monkeypatch: pytest.MonkeyPatch, install: Installation) -> None
 
 def _patch_server_update(monkeypatch: pytest.MonkeyPatch, install: Installation) -> None:
     """A running previous server that stops cleanly; the test decides every start."""
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
     monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
@@ -137,7 +127,6 @@ def test_client_only_execution_never_targets_snapshots_or_starts_servers(
         id="upd_client", previous_version="rel_old", package="release.zip", local_package=True
     )
     calls: list[str] = []
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
     monkeypatch.setattr(
@@ -172,7 +161,6 @@ def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
         package="release.zip",
         local_package=True,
     )
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
 
@@ -195,7 +183,6 @@ def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
         restart=restart,
         handoff_ticket="ticket.json",
     )
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *a, **kw: "rel_old")
     monkeypatch.setattr(worker, "quiesce", lambda *a: pytest.fail("no maintenance or continuation"))
     monkeypatch.setattr(worker.processes, "target", lambda *a: pytest.fail("no server action"))
@@ -205,31 +192,22 @@ def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
     assert (install.root / "vBot.GUI.exe").read_bytes() == b"rel_old"
 
 
-def test_bound_source_update_replaces_download_route(
+def test_a_channel_publishing_the_active_version_completes_without_download(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     install = _install(tmp_path)
-    operation = Operation(id="upd_source", previous_version="rel_old", restart=False)
-    _patch_carry_forward(monkeypatch)
-    monkeypatch.setattr(
-        "cli.application.source_updates.read_binding", lambda _install: {"checkout": "source"}
-    )
-    monkeypatch.setattr(
-        "cli.application.source_updates.prepare_update",
-        lambda _install, operation_id, **kwargs: (
-            "rel_new" if operation_id == "upd_source" else "wrong"
-        ),
-    )
-    monkeypatch.setattr(worker, "download_release", lambda *_args: pytest.fail("must not download"))
+    operation = Operation(id="upd_current", previous_version="rel_old")
+    monkeypatch.setattr(worker, "download_release", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         worker, "stage_package", lambda *_args, **_kwargs: pytest.fail("must not stage")
     )
+    monkeypatch.setattr(worker, "quiesce", lambda *a: pytest.fail("no maintenance"))
     monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
 
     worker.execute(install, operation)
 
-    assert operation.phase == "prepared"
-    assert operation.candidate_version == "rel_new"
+    assert operation.phase == "completed"
+    assert operation.candidate_version == "rel_old"
     assert install.version().name == "rel_old"
 
 
@@ -263,7 +241,6 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
         handoff_ticket="ticket.json",
     )
     sequence: list[str] = []
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
     ready = iter((False, True))
@@ -319,7 +296,6 @@ def test_a_server_the_update_cannot_drain_fails_it_before_anything_changes(
     )
     operation.save(install)
     calls: list[str] = []
-    _patch_carry_forward(monkeypatch)
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
     monkeypatch.setattr(worker.processes, "server_state", lambda _install, **_kwargs: state)

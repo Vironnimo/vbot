@@ -1,8 +1,8 @@
 """Update handoff capabilities for Bash calls that run ``vbot update``.
 
 Every Bash call with a persistence boundary receives an unguessable in-memory
-token through ``VBOT_UPDATE_HANDOFF``. Only a packaged ``vbot update`` or
-``vbot customize activate`` claims it: the server then writes one durable,
+token through ``VBOT_UPDATE_HANDOFF``. Only a packaged ``vbot update`` claims
+it: the server then writes one durable,
 opaque ticket that the independent updater and the private application RPCs
 validate. Tickets and continuation receipts matter for one update operation
 only, so server startup removes those past ``UPDATE_HANDOFF_FILE_RETENTION``.

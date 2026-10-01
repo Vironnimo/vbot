@@ -12,7 +12,6 @@ import sys
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +27,11 @@ from cli.application.state import (
     write_json,
 )
 from cli.autostart_management import (
-    DEFAULT_TASK_NAME,
     Runner,
     _default_runner,
     _windows_task_command,
-    autostart_status,
-    disable_autostart,
 )
-from cli.install_state import InstallState, read_install_state
-from cli.server_management import ServerState, resolve_instance, stop_server
-from core.utils.processes import subprocess_creation_flags
+from cli.server_management import ServerState
 
 
 def refresh_gui_entrypoints(install: Installation) -> None:
@@ -399,119 +393,6 @@ def uninstall(
                 "data_removed": removed_data,
                 "data_preserved": not remove_data,
             }
-
-
-@dataclass(frozen=True)
-class CheckoutTransition:
-    """Verified source-install facts retained until packaged registration succeeds."""
-
-    state: InstallState
-    old_autostart_enabled: bool = False
-    old_autostart_launcher: str | None = None
-
-
-GitRunner = Callable[[Path], subprocess.CompletedProcess[str]]
-
-
-def _git_status(checkout: Path) -> subprocess.CompletedProcess[str]:
-    try:
-        return subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=checkout,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=30,
-            creationflags=subprocess_creation_flags(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ApplicationError("Could not inspect the source checkout before transition") from exc
-
-
-def prepare_checkout_transition(
-    checkout: Path,
-    *,
-    shape: str,
-    platform: str = sys.platform,
-    git_runner: GitRunner = _git_status,
-    runner: Runner | None = None,
-    stop: Callable[[Any], Any] = stop_server,
-) -> CheckoutTransition:
-    """Refuse local changes and stop the exact source-owned server before cutover."""
-    checkout = checkout.resolve()
-    state = read_install_state(checkout)
-    if state is None or state.install_shape != shape:
-        raise ApplicationError("The existing checkout has no matching installation manifest")
-    status = git_runner(checkout)
-    if status.returncode != 0:
-        raise ApplicationError("Could not inspect the source checkout before transition")
-    if status.stdout.strip():
-        raise ApplicationError(
-            "The source checkout has local changes; use 'vbot customize prepare' to migrate them"
-        )
-    if shape == "desktop-client":
-        return CheckoutTransition(state)
-    if not state.server_host or not state.server_port or not state.server_data_directory:
-        raise ApplicationError("The source installation has no exact server target")
-    instance = resolve_instance(
-        host=state.server_host,
-        port=state.server_port,
-        data_dir=state.server_data_directory,
-    )
-    stopped = stop(instance)
-    if not stopped.ok:
-        raise ApplicationError(
-            f"Source transition aborted because the server could not stop: {stopped.message}"
-        )
-    old_launcher = str(Path(state.python_executable).parent / "vbot-autostart.exe")
-    enabled = False
-    if platform == "win32":
-        existing = autostart_status(
-            instance,
-            platform=platform,
-            runner=runner,
-            task_name=DEFAULT_TASK_NAME,
-            windows_launcher_path=old_launcher,
-        )
-        if not existing.ok:
-            raise ApplicationError(
-                f"Could not verify source Autostart ownership: {existing.message}"
-            )
-        enabled = existing.message.startswith("autostart: enabled ")
-    return CheckoutTransition(state, enabled, old_launcher)
-
-
-def finish_checkout_transition(
-    install: Installation,
-    transition: CheckoutTransition,
-    *,
-    platform: str = sys.platform,
-    runner: Runner | None = None,
-) -> None:
-    """Move owned logon registration only after packaged registration verifies."""
-    if not transition.old_autostart_enabled:
-        return
-    autostart(install, "enable", platform=platform, runner=runner)
-    state = transition.state
-    assert state.server_host and state.server_port and state.server_data_directory
-    instance = resolve_instance(
-        host=state.server_host, port=state.server_port, data_dir=state.server_data_directory
-    )
-    status = autostart_status(
-        instance,
-        platform=platform,
-        runner=runner,
-        task_name=DEFAULT_TASK_NAME,
-        windows_launcher_path=transition.old_autostart_launcher,
-    )
-    if not status.ok or not status.message.startswith("autostart: enabled "):
-        raise ApplicationError("Source Autostart ownership changed during transition")
-    removed = disable_autostart(
-        instance, platform=platform, runner=runner, task_name=DEFAULT_TASK_NAME
-    )
-    if not removed.ok:
-        raise ApplicationError(f"Could not retire source Autostart: {removed.message}")
 
 
 def begin_removal(install: Installation) -> dict[str, Any]:

@@ -18,11 +18,21 @@ from typing import Any, TypeVar
 
 import httpx
 
-from cli.application.state import ApplicationError, Installation, contained, read_json, safe_id
+from cli.application.state import (
+    ApplicationError,
+    Installation,
+    contained,
+    current_platform,
+    read_json,
+    safe_id,
+)
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
 MAX_FILES = 100_000
+#: Published beside the packages of a release; names the version they contain so an
+#: update can skip a download when that version is already active.
+RELEASE_IDENTITY_ASSET = "vbot-release.json"
 # CPython's bytecode cache files and the temporaries of its atomic cache writes.
 _BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
 #: Concurrent readers for payload files. Windows scans every newly written file
@@ -280,9 +290,7 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
                 if os.name != "nt" and mode & 0o111:
                     target.chmod(0o755)
         manifest = validate_release(
-            temporary,
-            shape=install.install_shape,
-            platform="windows-x86_64" if os.name == "nt" else None,
+            temporary, shape=install.install_shape, platform=current_platform()
         )
         version_id = manifest["version_id"]
         destination = install.version(version_id)
@@ -305,45 +313,83 @@ def stage_package(install: Installation, archive: Path, *, local: bool = False) 
             shutil.rmtree(temporary)
 
 
+def package_name(shape: str, platform: str | None = None) -> str:
+    """The update archive of one shape for one platform, as releases publish it."""
+    return f"vbot-{platform or current_platform()}-{shape}.zip"
+
+
 def download_release(
     install: Installation,
     operation_id: str,
     *,
     progress: Callable[[str, str | None], None] | None = None,
-) -> Path:
+) -> Path | None:
+    """Download the signed package of the installation's channel.
+
+    Returns ``None`` without downloading when the channel publishes the version
+    that is already active.
+    """
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
-    directory.mkdir(parents=True, exist_ok=True)
-    expected = f"vbot-windows-x86_64-{install.install_shape}.zip"
+    expected = package_name(install.install_shape)
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
         response = client.get(
             install.release_url, headers={"Accept": "application/vnd.github+json"}
         )
         response.raise_for_status()
         release = response.json()
-        if progress:
-            progress(
-                "Downloading the application package",
-                version_label({"version": release.get("tag_name")}),
-            )
         assets = {item["name"]: item["browser_download_url"] for item in release.get("assets", [])}
+        identity = _release_identity(client, assets.get(RELEASE_IDENTITY_ASSET))
+        label = (
+            version_label(identity)
+            if identity is not None
+            else version_label({"version": release.get("tag_name")})
+        )
+        if identity is not None and identity["version_id"] == install.version().name:
+            if progress:
+                progress("The published version is already installed", label)
+            return None
+        if progress:
+            progress("Downloading the application package", label)
+        directory.mkdir(parents=True, exist_ok=True)
         for name in (expected, expected + ".sig"):
             url = assets.get(name)
             if not isinstance(url, str) or not url.startswith("https://"):
                 raise ApplicationError("No matching signed application package in this release")
             limit = 1024 if name.endswith(".sig") else MAX_ARCHIVE_BYTES
-            target = directory / name
-            count = 0
-            with client.stream("GET", url) as stream, target.open("wb") as output:
-                stream.raise_for_status()
-                if stream.url.scheme != "https":
-                    raise ApplicationError("Release download redirected to an insecure URL")
-                for chunk in stream.iter_bytes():
-                    count += len(chunk)
-                    if count > limit:
-                        raise ApplicationError("Release download exceeds the size limit")
-                    output.write(chunk)
-                output.flush()
-                os.fsync(output.fileno())
+            _download(client, url, directory / name, limit)
     return directory / expected
+
+
+def _release_identity(client: httpx.Client, url: object) -> dict[str, Any] | None:
+    """Read the published version identity; a release without one has none."""
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return None
+    response = client.get(url)
+    response.raise_for_status()
+    if len(response.content) > 4096:
+        raise ApplicationError("Release identity exceeds the size limit")
+    try:
+        value = response.json()
+    except ValueError as exc:
+        raise ApplicationError("Release identity is not valid JSON") from exc
+    if not isinstance(value, dict) or value.get("schema_version") != 1:
+        raise ApplicationError("Unsupported release identity")
+    safe_id(value.get("version_id"))
+    return value
+
+
+def _download(client: httpx.Client, url: str, target: Path, limit: int) -> None:
+    count = 0
+    with client.stream("GET", url) as stream, target.open("wb") as output:
+        stream.raise_for_status()
+        if stream.url.scheme != "https":
+            raise ApplicationError("Release download redirected to an insecure URL")
+        for chunk in stream.iter_bytes():
+            count += len(chunk)
+            if count > limit:
+                raise ApplicationError("Release download exceeds the size limit")
+            output.write(chunk)
+        output.flush()
+        os.fsync(output.fileno())
