@@ -142,6 +142,9 @@ def smoke(package: Path) -> None:
                 except Exception as error:
                     print(f"Disposable server cleanup needs attention: {error}")
             print("\n\n".join(transcript))
+            # Update and startup failures name these logs; the runner is gone afterwards.
+            for log in sorted((root / "logs").glob("*.log")):
+                print(f"\n--- {log}\n{log.read_text(encoding='utf-8', errors='replace')}")
             print(f"Smoke evidence retained at {temporary}")
         else:
             shutil.rmtree(temporary)
