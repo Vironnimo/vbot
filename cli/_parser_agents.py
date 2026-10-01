@@ -631,7 +631,7 @@ def _add_archive_parsers(subparsers: argparse._SubParsersAction[argparse.Argumen
         help="Continuation JSON a previous list printed for its next page",
     )
     list_parser.add_argument(
-        "--all", action="store_true", help="Fetch every page; output may be large"
+        "--all", action="store_true", help="Fetch every page and print every matching entry"
     )
 
     show_parser = _add_command_parser(

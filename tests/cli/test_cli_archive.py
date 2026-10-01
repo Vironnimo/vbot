@@ -88,6 +88,47 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
     ]
 
 
+@pytest.mark.parametrize(
+    ("tree", "shown"),
+    [
+        pytest.param(
+            {"role": "workspace", "path": "archive/agents/coder/workspace"},
+            "- workspace: archive/agents/coder/workspace (from C:/notes/coder) "
+            "(may be your own folder; a restore brings it back, a purge deletes it)",
+            id="moved-workspace",
+        ),
+        pytest.param(
+            {"role": "files", "path": "archive/old-notes"},
+            "- files: archive/old-notes (from C:/notes/coder) "
+            "(may be your own folder; a purge deletes it)",
+            id="older-files",
+        ),
+    ],
+)
+def test_archive_show_marks_folders_that_may_be_the_users_own(
+    rpc: FakeRpc, run_cli: RunCli, tree: dict[str, Any], shown: str
+) -> None:
+    rpc.reply(
+        "archive.show",
+        {
+            "entry": AGENT_ENTRY,
+            "sessions": [],
+            "session_count": 0,
+            "files": {
+                "state": "present",
+                "trees": [tree | {"source_path": "C:/notes/coder", "user_folder": True}],
+            },
+            "details": {},
+            "restore": {"possible": True, "blockers": [], "warnings": []},
+        },
+    )
+
+    code, out, _err = run_cli("archive", "show", "arc_7k2m9q4xw1ab")
+
+    assert code == 0
+    assert shown in out.splitlines()
+
+
 def test_archive_list_says_when_the_retention_period_cannot_be_read(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
@@ -344,8 +385,32 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
                 "- scope_missing: Agent coder does not exist; restore it first "
                 "(vbot archive restore arc_p0c1x8n3w5yt)",
             ],
-            ["Next: vbot archive list"],
+            [
+                "Resolve the blockers above, then restore the entry again.",
+                "Next: vbot archive show arc_7k2m9q4xw1ab",
+            ],
             id="not-restorable",
+        ),
+        pytest.param(
+            "archive_not_restorable",
+            {
+                "entry_id": "arc_7k2m9q4xw1ab",
+                "blockers": [
+                    {"code": "older_format", "message": "an older vBot archived it"},
+                    {"code": "scope_missing", "message": "Agent coder does not exist"},
+                ],
+            },
+            [
+                "archive_not_restorable: cannot restore archive entry arc_7k2m9q4xw1ab:",
+                "- older_format: an older vBot archived it",
+                "- scope_missing: Agent coder does not exist",
+            ],
+            [
+                "This entry can never be restored (older_format). If it is no longer needed, "
+                "'vbot archive purge arc_7k2m9q4xw1ab --yes' deletes it permanently.",
+                "Next: vbot archive show arc_7k2m9q4xw1ab",
+            ],
+            id="never-restorable",
         ),
         pytest.param(
             "archive_entry_busy",

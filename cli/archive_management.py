@@ -472,7 +472,13 @@ def _format_detail(data: Mapping[str, Any]) -> str:
         if not isinstance(tree, dict):
             continue
         source = f" (from {tree['source_path']})" if tree.get("source_path") else ""
-        user_folder = " (a user folder, never restored)" if tree.get("user_folder") else ""
+        user_folder = (
+            ""
+            if not tree.get("user_folder")
+            else " (may be your own folder; a restore brings it back, a purge deletes it)"
+            if tree.get("role") == "workspace"
+            else " (may be your own folder; a purge deletes it)"
+        )
         lines.append(f"- {tree.get('role')}: {tree.get('path')}{source}{user_folder}")
     lines.extend(_detail_lines(data.get("details")))
     lines.extend(_restore_lines(data.get("restore"), kind))

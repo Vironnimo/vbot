@@ -79,9 +79,7 @@ _CODE_GUIDANCE = {
     "current status or list stored recordings.",
     "archive_restore_conflict": "The id is taken by a live resource. Re-run with --as <new-id> "
     "to restore under a new id, or remove the conflicting resource first.",
-    "archive_not_restorable": "This entry cannot be restored; the blockers above say why. "
-    "'vbot archive show <entry-id>' shows its contents; 'vbot archive purge <entry-id> --yes' "
-    "deletes it.",
+    "archive_not_restorable": "Resolve the blockers above, then restore the entry again.",
     "archive_entry_busy": "Another operation is using this archive entry. Retry after it finished.",
 }
 
@@ -139,9 +137,13 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["provider", "list"]
     elif code in _ARCHIVE_CODES:
         inspection = ["archive", "list"]
-    if code == "archive_entry_busy" and failure is not None:
+    if code in {"archive_entry_busy", "archive_not_restorable"} and failure is not None:
         data = failure.data or {}
-        explanation = _archive_busy_guidance(data)
+        explanation = (
+            _archive_busy_guidance(data)
+            if code == "archive_entry_busy"
+            else _not_restorable_guidance(data)
+        )
         if isinstance(data.get("entry_id"), str):
             inspection = ["archive", "show", data["entry_id"]]
 
@@ -180,15 +182,36 @@ def _archive_busy_guidance(data: Mapping[str, Any]) -> str:
             "the restore."
         )
     if data.get("state") == "purging":
-        entry_id = data.get("entry_id")
-        purge = format_command(
-            ("vbot", "archive", "purge", entry_id if isinstance(entry_id, str) else "<entry-id>")
-        )
         return (
             "This entry is being deleted permanently and will not become restorable. vBot "
-            f"finishes the deletion in the background; '{purge} --yes' finishes it now."
+            f"finishes the deletion in the background; '{_purge_command(data)}' finishes it now."
         )
     return _CODE_GUIDANCE["archive_entry_busy"]
+
+
+# Blockers no action resolves: only deleting such an entry is left.
+_FINAL_BLOCKERS = ("kind_not_restorable", "older_format", "payload_missing")
+
+
+def _not_restorable_guidance(data: Mapping[str, Any]) -> str:
+    """Resolve the blockers; offer deleting the entry only when none can be resolved."""
+    codes = {
+        blocker.get("code") for blocker in data.get("blockers") or () if isinstance(blocker, dict)
+    }
+    final = [code for code in _FINAL_BLOCKERS if code in codes]
+    if not final:
+        return _CODE_GUIDANCE["archive_not_restorable"]
+    return (
+        f"This entry can never be restored ({', '.join(final)}). If it is no longer needed, "
+        f"'{_purge_command(data)}' deletes it permanently."
+    )
+
+
+def _purge_command(data: Mapping[str, Any]) -> str:
+    entry_id = data.get("entry_id")
+    if not isinstance(entry_id, str):
+        return "vbot archive purge <entry-id> --yes"
+    return format_command(("vbot", "archive", "purge", entry_id, "--yes"))
 
 
 def _inspection(args: argparse.Namespace) -> list[str] | None:
