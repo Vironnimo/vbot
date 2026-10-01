@@ -379,15 +379,19 @@ def test_worker_wire_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _hub(contents: dict[str, bytes], downloads: list[str]) -> dict[str, ModuleType]:
-    """Fake ``huggingface_hub`` that serves *contents* with byte progress."""
+    """Fake ``huggingface_hub`` that serves *contents* with byte progress like a Xet download."""
 
     class Tqdm:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.unit = kwargs.get("unit")
             self.n = 0
+            # tqdm's rule: `disable=None` turns off a bar whose output is no terminal.
+            disable = kwargs.get("disable")
+            self.disable = not kwargs["file"].isatty() if disable is None else disable
 
         def update(self, n: float | None = 1) -> bool | None:
-            self.n += int(n or 0)
+            if not self.disable:
+                self.n += int(n or 0)
             return None
 
     def hf_hub_download(
@@ -397,7 +401,13 @@ def _hub(contents: dict[str, bytes], downloads: list[str]) -> dict[str, ModuleTy
         target = Path(local_dir) / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(contents[path])
-        tqdm_class(unit="B", total=len(contents[path])).update(len(contents[path]))
+        # Xet counts compressed network bytes and written bytes on two bars.
+        size = len(contents[path])
+        network = tqdm_class(unit="B", disable=None)
+        written = tqdm_class(unit="B", total=size, disable=None)
+        network.update(3)
+        written.update(2)
+        written.update(size - 2)
         return str(target)
 
     hub = ModuleType("huggingface_hub")
@@ -431,6 +441,7 @@ def test_worker_install_downloads_verified_files_only(
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(embedding_worker, "Model", _WorkerModel)
     monkeypatch.setattr(embedding_worker, "lower_priority", lambda: None)
+    monkeypatch.setattr(embedding_worker, "_PROGRESS_INTERVAL_S", 0.0)
     # A file already present with the pinned checksum is kept, not downloaded again.
     (tmp_path / "tokenizer.json").write_bytes(b"tokens")
     spec = {
@@ -446,6 +457,9 @@ def test_worker_install_downloads_verified_files_only(
 
     frames = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
     assert downloads == ["onnx/model.onnx"]
+    completed = [frame["progress"]["completed"] for frame in frames if "progress" in frame]
+    # Bytes arrive during the download and never go back across Xet's two bars.
+    assert completed[:4] == [0, 3, 3, 5]
     assert frames[0] == {"progress": {"completed": 0, "total": 11}}
     if error is None:
         assert status == 0
