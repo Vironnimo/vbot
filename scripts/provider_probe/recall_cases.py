@@ -323,6 +323,9 @@ class FixtureEmbeddings:
             provider_id="fixture", model_id="topics", fingerprint="recall-workflow-v1"
         )
 
+    def document_batch_size(self) -> int | None:
+        return None
+
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         vectors = []
         for text in texts:
