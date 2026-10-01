@@ -30,6 +30,9 @@ export function createSessionActions(context) {
   // only runs once the confirm dialog resolves.
   let deleteConfirmSession = $state(null);
 
+  // Whether the confirmed delete skips the Archive.
+  let deletePermanently = $state(false);
+
   let policySession = $state(null);
 
   let policyUsesOverride = $state(false);
@@ -84,7 +87,8 @@ export function createSessionActions(context) {
     }
   };
 
-  // Delete (archive) a session from the row menu. The shared ConfirmDialog
+  // Delete a session from the row menu: it moves to the Archive, or with the
+  // dialog's permanent option is deleted right away. The shared ConfirmDialog
   // guards the click (#3); for a channel-bound session the body also notes it
   // will resume empty on the next inbound message (#5a). The server returns
   // where to land, which ChatView uses to navigate if it was viewing the
@@ -95,6 +99,7 @@ export function createSessionActions(context) {
     if (!targetAgentId || deleting) {
       return;
     }
+    deletePermanently = false;
     deleteConfirmSession = session;
   };
 
@@ -150,6 +155,11 @@ export function createSessionActions(context) {
       return '';
     }
     const name = session.display_name || sessionDisplayName(session);
+    if (deletePermanently) {
+      return session.is_channel_session
+        ? t('sessions.delete_permanent_confirm_channel', { name })
+        : t('sessions.delete_permanent_confirm', { name });
+    }
     return session.is_channel_session
       ? t('sessions.delete_confirm_channel', { name })
       : t('sessions.delete_confirm', { name });
@@ -161,6 +171,7 @@ export function createSessionActions(context) {
 
   const confirmDelete = async () => {
     const session = deleteConfirmSession;
+    const permanent = deletePermanently;
     deleteConfirmSession = null;
     const targetAgentId = session?.agent_address || asText(context.agentId);
     if (!session || !targetAgentId || deleting) {
@@ -170,7 +181,9 @@ export function createSessionActions(context) {
     deleting = true;
     actionError = null;
     try {
-      const result = await deleteSession(targetAgentId, session.id);
+      const result = await deleteSession(targetAgentId, session.id, {
+        permanent,
+      });
       context.onSessionDeleted?.({
         deletedSessionId: session.id,
         nextSessionId: asText(result?.next_session_id),
@@ -240,6 +253,12 @@ export function createSessionActions(context) {
     },
     set deleteConfirmSession(value) {
       deleteConfirmSession = value;
+    },
+    get deletePermanently() {
+      return deletePermanently;
+    },
+    set deletePermanently(value) {
+      deletePermanently = value;
     },
     get policySession() {
       return policySession;

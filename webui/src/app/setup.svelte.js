@@ -2,6 +2,7 @@ import { isOperational } from '$lib/onboarding.js';
 import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
 import { getSettings } from '$lib/api.js';
 import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
+import { applyArchiveSettings } from '$lib/archiveRetention.svelte.js';
 
 export function createAppSetup(context) {
   // Accessor-local UI state only: whether the user set the first-run wizard
@@ -67,6 +68,7 @@ export function createAppSetup(context) {
       settings = result;
       setApplicationTimeZone(result?.general?.timezone);
       applyAppearanceSettings(result?.appearance);
+      applyArchiveSettings(result?.archive);
       maybeStartOnboarding();
     } catch {
       // settings RPC unavailable — keep the comfortable defaults and leave the

@@ -12,6 +12,7 @@
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import { formatLabel } from './projectLabels.js';
+  import ArchiveDeleteOption from '../archive/ArchiveDeleteOption.svelte';
   let { projectsState = $bindable(), projectsController } = $props();
 
   const addFormatsPresent = $derived(
@@ -265,11 +266,17 @@
   >
     {#snippet body()}
       <p>
-        {t('projects.remove.rootedAgentsBody', {
-          name:
-            projectsState.removeConfirmProject.display_name ||
-            projectsState.removeConfirmProject.project_id,
-        })}
+        {projectsState.removePermanently
+          ? t('projects.remove.permanentBody', {
+              name:
+                projectsState.removeConfirmProject.display_name ||
+                projectsState.removeConfirmProject.project_id,
+            })
+          : t('projects.remove.body', {
+              name:
+                projectsState.removeConfirmProject.display_name ||
+                projectsState.removeConfirmProject.project_id,
+            })}
       </p>
       <div class="projects-toggle-row">
         <span>
@@ -287,6 +294,11 @@
       <p class="modal-hint">
         {t('projects.remove.copyIdentityFilesHelp')}
       </p>
+      <ArchiveDeleteOption
+        permanent={projectsState.removePermanently}
+        disabled={Boolean(projectsState.removingProjectId)}
+        onChange={(next) => (projectsState.removePermanently = next)}
+      />
     {/snippet}
     {#snippet footer()}
       <Button
@@ -301,7 +313,9 @@
         disabled={Boolean(projectsState.removingProjectId)}
         onClick={confirmRemove}
       >
-        {t('common.remove')}
+        {projectsState.removePermanently
+          ? t('archive.deletePermanently')
+          : t('common.remove')}
       </Button>
     {/snippet}
   </Modal>

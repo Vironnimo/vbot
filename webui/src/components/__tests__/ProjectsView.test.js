@@ -341,6 +341,7 @@ describe('ProjectsView list and selection', () => {
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     expect(removeProjectMock).toHaveBeenCalledWith('beta', {
       copyRootedAgentIdentityFiles: false,
+      permanent: false,
     });
     // Removing another Project keeps the shown one.
     expect(navigation.place).toEqual(['alpha']);
@@ -365,15 +366,18 @@ describe('ProjectsView list and selection', () => {
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     expect(removeProjectMock).toHaveBeenCalledWith('demo', {
       copyRootedAgentIdentityFiles: false,
+      permanent: false,
     });
     await waitForCondition(() => document.querySelector('[role="alert"]'));
   });
 
-  it('sends one aggregate identity-file copy choice when removing a project', async () => {
+  it('sends the identity-file copy choice and the permanent choice when removing a project', async () => {
     serveProject();
     removeProjectMock.mockResolvedValue({
       project_id: 'demo',
-      archived: true,
+      archive_entry_id: null,
+      purged: true,
+      purge_pending: false,
       affected_agent_ids: ['alpha', 'beta'],
     });
     view.mount();
@@ -384,15 +388,31 @@ describe('ProjectsView list and selection', () => {
     toggleByAriaLabel(
       'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
     ).click();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
+    [...dialog.querySelectorAll('[role="checkbox"]')]
+      .find((box) =>
+        box.textContent.includes(t('archive.deleteOption.permanent')),
+      )
+      .click();
     flushSync();
-    confirmDialog('Remove');
+    expect(dialog.textContent).toContain(
+      t('projects.remove.permanentBody', { name: 'Demo' }),
+    );
+    confirmDialog(t('archive.deletePermanently'));
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
     expect(removeProjectMock).toHaveBeenCalledWith('demo', {
       copyRootedAgentIdentityFiles: true,
+      permanent: true,
     });
     await waitForCondition(() =>
       document.querySelector('.project-list-state[role="status"]'),
+    );
+    expect(
+      document.querySelector('.project-list-state[role="status"]').textContent,
+    ).toContain(
+      `${t('projects.remove.deletedPermanently')} ${t('projects.remove.resetManyAgents', { count: 2, copyState: t('projects.remove.filesCopied') })}`,
     );
   });
 

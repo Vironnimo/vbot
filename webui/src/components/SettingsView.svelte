@@ -26,6 +26,7 @@
   import { getSettings } from '$lib/api.js';
   import { setApplicationTimeZone } from '$lib/dateTimePrefs.svelte.js';
   import { applyAppearanceSettings } from '$lib/appearancePrefs.svelte.js';
+  import { applyArchiveSettings } from '$lib/archiveRetention.svelte.js';
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
@@ -693,6 +694,7 @@
     setApplicationTimeZone(nextSettings?.general?.timezone);
 
     applyAppearanceSettings(nextSettings?.appearance);
+    applyArchiveSettings(nextSettings?.archive);
   }
 
   function commitSettings(nextSettings) {

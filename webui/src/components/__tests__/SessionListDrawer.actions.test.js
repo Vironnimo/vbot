@@ -169,7 +169,9 @@ describe('SessionListDrawer row actions', () => {
 
     // The callback fires only after the delete request resolved.
     await waitForCondition(() => onSessionDeleted.mock.calls.length === 1);
-    expect(api.deleteSession).toHaveBeenCalledWith('alpha', 'session-1');
+    expect(api.deleteSession).toHaveBeenCalledWith('alpha', 'session-1', {
+      permanent: false,
+    });
     expect(onSessionDeleted).toHaveBeenCalledWith({
       deletedSessionId: 'session-1',
       nextSessionId: 'session-2',
@@ -179,6 +181,27 @@ describe('SessionListDrawer row actions', () => {
     await waitForCondition(
       () => api.listSessions.mock.calls.length === loadsBefore + 1,
     );
+
+    // The dialog's permanent option skips the Archive and says so. The row
+    // accepts the next delete once the first one settled.
+    await waitForCondition(() => {
+      chooseRowAction(DELETE_ITEM);
+      return document.querySelector('[role="dialog"]');
+    });
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
+    [...dialog.querySelectorAll('[role="checkbox"]')]
+      .find((box) =>
+        box.textContent.includes(t('archive.deleteOption.permanent')),
+      )
+      .click();
+    flushSync();
+    expect(dialog.textContent).not.toContain(t('archive.deleteNotice.kept'));
+    confirmDialog(t('archive.deletePermanently'));
+    await waitForCondition(() => onSessionDeleted.mock.calls.length === 2);
+    expect(api.deleteSession).toHaveBeenLastCalledWith('alpha', 'session-1', {
+      permanent: true,
+    });
   });
 
   it.each([

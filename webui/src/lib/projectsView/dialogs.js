@@ -138,6 +138,7 @@ export function createProjectDialogs({
   function openRemove(project) {
     state.removeConfirmProject = project;
     state.copyRootedAgentIdentityFiles = false;
+    state.removePermanently = false;
   }
 
   function cancelRemove() {
@@ -169,6 +170,7 @@ export function createProjectDialogs({
     try {
       const result = await operations.removeProject(project.project_id, {
         copyRootedAgentIdentityFiles: state.copyRootedAgentIdentityFiles,
+        permanent: state.removePermanently,
       });
       if (!isActive()) {
         return;
@@ -185,13 +187,21 @@ export function createProjectDialogs({
       const copyState = state.copyRootedAgentIdentityFiles
         ? t('projects.remove.filesCopied')
         : t('projects.remove.filesNotCopied');
-      state.statusMessage =
-        affectedCount === 1
-          ? t('projects.remove.successOneAgent', { copyState })
-          : t('projects.remove.successManyAgents', {
-              count: affectedCount,
-              copyState,
-            });
+      const removed = !state.removePermanently
+        ? t('projects.remove.archived')
+        : result?.purge_pending
+          ? t('archive.deletePending')
+          : t('projects.remove.deletedPermanently');
+      const reset =
+        affectedCount === 0
+          ? ''
+          : affectedCount === 1
+            ? t('projects.remove.resetOneAgent', { copyState })
+            : t('projects.remove.resetManyAgents', {
+                count: affectedCount,
+                copyState,
+              });
+      state.statusMessage = [removed, reset].filter(Boolean).join(' ');
       await loadProjects();
     } catch (error) {
       if (!isActive()) {

@@ -27,6 +27,7 @@
   } from '$lib/sessionListView.js';
   import Badge from './ui/Badge.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import Modal from './ui/Modal.svelte';
   import CompactionPolicyEditor from './compaction/CompactionPolicyEditor.svelte';
   import { onDestroy, untrack } from 'svelte';
@@ -1017,10 +1018,19 @@
   <ConfirmDialog
     title={t('sessions.delete_confirm_title')}
     body={actions.deleteConfirmMessage}
-    confirmLabel={t('common.delete')}
+    confirmLabel={actions.deletePermanently
+      ? t('archive.deletePermanently')
+      : t('common.delete')}
     onConfirm={actions.confirmDelete}
     onCancel={actions.cancelDelete}
-  />
+  >
+    {#snippet bodyExtra()}
+      <ArchiveDeleteOption
+        permanent={actions.deletePermanently}
+        onChange={(next) => (actions.deletePermanently = next)}
+      />
+    {/snippet}
+  </ConfirmDialog>
 {/if}
 
 {#if actions.policySession}

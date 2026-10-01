@@ -276,7 +276,8 @@ export default Object.freeze({
   'agents.delete': 'Delete agent',
   'agents.deleteDisabledMinimum': 'The last remaining agent cannot be deleted.',
   'agents.created': 'Agent created.',
-  'agents.deleted': 'Agent deleted.',
+  'agents.deleted': 'Agent moved to the Archive.',
+  'agents.deletedPermanently': 'Agent deleted permanently.',
   'agents.loadError': 'Agents could not be loaded.',
   'agents.saveError': 'Agent could not be saved.',
   'agents.deleteError': 'Agent could not be deleted.',
@@ -326,13 +327,15 @@ export default Object.freeze({
   'agents.details.anyConnection': 'Chosen when a Run starts',
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
-    'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'Moves the Agent, its private Skills and its Sessions to the Archive, where you can restore them. An Agent that is still referenced or has active Runs cannot be deleted.',
   'agents.deleteConfirm':
-    'Delete {name}? The Agent, its Workspace and its Sessions move to the archive and no longer appear in vBot. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'Delete {name}? The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside vBot’s data directory stays where it is. An Agent that is still referenced or has active Runs cannot be deleted.',
+  'agents.deletePermanentConfirm':
+    'Delete {name} permanently? The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside vBot’s data directory stays where it is. Recorded usage and costs stay in Statistics.',
   'agents.deleteBusy':
     'This Agent has an active or queued Run and cannot be deleted right now.',
   'agents.deleteInUse':
-    'A schedule, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
+    'A schedule, Bootstrap job, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
   'agents.menu.label': 'Actions for {name}',
   'agents.menu.openChat': 'Open chat',
   'agents.menu.copyId': 'Copy ID',
@@ -553,23 +556,27 @@ export default Object.freeze({
   'projects.menu.rePoint': 'Re-point…',
   'projects.menu.remove': 'Remove…',
   'projects.remove.confirmTitle': 'Remove project',
-  'projects.remove.rootedAgentsBody':
-    'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',
+  'projects.remove.body':
+    'Remove {name}? The Project and its Sessions move to the Archive, where you can restore them. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
+  'projects.remove.permanentBody':
+    'Remove {name} permanently? The Project’s vBot data and its Sessions are deleted now and cannot be restored. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
   'projects.remove.copyIdentityFiles':
     'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
   'projects.remove.copyIdentityFilesHelp':
     'When enabled, existing destination versions are backed up before replacement. One choice applies to every affected Agent.',
-  'projects.remove.successOneAgent':
-    'Project removed. 1 Agent was reset; identity files {copyState}.',
-  'projects.remove.successManyAgents':
-    'Project removed. {count} Agents were reset; identity files {copyState}.',
+  'projects.remove.archived': 'Project moved to the Archive.',
+  'projects.remove.deletedPermanently': 'Project deleted permanently.',
+  'projects.remove.resetOneAgent':
+    '1 Agent was reset; identity files {copyState}.',
+  'projects.remove.resetManyAgents':
+    '{count} Agents were reset; identity files {copyState}.',
   'projects.remove.filesCopied': 'were copied',
   'projects.remove.filesNotCopied': 'were not copied',
   'projects.remove.error': 'Project could not be removed.',
   'projects.remove.busy':
     'This project has an active or queued run and cannot be removed right now.',
   'projects.remove.inUse':
-    'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
+    'A schedule, Bootstrap job or Calendar action uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
@@ -818,4 +825,16 @@ export default Object.freeze({
   'agents.rename.confirm': 'Change ID',
   'agents.renamed': 'Agent ID changed.',
   'agents.renameError': 'Could not change Agent ID.',
+  'archive.deletePermanently': 'Delete permanently',
+  'archive.deleteOption.permanent':
+    'Delete permanently instead of moving it to the Archive',
+  'archive.deleteNotice.days':
+    'The Archive deletes it automatically after {days} days.',
+  'archive.deleteNotice.oneDay':
+    'The Archive deletes it automatically after one day.',
+  'archive.deleteNotice.off': 'The Archive keeps it until you delete it there.',
+  'archive.deleteNotice.kept':
+    'Settings › System sets how long the Archive keeps it.',
+  'archive.deletePending':
+    'Deleted. vBot finishes removing its data in the background.',
 });
