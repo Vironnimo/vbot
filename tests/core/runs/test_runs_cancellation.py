@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
-import sys
-from textwrap import dedent
+import threading
 
 import pytest
 
@@ -28,7 +26,7 @@ from tests.core.runs.runs_test_support import (
 )
 
 pytestmark = pytest.mark.asyncio
-SUBPROCESS_TIMEOUT_SECONDS = 10
+SCENARIO_DEADLINE_SECONDS = 10
 
 
 @pytest.mark.parametrize("cancelled", [False, True])
@@ -195,58 +193,52 @@ async def test_nested_cleanup_shares_the_original_deadline(monkeypatch) -> None:
 
 
 async def test_immediate_async_cleanup_settles_cancel_and_starts_queued_run() -> None:
-    # A regression can starve asyncio itself, so only a separate interpreter's
-    # timeout can safely bound this production-manager scenario.
-    scenario = dedent(
-        """
-        import asyncio
+    # A regression can starve an event loop itself, so the scenario runs on its own
+    # loop in a daemon thread that a failing test abandons once the deadline passes.
+    completed: list[str] = []
 
-        from core.runs import ChatRunManager, RunStatus
-        from core.sessions import SessionAddress
+    async def scenario() -> None:
+        manager = ChatRunManager()
+        started = asyncio.Event()
 
-        async def main():
-            manager = ChatRunManager()
-            started = asyncio.Event()
-            completed = []
+        async def cleanup() -> None:
+            completed.append("cleanup")
 
-            async def cleanup():
-                completed.append("cleanup")
+        async def first_executor(run: Run) -> None:
+            run.add_cancel_callback(cleanup)
+            started.set()
+            await asyncio.Event().wait()
 
-            async def first_executor(run):
-                run.add_cancel_callback(cleanup)
-                started.set()
-                await asyncio.Event().wait()
+        async def second_executor(_run: Run) -> str:
+            completed.append("second")
+            return "second"
 
-            async def second_executor(run):
-                completed.append("second")
-                return "second"
+        first = await manager.start(SESSION, first_executor)
+        await started.wait()
+        queued = await manager.enqueue(SESSION, second_executor)
 
-            address = SessionAddress(project_id=None, agent_id="coder", session_id="session")
-            first = await manager.start(address, first_executor)
-            await started.wait()
-            queued = await manager.enqueue(address, second_executor)
+        await manager.cancel(first.id, reason="user")
+        second = await queued.future
+        assert await second.wait() == "second"
+        assert first.status == RunStatus.CANCELLED
+        await manager.aclose()
 
-            await manager.cancel(first.id, reason="user")
-            second = await queued.future
-            assert await second.wait() == "second"
-            assert first.status == RunStatus.CANCELLED
-            assert completed == ["cleanup", "second"]
-            await manager.aclose()
+    failures: list[BaseException] = []
 
-        asyncio.run(main())
-        """
-    )
+    def run_scenario() -> None:
+        try:
+            asyncio.run(scenario())
+        except BaseException as error:
+            failures.append(error)
 
-    result = await asyncio.to_thread(
-        subprocess.run,
-        [sys.executable, "-c", scenario],
-        capture_output=True,
-        text=True,
-        timeout=SUBPROCESS_TIMEOUT_SECONDS,
-        check=False,
-    )
+    thread = threading.Thread(target=run_scenario, daemon=True)
+    thread.start()
+    await asyncio.to_thread(thread.join, SCENARIO_DEADLINE_SECONDS)
 
-    assert result.returncode == 0, result.stderr
+    assert not thread.is_alive(), "the cancelled Run never settled"
+    if failures:
+        raise failures[0]
+    assert completed == ["cleanup", "second"]
 
 
 async def test_immediate_cancel_reaches_terminal_and_releases_session() -> None:
