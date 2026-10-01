@@ -174,7 +174,7 @@ def test_claim_refuses_live_legacy_control_owner(tmp_path: Path) -> None:
             tmp_path,
             8420,
             pid=child.pid,
-            process_create_time=psutil.Process(child.pid).create_time(),
+            process_create_time=process_started(psutil.Process(child.pid)),
             token="legacy",
         )
         with (

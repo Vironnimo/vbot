@@ -1,0 +1,31 @@
+#!/bin/sh
+# Stable vBot bootstrap (protocol 1): runs the active version of the
+# installation it lives in. `vbot --server ...` runs that version's server, the
+# way its systemd user unit starts it; every other call runs the vBot CLI.
+set -eu
+
+self=$(readlink -f -- "$0")
+root=$(dirname -- "$self")
+version=$(head -n 1 "$root/active-version" 2>/dev/null | tr -d '\r') || version=
+case "$version" in
+    "" | *[!A-Za-z0-9_.-]* | .*)
+        echo "vbot: $root has no valid active version" >&2
+        exit 111
+        ;;
+esac
+runtime="$root/versions/$version/runtime"
+if [ ! -x "$runtime/bin/python3" ]; then
+    echo "vbot: the runtime of version $version is missing" >&2
+    exit 111
+fi
+export VBOT_INSTALL_ROOT="$root"
+
+# Isolated mode ignores the user's Python environment; the runtime finds the
+# application through its site-packages. Bytecode is never written into the
+# verified version.
+if [ "${1-}" = "--server" ]; then
+    shift
+    cd "$root/versions/$version/app"
+    exec "$runtime/bin/python3" -I -B -X utf8 -m server.main "$@"
+fi
+exec "$runtime/bin/python3" -I -B -X utf8 -m cli.main "$@"

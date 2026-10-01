@@ -243,17 +243,19 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
             "Packaged lifecycle commands must target this installation's recorded server"
         )
     if args.area == "autostart":
-        from cli.application.integration import autostart
+        from cli.application.autostart import autostart
 
         if args.task_name or args.service_name:
             raise ApplicationError(
                 "Packaged Autostart uses this installation's owned logon registration"
             )
         registration = autostart(install, args.command)
-        _print(
-            registration,
-            lines=[f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."],
-        )
+        lines = [f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."]
+        if "unit" in registration:
+            lines.append(f"systemd user unit: {registration['unit']}")
+        if "attention" in registration:
+            lines.append(f"Attention: {registration['attention']}")
+        _print(registration, lines=lines)
         return 0
     if args.area == "uninstall":
         from cli.application.integration import uninstall
@@ -292,6 +294,13 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
                 "Server: restarted." if removal["server_restarted"] else "Server: stopped.",
             ]
             if mode == "data-only"
+            else [
+                f"vBot has been removed from {install.root}.",
+                "Server data was removed."
+                if removal["data_removed"]
+                else "Server data is preserved.",
+            ]
+            if removal.get("removed")
             else [
                 "The uninstaller has started. Application removal is not yet confirmed.",
                 "Server data was removed."

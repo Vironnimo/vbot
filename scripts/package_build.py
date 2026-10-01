@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -108,6 +109,16 @@ def _git(source: Path, *args: str) -> subprocess.CompletedProcess[str]:
         timeout=30,
         creationflags=subprocess_creation_flags(),
     )
+
+
+def remove_bytecode_caches(root: Path) -> None:
+    """Drop bytecode a build step wrote; packaged hosts never write or need it."""
+    for directory in root.rglob("__pycache__"):
+        if directory.is_dir():
+            shutil.rmtree(directory)
+    for suffix in ("*.pyc", "*.pyo"):
+        for path in root.rglob(suffix):
+            path.unlink()
 
 
 def file_hashes(version_root: Path) -> dict[str, str]:

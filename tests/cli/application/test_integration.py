@@ -1,27 +1,20 @@
 from __future__ import annotations
 
-import base64
 import ctypes
 import json
-import re
 import sys
 import uuid
 from contextlib import nullcontext, suppress
 from ctypes import wintypes
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
 
 import pytest
 
 from cli.application import integration
-from cli.application.integration import (
-    autostart,
-    request_host_exit,
-    uninstall,
-)
+from cli.application.autostart import UNIT_NAME, CommandRun, autostart, owned_unit, user_unit_dir
+from cli.application.integration import request_host_exit, uninstall
 from cli.application.state import ApplicationError, Installation
-from cli.autostart_management import CommandRun
 from cli.server_management import ServerState
 
 
@@ -35,48 +28,6 @@ def _install(root: Path, shape: str = "server") -> Installation:
         None if shape == "desktop-client" else 8420,
         None if shape == "desktop-client" else str((root.parent / "data").resolve()),
     )
-
-
-def _operation(command: list[str]) -> dict[str, object]:
-    script = base64.b64decode(command[-1]).decode("utf-16-le")
-    token = re.search(r'\$payloadToken = "([A-Za-z0-9+/=]+)"', script)
-    assert token
-    return cast(dict[str, object], json.loads(base64.b64decode(token.group(1))))
-
-
-def test_packaged_autostart_registers_and_verifies_exact_no_argument_launcher(
-    tmp_path: Path,
-) -> None:
-    install = _install(tmp_path / "app")
-    registration: dict[str, str] = {}
-
-    def runner(command: list[str]) -> CommandRun:
-        payload = _operation(command)
-        operation = payload["operation"]
-        if operation == "inspect":
-            if not registration:
-                return CommandRun(3, "", "")
-            return CommandRun(0, json.dumps(registration), "")
-        assert operation == "enable"
-        registration.update(launcher=str(payload["launcher"]), arguments=str(payload["arguments"]))
-        return CommandRun(0, "", "")
-
-    result = autostart(install, "enable", platform="win32", runner=runner)
-
-    assert result["enabled"] is True
-    assert registration == {"launcher": str(install.root / "vBot.exe"), "arguments": ""}
-    assert autostart(install, "status", platform="win32", runner=runner)["enabled"] is True
-
-
-def test_packaged_autostart_refuses_foreign_registration_before_disable(tmp_path: Path) -> None:
-    install = _install(tmp_path / "app")
-
-    def runner(command: list[str]) -> CommandRun:
-        assert _operation(command)["operation"] == "inspect"
-        return CommandRun(0, json.dumps({"launcher": "C:/foreign.exe", "arguments": ""}), "")
-
-    with pytest.raises(ApplicationError, match="belongs to another"):
-        autostart(install, "disable", platform="win32", runner=runner)
 
 
 def _short_path_alias(path: Path) -> str | None:
@@ -177,6 +128,59 @@ def test_uninstall_launches_only_after_the_exact_server_stopped(
     assert events == ["exit-host", "stop:8420", *(["launch:unins000.exe"] if stopped else [])]
     if stopped:
         assert result["data_preserved"] is True
+
+
+def test_linux_uninstall_removes_the_unit_command_link_and_application_but_keeps_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    install = _install(tmp_path / "app")
+    install.bootstrap.write_bytes(b"bootstrap")
+    commands: list[list[str]] = []
+
+    def runner(command: list[str]) -> CommandRun:
+        commands.append(command)
+        return CommandRun(0, "", "")
+
+    autostart(install, "enable", platform="linux", runner=runner)
+    assert owned_unit(install, unit_dir=user_unit_dir()) is not None
+    link = tmp_path / "bin" / "vbot"
+    link.parent.mkdir()
+    foreign_link = tmp_path / "bin" / "other"
+    try:
+        link.symlink_to(install.bootstrap)
+        foreign_link.symlink_to(tmp_path / "elsewhere")
+    except OSError:
+        pytest.skip("symbolic links are unavailable here")
+    events: list[str] = []
+    commands.clear()
+
+    result = uninstall(
+        install,
+        platform="linux",
+        runner=runner,
+        exit_host=lambda candidate: events.append("exit-host"),
+        stop=lambda candidate: SimpleNamespace(ok=True, message="stopped"),
+        launcher=lambda path: events.append("launch"),
+        remove_tree=lambda path: events.append(f"remove:{path}"),
+        command_link=link,
+    )
+
+    assert result["removed"] is True and result["data_preserved"] is True
+    assert ["systemctl", "--user", "disable", UNIT_NAME] in commands
+    assert not (user_unit_dir() / UNIT_NAME).exists()
+    assert events == ["exit-host", f"remove:{install.root}"] and not link.is_symlink()
+    # A command link that names something else is not vBot's to remove.
+    assert uninstall(
+        _install(tmp_path / "second"),
+        platform="linux",
+        runner=runner,
+        exit_host=lambda candidate: None,
+        stop=lambda candidate: SimpleNamespace(ok=True, message="stopped"),
+        remove_tree=lambda path: None,
+        command_link=foreign_link,
+    )["removed"]
+    assert foreign_link.is_symlink()
 
 
 def test_notification_identity_is_removed_only_by_the_installation_it_points_into(

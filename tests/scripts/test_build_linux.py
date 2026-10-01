@@ -1,0 +1,94 @@
+from __future__ import annotations
+
+import io
+import shutil
+import subprocess
+import sys
+import tarfile
+from pathlib import Path
+
+import pytest
+
+from scripts import build_linux
+
+_BOOTSTRAP = Path(build_linux.__file__).parent / "linux" / "vbot"
+
+
+def _runtime_archive(path: Path) -> None:
+    files = {
+        "python/bin/python3.13": b"interpreter",
+        "python/bin/pip3": b"#!/build/machine/python\n",
+        "python/lib/python3.13/os.py": b"os",
+        "python/lib/python3.13/test/test_os.py": b"test",
+        "python/lib/python3.13/tkinter/__init__.py": b"tk",
+        "python/lib/libpython3.13.so.1.0": b"embedding",
+        "python/lib/tcl9.0/init.tcl": b"tcl",
+        "python/include/python3.13/Python.h": b"header",
+    }
+    links = {
+        "python/bin/python3": "python3.13",
+        "python/bin/python": "python3.13",
+        "python/lib/python3.13/linked.py": "os.py",
+    }
+    with tarfile.open(path, "w:gz") as bundle:
+        for name, content in files.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mode = len(content), 0o755
+            bundle.addfile(info, io.BytesIO(content))
+        for name, target in links.items():
+            info = tarfile.TarInfo(name)
+            info.type, info.linkname = tarfile.SYMTYPE, target
+            bundle.addfile(info)
+
+
+def test_runtime_is_a_pruned_link_free_tree_with_one_interpreter(tmp_path: Path) -> None:
+    archive = tmp_path / "runtime.tar.gz"
+    _runtime_archive(archive)
+    runtime = tmp_path / "runtime"
+
+    build_linux.extract_runtime(archive, runtime)
+
+    files = sorted(
+        path.relative_to(runtime).as_posix() for path in runtime.rglob("*") if not path.is_dir()
+    )
+    assert files == ["bin/python3", "lib/python3.13/linked.py", "lib/python3.13/os.py"]
+    assert not any(path.is_symlink() for path in runtime.rglob("*"))
+    assert (runtime / "bin" / "python3").read_bytes() == b"interpreter"
+    assert (runtime / "lib" / "python3.13" / "linked.py").read_bytes() == b"os"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="POSIX bootstrap")
+@pytest.mark.parametrize("active", ["v1", "", "../escape", None], ids=str)
+def test_bootstrap_runs_the_active_version_cli_or_server_through_any_link(
+    tmp_path: Path, active: str | None
+) -> None:
+    root = tmp_path / "application"
+    app = root / "versions" / "v1" / "app"
+    interpreter = root / "versions" / "v1" / "runtime" / "bin" / "python3"
+    app.mkdir(parents=True)
+    interpreter.parent.mkdir(parents=True)
+    # The fake interpreter reports where and how the bootstrap ran it.
+    interpreter.write_text('#!/bin/sh\necho "$PWD|$VBOT_INSTALL_ROOT|$*"\n', encoding="utf-8")
+    interpreter.chmod(0o755)
+    shutil.copyfile(_BOOTSTRAP, root / "vbot")
+    (root / "vbot").chmod(0o755)
+    if active is not None:
+        (root / "active-version").write_text(f"{active}\n", encoding="ascii")
+    link = tmp_path / "bin" / "vbot"
+    link.parent.mkdir()
+    link.symlink_to(root / "vbot")
+
+    def run(*arguments: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(link), *arguments], cwd=tmp_path, capture_output=True, text=True, timeout=10
+        )
+
+    cli, server = run("server", "status"), run("--server", "--port", "8420")
+
+    if active != "v1":
+        assert (cli.returncode, server.returncode) == (111, 111)
+        assert "no valid active version" in cli.stderr
+        return
+    flags = "-I -B -X utf8 -m"
+    assert cli.stdout.strip() == f"{tmp_path}|{root}|{flags} cli.main server status"
+    assert server.stdout.strip() == f"{app}|{root}|{flags} server.main --port 8420"

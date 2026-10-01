@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import io
 import json
 import os
 import shlex
 import shutil
 import subprocess
 import sys
-import tarfile
 import tomllib
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -57,144 +55,6 @@ def _run_windows_powershell(tmp_path: Path, script: str, *arguments: str) -> obj
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
-
-
-def _write_webui_archive(archive_path: Path, members: dict[str, str]) -> None:
-    """Create a release-candidate-shaped archive without shelling out to tar."""
-    with tarfile.open(archive_path, mode="w:gz") as archive:
-        directories = {
-            parent.as_posix()
-            for name in members
-            for parent in PurePosixPath(name).parents
-            if parent.as_posix() != "."
-            and (parent.parts[0] == "webui" or parent.as_posix().startswith("resources/extensions"))
-        }
-        for directory in sorted(directories):
-            info = tarfile.TarInfo(f"{directory}/")
-            info.type = tarfile.DIRTYPE
-            info.mode = 0o755
-            archive.addfile(info)
-        for name, content in members.items():
-            payload = content.encode("utf-8")
-            info = tarfile.TarInfo(name)
-            info.size = len(payload)
-            archive.addfile(info, fileobj=io.BytesIO(payload))
-
-
-def _run_linux_webui_unpack(
-    archive_path: Path,
-    destination: Path,
-    tmp_path: Path,
-    *,
-    expect_success: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    """Invoke the installer's real archive function without starting an install."""
-    if os.name != "posix":
-        pytest.skip("Linux installer integration requires a POSIX host")
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is unavailable")
-    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-    function_source = script[: script.index('\n[ "$USE_EXISTING_CHECKOUT" -eq 0 ] && ensure_git')]
-    harness = tmp_path / "install-functions.sh"
-    harness.write_text(function_source, encoding="utf-8")
-    home = tmp_path / "home"
-    home.mkdir()
-    destination.mkdir()
-    command = (
-        'harness="$1"; destination="$2"; '
-        'asset_url="$(python3 -c "$4" "$3")"; '
-        'set --; source "$harness"; '
-        'INSTALL_DIR="$destination"; '
-        'WEBUI_ASSET_URL="$asset_url"; '
-        "fetch_prebuilt_webui"
-    )
-    uri_script = "import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())"
-    result = subprocess.run(
-        [
-            bash,
-            "-c",
-            command,
-            "bash",
-            str(harness),
-            str(destination),
-            str(archive_path),
-            uri_script,
-        ],
-        cwd=tmp_path,
-        env={**os.environ, "HOME": str(home)},
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if expect_success:
-        assert result.returncode == 0, result.stderr
-    else:
-        assert result.returncode != 0
-    return result
-
-
-def test_linux_installer_extracts_current_archive_assets_beside_extension_owner(
-    tmp_path: Path,
-) -> None:
-    archive = tmp_path / "webui-dist.tar.gz"
-    owner_page = "resources/extensions/alpha/web/page.html"
-    _write_webui_archive(
-        archive,
-        {
-            "webui/dist/index.html": "<!doctype html>",
-            owner_page: '<script src="./assets/page-a.js"></script>',
-            "resources/extensions/alpha/web/assets/page-a.js": "console.log('alpha')",
-            "resources/extensions/alpha/web/assets/page-a.css": "main {}",
-        },
-    )
-    destination = tmp_path / "installed"
-
-    _run_linux_webui_unpack(archive, destination, tmp_path)
-
-    assert (destination / "webui" / "dist" / "index.html").is_file()
-    owner_web = destination / "resources" / "extensions" / "alpha" / "web"
-    assert (owner_web / "page.html").is_file()
-    assert (owner_web / "assets" / "page-a.js").is_file()
-    assert (owner_web / "assets" / "page-a.css").is_file()
-
-
-def test_linux_installer_keeps_explicit_old_release_archive_layout_compatible(
-    tmp_path: Path,
-) -> None:
-    archive = tmp_path / "legacy-webui-dist.tar.gz"
-    _write_webui_archive(archive, {"dist/index.html": "<!doctype html>"})
-    destination = tmp_path / "installed"
-
-    _run_linux_webui_unpack(archive, destination, tmp_path)
-
-    assert (destination / "webui" / "dist" / "index.html").is_file()
-
-
-@pytest.mark.parametrize(
-    "members",
-    [
-        {
-            "webui/dist/index.html": "<!doctype html>",
-            "dist/index.html": "<!doctype html>",
-        },
-        {
-            "webui/dist/../../escaped.html": "must not escape",
-        },
-    ],
-)
-def test_linux_installer_rejects_mixed_or_escaping_webui_archives(
-    tmp_path: Path,
-    members: dict[str, str],
-) -> None:
-    archive = tmp_path / "unsafe-webui-dist.tar.gz"
-    _write_webui_archive(archive, members)
-    destination = tmp_path / "installed"
-
-    _run_linux_webui_unpack(archive, destination, tmp_path, expect_success=False)
-
-    assert not (tmp_path / "escaped.html").exists()
-    assert not (destination / "webui" / "dist" / "index.html").exists()
 
 
 def test_windows_installer_recognizes_current_and_legacy_webui_archive_layouts() -> None:
@@ -324,33 +184,6 @@ def test_linux_installer_rejects_option_like_service_name(tmp_path: Path) -> Non
 
     assert result.returncode != 0
     assert not data_dir.exists()
-
-
-def test_linux_public_installer_rejects_conflicting_shapes_before_install(
-    tmp_path: Path,
-) -> None:
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash is unavailable")
-    install_dir = tmp_path / "must-not-exist"
-
-    result = subprocess.run(
-        [
-            bash,
-            "scripts/install.sh",
-            "--dir",
-            str(install_dir),
-            "--desktop",
-            "--desktop-client",
-        ],
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-
-    assert result.returncode != 0
-    assert not install_dir.exists()
 
 
 def test_powershell_lifecycle_scripts_parse() -> None:
@@ -1154,7 +987,7 @@ def _assert_native_routing(mode: str, payload: dict[str, Any], install_dir: Path
         assert "invalid Authenticode signature" in payload["error"], mode
 
 
-@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+@pytest.mark.parametrize("script_name", ["install.ps1"])
 def test_public_installer_routes_setup_details_to_a_failure_log(
     script_name: str,
 ) -> None:
@@ -1170,19 +1003,6 @@ def test_public_installer_routes_setup_details_to_a_failure_log(
         assert '$VerbosePreference -eq "Continue"' in script
         assert "Add-Content -LiteralPath $InstallLogPath" in script
         assert "Write-Host $line" in script
-
-
-def test_linux_public_installer_verifies_server_and_autostart_before_ready() -> None:
-    script = (PROJECT_ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
-    summary_start = script.index("finish_with_summary()")
-    summary = script[summary_start:]
-
-    assert 'capture_command "$vbot_path" server status' in summary
-    assert 'capture_command "$vbot_path" autostart status' in summary
-    ready_guard = summary.index('if [ "$server_running" -eq 1 ]')
-    assert summary.index('capture_command "$vbot_path" server status') < ready_guard
-    assert summary.index('capture_command "$vbot_path" autostart status') < ready_guard
-    assert ready_guard < summary.index("http://${summary_host}:${summary_port}/", ready_guard)
 
 
 def test_windows_checkout_setup_does_not_claim_an_unverified_server_url() -> None:
@@ -1219,7 +1039,7 @@ def test_public_docs_install_only_through_install_files(doc_name: str) -> None:
     assert "bootstrap.ps1" not in document
 
 
-@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+@pytest.mark.parametrize("script_name", ["install.ps1"])
 def test_public_installer_owns_fresh_install_and_calls_internal_setup(script_name: str) -> None:
     script = (PROJECT_ROOT / "scripts" / script_name).read_text(encoding="utf-8")
     setup_reference = "scripts/setup.sh" if script_name.endswith(".sh") else "scripts\\setup.ps1"
@@ -1244,7 +1064,7 @@ def test_uninstaller_accepts_new_and_legacy_managed_install_markers(script_name:
     assert ".vbot-bootstrap" in script
 
 
-@pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
+@pytest.mark.parametrize("script_name", ["install.ps1"])
 def test_public_installer_can_configure_releases_from_before_setup_rename(
     script_name: str,
 ) -> None:

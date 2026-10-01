@@ -10,6 +10,7 @@ from pathlib import Path
 
 import psutil  # type: ignore[import-untyped]
 
+from cli.application.autostart import UNIT_NAME, owned_unit, run_command
 from cli.application.operations import child_environment
 from cli.application.state import ApplicationError, Installation
 from cli.server_management import (
@@ -109,6 +110,8 @@ def start(
             health=current,
             webui=probe_webui(instance) if ready else None,
         )
+    if not verification and version_id in {None, install.version().name} and owned_unit(install):
+        return _start_unit(install, instance, timeout)
     executable = install.interpreter(version_id, "Server")
     args = [
         str(executable),
@@ -172,6 +175,42 @@ def start(
     )
 
 
+def _start_unit(install: Installation, instance: ServerInstance, timeout: float) -> CommandResult:
+    """Start the active version through its systemd user unit and await its readiness."""
+    started = run_command(["systemctl", "--user", "start", UNIT_NAME])
+    if started.returncode != 0:
+        return CommandResult(
+            ok=False,
+            message=f"systemctl --user start {UNIT_NAME} failed: "
+            f"{started.stderr or started.stdout}",
+            instance=instance,
+        )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        health = probe_health(instance)
+        if health.is_vbot and (
+            _classify(install, instance, health, version_id=None, verification=False) == "running"
+        ):
+            return CommandResult(
+                ok=True,
+                message="started via systemd",
+                instance=instance,
+                health=health,
+                webui=probe_webui(instance),
+            )
+        time.sleep(0.25)
+    # A server that never became ready must not keep restarting in the background.
+    run_command(["systemctl", "--user", "stop", UNIT_NAME])
+    return CommandResult(
+        ok=False,
+        message=(
+            "The vBot server did not become ready; inspect "
+            f"`journalctl --user -u {UNIT_NAME}` and {instance.data_dir / 'logs'}"
+        ),
+        instance=instance,
+    )
+
+
 def _rotate_startup_log(path: Path) -> None:
     """Move an oversized startup log to its single previous generation."""
     # A missing file needs nothing; a file an earlier server process still holds
@@ -182,5 +221,19 @@ def _rotate_startup_log(path: Path) -> None:
 
 
 def stop(install: Installation, *, initiator: str = "cli") -> CommandResult:
-    """Stop the installation's server; *initiator* names the caller in its stop line."""
-    return stop_server(target(install), initiator=initiator)
+    """Stop the installation's server; *initiator* names the caller in its stop line.
+
+    The server is asked to shut down cooperatively. With a systemd user unit, the
+    unit is stopped as well, which cancels an automatic restart it may schedule.
+    """
+    result = stop_server(target(install), initiator=initiator)
+    if owned_unit(install):
+        settled = run_command(["systemctl", "--user", "stop", UNIT_NAME])
+        if settled.returncode != 0 and result.ok:
+            return CommandResult(
+                ok=False,
+                message=f"systemctl --user stop {UNIT_NAME} failed: "
+                f"{settled.stderr or settled.stdout}",
+                instance=result.instance,
+            )
+    return result

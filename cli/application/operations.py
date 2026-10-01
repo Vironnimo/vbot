@@ -47,7 +47,23 @@ def child_environment(install: Installation) -> dict[str, str]:
     environment["VBOT_INSTALL_ROOT"] = str(install.root)
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    if os.name != "nt":
+        # Native Windows hosts run in UTF-8 mode; a POSIX runtime needs it requested.
+        environment["PYTHONUTF8"] = "1"
     return environment
+
+
+def _service_cgroup() -> bool:
+    """Whether this process runs inside a systemd service, such as the server's unit.
+
+    Everything left in a service's control group is killed when the service
+    stops, so a process that must outlive the server leaves it first.
+    """
+    try:
+        groups = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+    return any(line.rsplit(":", 1)[-1].endswith(".service") for line in groups)
 
 
 def worker_alive(operation: Operation) -> bool:
@@ -57,15 +73,25 @@ def worker_alive(operation: Operation) -> bool:
         return False
     try:
         process = psutil.Process(operation.worker_pid)
-        started = process_started(process)
-        return bool(abs(started - operation.worker_created) < 0.001 and process.is_running())
+        return bool(
+            abs(process_started(process) - operation.worker_created) < 0.001
+            and process.is_running()
+        )
     except psutil.Error:
         return False
 
 
 def spawn_worker(install: Installation, operation: Operation) -> None:
     executable = install.interpreter(role="Update")
+    # The worker stops the server; started from inside the server's systemd
+    # unit, it moves into its own scope so that the stop does not end it too.
+    scope = (
+        ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"]
+        if os.name != "nt" and _service_cgroup()
+        else []
+    )
     args = [
+        *scope,
         str(executable),
         "-m",
         "cli.application.worker",

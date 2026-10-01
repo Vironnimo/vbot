@@ -21,6 +21,7 @@ from scripts.package_build import (
     CHANNELS,
     INVENTORY_NAME,
     BuildError,
+    remove_bytecode_caches,
     sign_archive,
     verify_release_source,
     write_archive,
@@ -165,15 +166,6 @@ def _sign_with_packaged_runtime(
     return result.stdout.strip()
 
 
-def _remove_runtime_caches(runtime: Path) -> None:
-    for directory in runtime.rglob("__pycache__"):
-        if directory.is_dir():
-            shutil.rmtree(directory)
-    for suffix in ("*.pyc", "*.pyo"):
-        for path in runtime.rglob(suffix):
-            path.unlink()
-
-
 def build(args: argparse.Namespace) -> Path:
     source = Path(str(args.source)).resolve()
     runtime = Path(str(args.runtime)).resolve()
@@ -196,7 +188,7 @@ def build(args: argparse.Namespace) -> Path:
         app_source=source,
         shape=args.shape,
     )
-    _remove_runtime_caches(version_root / "runtime")
+    remove_bytecode_caches(version_root / "runtime")
     compile_hosts(source, version_root / "runtime", version=args.version)
     for filename in ("vBot.exe", "vBot.GUI.exe"):
         shutil.copy2(version_root / "runtime" / filename, package / filename)
