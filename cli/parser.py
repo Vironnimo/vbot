@@ -290,9 +290,10 @@ def _check_archive_purge_selection(
             f"archive purge takes entry ids or --all, not both; run either {by_ids} or {by_filter}"
         )
     if not args.all and not args.entry_ids:
+        selection = "every matching archive entry" if filters else "every archive entry"
         parser.error(
             f"archive purge needs entry ids or --all; run either {by_ids}, or {by_filter} "
-            "to delete every archive entry"
+            f"to delete {selection}"
         )
     if filters and not args.all:
         parser.error(

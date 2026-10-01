@@ -470,15 +470,24 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
 
 
 @pytest.mark.parametrize(
-    "tokens",
+    ("tokens", "reason"),
     [
-        pytest.param(("arc_7k2m9q4xw1ab", "--all"), id="ids-and-all"),
-        pytest.param((), id="neither"),
-        pytest.param(("arc_7k2m9q4xw1ab", "--kind", "agent"), id="filters-without-all"),
+        pytest.param(("arc_7k2m9q4xw1ab", "--all"), "not both", id="ids-and-all"),
+        pytest.param((), "to delete every archive entry", id="neither"),
+        pytest.param(
+            ("--kind", "session"),
+            "vbot archive purge --all --kind session --yes to delete every matching archive entry",
+            id="filters-only",
+        ),
+        pytest.param(
+            ("arc_7k2m9q4xw1ab", "--kind", "agent"),
+            "--kind only apply with --all",
+            id="filters-without-all",
+        ),
     ],
 )
 def test_archive_purge_takes_entry_ids_or_all(
-    tokens: tuple[str, ...], capsys: pytest.CaptureFixture[str]
+    tokens: tuple[str, ...], reason: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with pytest.raises(SystemExit) as done:
         main.run(
@@ -489,4 +498,4 @@ def test_archive_purge_takes_entry_ids_or_all(
     assert done.value.code == 2
     error = capsys.readouterr().err
     assert "No command was executed." in error
-    assert "vbot archive purge " in error
+    assert reason in error
