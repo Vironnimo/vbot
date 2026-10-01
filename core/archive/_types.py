@@ -113,8 +113,8 @@ class PendingPurge:
 
     It stays ``purging`` with what is left, never restorable again; the
     retention sweep continues it, and purging it again continues it at once.
-    ``reason`` is ``usage_import_failed``, ``stopped`` (a stop request) or the
-    failure's exception class.
+    ``reason`` is ``usage_import_failed`` (for an entry already ``purging``),
+    ``stopped`` (a stop request) or the failure's exception class.
     """
 
     entry_id: str
@@ -126,9 +126,10 @@ class SkippedPurge:
     """An entry a purge left exactly as it was: nothing of it was deleted.
 
     ``reason`` is ``busy`` when another operation held it (``state`` names that
-    operation's entry state, such as ``restoring``), or the exception class of a
-    failure that kept the purge from claiming it. Nothing retries it on its own;
-    an ``archived`` entry stays restorable.
+    operation's entry state, such as ``restoring``), ``usage_import_failed``
+    when recorded usage could not reach the usage ledger first, or the
+    exception class of a failure that kept the purge from claiming it. Nothing
+    retries it on its own; an ``archived`` entry stays restorable.
     """
 
     entry_id: str

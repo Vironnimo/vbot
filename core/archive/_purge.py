@@ -2,12 +2,12 @@
 
 Every purge runs on the one ``archive`` worker, so two purges never overlap in
 this process; the entry's compare-and-set state keeps restores out. A purge
-first claims its entries (``purging``), then brings the usage ledger up to date
-(recorded usage outlives the Sessions), then deletes each entry's member
-Sessions newest first, one transaction each, then its payload trees, then the
-entry. It holds no compound mutation: an entry left ``purging`` by a failure, a
-stop request or a crash keeps what is not deleted yet, and a later purge of it,
-manual or by the retention sweep, continues.
+first brings the usage ledger up to date (recorded usage outlives the Sessions;
+when that fails, no entry changes), then claims its entries (``purging``), then
+deletes each entry's member Sessions newest first, one transaction each, then
+its payload trees, then the entry. It holds no compound mutation: an entry left
+``purging`` by a failure, a stop request or a crash keeps what is not deleted
+yet, and a later purge of it, manual or by the retention sweep, continues.
 """
 
 from __future__ import annotations
@@ -62,12 +62,39 @@ def purge_entries(
 ) -> PurgeOutcome:
     """Purge ``entries`` one after another; one that does not finish is reported pending.
 
-    Every entry is claimed first, so an entry reported pending stays
-    ``purging`` and is continued later. An entry another operation holds is
-    skipped unchanged, and one that is no longer in the archive is reported
-    gone. When ``stopping`` is set, the purge ends before the next Session or tree.
+    The usage ledger is brought up to date first; when that fails, nothing
+    changes: an ``archived`` entry is skipped and stays restorable, one already
+    ``purging`` stays pending. Then every entry is claimed, so an entry reported
+    pending stays ``purging`` and is continued later. An entry another operation
+    holds is skipped unchanged, and one that is no longer in the archive is
+    reported gone. When ``stopping`` is set, the purge ends before the next
+    Session or tree.
     """
     ledger = services.sessions.archive_ledger
+    usage_import = ("usage_import", services.data_dir)
+    try:
+        # Recorded usage must reach the usage ledger before its Sessions go.
+        services.import_usage()
+    except Exception as error:
+        if _FAILURES.started(usage_import, type(error).__name__):
+            _LOGGER.warning(
+                "Usage import before a purge failed; nothing was deleted: %s",
+                error,
+            )
+        return PurgeOutcome(
+            pending=tuple(
+                PendingPurge(entry.entry_id, USAGE_IMPORT_FAILED)
+                for entry in entries
+                if entry.state == ARCHIVE_STATE_PURGING
+            ),
+            skipped=tuple(
+                SkippedPurge(entry.entry_id, USAGE_IMPORT_FAILED, entry.state)
+                for entry in entries
+                if entry.state != ARCHIVE_STATE_PURGING
+            ),
+        )
+    if _FAILURES.ended(usage_import):
+        _LOGGER.info("Usage import before a purge no longer fails")
     claimed: list[ArchiveEntry] = []
     pending: list[PendingPurge] = []
     skipped: list[SkippedPurge] = []
@@ -93,29 +120,6 @@ def purge_entries(
                 pending.append(PendingPurge(entry.entry_id, failure))
             else:
                 skipped.append(SkippedPurge(entry.entry_id, failure, entry.state))
-    if not claimed:
-        return PurgeOutcome(pending=tuple(pending), skipped=tuple(skipped), gone=tuple(gone))
-    usage_import = ("usage_import", services.data_dir)
-    try:
-        services.import_usage()
-    except Exception as error:
-        # Recorded usage must reach the usage ledger before its Sessions go.
-        if _FAILURES.started(usage_import, type(error).__name__):
-            _LOGGER.warning(
-                "Usage import before a purge failed; nothing was purged and the purge is "
-                "retried: %s",
-                error,
-            )
-        return PurgeOutcome(
-            pending=(
-                *pending,
-                *(PendingPurge(entry.entry_id, USAGE_IMPORT_FAILED) for entry in claimed),
-            ),
-            skipped=tuple(skipped),
-            gone=tuple(gone),
-        )
-    if _FAILURES.ended(usage_import):
-        _LOGGER.info("Usage import before a purge no longer fails")
     purged: list[PurgedEntry] = []
     for entry in claimed:
         result = _purge_claimed(services, entry, reason=reason, actor=actor, stopping=stopping)

@@ -365,8 +365,9 @@ class ArchiveService:
         that is neither ``archived`` nor ``purging`` with ``ArchiveEntryBusyError``,
         before anything is deleted; ``all_matching`` skips such entries. Recorded
         usage first reaches the usage ledger, so usage totals stay; when that
-        fails, nothing is deleted. An entry whose deletion does not finish, because
-        of that, a failure partway or :meth:`stop`, is reported pending and stays
+        fails, nothing is deleted or claimed: an ``archived`` entry is reported
+        skipped and stays restorable. An entry whose deletion does not finish,
+        because of a failure partway or :meth:`stop`, is reported pending and stays
         ``purging`` with what is left; the retention sweep continues it, and
         purging it again continues it at once. An entry another operation took
         between that check and the purge is reported skipped (still held, nothing

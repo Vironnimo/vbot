@@ -251,7 +251,7 @@ def _usage_import_fails() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("usage_import", ["works", "fails"])
-async def test_rm_permanent_deletes_the_anchor_and_sessions_or_reports_it_pending(
+async def test_rm_permanent_deletes_the_anchor_and_sessions_or_keeps_them_archived(
     tmp_path: Path, usage_import: str
 ) -> None:
     state = _make_state(tmp_path)
@@ -275,7 +275,12 @@ async def test_rm_permanent_deletes_the_anchor_and_sessions_or_reports_it_pendin
         assert not ledger.page(ArchiveEntryFilter()).entries
         assert not any((tmp_path / "data" / "archive").rglob("*"))
     else:
-        # The Project is archived; its permanent deletion waits for another purge.
-        assert (result["purged"], result["purge_pending"]) == (False, True)
-        assert ledger.entry(result["archive_entry_id"]) is not None
+        # The Project is archived and stays restorable; nothing was deleted.
+        assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
+            False,
+            False,
+            "usage_import_failed",
+        )
+        entry = ledger.entry(result["archive_entry_id"])
+        assert entry is not None and entry.state == "archived"
     assert repo.exists()

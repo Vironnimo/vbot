@@ -354,7 +354,7 @@ async def test_purge_deletes_named_entries_or_all_matching_ones(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_a_purge_whose_usage_import_fails_reports_every_entry_pending(
+async def test_a_purge_whose_usage_import_fails_leaves_every_entry_restorable(
     tmp_path: Path,
 ) -> None:
     def fail() -> None:
@@ -370,11 +370,12 @@ async def test_a_purge_whose_usage_import_fails_reports_every_entry_pending(
 
     assert result == {
         "purged": [],
-        "pending": [{"entry_id": entry_id, "reason": "usage_import_failed"}],
-        "skipped": [],
+        "pending": [],
+        "skipped": [{"entry_id": entry_id, "reason": "usage_import_failed", "state": "archived"}],
         "gone": [],
     }
-    assert state.runtime.sessions.archive_ledger.entry(entry_id) is not None
+    shown = await rpc_result(state, "archive.show", entry_id=entry_id)
+    assert (shown["entry"]["state"], shown["restore"]["possible"]) == ("archived", True)
 
 
 def _taken_before_the_claim(
