@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import shutil
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,15 @@ from server.rpc import agent_methods, skill_methods
 from tests.core.runtime.runtime_test_support import call_rpc, write_agent_skill, write_skill
 
 
+@pytest.fixture
+def runtime(config: Config) -> Iterator[Runtime]:
+    """A started test-mode Runtime: Skill resolution needs no Extensions or producers."""
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    yield runtime
+    runtime.stop()
+
+
 def _names(registry: SkillRegistry) -> set[str]:
     return {skill.name for skill in registry.list_all()}
 
@@ -30,9 +40,8 @@ def _allowed(registry: SkillRegistry, allowlist: list[str]) -> list[str]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["update", "delete", "create", "delete_owner"])
 async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
-    config: Config, tmp_path: Path, operation: str
+    config: Config, tmp_path: Path
 ) -> None:
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
@@ -42,37 +51,46 @@ async def test_owner_skill_mutation_refreshes_shared_receivers_in_every_project(
         repo = tmp_path / "repo"
         repo.mkdir()
         project = runtime.projects.create("p", "P", repo)
-        if operation != "create":
-            write_agent_skill(config.data_dir, "main", "deploy", "Before mutation")
+        # The share names the package before it exists.
         runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["receiver"])
         scopes = [None, project.project_id]
-        before = {scope: runtime.skills_for(scope, "receiver") for scope in scopes}
-        unrelated = runtime.skills_for(project.project_id, "unrelated")
-        params = {"scope": "agent:main", "name": "deploy"}
-        if operation != "delete":
-            params["content"] = (
-                "---\nname: deploy\ndescription: After mutation\n---\n\nNew instructions.\n"
-            )
-
         state = SimpleNamespace(
             runtime=runtime,
             chat_runs=runtime.chat_runs,
             agent_delete_lock=asyncio.Lock(),
             event_bus=ServerEventBus(),
         )
-        if operation == "delete_owner":
-            await call_rpc(agent_methods.method_handlers(), "agent.delete", state, {"id": "main"})
-        else:
-            await call_rpc(skill_methods.method_handlers(), f"skill.{operation}", state, params)
 
-        for scope in scopes:
-            current = runtime.skills_for(scope, "receiver")
-            assert current is not before[scope]
-            if operation in {"delete", "delete_owner"}:
-                assert "deploy" not in _names(current)
+        async def mutate(operation: str) -> None:
+            """Apply one owner mutation; every receiver scope refreshes, nothing else."""
+            before = {scope: runtime.skills_for(scope, "receiver") for scope in scopes}
+            unrelated = runtime.skills_for(project.project_id, "unrelated")
+            if operation == "delete_owner":
+                await call_rpc(
+                    agent_methods.method_handlers(), "agent.delete", state, {"id": "main"}
+                )
             else:
-                assert current.get("deploy").description == "After mutation"
-        assert runtime.skills_for(project.project_id, "unrelated") is unrelated
+                params = {"scope": "agent:main", "name": "deploy"}
+                if operation != "delete":
+                    params["content"] = (
+                        f"---\nname: deploy\ndescription: After {operation}\n---\n\nSteps.\n"
+                    )
+                await call_rpc(skill_methods.method_handlers(), f"skill.{operation}", state, params)
+            for scope in scopes:
+                current = runtime.skills_for(scope, "receiver")
+                assert current is not before[scope]
+                if operation in {"delete", "delete_owner"}:
+                    assert "deploy" not in _names(current)
+                else:
+                    assert current.get("deploy").description == f"After {operation}"
+            assert runtime.skills_for(project.project_id, "unrelated") is unrelated
+
+        for operation in ("create", "update", "delete"):
+            await mutate(operation)
+        write_agent_skill(config.data_dir, "main", "deploy", "Before the owner leaves")
+        runtime.invalidate_agent_skills("main")
+        assert "deploy" in _names(runtime.skills_for(None, "receiver"))
+        await mutate("delete_owner")
     finally:
         await runtime.aclose()
 
@@ -216,50 +234,7 @@ def test_installed_private_and_global_skills_refresh_live_visibility(
     assert "global-import" not in _allowed(runtime.skills_for(None, "main"), [])
 
 
-def test_manager_inspects_exact_original_and_projects_write_scope(
-    runtime: Runtime, tmp_path: Path
-) -> None:
-    runtime.agents.create("two", "Two")
-    for owner in ("main", "two"):
-        write_agent_skill(runtime.storage.data_dir, owner, "duplicate", f"sentinel-{owner}")
-    write_skill(runtime.global_skills_dir, "duplicate", "sentinel-global")
-    extra = tmp_path / "external"
-    write_skill(extra, "duplicate", "sentinel-external")
-    runtime.storage.save_settings(
-        {**runtime.storage.load_settings(), "skill_directories": [str(extra)]}
-    )
-    runtime.skill_policy.set_shared("main", "duplicate", shared=True, receivers=["two"])
-
-    def duplicates() -> list[dict[str, Any]]:
-        return [
-            entry for entry in runtime.skill_inventory()["skills"] if entry["name"] == "duplicate"
-        ]
-
-    entries = duplicates()
-    assert len({entry["id"] for entry in entries}) == len(entries) == 4
-    for entry in entries:
-        inspection = runtime.inspect_skill(entry["id"])
-        assert inspection["id"] == entry["id"]
-        assert entry["description"] in inspection["content"]
-        # Only packages in the real global and private write roots are editable.
-        if entry["description"] == "sentinel-external":
-            assert entry["editable_scope"] is None
-        else:
-            assert entry["editable_scope"] == (
-                f"agent:{entry['owner_id']}" if entry["owner_id"] else "global"
-            )
-    # Ids are stable across inventory passes.
-    assert {entry["id"] for entry in entries} == {entry["id"] for entry in duplicates()}
-    removed = next(entry for entry in entries if entry["owner_id"] == "two")
-    (runtime.agent_skills_dir("two") / "duplicate" / "SKILL.md").unlink()
-    with pytest.raises(ValueError):
-        runtime.inspect_skill(removed["id"])
-    # Inspection never addresses arbitrary client filesystem paths.
-    with pytest.raises(ValueError):
-        runtime.inspect_skill(str(extra / "duplicate" / "SKILL.md"))
-
-
-def test_manager_evaluates_each_same_name_package(
+def test_manager_lists_inspects_and_evaluates_each_same_name_package(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for name in (
@@ -276,6 +251,7 @@ def test_manager_evaluates_each_same_name_package(
         repo.mkdir()
         project = runtime.projects.create("p", "P", repo)
         write_skill(runtime.global_skills_dir, "inventory-helper", "Dependency.")
+        extra = tmp_path / "external"
         packages: tuple[tuple[Path, str, dict[str, object]], ...] = (
             (runtime.global_skills_dir, "global", {"env": "VBOT_TEST_GLOBAL_REQUIRED"}),
             (
@@ -288,6 +264,7 @@ def test_manager_evaluates_each_same_name_package(
             ),
             (runtime.agent_skills_dir("main"), "main", {}),
             (runtime.agent_skills_dir("two"), "two", {"env": "VBOT_TEST_PRIVATE_REQUIRED"}),
+            (extra, "external", {}),
         )
         for root, label, requirements in packages:
             package = root / "duplicate"
@@ -300,42 +277,78 @@ def test_manager_evaluates_each_same_name_package(
                 }
             )
             (package / "SKILL.md").write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
-        expected = {
+        runtime.storage.save_settings(
+            {**runtime.storage.load_settings(), "skill_directories": [str(extra)]}
+        )
+        runtime.skill_policy.set_shared("main", "duplicate", shared=True, receivers=["two"])
+        # Per package: status, missing, optional missing, and the editable scope.
+        expected: dict[str, tuple[str, list[str], list[str], str | None]] = {
             "global": (
                 "unavailable",
                 ["missing environment variable 'VBOT_TEST_GLOBAL_REQUIRED'"],
                 [],
+                "global",
             ),
             "project": (
                 "available",
                 [],
                 ["missing environment variable 'VBOT_TEST_PROJECT_OPTIONAL'"],
+                None,
             ),
-            "main": ("available", [], []),
+            "main": ("available", [], [], "agent:main"),
             "two": (
                 "unavailable",
                 ["missing environment variable 'VBOT_TEST_PRIVATE_REQUIRED'"],
                 [],
+                "agent:two",
             ),
+            # Only packages in the real global and private write roots are editable.
+            "external": ("available", [], [], None),
         }
 
-        def assert_inventory(*, disabled: bool) -> None:
-            entries = {
+        def duplicates() -> dict[str, dict[str, Any]]:
+            return {
                 entry["description"]: entry
                 for entry in runtime.skill_inventory()["skills"]
                 if entry["name"] == "duplicate"
             }
-            assert entries.keys() == expected.keys()
-            for label, (status, missing, optional_missing) in expected.items():
-                # The disable switch outranks every other state but keeps the details.
-                assert entries[label]["status"] == ("disabled" if disabled else status)
-                assert entries[label]["missing"] == missing
-                assert entries[label]["optional_missing"] == optional_missing
 
-        assert_inventory(disabled=False)
+        entries = duplicates()
+        assert entries.keys() == expected.keys()
+        assert len({entry["id"] for entry in entries.values()}) == len(entries)
+        for label, (status, missing, optional_missing, scope) in expected.items():
+            entry = entries[label]
+            assert (entry["status"], entry["missing"], entry["optional_missing"]) == (
+                status,
+                missing,
+                optional_missing,
+            )
+            assert entry["editable_scope"] == scope
+            inspection = runtime.inspect_skill(entry["id"])
+            assert inspection["id"] == entry["id"]
+            assert f"description: {label}" in inspection["content"]
         assert runtime.skills_for(None, "main").availability_for("duplicate").state == "available"
+
+        # The disable switch outranks every other state but keeps the details;
+        # ids are stable across inventory passes.
         runtime.skill_policy.set_disabled("duplicate", disabled=True)
-        assert_inventory(disabled=True)
+        disabled = duplicates()
+        assert {label: entry["id"] for label, entry in disabled.items()} == {
+            label: entry["id"] for label, entry in entries.items()
+        }
+        for label, (_status, missing, optional_missing, _scope) in expected.items():
+            assert (
+                disabled[label]["status"],
+                disabled[label]["missing"],
+                disabled[label]["optional_missing"],
+            ) == ("disabled", missing, optional_missing)
+
+        (runtime.agent_skills_dir("two") / "duplicate" / "SKILL.md").unlink()
+        with pytest.raises(ValueError):
+            runtime.inspect_skill(entries["two"]["id"])
+        # Inspection never addresses arbitrary client filesystem paths.
+        with pytest.raises(ValueError):
+            runtime.inspect_skill(str(extra / "duplicate" / "SKILL.md"))
     finally:
         runtime.stop()
 
