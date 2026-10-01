@@ -58,6 +58,8 @@ Runtime injects the canonical `UsageRecorder` into every task execution service.
 
 ## References
 
-- Live voice calls: the `live_voice` binding, provider live wires, delegated reasoning, the call registry and owner socket, spoken app operations, or proactive Run announcements -> `model_tasks/live.md`
+- Live voice calls: the `live_voice` binding, call lifecycle, the call registry and owner socket, delegated reasoning and its trust rules, or the WebUI Live control -> `model_tasks/live.md`
+- Live voice operator: the Live Tools (spoken app operations on Sessions, Terminals and views), Run announcements, the memory across calls, or Debug Mode call records -> `model_tasks/live-operator.md`
+- Live voice provider wires: the OpenAI or xAI realtime wire, adding a Live provider, or the backend model probe -> `model_tasks/live-wires.md`
 
 - Structured judgments, the evaluate Tool, Jev experiments, external application Actions and control lifecycle -> `model_tasks/decisions.md`
