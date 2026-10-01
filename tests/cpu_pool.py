@@ -6,16 +6,12 @@ overload it until tests time out. So before it starts its workers, each local ru
 claims cores from one pool per machine: one lock file per physical core, held until
 the run ends. The operating system releases a lock when its process dies, so a
 crashed run never keeps its cores. A run waits until the cores it asks for are
-free instead of starting beside the others.
-
-The checks of the commit hook (scripts/commit_check.py marks their runs) take at
-most the cores beyond ``RESERVED_CORES``; those stay free for the runs an Agent
-starts directly, so a quick run never waits for a long check. Direct runs take
-the shared cores too while no check holds them.
+free instead of starting beside the others; waiting runs take their turn one
+after another.
 
 ``-n auto`` asks for ``LOCAL_AUTO_WORKERS`` cores here; an explicit ``-n N`` asks for
-N, at most the cores the run may take. Every run appends one line to ``RUN_LOG`` in the pool
-directory: the checkout, who started it, cores, wait, duration and outcome.
+N, at most the pool's size. Every run appends one line to ``RUN_LOG`` in the pool
+directory: the checkout, cores, wait, duration and outcome.
 
 CI runs on machines of its own and skips the pool, as does a pytest run started by
 a test inside a run that holds cores, which would otherwise wait for its parent.
@@ -41,13 +37,8 @@ RUN_LOG = "runs.jsonl"
 # The log starts afresh beside one previous generation once it grows beyond this.
 RUN_LOG_LIMIT = 2_000_000
 LOCAL_AUTO_WORKERS = 2
-# Cores the checks of the commit hook leave to the runs an Agent starts directly.
-RESERVED_CORES = 2
 # Set while a run holds cores; the pytest processes it starts inherit it.
 HELD_VARIABLE = "VBOT_TEST_CORES_HELD"
-# Set by scripts/commit_check.py: who started the run, and why it runs every test.
-KIND_VARIABLE = "VBOT_TEST_RUN_KIND"
-REASON_VARIABLE = "VBOT_TEST_RUN_REASON"
 _POLL_SECONDS = 0.2
 
 
@@ -105,38 +96,20 @@ def release(handles: list[IO[bytes]]) -> None:
         handle.close()
 
 
-def _lanes(size: int) -> tuple[list[int], list[int]]:
-    """Return the cores of a pool of *size* that only direct runs take, and the shared ones."""
-    reserved = min(RESERVED_CORES, size - 1)
-    return list(range(reserved)), list(range(reserved, size))
-
-
-def check_cores() -> int:
-    """The most cores a check of the commit hook holds; the others stay free for direct runs."""
-    return len(_lanes(pool_size())[1])
-
-
 def take(
     directory: Path,
     cores: int,
     size: int,
     on_wait: Callable[[], None] = lambda: None,
-    *,
-    check: bool = False,
 ) -> list[IO[bytes]]:
     """Wait until *cores* of the *size* cores in *directory* are free; hold and return them.
 
-    A *check* of the commit hook takes only the shared cores, and collects them one
-    by one: only one check collects at a time, so a check waiting for several cores
-    does not lose them to smaller checks behind it. A direct run takes the cores
-    reserved for direct runs first and the shared ones after them, all at once:
-    it holds none while it waits, so a check and a direct run never wait for each
-    other's cores. *on_wait* is called once when the run has to wait.
+    A run takes all its cores at once and holds none while it waits. Only one run
+    collects at a time, so a run waiting for many cores does not lose them to
+    smaller runs behind it. *on_wait* is called once when the run has to wait.
     """
     directory.mkdir(parents=True, exist_ok=True)
-    reserved, shared = _lanes(size)
-    candidates = shared if check else reserved + shared
-    cores = max(1, min(cores, len(candidates)))
+    cores = max(1, min(cores, size))
     waiting = False
 
     def wait() -> None:
@@ -146,18 +119,16 @@ def take(
             on_wait()
         time.sleep(_POLL_SECONDS)
 
-    queue = (directory / ("checks.lock" if check else "queue.lock")).open("a+b")
+    queue = (directory / "queue.lock").open("a+b")
     held: dict[int, IO[bytes]] = {}
     try:
         while not _try_lock(queue):
             wait()
         try:
             while True:
-                for index in candidates:
+                for index in range(size):
                     if len(held) == cores:
                         break
-                    if index in held:
-                        continue
                     handle = (directory / f"core-{index}.lock").open("a+b")
                     if _try_lock(handle):
                         held[index] = handle
@@ -165,9 +136,8 @@ def take(
                         handle.close()
                 if len(held) == cores:
                     return list(held.values())
-                if not check:
-                    release(list(held.values()))
-                    held.clear()
+                release(list(held.values()))
+                held.clear()
                 wait()
         finally:
             _unlock(queue)
@@ -213,8 +183,6 @@ class _Claim:
         record = {
             "at": datetime.now(UTC).isoformat(timespec="seconds"),
             "checkout": str(config.rootpath),
-            "kind": os.environ.get(KIND_VARIABLE, "manual"),
-            "complete_reason": os.environ.get(REASON_VARIABLE) or None,
             "cores_asked": self.asked,
             "cores": len(self.handles),
             "waited_s": round(self.waited, 1),
@@ -240,7 +208,6 @@ def claim(config: pytest.Config, directory: Path = POOL_DIR) -> None:
     workers = workers if isinstance(workers, int) else 0
     size = pool_size()
     asked = max(1, workers)
-    check = bool(os.environ.get(KIND_VARIABLE))
     start = time.monotonic()
 
     def announce() -> None:
@@ -251,7 +218,7 @@ def claim(config: pytest.Config, directory: Path = POOL_DIR) -> None:
             flush=True,
         )
 
-    handles = take(directory, asked, size, announce, check=check)
+    handles = take(directory, asked, size, announce)
     if workers > len(handles):
         config.option.numprocesses = len(handles)
         config.option.tx = ["popen"] * len(handles)

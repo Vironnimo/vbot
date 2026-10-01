@@ -18,12 +18,7 @@ from typing import Any
 
 import pytest
 
-from tests import cpu_pool, file_dependencies
-
-# pytest-testmon attributes executed lines to single tests through coverage contexts.
-# The sys.monitoring core (the default on Python 3.12+) reports a line only the
-# first time it runs, which leaves later tests without their dependencies.
-os.environ.setdefault("COVERAGE_CORE", "ctrace")
+from tests import cpu_pool
 
 # Tests run git in temporary repositories. Started from a git hook, pytest inherits
 # variables such as GIT_DIR and GIT_INDEX_FILE that would point those git calls at
@@ -245,8 +240,6 @@ def pytest_xdist_auto_num_workers(config: pytest.Config) -> int | None:
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config: pytest.Config) -> None:
     cpu_pool.claim(config)
-    # Records the data files each test reads while pytest-testmon collects data.
-    config.pluginmanager.register(file_dependencies, "vbot-file-dependencies")
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

@@ -10,7 +10,6 @@ import os
 import re
 import runpy
 import shutil
-import sqlite3
 import stat
 import subprocess
 import sys
@@ -70,7 +69,6 @@ from scripts._worktree_records import (  # noqa: E402
     _worktree_server_port,
 )
 from scripts._worktree_seed import (  # noqa: E402
-    NATIVE_RESOURCES_RELATIVE_PATH,
     seed_native_resources,
     seed_type_check_cache,
     seed_webui_packages,
@@ -117,16 +115,18 @@ WORKTREES_DIR = PROJECT_ROOT / ".worktrees"
 FAKE_PROVIDER_SETTINGS_RELATIVE_PATH = Path("tests") / "e2e" / "fake-provider-settings.json"
 VALID_WORKTREE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TRASH_DIR_PREFIX = ".trash-"
-# A merge prepares its merge commit in a private checkout named with this prefix.
+# A merge prepares its merge commit, and scripts/push.py checks the commit it
+# pushes, in a private detached checkout named with one of these prefixes.
 LANDING_DIR_PREFIX = ".landing-"
-LANDING_LOCK_SUFFIX = ".lock"
+PUSH_DIR_PREFIX = ".push-"
+PRIVATE_CHECKOUT_PREFIXES = (LANDING_DIR_PREFIX, PUSH_DIR_PREFIX)
+PRIVATE_CHECKOUT_LOCK_SUFFIX = ".lock"
 # A merge whose base main left behind while its commit was checked merges again
 # onto the new main, up to this many checks in all.
 LANDING_ATTEMPTS = 3
 # git refuses to fast-forward main while another git command holds its index lock.
 FAST_FORWARD_ATTEMPTS = 5
 FAST_FORWARD_RETRY_SECONDS = 0.5
-MAIN_TESTS_LOCK_NOTICE = "waiting for the tests of a commit in the primary checkout..."
 PORT_ALLOCATION_LOCK_NAME = "vbot-worktree-port.lock"
 PRIMARY_BRANCH = "main"
 MERGE_LOCK_FILE_NAME = "vbot-merge.lock"
@@ -396,24 +396,24 @@ def _remove_checkout(checkout: Path) -> None:
     _run_command(["git", "worktree", "prune"])
 
 
-def _landing_lock_path(landing: Path) -> Path:
-    """Return the lock a merge holds while its landing checkout is in use."""
-    return landing.with_name(landing.name + LANDING_LOCK_SUFFIX)
+def _private_checkout_lock_path(checkout: Path) -> Path:
+    """Return the lock a merge or push holds while its private checkout is in use."""
+    return checkout.with_name(checkout.name + PRIVATE_CHECKOUT_LOCK_SUFFIX)
 
 
-def sweep_landing_checkouts(worktrees_dir: Path) -> None:
-    """Remove the landing checkouts of merges that ended without removing them.
+def sweep_private_checkouts(worktrees_dir: Path) -> None:
+    """Remove the private checkouts of merges and pushes that ended without removing them.
 
-    A running merge holds its landing checkout's lock; the OS frees it when the
-    merge process dies, however it ends.
+    A running merge or push holds its checkout's lock; the OS frees it when the
+    process dies, however it ends.
     """
     if not worktrees_dir.exists():
         return
 
     for candidate in list(worktrees_dir.iterdir()):
-        if not candidate.name.startswith(LANDING_DIR_PREFIX) or not candidate.is_dir():
+        if not candidate.name.startswith(PRIVATE_CHECKOUT_PREFIXES) or not candidate.is_dir():
             continue
-        lock_path = _landing_lock_path(candidate)
+        lock_path = _private_checkout_lock_path(candidate)
         with lock_path.open("a+b") as lock_file:
             if not _acquire_file_lock(lock_file):
                 continue
@@ -652,19 +652,6 @@ def _stop_worktree_services(
     return stderr or "managed worktree services could not be stopped"
 
 
-def _adopt_test_records(worktree_path: Path) -> None:
-    """Give a new worktree a copy of the primary checkout's test-impact records.
-
-    The commit check judges the branch's tests against these test runs of the state
-    it forked from, so its branch check before the merge runs only the tests the
-    branch's changes affect.
-    """
-    from scripts import _test_impact
-
-    with suppress(OSError, sqlite3.Error):
-        _test_impact.copy_data(PROJECT_ROOT, worktree_path)
-
-
 def cmd_create(args: argparse.Namespace) -> int:
     """Create a new worktree with dedicated port and data directory."""
     name: str = args.name
@@ -677,7 +664,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     data_dir = _expected_data_dir(name)
     managed_branch = args.from_branch is None
 
-    sweep_landing_checkouts(WORKTREES_DIR)
+    sweep_private_checkouts(WORKTREES_DIR)
     sweep_trash_directories(WORKTREES_DIR)
 
     if worktree_path.exists():
@@ -736,7 +723,6 @@ def cmd_create(args: argparse.Namespace) -> int:
         print_error(str(exc))
         return 1
 
-    _adopt_test_records(worktree_path)
     seed_native_resources(PROJECT_ROOT, worktree_path)
     print("installing the verified search engine...", flush=True)
     return_code, stderr = _run_command(
@@ -795,7 +781,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     worktree_path = WORKTREES_DIR / name
 
-    sweep_landing_checkouts(WORKTREES_DIR)
+    sweep_private_checkouts(WORKTREES_DIR)
     sweep_trash_directories(WORKTREES_DIR)
 
     if not worktree_path.exists():
@@ -1020,32 +1006,6 @@ def _print_merge_check_hints(name: str, *, window_open: bool) -> None:
         print("note: your protected repair window stays open while you fix this")
 
 
-def _check_branch(worktree_path: Path) -> int:
-    """Run the tests the branch affects in its worktree; return the exit code.
-
-    This runs before the merge takes the merge lock, so other merges do not wait
-    for it; the merge commit then runs only the tests neither side covered. The
-    branch's own commit check runs them, as its commits run its own hook; a branch
-    without one has nothing to run.
-    """
-    script = worktree_path / "scripts" / "commit_check.py"
-    if not script.is_file():
-        return 0
-    print("testing the branch: the tests its changes affect (no output until done)...", flush=True)
-    return subprocess.run(
-        [sys.executable, str(script), "--branch"], cwd=worktree_path, check=False
-    ).returncode
-
-
-def _print_branch_check_hints(name: str, *, window_open: bool) -> None:
-    """Print the agent-facing recovery hints after the branch's tests failed."""
-    print("hint: the branch check failed (report above); main is unchanged")
-    print("hint: fix the reported problems in your worktree and commit")
-    print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
-    if window_open:
-        print("note: your protected repair window stays open while you fix this")
-
-
 def _git_stdout(repo: Path, *arguments: str) -> str | None:
     """Return the output of a git command in *repo*, or None when it fails."""
     try:
@@ -1071,13 +1031,6 @@ def _main_head() -> str | None:
     """Return the commit the primary checkout has checked out."""
     head = _git_stdout(PROJECT_ROOT, "rev-parse", "-q", "--verify", "HEAD")
     return head.strip() if head else None
-
-
-def _main_tests_lock_path() -> Path:
-    """Return the lock main's commit check holds while it runs tests and writes its records."""
-    from scripts import commit_check
-
-    return _git_common_dir() / commit_check.TESTS_LOCK_NAME
 
 
 def _merge_changes_since(tree: str, merge_paths: set[str]) -> list[str] | None:
@@ -1184,17 +1137,22 @@ def _roll_back_unfinished_merge() -> bool:
 
 
 @contextmanager
-def _claimed_landing(name: str) -> Iterator[Path]:
-    """Name a landing checkout for this merge and hold its lock until it is removed again."""
-    landing = WORKTREES_DIR / f"{LANDING_DIR_PREFIX}{name}-{uuid4().hex[:8]}"
-    lock_path = _landing_lock_path(landing)
+def private_checkout(prefix: str, name: str) -> Iterator[Path]:
+    """Name a private checkout under ``.worktrees`` and hold its lock until it is removed again.
+
+    The caller creates the checkout at the yielded path; it is removed when the
+    context ends, however it ends. A checkout whose process died is removed by the
+    next ``sweep_private_checkouts``.
+    """
+    checkout = WORKTREES_DIR / f"{prefix}{name}-{uuid4().hex[:8]}"
+    lock_path = _private_checkout_lock_path(checkout)
     try:
         with _held_file_lock(lock_path):
             try:
-                yield landing
+                yield checkout
             finally:
-                if landing.exists():
-                    _remove_checkout(landing)
+                if checkout.exists():
+                    _remove_checkout(checkout)
     finally:
         with suppress(OSError):
             lock_path.unlink()
@@ -1203,8 +1161,8 @@ def _claimed_landing(name: str) -> Iterator[Path]:
 def _create_landing_checkout(landing: Path, worktree_path: Path) -> str | None:
     """Check main out detached in *landing*; return why that failed, or None.
 
-    The type checker's cache and the native executables come from the task's
-    worktree, else from the primary checkout.
+    The type checker's cache comes from the task's worktree, else from the primary
+    checkout.
     """
     return_code, stderr = _run_command(
         ["git", "worktree", "add", "--detach", str(landing), PRIMARY_BRANCH]
@@ -1214,17 +1172,13 @@ def _create_landing_checkout(landing: Path, worktree_path: Path) -> str | None:
     for source in (worktree_path, PROJECT_ROOT):
         if seed_type_check_cache(source, landing):
             break
-    for source in (worktree_path, PROJECT_ROOT):
-        if (source / NATIVE_RESOURCES_RELATIVE_PATH).is_dir():
-            seed_native_resources(source, landing)
-            break
     return None
 
 
 def _provide_webui_packages(landing: Path, worktree_path: Path) -> str | None:
     """Install the merged WebUI packages in *landing* when its commit check needs them.
 
-    The commit check runs the WebUI checks for the merge's WebUI changes, on packages
+    The commit check formats and lints the merge's WebUI sources on packages
     matching the merged lock, when main has installed packages. A matching
     installation of main or of the task's worktree is copied; otherwise ``npm ci``
     installs one. Returns why that failed, or None.
@@ -1235,7 +1189,7 @@ def _provide_webui_packages(landing: Path, worktree_path: Path) -> str | None:
         return None
     staged = _git_stdout(landing, "diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD")
     scope = commit_check.webui_scope(_nul_separated(staged or ""))
-    if not (scope.sources or scope.all_styles or scope.all_tests):
+    if not (scope.sources or scope.all_styles):
         return None
     webui = landing / "webui"
     node_modules = webui / "node_modules"
@@ -1254,10 +1208,7 @@ def _provide_webui_packages(landing: Path, worktree_path: Path) -> str | None:
 
 
 def _commit_landing(landing: Path, message: str) -> tuple[int, str]:
-    """Commit the merge staged in *landing*; its commit check runs the tests of a landing."""
-    from scripts import commit_check
-
-    environment = {**os.environ, commit_check.LANDING_VARIABLE: "1"}
+    """Commit the merge staged in *landing* through the commit check."""
     try:
         result = subprocess.run(
             ["git", "-C", str(landing), "commit", "-m", message],
@@ -1265,7 +1216,6 @@ def _commit_landing(landing: Path, message: str) -> tuple[int, str]:
             text=True,
             encoding="utf-8",
             errors="replace",
-            env=environment,
             check=False,
         )
     except OSError as exc:
@@ -1331,10 +1281,9 @@ def _merge_protection(name: str, wait_timeout: float) -> Iterator[bool]:
 def cmd_merge(args: argparse.Namespace) -> int:
     """Merge a finished worktree branch into main and remove the worktree.
 
-    A conflict with main is reported before any test runs. The branch's tests
-    run first, in the worktree and outside the merge lock. The merge commit is
-    then made and checked in a private landing checkout, and main fast-forwards
-    to it only once it passed: an interrupted merge leaves main as it was.
+    A conflict with main is reported first. The merge commit is then made and
+    checked in a private landing checkout, and main fast-forwards to it only once
+    it passed: an interrupted merge leaves main as it was.
     Concurrency contract: only one merge or protected repair window may touch
     the primary checkout at a time. A task with an active repair window merges
     under its own window, which stays open until the merge is done; every other
@@ -1371,21 +1320,17 @@ def cmd_merge(args: argparse.Namespace) -> int:
     lock_path, holder_path, release_path = _merge_lock_paths()
     message = args.message or f"merge: {name}"
 
-    # A conflict needs a repair first; the branch's tests would run in vain.
+    # A conflict needs a repair first; the merge would only roll back.
     conflicted = _merge_conflicts(branch)
     if conflicted:
         for conflict_path in conflicted:
             print(f"conflicted: {conflict_path}")
-        print_error(f"merging '{branch}' into {PRIMARY_BRANCH} conflicts; no test ran")
+        print_error(f"merging '{branch}' into {PRIMARY_BRANCH} conflicts")
         _print_merge_conflict_hints(name, window_open=_repair_window_stays_open(holder_path, name))
         return MERGE_CONFLICT_EXIT_CODE
 
-    if _check_branch(worktree_path) != 0:
-        _print_branch_check_hints(name, window_open=_repair_window_stays_open(holder_path, name))
-        return MERGE_CONFLICT_EXIT_CODE
-
-    sweep_landing_checkouts(WORKTREES_DIR)
-    with _claimed_landing(name) as landing:
+    sweep_private_checkouts(WORKTREES_DIR)
+    with private_checkout(LANDING_DIR_PREFIX, name) as landing:
         failure = _create_landing_checkout(landing, worktree_path)
         if failure is not None:
             print_error(f"the landing checkout could not be created: {failure}")
@@ -1427,24 +1372,17 @@ def _land_merge(
     """Land the branch on main through *landing*; return the exit code and whether it landed.
 
     Runs under the merge lock or this task's extended repair window. The merge
-    commit is made and checked in *landing*, which starts from main and main's test
-    records; main only fast-forwards to it and takes its records over. When main
-    moved meanwhile, the merge is made and checked again onto the new main.
+    commit is made and checked in *landing*, which starts from main; main only
+    fast-forwards to it. When main moved meanwhile, the merge is made and checked
+    again onto the new main.
     """
-    from scripts import _test_impact
-
     lock_path, holder_path, _ = _merge_lock_paths()
 
     def window_open() -> bool:
         return window and _repair_window_stays_open(holder_path, name)
 
-    tests_lock = _main_tests_lock_path()
-    # A test run in main, such as one a killed older merge left behind, ends first.
-    with _held_file_lock(tests_lock, notice=MAIN_TESTS_LOCK_NOTICE):
-        if not _roll_back_unfinished_merge():
-            return 1, False
-        with suppress(OSError, sqlite3.Error):
-            _test_impact.copy_data(PROJECT_ROOT, landing)
+    if not _roll_back_unfinished_merge():
+        return 1, False
 
     primary_branch = _read_primary_branch()
     if primary_branch != PRIMARY_BRANCH:
@@ -1495,11 +1433,7 @@ def _land_merge(
             if window_open():
                 print("note: your protected repair window stays open while you fix this")
             return 1, False
-        print(
-            "checking the merge commit: the tests the branch check did not cover and the "
-            "WebUI checks (no output until done)...",
-            flush=True,
-        )
+        print("checking the merge commit (no output until done)...", flush=True)
         return_code, stderr = _commit_landing(landing, message)
         commit = _git_stdout(landing, "rev-parse", "-q", "--verify", "HEAD")
         if return_code != 0 or commit is None or commit.strip() == base:
@@ -1514,12 +1448,7 @@ def _land_merge(
             )
             print(f"hint: retry the merge: python scripts/worktree.py merge {name}")
             return 1, False
-        with _held_file_lock(tests_lock, notice=MAIN_TESTS_LOCK_NOTICE):
-            return_code, stderr = _fast_forward_main(commit)
-            if return_code == 0:
-                # main's records now describe the merge commit, as its check left them.
-                with suppress(OSError, sqlite3.Error):
-                    _test_impact.copy_data(landing, PROJECT_ROOT)
+        return_code, stderr = _fast_forward_main(commit)
         if return_code == 0:
             landed = commit
             break
