@@ -252,7 +252,7 @@ def _gate(label: str, command: list[str], cwd: Path) -> StepResult:
     return StepResult(label, "FAIL", True, _output(result))
 
 
-def _mypy_targets(root: Path, python_files: list[str]) -> list[str]:
+def mypy_targets(root: Path, python_files: list[str]) -> list[str]:
     """Return the configured mypy files plus staged Python files outside them."""
     pyproject = root / "pyproject.toml"
     configured: list[str] = []
@@ -288,7 +288,7 @@ def check_python(root: Path, staged: list[str], dirty: set[str]) -> list[StepRes
         )
         results.append(_gate("ruff check", [*ruff, "check", "--", *python_files], root))
 
-    targets = _mypy_targets(root, python_files)
+    targets = mypy_targets(root, python_files)
     if targets:
         results.extend(check_types(root, targets, set(staged), dirty))
     return results
