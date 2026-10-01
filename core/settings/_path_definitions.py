@@ -348,9 +348,11 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "archive.retention_days",
         "integer",
-        "Days before vBot deletes an archive entry permanently; null keeps entries until "
-        "they are purged. Entries of kind files and entries that may hold the user's own "
-        "folders are never deleted automatically.",
+        "Days after archiving before vBot deletes an archive entry permanently; null keeps "
+        "entries until they are purged. A changed period applies to existing entries "
+        "immediately: lowering it deletes the entries that are now older within the hour, at "
+        "once when changed through vBot. Entries of kind files and entries that 'vbot archive "
+        "list' marks user_folders=yes or origin=recovered are never deleted automatically.",
         default=ARCHIVE_SETTING_DEFAULTS["retention_days"],
         minimum=MIN_ARCHIVE_RETENTION_DAYS,
         maximum=MAX_ARCHIVE_RETENTION_DAYS,
