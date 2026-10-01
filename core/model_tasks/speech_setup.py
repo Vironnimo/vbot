@@ -19,7 +19,7 @@ class LocalSpeechSetup(LocalSetup):
     """One speech engine's installation: the server's STT stack or a managed environment.
 
     Without a directory it installs the shipped ``local-speech`` extra into a
-    source installation's server interpreter (restart required). With a
+    development checkout's server interpreter (restart required). With a
     directory it creates a managed environment: the packaged STT stack, or a
     TTS engine's ``[tool.vbot.local-tts.<engine>]`` recipe.
     """

@@ -12,7 +12,7 @@ a ``[tool.vbot.*]`` recipe in ``pyproject.toml``.
 
 Packaged releases never install into their own runtime: managed environments
 live in the data directory, and the uv bootstrap only reaches the server
-interpreter of a source installation.
+interpreter of a development checkout.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from typing import Any
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("local_engines.setup")
-# The optional extra that brings uv to a source installation's server interpreter.
+# The optional extra that brings uv to a development checkout's server interpreter.
 UV_BOOTSTRAP_EXTRA = "local-tts"
 SETUP_TIMEOUT_S = 3600
 
@@ -173,7 +173,7 @@ class LocalSetup:
         for key in section:
             recipe = recipe[key]
         bootstrap = config["project"]["optional-dependencies"][UV_BOOTSTRAP_EXTRA]
-        # Packaged roles ship uv. Source installations retain their existing
+        # Packaged roles ship uv. Development checkouts retain their existing
         # fixed bootstrap recipe, while immutable packaged roles are untouched.
         if not self._packaged() and await self._pip(bootstrap) != 0:
             self._fail("install_failed")

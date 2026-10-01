@@ -547,7 +547,6 @@ def test_native_host_reports_a_missing_runtime_and_runs_the_private_one(tmp_path
         output,
         role=role,
         version="0.4.3",
-        stable=stable and role != "gui",
     )
     # Without its runtime, a host exits with a report instead of waiting on a
     # dialog; only the GUI companion reports the failure in a dialog.
