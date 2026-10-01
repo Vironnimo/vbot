@@ -64,13 +64,14 @@ export function renameAgent(id, newId, options = {}) {
   return rpc('agent.rename', { id, new_id: newId }, options);
 }
 
-export function deleteAgent(id, options = {}) {
+// Archives the Agent; `permanent` deletes it right away instead.
+export function deleteAgent(id, { permanent = false } = {}, options = {}) {
   requireNonEmptyString(
     id,
     'Agent id must be a non-empty string',
     'agent.delete',
   );
-  return rpc('agent.delete', { id }, options);
+  return rpc('agent.delete', { id, ...permanentFlag(permanent) }, options);
 }
 
 export function listModels(params = {}, options = {}) {
@@ -379,9 +380,10 @@ export function clearOverride(projectId, agentId, field, options = {}) {
   );
 }
 
+// Archives the Project; `permanent` deletes it right away instead.
 export function removeProject(
   projectId,
-  copyRootedAgentIdentityFiles = false,
+  { copyRootedAgentIdentityFiles = false, permanent = false } = {},
   options = {},
 ) {
   requireNonEmptyString(
@@ -389,23 +391,121 @@ export function removeProject(
     'Project id must be a non-empty string',
     'project.rm',
   );
-
-  const requestOptions =
-    copyRootedAgentIdentityFiles &&
-    typeof copyRootedAgentIdentityFiles === 'object'
-      ? copyRootedAgentIdentityFiles
-      : options;
-  const copyFiles =
-    typeof copyRootedAgentIdentityFiles === 'boolean'
-      ? copyRootedAgentIdentityFiles
-      : false;
-
   return rpc(
     'project.rm',
     {
       project_id: projectId,
-      copy_rooted_agent_identity_files: copyFiles,
+      copy_rooted_agent_identity_files: copyRootedAgentIdentityFiles === true,
+      ...permanentFlag(permanent),
     },
-    requestOptions,
+    options,
   );
+}
+
+// A delete sends `permanent` only when it deletes permanently.
+function permanentFlag(permanent) {
+  return permanent === true ? { permanent: true } : {};
+}
+
+const ARCHIVE_PURGE_IDS_MAX = 100;
+
+function archiveFilterParams({ kind, agentId, projectId } = {}) {
+  return {
+    ...(kind ? { kind } : {}),
+    ...(agentId ? { agent_id: agentId } : {}),
+    ...(projectId ? { project_id: projectId } : {}),
+  };
+}
+
+// One page of archive entries, newest first. `cursor` is the previous page's
+// `next_cursor`; `agentId` alone selects an Identity Agent's scope and
+// `projectId` alone every entry of a Project.
+export function listArchiveEntries(
+  { kind = '', agentId = '', projectId = '', cursor = null, limit } = {},
+  options = {},
+) {
+  return rpc(
+    'archive.list',
+    {
+      ...archiveFilterParams({ kind, agentId, projectId }),
+      ...(cursor ? { cursor } : {}),
+      ...(limit === undefined ? {} : { limit }),
+    },
+    options,
+  );
+}
+
+export function showArchiveEntry(entryId, { sessionLimit } = {}, options = {}) {
+  requireNonEmptyString(
+    entryId,
+    'Archive entry id must be a non-empty string',
+    'archive.show',
+  );
+  return rpc(
+    'archive.show',
+    {
+      entry_id: entryId,
+      ...(sessionLimit === undefined ? {} : { session_limit: sessionLimit }),
+    },
+    options,
+  );
+}
+
+// Restores an entry; `targetId` restores it under a new id.
+export function restoreArchiveEntry(
+  entryId,
+  { targetId = '' } = {},
+  options = {},
+) {
+  requireNonEmptyString(
+    entryId,
+    'Archive entry id must be a non-empty string',
+    'archive.restore',
+  );
+  return rpc(
+    'archive.restore',
+    { entry_id: entryId, ...(targetId ? { target_id: targetId } : {}) },
+    options,
+  );
+}
+
+// Deletes entries permanently: the named `entryIds` (1 to 100), or with
+// `all` every entry matching the filters.
+export function purgeArchiveEntries(
+  {
+    entryIds = null,
+    all = false,
+    kind = '',
+    agentId = '',
+    projectId = '',
+  } = {},
+  options = {},
+) {
+  if (all === true) {
+    if (entryIds !== null) {
+      throw new ApiClientError(
+        RPC_ERROR_INVALID_CLIENT_REQUEST,
+        'Archive purge takes entry ids or all, not both',
+        { method: 'archive.purge' },
+      );
+    }
+    return rpc(
+      'archive.purge',
+      { all: true, ...archiveFilterParams({ kind, agentId, projectId }) },
+      options,
+    );
+  }
+  if (
+    !Array.isArray(entryIds) ||
+    entryIds.length < 1 ||
+    entryIds.length > ARCHIVE_PURGE_IDS_MAX ||
+    entryIds.some((entryId) => typeof entryId !== 'string' || !entryId)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      `Archive purge needs 1 to ${ARCHIVE_PURGE_IDS_MAX} entry ids`,
+      { method: 'archive.purge' },
+    );
+  }
+  return rpc('archive.purge', { entry_ids: entryIds }, options);
 }

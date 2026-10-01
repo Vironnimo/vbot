@@ -339,7 +339,9 @@ describe('ProjectsView list and selection', () => {
     );
     confirmDialog('Remove');
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
-    expect(removeProjectMock).toHaveBeenCalledWith('beta', false);
+    expect(removeProjectMock).toHaveBeenCalledWith('beta', {
+      copyRootedAgentIdentityFiles: false,
+    });
     // Removing another Project keeps the shown one.
     expect(navigation.place).toEqual(['alpha']);
   });
@@ -361,7 +363,9 @@ describe('ProjectsView list and selection', () => {
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
-    expect(removeProjectMock).toHaveBeenCalledWith('demo', false);
+    expect(removeProjectMock).toHaveBeenCalledWith('demo', {
+      copyRootedAgentIdentityFiles: false,
+    });
     await waitForCondition(() => document.querySelector('[role="alert"]'));
   });
 
@@ -384,7 +388,9 @@ describe('ProjectsView list and selection', () => {
     confirmDialog('Remove');
 
     await waitForCondition(() => removeProjectMock.mock.calls.length === 1);
-    expect(removeProjectMock).toHaveBeenCalledWith('demo', true);
+    expect(removeProjectMock).toHaveBeenCalledWith('demo', {
+      copyRootedAgentIdentityFiles: true,
+    });
     await waitForCondition(() =>
       document.querySelector('.project-list-state[role="status"]'),
     );

@@ -146,6 +146,10 @@ export {
   setOverride,
   clearOverride,
   removeProject,
+  listArchiveEntries,
+  showArchiveEntry,
+  restoreArchiveEntry,
+  purgeArchiveEntries,
 } from './api/management.js';
 export {
   listChatCommands,

@@ -25,6 +25,7 @@ export const RESOURCE_TOKEN_CALENDAR = 'calendar';
 export const RESOURCE_TOKEN_COMMANDS = 'commands';
 export const RESOURCE_TOKEN_TERMINALS = 'terminals';
 export const RESOURCE_TOKEN_SKILLS = 'skills';
+export const RESOURCE_TOKEN_ARCHIVE = 'archive';
 export const RESOURCE_KIND_DATA_STORE = 'data_store';
 
 // Which token group(s) each resource kind invalidates. Both a model-catalog
@@ -32,7 +33,9 @@ export const RESOURCE_KIND_DATA_STORE = 'data_store';
 // models are selectable, so both bump the "models" group — a consuming surface
 // reloads its model list AND its connection list together. Agent CRUD bumps the
 // "agents" group (re-fetch agent.list) and session create/switch bumps the
-// "sessions" group (re-fetch a session list). New kinds add their mapping here.
+// "sessions" group (re-fetch a session list). An archive entry that appears,
+// changes state or goes bumps the "archive" group (re-fetch archive.list).
+// New kinds add their mapping here.
 const KIND_TOKEN_GROUPS = {
   models: [RESOURCE_TOKEN_MODELS],
   providers: [RESOURCE_TOKEN_MODELS],
@@ -48,6 +51,7 @@ const KIND_TOKEN_GROUPS = {
   commands: [RESOURCE_TOKEN_COMMANDS],
   terminals: [RESOURCE_TOKEN_TERMINALS],
   skills: [RESOURCE_TOKEN_SKILLS],
+  archive: [RESOURCE_TOKEN_ARCHIVE],
 };
 
 // Return the refresh-token group(s) a resource kind invalidates (empty for an

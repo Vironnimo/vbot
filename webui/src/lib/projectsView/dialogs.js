@@ -167,10 +167,9 @@ export function createProjectDialogs({
     state.listError = '';
     state.editError = '';
     try {
-      const result = await operations.removeProject(
-        project.project_id,
-        state.copyRootedAgentIdentityFiles,
-      );
+      const result = await operations.removeProject(project.project_id, {
+        copyRootedAgentIdentityFiles: state.copyRootedAgentIdentityFiles,
+      });
       if (!isActive()) {
         return;
       }

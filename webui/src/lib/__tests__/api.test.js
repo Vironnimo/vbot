@@ -272,14 +272,79 @@ describe('RPC wrappers', () => {
       { display_name: 'Renamed', cwd: 'C:/x', project_id: 'demo' },
     ],
     [
-      'project.rm (identity files not copied by default)',
-      (o) => api.removeProject('demo', o),
+      'project.rm (archived, identity files not copied by default)',
+      (o) => api.removeProject('demo', {}, o),
       { project_id: 'demo', copy_rooted_agent_identity_files: false },
     ],
     [
-      'project.rm (Rooted-Agent copy choice)',
-      (o) => api.removeProject('demo', true, o),
-      { project_id: 'demo', copy_rooted_agent_identity_files: true },
+      'project.rm (Rooted-Agent copy choice, permanent)',
+      (o) =>
+        api.removeProject(
+          'demo',
+          { copyRootedAgentIdentityFiles: true, permanent: true },
+          o,
+        ),
+      {
+        project_id: 'demo',
+        copy_rooted_agent_identity_files: true,
+        permanent: true,
+      },
+    ],
+    [
+      'agent.delete (archived)',
+      (o) => api.deleteAgent('coder', {}, o),
+      { id: 'coder' },
+    ],
+    [
+      'agent.delete (permanent)',
+      (o) => api.deleteAgent('coder', { permanent: true }, o),
+      { id: 'coder', permanent: true },
+    ],
+    [
+      'archive.list (filters and cursor)',
+      (o) =>
+        api.listArchiveEntries(
+          {
+            kind: 'session',
+            agentId: 'coder',
+            projectId: '',
+            cursor: { archived_at: '2026-10-01T10:00:00Z', entry_id: 'arc_1' },
+            limit: 20,
+          },
+          o,
+        ),
+      {
+        kind: 'session',
+        agent_id: 'coder',
+        cursor: { archived_at: '2026-10-01T10:00:00Z', entry_id: 'arc_1' },
+        limit: 20,
+      },
+    ],
+    ['archive.list (unfiltered)', (o) => api.listArchiveEntries({}, o), {}],
+    [
+      'archive.show',
+      (o) => api.showArchiveEntry('arc_1', {}, o),
+      { entry_id: 'arc_1' },
+    ],
+    [
+      'archive.restore',
+      (o) => api.restoreArchiveEntry('arc_1', {}, o),
+      { entry_id: 'arc_1' },
+    ],
+    [
+      'archive.restore (as a new id)',
+      (o) => api.restoreArchiveEntry('arc_1', { targetId: 'coder-2' }, o),
+      { entry_id: 'arc_1', target_id: 'coder-2' },
+    ],
+    [
+      'archive.purge (entries)',
+      (o) => api.purgeArchiveEntries({ entryIds: ['arc_1', 'arc_2'] }, o),
+      { entry_ids: ['arc_1', 'arc_2'] },
+    ],
+    [
+      'archive.purge (all matching)',
+      (o) => api.purgeArchiveEntries({ all: true, projectId: 'demo' }, o),
+      { all: true, project_id: 'demo' },
     ],
     [
       'project.set_override (numeric 0 sent verbatim)',
@@ -351,9 +416,14 @@ describe('RPC wrappers', () => {
       { agent_id: 'alpha', session_id: 'session-1', title: '' },
     ],
     [
-      'session.delete',
-      (o) => api.deleteSession('alpha', 'session-1', o),
+      'session.delete (archived)',
+      (o) => api.deleteSession('alpha', 'session-1', {}, o),
       { agent_id: 'alpha', session_id: 'session-1' },
+    ],
+    [
+      'session.delete (permanent)',
+      (o) => api.deleteSession('alpha', 'session-1', { permanent: true }, o),
+      { agent_id: 'alpha', session_id: 'session-1', permanent: true },
     ],
     [
       'chat.cancel',
@@ -567,6 +637,16 @@ describe('RPC wrappers', () => {
       'a Project without cwd',
       () => api.addProject({ display_name: 'Demo' }),
       'project.add',
+    ],
+    [
+      'an archive purge without entries',
+      () => api.purgeArchiveEntries({ entryIds: [] }),
+      'archive.purge',
+    ],
+    [
+      'an archive purge naming entries and all',
+      () => api.purgeArchiveEntries({ entryIds: ['arc_1'], all: true }),
+      'archive.purge',
     ],
     [
       'non-object Project changes',
