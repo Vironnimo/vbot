@@ -54,6 +54,7 @@ from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     is_valid_project_id,
 )
+from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.tree_move import move_tree
@@ -449,31 +450,42 @@ class ProjectStore:
         """Move an archived Anchor back as ``target_id`` for the caller's commit.
 
         Refuses a taken id and a repo another Project claims before anything
-        changes. The archived ``project.json`` is rewritten to the target id
-        first; unknown fields stay, and a repeated rewrite gives the same
-        document. A failing body moves the Anchor back into ``source``.
+        changes. Once moved, its ``project.json`` is rewritten to the target id;
+        unknown fields stay. If the rewrite or the body raises, ``project.json``
+        gets its archived bytes back and the Anchor moves back into ``source``,
+        so a failed restore leaves the payload as it was.
         """
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_project_id(target_id)
             if self.restore_target_problem(target_id) is not None:
                 raise ProjectAlreadyExistsError(f"Project already exists: {target_id}")
-            path = source / _PROJECT_CONFIG_FILENAME
-            project = project_from_dict(load_validated_project_json(path))
+            project = project_from_dict(
+                load_validated_project_json(source / _PROJECT_CONFIG_FILENAME)
+            )
             self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
             restored = replace(project, project_id=target_id, updated_at=_utc_now())
-            try:
-                write_json_document(path, restored.to_dict(), project_format())
-            except JsonDocumentWriteError as error:
-                raise ProjectError(str(error)) from error
             project_dir = self._project_dir(target_id)
+            config = project_dir / _PROJECT_CONFIG_FILENAME
             try:
+                archived_document = (source / _PROJECT_CONFIG_FILENAME).read_bytes()
                 project_dir.parent.mkdir(parents=True, exist_ok=True)
                 move_tree(source, project_dir)
             except OSError as exc:
                 raise ProjectError(f"Project restore failed: {exc}") from exc
             try:
-                yield self._read_project(project_dir / _PROJECT_CONFIG_FILENAME)
+                try:
+                    write_json_document(config, restored.to_dict(), project_format())
+                except JsonDocumentWriteError as error:
+                    raise ProjectError(str(error)) from error
+                yield self._read_project(config)
             except BaseException as exc:
+                try:
+                    atomic_write_bytes(config, archived_document)
+                except OSError as error:
+                    # The payload keeps the rewritten document, which restores all the same.
+                    _LOGGER.warning(
+                        "Could not return %s to its archived content: %s", config, error
+                    )
                 _move_back(project_dir, source, exc, "Project restore failed")
                 raise
 

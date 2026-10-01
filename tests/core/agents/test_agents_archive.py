@@ -176,6 +176,7 @@ def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fiel
     document = json.loads((payload / "agent.json").read_text(encoding="utf-8"))
     document["future_field"] = {"kept": True}
     (payload / "agent.json").write_text(json.dumps(document), encoding="utf-8")
+    archived = (payload / "agent.json").read_bytes()
 
     with (
         pytest.raises(AgentAlreadyExistsError),
@@ -188,6 +189,8 @@ def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fiel
     ):
         raise RuntimeError("database unavailable")
     assert not store.exists("coder-2")
+    # A failed restore leaves the payload exactly as archived.
+    assert (payload / "agent.json").read_bytes() == archived
     with store.restore_files(payload, "coder-2", workspace=None, root_project_id=None) as agent:
         pass
 

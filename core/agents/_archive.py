@@ -43,6 +43,7 @@ from core.agents._workspace import (
 )
 from core.json_documents import JsonDocumentWriteError, document_version_state, write_json_document
 from core.settings import is_valid_agent_id
+from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.tree_move import move_tree
@@ -98,6 +99,18 @@ def _move_back(source: Path, destination: Path, error: BaseException, failure: s
         move_tree(source, destination)
     except OSError as move_error:
         raise AgentError(f"{failure} ({error}); Agent files retained at {source}") from move_error
+
+
+def _return_to_payload(config: Path, archived_document: bytes) -> None:
+    """Give a restored ``agent.json`` its archived bytes back before it returns to the payload.
+
+    Should that fail, the payload keeps the rewritten document, which restores
+    all the same; the failure is logged.
+    """
+    try:
+        atomic_write_bytes(config, archived_document)
+    except OSError as error:
+        _LOGGER.warning("Could not return %s to its archived content: %s", config, error)
 
 
 def remove_delegation_grants(
@@ -175,11 +188,12 @@ def restore_files(
 ) -> Iterator[Agent]:
     """Move an archived Agent payload to ``agents/<target_id>`` for the caller's commit.
 
-    The payload's ``agent.json`` is first rewritten to the target id, the
-    Workspace and the root; unknown fields stay, and a repeated rewrite gives the
-    same document. ``workspace=None`` keeps the archived Workspace, moved along
-    when it lies inside the Agent's directory. If the body raises, the tree moves
-    back into the payload.
+    Once moved, its ``agent.json`` is rewritten to the target id, the Workspace
+    and the root; unknown fields stay. ``workspace=None`` keeps the archived
+    Workspace, moved along when it lies inside the Agent's directory. If the
+    rewrite or the body raises, ``agent.json`` gets its archived bytes back and
+    the tree moves back into the payload, so a failed restore leaves the payload
+    as it was.
     """
     with store._snapshot_barrier.compound_mutation(), store._change():
         _validate_agent_id(target_id)
@@ -187,8 +201,7 @@ def restore_files(
             raise AgentAlreadyExistsError(f"Agent already exists: {target_id}")
         agents_dir = store.data_dir / "agents"
         home = store._agent_dir(target_id)
-        path = source / "agent.json"
-        data = load_validated_agent_json(path)
+        data = load_validated_agent_json(source / "agent.json")
         archived_id = str(data["id"])
         agent = _agent_from_dict(
             data,
@@ -208,25 +221,29 @@ def restore_files(
             updated_at=_utc_now(),
         )
         try:
-            write_json_document(
-                path,
-                _agent_document(
-                    restored,
-                    workspace=_workspace_for_storage(restored.workspace, data_dir=store.data_dir),
-                ),
-                AGENT_FORMAT,
-            )
-        except JsonDocumentWriteError as error:
-            raise AgentError(str(error)) from error
-        try:
+            archived_document = (source / "agent.json").read_bytes()
             agents_dir.mkdir(parents=True, exist_ok=True)
             move_tree(source, home)
         except OSError as exc:
             raise AgentError(f"Agent restore failed: {exc}") from exc
         try:
+            try:
+                write_json_document(
+                    home / "agent.json",
+                    _agent_document(
+                        restored,
+                        workspace=_workspace_for_storage(
+                            restored.workspace, data_dir=store.data_dir
+                        ),
+                    ),
+                    AGENT_FORMAT,
+                )
+            except JsonDocumentWriteError as error:
+                raise AgentError(str(error)) from error
             store._seed_workspace(Path(restored.workspace))
             yield _apply_defaults(restored, store._agent_defaults())
         except BaseException as exc:
+            _return_to_payload(home / "agent.json", archived_document)
             _move_back(home, source, exc, "Agent restore failed")
             raise
 

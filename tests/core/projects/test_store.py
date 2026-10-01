@@ -220,6 +220,15 @@ def test_archive_files_moves_only_the_anchor_and_restore_files_brings_it_back(
     assert marker.read_text(encoding="utf-8") == "repo content"
     inspected = store.inspect_archived(payload)
     assert inspected.problem is None and inspected.project is not None
+    archived_bytes = (payload / "project.json").read_bytes()
+    with (
+        pytest.raises(RuntimeError, match="database unavailable"),
+        store.restore_files(payload, "vbot-old"),
+    ):
+        raise RuntimeError("database unavailable")
+    # A failed restore leaves the payload exactly as archived.
+    assert (payload / "project.json").read_bytes() == archived_bytes
+    assert not store.exists("vbot-old")
     with store.restore_files(payload, "vbot-old") as restored:
         assert restored.project_id == "vbot-old"
     assert not payload.exists()
