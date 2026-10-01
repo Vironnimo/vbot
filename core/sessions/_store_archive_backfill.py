@@ -46,9 +46,12 @@ from core.utils.timestamps import format_canonical_timestamp, parse_timestamp, u
 
 _LOGGER = get_logger("sessions")
 
-# The pairing window of a legacy tree: an older vBot archived the Sessions
-# right after it moved the tree, so their archive time follows the tree's
-# modification time closely.
+# The pairing window of a legacy Agent tree: an older vBot moved the Agent's
+# directories into a fresh container right before it archived the Sessions, so
+# their archive time follows the container's modification time closely. A
+# legacy Project archive renamed the anchor directory itself, which keeps its
+# own modification time, the Project's last edit: only a lower bound, so a
+# Project tree has no upper bound.
 _PAIRING_BEFORE = timedelta(seconds=2)
 _PAIRING_AFTER = timedelta(minutes=10)
 # Legacy roots under archive/ that never hold one flat Agent archive.
@@ -90,9 +93,10 @@ class _LegacyTree:
 def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> ArchiveAdoption:
     """Give every legacy archive tree and every archived Session without one an entry.
 
-    An Agent or Project tree takes the Sessions its archive left when their
-    archive time lies within the pairing window after the tree's modification
-    time. Unreadable directories are skipped and adopted at the next run.
+    An Agent tree takes the Sessions its archive left when their archive time
+    lies within the pairing window after the tree's modification time; a Project
+    tree takes the latest of its Project's archives at or after that time.
+    Unreadable directories are skipped and adopted at the next run.
     """
     now = utc_now_timestamp()
     batches = _unrecorded_batches(connection)
@@ -236,15 +240,19 @@ def _add_members(connection: sqlite3.Connection, entry_key: int, keys: Sequence[
 
 
 def _claim_batches(tree: _LegacyTree, batches: list[_Batch]) -> list[_Batch]:
-    """Take the batches one Agent or Project archive left, the closest in time first.
+    """Take the batches one Agent or Project archive left.
 
-    An Agent tree takes one Identity-scope batch of its id. A Project tree takes
-    every Agent's batch of its id archived at one instant, which is how one
-    Project archive left them.
+    An Agent tree takes the Identity-scope batch of its id closest in time within
+    the pairing window. A Project tree takes every Agent's batch of its id
+    archived at one instant, which is how one Project archive left them: the
+    latest such instant at or after the tree's modification time, because a
+    repeated archive of the same id replaced the earlier tree.
     """
     if tree.kind not in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT):
         return []
-    lower, upper = tree.mtime - _PAIRING_BEFORE, tree.mtime + _PAIRING_AFTER
+    project = tree.kind == ARCHIVE_KIND_PROJECT
+    lower = tree.mtime - _PAIRING_BEFORE
+    upper = None if project else tree.mtime + _PAIRING_AFTER
     candidates: dict[str, list[_Batch]] = {}
     for batch in batches:
         if not batch.keys or batch.owner_name is not None:
@@ -257,15 +265,24 @@ def _claim_batches(tree: _LegacyTree, batches: list[_Batch]) -> list[_Batch]:
         if tree.kind == ARCHIVE_KIND_PROJECT and batch.project_id != tree.subject_id:
             continue
         archived_at = _parsed(batch.archived_at)
-        if archived_at is not None and lower <= archived_at <= upper:
-            candidates.setdefault(batch.archived_at, []).append(batch)
+        if (
+            archived_at is None
+            or archived_at < lower
+            or (upper is not None and archived_at > upper)
+        ):
+            continue
+        candidates.setdefault(batch.archived_at, []).append(batch)
     if not candidates:
         return []
-    closest = min(
-        candidates,
-        key=lambda archived_at: abs((_parsed(archived_at) or tree.mtime) - tree.mtime),
-    )
-    claimed = candidates[closest]
+
+    def instant(archived_at: str) -> datetime:
+        return _parsed(archived_at) or tree.mtime
+
+    if project:
+        chosen = max(candidates, key=instant)
+    else:
+        chosen = min(candidates, key=lambda archived_at: abs(instant(archived_at) - tree.mtime))
+    claimed = candidates[chosen]
     batches[:] = [batch for batch in batches if batch not in claimed]
     return claimed
 

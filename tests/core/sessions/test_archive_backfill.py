@@ -75,7 +75,7 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
         ("ev-01", "e-2"),
     ):
         manager.create(agent_id, session_id=session_id)
-    for agent_id, session_id in (("lead", "t-1"), ("coder", "t-2")):
+    for agent_id, session_id in (("lead", "t-0"), ("lead", "t-1"), ("coder", "t-2")):
         manager.create(agent_id, session_id=session_id, project_id="team")
     for participant in ("p-1", "p-2"):
         manager.create_bound_temporary_session(
@@ -86,6 +86,8 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
             config={},
         )
     manager.close()
+    # An earlier archive of the Project "team", whose tree the latest one replaced.
+    _archive_rows(tmp_path, _BASE - timedelta(days=5), "t-0")
     _archive_rows(tmp_path, _BASE + timedelta(seconds=30), "d-1", "d-2")
     _archive_rows(tmp_path, _BASE + timedelta(hours=1), "m-1")
     _archive_rows(tmp_path, _BASE + timedelta(hours=2, seconds=5), "t-1", "t-2")
@@ -110,7 +112,8 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     _touch(archive / "agents/deepseek", _BASE)
     # main's tree is newer than the pairing window after its only archived Session.
     _touch(archive / "agents/main", _BASE + timedelta(hours=1, minutes=16))
-    _touch(archive / "projects/team", _BASE + timedelta(hours=2))
+    # Archiving a Project renamed its directory, which kept the time of its last edit.
+    _touch(archive / "projects/team", _BASE - timedelta(days=2))
     started = format_canonical_timestamp(datetime.now(UTC) - timedelta(seconds=1))
 
     manager = ChatSessionManager(tmp_path)
@@ -122,6 +125,7 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
         (ARCHIVE_KIND_AGENT, "coder"),
         (ARCHIVE_KIND_PROJECT, "team"),
         (ARCHIVE_KIND_SESSION, "m-1"),
+        (ARCHIVE_KIND_SESSION, "t-0"),
         (ARCHIVE_KIND_SESSION, "e-1"),
         (ARCHIVE_KIND_OWNER_GROUP, "docs"),
         (ARCHIVE_KIND_FILES, "archive/agents/.coder-archive-x1"),
@@ -137,6 +141,7 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     assert summary[(ARCHIVE_KIND_AGENT, "main")] == (0, "", "main")
     assert summary[(ARCHIVE_KIND_SESSION, "m-1")] == (1, "", "main")
     assert summary[(ARCHIVE_KIND_PROJECT, "team")] == (2, "team", "")
+    assert summary[(ARCHIVE_KIND_SESSION, "t-0")] == (1, "team", "lead")
     assert summary[(ARCHIVE_KIND_SESSION, "e-1")] == (2, "", "ev-01")
     assert summary[(ARCHIVE_KIND_OWNER_GROUP, "docs")] == (2, "", "")
     assert entries[(ARCHIVE_KIND_OWNER_GROUP, "docs")].owner_name == "swarm"
@@ -155,12 +160,14 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     main = entries[(ARCHIVE_KIND_AGENT, "main")]
     assert main.facts["backfill"]["match"] == "none"
     assert main.archived_at == main.facts["backfill"]["tree_mtime"]
-    assert entries[(ARCHIVE_KIND_PROJECT, "team")].facts == {
+    team = entries[(ARCHIVE_KIND_PROJECT, "team")]
+    assert team.archived_at == format_canonical_timestamp(_BASE + timedelta(hours=2, seconds=5))
+    assert team.facts == {
         "payload_format": 1,
         "cwd": "C:/repo/team",
         "backfill": {
             "match": "timestamp",
-            "tree_mtime": format_canonical_timestamp(_BASE + timedelta(hours=2)),
+            "tree_mtime": format_canonical_timestamp(_BASE - timedelta(days=2)),
         },
     }
     assert entries[(ARCHIVE_KIND_PROJECT, "team")].trees == (
