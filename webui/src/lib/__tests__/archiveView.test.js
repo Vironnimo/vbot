@@ -134,6 +134,11 @@ describe('archive view rules', () => {
       }),
     ],
     [
+      'entries kept because they may hold folders of the user, without a warning',
+      { purged: [], kept: [{ entry_id: 'e1', reason: 'files' }] },
+      () => ({ title: t('archive.purge.keptOne'), variant: 'info' }),
+    ],
+    [
       'that nothing was deleted',
       {},
       () => ({ title: t('archive.purge.nothing'), variant: 'info' }),

@@ -38,8 +38,8 @@
     archiveScopeOptions,
     canRestoreAs,
     hasArchiveFilters,
-    isKeptFromRetention,
     isPurgeable,
+    mayHoldUserFolders,
     purgeConfirmText,
     purgeResultToast,
     restoreConflictText,
@@ -87,7 +87,7 @@
   let busy = $state(false);
   let countingAll = $state(false);
   // The deletion awaiting confirmation: { mode: 'one' | 'selected' | 'all',
-  // entryIds, filters, count, name, holdsOwnFolders }.
+  // entryIds, filters, count, name, holdsOwnFolders, kept }.
   let purgeConfirm = $state(null);
   // The open "Restore as" dialog: { entry, conflictText, error }.
   let restoreAs = $state(null);
@@ -180,13 +180,6 @@
 
   function adoptRetention(days) {
     applyArchiveRetention(days);
-  }
-
-  // Whether a listed entry may hold folders of the user's own: older files
-  // always may; another entry shows it only while automatic deletion is on
-  // (it is then the one kept from it).
-  function mayHoldOwnFolders(entry) {
-    return entry?.kind === 'files' || isKeptFromRetention(entry, retentionDays);
   }
 
   async function loadList({ keepCount = false } = {}) {
@@ -414,7 +407,7 @@
       name: entry.label || entry.subject_id,
       count: 1,
       holdsOwnFolders:
-        entry.kind === 'files' || trees.some((tree) => tree.user_folder),
+        mayHoldUserFolders(entry) || trees.some((tree) => tree.user_folder),
     };
   }
 
@@ -425,7 +418,7 @@
       mode: 'selected',
       entryIds: selected.map((entry) => entry.entry_id),
       count: selected.length,
-      holdsOwnFolders: selected.some(mayHoldOwnFolders),
+      holdsOwnFolders: selected.some(mayHoldUserFolders),
     };
   }
 
@@ -452,16 +445,28 @@
       }
       if (disposed || filters.kind !== filterSnapshot.kind) return;
       if (filters.scope !== filterSnapshot.scope) return;
+      // Deleting every matching entry keeps those that may hold the user's
+      // own folders; only deleting one by itself removes it.
       const purgeable = matching.filter(isPurgeable);
-      if (purgeable.length === 0) {
-        onToast({ title: t('archive.purgeAll.nothing'), variant: 'info' });
+      const kept = purgeable.filter(
+        (entry) => entry.state === 'archived' && mayHoldUserFolders(entry),
+      );
+      const count = purgeable.length - kept.length;
+      if (count === 0) {
+        onToast({
+          title: kept.length
+            ? t('archive.purgeAll.onlyOwnFolders')
+            : t('archive.purgeAll.nothing'),
+          variant: 'info',
+        });
         return;
       }
       purgeConfirm = {
         mode: 'all',
         filters: filterSnapshot,
-        count: purgeable.length,
-        holdsOwnFolders: purgeable.some(mayHoldOwnFolders),
+        count,
+        holdsOwnFolders: false,
+        kept: kept.length,
       };
     } catch (error) {
       onToast({

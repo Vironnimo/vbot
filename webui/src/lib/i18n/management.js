@@ -975,12 +975,22 @@ export default Object.freeze({
     '1 item could not be deleted and stays in the Archive unchanged. Try again later.',
   'archive.purge.failedMany':
     '{count} items could not be deleted and stay in the Archive unchanged. Try again later.',
+  'archive.purge.keptOne':
+    '1 item that may hold folders of your own was kept. Delete it by itself to remove it.',
+  'archive.purge.keptMany':
+    '{count} items that may hold folders of your own were kept. Delete each by itself to remove it.',
   'archive.purge.nothing': 'Nothing was deleted.',
   'archive.purge.error': 'Could not delete',
   'archive.purgeAll.everything': 'Empty Archive…',
   'archive.purgeAll.everythingTitle': 'Empty the Archive?',
   'archive.purgeAll.matching': 'Delete all matching…',
   'archive.purgeAll.nothing': 'Nothing here can be deleted right now.',
+  'archive.purgeAll.onlyOwnFolders':
+    'Deleting everything here skips items that may hold folders of your own. Delete each by itself to remove it.',
+  'archive.purgeAll.keptOne':
+    '1 item that may hold folders of your own is kept; delete it by itself to remove it.',
+  'archive.purgeAll.keptMany':
+    '{count} items that may hold folders of your own are kept; delete each by itself to remove it.',
   'archive.detail.breadcrumb': 'Breadcrumb',
   'archive.detail.backToList': 'Back to the Archive',
   'archive.detail.backHint': 'Back',

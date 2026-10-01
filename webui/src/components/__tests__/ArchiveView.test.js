@@ -43,6 +43,7 @@ function entry(fields) {
     session_count: 1,
     restorable: true,
     not_restorable_reason: null,
+    may_hold_user_folders: false,
     ...fields,
   };
 }
@@ -71,6 +72,7 @@ const LEGACY = entry({
   session_count: 0,
   restorable: false,
   not_restorable_reason: 'kind_not_restorable',
+  may_hold_user_folders: true,
 });
 
 // The App navigator goes up with Back when the list is the previous entry,
@@ -358,7 +360,8 @@ describe('ArchiveView', () => {
       })
       .mockResolvedValueOnce({
         purged: [{ entry_id: 'e-coder' }, { entry_id: 'e-notes' }],
-        pending: [{ entry_id: 'e-legacy', reason: 'stopped' }],
+        pending: [],
+        kept: [{ entry_id: 'e-legacy', reason: 'files' }],
       });
     const onToast = vi.fn();
     mountView({ onToast });
@@ -390,7 +393,8 @@ describe('ArchiveView', () => {
       variant: 'success',
     });
 
-    // Every matching entry: the files entry may hold the user's own folders.
+    // Every matching entry: the files entry may hold the user's own folders,
+    // so deleting everything keeps it.
     await waitForCondition(() =>
       document.body.textContent.includes(t('archive.purgeAll.everything')),
     );
@@ -399,15 +403,15 @@ describe('ArchiveView', () => {
     const dialog = document.querySelector('[role="dialog"]');
     expect(dialog.textContent).toContain(t('archive.purgeAll.everythingTitle'));
     expect(dialog.textContent).toContain(
-      t('archive.purgeMany.confirmOwnFolders', { count: 3 }),
+      `${t('archive.purgeMany.confirm', { count: 2 })} ${t('archive.purgeAll.keptOne')}`,
     );
     dialogButton(t('archive.deletePermanently')).click();
     await waitForCondition(() => onToast.mock.calls.length === 2);
     expect(purgeMock).toHaveBeenLastCalledWith({ all: true, ...NO_FILTERS });
     expect(onToast).toHaveBeenLastCalledWith({
       title: t('archive.purge.successMany', { count: 2 }),
-      message: t('archive.purge.pendingOne'),
-      variant: 'warn',
+      message: t('archive.purge.keptOne'),
+      variant: 'success',
     });
   });
 

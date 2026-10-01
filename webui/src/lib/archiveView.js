@@ -160,6 +160,14 @@ export function isPurgeable(entry) {
   );
 }
 
+// Whether an entry may hold folders of the user's own: files from older vBot
+// versions, or a folder an older vBot moved into the Archive. Neither automatic
+// deletion nor deleting every matching entry removes it; deleting it by
+// itself does.
+export function mayHoldUserFolders(entry) {
+  return entry?.may_hold_user_folders === true || entry?.kind === 'files';
+}
+
 // An entry vBot never deletes on its own while retention is on: files from
 // older vBot versions and entries that may hold the user's own folders.
 export function isKeptFromRetention(entry, retentionDays) {
@@ -434,8 +442,25 @@ export function archiveErrorText(error) {
 }
 
 // `holdsOwnFolders`: an entry being deleted may hold folders of the user's
-// own, which the deletion removes too.
-export function purgeConfirmText({ count, name = '', holdsOwnFolders }) {
+// own, which the deletion removes too. `kept`: how many matching entries that
+// may hold such folders deleting every matching entry leaves alone.
+export function purgeConfirmText({
+  count,
+  name = '',
+  holdsOwnFolders,
+  kept = 0,
+}) {
+  const keptText = countText(
+    kept,
+    () => t('archive.purgeAll.keptOne'),
+    (count) => t('archive.purgeAll.keptMany', { count }),
+  );
+  return [deleteConfirmText({ count, name, holdsOwnFolders }), keptText]
+    .filter(Boolean)
+    .join(' ');
+}
+
+function deleteConfirmText({ count, name, holdsOwnFolders }) {
   if (name) {
     return holdsOwnFolders
       ? t('archive.purge.confirmOwnFolders', { name })
@@ -463,10 +488,17 @@ function countText(count, one, many) {
 
 // The toast after a purge: what was deleted, what vBot finishes later, and
 // what stays in the Archive and why. Entries no longer in the Archive (another
-// action deleted or restored them) count as done.
+// action deleted or restored them) count as done; entries that may hold the
+// user's own folders, which deleting every matching entry keeps, are named
+// without a warning.
 export function purgeResultToast(result, { name = '' } = {}) {
   const purged = listLength(result?.purged);
   const gone = listLength(result?.gone);
+  const kept = countText(
+    listLength(result?.kept),
+    () => t('archive.purge.keptOne'),
+    (count) => t('archive.purge.keptMany', { count }),
+  );
   const pending = listLength(result?.pending);
   const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
   const busy = skipped.filter((entry) => entry?.reason === 'busy').length;
@@ -504,8 +536,10 @@ export function purgeResultToast(result, { name = '' } = {}) {
       (count) => t('archive.purge.goneMany', { count }),
     );
   } else {
-    title = notes.shift() ?? t('archive.purge.nothing');
+    title = notes.shift() ?? '';
   }
+  if (kept) notes.push(kept);
+  if (!title) title = notes.shift() ?? t('archive.purge.nothing');
   return {
     title,
     ...(notes.length > 0 ? { message: notes.join(' ') } : {}),
