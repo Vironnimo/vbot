@@ -39,7 +39,9 @@ async function removeProject(page) {
   await removeDialog
     .getByRole("button", { exact: true, name: "Remove" })
     .click();
-  await expect(projects.getByText(/^Project removed\./)).toBeVisible();
+  await expect(
+    projects.getByText(/^Project moved to the Archive\./),
+  ).toBeVisible();
   await expect(
     projects.getByText("No projects yet", { exact: true }),
   ).toBeVisible();
