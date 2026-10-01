@@ -263,7 +263,8 @@ class SessionArchiveLedger:
             lambda connection: _store_archive.page(connection, filters, cursor, limit)
         )
 
-    def members(self, entry_key: int, *, limit: int = 100) -> tuple[ArchiveMember, ...]:
+    def members(self, entry_key: int, *, limit: int | None = 100) -> tuple[ArchiveMember, ...]:
+        """The entry's member Sessions in archive order: the first ``limit``, all for ``None``."""
         return self._store._read(
             lambda connection: _store_archive.members(connection, entry_key, limit)
         )

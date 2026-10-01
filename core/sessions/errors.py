@@ -55,6 +55,17 @@ class ArchiveEntryBusyError(ArchiveEntryError):
         self.state = state
 
 
+class ArchiveMembersManagedError(ArchiveEntryError):
+    """Raised when an Extension manages member Sessions a restore would make live."""
+
+    def __init__(self, entry_id: str) -> None:
+        super().__init__(
+            f"cannot restore archive entry {entry_id}: an Extension manages its Sessions; "
+            "use that Extension to resume them"
+        )
+        self.entry_id = entry_id
+
+
 class ArchiveAddressTakenError(ArchiveEntryError):
     """Raised when live Sessions occupy addresses a restore would give back."""
 

@@ -41,6 +41,7 @@ from core.sessions.errors import (
     ArchiveAddressTakenError,
     ArchiveEntryBusyError,
     ArchiveEntryNotFoundError,
+    ArchiveMembersManagedError,
     SessionStoreCorruptError,
 )
 from core.utils.ids import new_id
@@ -543,7 +544,8 @@ def commit_restore(
     live Session at any resulting address refuses the whole restore with
     :class:`ArchiveAddressTakenError`. ``strip_channel_keys`` drops the Channel
     routing of the members. The membership goes and the entry becomes
-    ``restored``.
+    ``restored``. Members an Extension manages refuse it with
+    :class:`ArchiveMembersManagedError`.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_RESTORING)
     owned = connection.execute(
@@ -552,7 +554,7 @@ def commit_restore(
         (entry_key,),
     ).fetchone()
     if owned is not None:
-        raise ChatSessionError(_store_values._OWNER_MANAGED_ERROR)
+        raise ArchiveMembersManagedError(str(row["entry_id"]))
     targets, taken = _restore_targets(
         connection, entry_key, project_id=project_id, agent_id=agent_id, session_id=session_id
     )
@@ -756,15 +758,15 @@ def page(
 
 
 def members(
-    connection: sqlite3.Connection, entry_key: int, limit: int
+    connection: sqlite3.Connection, entry_key: int, limit: int | None
 ) -> tuple[ArchiveMember, ...]:
-    """The first ``limit`` member Sessions of an entry, in archive order."""
+    """The first ``limit`` member Sessions of an entry (all for ``None``), in archive order."""
     rows = connection.execute(
         "SELECT s.project_id, s.agent_id, s.session_id, s.generation_id, s.title, s.auto_title, "
         "s.created_at, s.last_activity_at FROM archive_entry_sessions AS m "
         "JOIN sessions AS s ON s.session_key = m.session_key WHERE m.entry_key = ? "
         "ORDER BY m.session_key LIMIT ?",
-        (entry_key, limit),
+        (entry_key, -1 if limit is None else limit),
     ).fetchall()
     return tuple(
         ArchiveMember(

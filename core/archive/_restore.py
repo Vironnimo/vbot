@@ -40,6 +40,7 @@ from core.sessions import (
     ArchiveEntry,
     ArchiveEntryBusyError,
     ArchiveEntryNotFoundError,
+    ArchiveMembersManagedError,
     ArchiveTree,
     SessionAddress,
 )
@@ -98,7 +99,8 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
 
     Raises :class:`ArchiveRestoreConflictError` when the target's id or Session
     addresses are taken, :class:`ArchiveEntryBusyError` when another operation
-    holds the entry and :class:`ArchiveNotRestorableError` for every other blocker.
+    holds the entry and :class:`ArchiveNotRestorableError` for every other blocker,
+    such as member Sessions an Extension manages (``owner_managed``).
     """
     ledger = services.sessions.archive_ledger
     plan = _plan(services, _require_entry(services, entry_id), target_id)
@@ -117,6 +119,17 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
             _abort(services, plan)
             raise ArchiveRestoreConflictError(
                 entry.entry_id, (_addresses_taken(error.addresses),)
+            ) from error
+        except ArchiveMembersManagedError as error:
+            _abort(services, plan)
+            raise ArchiveNotRestorableError(
+                entry.entry_id,
+                (
+                    RestoreProblem(
+                        "owner_managed",
+                        "an Extension manages its Sessions; use that Extension to resume them",
+                    ),
+                ),
             ) from error
         except BaseException:
             _abort(services, plan)
@@ -361,8 +374,10 @@ def _plan_workspace(
             return default, (moved, source / "workspace")
         findings.block(
             "workspace_path_taken",
-            f"the Workspace folder {folder} and the default Workspace are both in use",
+            f"the archived Workspace returns to {folder}, which is in use, and so is the "
+            f"Agent's default Workspace; move or rename {folder}, then restore again",
             path=None if folder is None else str(folder),
+            archived_workspace=str(moved),
         )
         return None, None
     workspace = Path(agent.workspace)

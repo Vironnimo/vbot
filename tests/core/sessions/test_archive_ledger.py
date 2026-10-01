@@ -22,6 +22,7 @@ from core.sessions import (
     ArchiveEntryBusyError,
     ArchiveEntryFilter,
     ArchiveEntryNotFoundError,
+    ArchiveMembersManagedError,
     ArchiveScope,
     ArchiveTree,
     ChatSessionManager,
@@ -99,6 +100,8 @@ def test_scope_archive_commits_with_session_states_and_abandon_leaves_them_live(
         "one",
         "two",
     ]
+    assert len(ledger.members(ref.entry_key, limit=1)) == 1
+    assert len(ledger.members(ref.entry_key, limit=None)) == 2
     assert _states(manager) == {
         "one": "archived",
         "two": "archived",
@@ -112,7 +115,9 @@ def test_scope_archive_commits_with_session_states_and_abandon_leaves_them_live(
     assert changes == []
 
 
-def test_owner_managed_sessions_refuse_a_scope_archive(manager: ChatSessionManager) -> None:
+def test_owner_managed_sessions_refuse_a_scope_archive_and_a_restore(
+    manager: ChatSessionManager,
+) -> None:
     ledger = manager.archive_ledger
     manager.create("temporary", session_id="ordinary")
     manager.create_bound_temporary_session(
@@ -129,6 +134,25 @@ def test_owner_managed_sessions_refuse_a_scope_archive(manager: ChatSessionManag
 
     assert _entry(manager, ref.entry_id).state == ARCHIVE_STATE_ARCHIVING
     assert set(_states(manager).values()) == {"live"}
+
+    # An Extension took over an archived member: a restore is refused as an archive error.
+    ledger.abandon(ref.entry_key)
+    archived = ledger.begin(ARCHIVE_KIND_AGENT, subject_id="coder", agent_id="coder")
+    manager.create("coder", session_id="adopted")
+    ledger.commit_scope(archived.entry_key, ArchiveScope(agent_id="coder"))
+    with sqlite3.connect(manager._store.path) as connection:
+        connection.execute(
+            "INSERT INTO temporary_session_bindings "
+            "(session_key, owner_name, group_id, participant_id, config_json) "
+            "SELECT session_key, 'swarm', 'other', 'peer-2', '{}' FROM sessions "
+            "WHERE session_id = 'adopted'"
+        )
+    ledger.begin_restore(archived.entry_id, {"target_id": None})
+
+    with pytest.raises(ArchiveMembersManagedError, match="an Extension manages its Sessions"):
+        ledger.commit_restore(archived.entry_key)
+
+    assert _states(manager)["adopted"] == "archived"
 
 
 @pytest.mark.asyncio

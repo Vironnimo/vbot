@@ -298,7 +298,7 @@ class ArchiveService:
         if entry.kind == ARCHIVE_KIND_PROJECT:
             return runs.project_admission_guard(target)
         members = await self._services.sessions.run_async(
-            self._services.sessions.archive_ledger.members, entry.entry_key, limit=1000
+            self._services.sessions.archive_ledger.members, entry.entry_key, limit=None
         )
         renamed = target != entry.subject_id
         addresses = [
@@ -321,13 +321,16 @@ class ArchiveService:
         reason: str = "manual",
         actor: str = "rpc",
     ) -> PurgeOutcome:
-        """Delete entries permanently: their Sessions, payload files and the entries.
+        """Delete entries permanently: their Sessions, payload trees and the entries.
 
-        Give ``entry_ids`` or ``all_matching``. An unknown id refuses the whole
-        call with ``ArchiveEntryNotFoundError`` and an entry another operation
-        holds with ``ArchiveEntryBusyError``, before anything is deleted. Usage
-        totals stay. An entry whose deletion stops is reported pending and stays
-        ``purging``; purging it again continues.
+        Give ``entry_ids`` or ``all_matching``. With ``entry_ids``, an unknown id
+        refuses the whole call with ``ArchiveEntryNotFoundError`` and an entry
+        that is neither ``archived`` nor ``purging`` with ``ArchiveEntryBusyError``,
+        before anything is deleted; ``all_matching`` skips such entries. Recorded
+        usage first reaches the usage ledger, so usage totals stay; when that
+        fails, nothing is deleted and every entry is reported pending. An entry
+        whose deletion stops partway is reported pending and stays ``purging``
+        with what is left; purging it again continues.
         """
         services = self._services
         entries = await services.sessions.run_async(self._purge_targets, entry_ids, all_matching)
