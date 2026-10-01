@@ -12,6 +12,7 @@ import sys
 import tarfile
 import tomllib
 from pathlib import Path, PurePosixPath
+from typing import Any
 
 import pytest
 
@@ -827,33 +828,27 @@ def test_windows_dev_installer_routes_fresh_installs_to_native_main() -> None:
     assert "-Dev selects the native main installation" in script
 
 
-@pytest.mark.parametrize(
-    ("available", "llvm_installed", "expected"),
-    [
+def test_windows_dev_installer_warns_about_missing_launcher_build_tools(tmp_path: Path) -> None:
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    # (tools on PATH, LLVM installed but not on PATH, expected warning remedy)
+    cases = [
         ("clang-cl,llvm-rc", False, None),
         ("clang-cl", False, "llvm-rc not found"),
         ("", True, "add {llvm_bin} to PATH"),
         ("", False, "install LLVM (winget install LLVM.LLVM)"),
-    ],
-)
-def test_windows_dev_installer_warns_about_missing_launcher_build_tools(
-    tmp_path: Path, available: str, llvm_installed: bool, expected: str | None
-) -> None:
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        pytest.skip("PowerShell is unavailable")
-    program_files = tmp_path / "Program Files"
-    llvm_bin = program_files / "LLVM" / "bin"
-    if llvm_installed:
-        llvm_bin.mkdir(parents=True)
-        (llvm_bin / "clang-cl.exe").write_bytes(b"")
+    ]
+    program_files = {False: tmp_path / "without" / "Program Files"}
+    program_files[True] = tmp_path / "with" / "Program Files"
+    llvm_bin = program_files[True] / "LLVM" / "bin"
+    llvm_bin.mkdir(parents=True)
+    (llvm_bin / "clang-cl.exe").write_bytes(b"")
     harness = tmp_path / "build-tools-harness.ps1"
     harness.write_text(
-        r"""param($Source, $ProgramFiles, $Available)
+        r"""param($Source, $Cases)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$env:ProgramFiles = $ProgramFiles
-$statuses = @()
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $Source, [ref]$tokens, [ref]$errors
@@ -866,8 +861,17 @@ $node = $ast.FindAll({
 . ([scriptblock]::Create($node.Extent.Text))
 function Test-Have { param($Name) return ($Available -split ",") -contains $Name }
 function Write-Status { param($State, $Message) $script:statuses += "${State}:$Message" }
-Confirm-NativeBuildTools
-ConvertTo-Json -Compress -InputObject @($statuses)
+$results = @{}
+$index = 0
+foreach ($case in @($Cases | ConvertFrom-Json)) {
+    $env:ProgramFiles = $case.program_files
+    $Available = $case.available
+    $statuses = @()
+    Confirm-NativeBuildTools
+    $results["$index"] = @($statuses)
+    $index++
+}
+$results | ConvertTo-Json -Compress -Depth 3
 """,
         encoding="utf-8",
     )
@@ -880,8 +884,12 @@ ConvertTo-Json -Compress -InputObject @($statuses)
             "-File",
             str(harness),
             str(PROJECT_ROOT / "scripts" / "install.ps1"),
-            str(program_files),
-            available,
+            json.dumps(
+                [
+                    {"available": available, "program_files": str(program_files[installed])}
+                    for available, installed, _expected in cases
+                ]
+            ),
         ],
         capture_output=True,
         text=True,
@@ -890,13 +898,15 @@ ConvertTo-Json -Compress -InputObject @($statuses)
 
     assert result.returncode == 0, result.stderr
     statuses = json.loads(result.stdout)
-    if expected is None:
-        assert statuses == []
-    else:
-        assert len(statuses) == 1
-        assert statuses[0].startswith("WARN:")
-        assert expected.format(llvm_bin=llvm_bin) in statuses[0]
-        assert "Visual Studio C++ build tools with the Windows SDK" in statuses[0]
+    for index, (available, _installed, expected) in enumerate(cases):
+        warnings = statuses[str(index)]
+        if expected is None:
+            assert warnings == [], available
+        else:
+            assert len(warnings) == 1, available
+            assert warnings[0].startswith("WARN:"), available
+            assert expected.format(llvm_bin=llvm_bin) in warnings[0], available
+            assert "Visual Studio C++ build tools with the Windows SDK" in warnings[0], available
 
 
 def test_windows_dev_installer_checks_launcher_build_tools_for_every_shape() -> None:
@@ -928,43 +938,33 @@ def test_windows_public_installer_ends_with_verified_lifecycle_summary() -> None
     assert ready_guard < summary.index("http://${summaryHost}:$summaryPort/")
 
 
-@pytest.mark.parametrize(
-    "mode",
-    [
-        "success",
-        "missing",
-        "digest",
-        "signature",
-        "dev-success",
-        "dev-source-failure",
-        "dev-update-failure",
-        "dev-no-autostart",
-        "dev-desktop-client",
-    ],
+_NATIVE_ROUTING_MODES = (
+    "success",
+    "missing",
+    "digest",
+    "signature",
+    "dev-success",
+    "dev-source-failure",
+    "dev-update-failure",
+    "dev-no-autostart",
+    "dev-desktop-client",
 )
-def test_windows_native_installer_release_routing_is_verified(tmp_path: Path, mode: str) -> None:
+
+
+def test_windows_native_installer_release_routing_is_verified(tmp_path: Path) -> None:
     powershell = shutil.which("pwsh") or shutil.which("powershell")
     if powershell is None:
         pytest.skip("PowerShell is unavailable")
     harness = tmp_path / "native-harness.ps1"
     harness.write_text(
-        r"""param($Source, $Root, $Mode)
+        r"""param($Source, $Root, $Modes)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ApiBase = "https://api.github.com/repos/Vironnimo/vbot"
 $ApiHeaders = @{}
-$InstallDir = $Root
-$DataDir = Join-Path $Root "data"
 $HostName = "127.0.0.1"
 $Port = 9134
-$Dev = $Mode -like "dev-*"
-$NoAutostart = $Mode -eq "dev-no-autostart"
-$Shape = if ($Mode -eq "dev-desktop-client") { "desktop-client" } else { "server" }
 $ProgressPreference = "SilentlyContinue"
-$calls = @()
-$nativeCommands = @()
-$statuses = @()
-$healthCalls = 0
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile(
     $Source, [ref]$tokens, [ref]$errors
@@ -1053,10 +1053,24 @@ function Start-Process {
     Set-Content (Join-Path $InstallDir "active-version") "rel_test"
     return [pscustomobject]@{ExitCode=0}
 }
-try {
-    Install-NativeRelease -Tag "v1.2.3" -Shape $Shape
-    $result = @{
-        ok = $true
+# One process runs every mode against its own installation directory.
+$results = @{}
+foreach ($Mode in ($Modes -split ",")) {
+    $InstallDir = Join-Path $Root $Mode
+    $DataDir = Join-Path $InstallDir "data"
+    $Dev = $Mode -like "dev-*"
+    $NoAutostart = $Mode -eq "dev-no-autostart"
+    $Shape = if ($Mode -eq "dev-desktop-client") { "desktop-client" } else { "server" }
+    $calls = @()
+    $nativeCommands = @()
+    $statuses = @()
+    $healthCalls = 0
+    $failure = $null
+    try { Install-NativeRelease -Tag "v1.2.3" -Shape $Shape }
+    catch { $failure = $_.Exception.Message }
+    $results[$Mode] = @{
+        ok = $null -eq $failure
+        error = $failure
         calls = $calls
         nativeCommands = $nativeCommands
         statuses = $statuses
@@ -1064,21 +1078,8 @@ try {
         installationRetained = (Test-Path (Join-Path $InstallDir "application.json")) -and
             (Test-Path (Join-Path $InstallDir "active-version"))
     }
-    $result | ConvertTo-Json -Compress
 }
-catch {
-    $result = @{
-        ok = $false
-        error = $_.Exception.Message
-        calls = $calls
-        nativeCommands = $nativeCommands
-        statuses = $statuses
-        healthCalls = $healthCalls
-        installationRetained = (Test-Path (Join-Path $InstallDir "application.json")) -and
-            (Test-Path (Join-Path $InstallDir "active-version"))
-    }
-    $result | ConvertTo-Json -Compress
-}
+$results | ConvertTo-Json -Compress -Depth 5
 """,
         encoding="utf-8",
     )
@@ -1091,60 +1092,66 @@ catch {
             str(harness),
             str(PROJECT_ROOT / "scripts/install.ps1"),
             str(tmp_path / "install with spaces"),
-            mode,
+            ",".join(_NATIVE_ROUTING_MODES),
         ],
         capture_output=True,
         text=True,
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    payloads = json.loads(result.stdout.strip().splitlines()[-1])
+    assert set(payloads) == set(_NATIVE_ROUTING_MODES)
+    for mode in _NATIVE_ROUTING_MODES:
+        _assert_native_routing(mode, payloads[mode], tmp_path / "install with spaces" / mode)
+
+
+def _assert_native_routing(mode: str, payload: dict[str, Any], install_dir: Path) -> None:
     if mode == "success":
-        assert payload["ok"] is True
+        assert payload["ok"] is True, mode
         assert payload["calls"] == [
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
             "/NORESTART",
-            f'/DIR="{tmp_path / "install with spaces"}"',
-            f'/VBOTDATA="{tmp_path / "install with spaces" / "data"}"',
+            f'/DIR="{install_dir}"',
+            f'/VBOTDATA="{install_dir / "data"}"',
             '/VBOTHOST="127.0.0.1"',
             "/VBOTPORT=9134",
             "/TASKS=startup",
-        ]
-        assert payload["nativeCommands"] == []
-        assert payload["healthCalls"] == 1
+        ], mode
+        assert payload["nativeCommands"] == [], mode
+        assert payload["healthCalls"] == 1, mode
     elif mode == "dev-success":
-        assert payload["ok"] is True
-        assert payload["calls"][-1] == "/TASKS="
+        assert payload["ok"] is True, mode
+        assert payload["calls"][-1] == "/TASKS=", mode
         assert payload["nativeCommands"] == [
             "application source main",
             "update",
             "autostart enable",
-        ]
-        assert payload["statuses"] == ["OK:vBot is installed and follows main."]
-        assert payload["healthCalls"] == 1
+        ], mode
+        assert payload["statuses"] == ["OK:vBot is installed and follows main."], mode
+        assert payload["healthCalls"] == 1, mode
     elif mode in {"dev-source-failure", "dev-update-failure"}:
-        assert payload["ok"] is False
-        assert "installation and logs were retained" in payload["error"]
-        assert payload["installationRetained"] is True
-        assert payload["statuses"] == []
-        assert payload["healthCalls"] == 0
+        assert payload["ok"] is False, mode
+        assert "installation and logs were retained" in payload["error"], mode
+        assert payload["installationRetained"] is True, mode
+        assert payload["statuses"] == [], mode
+        assert payload["healthCalls"] == 0, mode
         expected = ["application source main"]
         if mode == "dev-update-failure":
             expected.append("update")
-        assert payload["nativeCommands"] == expected
+        assert payload["nativeCommands"] == expected, mode
     elif mode == "dev-no-autostart" or mode == "dev-desktop-client":
-        assert payload["ok"] is True
-        assert payload["calls"][-1] == "/TASKS="
-        assert payload["nativeCommands"] == ["application source main", "update"]
-        assert payload["healthCalls"] == 0
+        assert payload["ok"] is True, mode
+        assert payload["calls"][-1] == "/TASKS=", mode
+        assert payload["nativeCommands"] == ["application source main", "update"], mode
+        assert payload["healthCalls"] == 0, mode
     elif mode == "missing":
-        assert "not yet published" in payload["error"]
-        assert "-SourceCheckout" in payload["error"]
+        assert "not yet published" in payload["error"], mode
+        assert "-SourceCheckout" in payload["error"], mode
     elif mode == "digest":
-        assert "digest does not match" in payload["error"]
+        assert "digest does not match" in payload["error"], mode
     else:
-        assert "invalid Authenticode signature" in payload["error"]
+        assert "invalid Authenticode signature" in payload["error"], mode
 
 
 @pytest.mark.parametrize("script_name", ["install.sh", "install.ps1"])
@@ -1251,78 +1258,69 @@ def test_public_installer_can_configure_releases_from_before_setup_rename(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PowerShell installer")
-@pytest.mark.parametrize("exit_code", [0, 7])
-def test_native_installer_preserves_progress_labels_and_failure_log(tmp_path, exit_code):
-    harness = tmp_path / "native-output.ps1"
-    harness.write_text(
-        r"""param($Source, $ExitCode, $Target)
+def test_native_installer_preserves_progress_labels_and_failure_log(tmp_path):
+    exit_codes = (0, 7)
+    payloads = _run_windows_powershell(
+        tmp_path,
+        r"""param($Source, $ExitCodes, $Root)
 $ErrorActionPreference = "Stop"
-$InstallDir = $Target
-$InstallLogPath = Join-Path $Target "output.log"
 $Functions = @("Invoke-CapturedNative", "Invoke-NativeCommand")
 """
         + _LOAD_INSTALLER_FUNCTIONS
         + r"""
-$script:statuses = @()
 function Write-Status { param($State, $Message) $script:statuses += "${State}:$Message" }
-# A function shadows only the executable in this disposable harness.
-$application = Join-Path $InstallDir "vBot.exe"
-Set-Item -LiteralPath "Function:$application" -Value {
-    "[WORK] prepare-sentinel"
-    # The CLI reports command summaries on stderr.
-    cmd /c "1>&2 echo [OK] stderr-sentinel"
-    "[WARN] warning-sentinel"
-    "[ERROR] diagnostic-sentinel"
-    "private-diagnostic-sentinel"
-    $global:LASTEXITCODE = [int]$ExitCode
+# One process runs every exit code against its own installation directory.
+$results = @{}
+foreach ($ExitCode in ($ExitCodes -split ",")) {
+    $InstallDir = Join-Path $Root $ExitCode
+    $null = New-Item -ItemType Directory -Force -Path $InstallDir
+    $InstallLogPath = Join-Path $InstallDir "output.log"
+    $script:statuses = @()
+    # A function shadows only the executable in this disposable harness.
+    $application = Join-Path $InstallDir "vBot.exe"
+    Set-Item -LiteralPath "Function:$application" -Value {
+        "[WORK] prepare-sentinel"
+        # The CLI reports command summaries on stderr.
+        cmd /c "1>&2 echo [OK] stderr-sentinel"
+        "[WARN] warning-sentinel"
+        "[ERROR] diagnostic-sentinel"
+        "private-diagnostic-sentinel"
+        $global:LASTEXITCODE = [int]$ExitCode
+    }
+    try { Invoke-NativeCommand -Arguments @("autostart", "enable"); $ok = $true; $detail = "" }
+    catch { $ok = $false; $detail = $_.Exception.Message }
+    $results[$ExitCode] = @{ok=$ok; detail=$detail; statuses=$script:statuses;
+        log=[string](Get-Content -Raw $InstallLogPath)}
 }
-try { Invoke-NativeCommand -Arguments @("autostart", "enable"); $ok = $true; $detail = "" }
-catch { $ok = $false; $detail = $_.Exception.Message }
-@{ok=$ok; detail=$detail; statuses=$script:statuses;
-  log=[string](Get-Content -Raw $InstallLogPath)} | ConvertTo-Json -Compress
+$results | ConvertTo-Json -Compress -Depth 3
 """,
-        encoding="utf-8",
+        str(PROJECT_ROOT / "scripts/install.ps1"),
+        ",".join(map(str, exit_codes)),
+        str(tmp_path),
     )
-    result = subprocess.run(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-File",
-            str(harness),
-            str(PROJECT_ROOT / "scripts/install.ps1"),
-            str(exit_code),
-            str(tmp_path),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["statuses"] == [
-        "WORK:prepare-sentinel",
-        "OK:stderr-sentinel",
-        "WARN:warning-sentinel",
-        "ERROR:diagnostic-sentinel",
-    ]
-    assert "private-diagnostic-sentinel" in payload["log"]
-    assert payload["ok"] is (exit_code == 0)
-    if exit_code:
-        assert "autostart enable" in payload["detail"]
-        assert str(tmp_path / "output.log") in payload["detail"]
-        assert "retrying vbot update" not in payload["detail"]
+    assert isinstance(payloads, dict)
+    assert set(payloads) == {str(code) for code in exit_codes}
+    for exit_code in exit_codes:
+        payload = payloads[str(exit_code)]
+        assert payload["statuses"] == [
+            "WORK:prepare-sentinel",
+            "OK:stderr-sentinel",
+            "WARN:warning-sentinel",
+            "ERROR:diagnostic-sentinel",
+        ], exit_code
+        assert "private-diagnostic-sentinel" in payload["log"], exit_code
+        assert payload["ok"] is (exit_code == 0)
+        if exit_code:
+            assert "autostart enable" in payload["detail"]
+            assert str(tmp_path / str(exit_code) / "output.log") in payload["detail"]
+            assert "retrying vbot update" not in payload["detail"]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
-@pytest.mark.parametrize(("exit_code", "usable"), [(0, True), (9009, False)])
-def test_windows_python_probe_reads_the_exit_code_despite_stderr_output(
-    tmp_path: Path, exit_code: int, usable: bool
-) -> None:
+def test_windows_python_probe_reads_the_exit_code_despite_stderr_output(tmp_path: Path) -> None:
     payload = _run_windows_powershell(
         tmp_path,
-        r"""param($Source, $ExitCode)
+        r"""param($Source)
 $ErrorActionPreference = "Stop"
 $Functions = @("Invoke-CapturedNative", "Test-Have", "Test-PythonOk")
 """
@@ -1330,13 +1328,14 @@ $Functions = @("Invoke-CapturedNative", "Test-Have", "Test-PythonOk")
         + r"""
 # Stands in for the Microsoft Store alias, which reports on stderr.
 function python { cmd /c "1>&2 echo Python was not found& exit $ExitCode" }
-@{usable = (Test-PythonOk)} | ConvertTo-Json -Compress
+$results = @{}
+foreach ($ExitCode in @(0, 9009)) { $results["$ExitCode"] = (Test-PythonOk) }
+$results | ConvertTo-Json -Compress
 """,
         str(PROJECT_ROOT / "scripts/install.ps1"),
-        str(exit_code),
     )
 
-    assert payload == {"usable": usable}
+    assert payload == {"0": True, "9009": False}
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows PowerShell installer")
