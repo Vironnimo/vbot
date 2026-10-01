@@ -96,7 +96,7 @@ export function liveFixture(overrides = {}) {
         handlers,
         close: vi.fn(),
         sendAudio: vi.fn(),
-        sendJson: vi.fn(),
+        sendJson: vi.fn(() => true),
       };
       sockets.push(socket);
       return socket;

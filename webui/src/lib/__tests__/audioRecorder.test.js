@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createAudioRecorder } from '../audioRecorder.js';
+import { microphoneInUse, onMicrophoneUse } from '../microphoneUse.js';
 
 class FakeMediaRecorder {
   static lastInstance = null;
@@ -59,14 +60,20 @@ describe('audioRecorder', () => {
     });
     expect(FakeMediaRecorder.lastInstance.options).toEqual({});
     expect(untyped.filename()).toBe('recording.webm');
+    ogg.cancel();
+    untyped.cancel();
   });
 
   it('records the audio in the chosen format and releases the microphone after stopping', async () => {
     const track = { stop: vi.fn() };
+    const uses = [];
+    const unsubscribe = onMicrophoneUse((inUse) => uses.push(inUse));
     const recorder = await createAudioRecorder({
       navigator: navigatorWithTrack(track),
       MediaRecorder: FakeMediaRecorder,
     });
+    // The page knows a recording holds the microphone, so Live voice pauses.
+    expect(microphoneInUse()).toBe(true);
 
     recorder.start();
     expect(recorder.state).toBe('recording');
@@ -81,6 +88,9 @@ describe('audioRecorder', () => {
     expect(await blob.text()).toBe('abc');
     expect(recorder.filename()).toBe('recording.webm');
     expect(track.stop).toHaveBeenCalledOnce();
+    expect(microphoneInUse()).toBe(false);
+    unsubscribe();
+    expect(uses).toEqual([true, false]);
   });
 
   it.each([

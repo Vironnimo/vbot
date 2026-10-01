@@ -95,6 +95,7 @@ const COMPOSED_KEYS = {
   'terminals.commandError.*': ['unclosedQuote', 'emptyArgument'],
   'calendar.actions.status.*': 'tOr', // Calendar action status
   'chat.voice.progress.*': 'tOr', // speech job phase
+  'live.tool.*': 'tOr', // Live Tool name in an action update
   'logs.level.*': 'tOr', // log record level
   'projects.report.group.*': 'tOr', // Project scan finding type
   'settings.language.*': 'tOr', // server language id

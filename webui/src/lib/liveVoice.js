@@ -25,8 +25,12 @@ const SOCKET_REATTACH_DELAY_MS = 500;
 // longer than this is half-open and gets replaced.
 const SOCKET_SILENCE_LIMIT_MS = 60000;
 const SOCKET_WATCHDOG_INTERVAL_MS = 10000;
-const CAPTION_LIMIT = 20;
+const CAPTION_LIMIT = 40;
 const CAPTION_TEXT_LIMIT = 2000;
+const ACTION_LIMIT = 40;
+const LINK_KINDS = new Set(['session', 'terminal']);
+// Call endings the server names, as notices; others are a plain `ended`.
+const ENDED_NOTICES = { hung_up: 'hung_up', idle: 'idle', expired: 'expired' };
 const OPEN_VIEWS = new Set([
   'chat',
   'terminals',
@@ -146,8 +150,20 @@ export function createLiveVoiceState() {
     muted: false,
     busy: false,
     activityLabel: null,
-    // Bounded transient captions: {role: 'user'|'assistant', text, final}.
+    // The assistant is silenced by the user; the call goes on.
+    speakerMuted: false,
+    // Epoch milliseconds: when the call went live, when the provider ends it,
+    // and when the server ends an idle call; null when not known.
+    liveSince: null,
+    expiresAt: null,
+    idleEndsAt: null,
+    // Bounded transient captions: {seq, role: 'user'|'assistant', text, final}.
     captions: [],
+    // What the operator did, oldest first, bounded: {seq, tool, ok,
+    // arguments, result, links: [{ref, kind, label, agent_id?, session_id?,
+    // terminal_id?}]}. Captions and actions share `seq`, their order of arrival.
+    // Both stay after the call until the next start.
+    actions: [],
     // Last error code that ended a call; kept until the next start.
     error: '',
     // The call is held (microphone and assistant audio off) for something
@@ -189,6 +205,8 @@ export function createLiveVoice({
   let current = null;
   // What the app shows, as last reported; every owner socket receives it.
   let appContext = null;
+  // Orders captions and actions of the current state.
+  let sequence = 0;
 
   const isCurrent = (call) => call !== null && call === current;
   const notify = (code, severity) => onNotice({ code, severity });
@@ -245,10 +263,12 @@ export function createLiveVoice({
       track.enabled = enabled;
   }
 
+  const silenced = (call) => isHeld(call) || state.speakerMuted;
+
   // WebRTC plays through the audio element; relay audio is dropped on arrival
-  // while held (see attachSocket).
+  // while held or silenced (see attachSocket).
   function applyOutput(call) {
-    const muted = isHeld(call);
+    const muted = silenced(call);
     if (!audio || call.outputMuted === muted) return;
     call.outputMuted = muted;
     audio.muted = muted;
@@ -280,6 +300,10 @@ export function createLiveVoice({
       held: false,
       busy: false,
       activityLabel: null,
+      speakerMuted: false,
+      liveSince: null,
+      expiresAt: null,
+      idleEndsAt: null,
     });
     if (call.announcedActive) onActive(false);
   }
@@ -317,6 +341,7 @@ export function createLiveVoice({
     call.closing = true;
     state.phase = 'closing';
     state.busy = false;
+    state.idleEndsAt = null;
     releaseMedia(call);
     cancel(call, call.startupTimer);
     cancel(call, call.disconnectTimer);
@@ -381,7 +406,7 @@ export function createLiveVoice({
         onAudio: (pcm) => {
           if (!owns()) return;
           call.socketHeardAt = now();
-          if (!call.closing && !isHeld(call)) call.relay?.play(pcm);
+          if (!call.closing && !silenced(call)) call.relay?.play(pcm);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -453,6 +478,7 @@ export function createLiveVoice({
       call.reachedLive = true;
       cancel(call, call.startupTimer);
       state.phase = 'live';
+      state.liveSince = now();
       call.announcedActive = true;
       onActive(true);
     } else if (phase === 'failed') {
@@ -477,15 +503,60 @@ export function createLiveVoice({
     let next;
     if (index >= 0) {
       next = captions.toSpliced(index, 1, {
+        seq: captions[index].seq,
         role,
         text: boundCaption(text || captions[index].text),
         final,
       });
     } else {
       if (!text) return;
-      next = [...captions, { role, text: boundCaption(text), final }];
+      sequence += 1;
+      next = [
+        ...captions,
+        { seq: sequence, role, text: boundCaption(text), final },
+      ];
     }
     state.captions = next.slice(-CAPTION_LIMIT);
+  }
+
+  // A link names one Session (agent_id, session_id) or Terminal (terminal_id).
+  function actionLink(link) {
+    if (!isPlainObject(link) || !LINK_KINDS.has(link.kind)) return null;
+    if (!isText(link.ref)) return null;
+    const ids =
+      link.kind === 'session'
+        ? { agent_id: link.agent_id, session_id: link.session_id }
+        : { terminal_id: link.terminal_id };
+    if (!Object.values(ids).every(isText)) return null;
+    return {
+      ref: link.ref,
+      kind: link.kind,
+      label: isText(link.label) ? link.label : link.ref,
+      ...ids,
+    };
+  }
+
+  function applyAction(frame) {
+    if (!isText(frame.tool)) return;
+    sequence += 1;
+    const action = {
+      seq: sequence,
+      tool: frame.tool,
+      ok: frame.ok === true,
+      arguments: isPlainObject(frame.arguments) ? { ...frame.arguments } : {},
+      result: typeof frame.result === 'string' ? frame.result : '',
+      links: (Array.isArray(frame.links) ? frame.links : [])
+        .map(actionLink)
+        .filter(Boolean),
+    };
+    state.actions = [...state.actions, action].slice(-ACTION_LIMIT);
+  }
+
+  // Seconds from now as epoch milliseconds; null for anything else.
+  function deadline(seconds) {
+    return Number.isFinite(seconds) && seconds >= 0
+      ? now() + seconds * 1000
+      : null;
   }
 
   function applyError(call, frame) {
@@ -512,7 +583,7 @@ export function createLiveVoice({
         const code = call.failed ? 'call_failed' : 'connection_failed';
         state.error = code;
         notify(code, 'error');
-      } else notify('ended', 'info');
+      } else notify(ENDED_NOTICES[state.closeReason] ?? 'ended', 'info');
     }
     finish(call);
   }
@@ -628,6 +699,20 @@ export function createLiveVoice({
         // The user talks over the assistant: drop its queued speech at once.
         call.relay?.clear();
         break;
+      case 'action':
+        applyAction(frame);
+        break;
+      case 'expiry':
+        state.expiresAt = deadline(frame.seconds);
+        break;
+      case 'idle': {
+        // A warning names when the call ends; `ends_in: null` withdraws it.
+        const warned = state.idleEndsAt !== null;
+        state.idleEndsAt = call.closing ? null : deadline(frame.ends_in);
+        if (!warned && state.idleEndsAt !== null)
+          notify('idle_warning', 'warn');
+        break;
+      }
       case 'error':
         applyError(call, frame);
         break;
@@ -780,6 +865,7 @@ export function createLiveVoice({
       holds: new Map(),
     };
     current = call;
+    sequence = 0;
     Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
     armStartupTimer(call);
     try {
@@ -864,6 +950,22 @@ export function createLiveVoice({
     applyMicrophone(call);
   }
 
+  // Silence or restore the assistant; the microphone and the call go on.
+  function muteSpeaker(muted = !state.speakerMuted) {
+    const call = current;
+    if (!call || call.closing) return;
+    state.speakerMuted = muted === true;
+    if (state.speakerMuted) call.relay?.clear();
+    applyOutput(call);
+  }
+
+  // Keep a call the server warned about idling.
+  function stay() {
+    const call = current;
+    if (!call || call.closing) return false;
+    return call.socket?.sendJson?.({ type: 'stay' }) === true;
+  }
+
   // Hold the running call for `reason`: the microphone stops sending and the
   // assistant goes silent (queued relay audio is dropped) until every hold of
   // every reason is released. Holds count per reason, are independent of the
@@ -915,6 +1017,8 @@ export function createLiveVoice({
     start,
     stop,
     mute,
+    muteSpeaker,
+    stay,
     hold,
     release,
     held,

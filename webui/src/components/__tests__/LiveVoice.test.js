@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { init, t } from '../../lib/i18n.js';
+import { claimMicrophone } from '../../lib/microphoneUse.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock(
@@ -69,6 +70,10 @@ function simulateController() {
         mute: vi.fn(() => {
           state.muted = !state.muted;
         }),
+        muteSpeaker: vi.fn(() => {
+          state.speakerMuted = !state.speakerMuted;
+        }),
+        stay: vi.fn(() => true),
         hold: vi.fn((reason) => {
           holds.add(reason);
           state.held = true;
@@ -93,6 +98,9 @@ const toggle = () => document.querySelector('.live-voice__toggle');
 const muteButton = () =>
   document.querySelector(`button[aria-label="${t('live.mute')}"]`);
 const caption = () => document.querySelector('.live-voice__caption');
+const button = (label) =>
+  document.querySelector(`button[aria-label="${label}"]`);
+const panel = () => document.querySelector('.live-activity');
 
 async function settle() {
   await vi.waitFor(() => {
@@ -174,6 +182,161 @@ describe('sidebar Live control', () => {
     expect(caption().dataset.role).toBe('status');
   });
 
+  it('shows the call time, silences the assistant and keeps an idle call', async () => {
+    simulateController();
+    render();
+    toggle().click();
+    await settle();
+    Object.assign(fake.state, {
+      phase: 'live',
+      liveSince: Date.now() - 65_000,
+    });
+    flushSync();
+    expect(document.querySelector('.live-voice__time').textContent).toBe(
+      '1:05',
+    );
+
+    button(t('live.speakerMute')).click();
+    flushSync();
+    expect(fake.muteSpeaker).toHaveBeenCalledOnce();
+    expect(button(t('live.speakerUnmute')).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+
+    // A warning outranks speech and offers to keep the call.
+    fake.state.captions = [
+      { seq: 1, role: 'assistant', text: 'Hi', final: true },
+    ];
+    fake.state.idleEndsAt = Date.now() + 45_000;
+    flushSync();
+    expect(caption().textContent).toBe(t('live.state.idle', { time: '0:45' }));
+    expect(caption().dataset.role).toBe('warning');
+    document.querySelector('.live-voice__stay').click();
+    expect(fake.stay).toHaveBeenCalledOnce();
+    fake.state.idleEndsAt = null;
+    fake.state.expiresAt = Date.now() + 90_000;
+    flushSync();
+    expect(caption().textContent).toBe(
+      t('live.state.expiring', { time: '1:30' }),
+    );
+    fake.state.expiresAt = Date.now() + 600_000;
+    flushSync();
+    expect(caption().textContent).toBe('Hi');
+  });
+
+  it('shows what was said and done, with links into the app', async () => {
+    simulateController();
+    const onToast = vi.fn();
+    const uiActions = {
+      context: () => null,
+      open: vi.fn(async () => true),
+      terminalView: vi.fn(async () => {
+        throw new Error('terminal_view_unavailable');
+      }),
+    };
+    render({ uiActions, onToast });
+    toggle().click();
+    await settle();
+    fake.state.phase = 'live';
+    fake.state.captions = [
+      { seq: 1, role: 'user', text: 'Start Coder on the tests', final: true },
+      { seq: 3, role: 'assistant', text: 'Coder is on it.', final: true },
+    ];
+    fake.state.actions = [
+      {
+        seq: 2,
+        tool: 'start_agent_session',
+        ok: true,
+        arguments: { agent: 'coder', task: 'Fix the tests' },
+        result: 'Started a Session at Coder with the task: s1.',
+        links: [
+          {
+            ref: 's1',
+            kind: 'session',
+            label: 'Session at Coder',
+            agent_id: 'coder',
+            session_id: 'ses_1',
+          },
+          {
+            ref: 't1',
+            kind: 'terminal',
+            label: 'Build',
+            terminal_id: 'term_a',
+          },
+        ],
+      },
+    ];
+    flushSync();
+    button(t('live.activity.show')).click();
+    flushSync();
+
+    const items = [...panel().querySelectorAll('li')];
+    expect(items.map((item) => item.classList[0])).toEqual([
+      'live-activity__caption',
+      'live-activity__action',
+      'live-activity__caption',
+    ]);
+    expect(items[1].textContent).toContain(t('live.tool.start_agent_session'));
+    expect(items[1].textContent).toContain('coder · Fix the tests');
+    const [session, terminal] = items[1].querySelectorAll('button');
+    session.click();
+    await settle();
+    expect(uiActions.open).toHaveBeenCalledWith(
+      { view: 'chat', agent_id: 'coder', session_id: 'ses_1' },
+      expect.objectContaining({ isCurrent: expect.any(Function) }),
+    );
+    terminal.click();
+    await settle();
+    expect(uiActions.terminalView).toHaveBeenCalledWith(
+      { op: 'show', terminal_id: 'term_a' },
+      expect.anything(),
+    );
+    expect(onToast).toHaveBeenCalledExactlyOnceWith({
+      title: t('live.title'),
+      message: t('live.error.link'),
+      variant: 'warn',
+    });
+
+    // The record stays readable after the call, until Escape closes it.
+    fake.state.phase = 'off';
+    flushSync();
+    expect(panel().querySelector('h2').textContent).toBe(
+      t('live.activity.lastCall'),
+    );
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    flushSync();
+    expect(panel()).toBeNull();
+    expect(button(t('live.activity.show'))).not.toBeNull();
+  });
+
+  it('holds a running call while the page records, and asks before leaving it', async () => {
+    simulateController();
+    render();
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    expect(leave()).toBe(false);
+    toggle().click();
+    await settle();
+    fake.state.phase = 'live';
+    flushSync();
+    expect(leave()).toBe(true);
+
+    const release = claimMicrophone();
+    flushSync();
+    expect(fake.hold).toHaveBeenCalledExactlyOnceWith('recording');
+    expect(caption().textContent).toBe(t('live.state.heldRecording'));
+    release();
+    flushSync();
+    expect(fake.release).toHaveBeenCalledExactlyOnceWith('recording');
+
+    toggle().click();
+    flushSync();
+    expect(leave()).toBe(false);
+  });
+
   it('passes the App UI actions and what the app shows to the controller', () => {
     simulateController();
     const shown = { view: 'chat', selected_agent_id: 'main' };
@@ -212,8 +375,15 @@ describe('sidebar Live control', () => {
       desktop_restart_required: 'live.error.desktopRestart',
       ui_action_failed: 'live.error.uiAction',
       notification_failed: 'live.error.notification',
+      provider_unavailable: 'live.error.providerUnavailable',
+      backend_unavailable: 'live.error.backendUnavailable',
+      link_failed: 'live.error.link',
       replaced: 'live.notice.replaced',
       ended: 'live.notice.ended',
+      hung_up: 'live.notice.hungUp',
+      idle: 'live.notice.idle',
+      idle_warning: 'live.notice.idleWarning',
+      expired: 'live.notice.expired',
     };
     for (const code of Object.keys(messageKeys))
       fake.onNotice({ code, severity: 'error' });

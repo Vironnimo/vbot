@@ -477,20 +477,37 @@ describe('Live call frames', () => {
   });
 
   it.each([
-    ['after it was live', true, { code: 'ended', severity: 'info' }],
+    ['after it was live', true, null, { code: 'ended', severity: 'info' }],
     [
       'before it was live',
       false,
+      null,
       { code: 'connection_failed', severity: 'error' },
     ],
-  ])('reports a call the server ended %s', async (_label, live, notice) => {
-    const f = liveFixture();
-    await f.controller.start();
-    if (live) f.frame({ type: 'state', phase: 'live' });
-    f.frame({ type: 'closed', reason: null, usage: null });
-    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith(notice);
-    expect(f.state.phase).toBe('off');
-  });
+    [
+      'after the voice model hung up',
+      true,
+      'hung_up',
+      { code: 'hung_up', severity: 'info' },
+    ],
+    ['after idling', true, 'idle', { code: 'idle', severity: 'info' }],
+    [
+      'at the provider limit',
+      true,
+      'expired',
+      { code: 'expired', severity: 'info' },
+    ],
+  ])(
+    'reports a call the server ended %s',
+    async (_label, live, reason, notice) => {
+      const f = liveFixture();
+      await f.controller.start();
+      if (live) f.frame({ type: 'state', phase: 'live' });
+      f.frame({ type: 'closed', reason, usage: null });
+      expect(f.onNotice).toHaveBeenCalledExactlyOnceWith(notice);
+      expect(f.state.phase).toBe('off');
+    },
+  );
 
   it('reports a failed call once', async () => {
     const f = liveFixture();
@@ -544,8 +561,8 @@ describe('Live call frames', () => {
     });
     f.frame({ type: 'caption', role: 'assistant', text: 'Sure', final: false });
     expect(f.state.captions).toEqual([
-      { role: 'user', text: 'Open the chat', final: false },
-      { role: 'assistant', text: 'Sure', final: false },
+      { seq: 1, role: 'user', text: 'Open the chat', final: false },
+      { seq: 2, role: 'assistant', text: 'Sure', final: false },
     ]);
     f.frame({
       type: 'caption',
@@ -555,15 +572,15 @@ describe('Live call frames', () => {
     });
     f.frame({ type: 'caption', role: 'assistant', text: '', final: true });
     expect(f.state.captions).toEqual([
-      { role: 'user', text: 'Open the chat.', final: true },
-      { role: 'assistant', text: 'Sure', final: true },
+      { seq: 1, role: 'user', text: 'Open the chat.', final: true },
+      { seq: 2, role: 'assistant', text: 'Sure', final: true },
     ]);
   });
 
   it('bounds caption turns and their text', async () => {
     const f = liveFixture();
     await f.goLive();
-    for (let index = 0; index < 25; index += 1)
+    for (let index = 0; index < 45; index += 1)
       f.frame({
         type: 'caption',
         role: 'assistant',
@@ -576,10 +593,108 @@ describe('Live call frames', () => {
       text: `${'x'.repeat(3000)}end`,
       final: false,
     });
-    expect(f.state.captions).toHaveLength(20);
+    expect(f.state.captions).toHaveLength(40);
     expect(f.state.captions[0].text).toBe('turn 6');
     expect(f.state.captions.at(-1).text).toHaveLength(2000);
     expect(f.state.captions.at(-1).text.endsWith('end')).toBe(true);
+  });
+
+  it('keeps the operator actions with their links in order with the captions', async () => {
+    const f = liveFixture();
+    await f.goLive();
+    f.frame({
+      type: 'caption',
+      role: 'user',
+      text: 'Start Coder',
+      final: true,
+    });
+    f.frame({
+      type: 'action',
+      tool: 'start_agent_session',
+      ok: true,
+      arguments: { agent: 'coder', task: 'Fix it' },
+      result: 'Started a Session at Coder with the task: s1.',
+      links: [
+        {
+          ref: 's1',
+          kind: 'session',
+          agent_id: 'coder',
+          session_id: 'ses_1',
+          label: 'Session at Coder',
+        },
+        { ref: 't1', kind: 'terminal', terminal_id: 'term_a', label: '' },
+        { ref: 's2', kind: 'session', agent_id: 'coder' },
+        { ref: 'x1', kind: 'browser', url: 'https://example.com' },
+        'not a link',
+      ],
+    });
+    f.frame({ type: 'action', ok: true });
+    expect(f.state.actions).toEqual([
+      {
+        seq: 2,
+        tool: 'start_agent_session',
+        ok: true,
+        arguments: { agent: 'coder', task: 'Fix it' },
+        result: 'Started a Session at Coder with the task: s1.',
+        links: [
+          {
+            ref: 's1',
+            kind: 'session',
+            label: 'Session at Coder',
+            agent_id: 'coder',
+            session_id: 'ses_1',
+          },
+          { ref: 't1', kind: 'terminal', label: 't1', terminal_id: 'term_a' },
+        ],
+      },
+    ]);
+    expect(f.state.captions[0].seq).toBe(1);
+
+    // The record outlasts the call and starts over with the next one.
+    f.frame({ type: 'closed', reason: 'hung_up', usage: null });
+    expect(f.state.actions).toHaveLength(1);
+    expect(f.state.captions).toHaveLength(1);
+    await f.goLive();
+    expect(f.state.actions).toEqual([]);
+    expect(f.state.captions).toEqual([]);
+  });
+
+  it('knows how long the call runs, when the provider ends it and when it idles out', async () => {
+    let clock = 1_000_000;
+    const f = liveFixture({ now: () => clock });
+    await f.goLive();
+    expect(f.state.liveSince).toBe(1_000_000);
+    f.frame({ type: 'expiry', seconds: 3600 });
+    f.frame({ type: 'idle', ends_in: 60 });
+    expect(f.state).toMatchObject({
+      expiresAt: 4_600_000,
+      idleEndsAt: 1_060_000,
+    });
+    // A warning reaches the user also where the sidebar shows no caption.
+    f.frame({ type: 'idle', ends_in: 50 });
+    expect(f.onNotice).toHaveBeenCalledExactlyOnceWith({
+      code: 'idle_warning',
+      severity: 'warn',
+    });
+    // Keeping the call asks the server; its answer withdraws the warning.
+    expect(f.controller.stay()).toBe(true);
+    expect(f.socket().sendJson).toHaveBeenCalledWith({ type: 'stay' });
+    f.frame({ type: 'idle', ends_in: null });
+    expect(f.state.idleEndsAt).toBeNull();
+    f.frame({ type: 'idle', ends_in: 'soon' });
+    expect(f.state.idleEndsAt).toBeNull();
+
+    clock += 5000;
+    f.frame({ type: 'idle', ends_in: 30 });
+    f.controller.stop();
+    expect(f.state.idleEndsAt).toBeNull();
+    expect(f.controller.stay()).toBe(false);
+    f.frame({ type: 'closed', reason: 'closed', usage: null });
+    expect(f.state).toMatchObject({
+      liveSince: null,
+      expiresAt: null,
+      idleEndsAt: null,
+    });
   });
 
   it('tracks busy activity and ignores unknown frames', async () => {
@@ -753,6 +868,31 @@ describe('Live voice media and connection failures', () => {
     });
     expect(f.api.stopLiveCall).toHaveBeenCalledWith('call-1');
     expect(f.state.phase).toBe('off');
+  });
+
+  it('silences the assistant without muting the microphone', async () => {
+    const f = relayFixture();
+    await f.goLive();
+    f.controller.muteSpeaker();
+    expect(f.state.speakerMuted).toBe(true);
+    expect(f.relay.clear).toHaveBeenCalledOnce();
+    f.socket().handlers.onAudio(new ArrayBuffer(4));
+    expect(f.relay.play).not.toHaveBeenCalled();
+    expect(f.track.enabled).toBe(true);
+    f.controller.muteSpeaker();
+    f.socket().handlers.onAudio(new ArrayBuffer(4));
+    expect(f.relay.play).toHaveBeenCalledOnce();
+
+    // WebRTC audio plays through the element, which is muted instead.
+    const g = liveFixture();
+    await g.goLive();
+    g.peer.emit('track', { track: {}, streams: [{ id: 'remote' }] });
+    g.controller.muteSpeaker(true);
+    expect(g.audio.muted).toBe(true);
+    g.controller.stop();
+    expect(g.audio.muted).toBe(false);
+    g.frame({ type: 'closed', reason: 'closed', usage: null });
+    expect(g.state.speakerMuted).toBe(false);
   });
 
   it('mutes the microphone track, including before it is granted', async () => {
