@@ -231,34 +231,49 @@ export default Object.freeze({
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
-  'settings.recall.meaning': 'Also search by meaning',
-  'settings.recall.meaningDescription':
-    'Finds conversations about the same topic even when the words differ.',
-  'settings.recall.meaningHelp':
-    'Agents look through earlier conversations with the session_search Tool. Keyword search is always on: it finds the words searched for, using a fast local index.\n\nSearching by meaning also finds passages that say the same thing in other words, so a search for “vehicles” also finds “cars”. It needs an embedding model, which turns conversation text into a search index. vBot builds that index in the background shortly after conversations and keeps it up to date; a search embeds only its query.\n\nUntil the index has caught up, searches return every keyword match plus the meaning matches among the passages indexed so far.',
+  'settings.recall.method': 'Search method',
+  'settings.recall.methodHelp':
+    'Agents look through earlier conversations with the session_search Tool.\n\nKeywords finds the words searched for, using a fast local index. Keywords and meaning also finds passages that say the same thing in other words, so a search for “vehicles” also finds “cars”. Meaning only ranks by meaning alone; it can miss exact names and numbers that keyword search finds.\n\nSearching by meaning needs an embedding model. vBot builds its search index in the background shortly after conversations and keeps it up to date. Until the index has caught up, searches return every keyword match plus the meaning matches among the passages indexed so far.\n\nExtensions can add search methods of their own.',
+  'settings.recall.methodRecommended': 'Recommended',
+  'settings.recall.methodExtension': 'A search method added by an Extension.',
+  'settings.recall.backends.sqlite_fts': 'Keywords',
+  'settings.recall.backends.hybrid': 'Keywords and meaning',
+  'settings.recall.backends.vector': 'Meaning only',
+  'settings.recall.backendDescriptions.sqlite_fts':
+    'Finds conversations that contain the searched words.',
+  'settings.recall.backendDescriptions.hybrid':
+    'Also finds conversations that say the same thing in other words.',
+  'settings.recall.backendDescriptions.vector':
+    'Ranks by meaning alone; can miss exact names and numbers.',
   'settings.recall.model.loading': 'Loading embedding models…',
+  'settings.recall.model.placeholder': 'Choose a model',
+  'settings.recall.model.search': 'Search embedding models',
+  'settings.recall.model.none': 'No embedding models found',
   'settings.recall.model.groupLocal': 'On this computer',
   'settings.recall.model.groupCloud': 'Cloud',
-  'settings.recall.model.factMultilingual': 'Multilingual',
-  'settings.recall.model.factEnglish': 'English only',
-  'settings.recall.model.factPrice': '{price} per 1M tokens',
-  'settings.recall.model.factPriceUnknown': 'Price unknown',
-  'settings.recall.model.factLocal': 'Free, runs locally',
-  'settings.recall.model.notInstalled': 'Not set up on this computer yet.',
-  'settings.recall.model.noRecommended':
-    'No recommended embedding model is available. Connect a Provider that offers one, or choose any embedding model under All models.',
-  'settings.recall.model.allModels': 'All models',
-  'settings.recall.model.allModelsDescription':
-    'Every embedding model your Providers offer.',
+  'settings.recall.model.groupSaved': 'No longer offered',
+  'settings.recall.model.free': 'Free',
+  'settings.recall.model.price': '{price} / 1M tokens',
+  'settings.recall.model.notInstalled': 'Not installed',
+  'settings.recall.model.notInstalledSize': 'Not installed · {size}',
+  'settings.recall.model.unavailable': 'Unavailable',
+  'settings.recall.model.englishOnly': 'English only',
+  'settings.recall.model.choose':
+    'Choose a model to search by meaning. Connect a Provider that offers embedding models if the list is empty.',
+  'settings.recall.model.chooseRecommended':
+    'Choose a model to search by meaning. {model} is a good start.',
+  'settings.recall.model.notOffered':
+    'This model is no longer offered. Choose another one.',
+  'settings.recall.model.installNeeded':
+    'This model is not installed yet. Choose it again to install it.',
+  'settings.recall.model.privacyLocal':
+    'Runs on this computer, free. Conversation text stays here.',
+  'settings.recall.model.privacyLocalRuntime':
+    'Runs in {provider} on this computer. Conversation text stays here.',
   'settings.recall.model.privacyProvider':
     'Conversation text is sent to {provider} to build the search index.',
-  'settings.recall.model.privacyLocal':
-    'Conversation text stays on this computer.',
-  'settings.recall.model.privacyUnknown':
-    'Conversation text is sent to the chosen model’s Provider to build the search index.',
-  'settings.recall.model.rebuildNote': 'Changing the model rebuilds the index.',
-  'settings.recall.model.missing':
-    'Choose an embedding model to search by meaning.',
+  'settings.recall.model.privacyProviderPrice':
+    'Conversation text is sent to {provider} to build the search index, at {price} per 1M tokens.',
   'settings.recall.index': 'Search index',
   'settings.recall.indexHelp':
     'The passages of your conversations that the embedding model has turned into the search index. vBot adds new passages in the background shortly after each conversation and checks regularly for other changes.\n\nWaiting passages are not indexed yet. Skipped passages were rejected by the embedding model and stay out of the index until it is rebuilt. Spent counts the indexing since the model was chosen or the index was last rebuilt; costs are estimated from the model’s listed price when the Provider does not report them.',
@@ -299,30 +314,26 @@ export default Object.freeze({
   'settings.recall.indexError.space_unstable':
     'The embedding model kept changing during indexing.',
   'settings.recall.indexError.local_model_missing':
-    'The local embedding model is not installed yet. Install it under On this computer, or choose another model.',
+    'The local embedding model is not installed. Choose it under Embedding model to install it, or choose another model.',
   'settings.recall.indexError.local_engine_failed':
     'The local embedding model failed to run on this computer.',
   'settings.recall.status.etaSoon': 'less than a minute left',
   'settings.recall.status.eta': 'about {duration} left',
-  'settings.recall.rebuild': 'Rebuild index',
+  'settings.recall.rebuild': 'Rebuild',
   'settings.recall.rebuildTitle': 'Rebuild the search index?',
   'settings.recall.rebuildBody':
-    'Every passage is indexed again, skipped ones included. This takes a while, and a cloud embedding model bills its Provider again for all conversation text. Keyword search keeps working; searches by meaning cover only the passages indexed again until the rebuild finishes.',
-  'settings.recall.rebuildConfirm': 'Rebuild',
+    'Indexes every conversation again from scratch. This is only needed when search by meaning finds poor results; after a model change vBot rebuilds the index on its own. A cloud embedding model bills its Provider again for all conversation text.',
+  'settings.recall.rebuildConfirm': 'Rebuild index',
   'settings.recall.rebuildError': 'The search index could not be rebuilt.',
-  'settings.recall.advanced': 'Advanced',
-  'settings.recall.backend': 'Search method',
-  'settings.recall.backendHelp':
-    'Keywords only finds the words searched for. Keywords and meaning adds matches by meaning; the switch above turns it on. Meaning only ranks by meaning alone and needs an embedding model; it can miss exact names and numbers that keyword search finds.\n\nExtensions can add search methods of their own.',
-  'settings.recall.backends.sqlite_fts': 'Keywords only',
-  'settings.recall.backends.vector': 'Meaning only',
-  'settings.recall.backends.hybrid': 'Keywords and meaning',
-  'settings.recall.modelOptions': 'Embedding model options',
+  'settings.recall.modelOptions': 'Model options',
   'settings.localModel.state.checking': 'Checking whether it is installed…',
   'settings.localModel.state.missing': 'Not set up on this computer yet.',
   'settings.localModel.state.ready': 'Installed.',
   'settings.localModel.state.restart_required':
     'Installed. Restart the vBot server to use it.',
+  'settings.localModel.dialogTitle': 'Install {model}',
+  'settings.localModel.dialogIntro':
+    'It runs on this computer, so conversation text never leaves it. vBot downloads it once.',
   'settings.localModel.downloadSize': '{size} download',
   'settings.localModel.license': '{license} license',
   'settings.localModel.progress': '{completed} of {total}',
@@ -341,7 +352,7 @@ export default Object.freeze({
   'settings.localModel.phase.installing': 'Installing the local model runtime…',
   'settings.localModel.phase.verifying': 'Checking the installation…',
   'settings.localModel.downloadingModel':
-    'Downloading the model. You can leave this page.',
+    'Downloading the model. You can close this dialog; the download continues.',
   'settings.localModel.error.connection':
     'The server could not be reached. Check again to see the installation status.',
   'settings.localModel.error.install_failed':
@@ -545,7 +556,7 @@ export default Object.freeze({
     'Used by the generate_music Tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
   'settings.specializedModels.embeddingModelHelp':
-    'Turns conversation text into the search index for searching by meaning, and embeds each search query. Recommended models are listed first; All models lists every embedding model your Providers offer.\n\nChanging the model rebuilds the index from all stored conversations. That takes a while and, with a cloud model, adds Provider usage.',
+    'Turns conversation text into the search index for searching by meaning, and embeds each search query. Models on this computer are listed first, then the embedding models your Providers offer; recommended ones come first in each group. A model on this computer that is not installed yet is installed once when you choose it.\n\nChanging the model rebuilds the index from all stored conversations. That takes a while and, with a cloud model, adds Provider usage.',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.aboutAria': 'About {name}',
