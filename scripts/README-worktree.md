@@ -492,9 +492,18 @@ this automatically:
    `.worktrees/.trash-<name>-<timestamp>` and reported as a `leftover:` line.
    The worktree still counts as deleted; trash directories are swept
    automatically on later create/delete runs once the locks are gone.
+3. If the emptied directory itself is the working directory of a running
+   process, Windows refuses to rename it as well. This is the usual case when
+   the delete or merge was started from inside the worktree: the command, and
+   the shell that ran it, hold the directory until the command ends, even after
+   a `cd` inside the command. Once the checkout is gone, `delete` hands the
+   empty directory to a background `remove-released` process and prints a
+   `note:` line. That process removes the directory as soon as no process uses
+   it, waiting up to five minutes; it never removes a directory that holds a
+   checkout again.
 
-In both cases the delete finishes: owned data dir and managed branch are cleaned up
-and the worktree name is immediately reusable.
+In all cases the delete finishes: owned data dir and managed branch are cleaned up.
+The worktree name is reusable at once, or after the background removal in case 3.
 
 ### The frontend dependency step failed during creation
 
@@ -512,7 +521,7 @@ A keeper process exits when its release signal appears, when its window expires 
 
 The output prints `status: merged` with the commit and then an explicit cleanup error. The landed commit is safe; finish the removal manually with `python scripts/worktree.py delete <name>` (add `--force` only to discard worktree-local leftovers).
 
-The usual cause is a shell whose working directory is still inside the worktree: the held directory cannot be removed, and the merge restores the `.vbot-worktree` marker for a retry, so only the marker remains (typically while `git worktree list` still shows the entry as `prunable`). Move that shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git no longer registers the leftover, its branch cannot be verified and is kept; delete it with `git branch -d <name>`.
+A merge started from inside the worktree no longer fails here: its cleanup hands the held, emptied directory to a background removal (see "Delete reported `terminated:` or `leftover:` lines"). Worktrees branched before that change run their own older copy of this script when the merge is invoked as `python scripts/worktree.py` from inside them, and still fail; so does a removal whose directory still holds the checkout's `.git`. In these cases the merge restores the `.vbot-worktree` marker for a retry (typically while `git worktree list` still shows the entry as `prunable`). Move the shell out in a separate command (a `cd` inside the merge command does not release it), then run `delete <name>` without `--force`. It removes the leftover directory, the data dir, Git's registration, and the merged managed branch. If Git no longer registers the leftover, its branch cannot be verified and is kept; delete it with `git branch -d <name>`.
 
 ## Recommended team workflow
 

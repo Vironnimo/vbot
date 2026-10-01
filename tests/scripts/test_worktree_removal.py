@@ -455,6 +455,82 @@ def test_cmd_delete_moves_stuck_worktree_to_trash(tmp_path, monkeypatch, capsys)
     assert "status: deleted" in captured.out
 
 
+def test_cmd_delete_hands_a_held_empty_directory_to_the_background_remover(
+    tmp_path, monkeypatch, capsys
+):
+    """The shell that ran the delete holds its start directory until the command ends."""
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+
+    name = "held-by-shell"
+    worktree_path = module.WORKTREES_DIR / name
+    _make_checkout(worktree_path)
+    (worktree_path / module.WORKTREE_FILE_NAME).write_text(
+        json.dumps({"data_dir": f"~/.vbot-{name}", "managed_branch": True}), encoding="utf-8"
+    )
+
+    commands = []
+
+    def fake_run_command(command, *, cwd=None):
+        commands.append(command)
+        if command[:3] == ["git", "worktree", "remove"]:
+            return 1, f"error: failed to delete '{worktree_path}': Permission denied"
+        return 0, ""
+
+    def empty_but_keep_directory(path):
+        for child in path.iterdir():
+            child.unlink()
+        return "the directory is in use"
+
+    handed_over = []
+    monkeypatch.setattr(module, "_run_command", fake_run_command)
+    monkeypatch.setattr(module, "_read_worktree_branch_name", lambda _path: name)
+    monkeypatch.setattr(module, "_worktree_registration_state", lambda _path: False)
+    monkeypatch.setattr(module, "_list_uncommitted_paths", lambda _path: [])
+    monkeypatch.setattr(module, "_terminate_worktree_processes", lambda _path: [])
+    monkeypatch.setattr(module, "_remove_directory_tree", empty_but_keep_directory)
+    monkeypatch.setattr(module, "_move_to_trash", lambda _path: None)
+    monkeypatch.setattr(module, "_remove_when_released", lambda n: handed_over.append(n) or True)
+
+    result = module.cmd_delete(argparse.Namespace(name=name, force=False))
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert handed_over == [name]
+    assert ["git", "branch", "-d", name] in commands
+    assert "status: deleted" in captured.out
+    assert "background process removes it" in captured.out
+
+
+def test_cmd_remove_released_waits_for_release_and_never_removes_a_checkout(tmp_path, monkeypatch):
+    module = _load_worktree_module()
+    monkeypatch.setattr(module, "WORKTREES_DIR", tmp_path / ".worktrees")
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    released = module.WORKTREES_DIR / "released"
+    released.mkdir(parents=True)
+    attempts = []
+
+    def held_twice(path):
+        attempts.append(path)
+        if len(attempts) < 3:
+            return "the directory is in use"
+        path.rmdir()
+        return None
+
+    monkeypatch.setattr(module, "_remove_directory_tree", held_twice)
+
+    assert module.cmd_remove_released(argparse.Namespace(name="released")) == 0
+    assert not released.exists()
+    assert len(attempts) == 3
+
+    recreated = _make_checkout(module.WORKTREES_DIR / "recreated")
+
+    assert module.cmd_remove_released(argparse.Namespace(name="recreated")) == 1
+    assert (recreated / ".git").exists()
+    assert len(attempts) == 3
+
+
 def test_cmd_delete_lists_uncommitted_files_when_non_force_remove_fails(
     tmp_path, monkeypatch, capsys
 ):

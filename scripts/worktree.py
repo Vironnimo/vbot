@@ -18,6 +18,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import IO
 from uuid import uuid4
 
 # Direct execution loads helper modules from this checkout.
@@ -135,9 +136,14 @@ REPAIR_LOG_FILE_NAME = "vbot-merge-repair.log"
 MERGE_CONFLICT_EXIT_CODE = 2
 # Locks the WebUI packages; a merge that changes it replaces main's node_modules.
 WEBUI_LOCK_FILE = "webui/package-lock.json"
-# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — keeps the repair keeper alive
-# after the spawning CLI exits and outside the caller's Ctrl+C group.
+# DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — keeps the repair keeper and the
+# released-directory remover alive after the spawning CLI exits and outside the
+# caller's Ctrl+C group.
 WINDOWS_DETACHED_CREATION_FLAGS = 0x00000008 | 0x00000200
+# How long the remover of an emptied worktree directory waits for the processes
+# whose working directory it is, typically the shell that ran the delete, to exit.
+RELEASE_WAIT_SECONDS = 300.0
+RELEASE_POLL_SECONDS = 0.5
 
 
 def print_ok(**fields: str | int | bool | Path) -> None:
@@ -312,6 +318,68 @@ def _move_to_trash(worktree_path: Path) -> Path | None:
     except OSError:
         return None
     return trash_path
+
+
+def _spawn_detached(command: list[str], output: int | IO[bytes]) -> None:
+    """Start *command* in the primary checkout so it outlives this CLI and its Ctrl+C group."""
+    if os.name == "nt":
+        subprocess.Popen(
+            command,
+            cwd=PROJECT_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            creationflags=WINDOWS_DETACHED_CREATION_FLAGS,
+        )
+    else:
+        subprocess.Popen(
+            command,
+            cwd=PROJECT_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            start_new_session=True,
+        )
+
+
+def _remove_when_released(name: str) -> bool:
+    """Hand an emptied worktree directory to a background remover; return whether it started.
+
+    Windows neither removes nor renames a directory that is a running process's
+    working directory. A delete or merge started from inside the worktree, often
+    through the worktree's own copy of this script, holds it until the command
+    ends; the shell that ran it keeps it even after a `cd` inside the command.
+    The remover runs the primary checkout's script, as the worktree's is gone.
+    """
+    script = PROJECT_ROOT / "scripts" / "worktree.py"
+    command = [sys.executable, str(script), "remove-released", name]
+    try:
+        _spawn_detached(command, subprocess.DEVNULL)
+    except OSError:
+        return False
+    return True
+
+
+def cmd_remove_released(args: argparse.Namespace) -> int:
+    """Remove an emptied worktree directory once no process uses it any more.
+
+    Leaves a directory that holds a checkout again, or that stays in use for
+    RELEASE_WAIT_SECONDS; `delete <name>` removes such a leftover later.
+    """
+    name: str = args.name
+    if validate_worktree_name(name) is not None:
+        return 1
+    worktree_path = WORKTREES_DIR / name
+    deadline = time.monotonic() + RELEASE_WAIT_SECONDS
+    while worktree_path.exists():
+        if (worktree_path / ".git").exists():
+            return 1
+        if _remove_directory_tree(worktree_path) is None:
+            break
+        if time.monotonic() >= deadline:
+            return 1
+        time.sleep(RELEASE_POLL_SECONDS)
+    return 0
 
 
 def _remove_checkout(checkout: Path) -> None:
@@ -774,6 +842,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
 
     terminated_paths: list[str] = []
     leftover_path: Path | None = None
+    removal_deferred = False
     # Without a checkout there is no work to lose in either mode, and
     # `git worktree remove` refuses a registered directory lacking `.git`.
     finish_removal = not checkout_present
@@ -811,7 +880,14 @@ def cmd_delete(args: argparse.Namespace) -> int:
             removal_error = _remove_directory_tree(worktree_path)
             if removal_error is not None and worktree_path.exists():
                 leftover_path = _move_to_trash(worktree_path)
-                if leftover_path is None:
+                # Only the directory is left once its checkout is gone, typically
+                # held as the working directory of this command or its shell.
+                removal_deferred = (
+                    leftover_path is None
+                    and not (worktree_path / ".git").exists()
+                    and _remove_when_released(name)
+                )
+                if leftover_path is None and not removal_deferred:
                     if marker_text is not None and not marker.exists():
                         with suppress(OSError):
                             marker.write_text(marker_text, encoding="utf-8")
@@ -851,6 +927,11 @@ def cmd_delete(args: argparse.Namespace) -> int:
         # Still held by an external process (e.g. an editor); swept later.
         fields["leftover"] = leftover_path
     print_ok(**fields)
+    if removal_deferred:
+        print(
+            "note: a running process, typically this command or its shell, still uses the "
+            "emptied worktree directory; a background process removes it once that process exits"
+        )
     return 0
 
 
@@ -1512,22 +1593,7 @@ def cmd_repair_start(args: argparse.Namespace) -> int:
         str(release_path),
     ]
     try:
-        if os.name == "nt":
-            subprocess.Popen(
-                keeper_command,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=log_handle,
-                creationflags=WINDOWS_DETACHED_CREATION_FLAGS,
-            )
-        else:
-            subprocess.Popen(
-                keeper_command,
-                stdin=subprocess.DEVNULL,
-                stdout=log_handle,
-                stderr=log_handle,
-                start_new_session=True,
-            )
+        _spawn_detached(keeper_command, log_handle)
     finally:
         log_handle.close()
 
@@ -1586,6 +1652,8 @@ def main() -> int:
         return cmd_repair_finish(args)
     if args.command == "keeper-hold":
         return cmd_keeper_hold(args)
+    if args.command == "remove-released":
+        return cmd_remove_released(args)
     return 1
 
 

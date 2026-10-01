@@ -80,4 +80,4 @@ If the task is cancelled or aborted, use the project-specific `delete` command (
 - **Never hand-merge into `main`** while sessions are running — all merges go through the merge command so the lock serializes them; a hand merge can collide with an automated one.
 - **A failed branch check** stops before the merge; fix the reported problems in the worktree, commit, and retry the merge.
 - **A merge rejected by the commit check** leaves `main` unchanged; its report names the problems. Bring `main` into your branch (`git rebase main`), fix them, commit, and retry the merge.
-- **Cleanup failure after a landed merge** — if the merge succeeded but worktree cleanup failed, the output says so; finish with the project-specific `delete` command manually.
+- **Cleanup after a landed merge** — a merge started from inside the worktree removes the emptied worktree directory in the background once the merge command ends, and says so in a `note:` line; the shell's working directory is gone afterwards. If cleanup failed, the output says so; finish with the project-specific `delete` command manually.

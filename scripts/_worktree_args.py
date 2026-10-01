@@ -66,4 +66,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     keeper_parser.add_argument("--holder-path", required=True)
     keeper_parser.add_argument("--release-path", required=True)
 
+    remove_parser = subparsers.add_parser("remove-released", help=argparse.SUPPRESS)
+    remove_parser.add_argument("name")
+
     return parser.parse_args(argv)
