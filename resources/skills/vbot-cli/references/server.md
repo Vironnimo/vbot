@@ -8,7 +8,7 @@ These commands run locally. Management commands in other areas normally contact 
 - Host normally defaults to `127.0.0.1`. Port resolves from `--port`, then `VBOT_SERVER_PORT`, then the selected local Settings, then `8420`.
 - The local data directory resolves from `--data-dir`, then `VBOT_DATA_DIR`, then an applicable checkout/worktree marker, then `~/.vbot`. Use `vbot home [--data-dir <path>]` to inspect it. `--data-dir` selects local configuration and lifecycle state; it is not sent to the server to redirect a management request.
 - Keep local lifecycle commands on the machine that owns the server. For a remote server, management uses its host/port; local paths still refer to the machine running the CLI. Do not treat `home`, `doctor`, or local snapshot results as remote filesystem observations.
-- `home` and `doctor` accept only `--data-dir`; `desktop` accepts only host/port and has its own last-used-server default. Update, uninstall, and autostart act on the installation that runs the command and use its recorded server target; explicit target options must match it.
+- `home` and `doctor` accept only `--data-dir`; `desktop` accepts only host/port and has its own last-used-server default. `update` and `uninstall` take no target options: they act on the installation that runs the command, with its recorded server and data directory.
 
 ## Server lifecycle
 

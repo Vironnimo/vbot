@@ -223,7 +223,7 @@ vbot uninstall --data-only --yes
 vbot uninstall --all --yes
 ```
 
-Automation must choose exactly one scope and confirm it with `--yes`. An installation always uses its own recorded server target; a `--host`, `--port` or `--data-dir` that names another target is rejected.
+Automation must choose exactly one scope and confirm it with `--yes`. Uninstall takes no target options: it always acts on the installation that runs it, with that installation's recorded server and data directory.
 
 </details>
 

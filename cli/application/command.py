@@ -241,7 +241,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         print(f"data_dir: {data_directory or 'not applicable (Desktop Client)'}")
         print(f"application_root: {install.root}")
         return 0
-    if args.area in {"server", "update", "autostart", "uninstall"} and (
+    if args.area in {"server", "autostart"} and (
         # Explicit lifecycle overrides remain deliberate targets, never silently
         # change which installed payload a process belongs to.
         getattr(args, "host", None) not in {None, "127.0.0.1", install.server_host}
