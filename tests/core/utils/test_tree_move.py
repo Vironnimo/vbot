@@ -3,6 +3,7 @@
 import errno
 import os
 import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 import pytest
 
 from core.utils import tree_move
-from core.utils.tree_move import move_tree
+from core.utils.tree_move import move_tree, remove_tree
 
 
 def make_tree(root: Path) -> Path:
@@ -170,3 +171,36 @@ def test_move_tree_keeps_the_copy_when_the_original_cannot_be_fully_deleted(
     assert not source.exists()
     leftovers = [path for path in tmp_path.iterdir() if path.name.startswith(".source.moved-")]
     assert len(leftovers) == 1
+
+
+def _link_directory(link: Path, target: Path) -> None:
+    """Create a directory link without privileges: a junction on Windows, a symlink elsewhere."""
+    if sys.platform == "win32":
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
+def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
+    tmp_path: Path,
+) -> None:
+    outside = make_tree(tmp_path / "outside")
+    expected = contents(outside)
+    within = tmp_path / "archive"
+    tree = make_tree(within / "entry" / "agent")
+    _link_directory(tree / "linked", outside)
+    read_only = tree / "sub" / "nested.txt"
+    read_only.chmod(stat.S_IREAD)
+    _link_directory(within / "link", outside)
+
+    for refused in (outside, within, within / ".." / "outside", within / "link" / "top.txt"):
+        with pytest.raises(ValueError, match="not inside"):
+            remove_tree(refused, within=within)
+    remove_tree(within / "link", within=within)
+    remove_tree(within / "entry", within=within)
+    remove_tree(within / "missing", within=within)
+
+    assert list(within.iterdir()) == []
+    assert contents(outside) == expected

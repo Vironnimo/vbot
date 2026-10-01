@@ -73,6 +73,32 @@ def _discard_tree(path: Path, what: str) -> None:
         _LOGGER.warning("Could not remove the %s at %s: %s", what, path, error)
 
 
+def remove_tree(path: Path, *, within: Path) -> None:
+    """Delete the file, directory tree or link at ``path``, which must lie inside ``within``.
+
+    The containment check resolves the parent directories but not ``path`` itself,
+    so a ``path`` that is a symbolic link or junction is removed as a link entry and
+    whatever it points at stays untouched; links inside a tree are never followed
+    either. Read-only attributes, such as those of ``.git`` objects, are cleared. A
+    missing ``path`` counts as removed. A ``path`` outside ``within``, or ``within``
+    itself, raises ``ValueError`` before anything is deleted.
+    """
+    root = Path(within).resolve()
+    target = Path(path).parent.resolve() / Path(path).name
+    if target == root or not target.is_relative_to(root) or Path(path).name in ("", ".", ".."):
+        raise ValueError(f"refusing to remove {path}: it is not inside {within}")
+    if not os.path.lexists(target):
+        return
+    if os.path.islink(target) or os.path.isjunction(target) or not target.is_dir():
+        try:
+            os.unlink(target)
+        except PermissionError:
+            os.chmod(target, os.lstat(target).st_mode | stat.S_IWRITE, follow_symlinks=False)
+            os.unlink(target)
+        return
+    _remove_tree(target)
+
+
 def _remove_tree(path: Path) -> None:
     """Delete a tree, clearing read-only attributes such as those of ``.git`` objects."""
     shutil.rmtree(path, onexc=_clear_read_only_and_retry)
