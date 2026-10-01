@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  archiveDeletionText,
   archiveRow,
   canRestoreAs,
   permanentDeleteNotice,
@@ -59,6 +60,35 @@ describe('archive view rules', () => {
       const row = archiveRow(entry(fields), { retentionDays: days, ...NAMES });
       expect(row.status).toBe(key ? t(key) : '');
       expect(row.purgeable).toBe(purgeable);
+    },
+  );
+
+  it.each([
+    [
+      'older files',
+      { kind: 'files', may_hold_user_folders: true },
+      'archive.row.neverDeletedFiles',
+      'archive.detail.neverDeletedFiles',
+    ],
+    [
+      'an entry that may hold folders of the user',
+      { may_hold_user_folders: true },
+      'archive.row.neverDeletedFolders',
+      'archive.row.neverDeletedFolders',
+    ],
+    [
+      'an entry found without its record',
+      { origin: 'recovered' },
+      'archive.row.neverDeletedRecovered',
+      'archive.detail.neverDeletedRecovered',
+    ],
+  ])(
+    'says why retention never deletes %s',
+    (_name, fields, rowKey, detailKey) => {
+      const kept = entry(fields);
+      const row = archiveRow(kept, { retentionDays: 30, ...NAMES });
+      expect(row.statusHint).toBe(t(rowKey));
+      expect(archiveDeletionText(kept, 30)).toBe(t(detailKey));
     },
   );
 

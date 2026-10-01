@@ -178,10 +178,16 @@ export function isKeptFromRetention(entry, retentionDays) {
   );
 }
 
+// Whether vBot found the entry's files without a record of when they were
+// archived (after restoring a data snapshot, for example).
+function isRecoveredOnly(entry) {
+  return entry?.origin === 'recovered' && !mayHoldUserFolders(entry);
+}
+
 export function keptFromRetentionReason(entry) {
-  return entry?.kind === 'files'
-    ? t('archive.row.neverDeletedFiles')
-    : t('archive.row.neverDeletedFolders');
+  if (entry?.kind === 'files') return t('archive.row.neverDeletedFiles');
+  if (isRecoveredOnly(entry)) return t('archive.row.neverDeletedRecovered');
+  return t('archive.row.neverDeletedFolders');
 }
 
 export function sessionCountText(count) {
@@ -273,6 +279,9 @@ export function archiveDeletionText(entry, retentionDays, userFolders = []) {
   if (retentionDays === null) return t('archive.retention.off');
   if (!isKeptFromRetention(entry, retentionDays)) return '';
   if (entry?.kind === 'files') return t('archive.detail.neverDeletedFiles');
+  if (userFolders.length === 0 && isRecoveredOnly(entry)) {
+    return t('archive.detail.neverDeletedRecovered');
+  }
   return userFolders.length > 0
     ? t('archive.detail.neverDeletedFolders')
     : t('archive.row.neverDeletedFolders');

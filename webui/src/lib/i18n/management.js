@@ -892,6 +892,8 @@ export default Object.freeze({
     'Files from an older vBot version may be folders of your own, so vBot deletes them only when you do.',
   'archive.row.neverDeletedFolders':
     'This item may hold folders of your own, so vBot deletes it only when you do.',
+  'archive.row.neverDeletedRecovered':
+    'vBot found this item in its Archive folder without a record of when it was archived, so it deletes it only when you do.',
   'archive.row.deleteOnly': 'Cannot be restored',
   'archive.state.archiving': 'Being archived',
   'archive.state.restoring': 'Being restored',
@@ -1009,6 +1011,8 @@ export default Object.freeze({
     'Never deleted automatically: files from an older vBot version may be folders of your own.',
   'archive.detail.neverDeletedFolders':
     'Never deleted automatically: the folders marked below may be your own.',
+  'archive.detail.neverDeletedRecovered':
+    'Never deleted automatically: vBot found it in its Archive folder without a record of when it was archived.',
   'archive.detail.id': 'ID',
   'archive.detail.agent': 'Agent',
   'archive.detail.project': 'Project',
