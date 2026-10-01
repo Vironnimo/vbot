@@ -3,23 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import sys
 import tomllib
-from collections.abc import Sequence
-from contextlib import suppress
 from importlib import metadata, util
 from pathlib import Path
-from typing import Any
 
+from core.model_tasks.local_setup import LocalSetup
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("speech.setup")
 
 
-class LocalSpeechSetup:
-    """One server-owned, fixed-recipe dependency installation; no client commands."""
+class LocalSpeechSetup(LocalSetup):
+    """One speech engine's installation: the server's STT stack or a managed environment.
+
+    Without a directory it installs the shipped ``local-speech`` extra into a
+    source installation's server interpreter (restart required). With a
+    directory it creates a managed environment: the packaged STT stack, or a
+    TTS engine's ``[tool.vbot.local-tts.<engine>]`` recipe.
+    """
 
     def __init__(
         self,
@@ -28,275 +31,106 @@ class LocalSpeechSetup:
         directory: Path | None = None,
         install_lock: asyncio.Lock | None = None,
     ) -> None:
+        super().__init__(
+            name=engine or "stt",
+            directory=directory,
+            install_lock=install_lock,
+            subject="Local speech",
+            logger=_LOGGER,
+        )
         self.engine = engine
-        self.directory = directory
-        self._install_lock = install_lock or asyncio.Lock()
-        self._task: asyncio.Task[None] | None = None
-        self._process: asyncio.subprocess.Process | None = None
-        self._state = "idle"
-        self._phase = "checking"
-        self._error = ""
-        self._closed = False
-        self._reported_unavailability = ""
-
-    @property
-    def blocks_execution(self) -> bool:
-        return self._state in {"installing", "restart_required", "failed"}
-
-    def status(self, *, log_unavailable: bool = False) -> dict[str, Any]:
-        state = self._state
-        error = self._error
-        if state in {"idle", "ready"}:
-            error = self._availability_error()
-            state = "missing" if error else "ready"
-        if log_unavailable:
-            reason = error or (state if self.blocks_execution else "")
-            if reason and reason != self._reported_unavailability:
-                _LOGGER.warning(
-                    "Local speech unavailable (engine=%s, reason=%s, environment=%s)",
-                    self.engine or "stt",
-                    reason,
-                    self.directory or "server",
-                )
-            elif not reason and self._reported_unavailability:
-                _LOGGER.info("Local speech available again (engine=%s)", self.engine or "stt")
-            self._reported_unavailability = reason
-        return {"state": state, "phase": self._phase, "error": error}
-
-    @property
-    def python(self) -> Path:
-        assert self.directory is not None
-        return self.directory / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-
-    def available(self) -> bool:
-        return not self.blocks_execution and not self._availability_error()
 
     def _availability_error(self) -> str:
         if not self.engine and self.directory is None:
             return "" if _dependencies_available() else "dependencies_missing"
-        if self.directory is None:
-            return "environment_missing"
-        try:
-            if not self.python.is_file():
-                return "python_missing"
-            # This receipt proves that setup finished, not that the installed
-            # packages or application source are identical to today's recipe.
-            # Updates must not revoke a completed setup based on text or hashes.
-            if not (self.directory / "verified.json").is_file():
-                return "setup_incomplete"
-        except OSError:
-            return "environment_unreadable"
-        return ""
+        return super()._availability_error()
 
-    def _config(self) -> dict[str, Any]:
-        source = Path(__file__).resolve()
-        project = source.parents[2] / "pyproject.toml"
-        if not project.is_file():
-            project = next(
-                parent / "app" / "pyproject.toml"
-                for parent in source.parents
-                if (parent / "release.json").is_file()
-                and (parent / "app" / "pyproject.toml").is_file()
-            )
-        return tomllib.loads(project.read_text(encoding="utf-8"))
-
-    def install(self) -> dict[str, Any]:
-        if self._closed or self._state in {"installing", "restart_required"}:
-            return self.status()
-        if self.status()["state"] == "ready":
-            return self.status()
-        self._state, self._phase, self._error = "installing", "checking", ""
-        self._task = asyncio.create_task(self._install())
-        return self.status()
-
-    async def _install(self) -> None:
-        try:
-            if self._install_lock.locked():
-                self._phase = "queued"
-            async with self._install_lock:
-                await self._run_install()
-        except asyncio.CancelledError:
-            self._fail("interrupted")
-            raise
-
-    async def _run_install(self) -> None:
-        try:
-            async with asyncio.timeout(3600):
-                if self.engine:
-                    await self._install_tts()
-                    return
-                if self.directory is not None:
-                    await self._install_stt()
-                    return
-                # Only the shipped extra is installable, never packages or paths
-                # supplied by an RPC caller. Install dependencies, not vBot's
-                # launchers, which may be locked by an open Windows Desktop.
-                project_file = Path(__file__).resolve().parents[2] / "pyproject.toml"
-                requirements = tomllib.loads(project_file.read_text(encoding="utf-8"))["project"][
-                    "optional-dependencies"
-                ]["local-speech"]
-                if await self._command([sys.executable, "-m", "pip", "--version"]) != 0:
-                    self._fail("pip_unavailable")
-                    return
-                gpu_tool = shutil.which("nvidia-smi")
-                use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
-                self._phase = "gpu" if use_cuda else "downloading"
-                torch_check = (
-                    "import torch; "
-                    "v=tuple(int(p) for p in torch.__version__.split('.')[:2]); "
-                    "assert (2,10) <= v < (3,); "
-                )
-                if use_cuda:
-                    torch_check += (
-                        "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096"
-                    )
-                if await self._command([sys.executable, "-c", torch_check]) != 0:
-                    torch_requirement = next(
-                        item for item in requirements if item.startswith("torch")
-                    )
-                    index = (
-                        "https://download.pytorch.org/whl/cu128"
-                        if use_cuda
-                        else "https://download.pytorch.org/whl/cpu"
-                    )
-                    if sys.platform == "darwin":
-                        index = "https://pypi.org/simple"
-                    if (
-                        await self._pip(
-                            [
-                                torch_requirement,
-                                "--force-reinstall",
-                                "--no-deps",
-                                "--index-url",
-                                index,
-                            ]
-                        )
-                        != 0
-                    ):
-                        self._fail("install_failed")
-                        return
-                if await self._pip(requirements) != 0:
-                    self._fail("install_failed")
-                    return
-                self._phase = "verifying"
-                # A fresh process proves imports without contaminating the live
-                # server with a mixture of old and newly installed libraries.
-                probe = (
-                    "import torch, av, librosa; "
-                    "from transformers import AutoProcessor, AutoModelForMultimodalLM; "
-                    "from transformers import AutoModelForTDT, AutoModelForRNNT; "
-                    "from core.model_tasks.speech_local import _dependencies_available; "
-                    "assert _dependencies_available(); "
-                )
-                if use_cuda:
-                    probe += (
-                        "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096; "
-                    )
-                if await self._command([sys.executable, "-c", probe]) != 0:
-                    self._fail("gpu_unavailable" if use_cuda else "verification_failed")
-                    return
-                self._state = "restart_required"
-                _LOGGER.info("Local speech support installed; server restart required")
-        except asyncio.CancelledError:
-            raise
-        except TimeoutError:
-            self._fail("timeout")
-        except (OSError, ValueError, KeyError, StopIteration):
-            self._fail("setup_unavailable")
-        except Exception:
-            self._fail("install_failed")
-
-    async def _install_tts(self) -> None:
-        assert self.directory is not None
-        marker = self.directory / "verified.json"
-        marker.unlink(missing_ok=True)
-        config = self._config()
-        recipe = config["tool"]["vbot"]["local-tts"][self.engine]
-        # Packaged roles ship uv. Source installations retain their existing
-        # fixed bootstrap recipe, while immutable packaged roles are untouched.
-        if (
-            not self._packaged()
-            and await self._pip(config["project"]["optional-dependencies"]["local-tts"]) != 0
-        ):
-            self._fail("install_failed")
+    async def _perform(self) -> None:
+        if self.engine:
+            await self._install_tts()
             return
-        uv = [sys.executable, "-m", "uv"]
-        self._phase = "python"
-        if (
-            not self.python.exists()
-            and await self._command(
-                [*uv, "venv", "--python", recipe["python"], "--managed-python", str(self.directory)]
-            )
-            != 0
-        ):
-            self._fail("install_failed")
+        if self.directory is not None:
+            await self._install_stt()
+            return
+        # Only the shipped extra is installable, never packages or paths
+        # supplied by an RPC caller. Install dependencies, not vBot's
+        # launchers, which may be locked by an open Windows Desktop.
+        project_file = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        requirements = tomllib.loads(project_file.read_text(encoding="utf-8"))["project"][
+            "optional-dependencies"
+        ]["local-speech"]
+        if await self._command([sys.executable, "-m", "pip", "--version"]) != 0:
+            self._fail("pip_unavailable")
             return
         gpu_tool = shutil.which("nvidia-smi")
         use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
         self._phase = "gpu" if use_cuda else "downloading"
-        version = recipe["torch"]
-        index = "cu126" if version == "2.6.0" else "cu128"
-        index = f"https://download.pytorch.org/whl/{index if use_cuda else 'cpu'}"
-        if sys.platform == "darwin":
-            index = "https://pypi.org/simple"
-        pip = [*uv, "pip", "install", "--python", str(self.python)]
-        if (
-            await self._command(
-                [
-                    *pip,
-                    "--only-binary=:all:",
-                    f"torch=={version}",
-                    f"torchaudio=={version}",
-                    "--index-url",
-                    index,
-                ],
-                progress=True,
+        torch_check = (
+            "import torch; "
+            "v=tuple(int(p) for p in torch.__version__.split('.')[:2]); "
+            "assert (2,10) <= v < (3,); "
+        )
+        if use_cuda:
+            torch_check += "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096"
+        if await self._command([sys.executable, "-c", torch_check]) != 0:
+            torch_requirement = next(item for item in requirements if item.startswith("torch"))
+            index = (
+                "https://download.pytorch.org/whl/cu128"
+                if use_cuda
+                else "https://download.pytorch.org/whl/cpu"
             )
-            != 0
-        ):
-            self._fail("install_failed")
-            return
-        self._phase = "installing"
-        # A previous setup may have installed the pinned source with the same
-        # version as PyPI. Resolve dependency metadata from PyPI again before
-        # restoring that source; its metadata may contain transitive Git URLs.
-        reinstall = ["--reinstall-package", "chatterbox-tts"] if recipe.get("source") else []
-        if (
-            await self._command(
-                [*pip, "--only-binary=:all:", *reinstall, *recipe["packages"]], progress=True
-            )
-            != 0
-        ):
-            self._fail("install_failed")
-            return
-        if (
-            recipe.get("source")
-            and await self._command(
-                [*pip, "--no-deps", "--reinstall-package", "chatterbox-tts", recipe["source"]]
-            )
-            != 0
-        ):
+            if sys.platform == "darwin":
+                index = "https://pypi.org/simple"
+            if (
+                await self._pip(
+                    [
+                        torch_requirement,
+                        "--force-reinstall",
+                        "--no-deps",
+                        "--index-url",
+                        index,
+                    ]
+                )
+                != 0
+            ):
+                self._fail("install_failed")
+                return
+        if await self._pip(requirements) != 0:
             self._fail("install_failed")
             return
         self._phase = "verifying"
+        # A fresh process proves imports without contaminating the live
+        # server with a mixture of old and newly installed libraries.
+        probe = (
+            "import torch, av, librosa; "
+            "from transformers import AutoProcessor, AutoModelForMultimodalLM; "
+            "from transformers import AutoModelForTDT, AutoModelForRNNT; "
+            "from core.model_tasks.speech_local import _dependencies_available; "
+            "assert _dependencies_available(); "
+        )
+        if use_cuda:
+            probe += "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096; "
+        if await self._command([sys.executable, "-c", probe]) != 0:
+            self._fail("gpu_unavailable" if use_cuda else "verification_failed")
+            return
+        self._state = "restart_required"
+        _LOGGER.info("Local speech support installed; server restart required")
+
+    async def _install_tts(self) -> None:
+        assert self.directory is not None
+        device = await self._install_recipe("local-tts", self.engine)
+        if device is None:
+            return
         worker = Path(__file__).with_name("speech_worker.py")
         if (
             await self._command(
-                [
-                    str(self.python),
-                    "-I",
-                    "-B",
-                    str(worker),
-                    "--verify",
-                    self.engine,
-                    "cuda" if use_cuda else "cpu",
-                ]
+                [str(self.python), "-I", "-B", str(worker), "--verify", self.engine, device]
             )
             != 0
         ):
             self._fail("verification_failed")
             return
-        self._write_marker(marker)
+        self._write_marker(self.directory / "verified.json")
         # Only a child environment changed; the server can use it immediately.
         self._state = "ready"
         _LOGGER.info("Local TTS support installed (engine=%s)", self.engine)
@@ -375,93 +209,6 @@ class LocalSpeechSetup:
             if (parent / "release.json").is_file() and parent.parent.name == "versions":
                 return load_installation(parent.parent.parent)
         return None
-
-    def _packaged(self) -> bool:
-        return any(
-            (parent / "release.json").is_file() for parent in Path(__file__).resolve().parents
-        )
-
-    def _write_marker(self, marker: Path) -> None:
-        temporary = marker.with_suffix(".tmp")
-        temporary.write_text("{}\n", encoding="utf-8")
-        os.replace(temporary, marker)
-
-    def _fail(self, code: str) -> None:
-        self._state, self._error = "failed", code
-        _LOGGER.warning("Local speech installation failed (reason=%s)", code)
-
-    async def _pip(self, arguments: Sequence[str]) -> int:
-        return await self._command(
-            [
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--disable-pip-version-check",
-                "--no-input",
-                "--progress-bar",
-                "off",
-                "--only-binary=:all:",
-                *arguments,
-            ],
-            progress=True,
-        )
-
-    async def _command(
-        self,
-        arguments: Sequence[str],
-        *,
-        progress: bool = False,
-        environment: dict[str, str] | None = None,
-    ) -> int:
-        from core.utils.processes import kill_process_tree_async, subprocess_creation_flags
-
-        process = await asyncio.create_subprocess_exec(
-            *arguments,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            creationflags=subprocess_creation_flags(),
-            start_new_session=os.name != "nt",
-            env=environment
-            or {
-                **os.environ,
-                "PYTHONUTF8": "1",
-                "PIP_NO_INPUT": "1",
-                "PYTHONDONTWRITEBYTECODE": "1",
-            },
-        )
-        self._process = process
-        try:
-            assert process.stdout is not None
-            while line := await process.stdout.readline():
-                # Never expose package-manager output: custom indexes can carry
-                # credentials. Surface only fixed, translated phase identifiers.
-                if progress and line.startswith(b"Installing collected packages"):
-                    self._phase = "installing"
-                elif progress and line.startswith(b"Downloading"):
-                    self._phase = "downloading"
-            return await process.wait()
-        finally:
-            if process.returncode is None:
-                with suppress(ProcessLookupError):
-                    await kill_process_tree_async(process)
-                await process.wait()
-            self._process = None
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-        # The task's finally block owns the process tree and reaping. Killing
-        # only a Windows venv launcher would orphan its Python/uv children.
-
-    async def aclose(self) -> None:
-        self.close()
-        if self._task is not None:
-            await asyncio.gather(self._task, return_exceptions=True)
 
 
 def _dependencies_available() -> bool:

@@ -115,4 +115,5 @@ python = "3.12"
 packages = ["chatterbox-tts==0.1.7"]
 # PyPI 0.1.7 supplies dependencies; this pinned official source adds V3.
 source = "https://github.com/resemble-ai/chatterbox/archive/5de7a54aa4e5e2baadb0182dde554908b48b85c2.zip"
+source-package = "chatterbox-tts"
 torch = "2.6.0"
