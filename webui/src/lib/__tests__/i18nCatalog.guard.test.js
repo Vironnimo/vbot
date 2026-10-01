@@ -104,6 +104,7 @@ const COMPOSED_KEYS = {
   'settings.localSpeech.options.*.label': 'tOr', // Local Speech option name
   'settings.localSpeech.phase.*': 'tOr', // Local Speech setup phase
   'settings.recall.backends.*': 'tOr', // Recall backend id
+  'settings.recall.indexError.*': 'tOr', // Recall index failure code
   'settings.webSearch.providers.*': 'tOr', // web search or fetch provider
   'statistics.skills.origin.*': 'tOr', // Skill origin scope
   'statistics.status.*': 'tOr', // Run status

@@ -25,6 +25,7 @@ import {
   openSettingsSection,
   openSimpleDropdown,
   openWebSearchPanel,
+  recallIndexStatusPayload,
   resetSettingsViewHarness,
   rpcMock,
   saveStateText,
@@ -34,6 +35,7 @@ import {
   settingsPayload,
   waitForCondition,
 } from './SettingsView.support.js';
+import { reactiveProps } from './reactiveProps.support.svelte.js';
 
 vi.mock('svelte', async () => {
   return import('../../../node_modules/svelte/src/index-client.js');
@@ -217,7 +219,7 @@ describe('SettingsView', () => {
           'voice_controls',
           'transcription_audio',
         ],
-        memory: ['reflection', 'recall', 'embedding_model'],
+        memory: ['reflection', 'recall'],
         tools: [
           'web_search',
           'web_fetch',
@@ -912,31 +914,236 @@ describe('SettingsView', () => {
   });
 
   describe('Memory and Tools pages', () => {
-    it('selects and saves the Recall backend, pointing semantic search at its embedding model', async () => {
+    const embeddingTargets = [
+      {
+        id: 'openai/text-embedding-3-small',
+        label: 'OpenAI / Text Embedding 3 Small',
+        kind: 'provider',
+        provider_id: 'openai',
+        task_types: ['text_embedding'],
+        usable: true,
+        facts: {
+          local: false,
+          multilingual: true,
+          recommended_rank: 3,
+          input_price_per_million: 0.02,
+          note: 'Inexpensive general-purpose OpenAI model.',
+        },
+      },
+      {
+        id: 'local/granite-embedding-r2',
+        label: 'Granite Embedding R2',
+        kind: 'local',
+        task_types: ['text_embedding'],
+        usable: false,
+        facts: { local: true, multilingual: true, recommended_rank: 1 },
+      },
+      {
+        id: 'openrouter/unranked-embed',
+        label: 'OpenRouter / Unranked Embed',
+        kind: 'provider',
+        provider_id: 'openrouter',
+        task_types: ['text_embedding'],
+        usable: true,
+        facts: { local: false, recommended_rank: null },
+      },
+    ];
+    const embeddingOptions = {
+      'openai/text-embedding-3-small': {
+        fields: [{ name: 'dimensions', type: 'number', label: 'Dimensions' }],
+      },
+    };
+
+    function recallElement(selector) {
+      return document.querySelector(
+        `[data-settings-section="recall"] ${selector}`,
+      );
+    }
+
+    function embeddingChoice(id) {
+      return recallElement(`[data-embedding-choice="${id}"]`);
+    }
+
+    it('turns on search by meaning with a recommended embedding model and follows the index status', async () => {
       const settings = settingsPayload();
       settings.recall.available_backends = ['sqlite_fts', 'vector', 'hybrid'];
-      await mountSettings({ settings });
-      await openRecallPanel();
-      const embeddingNote = () =>
-        document.querySelector('[data-recall-embedding-note]');
-      expect(embeddingNote()).toBeNull();
-
-      openSimpleDropdown('settings-recall-backend');
-      selectSimpleOption(
-        'settings-recall-backend',
-        t('settings.recall.backends.vector'),
+      const props = reactiveProps({ recallIndexStatus: null });
+      await mountSettings(
+        {
+          settings,
+          taskModelTargets: embeddingTargets,
+          taskModelOptions: embeddingOptions,
+        },
+        props,
       );
-      // No embedding model is saved yet, so the section asks for one.
-      expect(embeddingNote().dataset.recallEmbeddingNote).toBe('missing');
-      getButton('Save').click();
-      await waitForCondition(() => getSettingsUpdateCalls().length >= 1);
+      await openRecallPanel();
+      const meaningSwitch = recallElement('#settings-recall-meaning');
+      const modelRow = recallElement('[data-recall-model]');
+      const note = recallElement('[data-recall-embedding-note]');
+      const indexRow = recallElement('[data-recall-index]');
+      expect(meaningSwitch.getAttribute('aria-checked')).toBe('false');
+      expect(modelRow.hidden).toBe(true);
+      expect(note.hidden).toBe(true);
+      expect(indexRow.hidden).toBe(true);
+      // Keywords only is a switch choice, so Advanced stays closed.
+      expect(recallElement('#settings-recall-advanced').hidden).toBe(true);
 
+      meaningSwitch.click();
+      flushSync();
+      expect(meaningSwitch.getAttribute('aria-checked')).toBe('true');
+      expect(modelRow.hidden).toBe(false);
+      expect(note.dataset.recallEmbeddingNote).toBe('missing');
+      await waitForCondition(() =>
+        embeddingChoice('openai/text-embedding-3-small'),
+      );
+      // Recommended Models only, grouped; one not set up yet is disabled.
+      expect(
+        Array.from(
+          modelRow.querySelectorAll('[data-recall-model-group]'),
+          (group) => [
+            group.dataset.recallModelGroup,
+            Array.from(
+              group.querySelectorAll('[data-embedding-choice]'),
+              (choice) => choice.dataset.embeddingChoice,
+            ),
+          ],
+        ),
+      ).toEqual([
+        ['local', ['local/granite-embedding-r2']],
+        ['cloud', ['openai/text-embedding-3-small']],
+      ]);
+      const local = embeddingChoice('local/granite-embedding-r2');
+      expect(local.querySelector('input').disabled).toBe(true);
+      expect(local.textContent).toContain(
+        t('settings.recall.model.notInstalled'),
+      );
+      const cloud = embeddingChoice('openai/text-embedding-3-small');
+      expect(cloud.textContent).toContain('Multilingual · $0.02 per 1M tokens');
+      expect(cloud.textContent).toContain(
+        'Inexpensive general-purpose OpenAI model.',
+      );
+
+      cloud.querySelector('input').click();
+      flushSync();
+      expect(note.dataset.recallEmbeddingNote).toBe('in-use');
+      expect(note.textContent).toContain(
+        'Conversation text is sent to OpenAI to build the search index.',
+      );
+      // The Model's options sit under Advanced.
+      await waitForCondition(() =>
+        recallElement('#task-model-text_embedding-dimensions'),
+      );
+
+      // One save state covers the backend and the embedding binding.
+      getButton('Save').click();
+      await waitForCondition(
+        () =>
+          getSettingsUpdateCalls().length >= 1 &&
+          rpcMock.mock.calls.some((call) => call[0] === 'task_model.update'),
+      );
       expect(getSettingsUpdateCalls()[0][1]).toEqual({
-        recall: { backend: 'vector' },
+        recall: { backend: 'hybrid' },
         base: { recall: { backend: 'sqlite_fts' } },
+      });
+      expect(
+        rpcMock.mock.calls.find((call) => call[0] === 'task_model.update')[1],
+      ).toEqual({
+        model_tasks: {
+          text_embedding: {
+            target: 'openai/text-embedding-3-small',
+            options: {},
+          },
+        },
       });
       await waitForCondition(
         () => saveStateText('recall') === t('common.saved'),
+      );
+
+      // Saving reads the status again; pushed updates replace it.
+      await waitForCondition(() => indexRow.hidden === false);
+      expect(indexRow.textContent).toContain(t('settings.recall.status.empty'));
+      props.recallIndexStatus = recallIndexStatusPayload({
+        state: 'indexing',
+        indexed: 812,
+        waiting: 183,
+        estimate: { characters: 1_600_000, tokens: 400_000, cost: 0.004 },
+      });
+      flushSync();
+      expect(indexRow.dataset.recallIndex).toBe('indexing');
+      expect(indexRow.textContent).toContain(
+        'Indexing: 812 of 995 passages · about 400K tokens waiting (~$0.004)',
+      );
+
+      meaningSwitch.click();
+      flushSync();
+      expect(modelRow.hidden).toBe(true);
+      expect(indexRow.hidden).toBe(true);
+    });
+
+    it('opens Advanced for a meaning-only backend and rebuilds a failed index after confirmation', async () => {
+      const settings = settingsPayload();
+      settings.recall = {
+        backend: 'vector',
+        available_backends: ['sqlite_fts', 'vector', 'hybrid'],
+      };
+      settings.model_tasks = {
+        text_embedding: { target: 'openrouter/unranked-embed', options: {} },
+      };
+      await mountSettings({
+        settings,
+        taskModelTargets: embeddingTargets,
+        taskModelOptions: {
+          'openrouter/unranked-embed': { fields: [] },
+        },
+        recallIndexStatus: recallIndexStatusPayload({
+          state: 'error',
+          indexed: 3,
+          waiting: 2,
+          estimate: { tokens: 500 },
+          last_error: { code: 'provider_auth', message: 'English' },
+        }),
+        recallRebuildStatus: recallIndexStatusPayload({
+          state: 'indexing',
+          waiting: 5,
+          estimate: { tokens: 900 },
+        }),
+      });
+      await openRecallPanel();
+
+      expect(
+        recallElement('#settings-recall-meaning').getAttribute('aria-checked'),
+      ).toBe('true');
+      expect(recallElement('#settings-recall-advanced').hidden).toBe(false);
+      expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
+        t('settings.recall.backends.vector'),
+      );
+      // The selected Model stays in the short list though it has no rank.
+      await waitForCondition(() =>
+        embeddingChoice('openrouter/unranked-embed'),
+      );
+      expect(
+        embeddingChoice('openrouter/unranked-embed').querySelector('input')
+          .checked,
+      ).toBe(true);
+      expect(recallElement('#settings-recall-all-models').hidden).toBe(true);
+      const indexRow = recallElement('[data-recall-index]');
+      await waitForCondition(() => indexRow.dataset.recallIndex === 'error');
+      expect(
+        indexRow.querySelector('[data-recall-index-problem]').textContent,
+      ).toContain(t('settings.recall.indexError.provider_auth'));
+
+      getButton(t('settings.recall.rebuild')).click();
+      flushSync();
+      expect(document.body.textContent).toContain(
+        t('settings.recall.rebuildTitle'),
+      );
+      getButton(t('settings.recall.rebuildConfirm')).click();
+      await waitForCondition(() => indexRow.dataset.recallIndex === 'indexing');
+      expect(
+        rpcMock.mock.calls.filter((call) => call[0] === 'recall.rebuild_index'),
+      ).toHaveLength(1);
+      expect(indexRow.textContent).toContain(
+        'Indexing: 0 of 5 passages · about 900 tokens waiting',
       );
     });
 

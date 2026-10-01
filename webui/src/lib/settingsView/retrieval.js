@@ -1,8 +1,6 @@
 import { t, tOr } from '../i18n.js';
 import { textOrFallback, textOrEmpty } from './values.js';
 
-const RECALL_BACKEND_SQLITE_FTS = 'sqlite_fts';
-
 const WEB_SEARCH_PROVIDER_BRAVE = 'brave';
 
 const WEB_SEARCH_PROVIDER_DUCKDUCKGO = 'duckduckgo';
@@ -18,12 +16,6 @@ const WEB_SEARCH_PROVIDER_FIRECRAWL = 'firecrawl';
 const WEB_SEARCH_PROVIDER_PERPLEXITY = 'perplexity';
 
 const WEB_SEARCH_PROVIDER_SEARXNG = 'searxng';
-
-const RECALL_BACKEND_DEFAULTS = Object.freeze([
-  RECALL_BACKEND_SQLITE_FTS,
-  'vector',
-  'hybrid',
-]);
 
 const WEB_SEARCH_PROVIDER_DEFAULTS = Object.freeze([
   WEB_SEARCH_PROVIDER_BRAVE,
@@ -43,42 +35,6 @@ const WEB_SEARCH_DEFAULT_COUNT = 12;
 const WEB_SEARCH_MIN_COUNT = 1;
 
 const WEB_SEARCH_MAX_COUNT = 20;
-
-function normalizeRecallSettings(rawSettings) {
-  const recall = rawSettings?.recall ?? {};
-  const availableBackends = normalizeRecallBackends(recall.available_backends);
-  const backend =
-    typeof recall.backend === 'string' &&
-    availableBackends.includes(recall.backend)
-      ? recall.backend
-      : RECALL_BACKEND_SQLITE_FTS;
-
-  return {
-    backend,
-    available_backends: availableBackends,
-  };
-}
-
-export function getRecallSettings(settings) {
-  return normalizeRecallSettings(settings);
-}
-
-export function buildRecallSettingsPayload(formValues) {
-  return {
-    recall: {
-      backend: normalizeRecallSettings({ recall: formValues }).backend,
-    },
-  };
-}
-
-export function buildRecallBackendOptions(recallSettings) {
-  return normalizeRecallBackends(recallSettings?.available_backends).map(
-    (backend) => ({
-      value: backend,
-      label: tOr(`settings.recall.backends.${backend}`, backend),
-    }),
-  );
-}
 
 function normalizeWebSearchSettings(rawSettings) {
   const webSearch = rawSettings?.web_search ?? {};
@@ -201,17 +157,6 @@ export function webServiceKeyHint(service) {
   return service.configured
     ? t('settings.serviceKey.optionSet')
     : t('settings.serviceKey.optionMissing');
-}
-
-function normalizeRecallBackends(backends) {
-  const values = Array.isArray(backends) ? backends : RECALL_BACKEND_DEFAULTS;
-  const normalized = values
-    .map((backend) => textOrEmpty(backend))
-    .filter((backend) => backend.length > 0);
-
-  return normalized.length > 0
-    ? Array.from(new Set(normalized))
-    : [...RECALL_BACKEND_DEFAULTS];
 }
 
 function normalizeWebSearchProviders(providers) {

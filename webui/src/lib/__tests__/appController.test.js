@@ -218,6 +218,24 @@ describe('App controller', () => {
     );
   });
 
+  it('keeps the latest pushed Recall index status', async () => {
+    const { controller, state } = setup();
+    expect(state.recallIndexStatus).toBeNull();
+
+    for (const indexed of [10, 20]) {
+      await controller.handleServerEvent({
+        type: 'recall_index_status',
+        payload: { state: 'indexing', indexed, waiting: 5 },
+      });
+    }
+
+    expect(state.recallIndexStatus).toEqual({
+      state: 'indexing',
+      indexed: 20,
+      waiting: 5,
+    });
+  });
+
   it('reloads the data-store projection on connect and invalidation', async () => {
     const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
     const { controller, state } = setup({ onLoadDataStoreStatus });

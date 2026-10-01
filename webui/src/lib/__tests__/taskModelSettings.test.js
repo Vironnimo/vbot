@@ -62,10 +62,35 @@ describe('task model bindings', () => {
   it('normalizes targets and option schemas', () => {
     expect(
       normalizeTargets({
-        targets: [{ id: 'target-1', label: 'Target 1' }, { label: 'No id' }],
+        targets: [
+          { id: 'target-1', label: 'Target 1' },
+          {
+            id: 'openai/text-embedding-3-small',
+            label: 'OpenAI / text-embedding-3-small',
+            kind: 'provider',
+            provider_id: 'openai',
+            facts: { local: false, recommended_rank: 3 },
+          },
+          { label: 'No id' },
+        ],
       }),
     ).toEqual([
-      { id: 'target-1', label: 'Target 1', usable: true, kind: 'provider' },
+      {
+        id: 'target-1',
+        label: 'Target 1',
+        usable: true,
+        kind: 'provider',
+        providerId: '',
+        facts: {},
+      },
+      {
+        id: 'openai/text-embedding-3-small',
+        label: 'OpenAI / text-embedding-3-small',
+        usable: true,
+        kind: 'provider',
+        providerId: 'openai',
+        facts: { local: false, recommended_rank: 3 },
+      },
     ]);
 
     const fields = normalizeOptionSchema({

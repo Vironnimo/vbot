@@ -66,6 +66,9 @@
     onDebugEnabledChange = noop,
     onOpenSetupGuide = noop,
     modelsRefreshToken = 0,
+    // The latest pushed Recall index status, applied by the Conversation
+    // search panel.
+    recallIndexStatus = null,
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
     initialScrollPosition = null,
@@ -127,10 +130,6 @@
       label: () => t('settings.sections.recall'),
     },
     {
-      id: 'embedding_model',
-      label: () => t('settings.specializedModels.embeddingModel'),
-    },
-    {
       id: 'reflection',
       label: () => t('settings.reflection.title'),
     },
@@ -167,7 +166,6 @@
   const modelTasksBySection = {
     speech_models: ['speech_to_text', 'text_to_speech'],
     live_voice_model: ['live_voice'],
-    embedding_model: ['text_embedding'],
     media_models: [
       'image_understanding',
       'image_generation',
@@ -214,7 +212,7 @@
       id: 'memory',
       label: () => t('settings.pages.memory'),
       description: () => t('settings.pages.memoryDescription'),
-      sections: ['reflection', 'recall', 'embedding_model'],
+      sections: ['reflection', 'recall'],
     },
     {
       id: 'tools',
@@ -805,9 +803,7 @@
   {:else if modelTasksBySection[panelId]}
     <SettingsSpecializedModelsPanel
       taskTypes={modelTasksBySection[panelId]}
-      showTaskLabels={!['embedding_model', 'live_voice_model'].includes(
-        panelId,
-      )}
+      showTaskLabels={panelId !== 'live_voice_model'}
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
@@ -825,6 +821,8 @@
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
+      {modelsRefreshToken}
+      {recallIndexStatus}
     />
   {:else if panelId === 'voice_controls'}
     <WakewordVoiceSettings

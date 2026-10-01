@@ -91,7 +91,6 @@ const TEXT_EMBEDDING_TASK_ROWS = Object.freeze([
   {
     taskType: TASK_TEXT_EMBEDDING,
     title: () => t('settings.specializedModels.embeddingModel'),
-    label: () => t('settings.specializedModels.embeddingModelLabel'),
     help: () => t('settings.specializedModels.embeddingModelHelp'),
   },
 ]);
@@ -136,6 +135,9 @@ export function normalizeTaskModelSettings(settings) {
   return normalized;
 }
 
+// `facts` are the task type's selection facts for one target (for
+// `text_embedding`: local, multilingual, recommended_rank, note,
+// input_price_per_million); other task types carry none.
 export function normalizeTargets(result) {
   return result.targets
     .map((target) => ({
@@ -143,6 +145,11 @@ export function normalizeTargets(result) {
       label: textOrFallback(target?.label, target?.id),
       usable: target?.usable !== false,
       kind: textOrFallback(target?.kind, 'provider'),
+      providerId: textOrEmpty(target?.provider_id),
+      facts:
+        target?.facts && typeof target.facts === 'object'
+          ? { ...target.facts }
+          : {},
     }))
     .filter((target) => target.id.length > 0);
 }

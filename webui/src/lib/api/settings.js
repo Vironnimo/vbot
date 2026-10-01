@@ -99,6 +99,17 @@ export function getDataStoreStatus(options = {}) {
   return rpc('data_store.status', {}, options);
 }
 
+// The semantic Recall index: its state, coverage, last error and costs.
+export function getRecallIndexStatus(options = {}) {
+  return rpc('recall.status', {}, options);
+}
+
+// Discards the current embeddings and indexes every Passage again; returns
+// the resulting index status.
+export function rebuildRecallIndex(options = {}) {
+  return rpc('recall.rebuild_index', {}, options);
+}
+
 export function createDataSnapshot(reason = 'rpc', options = {}) {
   requireNonEmptyString(
     reason,

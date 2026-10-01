@@ -50,6 +50,15 @@ export {
   getRecallSettings,
   buildRecallSettingsPayload,
   buildRecallBackendOptions,
+  recallSearchesByMeaning,
+  recallBackendForMeaning,
+  recallMeaningAvailable,
+  recallBackendNeedsAdvanced,
+  buildEmbeddingModelChoices,
+  describeEmbeddingPrivacy,
+  describeRecallIndexStatus,
+} from './settingsView/recall.js';
+export {
   getWebSearchSettings,
   getWebServiceKeys,
   webServiceKeyHint,
