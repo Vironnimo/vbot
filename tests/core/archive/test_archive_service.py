@@ -372,7 +372,7 @@ async def test_a_purge_that_stops_partway_stays_purging_and_continues_later(
     world.agents.create("coder")
     entry_id = (await world.service.archive_agent("coder")).entry_id
 
-    def refuse(_path: Path, *, within: Path) -> None:
+    def refuse(_path: Path, **_kwargs: Any) -> None:
         raise PermissionError(errno.EACCES, "held open by another program")
 
     monkeypatch.setattr(_purge, "remove_tree", refuse)
@@ -533,7 +533,8 @@ async def test_purge_at_ends_the_retention_period_of_entries_retention_deletes(
     archived = await world.service.archive_agent("writer")
     pending = await world.service.archive_agent("manager")
     world.sessions.archive_ledger.begin_purge(pending.entry_id)
-    # Retention never deletes folders the user may own; only a manual purge does.
+    # Retention never deletes folders the user may own, nor a payload found without
+    # its entry; only a manual purge does.
     legacy = legacy_agent_entry(world, tmp_path / "notes")
 
     page = await world.service.list(ArchiveEntryFilter())

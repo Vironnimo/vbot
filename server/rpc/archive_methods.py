@@ -241,6 +241,7 @@ def _entry_payload(listing: ArchiveListing) -> JsonObject:
         "owner_name": entry.owner_name,
         "label": listing.label,
         "archived_at": entry.archived_at,
+        "origin": entry.origin,
         "purge_at": listing.purge_at,
         "session_count": entry.session_count,
         "restorable": listing.restorable,

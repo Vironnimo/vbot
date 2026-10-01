@@ -398,6 +398,8 @@ def _format_entry_row(entry: object) -> str:
     if entry.get("state") != "archived":
         fields.append(f"state={entry.get('state')}")
     fields.append(f"archived_at={entry.get('archived_at')}")
+    if entry.get("origin") == "recovered":
+        fields.append("origin=recovered")
     fields.append(f"purge_at={entry.get('purge_at') or '-'}")
     if entry.get("may_hold_user_folders") is True:
         fields.append("user_folders=yes")
@@ -428,6 +430,11 @@ def _format_detail(data: Mapping[str, Any]) -> str:
             f"purge_at: {entry.get('purge_at') or '-'}",
         ]
     )
+    if entry.get("origin") == "recovered":
+        lines.append(
+            "origin: recovered (vBot found its files without a record of when they were "
+            "archived; only a purge that names it deletes it)"
+        )
     sessions = [session for session in data.get("sessions") or () if isinstance(session, dict)]
     lines.append(f"sessions: {data.get('session_count')} (showing {len(sessions)})")
     for session in sessions:

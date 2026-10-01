@@ -70,7 +70,7 @@ def purge_entries(
     pending stays ``purging`` and is continued later. An entry another operation
     holds is skipped unchanged, and one that is no longer in the archive is
     reported gone. When ``stopping`` is set, the purge ends before the next
-    Session or tree.
+    Session or file it would delete.
     """
     ledger = services.sessions.archive_ledger
     usage_import = ("usage_import", services.data_dir)
@@ -158,7 +158,7 @@ def _purge_claimed(
         for tree in entry.trees:
             check_stop()
             path = stored_path(services, tree.path)
-            remove_tree(path, within=archive_root)
+            remove_tree(path, within=archive_root, stop=check_stop)
             prune_empty_parents(services, path)
         ledger.finish_purge(entry.entry_key)
     except _StoppedError:

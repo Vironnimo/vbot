@@ -78,6 +78,7 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         "owner_name": None,
         "label": "Coder",
         "archived_at": agent_entry.archived_at,
+        "origin": "operation",
         "purge_at": _purge_at(state, entries["agent"]),
         "session_count": 1,
         "restorable": True,

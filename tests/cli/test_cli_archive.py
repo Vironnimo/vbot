@@ -19,10 +19,23 @@ AGENT_ENTRY = {
     "owner_name": None,
     "label": "Coder",
     "archived_at": "2026-09-30T14:02:11.120000Z",
+    "origin": "operation",
     "purge_at": "2026-10-30T14:02:11.120000Z",
     "session_count": 12,
     "restorable": True,
     "not_restorable_reason": None,
+    "may_hold_user_folders": False,
+}
+# Found at a start without its record; it holds a Workspace an older vBot moved.
+RECOVERED_ENTRY = AGENT_ENTRY | {
+    "entry_id": "arc_legacy01",
+    "subject_id": "writer",
+    "agent_id": "writer",
+    "label": "Writer",
+    "origin": "recovered",
+    "purge_at": None,
+    "session_count": 0,
+    "may_hold_user_folders": True,
 }
 GROUP_ENTRY = {
     "entry_id": "arc_h2q9c4m7r1sd",
@@ -34,11 +47,12 @@ GROUP_ENTRY = {
     "owner_name": "swarm",
     "label": "Docs swarm",
     "archived_at": "2026-09-29T08:00:00.000000Z",
+    "origin": "operation",
     "purge_at": None,
     "session_count": 6,
     "restorable": False,
     "not_restorable_reason": "kind_not_restorable",
-    "may_hold_user_folders": True,
+    "may_hold_user_folders": False,
 }
 CURSOR = {"archived_at": "2026-09-29T08:00:00.000000Z", "entry_id": "arc_h2q9c4m7r1sd"}
 
@@ -46,7 +60,11 @@ CURSOR = {"archived_at": "2026-09-29T08:00:00.000000Z", "entry_id": "arc_h2q9c4m
 def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply(
         "archive.list",
-        {"entries": [AGENT_ENTRY, GROUP_ENTRY], "next_cursor": CURSOR, "retention_days": 30},
+        {
+            "entries": [AGENT_ENTRY, RECOVERED_ENTRY, GROUP_ENTRY],
+            "next_cursor": CURSOR,
+            "retention_days": 30,
+        },
     )
 
     code, out, _err = run_cli("archive", "list", "--project", "vbot")
@@ -58,9 +76,12 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
         '- id=arc_7k2m9q4xw1ab kind=agent subject=coder label="Coder" sessions=12 '
         "archived_at=2026-09-30T14:02:11.120000Z purge_at=2026-10-30T14:02:11.120000Z "
         "restorable=yes",
+        '- id=arc_legacy01 kind=agent subject=writer label="Writer" sessions=0 '
+        "archived_at=2026-09-30T14:02:11.120000Z origin=recovered purge_at=- user_folders=yes "
+        "restorable=yes",
         "- id=arc_h2q9c4m7r1sd kind=owner_group subject=swm_k2 agent=builder project=vbot "
         'owner=swarm label="Docs swarm" sessions=6 state=purging '
-        "archived_at=2026-09-29T08:00:00.000000Z purge_at=- user_folders=yes restorable=no "
+        "archived_at=2026-09-29T08:00:00.000000Z purge_at=- restorable=no "
         "reason=kind_not_restorable",
         "next page: vbot archive list --project vbot --cursor "
         '\'{"archived_at":"2026-09-29T08:00:00.000000Z","entry_id":"arc_h2q9c4m7r1sd"}\'',

@@ -183,8 +183,9 @@ def _link_directory(link: Path, target: Path) -> None:
         link.symlink_to(target, target_is_directory=True)
 
 
+@pytest.mark.parametrize("stop", [None, lambda: None], ids=["at-once", "stoppable"])
 def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: Callable[[], None] | None
 ) -> None:
     outside = make_tree(tmp_path / "outside")
     expected = contents(outside)
@@ -210,12 +211,36 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     for refused in (outside, within, within / ".." / "outside", within / "link" / "top.txt"):
         with pytest.raises(ValueError, match="not inside"):
             remove_tree(refused, within=within)
-    remove_tree(within / "link", within=within)
-    remove_tree(within / "entry", within=within)
-    remove_tree(within / "missing", within=within)
+    remove_tree(within / "link", within=within, stop=stop)
+    remove_tree(within / "entry", within=within, stop=stop)
+    remove_tree(within / "missing", within=within, stop=stop)
 
     assert len(refused_once) == 2
     assert list(within.iterdir()) == []
     assert not os.stat(outside).st_mode & stat.S_IWRITE
     assert contents(outside) == expected
     outside.chmod(stat.S_IRWXU)
+
+
+def test_remove_tree_ends_where_stop_raises_and_a_later_removal_finishes(
+    tmp_path: Path,
+) -> None:
+    within = tmp_path / "archive"
+    tree = make_tree(within / "entry")
+    calls: list[None] = []
+
+    class StoppedError(Exception):
+        pass
+
+    def stop() -> None:
+        calls.append(None)
+        if len(calls) == 3:
+            raise StoppedError
+
+    with pytest.raises(StoppedError):
+        remove_tree(tree, within=within, stop=stop)
+
+    # One of the three entries went before the stop; the rest stays for the next removal.
+    assert len(list(tree.rglob("*"))) == 2
+    remove_tree(tree, within=within)
+    assert not tree.exists()

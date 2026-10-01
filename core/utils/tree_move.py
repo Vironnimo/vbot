@@ -73,7 +73,7 @@ def _discard_tree(path: Path, what: str) -> None:
         _LOGGER.warning("Could not remove the %s at %s: %s", what, path, error)
 
 
-def remove_tree(path: Path, *, within: Path) -> None:
+def remove_tree(path: Path, *, within: Path, stop: Callable[[], None] | None = None) -> None:
     """Delete the file, directory tree or link at ``path``, which must lie inside ``within``.
 
     The containment check resolves the parent directories but not ``path`` itself,
@@ -82,6 +82,10 @@ def remove_tree(path: Path, *, within: Path) -> None:
     either. Read-only attributes, such as those of ``.git`` objects, are cleared. A
     missing ``path`` counts as removed. A ``path`` outside ``within``, or ``within``
     itself, raises ``ValueError`` before anything is deleted.
+
+    ``stop`` is called before each entry of a tree is deleted; whatever it raises
+    ends the removal there and propagates. What is not deleted yet stays, and a
+    later removal of the same ``path`` finishes it.
     """
     root = Path(within).resolve()
     target = Path(path).parent.resolve() / Path(path).name
@@ -98,7 +102,36 @@ def remove_tree(path: Path, *, within: Path) -> None:
             _make_writable(target)
             os.unlink(target)
         return
-    _remove_tree(target)
+    if stop is None:
+        _remove_tree(target)
+    else:
+        _remove_tree_stoppable(target, stop)
+
+
+def _remove_tree_stoppable(path: Path, stop: Callable[[], None]) -> None:
+    """Delete a directory tree bottom-up, calling ``stop`` before each entry.
+
+    Links and junctions inside it are removed as entries, never followed.
+    """
+    with os.scandir(path) as entries:
+        children = [Path(entry.path) for entry in entries]
+    for child in children:
+        stop()
+        status = os.lstat(child)
+        if _is_link(status) or not stat.S_ISDIR(status.st_mode):
+            _retry_writable(os.unlink, child)
+        else:
+            _remove_tree_stoppable(child, stop)
+    stop()
+    _retry_writable(os.rmdir, path)
+
+
+def _retry_writable(action: Callable[[Path], object], path: Path) -> None:
+    try:
+        action(path)
+    except PermissionError:
+        _make_writable(path)
+        action(path)
 
 
 def _remove_tree(path: Path) -> None:

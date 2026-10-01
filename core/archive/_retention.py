@@ -2,9 +2,10 @@
 
 An entry's ``purge_at`` is computed on read from its ``retention_start`` and the
 current period (``archive.retention_days``), so a changed period applies to
-existing entries at once. Retention never deletes ``files`` entries or entries
+existing entries at once. Retention never deletes ``files`` entries, entries
 whose ``user_folders`` fact names folders the user may own rather than copies
-vBot made; only a purge that names them deletes those.
+vBot made, or ``recovered`` entries (a payload found without its entry, whose
+age nothing records); only a purge that names them deletes those.
 
 The retention sweep deletes due entries in the background, on the ``archive``
 worker and never on the Event Loop. The first sweep runs a minute after start,
@@ -12,8 +13,8 @@ later ones every hour, and one runs at once when the period changes or a manual
 purge left an entry pending. A sweep first continues entries a stopped or failed
 purge left ``purging``, then purges due entries oldest first, one entry per
 worker call so manual purges never wait behind a whole sweep. A stop request
-ends the sweep between two Sessions; the entry stays ``purging`` and the next
-sweep continues it.
+ends the sweep before the next Session or file it would delete; the entry stays
+``purging`` and the next sweep continues it.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from typing import TYPE_CHECKING
 from core.archive import _purge
 from core.sessions import (
     ARCHIVE_KIND_FILES,
+    ARCHIVE_ORIGIN_RECOVERED,
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_PURGING,
     ArchiveEntry,
@@ -79,11 +81,13 @@ def purge_at(entry: ArchiveEntry, retention_days: int | None) -> str | None:
     """When the retention period of ``entry`` ends, or ``None`` when retention never deletes it.
 
     Only a resting (``archived``) entry is due; a ``purging`` one is already
-    being deleted, and the other states belong to an operation in progress.
+    being deleted, and the other states belong to an operation in progress. A
+    ``recovered`` entry is never due: its payload was found without its entry,
+    so nothing records how old it is.
     """
     if retention_days is None or entry.state != ARCHIVE_STATE_ARCHIVED:
         return None
-    if may_hold_user_folders(entry):
+    if may_hold_user_folders(entry) or entry.origin == ARCHIVE_ORIGIN_RECOVERED:
         return None
     try:
         start = parse_canonical_timestamp(entry.retention_start)

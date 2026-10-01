@@ -11,10 +11,11 @@ import asyncio
 import errno
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -87,6 +88,13 @@ def _rest(world: ArchiveWorld, entry_id: str, days: float) -> None:
         )
 
 
+def _set_origin(world: ArchiveWorld, entry_id: str, origin: str) -> None:
+    with sqlite3.connect(world.data_dir / "sessions.db") as connection:
+        connection.execute(
+            "UPDATE archive_entries SET origin = ? WHERE entry_id = ?", (origin, entry_id)
+        )
+
+
 async def _archived_agent(world: ArchiveWorld, agent_id: str, *, days: float) -> str:
     world.agents.create(agent_id)
     entry_id = (await world.service.archive_agent(agent_id)).entry_id
@@ -118,7 +126,8 @@ async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_ent
     due = await _archived_agent(world, "due", days=31)
     oldest = await _archived_agent(world, "oldest", days=45)
     fresh = await _archived_agent(world, "fresh", days=29)
-    # Retention never deletes folders the user may own or other files; only a manual purge does.
+    # Retention never deletes folders the user may own, other files, or a payload
+    # found without its entry, whose age nothing records; only a manual purge does.
     legacy = legacy_agent_entry(world, tmp_path / "notes")
     (world.data_dir / "archive" / "loose").mkdir(parents=True)
     files = world.sessions.archive_ledger.adopt_payload(
@@ -128,7 +137,11 @@ async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_ent
         archived_at=format_canonical_timestamp(_NOW),
         trees=(ArchiveTree("archive/loose", ARCHIVE_TREE_FILES),),
     ).entry_id
+    recovered = await _archived_agent(world, "recovered", days=400)
+    _set_origin(world, recovered, "recovered")
     for entry_id in (legacy, files):
+        # Adopted by the migration, not found at a start.
+        _set_origin(world, entry_id, "backfill")
         _rest(world, entry_id, 400)
     caplog.set_level(logging.INFO, logger="vbot.archive")
 
@@ -136,12 +149,10 @@ async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_ent
 
     ledger = world.sessions.archive_ledger
     assert {
-        entry_id for entry_id in (due, oldest, fresh, legacy, files) if ledger.entry(entry_id)
-    } == {
-        fresh,
-        legacy,
-        files,
-    }
+        entry_id
+        for entry_id in (due, oldest, fresh, legacy, files, recovered)
+        if ledger.entry(entry_id)
+    } == {fresh, legacy, files, recovered}
     assert world.session_rows("due") == world.session_rows("oldest") == []
     assert _purged(caplog) == [
         f"Archive entry purged (entry={entry_id} kind=agent subject={subject} sessions=1 "
@@ -185,10 +196,10 @@ async def test_a_manual_purge_left_pending_is_continued_at_once(
     failures = iter([PermissionError(errno.EACCES, "held open by another program")])
     remove_tree = _purge.remove_tree
 
-    def remove_once_held(path: Path, *, within: Path) -> None:
+    def remove_once_held(path: Path, **kwargs: Any) -> None:
         if error := next(failures, None):
             raise error
-        remove_tree(path, within=within)
+        remove_tree(path, **kwargs)
 
     monkeypatch.setattr(_purge, "remove_tree", remove_once_held)
 
@@ -221,8 +232,9 @@ async def test_without_a_retention_period_only_interrupted_purges_continue(
 
 
 @pytest.mark.asyncio
-async def test_stopping_ends_a_purge_between_sessions_and_the_next_start_finishes_it(
-    world: ArchiveWorld, timer: _Timer
+@pytest.mark.parametrize("during", ["sessions", "tree"])
+async def test_stopping_ends_a_purge_partway_and_the_next_start_finishes_it(
+    world: ArchiveWorld, timer: _Timer, during: str
 ) -> None:
     world.agents.create("coder")
     for session_id in ("two", "three"):
@@ -232,6 +244,7 @@ async def test_stopping_ends_a_purge_between_sessions_and_the_next_start_finishe
     service = _service(world, _Setting(30))
     ledger = world.sessions.archive_ledger
     purge_next_session = ledger.purge_next_session
+    remove_tree = _purge.remove_tree
     loop = asyncio.get_running_loop()
     stopped = asyncio.Event()
 
@@ -239,14 +252,32 @@ async def test_stopping_ends_a_purge_between_sessions_and_the_next_start_finishe
         service.stop()
         stopped.set()
 
+    def shut_down() -> None:
+        asyncio.run_coroutine_threadsafe(stop(), loop).result(timeout=10)
+
     def purge_one_then_stop(entry_key: int) -> bool:
         # Runtime shutdown arrives while the first Session is deleted.
         deleted = purge_next_session(entry_key)
-        asyncio.run_coroutine_threadsafe(stop(), loop).result(timeout=10)
+        shut_down()
         return deleted
 
+    def remove_one_then_stop(path: Path, *, within: Path, stop: Callable[[], None]) -> None:
+        # Runtime shutdown arrives inside a large payload tree.
+        calls: list[None] = []
+
+        def check() -> None:
+            calls.append(None)
+            if len(calls) == 2:
+                shut_down()
+            stop()
+
+        remove_tree(path, within=within, stop=check)
+
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(ledger, "purge_next_session", purge_one_then_stop)
+        if during == "sessions":
+            patch.setattr(ledger, "purge_next_session", purge_one_then_stop)
+        else:
+            patch.setattr(_purge, "remove_tree", remove_one_then_stop)
         service.start()
         assert await timer.next_wait() == _retention.FIRST_SWEEP_DELAY_SECONDS
         timer.elapse()
@@ -254,7 +285,7 @@ async def test_stopping_ends_a_purge_between_sessions_and_the_next_start_finishe
         await service.aclose()
 
     assert world.entry(entry_id).state == "purging"
-    assert len(world.session_rows("coder")) == 2
+    assert len(world.session_rows("coder")) == (2 if during == "sessions" else 0)
     assert world.payload(entry_id, "agent").is_dir()
 
     await _sweep_once(_service(world, _Setting(30)), timer)
