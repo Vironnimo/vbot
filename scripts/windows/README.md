@@ -37,6 +37,18 @@ argument must be the version being built, not the example value above.
 Use a short build output path for Inno compilation: deeply nested build roots can
 exceed the compiler's file path limit even when the native payload itself works.
 
+Exercise a built payload in disposable installation and data directories, adding
+`--speech` for the server shape to provision the managed speech recipes:
+
+```powershell
+python scripts/windows/smoke.py --package build/windows/windows-x86_64/server
+```
+
+The workflow file shows the `ISCC.exe` definitions that compile
+[vbot.iss](vbot.iss) into the installer. `smoke_installer.ps1` installs and
+uninstalls that installer for real and therefore runs only in a disposable CI
+runner.
+
 The copied runtime's `DLLs/sqlite3.dll` is replaced with the official SQLite
 build pinned in [sqlite.lock.json](sqlite.lock.json), downloaded from sqlite.org
 at build time and verified against both recorded digests. CPython's bundled
@@ -51,6 +63,8 @@ Outputs include:
 - `artifacts/vbot-windows-x86_64-<shape>.zip`: the version payload for updates.
 - `artifacts/vbot-windows-x86_64-<shape>-runtime-inventory.json`: dependency names
   and exact versions for inspection.
+- `artifacts/vbot-release.json`: the version identity an updater compares with its
+  active version before downloading.
 - `artifacts/release-public-key.txt`, and a sibling `.zip.sig` for signed builds.
 - After Inno compilation, `installers/vBot-<version>-windows-x86_64-<shape>.exe`.
 
@@ -65,27 +79,41 @@ installer upgrade instead of replacing a live bootstrap.
 `--release-mode` requires an exact clean source revision and
 `VBOT_RELEASE_SIGNING_KEY`, containing a base64 raw Ed25519 private key. The
 builder signs the raw SHA256 digest of each archive and emits its public key for
-the installer. Keep this private key in release secrets. The installer stores
-only the public key; normal official updates fail closed without it. Optional
+the installer. Keep this private key in repository secrets. The installer stores
+only the public key; official updates fail closed without it. `--channel release|main`
+and the installer's `UpdateChannel` definition record the update channel the
+installed package follows. Optional
 `--authenticode-command` integrates an externally configured executable-signing
 tool. A development build without a release key is usable with an explicitly
 selected local `vbot update --package <archive>`.
 
-The package workflow builds, smoke-tests and uploads artifacts; it does not
-publish a GitHub release by itself. The Release workflow calls it in signed mode
-alongside the repository's existing release checks. Publication waits for both,
-then attaches each shape's installer, archive and matching signature together
-with the tested WebUI. Before upload, each compiled installer also runs through
-silent installation and native uninstall in a disposable CI runner, checking its
-recorded target, startup selection, server shutdown and preserved user data.
-The minimal server package also provisions real managed STT and both TTS recipes,
-including repeated Chatterbox setup, through `smoke.py --speech`. This required
-check uses disposable data and verifies imports without model weights or inference.
-A missing signing key blocks publication. The release tag
-must match the application version. The public PowerShell
-installer selects the exact installer name and verifies GitHub's release-asset
-SHA256 digest before executing it. Missing binary assets produce an actionable
-failure; source installation requires explicit `-SourceCheckout`.
+CI builds and signs every published package; nothing is published from a local
+build. The [Windows package workflow](../../.github/workflows/windows-package.yml)
+builds all three shapes, smoke-tests each payload's installation, update and
+lifecycle with `smoke.py` (the minimal server package also provisions real
+managed STT and both TTS recipes, including repeated Chatterbox setup, through
+`smoke.py --speech`, with disposable data and without model weights or
+inference), compiles the per-user installer, and runs it through silent
+installation and native uninstall in a disposable runner with
+`smoke_installer.ps1`, checking the recorded target, startup selection, server
+shutdown and preserved user data. It uploads the installer, archive, signature,
+runtime inventory and `vbot-release.json` as workflow artifacts and publishes
+nothing by itself. Two workflows call it in signed mode:
+
+- [`main-build.yml`](../../.github/workflows/main-build.yml) builds the commit of
+  every push to `main` that passed CI with `--channel main` and replaces the assets
+  of the rolling `main-build` prerelease, which `install.ps1 -Main` installs and
+  main-channel installations update from. It is not a release.
+- [`release.yml`](../../.github/workflows/release.yml) builds with `--channel release`
+  alongside the Linux packages and the complete CI, checks the complete asset set
+  with `scripts/release_assets.py`, and only then creates the tag and the GitHub
+  release with every asset attached. The release tag must match the application
+  version.
+
+A missing signing key blocks publication. The public PowerShell installer selects
+the exact installer name, requires GitHub's release-asset SHA-256 digest and an
+HTTPS `github.com` download URL, and rejects an invalid Authenticode signature
+before executing it.
 
 ## Installer and existing installations
 
@@ -102,30 +130,10 @@ when they exceed that limit; the hosts include the corresponding manifest, but
 the installer does not change machine-wide policy. The standard payloads fit
 below the legacy limit at the default location used in native verification.
 
-The installer requires an empty destination directory. An existing packaged
-application is updated with `vbot update`; rerunning an installer over its active
-installation is refused. Existing source installations
-retain their source updater. Moving one into a packaged installation is explicit:
-the payload installer supports `application install ... --from-checkout <path>`,
-verifies its install manifest and clean Git state, preserves its exact data/port,
-and retires its owned source Autostart only after package registration succeeds.
-It preserves the old checkout. Local source edits must first be preserved and
-reconciled into the managed development copy; no dirty checkout is discarded.
+The installer requires an empty destination directory. An existing installation
+is updated with `vbot update` from its channel; rerunning an installer over it is
+refused. `vbot application channel main|release` switches the channel of an
+existing installation. Uninstall preserves server data by default.
 
-Windows `-Dev` is also a native installation mode. The public PowerShell installer
-first installs the signed base with no startup task, selects main through
-`application source main`, waits for the normal durable update, and only then
-enables requested Autostart. The main Git checkout lives at `<install>/source`;
-`source-update.json` records its branch and remote. Explicit `--from-checkout`
-bindings preserve an existing checkout and its track. The running server uses a
-complete prepared version, so Git/build failures leave the active version intact.
-An initial build failure retains the base installation for an ordinary update retry.
-Host input fingerprints in `release.json` permit unchanged native hosts to be reused;
-changed native sources require the compiler/SDK inputs described above. Such an update
-compiles the hosts before any other build work, so a missing toolchain fails it within
-seconds; `-Dev` warns during installation when `clang-cl` or `llvm-rc` is not on PATH.
-
-For local features, Extension dependencies and isolated candidate testing, see
-[the user guide](../../USAGE.md#local-features-in-a-packaged-windows-application).
-Uninstall preserves server data by default and retains development copies so
-user-authored features are not deleted as application cache.
+For Extension dependencies in an installation, see
+[the user guide](../../USAGE.md#extension-dependencies-in-a-packaged-installation).
