@@ -148,6 +148,8 @@ describe('RPC wrappers', () => {
 
   it.each([
     ['data_store.status', (o) => api.getDataStoreStatus(o), {}],
+    ['recall.status', (o) => api.getRecallIndexStatus(o), {}],
+    ['recall.rebuild_index', (o) => api.rebuildRecallIndex(o), {}],
     [
       'data_store.snapshot_create',
       (o) => api.createDataSnapshot('manual', o),

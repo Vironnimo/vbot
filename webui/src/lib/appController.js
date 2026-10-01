@@ -128,6 +128,9 @@ export function createAppControllerState() {
     projectsRefreshToken: 0,
     providerAuthEvent: null,
     queueInvalidation: null,
+    // The latest pushed `recall_index_status` payload; Settings reads the
+    // full status on open and applies later pushes.
+    recallIndexStatus: null,
     backgroundBashStatusEvents: [],
     runServerEvents: [],
     serverNoticeState: '',
@@ -306,6 +309,10 @@ export function createAppController({
         ...state.backgroundBashStatusEvents,
         event,
       ].slice(-MAX_BACKGROUND_BASH_STATUS_EVENTS);
+      return;
+    }
+    if (event.type === 'recall_index_status') {
+      state.recallIndexStatus = event.payload ?? null;
       return;
     }
     if (event.type !== 'resource_changed') {
