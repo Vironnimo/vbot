@@ -179,6 +179,8 @@ class VoiceRuntime:
     transport: Any = None
     echo_stage_factory: EchoStageFactory | None = None
     reconnect_interval: float = 30.0
+    # How long a starting capture waits for an echo stage; None keeps the capture default.
+    echo_stage_wait: float | None = None
     join_timeout: float = JOIN_TIMEOUT_SECONDS
     mock_frame_seconds: float = 0.1
     mock_stage_seconds: float = 0.8
@@ -679,7 +681,7 @@ class VoiceController:
             return
 
         from desktop.wakeword import _speech_detection
-        from desktop.wakeword.capture import AudioCapture
+        from desktop.wakeword.capture import ECHO_STAGE_WAIT_SECONDS, AudioCapture
         from desktop.wakeword.commands import CommandPipeline, CommandRecorder
         from desktop.wakeword.detection import SUBSCRIPTION_SECONDS, DetectionLoop
 
@@ -699,6 +701,11 @@ class VoiceController:
             stop_event=stop_event,
             backend=runtime.audio_backend,
             reconnect_interval=runtime.reconnect_interval,
+            echo_stage_wait=(
+                ECHO_STAGE_WAIT_SECONDS
+                if runtime.echo_stage_wait is None
+                else runtime.echo_stage_wait
+            ),
         )
         session.capture = capture
         session.detection = DetectionLoop(
