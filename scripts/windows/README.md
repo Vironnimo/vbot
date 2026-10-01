@@ -27,7 +27,7 @@ For example, from the repository root after building the WebUI:
 
 ```powershell
 $revision = git rev-parse HEAD
-python scripts/build_windows.py --source . --runtime C:\Python313 --output build/windows --shape server --version 0.1.0 --revision $revision --provision-dependencies
+python scripts/build_windows.py --source . --runtime C:\Python313 --output build/windows --shape server --version 0.1.0 --revision $revision
 ```
 
 The runtime argument is an input directory: the builder copies it and provisions

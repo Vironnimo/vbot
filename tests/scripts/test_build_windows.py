@@ -15,6 +15,7 @@ from xml.etree import ElementTree
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from cli.application.payload import SHAPES
 from scripts import build_windows
 from scripts.windows import native_hosts
 
@@ -60,6 +61,10 @@ def _source(tmp_path: Path) -> Path:
         (path / "included.txt").write_text(directory, encoding="utf-8")
     (source / "desktop" / "icon.ico").write_bytes(b"icon")
     (source / "scripts" / "windows").mkdir(parents=True)
+    for shape in SHAPES:
+        (source / "scripts" / "windows" / f"requirements-{shape}.lock").write_text(
+            "example==1.0 --hash=sha256:abc\n", encoding="utf-8"
+        )
     (source / "desktop" / "windows.config").write_text("dpi-config", encoding="utf-8")
     (source / "core" / "__pycache__").mkdir()
     (source / "core" / "__pycache__" / "bad.pyc").write_bytes(b"bad")
@@ -91,6 +96,14 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "python.exe").write_bytes(b"python")
     (runtime / "python313.dll").write_bytes(b"dll")
     return runtime
+
+
+@pytest.fixture(autouse=True)
+def pip_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Record the builder's dependency installs instead of running pip."""
+    commands: list[list[str]] = []
+    monkeypatch.setattr(build_windows, "run_tool", lambda command: commands.append(command))
+    return commands
 
 
 def test_only_the_root_bootstraps_are_compiled_as_stable_hosts(
@@ -154,18 +167,15 @@ def test_copy_application_rejects_source_links(tmp_path: Path) -> None:
         )
 
 
-def test_runtime_with_unowned_site_packages_is_rejected(tmp_path: Path) -> None:
+def test_runtime_ships_only_locked_packages(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
     (runtime / "Lib" / "site-packages" / "ambient_package").mkdir()
 
-    with pytest.raises(build_windows.BuildError, match="no vbot-runtime-inventory.json"):
-        build_windows.copy_runtime(
-            runtime,
-            tmp_path / "copy",
-            provision=False,
-            app_source=_source(tmp_path),
-            shape="server",
-        )
+    destination = tmp_path / "copy"
+    build_windows.copy_runtime(runtime, destination, app_source=_source(tmp_path), shape="server")
+
+    assert not (destination / "Lib" / "site-packages" / "ambient_package").exists()
+    assert (runtime / "Lib" / "site-packages" / "ambient_package").is_dir()
 
 
 def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
@@ -176,7 +186,6 @@ def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
         build_windows.copy_runtime(
             runtime,
             tmp_path / "copy",
-            provision=False,
             app_source=_source(tmp_path),
             shape="server",
         )
@@ -194,7 +203,6 @@ def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
     build_windows.copy_runtime(
         runtime,
         destination,
-        provision=False,
         app_source=_source(tmp_path),
         shape="server",
     )
@@ -231,9 +239,7 @@ def test_runtime_copy_installs_the_pinned_sqlite_without_touching_the_input(
     monkeypatch.setattr("cli.application.runtime_sqlite._download", lambda _url: archive)
 
     destination = tmp_path / "copy"
-    build_windows.copy_runtime(
-        runtime, destination, provision=False, app_source=source, shape="server"
-    )
+    build_windows.copy_runtime(runtime, destination, app_source=source, shape="server")
 
     assert (destination / "DLLs" / "sqlite3.dll").read_bytes() == pinned
     assert (runtime / "DLLs" / "sqlite3.dll").read_bytes() == b"cpython sqlite"
@@ -252,33 +258,21 @@ def test_runtime_rejects_unexcluded_links(tmp_path: Path, relative: str) -> None
         build_windows.copy_runtime(
             runtime,
             tmp_path / "copy",
-            provision=False,
             app_source=_source(tmp_path),
             shape="server",
         )
 
 
 def test_runtime_provisioning_uses_shape_lock_with_hashes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, pip_commands: list[list[str]]
 ) -> None:
     source = _source(tmp_path)
     lock = source / "scripts" / "windows" / "requirements-server.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    lock.write_text("example==1.0 --hash=sha256:abc\n", encoding="utf-8")
-    commands: list[list[str]] = []
-    monkeypatch.setattr(build_windows, "run_tool", lambda command: commands.append(command))
     runtime = _runtime(tmp_path)
 
-    build_windows.copy_runtime(
-        runtime,
-        tmp_path / "copy",
-        provision=True,
-        app_source=source,
-        shape="server",
-    )
+    build_windows.copy_runtime(runtime, tmp_path / "copy", app_source=source, shape="server")
 
-    assert commands
-    command = commands[0]
+    (command,) = pip_commands
     assert command[:6] == [
         sys.executable,
         "-B",
@@ -314,7 +308,6 @@ def test_build_writes_complete_hashed_manifest_and_rooted_archive(
         shape="server",
         version="0.4.0",
         revision="abcdef1234567890",
-        provision_dependencies=False,
         release_mode=False,
         channel="main",
         signing_key_env="UNUSED",
@@ -376,7 +369,6 @@ def test_release_build_fails_closed_without_signing_key(
         shape="desktop-client",
         version="1.0.0",
         revision="abcdef",
-        provision_dependencies=False,
         release_mode=True,
         channel="release",
         signing_key_env="MISSING_SIGNING_KEY",
@@ -402,7 +394,6 @@ def test_release_archive_signature_covers_raw_sha256(
         shape="desktop-client",
         version="1.0.0",
         revision="abcdef",
-        provision_dependencies=False,
         release_mode=True,
         channel="release",
         signing_key_env="TEST_SIGNING_KEY",
