@@ -559,7 +559,28 @@ vbot session delete coder SESSION_ID --yes
 
 `session list` returns at most 100 Sessions by default. Use `--limit`, pass the returned JSON as `--cursor`, or explicitly request `--all` to collect every page.
 
-Deleting an Agent, Project, or Session archives its vBot-owned state rather than silently erasing it. Project source repositories are never archived or removed.
+Deleting an Agent, Project, or Session moves its vBot-owned state into the archive rather than erasing it (see [Archive](#archive)). Project source repositories are never archived or removed.
+
+### Archive
+
+Deleting an Identity Agent, a Project, or a Session creates one archive entry (`arc_` plus 12 characters), and the command prints its id together with the command that restores it. An Agent's entry holds its configuration, Workspace, Memory, private Skills, and Sessions; a custom Workspace outside the data directory stays where it is. A Project's entry holds its vBot metadata and Sessions; the repository is never touched. Each entry is restored or deleted as a whole, and deleting the same id again creates another entry.
+
+```bash
+vbot archive list --kind agent
+vbot archive show arc_7k2m9q4xw1ab
+vbot archive restore arc_7k2m9q4xw1ab
+vbot archive restore arc_7k2m9q4xw1ab --as coder-2
+vbot archive purge arc_7k2m9q4xw1ab --yes
+vbot archive purge --all --kind session --agent coder --yes
+```
+
+- `list` shows entries newest first, 50 per page (`--limit`, `--cursor`, or `--all` for every page), filtered by `--kind` (`agent`, `project`, `session`, `owner_group`, `files`), `--agent`, and `--project`. Each row says whether the entry can be restored and, if not, why.
+- `show` lists the entry's Sessions and files and whether a restore is possible, naming every reason that blocks it. Run it before restoring.
+- `restore` brings back the Agent, Project, or Session with its Sessions, the Agent's place in the Agent list, the delegation lists that named it, and the Identity Agents rooted in the Project. When the id is in use again, it refuses and names the conflict; `--as <new-id>` restores under another id, and the restored Sessions then lose their Channel links. Entries of kind `owner_group` (an Extension's Sessions) and `files` (archive folders of older vBot versions) can only be deleted.
+- `purge` deletes entries permanently and cannot be undone, so it requires `--yes`. Name the entries, or select them with `--all` and the `list` filters. Usage already recorded stays in Statistics, and uploaded attachments are not deleted. A purge that does not finish reports the entry as pending and exits non-zero; run the same command again to continue it.
+- `vbot agent delete <agent-id> --permanent --yes`, `vbot project remove <project-id> --permanent --yes`, and `vbot session delete <agent> <session-id> --yes --permanent` delete immediately instead of archiving. Deleting an Agent this way leaves the entries of Sessions deleted earlier; remove them with `vbot archive purge --all --kind session --agent <agent-id> --yes`.
+- `list` also names the retention period (30 days by default) and each entry's `purge_at`, the date its retention period ends. Automatic deletion after that period is not active yet: entries stay until you purge them. Entries of kind `files` and entries that may contain folders you own are never deleted automatically.
+- The entries' files live under `<data-dir>/archive/`; use these commands instead of moving or deleting files there by hand.
 
 ## Chat, Queue, and Built-in Commands
 
@@ -1072,6 +1093,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
+| Archive | `archive list`, `archive show`, `archive restore`, `archive purge` |
 | Chat | `chat [<prompt>] [--agent ...] [-c \| --session ...] [--model ...] [--thinking-effort ...] [--temperature ...] [--json]` |
 | Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |
