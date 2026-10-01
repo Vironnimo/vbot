@@ -36,7 +36,14 @@ export default Object.freeze({
     'Messaging Channels, Extensions, and MCP connections.',
   'settings.pages.system': 'System',
   'settings.pages.systemDescription':
-    'Server information, connections, and diagnostics.',
+    'Server information, connections, the Archive, and diagnostics.',
+  'settings.archive.title': 'Archive',
+  'settings.archive.automatic': 'Delete archived items automatically',
+  'settings.archive.automaticDescription':
+    'Deleted Agents, Projects and Sessions wait in the Archive, where you can restore them. When this is off, they stay until you delete them there. Files from older vBot versions and items that may hold folders of your own are never deleted automatically.',
+  'settings.archive.days': 'Days in the Archive',
+  'settings.archive.daysDescription':
+    '1 to 3650 days, counted from when an item was archived. A lower value deletes older items at the next hourly check.',
   'settings.sections.wakeword': 'Wakeword',
   'settings.sections.transcriptionAudio': 'Transcription audio',
   'settings.sections.speechModels': 'Speech models',

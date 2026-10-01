@@ -8,6 +8,7 @@
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
+  import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
@@ -161,6 +162,7 @@
       id: 'desktop_connection',
       label: () => t('settings.desktop.connection.title'),
     },
+    { id: 'archive', label: () => t('settings.archive.title') },
     { id: 'debug', label: () => t('debug.settings') },
   ];
   const panelById = new Map(sections.map((section) => [section.id, section]));
@@ -240,6 +242,7 @@
       sections: [
         'server',
         ...(desktopCapabilities?.serverSelection ? ['desktop_connection'] : []),
+        'archive',
         'debug',
       ],
     },
@@ -873,6 +876,12 @@
     />
   {:else if panelId === 'appearance'}
     <SettingsAppearancePanel
+      {settings}
+      onCommit={commitSettings}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'archive'}
+    <SettingsArchivePanel
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}

@@ -228,7 +228,7 @@ describe('SettingsView', () => {
           'subagents',
         ],
         integrations: ['channels', 'extensions'],
-        system: ['server', 'debug'],
+        system: ['server', 'archive', 'debug'],
       };
       for (const [pageId, sectionIds] of Object.entries(expectedSections)) {
         const page = document.querySelector(`[data-settings-page="${pageId}"]`);
