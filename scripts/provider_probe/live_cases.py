@@ -395,7 +395,7 @@ class ScriptedVbot:
         if found in self.terminals:
             return live_success(
                 f"{found} {self.terminals[found]} in {_VBOT_FOLDER}, running. Screen, quoted:\n"
-                "> Running the test suite (48 of 120 tests passed so far)"
+                "> Updating the README: 3 of 5 sections rewritten"
             )
         session = self._session(found)
         body = f"Assistant: {session.last}" if session.last else "User: " + session.title
