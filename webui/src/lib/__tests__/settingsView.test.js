@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { englishCatalog, t } from '../i18n.js';
+import { t } from '../i18n.js';
 
 import {
   AGENT_DEFAULTS_THINKING_EFFORT_NO_DEFAULT,
@@ -17,8 +17,6 @@ import {
   buildLanguageOptions,
   buildProviderConnectPayload,
   buildProviderDisconnectPayload,
-  buildRecallBackendOptions,
-  buildRecallSettingsPayload,
   buildSessionTitleSettingsPayload,
   buildSubAgentSettingsPayload,
   buildTranscriptionAudioSettingsPayload,
@@ -42,7 +40,6 @@ import {
   getDefaultSkillDirectoryValue,
   getPersistedChatWidth,
   getPersistedChatWorkingMode,
-  getRecallSettings,
   getSkillDirectories,
   getUsableProviderItems,
   getWebSearchSettings,
@@ -581,31 +578,7 @@ describe('agent defaults, sub-agents and session titles', () => {
   });
 });
 
-describe('retrieval', () => {
-  it('keeps the recall backend within the offered backends', () => {
-    expect(getRecallSettings({})).toEqual({
-      backend: 'sqlite_fts',
-      available_backends: ['sqlite_fts', 'vector', 'hybrid'],
-    });
-    expect(
-      getRecallSettings({
-        recall: { backend: 'hybrid', available_backends: ['sqlite_fts'] },
-      }),
-    ).toEqual({ backend: 'sqlite_fts', available_backends: ['sqlite_fts'] });
-    expect(buildRecallSettingsPayload({ backend: 'sqlite_fts' })).toEqual({
-      recall: { backend: 'sqlite_fts' },
-    });
-    expect(
-      buildRecallBackendOptions({ available_backends: ['vector', 'custom'] }),
-    ).toEqual([
-      {
-        value: 'vector',
-        label: englishCatalog['settings.recall.backends.vector'],
-      },
-      { value: 'custom', label: 'custom' },
-    ]);
-  });
-
+describe('web search and fetch', () => {
   it('normalizes web search settings and builds a trimmed payload', () => {
     expect(getWebSearchSettings({})).toMatchObject({
       provider: 'brave',

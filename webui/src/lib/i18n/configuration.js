@@ -231,18 +231,87 @@ export default Object.freeze({
   'settings.notifications.serverStopped': 'Server stopped',
   'settings.compaction.title': 'Compaction',
   'settings.compaction.summaryModelPlaceholder': 'Active agent model',
+  'settings.recall.meaning': 'Also search by meaning',
+  'settings.recall.meaningDescription':
+    'Finds conversations about the same topic even when the words differ.',
+  'settings.recall.meaningHelp':
+    'Agents look through earlier conversations with the session_search Tool. Keyword search is always on: it finds the words searched for, using a fast local index.\n\nSearching by meaning also finds passages that say the same thing in other words, so a search for “vehicles” also finds “cars”. It needs an embedding model, which turns conversation text into a search index. vBot builds that index in the background shortly after conversations and keeps it up to date; a search embeds only its query.\n\nUntil the index has caught up, searches return every keyword match plus the meaning matches among the passages indexed so far.',
+  'settings.recall.model.loading': 'Loading embedding models…',
+  'settings.recall.model.groupLocal': 'On this computer',
+  'settings.recall.model.groupCloud': 'Cloud',
+  'settings.recall.model.factMultilingual': 'Multilingual',
+  'settings.recall.model.factEnglish': 'English only',
+  'settings.recall.model.factPrice': '{price} per 1M tokens',
+  'settings.recall.model.factPriceUnknown': 'Price unknown',
+  'settings.recall.model.factLocal': 'Free, runs locally',
+  'settings.recall.model.notInstalled': 'Not set up on this computer yet.',
+  'settings.recall.model.noRecommended':
+    'No recommended embedding model is available. Connect a Provider that offers one, or choose any embedding model under All models.',
+  'settings.recall.model.allModels': 'All models',
+  'settings.recall.model.allModelsDescription':
+    'Every embedding model your Providers offer.',
+  'settings.recall.model.privacyProvider':
+    'Conversation text is sent to {provider} to build the search index.',
+  'settings.recall.model.privacyLocal':
+    'Conversation text stays on this computer.',
+  'settings.recall.model.privacyUnknown':
+    'Conversation text is sent to the chosen model’s Provider to build the search index.',
+  'settings.recall.model.rebuildNote': 'Changing the model rebuilds the index.',
+  'settings.recall.model.missing':
+    'Choose an embedding model to search by meaning.',
+  'settings.recall.index': 'Search index',
+  'settings.recall.indexHelp':
+    'The passages of your conversations that the embedding model has turned into the search index. vBot adds new passages in the background shortly after each conversation and checks regularly for other changes.\n\nWaiting passages are not indexed yet. Skipped passages were rejected by the embedding model and stay out of the index until it is rebuilt. Spent counts the indexing since the model was chosen or the index was last rebuilt; costs are estimated from the model’s listed price when the Provider does not report them.',
+  'settings.recall.status.loading': 'Checking the search index…',
+  'settings.recall.status.loadError':
+    'The search index status could not be loaded.',
+  'settings.recall.status.empty': 'No passages to index yet',
+  'settings.recall.status.complete': 'All passages indexed ({count})',
+  'settings.recall.status.progress': 'Indexed {indexed} of {total} passages',
+  'settings.recall.status.indexing': 'Indexing: {indexed} of {total} passages',
+  'settings.recall.status.waiting': 'about {tokens} tokens waiting',
+  'settings.recall.status.waitingCost':
+    'about {tokens} tokens waiting (~{cost})',
+  'settings.recall.status.skipped': '{count} skipped',
+  'settings.recall.status.spent': '{cost} spent',
+  'settings.recall.status.spentTokens': '{tokens} tokens spent',
+  'settings.recall.status.retrying': 'Retrying {when}.',
+  'settings.recall.status.nextAttempt': 'Next attempt {when}.',
+  'settings.recall.indexError.generic': 'Indexing failed.',
+  'settings.recall.indexError.provider_unavailable':
+    'The embedding Provider is unreachable or failing for now.',
+  'settings.recall.indexError.provider_rate_limited':
+    'The embedding Provider is limiting requests.',
+  'settings.recall.indexError.provider_auth':
+    'The embedding Provider rejected the credentials. Check its connection under Providers.',
+  'settings.recall.indexError.embedding_unusable':
+    'The chosen embedding model cannot be used. Choose another model or check its Provider.',
+  'settings.recall.indexError.embedding_model_unavailable':
+    'The Provider does not offer the chosen embedding model. Choose another model.',
+  'settings.recall.indexError.embedding_failed':
+    'The embedding Provider returned an unusable response.',
+  'settings.recall.indexError.provider_rejected':
+    'The embedding Provider rejected some texts.',
+  'settings.recall.indexError.context_overflow':
+    'Some texts are longer than the embedding model accepts.',
+  'settings.recall.indexError.index_unavailable':
+    'The search index could not be read or written.',
+  'settings.recall.indexError.space_unstable':
+    'The embedding model kept changing during indexing.',
+  'settings.recall.rebuild': 'Rebuild index',
+  'settings.recall.rebuildTitle': 'Rebuild the search index?',
+  'settings.recall.rebuildBody':
+    'Every passage is indexed again, skipped ones included. This takes a while, and a cloud embedding model bills its Provider again for all conversation text. Keyword search keeps working; searches by meaning cover only the passages indexed again until the rebuild finishes.',
+  'settings.recall.rebuildConfirm': 'Rebuild',
+  'settings.recall.rebuildError': 'The search index could not be rebuilt.',
+  'settings.recall.advanced': 'Advanced',
   'settings.recall.backend': 'Search method',
-  'settings.recall.backendDescription':
-    'How Agents search your past conversations.',
   'settings.recall.backendHelp':
-    'Agents look through earlier conversations with the session_search Tool.\n\nKeyword finds the words searched for, using a fast local index.\n\nSemantic finds passages by meaning, so a search for “vehicles” also finds “cars”. It needs an embedding model: your conversation text is sent to that Model to build the index in the background, which can cost tokens.\n\nKeyword + semantic combines both rankings. Without a working embedding model it returns keyword matches only.',
-  'settings.recall.backends.sqlite_fts': 'Keyword',
-  'settings.recall.backends.vector': 'Semantic',
-  'settings.recall.backends.hybrid': 'Keyword + semantic',
-  'settings.recall.embeddingMissing':
-    'Choose an embedding model below to search by meaning.',
-  'settings.recall.embeddingInUse':
-    'Your conversation text is sent to the embedding model below.',
+    'Keywords only finds the words searched for. Keywords and meaning adds matches by meaning; the switch above turns it on. Meaning only ranks by meaning alone and needs an embedding model; it can miss exact names and numbers that keyword search finds.\n\nExtensions can add search methods of their own.',
+  'settings.recall.backends.sqlite_fts': 'Keywords only',
+  'settings.recall.backends.vector': 'Meaning only',
+  'settings.recall.backends.hybrid': 'Keywords and meaning',
+  'settings.recall.modelOptions': 'Embedding model options',
   'settings.webFetch.direct': 'Direct (no service)',
   'settings.webFetch.fallback': 'Only when direct reading fails',
   'settings.webFetch.prefer': 'Prefer this service',
@@ -429,9 +498,8 @@ export default Object.freeze({
   'settings.specializedModels.musicGenerationHelp':
     'Used by the generate_music Tool.',
   'settings.specializedModels.embeddingModel': 'Embedding model',
-  'settings.specializedModels.embeddingModelLabel': 'Semantic search',
   'settings.specializedModels.embeddingModelHelp':
-    'Conversation search uses it to find passages by meaning. Your conversation text is sent to this Model’s Provider to build the search index in the background.\n\nSwitching to another Model rebuilds that index from all stored conversations, which adds Provider usage.',
+    'Turns conversation text into the search index for searching by meaning, and embeds each search query. Recommended models are listed first; All models lists every embedding model your Providers offer.\n\nChanging the model rebuilds the index from all stored conversations. That takes a while and, with a cloud model, adds Provider usage.',
   'settings.specializedModels.noTarget': 'Not configured',
   'settings.specializedModels.customTarget': 'Custom target: {target}',
   'settings.specializedModels.aboutAria': 'About {name}',

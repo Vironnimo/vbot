@@ -208,6 +208,7 @@
   let restartDiscardConfirmOpen = $state(false);
 
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
+  let recallIndexStatus = $derived(appControllerState.recallIndexStatus);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
@@ -1041,6 +1042,7 @@
           onDebugEnabledChange={handleDebugEnabledChange}
           onOpenSetupGuide={setup.reopenOnboarding}
           {modelsRefreshToken}
+          {recallIndexStatus}
           {clientsRefreshToken}
           {channelsRefreshToken}
           initialScrollPosition={settingsScrollPosition}

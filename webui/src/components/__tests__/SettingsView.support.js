@@ -95,7 +95,7 @@ export async function openSubAgentsPanel() {
 export async function openRecallPanel() {
   await openSettingsSection('Memory', 'recall');
   await waitForCondition(() =>
-    activeSection.querySelector('#settings-recall-backend'),
+    activeSection.querySelector('#settings-recall-meaning'),
   );
 }
 
@@ -380,9 +380,37 @@ export function createSettingsRpcMock(options = {}) {
     ]),
   );
 
+  // The Recall index status follows the stored backend and embedding
+  // binding unless the test fixes one.
+  const recallIndexStatus = () => {
+    if (options.recallIndexStatus) {
+      return deepClone(options.recallIndexStatus);
+    }
+    const semantic = ['vector', 'hybrid'].includes(
+      currentSettings.recall?.backend,
+    );
+    const configured = Boolean(
+      currentSettings.model_tasks?.text_embedding?.target,
+    );
+    return recallIndexStatusPayload({
+      semantic_enabled: semantic,
+      state: !semantic ? 'disabled' : configured ? 'idle' : 'unconfigured',
+    });
+  };
+
   return async (method, params = {}) => {
     if (method === 'settings.get') {
       return deepClone(currentSettings);
+    }
+
+    if (method === 'recall.status') {
+      return recallIndexStatus();
+    }
+
+    if (method === 'recall.rebuild_index') {
+      return options.recallRebuildStatus
+        ? deepClone(options.recallRebuildStatus)
+        : recallIndexStatus();
     }
 
     if (method === 'settings.update') {
@@ -808,6 +836,25 @@ function connectionsPayload() {
       usable: true,
     },
   ];
+}
+
+// A `recall.status` result; `overrides` replace top-level fields.
+export function recallIndexStatusPayload(overrides = {}) {
+  return {
+    semantic_enabled: true,
+    state: 'idle',
+    provider: null,
+    model: null,
+    indexed: 0,
+    waiting: 0,
+    skipped: 0,
+    last_error: null,
+    next_attempt_at: null,
+    last_completed_at: null,
+    spent: { requests: 0, input_tokens: 0, total_tokens: 0, cost: 0 },
+    estimate: { characters: 0, tokens: 0, cost: null },
+    ...overrides,
+  };
 }
 
 export function settingsPayload(options = {}) {
