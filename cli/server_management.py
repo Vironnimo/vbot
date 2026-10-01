@@ -47,6 +47,7 @@ from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
     CONTROL_TOKEN_HEADER,
+    process_started,
     read_server_control,
 )
 
@@ -464,7 +465,7 @@ def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
     try:
         process = psutil.Process(control.pid)
         if (
-            abs(process.create_time() - control.process_create_time)
+            abs(process_started(process) - control.process_create_time)
             > PROCESS_CREATE_TIME_TOLERANCE_SECONDS
         ):
             return None

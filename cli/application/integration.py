@@ -32,6 +32,7 @@ from cli.autostart_management import (
     _windows_task_command,
 )
 from cli.server_management import ServerState
+from core.utils.server_control import process_started
 
 
 def refresh_gui_entrypoints(install: Installation) -> None:
@@ -253,7 +254,7 @@ def request_host_exit(
         import psutil  # type: ignore[import-untyped]
 
         process = psutil.Process(pid)
-        if abs(process.create_time() - created) > 0.01:
+        if abs(process_started(process) - created) > 0.01:
             raise ApplicationError("Application host ownership record is stale")
         if not _same_path(process.exe(), install.root / "vBot.exe"):
             raise ApplicationError("Application host ownership record targets another executable")
@@ -458,7 +459,7 @@ def begin_removal(install: Installation) -> dict[str, Any]:
                 )
         write_json(
             contained(install.root, "removal-pending.json"),
-            {"schema_version": 1, "pid": parent.pid, "process_created": parent.create_time()},
+            {"schema_version": 1, "pid": parent.pid, "process_created": process_started(parent)},
         )
         # The tray has exited; if removal is cancelled, its next start registers again.
         remove_notification_identity(install)
@@ -493,7 +494,7 @@ def reset_removal(install: Installation) -> dict[str, Any]:
             raise ApplicationError("Removal ownership is invalid; preserve it for inspection")
         try:
             process = psutil.Process(record["pid"])
-            if abs(process.create_time() - created) < 0.001 and process.is_running():
+            if abs(process_started(process) - created) < 0.001 and process.is_running():
                 raise ApplicationError("The uninstaller is still running")
         except psutil.NoSuchProcess:
             pass

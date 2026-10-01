@@ -53,7 +53,7 @@ from core.database import (
     read_maintenance,
     restore_update_snapshot,
 )
-from core.utils.server_control import live_server_ports, read_server_control
+from core.utils.server_control import live_server_ports, process_started, read_server_control
 
 _LOGGER = logging.getLogger("vbot.application.update")
 #: How long a just-stopped server's lifetime claim may take to disappear.
@@ -534,7 +534,7 @@ def run(install: Installation, operation_id: str) -> None:
         if operation.terminal:
             return
         current_pid = os.getpid()
-        current_created = psutil.Process().create_time()
+        current_created = process_started(psutil.Process())
         if operation.worker_pid is not None and (
             operation.worker_pid != current_pid
             or operation.worker_created is None

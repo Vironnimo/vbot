@@ -8,6 +8,7 @@ import math
 import os
 import re
 import secrets
+import sys
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,23 @@ CONTROL_TOKEN_BYTES = 32
 # The control record carries the shutdown authority token; only the owner reads it.
 CONTROL_RECORD_MODE = 0o600
 _CLAIM_FILE_PATTERN = re.compile(r"^server-(\d{1,5})\.lock$")
+_PSUTIL_PROCESS = psutil.Process
+
+
+def process_started(process: psutil.Process) -> float:
+    """When *process* started, as the value that identifies it beside its PID.
+
+    psutil's creation time on Linux is the boot time plus the process's start
+    since boot, and the boot time moves whenever the system clock is set, such
+    as by NTP after a boot without a real-time clock. A recorded creation time
+    would then no longer match its own process, so Linux identifies a process
+    by its start since boot, which never moves. Elsewhere the creation time is
+    fixed. Test doubles report their creation time unchanged.
+    """
+    created = float(process.create_time())
+    if sys.platform.startswith("linux") and isinstance(process, _PSUTIL_PROCESS):
+        return created - float(psutil.boot_time())
+    return created
 
 
 def _lock_claim(handle: IO[bytes]) -> None:
@@ -94,7 +112,7 @@ def server_control_claim(data_dir: str | Path, port: int):
             try:
                 process = psutil.Process(existing.pid)
                 alive = (
-                    abs(process.create_time() - existing.process_create_time) < 0.001
+                    abs(process_started(process) - existing.process_create_time) < 0.001
                     and process.is_running()
                 )
             except (OSError, psutil.Error):
@@ -184,7 +202,7 @@ def create_server_control(
     if resolved_pid <= 0:
         raise ValueError("Server control PID must be positive")
     resolved_create_time = (
-        psutil.Process(resolved_pid).create_time()
+        process_started(psutil.Process(resolved_pid))
         if process_create_time is None
         else process_create_time
     )

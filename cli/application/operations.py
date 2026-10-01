@@ -23,6 +23,7 @@ from cli.application.state import (
     operations,
 )
 from core.utils.processes import subprocess_creation_flags
+from core.utils.server_control import process_started
 
 #: Set only for a tray host started by its predecessor's restart handoff.
 HOST_SUCCESSOR_ENV = "VBOT_HOST_SUCCESSOR"
@@ -56,9 +57,8 @@ def worker_alive(operation: Operation) -> bool:
         return False
     try:
         process = psutil.Process(operation.worker_pid)
-        return bool(
-            abs(process.create_time() - operation.worker_created) < 0.001 and process.is_running()
-        )
+        started = process_started(process)
+        return bool(abs(started - operation.worker_created) < 0.001 and process.is_running())
     except psutil.Error:
         return False
 
@@ -96,7 +96,7 @@ def spawn_worker(install: Installation, operation: Operation) -> None:
         raise ApplicationError(f"The update process could not start. Details: {startup_log}")
     try:
         operation.worker_pid = process.pid
-        operation.worker_created = psutil.Process(process.pid).create_time()
+        operation.worker_created = process_started(psutil.Process(process.pid))
     except (AttributeError, psutil.Error) as exc:
         raise ApplicationError(
             "The independent update process identity could not be verified"

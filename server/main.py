@@ -15,6 +15,8 @@ from time import perf_counter
 from types import FrameType
 from typing import Any, Literal
 
+import psutil  # type: ignore[import-untyped]
+
 from core.storage.layout import initialize_data_directory
 from core.utils.config import (
     DEFAULT_HOST,
@@ -104,7 +106,8 @@ def main(argv: list[str] | None = None) -> None:
             config=config,
             server_bind=server_bind,
             mode=safe_startup_mode or "normal",
-            process_created=control.process_create_time,
+            # Durations need the wall-clock creation time, not the record's identity.
+            process_created=psutil.Process().create_time(),
         )
         log_manager: LogManager | None = None
         server_holder: dict[str, Any] = {}
