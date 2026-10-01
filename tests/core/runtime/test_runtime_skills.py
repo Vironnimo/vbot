@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,15 @@ from tests.core.runtime.runtime_test_support import (
 
 BUNDLED_SKILLS_ROOT = Path(__file__).resolve().parents[3] / "resources" / "skills"
 RELOADED_SKILL_NAME = "runtime-reloaded-skill"
+
+
+@pytest.fixture
+def runtime(config: Config) -> Iterator[Runtime]:
+    """A started test-mode Runtime: Skill resolution needs no Extensions or producers."""
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    yield runtime
+    runtime.stop()
 
 
 def _names(registry: SkillRegistry) -> set[str]:
