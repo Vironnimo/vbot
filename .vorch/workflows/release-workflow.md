@@ -36,15 +36,16 @@ gh run list --workflow=ci.yml --branch=main --event=push --limit 1
 
 If it failed, read the failures (`gh run view <run-id> --log-failed`), fix them on `main`, and push the fix (`.vorch/workflows/push-workflow.md`), whose CI run must pass before you continue; a `main` already known to be red only fails the release gate after its full run time. `Flaky tests` warnings in a green run name tests that failed under the parallel load and passed when run again alone; they do not block the release.
 
-Release tasks run no local test passes. Do not run the complete pytest or Vitest suites before a release: the dispatched GitHub Release workflow calls the complete reusable CI workflow against the pushed `main` commit and blocks tag and Release creation until every required Backend, Frontend, and Installer job passes. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
+The push in step 4 runs the complete local checks; the dispatched GitHub Release workflow then calls the complete reusable CI workflow against the pushed `main` commit and blocks tag and Release creation until every required Backend, Frontend, and Installer job passes. If that CI fails, fix the reported problem on `main`, push it, and dispatch the Release workflow again.
 
 ### 4. Commit and push
 
 ```bash
 git add pyproject.toml
 git commit -m "chore(release): bump version to X.Y.Z"
-git push origin main
 ```
+
+Then push `main` through `.vorch/workflows/push-workflow.md`.
 
 ### 5. Dispatch the gated release workflow
 
