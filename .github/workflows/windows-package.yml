@@ -28,19 +28,6 @@ on:
         required: false
         default: false
         type: boolean
-  pull_request:
-    paths:
-      - "core/**"
-      - "server/**"
-      - "cli/**"
-      - "desktop/**"
-      - "resources/**"
-      - "webui/**"
-      - "scripts/build_windows.py"
-      - "scripts/package_build.py"
-      - "scripts/windows/**"
-      - "pyproject.toml"
-      - ".github/workflows/windows-package.yml"
 
 permissions:
   contents: read
