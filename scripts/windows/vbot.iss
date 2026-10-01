@@ -55,16 +55,9 @@ Name: "{group}\vBot Desktop"; Filename: "{app}\vBot.GUI.exe"; Parameters: "deskt
 #endif
 
 [UninstallDelete]
-Type: files; Name: "{app}\vBot.GUI.exe"
-Type: files; Name: "{app}\application.json"
-Type: files; Name: "{app}\active-version"
-Type: files; Name: "{app}\.operation.lock"
-Type: files; Name: "{app}\host.json"
-Type: files; Name: "{app}\host-exit-request.json"
-Type: filesandordirs; Name: "{app}\versions"
-Type: filesandordirs; Name: "{app}\operations"
-Type: filesandordirs; Name: "{app}\staging"
-Type: filesandordirs; Name: "{app}\downloads"
+; Installation accepts only an empty folder and keeps server data outside it,
+; so everything the application wrote there since belongs to it.
+Type: filesandordirs; Name: "{app}"
 
 [Code]
 var

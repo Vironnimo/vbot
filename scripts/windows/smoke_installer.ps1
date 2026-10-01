@@ -64,10 +64,12 @@ try {
         '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', ('/LOG="' + $uninstallLog + '"')
     )
     if ($removal.ExitCode -ne 0) { throw "Uninstaller failed with code $($removal.ExitCode)" }
-    foreach ($relative in @('vBot.exe', 'application.json', 'active-version', 'versions', 'removal-pending.json')) {
-        if (Test-Path -LiteralPath (Join-Path $installDir $relative)) {
-            throw "Uninstaller retained application path: $relative"
-        }
+    # The uninstaller removes its own executable and the folder last.
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Test-Path -LiteralPath $installDir) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    if (Test-Path -LiteralPath $installDir) {
+        $retained = (Get-ChildItem -LiteralPath $installDir -Recurse -Force | ForEach-Object FullName) -join ', '
+        throw "Uninstaller retained the application folder: $retained"
     }
     if ((Get-Content -LiteralPath $sentinel -Raw) -cne 'preserve user data') {
         throw 'Uninstaller changed or removed user data'
