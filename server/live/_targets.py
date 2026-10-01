@@ -12,7 +12,7 @@ Terminal id, a group id, an Agent address, a Project id) if any match, else its
 names (Terminals, groups, Agents, Projects). The target resolves only when
 exactly one thing matches across all accepted kinds; a Terminal and an Agent of
 the same name are ambiguous, never decided by kind order. Names compare by
-:func:`core.tools._call_vocabulary.spelling`.
+:func:`core.tools.call_syntax.spelling`.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.projects import format_agent_address
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 from server.live._context import JsonObject, LiveContext, LiveToolError
 from server.live._programs import CODING_PROGRAMS, CodingProgram
 

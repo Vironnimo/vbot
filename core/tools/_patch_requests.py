@@ -18,9 +18,8 @@ from __future__ import annotations
 from functools import cache
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools._patch_syntax import _Hunk, _Operation, _parse, _PatchError, _Replacement
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.model_names import model_tool_name
 from core.tools.tools import JsonObject

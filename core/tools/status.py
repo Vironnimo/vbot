@@ -31,9 +31,14 @@ from core.projects import (
 from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager
 from core.sessions import ChatSessionManager, SessionAddress
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import PLACEHOLDER_WORDS, SpellingAliases, is_placeholder, spelling
 from core.tools.arguments import optional_string
+from core.tools.call_syntax import (
+    PLACEHOLDER_WORDS,
+    SpellingAliases,
+    is_placeholder,
+    normalize_call_arguments,
+    spelling,
+)
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,

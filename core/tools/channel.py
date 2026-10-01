@@ -24,7 +24,6 @@ from core.channels import (
 from core.channels.adapter import FileData, RouteFacts
 from core.extensions import InteractionButton
 from core.sessions import SessionAddress
-from core.tools._call_vocabulary import spelling
 from core.tools._channel_send_arguments import (
     ACTION_FIELD,
     CHANNEL_FIELD,
@@ -39,6 +38,7 @@ from core.tools._channel_send_arguments import (
 )
 from core.tools._path_suggestions import similar_entries
 from core.tools.arguments import optional_string, required_string
+from core.tools.call_syntax import spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.tools import (
     JsonObject,

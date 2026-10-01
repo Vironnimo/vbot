@@ -20,8 +20,8 @@ from jsonschema.exceptions import best_match
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.projects.address import parse_agent_address
-from core.tools._argument_repair import normalize_call_arguments
 from core.tools.availability import resolve_tool_access
+from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     ToolContext,

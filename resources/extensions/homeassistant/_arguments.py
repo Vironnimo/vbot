@@ -16,7 +16,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
+from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import ToolContractError, compile_tool_contract
 
 # Identifier grammar; it also keeps request paths free of traversal.

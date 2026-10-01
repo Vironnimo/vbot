@@ -17,8 +17,7 @@ import re
 from functools import cache
 from typing import Any, TypeGuard
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, spelling
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import model_tool_name
 

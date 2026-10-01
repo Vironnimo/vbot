@@ -7,10 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools._shell_arguments import resolve_timeout
 from core.tools.arguments import optional_number, optional_string, required_string
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.process_manager import (

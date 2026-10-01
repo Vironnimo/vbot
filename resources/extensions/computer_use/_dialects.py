@@ -15,7 +15,7 @@ import math
 import re
 from typing import Any
 
-from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
+from core.tools.call_syntax import SpellingAliases, is_placeholder, spelling
 from core.tools.contracts import ToolContractError
 
 _FIELD_ALIASES = SpellingAliases(

@@ -1,15 +1,83 @@
-"""Owner-selected repairs for a Tool's call syntax, never arbitrary application data."""
+"""Reading a Model's call syntax: spellings, placeholders, and owner-selected repairs.
+
+Tool owners (built-in Tools, Extensions, the Live Tools) use this inside their
+``argument_normalizer`` to accept the field names other harnesses use, to
+recognize values a Model writes into optional fields it does not mean to use,
+and to repair the call object they declared (:func:`normalize_call_arguments`).
+Nothing here decides what a value means for a Tool: each owner selects the
+fields, aliases, and words it accepts, and payload values stay unchanged.
+"""
 
 from __future__ import annotations
 
 import copy
 import json
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
-from core.tools._call_vocabulary import is_placeholder
 from core.tools.contracts import ToolContract, ToolContractError, _load_json_value, _same_json_value
+
+
+def spelling(value: str) -> str:
+    """Return ``value`` without case, spaces, and punctuation: ``Agent-ID`` -> ``agentid``."""
+    return re.sub(r"[\W_]+", "", value.casefold())
+
+
+class SpellingAliases(Mapping[str, str]):
+    """Field aliases that match regardless of case, spaces, and punctuation."""
+
+    def __init__(self, fields: Mapping[str, Iterable[str]]) -> None:
+        self._aliases = {
+            spelling(alias): field for field, names in fields.items() for alias in names
+        }
+
+    def __getitem__(self, key: str) -> str:
+        return self._aliases[spelling(key)]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._aliases)
+
+    def __len__(self) -> int:
+        return len(self._aliases)
+
+
+# Words Models write into optional fields to mean "not used", compared by spelling.
+PLACEHOLDER_WORDS = frozenset(
+    {
+        "blank",
+        "empty",
+        "invalidplaceholder",
+        "na",
+        "nil",
+        "none",
+        "notapplicable",
+        "notset",
+        "null",
+        "omit",
+        "omitted",
+        "placeholder",
+        "tbd",
+        "undefined",
+        "unset",
+        "unused",
+    }
+)
+
+
+def is_placeholder(value: Any, words: Iterable[str] = PLACEHOLDER_WORDS) -> bool:
+    """Return whether ``value`` stands for an omitted optional field.
+
+    ``None``, blank or punctuation-only text (``" "``, ``"."``, ``"???"``), and
+    the given placeholder words (``"unused"``, ``"<none>"``, ``"__omit__"``)
+    qualify. Any other text, including an unknown id, is a real value.
+    """
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    text = spelling(value)
+    return not text or text in words
 
 
 def normalize_call_arguments(
@@ -53,7 +121,7 @@ def normalize_call_arguments(
             return key
         if key in aliases:
             return aliases[key]
-        if _spelling(key) == "operation" and actions:
+        if _format_key(key) == "operation" and actions:
             return "action"
         return _formatted_name(key, list(properties)) or key
 
@@ -65,7 +133,7 @@ def normalize_call_arguments(
         for key, item in obj.items():
             if key not in properties and canonical_field(key) == key:
                 action = _formatted_name(key, actions)
-                if _spelling(key) in {"request", "arguments"} or action is not None:
+                if _format_key(key) in {"request", "arguments"} or action is not None:
                     nested = _load_json_value(item) if isinstance(item, str) else item
                     if isinstance(nested, dict) and (nested or action is not None):
                         result.extend(entries(nested, depth + 1))
@@ -139,7 +207,8 @@ def _shown(value: Any) -> str:
     return text if len(text) <= 40 else text[:37] + "..."
 
 
-def _spelling(value: str) -> str:
+def _format_key(value: str) -> str:
+    """``value`` without case, spaces, ``_`` and ``-``, for field and choice names."""
     return re.sub(r"[\s_-]+", "", value.casefold())
 
 
@@ -147,6 +216,17 @@ def _formatted_name(value: str, choices: Sequence[Any]) -> str | None:
     if value in choices:
         return value
     matches = [
-        name for name in choices if isinstance(name, str) and _spelling(name) == _spelling(value)
+        name
+        for name in choices
+        if isinstance(name, str) and _format_key(name) == _format_key(value)
     ]
     return matches[0] if len(matches) == 1 else None
+
+
+__all__ = [
+    "PLACEHOLDER_WORDS",
+    "SpellingAliases",
+    "is_placeholder",
+    "normalize_call_arguments",
+    "spelling",
+]

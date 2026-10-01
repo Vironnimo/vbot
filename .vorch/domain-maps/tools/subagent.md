@@ -4,7 +4,7 @@ Registers the single public `subagent` Tool and delegates lifecycle orchestratio
 
 ## Data Model
 
-- `core.tools.subagent` owns the Tool name, description, flat JSON Schema, display metadata, registration, and Tool-owned System Prompt block. `core/tools/_subagent_arguments.py` owns call-syntax normalization (the `argument_normalizer`); `core/tools/_call_vocabulary.py` holds the owner-side spelling and placeholder helpers it uses (also used by `status` and `project`).
+- `core.tools.subagent` owns the Tool name, description, flat JSON Schema, display metadata, registration, and Tool-owned System Prompt block. `core/tools/_subagent_arguments.py` owns call-syntax normalization (the `argument_normalizer`); `core/tools/call_syntax.py` holds the owner-side spelling and placeholder helpers it uses (also used by `status` and `project`).
 - `SubAgentCoordinator` in `core/subagents/` owns admission, queueing, status, cancellation, batch tracking, automatic delivery, and Agent-facing result shaping. `core/subagents/_interpretation.py` settles what a normalized `run` call addresses against tracked work and allowed targets before any side effect.
 
 ## Interfaces

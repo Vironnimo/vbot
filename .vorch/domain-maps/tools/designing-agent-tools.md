@@ -52,7 +52,7 @@ Text an Agent copied with errors is such evidence when it is strong enough: Agen
 
 Rules and thresholds: `apply_patch.md` -> `copy_match`. The `"earth"`/`"world"` example above stays a refusal: the change rests on a word the file does not hold, which is not a misspelling.
 
-Where it lives: shared representation repair (types, encodings, scalar-to-array) belongs to `contracts.py`; field aliases, wrappers, vocabulary formatting, inapplicable fields and empty-as-omitted belong to the owning Tool through `argument_normalizer` and `_argument_repair.normalize_call_arguments`. Repairs stay scoped to call syntax: they never rewrite payload values, quoted text, external identifiers or application data.
+Where it lives: shared representation repair (types, encodings, scalar-to-array) belongs to `contracts.py`; field aliases, wrappers, vocabulary formatting, inapplicable fields and empty-as-omitted belong to the owning Tool through `argument_normalizer` and `call_syntax.normalize_call_arguments`. Repairs stay scoped to call syntax: they never rewrite payload values, quoted text, external identifiers or application data.
 
 ### 3. `ok` means the intended effect happened
 

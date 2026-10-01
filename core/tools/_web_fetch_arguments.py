@@ -13,9 +13,8 @@ import json
 import re
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, spelling
 from core.tools._web_fetch_pages import REF_IN_TEXT
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError
 
 MAX_URLS = 5

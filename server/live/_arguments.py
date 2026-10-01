@@ -22,8 +22,12 @@ from typing import Any
 
 from core.model_tasks.live import LiveToolRun, live_failure, live_result_text
 from core.tools import called_tool_name
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
+from core.tools.call_syntax import (
+    SpellingAliases,
+    is_placeholder,
+    normalize_call_arguments,
+    spelling,
+)
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from server.live._brief import (
     LIVE_KEYS,

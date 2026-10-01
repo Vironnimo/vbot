@@ -18,8 +18,7 @@ import shlex
 from functools import cache
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract, compile_tool_contract
 from core.tools.terminal_manager import TERMINAL_INPUT_KEY_SEQUENCES
 

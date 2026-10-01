@@ -17,11 +17,11 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import (
+from core.tools.call_syntax import (
     PLACEHOLDER_WORDS,
     SpellingAliases,
     is_placeholder,
+    normalize_call_arguments,
     spelling,
 )
 from core.tools.contracts import ToolContract, ToolContractError

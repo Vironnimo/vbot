@@ -14,7 +14,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 
 from . import observations
 from .driver import ComputerUseError

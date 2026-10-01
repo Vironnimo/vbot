@@ -14,10 +14,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases
 from core.tools._image_downloads import ImageDownloadError, download_images, image_address
 from core.tools._path_suggestions import corrected_paths
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract
 from core.tools.search import display_search_path
 from core.tools.tools import ToolContext

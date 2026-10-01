@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.model_tasks.live import live_failure, live_success
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 from core.utils.paths import model_path
 from server.live._brief import MAX_LIVE_NAME_CHARS, MAX_LIVE_TEXT_CHARS
 from server.live._context import (
