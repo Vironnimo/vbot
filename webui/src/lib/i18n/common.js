@@ -121,6 +121,7 @@ export default Object.freeze({
   'navigation.cron': 'Schedules',
   'navigation.systemPrompt': 'System Prompt',
   'navigation.settings': 'Settings',
+  'navigation.archive': 'Archive',
   'navigation.logs': 'Logs',
   'navigation.statistics': 'Statistics',
   'navigation.debug': 'Debug',

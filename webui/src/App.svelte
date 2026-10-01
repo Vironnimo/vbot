@@ -53,6 +53,11 @@
       section: 'configure',
     },
     {
+      id: 'archive',
+      label: () => t('navigation.archive'),
+      section: 'configure',
+    },
+    {
       id: 'statistics',
       label: () => t('navigation.statistics'),
       section: 'insights',
@@ -90,6 +95,7 @@
   import SkillsView from './components/skills/SkillsView.svelte';
   import SystemPromptView from './components/SystemPromptView.svelte';
   import SettingsView from './components/SettingsView.svelte';
+  import ArchiveView from './components/ArchiveView.svelte';
   import LogsView from './components/LogsView.svelte';
   import StatisticsView from './components/StatisticsView.svelte';
   import DebugView from './components/DebugView.svelte';
@@ -211,6 +217,7 @@
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let archiveRefreshToken = $derived(appControllerState.archiveRefreshToken);
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
   let webuiOutdated = $derived(appControllerState.webuiOutdated);
@@ -1045,6 +1052,18 @@
           {channelsRefreshToken}
           initialScrollPosition={settingsScrollPosition}
           onScrollPositionChange={rememberSettingsScrollPosition}
+        />
+      {:else if activeViewId === 'archive'}
+        <ArchiveView
+          navigation={navigator.view('archive')}
+          agents={selection.agents}
+          projects={selection.projects}
+          {archiveRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
+          {projectsRefreshToken}
+          {sessionsRefreshToken}
+          onToast={desktop.showToast}
+          onOpenRetentionSettings={() => navigateToSettingsPanel('archive')}
         />
       {:else if activeViewId === 'logs'}
         <LogsView navigation={navigator.view('logs')} />

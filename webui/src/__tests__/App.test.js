@@ -48,6 +48,7 @@ describe('NAVIGATION_ITEMS', () => {
       ['cron', 'configure'],
       ['system-prompt', 'configure'],
       ['settings', 'configure'],
+      ['archive', 'configure'],
       ['statistics', 'insights'],
       ['logs', 'insights'],
       ['debug', 'insights'],
