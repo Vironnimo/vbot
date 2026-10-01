@@ -84,7 +84,7 @@ def _no_disk_syncs() -> Iterator[None]:
     they publish. The data is visible within the process either way, and the
     syncs cost most of the time of storage-heavy tests. For the whole session,
     so that databases of module- and session-scoped fixtures are covered too,
-    the kernel creates and opens every database with ``synchronous=OFF`` and
+    the kernel opens every database with ``synchronous=OFF`` and
     ``os.fsync`` does nothing. ``os.fsync`` is patched process-wide because
     many modules call it through ``os``. A test marked ``durable`` gets the
     production syncs back.

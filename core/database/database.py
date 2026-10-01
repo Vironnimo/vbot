@@ -83,8 +83,8 @@ _LOGGER = logging.getLogger("vbot.database")
 _Result = TypeVar("_Result")
 
 IO_WORKERS = 8
-#: Test seam: the SQLite ``synchronous`` level with which the kernel creates and
-#: opens every database instead of its profile's (canonical ``FULL``, disposable
+#: Test seam: the SQLite ``synchronous`` level with which the kernel opens every
+#: database instead of its profile's (canonical ``FULL``, disposable
 #: ``NORMAL``). ``None`` in production; ``tests/conftest.py`` sets ``OFF``.
 SYNCHRONOUS_OVERRIDE: Synchronous | None = None
 
@@ -480,8 +480,9 @@ def _create_database_file(spec: DatabaseSpec) -> None:
     try:
         connection = sqlite3.connect(temporary, isolation_level=None)
         try:
-            if SYNCHRONOUS_OVERRIDE is not None:
-                connection.execute(f"PRAGMA synchronous={SYNCHRONOUS_OVERRIDE}")
+            # The file is fsynced once below before it is published under its name;
+            # a crash before that leaves only an unpublished temporary file.
+            connection.execute("PRAGMA synchronous=OFF")
             connection.execute("BEGIN IMMEDIATE")
             for _kind, _name, sql in declared.objects:
                 connection.execute(sql)
