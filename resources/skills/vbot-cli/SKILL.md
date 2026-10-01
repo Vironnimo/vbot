@@ -25,6 +25,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | Task | Read |
 |---|---|
 | Agents, Project membership, permissions, Sessions | `references/agents-projects.md` |
+| Archived Agents, Projects and Sessions: list, restore, delete permanently | `references/agents-projects.md` |
 | Send a message to an Agent and read its answer, continue one of its Sessions, set a Session's Model, thinking effort or temperature | `references/chat.md` |
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |

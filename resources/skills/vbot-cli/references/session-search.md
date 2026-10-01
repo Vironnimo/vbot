@@ -116,4 +116,4 @@ print(json.dumps(None if row is None else dict(row), ensure_ascii=False))
 db.close()
 ```
 
-Use the generation returned by the search or transcript query. If the generation changed or the selected Message is gone, locate it again rather than treating the same sequence in a replacement Session as the original evidence. For archived history, explicitly inspect the desired generation instead of broadening every query to all archives.
+Use the generation returned by the search or transcript query. If the generation changed or the selected Message is gone, locate it again rather than treating the same sequence in a replacement Session as the original evidence. For archived history, explicitly inspect the desired generation instead of broadening every query to all archives. Archived Sessions belong to archive entries and are deleted permanently after the retention period; `vbot archive list` shows which ones still exist.
