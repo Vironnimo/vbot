@@ -80,6 +80,7 @@ Tests guard behavior against regressions from concurrent and later work. Every t
 - One test per distinct behavior; parameterize only over genuinely different cases.
 - Developer scripts and probes get at most a smoke test, unless they protect data or installations (converters, installers, update and worktree tooling).
 - Keep tests fast and deterministic: controlled clocks and in-memory fakes instead of real waits, subprocesses, and network. A test that needs more than about a second must justify it. Load and scale variants carry the `stress` marker, which the normal suite skips (PROJECT.md -> Testing).
+- Durable I/O is the main hidden cost: the suite skips disk syncs (`os.fsync`, SQLite `synchronous`) unless a test is marked `durable` because it checks them. Build expensive setup such as empty databases or a Runtime once per worker and copy it, or share it where tests cannot change it, instead of rebuilding it in every test.
 - When a change makes tests obsolete or redundant, delete or merge them in the same change.
 - Documentation-only edits need no tests; review content, references, and the diff.
 
