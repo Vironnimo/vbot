@@ -8,7 +8,9 @@ meaning and an embedding model is configured. Searches only embed their query.
 A pass first refreshes the Passage catalog for every scope with live Sessions,
 over the Sessions Recall may return (conversation and Sub-Agent Sessions,
 never hidden ones), and evicts scopes that have none left. It then drains the
-waiting texts newest first, one provider call at a time.
+waiting texts newest first, one provider call at a time, in batches no larger
+than the embedding target asks for (a local engine computes on this machine
+and keeps its batches small).
 
 Passes run on a schedule: shortly after start, after a Run ends (coalesced),
 periodically as a sweep that also catches edits, imports and Channel traffic,
@@ -40,6 +42,7 @@ from typing import Any, Literal
 from core.model_tasks import (
     EmbeddingConfigurationError,
     EmbeddingError,
+    EmbeddingInputTooLongError,
     EmbeddingSpaceIdentity,
     EmbeddingUnsupportedTargetError,
     EmbeddingUsage,
@@ -398,6 +401,8 @@ class SemanticIndexer:
         return format_canonical_timestamp(self._clock() + timedelta(seconds=delay))
 
     def _input_price(self, identity: EmbeddingSpaceIdentity | None) -> float | None:
+        if identity is not None and identity.local:
+            return 0.0
         if identity is None or self._pricing is None:
             return None
         pricing = self._pricing(f"{identity.provider_id}/{identity.model_id}")
@@ -516,8 +521,14 @@ class SemanticIndexer:
         if identity is None:
             raise _HaltError(_classify(error or EmbeddingConfigurationError("unusable binding")))
         binding = VectorHeader.for_space(identity)
+        batch_size = await asyncio.to_thread(self._document_batch_size)
         await self._refresh_catalog()
-        await self._drain(binding)
+        await self._drain(binding, batch_size)
+
+    def _document_batch_size(self) -> int:
+        """This indexer's batch size, or the embedding target's smaller one. Blocking."""
+        preferred = self._embeddings.document_batch_size() if self._embeddings else None
+        return min(self._batch_size, preferred) if preferred else self._batch_size
 
     async def _refresh_catalog(self) -> None:
         """Bring every live scope's Recall-visible Sessions into the catalog."""
@@ -534,13 +545,13 @@ class SemanticIndexer:
         for project_id, agent_id in await self._index.indexed_scopes() - set(live):
             await self._index.remove_scope(agent_id, project_id)
 
-    async def _drain(self, binding: VectorHeader) -> None:
+    async def _drain(self, binding: VectorHeader, batch_size: int) -> None:
         totals = _PassTotals()
         started_at = self._monotonic()
         started = False
         header = await self._pinned(binding)
         while self._enabled and not self._closed:
-            batch = await self._index.pending_texts(limit=self._batch_size)
+            batch = await self._index.pending_texts(limit=batch_size)
             if not batch:
                 break
             if not started:
@@ -743,7 +754,7 @@ def _classify(error: BaseException) -> _Classified:
             IndexFailure.of(code),
             retry_after=float(retry_after) if isinstance(retry_after, int | float) else None,
         )
-    if _is_context_overflow(error):
+    if isinstance(error, EmbeddingInputTooLongError) or _is_context_overflow(error):
         return _Classified("permanent", IndexFailure.of("context_overflow"))
     if status in (400, 413, 422):
         return _Classified("permanent", IndexFailure.of("provider_rejected"))
