@@ -86,6 +86,8 @@ class FakeApp:
             {"group_id": "grp_done", "name": "Finished", "kind": "finished"},
         ]
         self.screens: dict[str, list[str]] = {}
+        # terminal.programs: whether each Terminal still runs its launch program.
+        self.programs_running: dict[str, bool] = {}
         self.inputs: list[tuple[str, str, int | None]] = []
         self.failures: dict[str, list[Exception | None]] = {}
         self.queued = False
@@ -110,6 +112,7 @@ class FakeApp:
             "chat.history",
             "chat.run_result",
             "terminal.list",
+            "terminal.programs",
             "terminal.read",
         }
         return [name for name, _params in self.calls if name not in reads]
@@ -185,6 +188,9 @@ class FakeApp:
 
     def _terminal_list(self, _params: JsonObject) -> JsonObject:
         return {"terminals": self.terminals, "groups": self.groups, "launch_history": []}
+
+    def _terminal_programs(self, _params: JsonObject) -> JsonObject:
+        return {"running": self.programs_running}
 
     def _terminal_start(self, params: JsonObject) -> JsonObject:
         terminal_id = f"term_start{len(self.terminals) + 1}"

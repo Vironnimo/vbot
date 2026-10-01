@@ -230,6 +230,7 @@ async def test_terminal_operator_handlers_validate_and_register_contract() -> No
     handlers = build_method_handlers()
     assert {
         "terminal.list",
+        "terminal.programs",
         "terminal.start",
         "terminal.input",
         "terminal.resize",

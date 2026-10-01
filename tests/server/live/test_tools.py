@@ -49,6 +49,9 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     }
     fx.app.add_terminal("term_a", name="Build")
     fx.app.add_terminal("term_b", "pwsh", state="exited")
+    # Codex ended (or never started) in term_c; only its shell is still open.
+    fx.app.add_terminal("term_c", state="ready")
+    fx.app.programs_running = {"term_a": True, "term_c": False}
     fx.context = {
         "view": "chat",
         "selected_agent_id": "main",
@@ -74,7 +77,10 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     assert "Old draft" not in text
     # Folders read with forward slashes, whatever the host writes.
     assert f'- t1 Codex "Build" in {PROJECT_FOLDER_SHOWN}: idle' in text
-    assert f"- t2 pwsh in {PROJECT_FOLDER_SHOWN}: exited" in text
+    assert (
+        f"- t2 Codex in {PROJECT_FOLDER_SHOWN}: Codex is not running; only the command line is open"
+    ) in text
+    assert f"- t3 pwsh in {PROJECT_FOLDER_SHOWN}: exited" in text
     assert fx.app.effects() == []
     assert fx.ui.requests == []
 

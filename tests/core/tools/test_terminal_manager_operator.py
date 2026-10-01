@@ -263,6 +263,37 @@ async def test_operator_input_expecting_a_program_writes_only_while_it_runs(
 
 
 @pytest.mark.asyncio
+async def test_operator_reads_whether_each_terminal_still_runs_its_launch_program(
+    tmp_path: Path,
+) -> None:
+    running: set[str] = {"codex"}
+
+    def probe(pid: int, program: str) -> bool:
+        return program in running
+
+    manager = TerminalManager(
+        adapter_factory=AdapterFactory(), sweep_interval_seconds=3600, program_probe=probe
+    )
+    manager.start()
+    try:
+        codex = await manager.spawn_for_operator(command="codex", arguments=[], cwd=tmp_path)
+        claude = await manager.spawn_for_operator(
+            command="C:\\tools\\claude.cmd", arguments=[], cwd=tmp_path
+        )
+        # A plain shell has no launch program to check.
+        await manager.spawn_for_operator(command=None, arguments=[], cwd=tmp_path)
+
+        assert await manager.running_programs_for_operator() == {
+            codex["terminal_id"]: True,
+            claude["terminal_id"]: False,
+        }
+        await manager.kill_for_operator(codex["terminal_id"])
+        assert await manager.running_programs_for_operator() == {claude["terminal_id"]: False}
+    finally:
+        await manager.aclose()
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_recovers_a_partially_recorded_finish(
     terminal_manager: tuple[TerminalManager, AdapterFactory], tmp_path: Path
 ) -> None:

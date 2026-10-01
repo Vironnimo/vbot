@@ -40,6 +40,12 @@ def _terminal_list(state: Any, params: JsonObject) -> JsonObject:
     }
 
 
+async def _terminal_programs(state: Any, params: JsonObject) -> JsonObject:
+    if params:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "terminal.programs does not accept params")
+    return {"running": await _terminal_manager(state).running_programs_for_operator()}
+
+
 def _terminal_read(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"terminal_id"}, "terminal.read")
     try:
@@ -288,6 +294,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
         "terminal.list": _terminal_list,
         "terminal.read": _terminal_read,
+        "terminal.programs": _terminal_programs,
         "terminal.start": _terminal_start,
         "terminal.input": _terminal_input,
         "terminal.resize": _terminal_resize,

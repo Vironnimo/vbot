@@ -305,13 +305,28 @@ class LiveToolExecutor:
         live = [item for item in terminals if item.get("state") not in {"exited", "error"}]
         ordered = live + [item for item in terminals if item not in live]
         shown = ordered[:LIST_CAP]
+        running = await self._running_programs()
         lines = ["Terminals:"]
         for item in shown:
-            ref = self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
-            lines.append(f"- {terminal_line(ref, item)}")
+            terminal_id = str(item["terminal_id"])
+            ref = self._refs.terminal(terminal_id, terminal_title(item))
+            line = terminal_line(ref, item, program_running=running.get(terminal_id))
+            lines.append(f"- {line}")
         if len(ordered) > len(shown):
             lines.append(f"- and {len(ordered) - len(shown)} more")
         return "\n".join(lines)
+
+    async def _running_programs(self) -> dict[str, bool]:
+        """Which Terminals still run the program they were started with; empty when unknown."""
+        try:
+            listed = await self._ctx.call("terminal.programs", {})
+        except RpcError as exc:
+            _LOGGER.warning("Live overview could not check Terminal programs (%s)", exc.code)
+            return {}
+        running = listed.get("running")
+        if not isinstance(running, dict):
+            return {}
+        return {str(key): value for key, value in running.items() if isinstance(value, bool)}
 
     # -- start_coding_terminal, terminal -------------------------------------
 

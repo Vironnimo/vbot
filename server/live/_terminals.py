@@ -88,6 +88,8 @@ _KEY_LABELS = {
 }
 _PASTE_START = "\x1b[200~"
 _PASTE_END = "\x1b[201~"
+# Terminal states in which the shell runs and its program may have ended.
+_RUNNING = frozenset({"ready", "working"})
 _STATE_WORDS = {
     "starting": "starting",
     "ready": "idle",
@@ -133,8 +135,12 @@ def terminal_state(item: JsonObject) -> str:
     return _STATE_WORDS.get(state, state or "unknown")
 
 
-def terminal_line(ref: str, item: JsonObject) -> str:
-    """One overview line: ref, program, name, folder, state."""
+def terminal_line(ref: str, item: JsonObject, *, program_running: bool | None = None) -> str:
+    """One overview line: ref, program, name, folder, state.
+
+    ``program_running`` False marks a coding Terminal whose program ended or
+    never started: its shell is still open, so its state alone says idle.
+    """
     program = coding_program(item)
     parts = [ref, program.label if program else terminal_label(item)]
     name = item.get("name")
@@ -143,6 +149,8 @@ def terminal_line(ref: str, item: JsonObject) -> str:
     folder = item.get("workdir")
     if isinstance(folder, str) and folder:
         parts.append(f"in {model_path(folder)}")
+    if program is not None and program_running is False and item.get("state") in _RUNNING:
+        return f"{' '.join(parts)}: {program.label} is not running; only the command line is open"
     return f"{' '.join(parts)}: {terminal_state(item)}"
 
 

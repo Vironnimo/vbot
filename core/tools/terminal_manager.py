@@ -136,6 +136,7 @@ class TerminalManager:
             self._sessions, self._operator_store, self._terminate_session
         )
         self._events = TerminalEvents(self._catalog)
+        self._program_probe = program_probe
         self._io = TerminalSessionIO(
             self._events,
             self._reader_executor,
@@ -159,6 +160,33 @@ class TerminalManager:
         """Return operator-visible groups: user/agent groups, then the shared
         manual automatic group, then one automatic group per active Agent."""
         return self._catalog.list_groups_for_operator()
+
+    async def running_programs_for_operator(self) -> dict[str, bool]:
+        """Whether each live manual Terminal's launch program still runs in it.
+
+        Keyed by terminal id, for Terminals started with a launch command that
+        have not finished. The program is the command's file name without its
+        extension (``codex`` for ``C:\\bin\\codex.cmd``), looked up in the
+        Terminal's process tree with the probe that guards expected-program
+        input, off the Event Loop; a tree that cannot be inspected reads as not
+        running. The shell stays open after its program ends or fails to start,
+        so the Terminal's state alone cannot tell.
+        """
+        checks = [
+            (session.terminal_id, session.adapter.pid, program)
+            for session in self._sessions.values()
+            if session.finished_at is None
+            and session.state not in {"exited", "error"}
+            and (program := _launch_program(session.launch_command))
+        ]
+        if not checks:
+            return {}
+        probe = self._program_probe
+
+        def run_checks() -> dict[str, bool]:
+            return {terminal_id: probe(pid, program) for terminal_id, pid, program in checks}
+
+        return await asyncio.to_thread(run_checks)
 
     def list_operator_launch_history(self) -> list[dict[str, Any]]:
         """Return newest-first manual launch configurations for operator reuse."""
@@ -1024,3 +1052,12 @@ __all__ = [
     "TerminalState",
     "agent_group_id",
 ]
+
+
+def _launch_program(command: str | None) -> str:
+    """The program a launch command starts: its file name without the extension."""
+    if not command or not command.strip():
+        return ""
+    name = command.strip().strip("\"'").replace("\\", "/").rsplit("/", 1)[-1]
+    stem, dot, _extension = name.rpartition(".")
+    return stem if dot and stem else name
