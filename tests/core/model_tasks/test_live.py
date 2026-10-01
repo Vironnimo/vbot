@@ -557,6 +557,34 @@ async def test_lost_control_channel_fails_the_call_and_drops_pending_work():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("elapsed", "closed", "reason"),
+    [
+        (3590.0, WireClosed(reason="session_ended", usage=None, confirmed=True), "expired"),
+        (3590.0, WireClosed(reason=None, usage=None, confirmed=False), "expired"),
+        (60.0, WireClosed(reason="max_duration", usage=None, confirmed=True), "expired"),
+        (60.0, WireClosed(reason=None, usage=None, confirmed=False), "connection_lost"),
+    ],
+    ids=["closed-at-limit", "lost-at-limit", "limit-reason", "lost-early"],
+)
+async def test_a_provider_close_at_the_session_limit_is_reported_as_expired(
+    elapsed: float, closed: WireClosed, reason: str
+) -> None:
+    now = [0.0]
+    wire, host = FakeWire(), FakeHost()
+    call = _call(wire, None, host, clock=lambda: now[0], wall_clock=lambda: 1000.0)
+    wire.push(WireStarted(expires_at=4600.0))
+    await _until(lambda: host.of_type("expiry"))
+    # The accessor learns how long the provider keeps the session.
+    assert host.of_type("expiry") == [{"type": "expiry", "seconds": 3600.0}]
+
+    now[0] = elapsed
+    wire.push(closed)
+    await call.wait_closed()
+    assert [update["reason"] for update in host.of_type("closed")] == [reason]
+
+
+@pytest.mark.asyncio
 async def test_media_that_never_connects_ends_the_call():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
     call = _call(wire, brain, host, start_timeout=0.05)
@@ -683,25 +711,34 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model_tasks",
+    ("model_tasks", "code"),
     [
-        FakeModelTasks(configured=False),
-        FakeModelTasks(target="mistral/voxtral::api-key"),
-        FakeModelTasks(options={"voice": "cove", "backend_model": ""}),
-        FakeModelTasks(options={"voice": "cove", "backend_model": "gpt-image-2"}),
-        FakeModelTasks(
-            options={
-                "voice": "cove",
-                "backend_model": "gpt-5.6-terra",
-                "backend_thinking_effort": "turbo",
-            }
+        (FakeModelTasks(configured=False), "not_configured"),
+        (FakeModelTasks(target="mistral/voxtral::api-key"), "not_configured"),
+        (FakeModelTasks(options={"voice": "cove", "backend_model": ""}), "backend_unavailable"),
+        (
+            FakeModelTasks(options={"voice": "cove", "backend_model": "gpt-image-2"}),
+            "backend_unavailable",
         ),
-        FakeModelTasks(
-            options={
-                "voice": "cove",
-                "backend_model": "gpt-5.6-terra",
-                "backend_thinking_effort": 3,
-            }
+        (
+            FakeModelTasks(
+                options={
+                    "voice": "cove",
+                    "backend_model": "gpt-5.6-terra",
+                    "backend_thinking_effort": "turbo",
+                }
+            ),
+            "backend_unavailable",
+        ),
+        (
+            FakeModelTasks(
+                options={
+                    "voice": "cove",
+                    "backend_model": "gpt-5.6-terra",
+                    "backend_thinking_effort": 3,
+                }
+            ),
+            "backend_unavailable",
         ),
     ],
     ids=[
@@ -713,10 +750,10 @@ async def test_invalid_offers_are_rejected_before_resolution(offer: str):
         "non-string-effort",
     ],
 )
-async def test_unusable_configuration_is_not_configured(model_tasks, candidates):
+async def test_an_unusable_configuration_names_what_is_missing(model_tasks, code, candidates):
     with pytest.raises(LiveStartRejected) as caught:
         await _service(model_tasks).start_call(media="webrtc", offer_sdp=OFFER, host=FakeHost())
-    assert caught.value.code == "not_configured"
+    assert caught.value.code == code
 
 
 @pytest.mark.asyncio
@@ -727,7 +764,7 @@ async def test_unusable_configuration_is_not_configured(model_tasks, candidates)
         (ProviderRateLimitError("slow"), "rate_limited"),
         (ProviderOutcomeUnknownError("unknown", operation_key="k"), "outcome_unknown"),
         (NetworkError("down"), "provider_error"),
-        (ConfigError("no credential"), "not_configured"),
+        (ConfigError("no credential"), "provider_unavailable"),
         (ControlJoinError("rtc_1", "OSError"), "control_failed"),
     ],
 )

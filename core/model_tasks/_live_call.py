@@ -63,6 +63,10 @@ _ANNOUNCEMENT_EXCERPT_CHARS = 600
 _CAPTION_MAX_CHARS = 1000
 _TEARDOWN_TIMEOUT_SECONDS = 3.0
 _ABORT_CLOSE_TIMEOUT_SECONDS = 1.0
+# A provider close this close to the session limit is the limit (``expired``),
+# also when the provider reports it with its own reason or none at all.
+_EXPIRY_TOLERANCE_SECONDS = 60.0
+_EXPIRED_REASONS = frozenset({"max_duration"})
 # Run notices that arrive before the call is live; spoken once it is.
 _PENDING_NOTICES = 5
 # Agent-facing: the voice model reads these when vBot could not answer.
@@ -105,6 +109,7 @@ class LiveCallSession:
         user_quiet: float = USER_QUIET_SECONDS,
         user_quiet_max_wait: float = USER_QUIET_MAX_WAIT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
         usage_accounting: TaskUsage | None = None,
         usage_call_id: str = "",
     ) -> None:
@@ -119,6 +124,9 @@ class LiveCallSession:
         self._user_quiet = user_quiet
         self._user_quiet_max_wait = user_quiet_max_wait
         self._clock = clock
+        self._wall_clock = wall_clock
+        # When the provider ends the session at its limit, on ``clock``.
+        self._expires_at: float | None = None
         self._usage_accounting = usage_accounting
         self._usage_call_id = usage_call_id
         self._finishing = False
@@ -257,6 +265,10 @@ class LiveCallSession:
             if self._phase == "connecting":
                 self._set_phase("live")
                 _LOGGER.debug("Live call media connected (call=%s)", self._log_id)
+                if event.expires_at is not None:
+                    seconds = max(0.0, event.expires_at - self._wall_clock())
+                    self._expires_at = self._clock() + seconds
+                    self._publish({"type": "expiry", "seconds": round(seconds, 1)})
                 if self._relay:
                     self._spawn(self._pump_audio(), name=f"live-call-audio:{self._log_id}")
                 while self._unspoken:
@@ -463,6 +475,8 @@ class LiveCallSession:
         reason: str | None
         if self._abort_reason is not None:
             reason = self._abort_reason
+        elif not self._closing and self._expired(closed):
+            reason = "expired"
         elif closed is not None and closed.confirmed:
             reason = closed.reason or "closed"
         elif self._closing:
@@ -512,6 +526,15 @@ class LiveCallSession:
                     self._clock() - self._started_at,
                 )
                 self._done.set()
+
+    def _expired(self, closed: WireClosed | None) -> bool:
+        """Whether the provider ended the call at its session limit."""
+        if closed is not None and closed.reason in _EXPIRED_REASONS:
+            return True
+        return (
+            self._expires_at is not None
+            and self._clock() >= self._expires_at - _EXPIRY_TOLERANCE_SECONDS
+        )
 
     async def _close_brain(self) -> None:
         """Release the backend's connection; a failure cannot keep the call open."""

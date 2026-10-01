@@ -8,6 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -565,8 +566,9 @@ async def test_ui_requests_wait_for_a_returning_owner_and_fail_without_one(
     task = asyncio.create_task(run_tool(call, "open", {"view": "terminals"}))
     await drain()
     reader = live.attach(call)
-    await settle(lambda: len(reader.frames) == 1)
-    assert reader.frames[0]["type"] == "ui_request"
+    await settle(lambda: len(reader.frames) == 2)
+    # The failed first open was reported to the app while nobody was attached.
+    assert reader.types() == ["action", "ui_request"]
     await call.abort()
     ended = await task
     assert ended["error"]["code"] == "ui_unavailable"
@@ -662,12 +664,73 @@ async def test_the_owner_reports_what_the_app_shows_to_the_call(live: Harness) -
 @pytest.mark.asyncio
 async def test_end_call_closes_the_call_gracefully_after_the_goodbye(live: Harness) -> None:
     call = await live.start()
+    reader = live.attach(call)
     result = await run_tool(call, "end_call", {})
     assert result["ok"] is True
     assert call.close_calls == 0
     await settle(lambda: call.close_calls == 1)
     assert call.abort_calls == 0
     assert live.registry.active_call_id is None
+    # The owner learns that the voice model hung up, not that the user stopped.
+    await settle(lambda: reader.done)
+    assert reader.frames[-1] == {
+        "type": "closed",
+        "reason": "hung_up",
+        "usage": {"total_tokens": 3},
+    }
+
+
+@pytest.mark.asyncio
+async def test_each_executed_tool_call_is_shown_to_the_owner_with_what_it_named(
+    live: Harness,
+) -> None:
+    call = await live.start()
+    reader = live.attach(call)
+    await run_tool(call, "start_agent_session", {"agent": "joel", "task": "Plan " + "x" * 300})
+    # A call that names no Live Tool runs nothing and shows nothing.
+    await run_tool(call, "browse", {})
+    await settle(lambda: reader.types() == ["action"])
+
+    action = reader.frames[0]
+    assert action["tool"] == "start_agent_session"
+    assert action["ok"] is True
+    assert action["arguments"]["agent"] == "joel"
+    assert action["arguments"]["task"].endswith("x...")
+    assert len(action["arguments"]["task"]) == 200
+    assert action["result"].startswith("Started a Session at Joel with the task: s1.")
+    assert action["links"] == [
+        {
+            "ref": "s1",
+            "kind": "session",
+            "agent_id": "joel",
+            "session_id": "ses_new",
+            "label": "Session at Joel",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_live_call_nobody_uses_is_warned_then_ended() -> None:
+    limits = replace(FAST, idle_seconds=0.3, idle_warning_seconds=0.2)
+    harness = Harness(limits)
+    try:
+        call = await harness.start()
+        reader = harness.attach(call)
+        call.host.publish({"type": "state", "phase": "live"})
+        await settle(lambda: "idle" in reader.types())
+        warning = reader.frames[-1]
+        assert warning["type"] == "idle"
+        assert 0 < warning["ends_in"] <= 0.2
+        # The owner keeps the call; the warning is withdrawn.
+        reader.owner.receive_text(json.dumps({"type": "stay"}))
+        await settle(lambda: reader.frames[-1] == {"type": "idle", "ends_in": None})
+        assert call.close_calls == 0
+        await settle(lambda: reader.done)
+        assert reader.types()[-3:] == ["idle", "idle", "closed"]
+        assert reader.frames[-1]["reason"] == "idle"
+        assert call.close_calls == 1
+    finally:
+        await harness.close()
 
 
 # -- call records -------------------------------------------------------------------

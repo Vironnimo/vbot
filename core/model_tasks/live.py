@@ -16,10 +16,14 @@ without one and call the host's Tools directly (direct Tools mode, backend
 Accessor updates published through :meth:`LiveCallHost.publish`:
 
 * ``{"type": "state", "phase": "connecting" | "live" | "closing" | "closed" | "failed"}``
+* ``{"type": "expiry", "seconds": float}`` (after ``live`` when the provider
+  limits the session: seconds until it ends the call)
 * ``{"type": "caption", "role": "user" | "assistant", "text": str, "final": bool}``
 * ``{"type": "activity", "busy": bool, "label": str | None}``
 * ``{"type": "playback_clear"}`` (relay media: drop audio not yet played)
-* ``{"type": "closed", "reason": str | None, "usage": dict | None}``
+* ``{"type": "closed", "reason": str | None, "usage": dict | None}``; reasons
+  include ``closed`` (an ordinary close), ``expired`` (the provider's session
+  limit), ``connection_lost``, ``start_timeout``, and ``aborted``
 
 Relay audio for the accessor goes through :meth:`LiveCallHost.publish_audio`.
 """
@@ -94,6 +98,8 @@ LIVE_MEDIA_KINDS = frozenset({MEDIA_WEBRTC, MEDIA_RELAY})
 LIVE_START_REJECTION_CODES = frozenset(
     {
         "not_configured",
+        "provider_unavailable",
+        "backend_unavailable",
         "invalid_offer",
         "access_denied",
         "rate_limited",
@@ -409,7 +415,9 @@ class LiveVoiceService:
             )
             raise LiveStartRejected(code, str(exc)) from exc
         except KeyError as exc:
-            raise LiveStartRejected("not_configured", "Live voice Provider is unavailable") from exc
+            raise LiveStartRejected(
+                "provider_unavailable", "Live voice Provider is unavailable"
+            ) from exc
         finally:
             if wire is None:
                 await accounting.finish(usage_call_id, status=status)
@@ -484,7 +492,7 @@ class LiveVoiceService:
         )
         if backend_model not in {model.model_id for model in candidates}:
             raise LiveStartRejected(
-                "not_configured", "The Live voice backend model is not available"
+                "backend_unavailable", "The Live voice backend model is not available"
             )
         return BrainTarget(
             provider_id=target_ref.provider_id,
@@ -515,7 +523,7 @@ def _backend_thinking_effort(options: JsonObject) -> str | None:
         effort = BACKEND_THINKING_EFFORT_DEFAULT
     if not isinstance(effort, str) or effort not in backend_thinking_efforts():
         raise LiveStartRejected(
-            "not_configured", "The Live voice backend reasoning effort is not valid"
+            "backend_unavailable", "The Live voice backend reasoning effort is not valid"
         )
     return effort or None
 
@@ -537,5 +545,5 @@ def _start_failure_code(error: VBotError) -> str:
     if isinstance(error, ProviderOutcomeUnknownError):
         return "outcome_unknown"
     if isinstance(error, ConfigError):
-        return "not_configured"
+        return "provider_unavailable"
     return "provider_error"

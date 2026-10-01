@@ -47,6 +47,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from contextlib import suppress
@@ -77,6 +78,9 @@ LIVE_AUDIO_FRAME_MAX_BYTES = 64 * 1024
 LIVE_CONTEXT_FRAME_MAX_CHARS = 4096
 
 CLOSED_REASON_REPLACED = "replaced"
+# The voice model ended the call (``end_call``), or nobody spoke for a while.
+CLOSED_REASON_HUNG_UP = "hung_up"
+CLOSED_REASON_IDLE = "idle"
 _NOTIFICATION_FAILED = "notification_failed"
 
 
@@ -95,10 +99,16 @@ class LiveCallLimits:
     abort_timeout_seconds: float = 4.0
     # Time for the voice model's goodbye before ``end_call`` closes the call.
     end_call_delay_seconds: float = 5.0
+    # A live call without speech, Tool calls, or delegated work ends after
+    # this long; ``idle_warning_seconds`` before, the owner is warned.
+    idle_seconds: float = 600.0
+    idle_warning_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.owner_queue_limit < self.update_buffer_limit:
             raise ValueError("owner_queue_limit must hold the whole update buffer")
+        if not 0 < self.idle_warning_seconds < self.idle_seconds:
+            raise ValueError("idle_warning_seconds must fall within idle_seconds")
 
 
 class LiveVoiceStarter(Protocol):
@@ -125,7 +135,9 @@ OwnerFrame = JsonObject | bytes
 
 # Updates that may be dropped first when a buffer is full; the rest carry
 # state an owner must see.
-_DISPOSABLE_UPDATES = frozenset({"caption", "activity", "heartbeat"})
+_DISPOSABLE_UPDATES = frozenset({"caption", "activity", "heartbeat", "action"})
+# Updates that show someone speaks; they keep a call from idling.
+_SPEECH_UPDATES = frozenset({"caption", "playback_clear"})
 
 
 class LiveOwnerStream:
@@ -216,8 +228,8 @@ class LiveOwnerStream:
         self._entry.receive_audio(self, pcm)
 
     def receive_text(self, text: str) -> None:
-        """Hand one inbound text frame to the call; only context reports count."""
-        self._entry.receive_context(self, text)
+        """Hand one inbound text frame (a context report or ``stay``) to the call."""
+        self._entry.receive_text(self, text)
 
     def detach(self) -> None:
         """Release ownership after the socket closed."""
@@ -271,9 +283,16 @@ class _LiveCallEntry:
             started_at=started_at,
             end_call=self.end_soon,
             memory=memory,
+            report=self.publish,
             record=self.record if recorder is not None else None,
         )
         self._ending = False
+        # Why vBot ended the call, when it did (hung up, idle).
+        self._end_reason: str | None = None
+        self._idle_watch: asyncio.Task[None] | None = None
+        self._active_at = 0.0
+        self._busy = False
+        self._idle_warned = False
         self._feed: LiveRunFeed | None = None
         self._timer: asyncio.Task[None] | None = None
         self._watcher: asyncio.Task[None] | None = None
@@ -308,7 +327,11 @@ class _LiveCallEntry:
         self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
     ) -> LiveToolRun:
         """Run one Tool call as a Model made it; the executor runs them in turn."""
-        return await self._executor.run(name, arguments, rejection=rejection)
+        self._mark_active()
+        try:
+            return await self._executor.run(name, arguments, rejection=rejection)
+        finally:
+            self._mark_active()
 
     def known_refs(self) -> str:
         """The refs Tool results named so far, one labeled line each."""
@@ -318,10 +341,21 @@ class _LiveCallEntry:
         """Deliver one call update to the owner, or buffer it until one attaches."""
         if self._closed_published:
             return
-        if update.get("type") == "closed":
+        kind = update.get("type")
+        if kind == "closed":
             self._closed_published = True
             self.active = False
             self._cancel_timer()
+            self._stop_idle_watch()
+            if self._end_reason is not None and update.get("reason") != CLOSED_REASON_REPLACED:
+                update = {**update, "reason": self._end_reason}
+        elif kind == "state" and update.get("phase") == "live":
+            self._start_idle_watch()
+        elif kind == "activity":
+            self._busy = update.get("busy") is True
+            self._mark_active()
+        elif kind in _SPEECH_UPDATES:
+            self._mark_active()
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
@@ -378,7 +412,50 @@ class _LiveCallEntry:
     async def _end_after_goodbye(self) -> None:
         await asyncio.sleep(self._limits.end_call_delay_seconds)
         _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
+        self._end_reason = self._end_reason or CLOSED_REASON_HUNG_UP
         self.request_close()
+
+    # -- idle hangup ----------------------------------------------------------
+
+    def _mark_active(self) -> None:
+        """Speech or work happened: the idle period starts over."""
+        self._active_at = time.monotonic()
+        if self._idle_warned and not self._closed_published:
+            self._idle_warned = False
+            self._deliver({"type": "idle", "ends_in": None})
+
+    def _start_idle_watch(self) -> None:
+        if self._idle_watch is None and not self._closing and not self.ended:
+            self._mark_active()
+            self._idle_watch = self._spawn(self._watch_idle())
+
+    def _stop_idle_watch(self) -> None:
+        watch, self._idle_watch = self._idle_watch, None
+        if watch is not None and watch is not asyncio.current_task():
+            watch.cancel()
+
+    async def _watch_idle(self) -> None:
+        """End a live call nobody uses; warn the owner shortly before."""
+        limits = self._limits
+        while not self._closing and not self.ended:
+            if self._busy:
+                self._mark_active()
+            idle_for = time.monotonic() - self._active_at
+            warn_after = limits.idle_seconds - limits.idle_warning_seconds
+            if idle_for < warn_after:
+                await asyncio.sleep(warn_after - idle_for)
+            elif idle_for < limits.idle_seconds:
+                if not self._idle_warned:
+                    self._idle_warned = True
+                    ends_in = round(limits.idle_seconds - idle_for, 1)
+                    self._deliver({"type": "idle", "ends_in": ends_in})
+                await asyncio.sleep(limits.idle_seconds - idle_for)
+            else:
+                _LOGGER.info("Live call ended after idling (call=%s)", self.log_id)
+                self._idle_watch = None
+                self._end_reason = self._end_reason or CLOSED_REASON_IDLE
+                self.request_close()
+                return
 
     async def replace(self) -> None:
         """End the call immediately because a newer call starts."""
@@ -506,16 +583,20 @@ class _LiveCallEntry:
             return
         call.push_audio(pcm)
 
-    def receive_context(self, owner: LiveOwnerStream, text: str) -> None:
-        """Keep what the current owner reports the app shows."""
+    def receive_text(self, owner: LiveOwnerStream, text: str) -> None:
+        """Keep what the current owner reports the app shows; ``stay`` keeps an idle call."""
         if owner is not self._owner or self.ended or len(text) > LIVE_CONTEXT_FRAME_MAX_CHARS:
             return
         try:
             frame = json.loads(text)
         except ValueError:
             return
-        if isinstance(frame, dict) and frame.get("type") == "context":
+        if not isinstance(frame, dict):
+            return
+        if frame.get("type") == "context":
             self._app_context = _app_context(frame)
+        elif frame.get("type") == "stay":
+            self._mark_active()
 
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner

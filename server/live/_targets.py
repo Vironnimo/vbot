@@ -176,6 +176,22 @@ class LiveRefs:
             return self._sessions.get(ref)
         return self._terminals.get(ref)
 
+    def link(self, ref: str) -> JsonObject | None:
+        """What a known ref names, for the app to show: ids plus the latest label."""
+        found = self.lookup(ref)
+        if found is None:
+            return None
+        label = self._labels.get(ref, "")
+        if isinstance(found, SessionKey):
+            return {
+                "ref": ref,
+                "kind": "session",
+                "agent_id": found.address,
+                "session_id": found.session_id,
+                "label": label,
+            }
+        return {"ref": ref, "kind": "terminal", "terminal_id": found, "label": label}
+
 
 class TeamCache:
     """Project teams a call looked up, reused for a short while.

@@ -27,7 +27,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from core.model_tasks.live import LiveToolRun, live_failure, live_success
+from core.model_tasks.live import LiveToolRun, live_failure, live_result_text, live_success
 from core.tools._call_vocabulary import spelling
 from core.utils.paths import model_path
 from server.live._arguments import run_live_call
@@ -70,6 +70,7 @@ from server.live._targets import (
     LiveAgent,
     LiveCatalog,
     LiveProject,
+    LiveRefs,
     SessionKey,
     Target,
     TeamCache,
@@ -90,6 +91,11 @@ _MAX_CUT_WORD_CHARS = 40
 _EXCERPT_CHARS = 160
 _CHAT_READ_LIMIT = 20
 _MAX_CHAT_CONTEXT_CHARS = 8_000
+# Refs in a result text; only known ones become links.
+_NAMED_REF = re.compile(r"\b[st][1-9][0-9]{0,5}\b")
+_ACTION_ARGUMENT_CHARS = 200
+_ACTION_RESULT_CHARS = 2_000
+_ACTION_LINKS = 12
 # A final message ending in a question mark (before closing quotes or
 # brackets) is taken as a question to the user; a heuristic, not a Run state.
 _QUESTION_END = re.compile(r"\?[\s\"')\]*_]*$")
@@ -118,8 +124,10 @@ class LiveToolExecutor:
     operations check it before each further effect. ``started_at`` bounds the
     recently finished Sessions ``overview`` shows. ``end_call`` ends the voice
     call after a short goodbye. ``memory`` holds the refs and assignments
-    shared with earlier and later calls (a fresh one by default). ``record``,
-    when given, receives one record per Tool call, labeled with ``mode``.
+    shared with earlier and later calls (a fresh one by default). ``report``,
+    when given, receives one ``action`` update per executed Tool call for the
+    app (see :func:`action_update`). ``record``, when given, receives one
+    record per Tool call, labeled with ``mode``.
     """
 
     def __init__(
@@ -132,6 +140,7 @@ class LiveToolExecutor:
         started_at: datetime,
         end_call: Callable[[], None],
         memory: LiveMemory | None = None,
+        report: Callable[[JsonObject], None] | None = None,
         record: Recorder | None = None,
         timings: TerminalTimings | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -143,6 +152,7 @@ class LiveToolExecutor:
         self._teams = TeamCache(clock=clock)
         self._started_at = started_at
         self._end_call = end_call
+        self._report = report
         self._record = record
         self._clock = clock
         self.mode = "delegated"
@@ -188,6 +198,8 @@ class LiveToolExecutor:
         result = await self._execute(name, arguments)
         if name in self._handlers:
             self._memory.note(name, arguments, result)
+            if self._report is not None:
+                self._report(action_update(name, arguments, result, self._refs))
         return result
 
     async def _execute(self, name: str, arguments: JsonObject) -> JsonObject:
@@ -795,6 +807,37 @@ class LiveToolExecutor:
         outcome = await self._ctx.ui(UI_ACTION_OPEN, args)
         if outcome.get("applied") is not True:
             raise LiveUiError(NAVIGATION_NOT_APPLIED)
+
+
+def action_update(
+    tool: str, arguments: JsonObject, result: JsonObject, refs: LiveRefs
+) -> JsonObject:
+    """The app's view of one executed Tool call.
+
+    ``{"type": "action", "tool", "arguments" (string values shortened), "ok",
+    "result" (the text the Model read, shortened), "links"}``; ``links`` hold
+    what each known ref in the result names (see :meth:`LiveRefs.link`), in
+    order of first mention.
+    """
+    text = live_result_text(result)
+    named = dict.fromkeys(match.group(0) for match in _NAMED_REF.finditer(text))
+    links = [link for ref in named if (link := refs.link(ref)) is not None]
+    return {
+        "type": "action",
+        "tool": tool,
+        "arguments": {
+            key: _shortened(value, _ACTION_ARGUMENT_CHARS) for key, value in arguments.items()
+        },
+        "ok": result.get("ok") is True,
+        "result": _shortened(text, _ACTION_RESULT_CHARS),
+        "links": links[:_ACTION_LINKS],
+    }
+
+
+def _shortened(value: Any, limit: int) -> Any:
+    if not isinstance(value, str) or len(value) <= limit:
+        return value
+    return value[: limit - 3].rstrip() + "..."
 
 
 def _recent_messages(messages: Any) -> list[JsonObject]:
