@@ -382,6 +382,10 @@ class ChatSessionManager:
             exclude_owner_managed=exclude_owner_managed,
         )
 
+    def list_live_scopes(self) -> builtins.list[tuple[str | None, str]]:
+        """Return every ``(project_id, agent_id)`` scope with a live Session, sorted."""
+        return self._store.list_live_scopes()
+
     def list_agent_ids(
         self, project_id: str | None = None, *, exclude_owner_managed: bool = False
     ) -> builtins.list[str]:
