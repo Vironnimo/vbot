@@ -161,6 +161,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("channel_state", channels.close, channels.close)
     if (recall := runtime._recall) is not None:
         yield _Step("recall", recall.close, recall.aclose)
+    if (embeddings := runtime._embeddings) is not None:
+        # After Recall: its indexer may still be waiting for an embedding.
+        yield _Step("embeddings", embeddings.close, embeddings.aclose)
     if (statistics := runtime._statistics_index) is not None:
         # A running Statistics read holds the index lock; aclose waits on its pool.
         yield _Step("statistics_index", statistics.close, statistics.aclose)

@@ -32,7 +32,9 @@ from core.memory import MemoryService
 from core.model_tasks import (
     EmbeddingService,
     ImageService,
+    LocalEmbeddingExecutor,
     LocalSpeechExecutor,
+    LocalTaskTargetRegistry,
     MusicService,
     SpeechService,
     TaskModelService,
@@ -220,12 +222,17 @@ def bootstrap(runtime: Runtime) -> None:
         # transport modules; prepare both off the Event Loop.
         prewarm_outbound_http()
         local_speech = LocalSpeechExecutor(engines_dir=runtime._storage.layout.speech_engines)
+        local_embeddings = LocalEmbeddingExecutor(
+            engines_dir=runtime._storage.layout.embedding_engines
+        )
         runtime._model_tasks = TaskModelService(
             runtime._providers,
             runtime._models,
             runtime._provider_credentials,
             runtime._storage,
-            local_targets=local_speech.targets,
+            local_targets=LocalTaskTargetRegistry(
+                [*local_speech.targets.descriptors(), *local_embeddings.targets.descriptors()]
+            ),
         )
         runtime._speech = SpeechService(
             runtime._model_tasks,
@@ -248,7 +255,10 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
         )
         runtime._embeddings = EmbeddingService(
-            runtime._model_tasks, runtime, usage_recorder=runtime._usage_recorder
+            runtime._model_tasks,
+            runtime,
+            usage_recorder=runtime._usage_recorder,
+            local_executor=local_embeddings,
         )
         runtime._decisions = DecisionService(
             runtime._model_tasks,

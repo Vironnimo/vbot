@@ -351,6 +351,7 @@ def test_embedding_targets_carry_selection_facts() -> None:
                     id="granite-embedding-r2",
                     label="Granite Embedding",
                     task_types=(TASK_TEXT_EMBEDDING,),
+                    metadata={"max_input_tokens": 2048},
                 )
             ]
         ),
@@ -371,7 +372,8 @@ def test_embedding_targets_carry_selection_facts() -> None:
         )
         for target_id, fact in facts.items()
     } == {
-        "local/granite-embedding-r2": (True, True, 1, 32768, None, True),
+        # A local engine costs nothing; its own input limit replaces the family's.
+        "local/granite-embedding-r2": (True, True, 1, 2048, 0.0, True),
         "ollama/nomic-embed-text:latest::local": (True, False, None, 8192, None, True),
         "openrouter/qwen/qwen3-embedding-8b::api-key": (False, True, 4, 32768, 0.01, True),
         # An unprofiled Model keeps its catalog context window and has no curated facts.

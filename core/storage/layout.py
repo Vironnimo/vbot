@@ -80,6 +80,10 @@ class DataDirectoryLayout:
         return self.root / "speech-engines"
 
     @property
+    def embedding_engines(self) -> Path:
+        return self.root / "embedding-engines"
+
+    @property
     def models(self) -> Path:
         return self.artifacts / "models"
 

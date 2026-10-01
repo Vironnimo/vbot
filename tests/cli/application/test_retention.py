@@ -90,6 +90,7 @@ def test_cleanup_retires_only_versions_nothing_can_still_use(
         "rel_customized",
         "rel_build_env",
         "rel_speech_env",
+        "rel_embedding_env",
         "rel_tray",
         "rel_server",
     }
@@ -119,6 +120,9 @@ def test_cleanup_retires_only_versions_nothing_can_still_use(
     )
     _environment(root / "data" / "speech-engines" / "stt", versions / "rel_speech_env" / "runtime")
     _environment(root / "data" / "speech-engines" / "tts", tmp_path / "uv" / "cpython")
+    _environment(
+        root / "data" / "embedding-engines" / "onnx", versions / "rel_embedding_env" / "runtime"
+    )
     # The worker itself runs from the fallback version; the tray host is a root
     # bootstrap that loaded an older version; unrelated processes are ignored.
     _processes(
