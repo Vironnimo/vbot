@@ -20,6 +20,7 @@ from core.utils.processes import subprocess_creation_flags
 from scripts.package_build import (
     CHANNELS,
     INVENTORY_NAME,
+    PYTHON_VERSION,
     BuildError,
     remove_bytecode_caches,
     sign_archive,
@@ -36,7 +37,7 @@ __all__ = ["APP_FILES", "BuildError", "app_paths", "copy_application"]
 
 PLATFORM = "windows-x86_64"
 SEARCH_TARGET = "x86_64-pc-windows-msvc"
-RUNTIME_DLL = "python313.dll"
+RUNTIME_DLL = f"python{PYTHON_VERSION.replace('.', '')}.dll"
 
 
 def _copy_tree(
@@ -67,7 +68,7 @@ def copy_runtime(
     if not source.is_dir():
         raise BuildError("runtime must be a prepared CPython directory")
     root_aliases = (
-        frozenset({"python3.exe", "python3.13.exe"})
+        frozenset({"python3.exe", f"python{PYTHON_VERSION}.exe"})
         if (source / "python.exe").is_file()
         else frozenset()
     )
@@ -78,7 +79,7 @@ def copy_runtime(
     ):
         raise BuildError("runtime must include venv and ensurepip for managed environments")
     if not (destination / RUNTIME_DLL).is_file():
-        raise BuildError("runtime must be CPython 3.13 x64")
+        raise BuildError(f"runtime must be CPython {PYTHON_VERSION} x64")
     try:
         provision_runtime_sqlite(destination, app_source)
     except (OSError, RuntimeSQLiteError) as error:

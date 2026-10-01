@@ -1,12 +1,12 @@
 # Windows runtime dependency locks
 
-These files lock the immutable Python 3.13 x86-64 Windows runtimes. Regenerate them from the
+These files lock the immutable Python 3.14 x86-64 Windows runtimes. Regenerate them from the
 repository root with the declared `uv==0.12.11` dependency:
 
 ```powershell
-python -m uv pip compile pyproject.toml --extra server --extra application --python-version 3.13 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server.lock
-python -m uv pip compile pyproject.toml --extra server --extra application --extra desktop --python-version 3.13 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server-desktop.lock
-python -m uv pip compile pyproject.toml --extra cli --extra application --extra desktop --python-version 3.13 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-desktop-client.lock
+python -m uv pip compile pyproject.toml --extra server --extra application --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server.lock
+python -m uv pip compile pyproject.toml --extra server --extra application --extra desktop --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-server-desktop.lock
+python -m uv pip compile pyproject.toml --extra cli --extra application --extra desktop --python-version 3.14 --python-platform x86_64-pc-windows-msvc --generate-hashes --no-emit-package vbot --output-file scripts/windows/requirements-desktop-client.lock
 ```
 
 Review and commit all lock changes with the corresponding `pyproject.toml` dependency change.

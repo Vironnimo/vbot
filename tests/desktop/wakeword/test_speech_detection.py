@@ -13,30 +13,12 @@ from desktop.wakeword._speech_detection import (
     SpeechDetector,
     SpeechGate,
     chunk_contains_speech,
-    create_fallback_vad,
     frame_is_speech,
 )
 
-_SAMPLE_RATE = 16000
-_SLICE_BYTES = 320  # 10 ms of 16 kHz PCM16
 _RECORDING_FRAME = b"\x10\x00" * 512  # one 32 ms endpointing frame
 _DETECTION_CHUNK = b"\x10\x00" * 1280  # one 80 ms detection chunk
 _FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "wakeword" / "okay_nabu.wav"
-
-
-class StrictVad:
-    """Behaves like ``webrtcvad.Vad``: only 10, 20 or 30 ms frames are valid."""
-
-    def __init__(self, speech_slices: set[int] | None = None) -> None:
-        self._speech_slices = speech_slices or set()
-        self.frames: list[bytes] = []
-
-    def is_speech(self, frame: bytes, sample_rate: int) -> bool:
-        if sample_rate != _SAMPLE_RATE or len(frame) not in {320, 640, 960}:
-            raise ValueError("Error while processing frame")
-        index = len(self.frames)
-        self.frames.append(frame)
-        return index in self._speech_slices
 
 
 class ScriptedSession:
@@ -55,86 +37,35 @@ class ScriptedSession:
         )
 
 
-# -- WebRTC fallback judgement -----------------------------------------------------
-#
-# WebRTC VAD accepts only 10, 20 or 30 ms frames, so both judgements slice their
-# audio into 10 ms frames. A 32 ms recording frame once crashed the VAD and
-# failed open as speech; StrictVad raises on any other frame size.
-
-_SINGLE_SLICE = b"\x10\x00" * 160
+# -- Speech decisions --------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("frame", "speech_slices", "expected"),
-    [
-        (_RECORDING_FRAME, set(), False),
-        (_RECORDING_FRAME, {1}, False),
-        (_RECORDING_FRAME, {0, 2}, True),
-        (_RECORDING_FRAME, {1, 2}, True),
-        (_SINGLE_SLICE, {0}, True),
-        (_SINGLE_SLICE, set(), False),
-    ],
-)
-def test_recording_fallback_needs_two_speech_slices_of_a_frame(
-    frame: bytes, speech_slices: set[int], expected: bool
-) -> None:
-    vad = StrictVad(speech_slices)
+class ExplodingDetector:
+    """A loaded detector whose scoring fails."""
 
-    assert frame_is_speech(frame, None, vad) is expected
-    assert {len(slice_) for slice_ in vad.frames} == {_SLICE_BYTES}
-
-
-@pytest.mark.parametrize(
-    ("speech_slices", "expected"), [(set(), False), ({0}, False), ({0, 3}, True)]
-)
-def test_detection_gate_needs_two_speech_slices_of_a_chunk(
-    speech_slices: set[int], expected: bool
-) -> None:
-    vad = StrictVad(speech_slices)
-
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, vad) is expected
-    assert {len(slice_) for slice_ in vad.frames} == {_SLICE_BYTES}
-
-
-class RaisingVad:
     @staticmethod
-    def is_speech(_frame: bytes, _sample_rate: int) -> bool:
-        raise RuntimeError("vad exploded")
+    def is_speech(_frame: bytes) -> bool:
+        raise RuntimeError("model exploded")
+
+    @staticmethod
+    def speech_probability(_chunk: bytes) -> float:
+        raise RuntimeError("model exploded")
 
 
-def test_both_judgements_fail_open_when_they_cannot_judge() -> None:
-    assert frame_is_speech(_RECORDING_FRAME, None, RaisingVad()) is True
-    assert frame_is_speech(b"\x10\x00" * 100, None, StrictVad()) is True  # no whole slice
-    assert frame_is_speech(_RECORDING_FRAME, None, None) is True
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, None) is True
-    assert chunk_contains_speech(b"\x10\x20" * 10, None, RaisingVad()) is True
-    assert chunk_contains_speech(_DETECTION_CHUNK, None, RaisingVad()) is True
+@pytest.mark.parametrize("detector", [None, ExplodingDetector()], ids=["absent", "failing"])
+def test_speech_decisions_fail_open_without_a_working_detector(detector: object) -> None:
+    speech_detector = cast(SpeechDetector | None, detector)
+
+    assert frame_is_speech(_RECORDING_FRAME, speech_detector) is True
+    assert chunk_contains_speech(_DETECTION_CHUNK, speech_detector) is True
 
 
-def test_detection_gate_prefers_the_neural_probability_and_falls_back_to_webrtc() -> None:
-    class ExplodingDetector:
-        @staticmethod
-        def speech_probability(_chunk: bytes) -> float:
-            raise RuntimeError("model exploded")
-
+def test_detection_gate_follows_the_neural_probability() -> None:
     confident = cast(SpeechDetector, ScriptedChunkDetector([0.9]))
     unsure = cast(SpeechDetector, ScriptedChunkDetector([0.1]))
-    exploding = cast(SpeechDetector, ExplodingDetector())
 
-    assert chunk_contains_speech(_DETECTION_CHUNK, confident, StrictVad()) is True
-    assert chunk_contains_speech(_DETECTION_CHUNK, unsure, StrictVad({0, 1})) is False
-    assert chunk_contains_speech(_DETECTION_CHUNK, exploding, None) is True
-    assert chunk_contains_speech(_DETECTION_CHUNK, exploding, StrictVad()) is False
-
-
-def test_the_real_fallback_vad_separates_silence_and_speech() -> None:
-    pytest.importorskip("webrtcvad")
-    vad = create_fallback_vad()
-
-    assert vad is not None
-    assert frame_is_speech(b"\x00\x00" * 512, None, vad) is False
-    assert chunk_contains_speech(b"\x00\x00" * 1280, None, vad) is False
-    assert chunk_contains_speech(np.full(1280, 1000, np.int16).tobytes(), None, vad) is True
+    assert chunk_contains_speech(_DETECTION_CHUNK, confident) is True
+    assert chunk_contains_speech(_DETECTION_CHUNK, unsure) is False
 
 
 # -- Delayed wakeword score gate (SpeechGate) --------------------------------------
@@ -160,20 +91,20 @@ def _admitted(gate: SpeechGate, chunks: int) -> list[bool]:
 
 def test_speech_gate_admits_the_scores_four_to_six_chunks_after_speech() -> None:
     detector = ScriptedChunkDetector([0.0] * 6 + [0.9] + [0.0] * 9)
-    gate = SpeechGate(cast(SpeechDetector, detector), None)
+    gate = SpeechGate(cast(SpeechDetector, detector))
 
     assert _admitted(gate, 16) == [False] * 10 + [True] * 3 + [False] * 3
 
 
 def test_speech_gate_stays_closed_until_four_chunks_of_history_exist() -> None:
-    gate = SpeechGate(cast(SpeechDetector, ScriptedChunkDetector([0.9] * 8)), None)
+    gate = SpeechGate(cast(SpeechDetector, ScriptedChunkDetector([0.9] * 8)))
 
     assert _admitted(gate, 8) == [False] * 4 + [True] * 4
 
 
 def test_speech_gate_reset_forgets_the_history_and_resets_the_detector() -> None:
     detector = ScriptedChunkDetector([0.9] * 6 + [0.0] * 6)
-    gate = SpeechGate(cast(SpeechDetector, detector), None)
+    gate = SpeechGate(cast(SpeechDetector, detector))
     _admitted(gate, 6)
 
     gate.reset()
@@ -182,22 +113,8 @@ def test_speech_gate_reset_forgets_the_history_and_resets_the_detector() -> None
     assert detector.resets == 1
 
 
-def test_speech_gate_uses_the_fallback_vad_without_a_neural_detector() -> None:
-    class LoudVad:
-        @staticmethod
-        def is_speech(frame: bytes, _sample_rate: int) -> bool:
-            return any(frame)
-
-    gate = SpeechGate(None, LoudVad())
-    silent_chunk = b"\x00\x00" * 1280
-
-    admitted = [gate.admits(_DETECTION_CHUNK)] + [gate.admits(silent_chunk) for _ in range(8)]
-
-    assert admitted == [False] * 4 + [True] * 3 + [False] * 2
-
-
 def test_speech_gate_is_open_without_any_speech_detector() -> None:
-    assert _admitted(SpeechGate(None, None), 3) == [True] * 3
+    assert _admitted(SpeechGate(None), 3) == [True] * 3
 
 
 # -- Neural endpointing detector ---------------------------------------------------

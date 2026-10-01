@@ -7,7 +7,7 @@ name = "vbot"
 version = "0.4.6"
 description = "A local-first agent harness: an async Python runtime giving AI agents a workspace, persistent state, host tool access, and server/WebUI/desktop/CLI accessors."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.14,<3.15"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "The vBot Authors" }]
@@ -17,9 +17,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
@@ -42,7 +40,7 @@ cli     = ["psutil", "cryptography>=46,<51"]
 application = ["cryptography>=46,<51", "uv==0.12.11"]
 local-tts = ["uv==0.12.11"]
 local-speech = ["torch>=2.10,<3", "transformers>=5.16.1,<6", "huggingface-hub>=1.30,<2", "librosa>=0.11,<1", "av>=18,<19"]
-desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "webrtcvad-wheels>=2.0.14,<3", "onnxruntime>=1.16,<2", "livekit>=1.1.20,<1.2", "PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == 'win32'"]
+desktop = ["pywebview", "pyopen-wakeword>=1.1,<2", "sounddevice", "soxr>=0.5,<2", "onnxruntime>=1.16,<2", "livekit>=1.1.20,<1.2", "PyAudioWPatch>=0.2.12.8,<0.3; sys_platform == 'win32'"]
 dev     = ["pytest", "pytest-asyncio", "ruff==0.16.9", "mypy==2.3.1", "types-jsonschema", "types-python-dateutil", "hatchling", "pytest-xdist", "pytest-timeout", "pytest-cov", "respx", "fastapi", "uvicorn[standard]", "watchfiles", "python-telegram-bot[rate-limiter]", "discord.py>=2.7,<3", "python-multipart", "psutil", "numpy", "soxr>=0.5,<2", "av>=18,<19", "py-spy>=0.4.2,<0.5"]
 
 [tool.hatch.build.targets.sdist]
@@ -67,11 +65,16 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
-target-version = "py311"
+# The oldest Python that runs vBot modules: managed model environments run them
+# on 3.12 (PROJECT.md -> Development -> Python version). A 3.14 target would let
+# the formatter write PEP 758 `except A, B:` clauses those cannot parse.
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+# PEP 695 type parameter syntax is valid on 3.12 but not required.
+ignore = ["UP040", "UP046", "UP047", "UP049"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/test-env.py" = ["N999"]
@@ -80,10 +83,7 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
 quote-style = "double"
 
 [tool.mypy]
-# 3.12 rather than our 3.11 runtime floor: current third-party stubs (numpy)
-# use `type` statements and cannot be parsed under 3.11. Floor syntax stays
-# guarded by ruff's py311 target and the real 3.11 test runs in CI.
-python_version = "3.12"
+python_version = "3.14"
 files = ["core", "server", "cli", "desktop", "tests"]
 mypy_path = "scripts"
 warn_return_any = true
@@ -99,7 +99,6 @@ module = [
     "onnxruntime.*",
     "sounddevice",
     "soxr",
-    "webrtcvad",
     "winpty",
     "yaml",
     "markdownify",

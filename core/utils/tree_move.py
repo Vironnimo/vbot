@@ -13,7 +13,6 @@ import errno
 import os
 import shutil
 import stat
-import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -76,10 +75,7 @@ def _discard_tree(path: Path, what: str) -> None:
 
 def _remove_tree(path: Path) -> None:
     """Delete a tree, clearing read-only attributes such as those of ``.git`` objects."""
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(path, onexc=_clear_read_only_and_retry)
-    else:
-        shutil.rmtree(path, onerror=_clear_read_only_and_retry)
+    shutil.rmtree(path, onexc=_clear_read_only_and_retry)
 
 
 def _clear_read_only_and_retry(action: Callable[[str], object], path: str, _error: object) -> None:
