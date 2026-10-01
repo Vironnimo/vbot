@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import shutil
 import subprocess
+import tarfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
@@ -144,3 +146,43 @@ def test_push_never_overwrites_a_moved_origin(
     assert _git(origin, "rev-parse", "main") == _git(other, "rev-parse", "HEAD")
     assert len(checked) == (0 if when == "before the checks" else 1)
     assert "origin's main moved" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("wsl", "code", "output", "passed", "shown"),
+    [
+        (False, 0, "", False, "WSL is not installed"),
+        (True, 0, "1 passed\nflaky: tests/test_b.py::test_b\n", True, "tests/test_b.py::test_b"),
+        (True, 1, f"{FAILURE}\n1 failed\n", False, FAILURE),
+        (True, 2, "linux tests: uv 1.0 could not be installed\n", False, "uv 1.0 could not"),
+    ],
+    ids=["no wsl", "flaky", "failure", "setup failure"],
+)
+def test_linux_step_runs_the_checked_commit_in_wsl_and_never_skips(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wsl: bool,
+    code: int,
+    output: str,
+    passed: bool,
+    shown: str,
+) -> None:
+    received: list[str] = []
+    run = subprocess.run
+
+    def fake_run(command: list[str], **options: object) -> subprocess.CompletedProcess[object]:
+        if command[0] == "git":
+            return run(command, **options)  # type: ignore[call-overload,no-any-return]
+        stdin = options["stdin"]
+        with tarfile.open(fileobj=stdin, mode="r|") as archive:  # type: ignore[call-overload]
+            received.extend(member.name for member in archive)
+        return subprocess.CompletedProcess(command, code, output.encode())
+
+    monkeypatch.setattr(push.shutil, "which", lambda name: "wsl.exe" if wsl else None)
+    monkeypatch.setattr(push.subprocess, "run", fake_run)
+
+    step = push._linux_pytest_step(repo, io.StringIO())
+
+    assert step.passed is passed
+    assert shown in (step.note if passed else step.details)
+    assert ("feature.txt" in received) is wsl

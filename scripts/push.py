@@ -6,6 +6,8 @@ The commit ``main`` points to is checked out detached in a private checkout unde
 the result. There, in this order: Ruff format check and lint, mypy for Windows and
 Linux as the commit hook runs it, the complete pytest suite on every core of the
 machine's test core pool, and the WebUI's format check, lint, Vitest and build.
+On Windows the complete pytest suite also runs on Linux in WSL, alongside the WebUI
+checks (``scripts/linux/push_tests.sh``); without a working WSL that step fails.
 Every step runs, whatever failed before it. Backend tests that fail run once more
 alone; those that pass then are reported as flaky without blocking.
 
@@ -24,14 +26,17 @@ git directory, whose path the report prints.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple, TextIO
@@ -58,6 +63,15 @@ PYTEST_SUMMARY_PATTERN = re.compile(
     r"^(?:FAILED |ERROR |Interrupted: |=*\s*\d+ (?:failed|passed|errors?)\b)"
 )
 WORKFLOW = ".vorch/workflows/push-workflow.md"
+# Run by bash in WSL with the checked commit as a tar on stdin: unpack it into the
+# cache's checkout under the cache's lock, then run the suite there. No quotes, so
+# Windows command line quoting cannot change it.
+WSL_BOOTSTRAP = (
+    "set -e; cache=$HOME/.cache/vbot-push; mkdir -p $cache; exec 9>$cache/lock; flock 9; "
+    "rm -rf $cache/checkout; mkdir $cache/checkout; tar -x -C $cache/checkout; "
+    "exec bash $cache/checkout/scripts/linux/push_tests.sh $cache/checkout"
+)
+FLAKY_PREFIX = "flaky: "
 
 
 class Step(NamedTuple):
@@ -195,6 +209,55 @@ def _pytest_step(checkout: Path, log: TextIO) -> Step:
     return Step("pytest", False, seconds, _excerpt(rerun.stdout, summary), note)
 
 
+def _linux_pytest_step(checkout: Path, log: TextIO) -> Step:
+    """Run the complete suite of *checkout*'s commit on Linux in WSL."""
+    label = "linux pytest"
+    start = time.monotonic()
+    wsl = shutil.which("wsl.exe")
+    if wsl is None:
+        return Step(
+            label,
+            False,
+            0.0,
+            "WSL is not installed; the Linux tests need it. Install a distribution with "
+            "python3 and its venv module (`wsl --install -d Ubuntu`) and run again.",
+        )
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / "commit.tar"
+        packed = _git(checkout, "archive", "--format=tar", "-o", str(archive), "HEAD")
+        if packed.returncode != 0:
+            return Step(label, False, 0.0, f"git archive failed: {packed.stderr.strip()}")
+        command = [wsl, "--exec", "bash", "-c", WSL_BOOTSTRAP]
+        with archive.open("rb") as stdin:
+            try:
+                result = subprocess.run(
+                    command,
+                    stdin=stdin,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                )
+            except OSError as exc:
+                result = subprocess.CompletedProcess(command, 127, str(exc).encode())
+    # wsl.exe writes its own messages in UTF-16, the Linux side UTF-8.
+    output = result.stdout.decode("utf-8", errors="replace").replace("\x00", "")
+    seconds = time.monotonic() - start
+    _log(log, label, command, result.returncode, seconds, output)
+    flaky = [
+        line[len(FLAKY_PREFIX) :] for line in output.splitlines() if line.startswith(FLAKY_PREFIX)
+    ]
+    note = ""
+    if flaky:
+        note = "failed under the parallel load, passed alone (not blocking):\n" + "\n".join(flaky)
+    if result.returncode == 0:
+        return Step(label, True, seconds, note=note)
+
+    def summary(line: str) -> bool:
+        return line.startswith("linux tests: ") or PYTEST_SUMMARY_PATTERN.match(line) is not None
+
+    return Step(label, False, seconds, _excerpt(output, summary), note)
+
+
 def _provide_webui_packages(checkout: Path, log: TextIO) -> Step | None:
     """Give *checkout* packages matching its lock; return the failed install, or None."""
     if seed_webui_packages(worktree.PROJECT_ROOT, checkout):
@@ -238,14 +301,29 @@ def run_checks(checkout: Path, log: TextIO) -> list[Step]:
     record(_command_step("ruff check", lint, checkout, log))
     record(*_type_check_steps(checkout, log))
     record(_pytest_step(checkout, log))
-    if packages is None:
-        webui = checkout / "webui"
-        npm = shutil.which("npm") or "npm"
-        npx = shutil.which("npx") or "npx"
-        record(_command_step("webui format", [npm, "run", "format:check"], webui, log))
-        record(_command_step("webui lint", [npm, "run", "lint"], webui, log))
-        record(_command_step("vitest", [npx, "vitest", "run"], webui, log))
-        record(_command_step("webui build", [npm, "run", "build"], webui, log))
+    with ThreadPoolExecutor(max_workers=1) as background:
+        linux: Future[Step] | None = None
+        # The Linux step logs into its own buffer, copied to the log once it is done.
+        linux_log = io.StringIO()
+        if sys.platform == "win32":
+            print(
+                "running the complete pytest suite on Linux in WSL alongside the webui "
+                "checks (no output until done)...",
+                flush=True,
+            )
+            linux = background.submit(_linux_pytest_step, checkout, linux_log)
+        if packages is None:
+            webui = checkout / "webui"
+            npm = shutil.which("npm") or "npm"
+            npx = shutil.which("npx") or "npx"
+            record(_command_step("webui format", [npm, "run", "format:check"], webui, log))
+            record(_command_step("webui lint", [npm, "run", "lint"], webui, log))
+            record(_command_step("vitest", [npx, "vitest", "run"], webui, log))
+            record(_command_step("webui build", [npm, "run", "build"], webui, log))
+        if linux is not None:
+            record(linux.result())
+            log.write(linux_log.getvalue())
+            log.flush()
     return steps
 
 

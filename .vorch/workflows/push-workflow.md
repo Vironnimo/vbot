@@ -12,7 +12,7 @@ From the primary checkout:
 python scripts/push.py
 ```
 
-It checks the commit in a private checkout, not the working tree, so other sessions' uncommitted work does not affect the result: Ruff, mypy for Windows and Linux, the complete pytest suite, and the WebUI's format check, lint, Vitest and build. Every step runs, whatever failed before it. A run takes several minutes, most of them the pytest suite, which first waits for the test cores other runs hold; use a shell timeout of at least 30 minutes. An interrupted run pushes nothing.
+It checks the commit in a private checkout, not the working tree, so other sessions' uncommitted work does not affect the result: Ruff, mypy for Windows and Linux, the complete pytest suite, and the WebUI's format check, lint, Vitest and build. On Windows the complete pytest suite also runs on Linux in WSL (`linux pytest`), alongside the WebUI checks; E2E stays with CI. Every step runs, whatever failed before it. A run takes several minutes, most of them the pytest suite, which first waits for the test cores other runs hold; use a shell timeout of at least 30 minutes. An interrupted run pushes nothing.
 
 Exit code 0 means the commit is pushed, or origin's `main` already had it. Continue with step 4.
 
@@ -42,4 +42,5 @@ Tell the user which commit was pushed and what you fixed on the way: each failur
 - **Only the checked commit is pushed**: commits that reach `main` while the command runs go with the next run; the report says when `main` moved on.
 - **Checks only**: `python scripts/push.py --no-push` runs every check without pushing.
 - **Preparation failures**: a failed `search engine` or `webui deps` step means the private checkout could not get its dependencies, usually through the network or npm; after a failed `webui deps` the WebUI checks did not run. Fix the cause and run again.
+- **Linux tests**: `linux pytest` needs WSL with a distribution that has `python3` and its `venv` module; without one the step fails, it is never skipped. It runs `scripts/linux/push_tests.sh` on the checked commit, which keeps uv, the test environment, the search engine and the encodings in `~/.cache/vbot-push` inside WSL; the first run builds them and takes longer. A `linux tests:` line in its details names a setup failure. The last run's checkout stays there until the next run; reproduce a failure in it with `wsl.exe bash -c 'cd ~/.cache/vbot-push/checkout && TIKTOKEN_CACHE_DIR=../tiktoken ../venv-*/bin/python -m pytest <node id>'`.
 - **Leftover checkouts**: a killed run can leave `.worktrees/.push-*` behind; the next push or `worktree.py` command removes it.
