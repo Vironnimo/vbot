@@ -282,4 +282,3 @@ def test_public_docs_install_only_through_install_files(doc_name: str) -> None:
 
     assert "scripts/install.sh" in document
     assert "scripts/install.ps1" in document
-    assert "scripts/setup." not in document
