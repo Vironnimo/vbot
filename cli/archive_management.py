@@ -43,6 +43,7 @@ def archive_list(
     entries: list[object] = []
     seen: set[str] = set()
     retention_days: object = None
+    retention_unknown = False
     while True:
         params: dict[str, object] = {**filters, "limit": limit}
         if cursor is not None:
@@ -57,6 +58,7 @@ def archive_list(
             )
         entries.extend(page)
         retention_days = payload.data.get("retention_days")
+        retention_unknown = payload.data.get("retention_unknown") is True
         next_cursor = payload.data.get("next_cursor")
         if next_cursor is not None and not isinstance(next_cursor, dict):
             return CommandResult(
@@ -73,7 +75,9 @@ def archive_list(
                 instance=instance,
             )
         seen.add(key)
-    lines = _format_entries(entries, retention_days, filtered=bool(filters))
+    lines = _format_entries(
+        entries, retention_days, filtered=bool(filters), retention_unknown=retention_unknown
+    )
     if cursor is not None:
         command = (
             "vbot",
@@ -85,7 +89,16 @@ def archive_list(
             json.dumps(cursor, ensure_ascii=False, separators=(",", ":")),
         )
         lines.append(f"next page: {format_command(command)}")
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    attention = (
+        (
+            "vBot cannot read the archive.retention_days setting, so it deletes no archive "
+            "entry automatically until the setting can be read; 'vbot doctor settings' shows "
+            "the problem in settings.json",
+        )
+        if retention_unknown
+        else ()
+    )
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance, attention=attention)
 
 
 def archive_show(instance: ServerInstance, entry_id: str) -> CommandResult:
@@ -366,11 +379,17 @@ def _filter_options(
 
 
 def _format_entries(
-    entries: Sequence[object], retention_days: object, *, filtered: bool
+    entries: Sequence[object],
+    retention_days: object,
+    *,
+    filtered: bool,
+    retention_unknown: bool = False,
 ) -> list[str]:
     if not entries:
         return ["no matching archive entries" if filtered else "no archive entries"]
-    if isinstance(retention_days, int) and not isinstance(retention_days, bool):
+    if retention_unknown:
+        header = "archive entries (automatic deletion paused: the retention period cannot be read):"
+    elif isinstance(retention_days, int) and not isinstance(retention_days, bool):
         unit = "day" if retention_days == 1 else "days"
         header = f"archive entries (automatic deletion after {retention_days} {unit}):"
     else:

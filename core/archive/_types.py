@@ -188,11 +188,16 @@ class ArchiveListing:
 
 @dataclass(frozen=True)
 class ArchivePage:
-    """One page of entries and the retention period in days (``None``: kept until deleted)."""
+    """One page of entries and the retention period in days (``None``: kept until deleted).
+
+    ``retention_unknown`` says the period cannot be read reliably: retention then
+    deletes nothing, ``retention_days`` is ``None`` and no entry has a ``purge_at``.
+    """
 
     entries: tuple[ArchiveListing, ...]
     next_cursor: ArchiveEntryCursor | None
     retention_days: int | None = None
+    retention_unknown: bool = False
 
 
 @dataclass(frozen=True)

@@ -77,6 +77,7 @@ async def _list_entries(state: Any, params: JsonObject) -> JsonObject:
         if page.next_cursor is None
         else {"archived_at": page.next_cursor.archived_at, "entry_id": page.next_cursor.entry_id},
         "retention_days": page.retention_days,
+        "retention_unknown": page.retention_unknown,
     }
 
 

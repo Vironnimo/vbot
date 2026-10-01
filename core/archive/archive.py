@@ -89,8 +89,9 @@ class ArchiveServices:
     Identity Agent from being archived; ``import_usage`` brings the usage ledger
     up to date before a purge; ``invalidate_project`` drops a Project's Team and
     Skill caches; ``retention_days`` reads the current retention period in days
-    (``None`` keeps entries until they are deleted); ``clock`` is the current
-    UTC time retention compares with.
+    (``None`` keeps entries until they are deleted) and raises
+    :class:`ArchiveRetentionUnknownError` when it cannot be read reliably;
+    ``clock`` is the current UTC time retention compares with.
     """
 
     data_dir: Path

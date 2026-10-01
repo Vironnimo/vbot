@@ -8,6 +8,14 @@ from core.archive._types import RestoreProblem
 from core.sessions import ArchiveEntryBusyError, ArchiveEntryError, ArchiveEntryNotFoundError
 
 
+class ArchiveRetentionUnknownError(Exception):
+    """The retention period cannot be read reliably, such as from an invalid setting.
+
+    Retention then deletes nothing instead of falling back to a default period
+    that may be shorter than the one the user chose.
+    """
+
+
 class ArchiveSubjectInUseError(ArchiveEntryError):
     """A Channel or a live automation still targets the Agent, Project or Session to archive.
 

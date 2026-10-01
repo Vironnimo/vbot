@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.runtime import Runtime, SettingsChangeEffects
+from core.sessions import ArchiveEntryFilter
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     CAPABILITY_EXT_SOURCE,
@@ -230,6 +231,19 @@ def test_settings_changes_refresh_only_their_live_services(
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
     } == {**_NO_EFFECTS, **expected}
+
+
+def test_archive_retention_never_falls_back_to_the_default_period(runtime: Runtime) -> None:
+    def listed() -> tuple[int | None, bool]:
+        page = asyncio.run(runtime.archive.list(ArchiveEntryFilter()))
+        return page.retention_days, page.retention_unknown
+
+    write_settings(runtime.storage.data_dir, {"archive": {"retention_days": 14}})
+    assert listed() == (14, False)
+    # A damaged file would read as the default 30 days, which may be shorter.
+    runtime.storage.settings_path.write_text('{"archive": ', encoding="utf-8")
+    assert runtime.storage.load_archive_settings() == {"retention_days": 30}
+    assert listed() == (None, True)
 
 
 def test_session_search_periods_follow_the_current_timezone_setting(config: Config) -> None:

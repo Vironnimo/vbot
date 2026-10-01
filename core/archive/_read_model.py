@@ -8,6 +8,7 @@ from core.agents import AGENT_FORMAT_VERSION
 from core.archive import _restore, _retention
 from core.archive._operations import stored_path
 from core.archive._types import ArchiveEntryDetail, ArchiveListing, ArchivePage
+from core.archive.errors import ArchiveRetentionUnknownError
 from core.projects import PROJECT_FORMAT_VERSION
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
@@ -43,12 +44,21 @@ def page(
     limit: int,
 ) -> ArchivePage:
     entries = services.sessions.archive_ledger.page(filters, cursor=cursor, limit=limit)
-    retention_days = services.retention_days()
+    retention_days, unknown = _retention_days(services)
     return ArchivePage(
         tuple(listing(services, entry, retention_days) for entry in entries.entries),
         entries.next_cursor,
         retention_days,
+        unknown,
     )
+
+
+def _retention_days(services: ArchiveServices) -> tuple[int | None, bool]:
+    """The retention period, and whether it is unknown (then no entry is due)."""
+    try:
+        return services.retention_days(), False
+    except ArchiveRetentionUnknownError:
+        return None, True
 
 
 def show(services: ArchiveServices, entry_id: str, session_limit: int) -> ArchiveEntryDetail:
@@ -65,7 +75,7 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
     marked = entry.facts.get("user_folders")
     named = set(marked) if isinstance(marked, list) else set()
     return ArchiveEntryDetail(
-        listing=listing(services, entry, services.retention_days()),
+        listing=listing(services, entry, _retention_days(services)[0]),
         sessions=ledger.members(entry.entry_key, limit=session_limit),
         files=files,
         restore=_restore.check(services, entry_id, None),

@@ -590,10 +590,31 @@ class StorageManager:
         settings = self.load_settings()
         return normalize_debug_settings(settings.get("debug"))
 
-    def load_archive_settings(self) -> dict[str, Any]:
-        """Return normalized persisted archive settings."""
+    def load_archive_settings(self, *, strict: bool = False) -> dict[str, Any]:
+        """Return normalized persisted archive settings.
 
-        settings = self.load_settings()
+        Like every section, the default read falls back to the defaults when
+        ``settings.json`` is degraded. A ``strict`` read never does, because a
+        default retention period could delete entries the user meant to keep
+        longer; retention reads this way. A file that cannot be read (invalid
+        JSON, another format version) or an invalid ``archive`` section then
+        raises :class:`StorageError`, while a missing file or section reads as
+        the defaults and an invalid other section does not matter.
+        """
+
+        if not strict:
+            return normalize_archive_settings(self.load_settings().get("archive"))
+        try:
+            settings, ignored = load_runtime_settings_json(self.settings_path)
+        except SettingsValidationError as exc:
+            raise StorageError(str(exc)) from exc
+        problems = [
+            f"{diagnostic.path}: {diagnostic.message}"
+            for diagnostic in ignored
+            if diagnostic.path == "$.archive" or diagnostic.path.startswith("$.archive.")
+        ]
+        if problems:
+            raise StorageError(f"{self.settings_path}: {'; '.join(problems)}")
         return normalize_archive_settings(settings.get("archive"))
 
     def load_reflection_settings(self) -> dict[str, Any]:

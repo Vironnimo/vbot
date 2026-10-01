@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
-from core.archive import ArchiveService, ArchiveServices
+from core.archive import ArchiveRetentionUnknownError, ArchiveService, ArchiveServices
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -88,6 +88,7 @@ from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
 from core.statistics import StatisticsIndex
+from core.storage.errors import StorageError
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
 from core.tools import (
@@ -766,7 +767,11 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         runtime.invalidate_project_skills(project_id)
 
     def retention_days() -> int | None:
-        days: int | None = storage.load_archive_settings()["retention_days"]
+        # Strict: a degraded settings file must never widen retention to the default.
+        try:
+            days: int | None = storage.load_archive_settings(strict=True)["retention_days"]
+        except StorageError as error:
+            raise ArchiveRetentionUnknownError(str(error)) from error
         return days
 
     return ArchiveServices(

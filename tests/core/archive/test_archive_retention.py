@@ -19,8 +19,14 @@ from typing import Any
 
 import pytest
 
-from core.archive import ArchiveService, PendingPurge, _purge, _retention
-from core.sessions import ARCHIVE_KIND_FILES, ARCHIVE_TREE_FILES, ArchiveTree
+from core.archive import (
+    ArchiveRetentionUnknownError,
+    ArchiveService,
+    PendingPurge,
+    _purge,
+    _retention,
+)
+from core.sessions import ARCHIVE_KIND_FILES, ARCHIVE_TREE_FILES, ArchiveEntryFilter, ArchiveTree
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
@@ -64,12 +70,15 @@ def timer(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Timer]:
 
 
 class _Setting:
-    """``archive.retention_days`` as the running service reads it."""
+    """``archive.retention_days`` as the running service reads it; ``unknown``: unreadable."""
 
-    def __init__(self, days: int | None) -> None:
+    def __init__(self, days: int | None, *, unknown: bool = False) -> None:
         self.days = days
+        self.unknown = unknown
 
     def __call__(self) -> int | None:
+        if self.unknown:
+            raise ArchiveRetentionUnknownError("settings.json: Invalid JSON")
         return self.days
 
 
@@ -120,9 +129,16 @@ def _purged(caplog: pytest.LogCaptureFixture) -> list[str]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("page_size", [100, 1], ids=["one-page", "page-per-entry"])
 async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_entry(
-    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture, tmp_path: Path
+    world: ArchiveWorld,
+    timer: _Timer,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    page_size: int,
 ) -> None:
+    monkeypatch.setattr(_retention, "_DUE_PAGE", page_size)
     due = await _archived_agent(world, "due", days=31)
     oldest = await _archived_agent(world, "oldest", days=45)
     fresh = await _archived_agent(world, "fresh", days=29)
@@ -161,6 +177,73 @@ async def test_a_sweep_purges_due_entries_oldest_first_and_keeps_every_other_ent
     ]
     assert world.changes
     assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["restore", "raised-period"])
+async def test_a_restore_or_a_raised_period_after_the_page_read_wins(
+    world: ArchiveWorld, timer: _Timer, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    entry_id = await _archived_agent(world, "coder", days=31)
+    setting = _Setting(30)
+    due_page = _retention._due_page
+
+    def change_after_reading(*args: Any) -> Any:
+        page = due_page(*args)
+        if change == "restore":
+            world.sessions.archive_ledger.begin_restore(entry_id, {"target_id": None})
+        else:
+            setting.days = 60
+        return page
+
+    monkeypatch.setattr(_retention, "_due_page", change_after_reading)
+
+    await _sweep_once(_service(world, setting), timer)
+
+    assert world.entry(entry_id).state == ("restoring" if change == "restore" else "archived")
+    assert len(world.session_rows("coder")) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_period_deletes_nothing_for_retention_until_it_reads_again(
+    world: ArchiveWorld, timer: _Timer, caplog: pytest.LogCaptureFixture
+) -> None:
+    due = await _archived_agent(world, "due", days=4000)
+    interrupted = await _archived_agent(world, "interrupted", days=0)
+    ledger = world.sessions.archive_ledger
+    ledger.begin_purge(interrupted)
+    # A broken settings file must never widen retention to the default period.
+    setting = _Setting(None, unknown=True)
+    service = _service(world, setting)
+    caplog.set_level(logging.INFO, logger="vbot.archive")
+
+    page = await service.list(ArchiveEntryFilter())
+    service.start()
+    assert await timer.next_wait() == _retention.FIRST_SWEEP_DELAY_SECONDS
+    for _sweep in range(2):
+        timer.elapse()
+        assert await timer.next_wait() == _retention.SWEEP_INTERVAL_SECONDS
+    kept = ledger.entry(due) is not None
+    setting.unknown = False
+    setting.days = 30
+    timer.elapse()
+    assert await timer.next_wait() == _retention.SWEEP_INTERVAL_SECONDS
+    await service.aclose()
+
+    assert (page.retention_days, page.retention_unknown) == (None, True)
+    assert {item.purge_at for item in page.entries} == {None}
+    # Interrupted purges still continue; retention resumes once the period reads.
+    assert kept
+    assert ledger.entry(interrupted) is None
+    assert ledger.entry(due) is None
+    assert [
+        (record.levelname, record.getMessage().split(";")[0])
+        for record in caplog.records
+        if record.levelno >= logging.WARNING or "read again" in record.getMessage()
+    ] == [
+        ("WARNING", "Archive retention period cannot be read"),
+        ("INFO", "Archive retention period can be read again"),
+    ]
 
 
 @pytest.mark.asyncio

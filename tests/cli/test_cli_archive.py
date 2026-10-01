@@ -88,6 +88,33 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
     ]
 
 
+def test_archive_list_says_when_the_retention_period_cannot_be_read(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    rpc.reply(
+        "archive.list",
+        {
+            "entries": [AGENT_ENTRY | {"purge_at": None}],
+            "next_cursor": None,
+            "retention_days": None,
+            "retention_unknown": True,
+        },
+    )
+
+    code, out, err = run_cli("archive", "list")
+
+    assert code == 0
+    # Not "automatic deletion off": the period is unknown, and nothing is deleted meanwhile.
+    assert out.splitlines()[0] == (
+        "archive entries (automatic deletion paused: the retention period cannot be read):"
+    )
+    assert (
+        "vBot cannot read the archive.retention_days setting, so it deletes no archive entry "
+        "automatically until the setting can be read; 'vbot doctor settings' shows the "
+        "problem in settings.json"
+    ) in err
+
+
 def test_archive_list_all_follows_every_page(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply(
         "archive.list", {"entries": [AGENT_ENTRY], "next_cursor": CURSOR, "retention_days": None}

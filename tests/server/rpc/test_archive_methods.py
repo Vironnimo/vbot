@@ -65,7 +65,7 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         entries["session"],
         entries["agent"],
     ]
-    assert first["retention_days"] == 30
+    assert (first["retention_days"], first["retention_unknown"]) == (30, False)
     assert second["next_cursor"] is None
     agent_entry = state.runtime.sessions.archive_ledger.entry(entries["agent"])
     assert second["entries"][0] == {

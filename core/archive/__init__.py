@@ -25,6 +25,7 @@ from core.archive.errors import (
     ArchiveEntryNotFoundError,
     ArchiveNotRestorableError,
     ArchiveRestoreConflictError,
+    ArchiveRetentionUnknownError,
     ArchiveSubjectInUseError,
 )
 
@@ -39,6 +40,7 @@ __all__ = [
     "ArchiveNotRestorableError",
     "ArchivePage",
     "ArchiveRestoreConflictError",
+    "ArchiveRetentionUnknownError",
     "ArchiveService",
     "ArchiveServices",
     "ArchiveSubjectInUseError",

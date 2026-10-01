@@ -140,6 +140,43 @@ def test_section_accessor_returns_defaults_for_a_missing_or_invalid_section(
     assert read(storage) == defaults
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param('{"format_version": 1, "archive": {"retention_days": 0}}', id="invalid"),
+        pytest.param('{"format_version": 1, "archive": {"retention_days": "never"}}', id="text"),
+        pytest.param('{"format_version": 1, "archive": {"retention_days": null', id="syntax"),
+        pytest.param('{"format_version": 99, "archive": {"retention_days": null}}', id="newer"),
+    ],
+)
+def test_a_strict_archive_read_never_falls_back_to_the_default_period(
+    tmp_path: Path, stored: str
+) -> None:
+    # Retention reads strictly: a default period could delete entries the user
+    # meant to keep longer. Settings still show the tolerant read.
+    storage = StorageManager(tmp_path)
+    assert storage.load_archive_settings(strict=True) == {"retention_days": 30}
+    storage.ensure_directories()
+
+    storage.settings_path.write_text(stored, encoding="utf-8")
+    with pytest.raises(StorageError):
+        storage.load_archive_settings(strict=True)
+    assert storage.load_archive_settings() == {"retention_days": 30}
+
+    # Another invalid section does not matter.
+    storage.settings_path.write_text(
+        json.dumps(
+            {
+                "format_version": 1,
+                "archive": {"retention_days": None},
+                "debug": {"trace_limit": 501},
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert storage.load_archive_settings(strict=True) == {"retention_days": None}
+
+
 # (stored settings, one-section update, read-back, expected section)
 SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
     "appearance-display-preferences": (

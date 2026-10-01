@@ -15,6 +15,10 @@ purge left ``purging``, then purges due entries oldest first, one entry per
 worker call so manual purges never wait behind a whole sweep. A stop request
 ends the sweep before the next Session or file it would delete; the entry stays
 ``purging`` and the next sweep continues it.
+
+When the period cannot be read reliably (``ArchiveRetentionUnknownError``), a
+sweep still continues ``purging`` entries but deletes nothing for retention: a
+default period could be shorter than the one the user chose.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from core.archive import _purge
+from core.archive.errors import ArchiveRetentionUnknownError
 from core.sessions import (
     ARCHIVE_KIND_FILES,
     ARCHIVE_ORIGIN_RECOVERED,
@@ -59,6 +64,9 @@ ACTOR = "retention"
 # One ERROR per data directory while its sweeps keep failing the same way, one
 # INFO when they work again.
 _SWEEP_FAILURES = LoggedConditions()
+# One WARNING per data directory while the retention period cannot be read, one
+# INFO when it can again.
+_PERIOD_UNKNOWN = LoggedConditions()
 
 
 def default_retention_days() -> int | None:
@@ -188,7 +196,18 @@ class RetentionSweeper:
             await self._purge(entry_id)
         after: ArchiveEntry | None = None
         while not self._stopping.is_set():
-            due, after = await _purge.PURGE_WORKERS.run(_due_page, services, after)
+            try:
+                due, after = await _purge.PURGE_WORKERS.run(_due_page, services, after)
+            except ArchiveRetentionUnknownError as error:
+                if _PERIOD_UNKNOWN.started(services.data_dir, "unknown"):
+                    _LOGGER.warning(
+                        "Archive retention period cannot be read; no entry is deleted for "
+                        "retention until it can: %s",
+                        error,
+                    )
+                return
+            if _PERIOD_UNKNOWN.ended(services.data_dir):
+                _LOGGER.info("Archive retention period can be read again; retention resumes")
             for entry_id in due:
                 if self._stopping.is_set():
                     return
@@ -216,7 +235,10 @@ def _purging_ids(services: ArchiveServices) -> tuple[str, ...]:
 def _due_page(
     services: ArchiveServices, after: ArchiveEntry | None
 ) -> tuple[tuple[str, ...], ArchiveEntry | None]:
-    """One page of due entry ids, and where the next page starts (``None`` at the end)."""
+    """One page of due entry ids, and where the next page starts (``None`` at the end).
+
+    Raises :class:`ArchiveRetentionUnknownError` when the period cannot be read.
+    """
     days = services.retention_days()
     if days is None:
         return (), None
@@ -240,7 +262,12 @@ def _purge_if_due(services: ArchiveServices, entry_id: str, stopping: threading.
     if entry.state == ARCHIVE_STATE_PURGING:
         reason = REASON_RESUMED
     else:
-        ends = purge_at(entry, services.retention_days())
+        try:
+            days = services.retention_days()
+        except ArchiveRetentionUnknownError:
+            # The period became unreadable since the page was read: delete nothing.
+            return False
+        ends = purge_at(entry, days)
         if ends is None or ends > format_canonical_timestamp(services.clock()):
             return False
         reason = REASON_RETENTION
