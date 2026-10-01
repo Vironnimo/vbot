@@ -13,6 +13,7 @@ import errno
 import os
 import shutil
 import stat
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -154,9 +155,8 @@ def _is_link(status: os.stat_result) -> bool:
 def _make_writable(path: Path | str) -> None:
     """Clear the read-only attribute of ``path`` itself, never of what a link points at.
 
-    Where ``os.chmod`` cannot leave links unfollowed (Windows before Python 3.13,
-    Linux), a link is left as it is: its removal then fails instead of changing a
-    directory outside the tree.
+    Where ``os.chmod`` cannot leave links unfollowed (Linux), a link is left as it
+    is: its removal then fails instead of changing a directory outside the tree.
     """
     status = os.lstat(path)
     if not _is_link(status):
