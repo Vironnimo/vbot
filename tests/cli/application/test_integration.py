@@ -45,9 +45,17 @@ def _short_path_alias(path: Path) -> str | None:
     return buffer.value
 
 
-@pytest.mark.parametrize("executable", ["owned", "short-path-alias", "foreign"])
+@pytest.mark.parametrize(
+    ("executable", "exit_seen"),
+    [
+        ("owned", "stopped"),
+        ("owned", "vanished"),
+        ("short-path-alias", "stopped"),
+        ("foreign", "stopped"),
+    ],
+)
 def test_host_exit_requests_only_the_exact_owned_host_process(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executable: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executable: str, exit_seen: str
 ) -> None:
     install = _install(tmp_path / "application with spaces")
     launcher = install.root / "vBot.exe"
@@ -76,9 +84,12 @@ def test_host_exit_requests_only_the_exact_owned_host_process(
             return process_executable
 
         def is_running(self) -> bool:
-            return False
+            return exit_seen == "vanished"
 
         def status(self) -> str:
+            # The host can exit between the running check and the status query.
+            if exit_seen == "vanished":
+                raise NoSuchProcessError
             return "stopped"
 
     monkeypatch.setitem(

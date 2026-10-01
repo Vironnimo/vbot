@@ -161,7 +161,11 @@ def request_host_exit(
     write_json(request, {"schema_version": 1, "nonce": uuid.uuid4().hex})
     deadline = monotonic() + timeout
     while monotonic() < deadline:
-        if not process.is_running() or process.status() == psutil.STATUS_ZOMBIE:
+        try:
+            exited = not process.is_running() or process.status() == psutil.STATUS_ZOMBIE
+        except psutil.NoSuchProcess:
+            exited = True
+        if exited:
             return {"ok": True, "running": False, "changed": True}
         pause(0.1)
     raise ApplicationError("The vBot tray did not exit in time; application removal was cancelled")
