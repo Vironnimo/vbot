@@ -124,7 +124,7 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("bash_process_status_changed", {"process_id": "process-one", "status": "completed"})
     ]
     assert skill_events == [("resource_changed", {"kind": "skills"})]
-    assert index_events == [("recall.index_status", index_status.to_dict())]
+    assert index_events == [("recall_index_status", index_status.to_dict())]
     # App shutdown releases the bridges.
     assert process_manager.terminal_callbacks == []
     assert runtime.skill_changed_callbacks == []

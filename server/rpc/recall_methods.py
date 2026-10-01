@@ -6,7 +6,7 @@ state, the embedding model, coverage counts, the last failure, spent usage and
 an estimate for what still waits. ``recall.rebuild_index`` drops the vectors
 of the current embedding space and queues every Passage again; it returns the
 status after the reset. Both read the index on its worker pool, off the Event
-Loop. Status changes are also pushed as the ``recall.index_status`` event.
+Loop. Status changes are also pushed as the ``recall_index_status`` event.
 """
 
 from __future__ import annotations
