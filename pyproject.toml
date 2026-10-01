@@ -65,15 +65,16 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
-# Deliberately below the one supported Python (3.14): its target makes the
-# formatter drop the parentheses of multi-exception `except` clauses (PEP 758),
-# which earlier Pythons cannot parse, and managed environments run vBot modules
-# on their own Python (PROJECT.md -> Development -> Python version).
-target-version = "py311"
+# The oldest Python that runs vBot modules: managed model environments run them
+# on 3.12 (PROJECT.md -> Development -> Python version). A 3.14 target would let
+# the formatter write PEP 758 `except A, B:` clauses those cannot parse.
+target-version = "py312"
 line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM"]
+# PEP 695 type parameter syntax is valid on 3.12 but not required.
+ignore = ["UP040", "UP046", "UP047", "UP049"]
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/test-env.py" = ["N999"]
