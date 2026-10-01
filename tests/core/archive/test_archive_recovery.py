@@ -16,6 +16,7 @@ from core.sessions import (
     ARCHIVE_ORIGIN_RECOVERED,
     ARCHIVE_TREE_AGENT,
     ARCHIVE_TREE_PROJECT,
+    ArchiveEntryBusyError,
     ArchiveEntryFilter,
     ArchiveTree,
     SessionAddress,
@@ -223,6 +224,17 @@ async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_t
         [busy] = (await world.service.show(entry_id)).restore.blockers
         assert (busy.code, busy.details["path"]) == ("entry_busy", str(home))
         assert "holds no valid Agent coder" in busy.message
+        # A restore or purge refused meanwhile says the same, not "retry".
+        for refused_call in (
+            lambda: world.service.restore(entry_id),
+            lambda: world.service.purge([entry_id]),
+        ):
+            with pytest.raises(ArchiveEntryBusyError) as refused:
+                await refused_call()
+            assert (refused.value.reason, refused.value.details["path"]) == (
+                busy.message,
+                str(home),
+            )
         # Once the folder is moved away, the next start undoes the restore.
         shutil.move(home, tmp_path / "rescued")
         world.service.recover()

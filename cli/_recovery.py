@@ -6,7 +6,9 @@ import argparse
 import os
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from cli._server_target import CommandResult
 
@@ -80,8 +82,7 @@ _CODE_GUIDANCE = {
     "archive_not_restorable": "This entry cannot be restored; the blockers above say why. "
     "'vbot archive show <entry-id>' shows its contents; 'vbot archive purge <entry-id> --yes' "
     "deletes it.",
-    "archive_entry_busy": "Another operation on this archive entry is in progress. Inspect it "
-    "with 'vbot archive show' and retry after it finished.",
+    "archive_entry_busy": "Another operation is using this archive entry. Retry after it finished.",
 }
 
 _ARCHIVE_CODES = frozenset(
@@ -138,6 +139,11 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["provider", "list"]
     elif code in _ARCHIVE_CODES:
         inspection = ["archive", "list"]
+    if code == "archive_entry_busy" and failure is not None:
+        data = failure.data or {}
+        explanation = _archive_busy_guidance(data)
+        if isinstance(data.get("entry_id"), str):
+            inspection = ["archive", "show", data["entry_id"]]
 
     if failure and failure.request_state in {"not_sent", "unknown"}:
         # The transport result already explains delivery and possible partial effects.
@@ -162,6 +168,27 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         if all(not any(ord(char) < 32 for char in token) for token in command)
     )
     return RecoveryGuidance(explanation, safe_commands)
+
+
+def _archive_busy_guidance(data: Mapping[str, Any]) -> str:
+    """What to do about an archive entry another operation holds, by what holds it."""
+    if isinstance(data.get("problem"), str):
+        return (
+            "An interrupted restore of this entry cannot finish. Resolve the problem the "
+            "message names, or move the folder it names out of the data directory, then "
+            "restart the server ('vbot server restart'): its next start finishes or undoes "
+            "the restore."
+        )
+    if data.get("state") == "purging":
+        entry_id = data.get("entry_id")
+        purge = format_command(
+            ("vbot", "archive", "purge", entry_id if isinstance(entry_id, str) else "<entry-id>")
+        )
+        return (
+            "This entry is being deleted permanently and will not become restorable. vBot "
+            f"finishes the deletion in the background; '{purge} --yes' finishes it now."
+        )
+    return _CODE_GUIDANCE["archive_entry_busy"]
 
 
 def _inspection(args: argparse.Namespace) -> list[str] | None:

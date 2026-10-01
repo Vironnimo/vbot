@@ -127,13 +127,15 @@ def rpc_call(instance: ServerInstance, method: str, params: dict[str, Any]) -> R
         and isinstance(error, dict)
         and (isinstance(error.get("code"), str) and isinstance(error.get("message"), str))
     ):
-        error_data = error.get("data")
+        error_data = error.get("data") if isinstance(error.get("data"), dict) else None
         return RpcPayload(
             ok=False,
             instance=instance,
             message=_rpc_error_message(error, fallback="RPC request failed"),
-            failure=RpcFailure(method, "responded", error["code"], response.status_code),
-            error_data=error_data if isinstance(error_data, dict) else None,
+            failure=RpcFailure(
+                method, "responded", error["code"], response.status_code, data=error_data
+            ),
+            error_data=error_data,
         )
     if response.status_code != httpx.codes.OK:
         return _transport_failure(

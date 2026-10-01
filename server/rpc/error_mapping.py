@@ -102,11 +102,10 @@ def _map_archive_error(error: ArchiveEntryError) -> RpcError:
             RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND, str(error), data={"entry_ids": list(error.entry_ids)}
         )
     if isinstance(error, ArchiveEntryBusyError):
-        return RpcError(
-            RPC_ERROR_ARCHIVE_ENTRY_BUSY,
-            str(error),
-            data={"entry_id": error.entry_id, "state": error.state},
-        )
+        data: dict[str, Any] = {**error.details, "entry_id": error.entry_id, "state": error.state}
+        if error.reason is not None:
+            data["message"] = error.reason
+        return RpcError(RPC_ERROR_ARCHIVE_ENTRY_BUSY, str(error), data=data)
     if isinstance(error, ArchiveRestoreConflictError):
         return RpcError(
             RPC_ERROR_ARCHIVE_RESTORE_CONFLICT,

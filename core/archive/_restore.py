@@ -35,6 +35,7 @@ from core.sessions import (
     ARCHIVE_KIND_SESSION,
     ARCHIVE_ROOT,
     ARCHIVE_STATE_ARCHIVED,
+    ARCHIVE_STATE_PURGING,
     ARCHIVE_STATE_RESTORING,
     ARCHIVE_TREE_AGENT,
     ARCHIVE_TREE_PROJECT,
@@ -291,23 +292,33 @@ def _plan(services: ArchiveServices, entry: ArchiveEntry, target_id: str | None)
     return _Plan(_checked(entry, target, findings), entry)
 
 
+def busy_error(entry: ArchiveEntry) -> ArchiveEntryBusyError:
+    """The refusal for an entry another operation holds, saying what the caller can do."""
+    reason, details = _busy_reason(entry)
+    return ArchiveEntryBusyError(entry.entry_id, entry.state, reason=reason, details=details)
+
+
 def _block_busy(entry: ArchiveEntry, findings: _Findings) -> None:
+    reason, details = _busy_reason(entry)
+    findings.block("entry_busy", reason, state=entry.state, **details)
+
+
+def _busy_reason(entry: ArchiveEntry) -> tuple[str, dict[str, Any]]:
+    """What the operation holding ``entry`` means for the caller, and its facts."""
     plan = entry.facts.get("restore_plan")
     problem = plan.get("problem") if isinstance(plan, Mapping) else None
-    if entry.state != ARCHIVE_STATE_RESTORING or not isinstance(problem, str):
-        findings.block("entry_busy", f"the entry is {entry.state}", state=entry.state)
-        return
-    assert isinstance(plan, Mapping)
-    live_path = plan.get("live_path")
-    findings.block(
-        "entry_busy",
-        f"an interrupted restore left the files live at {live_path} and cannot finish: "
-        f"{problem}. Once that is resolved, or the folder is moved out of the data "
-        "directory, the next start of vBot finishes or undoes the restore",
-        state=entry.state,
-        path=live_path,
-        problem=problem,
-    )
+    if entry.state == ARCHIVE_STATE_RESTORING and isinstance(problem, str):
+        assert isinstance(plan, Mapping)
+        live_path = plan.get("live_path")
+        return (
+            f"an interrupted restore left the files live at {live_path} and cannot finish: "
+            f"{problem}. Once that is resolved, or the folder is moved out of the data "
+            "directory, the next start of vBot finishes or undoes the restore",
+            {"path": live_path, "problem": problem},
+        )
+    if entry.state == ARCHIVE_STATE_PURGING:
+        return "it is being deleted permanently and will not become restorable", {}
+    return "another operation is using it; retry after that operation finished", {}
 
 
 def _checked(entry: ArchiveEntry, target: str, findings: _Findings) -> RestoreCheck:
@@ -545,7 +556,12 @@ def _raise_blockers(plan: _Plan) -> None:
         return
     busy = next((blocker for blocker in blockers if blocker.code == "entry_busy"), None)
     if busy is not None:
-        raise ArchiveEntryBusyError(plan.entry.entry_id, plan.entry.state)
+        raise ArchiveEntryBusyError(
+            plan.entry.entry_id,
+            plan.entry.state,
+            reason=busy.message,
+            details={key: value for key, value in busy.details.items() if key != "state"},
+        )
     if all(blocker.code in RESTORE_CONFLICT_CODES for blocker in blockers):
         raise ArchiveRestoreConflictError(plan.entry.entry_id, plan.entry.kind, blockers)
     raise ArchiveNotRestorableError(plan.entry.entry_id, blockers)

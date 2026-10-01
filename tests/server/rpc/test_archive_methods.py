@@ -251,6 +251,12 @@ def _purging(_data_dir: Path, state: SimpleNamespace, entry_id: str) -> None:
     state.runtime.sessions.archive_ledger.begin_purge(entry_id)
 
 
+def _stuck_restore(_data_dir: Path, state: SimpleNamespace, entry_id: str) -> None:
+    state.runtime.sessions.archive_ledger.begin_restore(
+        entry_id, {"target_id": None, "live_path": "/data/agents/coder", "problem": "invalid"}
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("arrange", "code", "data"),
@@ -274,8 +280,27 @@ def _purging(_data_dir: Path, state: SimpleNamespace, entry_id: str) -> None:
         pytest.param(
             _purging,
             "archive_entry_busy",
-            lambda entry_id: {"entry_id": entry_id, "state": "purging"},
-            id="busy",
+            lambda entry_id: {
+                "entry_id": entry_id,
+                "state": "purging",
+                "message": "it is being deleted permanently and will not become restorable",
+            },
+            id="purging",
+        ),
+        pytest.param(
+            _stuck_restore,
+            "archive_entry_busy",
+            lambda entry_id: {
+                "entry_id": entry_id,
+                "state": "restoring",
+                "message": "an interrupted restore left the files live at /data/agents/coder "
+                "and cannot finish: invalid. Once that is resolved, or the folder is moved "
+                "out of the data directory, the next start of vBot finishes or undoes the "
+                "restore",
+                "path": "/data/agents/coder",
+                "problem": "invalid",
+            },
+            id="stuck-restore",
         ),
     ],
 )

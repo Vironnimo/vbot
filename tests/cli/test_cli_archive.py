@@ -302,7 +302,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
 
 
 @pytest.mark.parametrize(
-    ("code", "data", "shown"),
+    ("code", "data", "shown", "guidance"),
     [
         pytest.param(
             "archive_restore_conflict",
@@ -323,6 +323,7 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
                 "an Agent with id coder exists; restore it under a new id: "
                 "vbot archive restore arc_7k2m9q4xw1ab --as <new-agent-id>"
             ],
+            ["Next: vbot archive list"],
             id="conflict",
         ),
         pytest.param(
@@ -343,12 +344,59 @@ def test_archive_restore_warnings_need_attention(rpc: FakeRpc, run_cli: RunCli) 
                 "- scope_missing: Agent coder does not exist; restore it first "
                 "(vbot archive restore arc_p0c1x8n3w5yt)",
             ],
+            ["Next: vbot archive list"],
             id="not-restorable",
+        ),
+        pytest.param(
+            "archive_entry_busy",
+            {
+                "entry_id": "arc_7k2m9q4xw1ab",
+                "state": "restoring",
+                "message": "an interrupted restore left the files live at ...",
+                "path": "/data/agents/coder",
+                "problem": "invalid",
+            },
+            ["archive_entry_busy: cannot restore archive entry arc_7k2m9q4xw1ab"],
+            [
+                "An interrupted restore of this entry cannot finish. Resolve the problem the "
+                "message names, or move the folder it names out of the data directory, then "
+                "restart the server ('vbot server restart'): its next start finishes or undoes "
+                "the restore.",
+                "Next: vbot archive show arc_7k2m9q4xw1ab",
+            ],
+            id="stuck-restore",
+        ),
+        pytest.param(
+            "archive_entry_busy",
+            {"entry_id": "arc_7k2m9q4xw1ab", "state": "purging", "message": "..."},
+            ["archive_entry_busy: cannot restore archive entry arc_7k2m9q4xw1ab"],
+            [
+                "This entry is being deleted permanently and will not become restorable. "
+                "vBot finishes the deletion in the background; "
+                "'vbot archive purge arc_7k2m9q4xw1ab --yes' finishes it now.",
+                "Next: vbot archive show arc_7k2m9q4xw1ab",
+            ],
+            id="purging",
+        ),
+        pytest.param(
+            "archive_entry_busy",
+            {"entry_id": "arc_7k2m9q4xw1ab", "state": "archiving"},
+            ["archive_entry_busy: cannot restore archive entry arc_7k2m9q4xw1ab"],
+            [
+                "Another operation is using this archive entry. Retry after it finished.",
+                "Next: vbot archive show arc_7k2m9q4xw1ab",
+            ],
+            id="busy",
         ),
     ],
 )
 def test_a_refused_restore_names_the_corrected_call(
-    rpc: FakeRpc, run_cli: RunCli, code: str, data: dict[str, Any], shown: list[str]
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    code: str,
+    data: dict[str, Any],
+    shown: list[str],
+    guidance: list[str],
 ) -> None:
     rpc.fail("archive.restore", code, "cannot restore archive entry arc_7k2m9q4xw1ab", data=data)
 
@@ -356,7 +404,9 @@ def test_a_refused_restore_names_the_corrected_call(
 
     assert exit_code == 1
     assert out.splitlines() == shown
-    assert "Next: vbot archive list" in err
+    lines = err.splitlines()
+    for line in guidance:
+        assert any(item.startswith(line) for item in lines), (line, err)
 
 
 @pytest.mark.parametrize(

@@ -7,8 +7,9 @@ a broken or busy database must not read as a missing Session.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.errors import ChatSessionError
 from core.database.errors import DatabaseCorruptError
@@ -45,14 +46,30 @@ class ArchiveEntryNotFoundError(ArchiveEntryError):
 
 
 class ArchiveEntryBusyError(ArchiveEntryError):
-    """Raised when another operation holds the entry (archiving, restoring or purging)."""
+    """Raised when another operation holds the entry (archiving, restoring or purging).
 
-    def __init__(self, entry_id: str, state: str) -> None:
+    ``reason`` says what that means for the caller when retrying would not help,
+    such as an entry being deleted or an interrupted restore that cannot finish;
+    ``details`` are its facts (``path``, ``problem``).
+    """
+
+    def __init__(
+        self,
+        entry_id: str,
+        state: str,
+        *,
+        reason: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(
-            f"archive entry {entry_id} is {state}; retry after that operation finished"
+            f"archive entry {entry_id} is {state}: {reason}"
+            if reason is not None
+            else f"archive entry {entry_id} is {state}; retry after that operation finished"
         )
         self.entry_id = entry_id
         self.state = state
+        self.reason = reason
+        self.details: dict[str, Any] = dict(details or {})
 
 
 class ArchiveMembersManagedError(ArchiveEntryError):

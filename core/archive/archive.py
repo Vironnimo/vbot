@@ -53,7 +53,6 @@ from core.sessions import (
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_PURGING,
     ArchiveEntry,
-    ArchiveEntryBusyError,
     ArchiveEntryCursor,
     ArchiveEntryFilter,
     ArchiveEntryNotFoundError,
@@ -432,7 +431,7 @@ class ArchiveService:
         resolved = [entry for entry in found_entries.values() if entry is not None]
         for entry in resolved:
             if entry.state not in (ARCHIVE_STATE_ARCHIVED, ARCHIVE_STATE_PURGING):
-                raise ArchiveEntryBusyError(entry.entry_id, entry.state)
+                raise _restore.busy_error(entry)
         return resolved, ()
 
     # -- Reads -------------------------------------------------------------------
