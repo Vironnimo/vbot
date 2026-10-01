@@ -175,7 +175,6 @@ class VoiceRuntime:
     audio_backend: Any = None
     engine_factory: EngineFactory | None = None
     speech_detector_factory: Callable[[], Any] | None = None
-    fallback_vad_factory: Callable[[], Any] | None = None
     transport: Any = None
     echo_stage_factory: EchoStageFactory | None = None
     reconnect_interval: float = 30.0
@@ -689,7 +688,6 @@ class VoiceController:
         speech_detector_factory = (
             runtime.speech_detector_factory or _speech_detection.SpeechDetector.create
         )
-        fallback_vad_factory = runtime.fallback_vad_factory or _speech_detection.create_fallback_vad
         stop_event = threading.Event()
         client = VoiceServerClient(server_url, cancel=stop_event, transport=runtime.transport)
         session = _Session(generation, stop_event, client)
@@ -717,12 +715,10 @@ class VoiceController:
             on_failed=lambda code: self._on_listener_failed(generation, code),
             calibrating=lambda: self._calibrating(generation),
             speech_detector_factory=speech_detector_factory,
-            fallback_vad_factory=fallback_vad_factory,
         )
         session.recorder = CommandRecorder(
             stop_event=stop_event,
             speech_detector_factory=speech_detector_factory,
-            fallback_vad_factory=fallback_vad_factory,
             budget_bytes=lambda: session.budget_bytes,
         )
         session.pipeline = CommandPipeline(

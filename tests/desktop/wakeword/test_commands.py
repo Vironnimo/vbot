@@ -30,7 +30,7 @@ from desktop.wakeword.server_client import (
     VoiceServerError,
 )
 from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeVad,
+    AmplitudeDetector,
     FakeSubscription,
     silence,
     tone,
@@ -117,20 +117,6 @@ class RecorderHarness:
         return recording
 
 
-class CountingDetector:
-    """Neural detector double deciding by amplitude; counts resets."""
-
-    def __init__(self) -> None:
-        self.resets = 0
-
-    def reset(self) -> None:
-        self.resets += 1
-
-    def is_speech(self, pcm16: bytes) -> bool:
-        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.int32)
-        return bool(samples.size) and int(np.abs(samples).max()) >= 1500
-
-
 @pytest.fixture
 def harness() -> Iterator[Callable[..., RecorderHarness]]:
     created: list[RecorderHarness] = []
@@ -141,18 +127,13 @@ def harness() -> Iterator[Callable[..., RecorderHarness]]:
 
         def detector_factory() -> Any:
             calls.append("detector")
-            return detector
-
-        def vad_factory() -> Any:
-            calls.append("vad")
-            return AmplitudeVad()
+            return detector or AmplitudeDetector()
 
         stop = threading.Event()
         state = RecorderHarness(
             recorder=CommandRecorder(
                 stop_event=stop,
                 speech_detector_factory=detector_factory,
-                fallback_vad_factory=vad_factory,
                 budget_bytes=lambda: budget[0],
             ),
             stop=stop,
@@ -310,10 +291,10 @@ def test_a_recording_that_never_pauses_ends_at_the_maximum_duration(
     assert MAX_RECORDING_SECONDS <= seconds <= MAX_RECORDING_SECONDS + 0.04
 
 
-def test_one_recording_at_a_time_and_speech_deciders_are_reused(
+def test_one_recording_at_a_time_and_the_speech_detector_is_reused(
     harness: Callable[..., RecorderHarness],
 ) -> None:
-    detector = CountingDetector()
+    detector = AmplitudeDetector()
     rig = harness(detector=detector)
     first = rig.record()
 
@@ -327,7 +308,7 @@ def test_one_recording_at_a_time_and_speech_deciders_are_reused(
     second.subscription.push_audio(silence(1.2, 16000))
 
     assert second.result().outcome == "audio"
-    assert rig.factory_calls == ["detector", "vad"]
+    assert rig.factory_calls == ["detector"]
     assert detector.resets == 2
 
 

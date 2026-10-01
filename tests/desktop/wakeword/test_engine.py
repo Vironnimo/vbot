@@ -494,7 +494,7 @@ def _speech_gate() -> SpeechGate:
     pytest.importorskip("onnxruntime")
     detector = SpeechDetector.create()
     assert detector is not None
-    return SpeechGate(detector, None)
+    return SpeechGate(detector)
 
 
 def _read_pcm16_mono(path: Path) -> bytes:

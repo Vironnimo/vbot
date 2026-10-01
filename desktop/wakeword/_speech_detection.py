@@ -1,9 +1,10 @@
-"""Speech detection: the neural speech detector, its fail-open WebRTC fallback, and
-the delayed :class:`SpeechGate` for wakeword scores.
+"""Speech detection: the neural speech detector and the delayed :class:`SpeechGate`
+for wakeword scores.
 
 Every consumer (the detection gate, command endpointing) creates its own
-:class:`SpeechDetector` because the model keeps per-stream state. All audio is
-16 kHz mono PCM16.
+:class:`SpeechDetector` because the model keeps per-stream state. Without a
+working detector every speech decision fails open: all audio counts as speech,
+so a technical failure never mutes Voice. All audio is 16 kHz mono PCM16.
 """
 
 from __future__ import annotations
@@ -29,13 +30,6 @@ SPEECH_HOP_SAMPLES = 512
 _SPEECH_VAD_CONTEXT_SAMPLES = 64
 _SPEECH_PROB_THRESHOLD = 0.5  # Silero's canonical speech threshold
 _SPEECH_PROB_NEG_THRESHOLD = 0.35  # exit threshold (threshold - 0.15)
-_VAD_MODE = 1  # moderate WebRTC aggressiveness for the fallback
-
-# The WebRTC fallback judges 10 ms slices (it accepts only 10, 20 or 30 ms
-# frames); two speech slices (20 ms) count as speech so isolated blips cannot,
-# while real speech beginning mid-frame still passes.
-_FALLBACK_SLICE_BYTES = int(SPEECH_SAMPLE_RATE * 0.010) * 2  # 320 bytes
-_FALLBACK_MIN_SPEECH_SLICES = 2
 
 # Upstream openWakeWord gates a chunk's scores on the speech decisions of the
 # chunks 4 to 6 before it (0.32-0.56 s earlier): the heads peak after the phrase.
@@ -48,13 +42,12 @@ class SpeechDetector:
 
     Runs the bundled Silero VAD v5 ONNX model over 32 ms windows at 16 kHz and
     answers a binary question per window: does this audio carry human speech,
-    or is it ambient noise (wind, rain, traffic, music)? Unlike the WebRTC VAD
-    fallback this decision is amplitude- and noise-robust, which is what keeps
-    the recording channel from being held open by continuous noise.
+    or is it ambient noise (wind, rain, traffic, music)? The decision is
+    amplitude- and noise-robust, which is what keeps the recording channel
+    from being held open by continuous noise.
 
     Loading can fail (onnxruntime or the model file absent); the caller treats
-    the detector factory's ``None`` result as fail-open, exactly like the
-    legacy WebRTC gate.
+    the detector factory's ``None`` result as fail-open.
 
     The binary decision applies hysteresis: speech opens at
     ``_SPEECH_PROB_THRESHOLD`` and only closes below ``_SPEECH_PROB_NEG_THRESHOLD``,
@@ -88,7 +81,7 @@ class SpeechDetector:
             return cls(session)
         except Exception:
             logger.warning(
-                "Neural speech detector unavailable; WebRTC VAD fallback stays active",
+                "Neural speech detector unavailable; all audio counts as speech",
                 exc_info=True,
             )
             return None
@@ -163,64 +156,37 @@ class SpeechDetector:
         return probability
 
 
-def create_fallback_vad() -> Any | None:
-    """Create the WebRTC VAD used when the neural detector is absent, or ``None``.
-
-    A missing VAD never mutes Voice: speech decisions without any detector
-    fail open.
-    """
-    try:
-        import webrtcvad  # type: ignore[import-untyped]
-
-        return webrtcvad.Vad(_VAD_MODE)
-    except Exception:
-        logger.warning("WebRTC fallback VAD unavailable; speech decisions fail open", exc_info=True)
-        return None
-
-
-def frame_is_speech(
-    pcm16: bytes,
-    detector: SpeechDetector | None,
-    fallback_vad: Any | None,
-) -> bool:
+def frame_is_speech(pcm16: bytes, detector: SpeechDetector | None) -> bool:
     """Decide whether one 32 ms (512-sample) frame carries speech, with a fail-open bias.
 
-    The neural detector is authoritative when present (with hysteresis across
-    frames). Without it (or on an unexpected scoring error) the WebRTC
-    fallback decides on the frame's 10 ms slices (see
-    :func:`_webrtc_contains_speech`); a totally unavailable stack counts frames
-    as speech so a technical failure can never mute recording.
+    The neural detector decides (with hysteresis across frames). Without it, or
+    on an unexpected scoring error, the frame counts as speech so a technical
+    failure can never mute recording.
     """
-    if detector is not None:
-        try:
-            return detector.is_speech(pcm16)
-        except Exception:
-            logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if fallback_vad is None:
+    if detector is None:
         return True
-    return _webrtc_contains_speech(pcm16, fallback_vad)
+    try:
+        return detector.is_speech(pcm16)
+    except Exception:
+        logger.warning("Neural speech scoring failed; counting the frame as speech", exc_info=True)
+        return True
 
 
-def chunk_contains_speech(
-    detection_pcm16: bytes,
-    speech_detector: SpeechDetector | None,
-    fallback_vad: Any | None,
-) -> bool:
+def chunk_contains_speech(detection_pcm16: bytes, speech_detector: SpeechDetector | None) -> bool:
     """Whether one detection chunk carries enough speech to trust model scores.
 
-    Prefers the neural speech detector: ambient noise must not open the gate,
-    or wakeword scores would accumulate toward false activations in wind and
-    rain. Falls back to the WebRTC VAD when no neural detector loaded. Both
-    paths fail open: the gate can never turn into an accidental mute.
+    Uses the neural speech detector: ambient noise must not open the gate, or
+    wakeword scores would accumulate toward false activations in wind and rain.
+    Fails open without a detector or on a scoring error: the gate can never
+    turn into an accidental mute.
     """
-    if speech_detector is not None:
-        try:
-            return speech_detector.speech_probability(detection_pcm16) >= _SPEECH_PROB_THRESHOLD
-        except Exception:
-            logger.warning("Neural speech scoring failed; using WebRTC fallback", exc_info=True)
-    if not fallback_vad:
+    if speech_detector is None:
         return True
-    return _webrtc_contains_speech(detection_pcm16, fallback_vad)
+    try:
+        return speech_detector.speech_probability(detection_pcm16) >= _SPEECH_PROB_THRESHOLD
+    except Exception:
+        logger.warning("Neural speech scoring failed; counting the chunk as speech", exc_info=True)
+        return True
 
 
 class SpeechGate:
@@ -235,18 +201,15 @@ class SpeechGate:
     Without any speech detector the gate is open, as upstream without VAD.
     """
 
-    def __init__(self, speech_detector: SpeechDetector | None, fallback_vad: Any | None) -> None:
+    def __init__(self, speech_detector: SpeechDetector | None) -> None:
         self._detector = speech_detector
-        self._fallback_vad = fallback_vad
         self._speech: deque[bool] = deque(maxlen=_GATE_FARTHEST_CHUNK + 1)
 
     def admits(self, detection_pcm16: bytes) -> bool:
         """Record this chunk's speech decision and return whether its scores count."""
-        if self._detector is None and self._fallback_vad is None:
+        if self._detector is None:
             return True
-        self._speech.append(
-            chunk_contains_speech(detection_pcm16, self._detector, self._fallback_vad)
-        )
+        self._speech.append(chunk_contains_speech(detection_pcm16, self._detector))
         return any(list(self._speech)[:-_GATE_NEAREST_CHUNK])
 
     def reset(self) -> None:
@@ -254,28 +217,3 @@ class SpeechGate:
         self._speech.clear()
         if self._detector is not None:
             self._detector.reset()
-
-
-def _webrtc_contains_speech(pcm16: bytes, vad: Any) -> bool:
-    """Whether WebRTC VAD hears speech in at least two 10 ms slices of 16 kHz PCM16.
-
-    WebRTC VAD accepts only 10, 20 or 30 ms frames, so the audio is judged in
-    10 ms slices and a shorter trailing remainder is ignored; audio with a
-    single slice needs that one. Fails open: audio shorter than one slice or a
-    VAD error counts as speech.
-    """
-    slice_count = len(pcm16) // _FALLBACK_SLICE_BYTES
-    if slice_count == 0:
-        return True
-    required_slices = min(_FALLBACK_MIN_SPEECH_SLICES, slice_count)
-    speech_slices = 0
-    for slice_index in range(slice_count):
-        offset = slice_index * _FALLBACK_SLICE_BYTES
-        try:
-            if vad.is_speech(pcm16[offset : offset + _FALLBACK_SLICE_BYTES], SPEECH_SAMPLE_RATE):
-                speech_slices += 1
-        except Exception:
-            return True
-        if speech_slices >= required_slices:
-            return True
-    return False

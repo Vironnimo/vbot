@@ -21,7 +21,6 @@ import threading
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from desktop.wakeword._speech_detection import SpeechDetector, SpeechGate
 from desktop.wakeword.capture import AudioBlock, CaptureGap, CaptureSubscription
@@ -77,7 +76,6 @@ class DetectionLoop:
         on_failed: Callable[[str], None],
         calibrating: Callable[[], bool],
         speech_detector_factory: Callable[[], SpeechDetector | None],
-        fallback_vad_factory: Callable[[], Any | None],
     ) -> None:
         self._subscription = subscription
         self._engine = engine
@@ -87,7 +85,6 @@ class DetectionLoop:
         self._on_failed = on_failed
         self._calibrating = calibrating
         self._speech_detector_factory = speech_detector_factory
-        self._fallback_vad_factory = fallback_vad_factory
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -129,7 +126,7 @@ class DetectionLoop:
             self._subscription.close()
 
     def _detect(self) -> None:
-        speech_gate = SpeechGate(self._speech_detector_factory(), self._fallback_vad_factory())
+        speech_gate = SpeechGate(self._speech_detector_factory())
         if self._stop.is_set():
             return
         self._on_started()
