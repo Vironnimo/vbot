@@ -95,8 +95,9 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
 
     An Agent tree takes the Sessions its archive left when their archive time
     lies within the pairing window after the tree's modification time; a Project
-    tree takes the latest of its Project's archives at or after that time.
-    Unreadable directories are skipped and adopted at the next run.
+    tree takes the latest of its Project's archives at or after that time. A
+    directory that cannot be read is skipped with a warning and stays where it
+    is, outside any entry.
     """
     now = utc_now_timestamp()
     batches = _unrecorded_batches(connection)
@@ -302,28 +303,47 @@ def _legacy_trees(connection: sqlite3.Connection, data_dir: Path) -> Iterator[_L
     for child in _directories(Path(data_dir) / ARCHIVE_ROOT):
         if child.name == "entries":
             continue
+        containers: list[tuple[Path, Callable[[Path, Path], _LegacyTree | None] | None]]
         if child.name in ("agents", "projects"):
             match = _agent_tree if child.name == "agents" else _project_tree
-            candidates = [
-                match(container, data_dir) or _files_tree(container, data_dir)
-                for container in _directories(child)
-            ]
+            containers = [(container, match) for container in _directories(child)]
         else:
-            flat = None if child.name in _RESERVED_ROOTS else _agent_tree(child, data_dir)
-            candidates = [flat or _files_tree(child, data_dir)]
-        for tree in candidates:
+            containers = [(child, None if child.name in _RESERVED_ROOTS else _agent_tree)]
+        for container, owner in containers:
+            try:
+                tree = (owner and owner(container, data_dir)) or _files_tree(container, data_dir)
+            except OSError as error:
+                _unreadable(container, error)
+                continue
             if tree is not None and not _store_archive.is_recorded(connection, tree.container):
                 yield tree
 
 
 def _directories(path: Path) -> list[Path]:
+    """The readable subdirectories of ``path`` by name; links are never followed."""
     try:
-        return sorted(
-            (entry for entry in path.iterdir() if entry.is_dir() and not entry.is_symlink()),
-            key=lambda entry: entry.name,
-        )
-    except OSError:
+        children = sorted(path.iterdir(), key=lambda entry: entry.name)
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        _unreadable(path, error)
+        return []
+    directories = []
+    for child in children:
+        try:
+            if child.is_dir() and not child.is_symlink():
+                directories.append(child)
+        except OSError as error:
+            _unreadable(child, error)
+    return directories
+
+
+def _unreadable(path: Path, error: OSError) -> None:
+    _LOGGER.warning(
+        "Archive folder not adopted; it cannot be read and stays as it is (path=%s): %s",
+        path,
+        error,
+    )
 
 
 def _relative(path: Path, data_dir: Path) -> str:
@@ -331,11 +351,8 @@ def _relative(path: Path, data_dir: Path) -> str:
     return path.relative_to(data_dir).as_posix()
 
 
-def _mtime(path: Path) -> datetime | None:
-    try:
-        return datetime.fromtimestamp(path.stat().st_mtime, UTC)
-    except OSError:
-        return None
+def _mtime(path: Path) -> datetime:
+    return datetime.fromtimestamp(path.stat().st_mtime, UTC)
 
 
 def _document(path: Path) -> dict[str, Any] | None:
@@ -363,13 +380,14 @@ def _name(document: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
-    """An Agent archive: ``<container>/agent/`` with an optional moved Workspace beside it."""
+    """An Agent archive: ``<container>/agent/`` with an optional moved Workspace beside it.
+
+    Raises ``OSError`` when the container cannot be read.
+    """
     agent_dir = container / "agent"
     if not agent_dir.is_dir():
         return None
     mtime = _mtime(container)
-    if mtime is None:
-        return None
     subject = container.name
     document = _document(agent_dir / "agent.json")
     workspace = None if document is None else document.get("workspace")
@@ -378,11 +396,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     root_project_id = None if document is None else document.get("root_project_id")
     facts["root_project_id"] = root_project_id if isinstance(root_project_id, str) else None
     moved = False
-    try:
-        children = sorted(container.iterdir(), key=lambda entry: entry.name)
-    except OSError:
-        return None
-    for child in children:
+    for child in sorted(container.iterdir(), key=lambda entry: entry.name):
         if child.name == "agent":
             continue
         if child.name == "workspace" and child.is_dir():
@@ -418,12 +432,13 @@ def _inside_agent_home(workspace: str, agent_id: str, data_dir: Path) -> bool:
 
 
 def _project_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
-    """A Project archive: the moved anchor directory holding ``project.json``."""
+    """A Project archive: the moved anchor directory holding ``project.json``.
+
+    Raises ``OSError`` when the container cannot be read.
+    """
     if not (container / "project.json").is_file():
         return None
     mtime = _mtime(container)
-    if mtime is None:
-        return None
     document = _document(container / "project.json")
     cwd = None if document is None else document.get("cwd")
     facts: dict[str, Any] = {**_name(document), **_payload_format(document)}
@@ -441,15 +456,13 @@ def _project_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
 
 
 def _files_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
-    """Any other non-empty directory: archived files without a restorable owner."""
-    try:
-        if not any(container.iterdir()):
-            return None
-    except OSError:
+    """Any other non-empty directory: archived files without a restorable owner.
+
+    Raises ``OSError`` when the container cannot be read.
+    """
+    if not any(container.iterdir()):
         return None
     mtime = _mtime(container)
-    if mtime is None:
-        return None
     path = _relative(container, data_dir)
     return _LegacyTree(
         ARCHIVE_KIND_FILES, path, path, [ArchiveTree(path, ARCHIVE_TREE_FILES, None)], mtime, {}

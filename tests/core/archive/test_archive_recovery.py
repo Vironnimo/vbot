@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,29 @@ from tests.core.archive.archive_test_support import world as world
 
 def _fail(*_args: Any, **_kwargs: Any) -> Any:
     raise OSError("stopped here")
+
+
+def _refuse_access(monkeypatch: pytest.MonkeyPatch, locked: Path) -> None:
+    """Make ``locked`` unreadable the way a folder without read permission is.
+
+    Its own entry stays visible, but listing it fails, and so does every check
+    of a path inside it, as ``Path.is_dir`` and ``Path.is_file`` raise before
+    Python 3.14.
+    """
+
+    def refuse(method: str, inside_only: bool) -> None:
+        real = getattr(Path, method)
+
+        def guarded(self: Path, *args: Any, **kwargs: Any) -> Any:
+            if locked in self.parents or (not inside_only and self == locked):
+                raise PermissionError(errno.EACCES, "Access is denied", str(self))
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, method, guarded)
+
+    refuse("iterdir", inside_only=False)
+    for method in ("stat", "is_dir", "is_file", "exists"):
+        refuse(method, inside_only=True)
 
 
 def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Path) -> None:
@@ -161,13 +185,18 @@ async def test_a_purging_entry_waits_for_the_next_purge(world: ArchiveWorld) -> 
 
 @pytest.mark.asyncio
 async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
-    world: ArchiveWorld,
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     world.agents.create("coder", "Coder Agent")
+    world.agents.create("locked", "Locked Agent")
     archive = world.data_dir / "archive"
     # A data snapshot restore can bring back a payload whose entry row it predates.
     with world.agents.archive_files("coder", archive / "entries" / "arc_orphan" / "agent"):
         pass
+    with world.agents.archive_files("locked", archive / "entries" / "arc_locked" / "agent"):
+        pass
+    # An unreadable payload never stops the start; it is adopted once it can be read.
+    _refuse_access(monkeypatch, archive / "entries" / "arc_locked")
     (archive / "entries" / "arc_empty").mkdir()
     user_files = [archive / "entries" / "notes" / "keep.txt", archive / "mine" / "keep.txt"]
     for path in user_files:
@@ -191,3 +220,8 @@ async def test_orphan_entry_payloads_are_adopted_and_nothing_else_under_archive(
     assert all(path.read_text(encoding="utf-8") == "mine" for path in user_files)
     await world.service.restore("arc_orphan")
     assert world.agents.get("coder").name == "Coder Agent"
+    monkeypatch.undo()
+
+    world.service.recover()
+
+    assert world.entry("arc_locked").subject_id == "locked"

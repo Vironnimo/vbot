@@ -1,8 +1,9 @@
 """Startup recovery: finish or undo what an interrupted archive operation left behind.
 
 It runs before Channels, Cron and Runs start, so nothing else changes Agents,
-Projects or archive entries meanwhile. Every step is idempotent; an entry whose
-recovery fails is logged and tried again at the next start.
+Projects or archive entries meanwhile. Every step is idempotent; a step or an
+entry whose recovery fails, such as an unreadable folder under ``archive/``, is
+logged and tried again at the next start, and never stops the start itself.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import os
 from contextlib import suppress
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.agents import AGENT_FORMAT_VERSION
@@ -45,15 +47,27 @@ def recover(services: ArchiveServices) -> bool:
     """Bring the archive ledger and its payloads back in step; ``True`` when anything changed."""
     ledger = services.sessions.archive_ledger
     changed = False
-    adoption = ledger.adopt_unrecorded_archived_rows()
-    if adoption.sessions:
-        _LOGGER.warning(
-            "Archived Sessions without an archive entry adopted (sessions=%d entries=%d)",
-            adoption.sessions,
-            adoption.entries,
+    try:
+        adoption = ledger.adopt_unrecorded_archived_rows()
+    except Exception:
+        _LOGGER.exception(
+            "Archived Sessions without an archive entry could not be adopted; "
+            "retried at the next start"
         )
-        changed = True
-    changed = _adopt_orphan_payloads(services) or changed
+    else:
+        if adoption.sessions:
+            _LOGGER.warning(
+                "Archived Sessions without an archive entry adopted (sessions=%d entries=%d)",
+                adoption.sessions,
+                adoption.entries,
+            )
+            changed = True
+    try:
+        changed = _adopt_orphan_payloads(services) or changed
+    except Exception:
+        _LOGGER.exception(
+            "Archive payloads without an entry could not be adopted; retried at the next start"
+        )
     for entry in ledger.unsettled():
         try:
             changed = _settle(services, entry) or changed
@@ -140,24 +154,35 @@ def _adopt_orphan_payloads(services: ArchiveServices) -> bool:
     ledger = services.sessions.archive_ledger
     entries_dir = services.data_dir / ARCHIVE_ENTRIES_DIR
     try:
-        candidates = sorted(
-            child
-            for child in entries_dir.iterdir()
-            if child.name.startswith("arc_") and child.is_dir() and not child.is_symlink()
-        )
-    except OSError:
+        children = sorted(entries_dir.iterdir())
+    except FileNotFoundError:
         return False
+    except OSError as error:
+        _unreadable(entries_dir, error)
+        return False
+    candidates = []
+    for child in children:
+        try:
+            if child.name.startswith("arc_") and child.is_dir() and not child.is_symlink():
+                candidates.append(child)
+        except OSError as error:
+            _unreadable(child, error)
     relative = {f"{ARCHIVE_ENTRIES_DIR}/{child.name}": child for child in candidates}
     adopted = False
     for directory in ledger.unrecorded(tuple(relative)):
         child = relative[directory]
-        kind, trees, subject_id, facts = _payload_contents(services, directory, child)
-        if not trees:
-            # An empty directory a failed archive left behind.
-            with suppress(OSError):
-                child.rmdir()
+        try:
+            kind, trees, subject_id, facts = _payload_contents(services, directory, child)
+            if not trees:
+                # An empty directory a failed archive left behind.
+                with suppress(OSError):
+                    child.rmdir()
+                continue
+            mtime = child.stat().st_mtime
+        except OSError as error:
+            _unreadable(child, error)
             continue
-        archived_at = format_canonical_timestamp(datetime.fromtimestamp(child.stat().st_mtime, UTC))
+        archived_at = format_canonical_timestamp(datetime.fromtimestamp(mtime, UTC))
         ref = ledger.adopt_payload(
             child.name,
             kind,
@@ -173,10 +198,22 @@ def _adopt_orphan_payloads(services: ArchiveServices) -> bool:
     return adopted
 
 
+def _unreadable(path: Path, error: OSError) -> None:
+    _LOGGER.warning(
+        "Archive payload not adopted; it cannot be read and is retried at the next start "
+        "(path=%s): %s",
+        path,
+        error,
+    )
+
+
 def _payload_contents(
-    services: ArchiveServices, directory: str, child: Any
+    services: ArchiveServices, directory: str, child: Path
 ) -> tuple[str, tuple[ArchiveTree, ...], str, dict[str, Any]]:
-    """The kind, trees, subject and facts an orphan payload directory shows."""
+    """The kind, trees, subject and facts an orphan payload directory shows.
+
+    Raises ``OSError`` when the directory cannot be read.
+    """
     agent_dir = child / "agent"
     project_dir = child / "project"
     if agent_dir.is_dir():
