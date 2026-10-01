@@ -425,7 +425,7 @@ Other entries appear at the data root when first needed:
 
 - the canonical databases `sessions.db`, `channels.db`, `provider-usage.db` and `decisions.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
 - `snapshots/`, `incidents/` and `quarantine/` for data snapshots and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
-- `runtime/` with the control records of a running server, and `speech-engines/` after local speech setup;
+- `runtime/` with the control records of a running server, `speech-engines/` after local speech setup, and `embedding-engines/` after a local embedding Model is installed;
 - `pre-generation-1/` after converting an older data directory (see below).
 
 The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates a `settings.json` holding only `format_version` 1 when Settings is absent. It never rewrites either existing file; Setup separately retains ownership of fresh-install Settings defaults and explicit port updates. It writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Converting an existing data directory).
