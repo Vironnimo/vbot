@@ -1,9 +1,11 @@
 """Persisted MCP faults must not disable unrelated connections or erase data."""
 
 import json
+import re
 
 import pytest
 
+from core.database import older_format_hint
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import (
     ConnectionStore,
@@ -134,7 +136,7 @@ def test_save_creates_a_versioned_document(tmp_path):
     ("original", "message"),
     [
         ("broken json", "Invalid JSON"),
-        ("{}", "persistence Generation 1"),
+        ("{}", re.escape(older_format_hint())),
         ("null", "Expected a JSON object"),
         (json.dumps([connection()]), "Expected a JSON object"),
         ('{"format_version": 2, "connections": []}', "written by a newer vBot"),

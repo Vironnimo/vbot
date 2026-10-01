@@ -121,7 +121,7 @@ python desktop/main.py                # Desktop shell
 ```
 A git-ignored checkout marker selects dev data `~/.vbot-dev`, port `8421`; the installed CLI outside the checkout uses `~/.vbot`, `8420`; managed worktrees have their own. Never target the installed instance with development commands, including its interpreter: running an installed version's runtime interpreter (`versions/<id>/runtime/python.exe`, `runtime/bin/python3` on Linux) writes `__pycache__` into the verified version (`cli/application.md` -> Update operation).
 
-**Data store:** `python cli/main.py data-store status|snapshot|incident|unregister` reports and manages every canonical database (`cli.md`). A data directory from before Generation 1 (the 0.4.x releases, `~/.vbot-dev` included) is converted once, offline, with `python -m scripts.converters.persistence_generation_1 <data-dir> [--dry-run]` (`database/generation-1-conversion.md`).
+**Data store:** `python cli/main.py data-store status|snapshot|incident|unregister` reports and manages every canonical database (`cli.md`). A data directory from before Generation 1 (vBot 0.4.4 and earlier) has no converter and is refused at startup (`database.md` -> Evolution contract, item 6).
 
 **Frontend build:** `cd webui && npm ci && npm run build`. It also compiles bundled Extension `ui/page.html` entries to relative `web/` assets (`webui/scripts/build-extension-pages.mjs`); installers ship assets and Extension sources. `npm run format`/`format:check`/`lint` and the commit hook cover these Extension sources too.
 

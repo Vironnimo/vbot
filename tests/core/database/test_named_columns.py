@@ -19,9 +19,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).parents[3]
 _RUNTIME_PACKAGES = ("core", "server", "resources/extensions")
-# Writers also include the command line and the converters, which build the
-# databases the runtime then opens.
-_WRITING_PACKAGES = ("core", "server", "cli", "resources/extensions", "scripts/converters")
+# Writers also include the command line, which runs offline data operations.
+_WRITING_PACKAGES = ("core", "server", "cli", "resources/extensions")
 
 _SQL = re.compile(r"\bSELECT\b", re.IGNORECASE)
 _IMPLICIT_COLUMNS = (

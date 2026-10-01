@@ -62,7 +62,7 @@ Some directories are created only when their owning feature first writes data.
 | `oauth/` | Sensitive OAuth token state | Provider connect/status/disconnect commands; never print or copy tokens into chat |
 | `extensions/` | User-installed single-file or package Extensions and optional bundled Extension Skills | `vbot extensions list/reload/enable/disable`; additional configured roots may live elsewhere |
 | `archive/` | System-owned archived Agent and Project trees (`archive/agents/`, `archive/projects/`) created by delete operations; archived Sessions stay in `sessions.db` | Inspect only to understand or recover an archived resource; do not treat it as active state |
-| `pre-generation-1/` | Present only after the one-time conversion to the current data format: every file the conversion replaced, including old copies of credential files, plus `conversion-report.json`; vBot never reads it | Do not read credentials from it or restore files from it; deleting it is the user's decision |
+| `pre-generation-1/` | Present only in a data directory converted from the data format of vBot 0.4.4 or earlier: every file the conversion replaced, including old copies of credential files, plus `conversion-report.json`; vBot never reads it | Do not read credentials from it or restore files from it; deleting it is the user's decision |
 | `artifacts/temp/bash/` and `artifacts/temp/subagents/` | Retained diagnostic output with category-specific expiry | Inspect when a Tool points to a retained file; do not treat it as durable application state |
 | `artifacts/temp/atomic/` | Short-lived atomic-write and refresh staging | Never use as a source of truth |
 

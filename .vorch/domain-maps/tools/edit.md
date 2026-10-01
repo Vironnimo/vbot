@@ -23,6 +23,4 @@ Runtime inventory and Provider-definition tests in
 `tests/core/runtime/test_runtime_wiring.py` verify that startup exposes `apply_patch`
 and excludes `edit`. A server restart is required to remove an already loaded
 built-in Tool. Existing Session history is not rewritten, and the application
-never maps a persisted `edit` grant to `apply_patch`. The Generation 1 converter
-replaces `edit` in persisted Tool access; `edit` alone does not grant `apply_patch`
-(`database/generation-1-conversion.md` -> Retired Tool names).
+never maps a persisted `edit` grant to `apply_patch`.

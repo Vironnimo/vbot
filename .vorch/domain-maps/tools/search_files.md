@@ -241,12 +241,7 @@ Only `search_files` is registered. New Project ceilings include it; startup neve
 migrates persisted selections, and a `grep`/`glob` name left in a policy is an
 ordinary unknown Tool name without special meaning.
 Claude/OpenCode scanner denials for either capability map to search_files.
-The Generation 1 converter replaces grep/glob in every persisted Tool access list
-(`scripts/converters/persistence_generation_1/_tool_access.py`): `search_files`
-is granted only where both old capabilities were, a denial or a mode-all policy that
-lost one capability denies it, and every replacement and narrowing is reported
-(`database/generation-1-conversion.md` -> Retired Tool names). Historical grep/glob
-chat rows remain readable.
+Historical grep/glob chat rows remain readable.
 
 ## Verification
 
@@ -256,7 +251,7 @@ system-error checks in `test_search_files.py`; named fields, other interfaces'
 spellings, grep habits, command-line strings, path suggestions, and encoded-list,
 literal-payload, conflict, regex-repair, and empty-scope regressions in
 `test_search_files_arguments.py`; native children in `test_search_files_lifecycle.py`),
-`tests/cli/test_search_runtime.py`, `tests/scripts/converters/persistence_generation_1/test_json_documents.py`,
+`tests/cli/test_search_runtime.py`,
 the retained probe cases in `tests/scripts/test_provider_probe.py`, plus runtime, scanner, Chat, packaging,
 and Tool row integration tests. Tests execute the private native engine.
 

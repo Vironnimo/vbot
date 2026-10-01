@@ -89,8 +89,8 @@ def extension_database_spec(
 ) -> DatabaseSpec:
     """Declare Extension database ``name`` of ``owner`` inside ``data_dir``.
 
-    Converters and tests use this with ``open_offline_database`` to build the
-    same database an Extension opens through its host.
+    Tests use this to build the same database an Extension opens through its
+    host.
     """
     if not isinstance(schema_sql, str) or not schema_sql.strip():
         raise ValueError("Extension database schema_sql must contain the CREATE statements")

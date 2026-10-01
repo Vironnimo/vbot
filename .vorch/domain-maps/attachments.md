@@ -10,7 +10,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 
 - `AttachmentRecord`: `id` (opaque blob basename; newly generated `att_` plus 12 lowercase base32 characters), `filename` (display name), `media_type` (server-sniffed), `size_bytes`, `stored_at`, `file_path` (the blob's current location, derived on load and never stored), optional cached `transcription` written on first STT.
 - Blob at `<id><canonical-extension>` (extension from sniffed type, never client metadata); sidecar `<id>.json`. No index, no DB, no cleanup pass.
-- The sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `attachment_metadata`): `format_version` 1 plus `id`, `filename`, `media_type`, `size_bytes`, `stored_at` and an optional `transcription` (`null` also reads as none). `validate_attachment_metadata_file` backs `doctor config`. Sidecars are not data-snapshot members: a snapshot holds no blobs. The Generation 1 converter stamped existing sidecars and dropped their stored `file_path` and the retired `text_content` cache.
+- The sidecar is a durable JSON document under the Generation 1 contract (`settings.md` -> JSON Document Contract; registry kind `attachment_metadata`): `format_version` 1 plus `id`, `filename`, `media_type`, `size_bytes`, `stored_at` and an optional `transcription` (`null` also reads as none). `validate_attachment_metadata_file` backs `doctor config`. Sidecars are not data-snapshot members: a snapshot holds no blobs.
 
 ## Contracts
 
@@ -33,7 +33,7 @@ Blob-backed original-file storage, attachment-specific message shaping, and shar
 ## Constraints & Gotchas
 
 - OOXML sniffing opens the uploaded ZIP's `[Content_Types].xml` - an unbounded decompression a within-limit zip bomb could inflate to gigabytes. The reader caps at 1 MiB treating overflow as "not OOXML"; encrypted entries, unsupported compression and malformed compressed data also stay unrecognized instead of escaping as unexpected exceptions. The upload limit bounds compressed bytes only, never make this read unbounded.
-- Suffixless blobs from the layout before typed blobs are invalid. Their explicit converter was removed with Generation 1; a data directory that still has them must first be converted with a vBot release before Generation 1.
+- Suffixless blobs from the layout before typed blobs are invalid; vBot has no converter for them.
 - `GET /api/attachments/{id}` serves sniffed type with inline disposition and the display filename. An unknown id and an unreadable/corrupt sidecar (`AttachmentError`) both return 404; the corrupt case also logs a warning, never an HTTP 500 (`tests/server/test_attachment_endpoints.py`).
 - Media resolution lives in the chat layer as a provider-agnostic intersection: native only when current turn AND model modality AND adapter wire support align; otherwise degraded - always one block in, one or more out, every attachment leaving a `Path:` handle, degradation never aborting a Run. Per-modality policies live in `chat/request-building.md`.
 - Tool-produced images use the same resolver without becoming user content: `web_fetch` and remote Tool media persist compact artifacts resolved into request-only content for the active Run. Local `read` images bypass blob storage and transfer loaded pixels in memory; file mentions are not attachment-backed either.

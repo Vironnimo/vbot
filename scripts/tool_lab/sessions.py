@@ -1,10 +1,10 @@
 """How Agents actually called the Tools: measurements from a copy of a sessions database.
 
 The source is never opened for writing. It is copied with SQLite's online
-backup API in short steps, so a running server keeps working. A
-pre-Generation-1 copy is converted with the persistence converter, so this
-module reads only the current schema. ``--work DIR`` keeps the prepared copy
-for later runs; otherwise it is removed at the end.
+backup API in short steps, so a running server keeps working. This module
+reads only the current schema and refuses a database written by vBot 0.4.4
+or earlier. ``--work DIR`` keeps the prepared copy for later runs; otherwise
+it is removed at the end.
 
 The overview counts calls, failures, error codes and result sizes per Tool. A
 Tool view adds the argument keys Agents sent (marking keys the current schema
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import sqlite3
 import statistics
 import tempfile
@@ -27,8 +26,6 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
-
-from scripts.converters.persistence_generation_1.conversion import convert_data_directory
 
 DATABASE_NAME = "sessions.db"
 _BACKUP_PAGES_PER_STEP = 4000
@@ -148,13 +145,15 @@ def _prepare(source: Path, work: Path) -> Path:
         writer.close()
         reader.close()
     shape = _shape(target)
+    if shape == "current":
+        return target
+    # A kept --work copy is reused without this check, so a refused one goes.
+    target.unlink()
     if shape == "legacy":
-        # The converter works on data directories; the copy is one on its own.
-        convert_data_directory(work)
-        shutil.rmtree(work / "pre-generation-1", ignore_errors=True)
-    elif shape != "current":
-        raise SessionsSourceError(f"{source} is not a vBot sessions database")
-    return target
+        raise SessionsSourceError(
+            f"{source} was written by vBot 0.4.4 or earlier; only the current schema is read"
+        )
+    raise SessionsSourceError(f"{source} is not a vBot sessions database")
 
 
 def _shape(path: Path) -> str:

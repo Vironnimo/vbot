@@ -11,7 +11,6 @@ from typing import Any
 import pytest
 
 from core.database import (
-    GENERATION_1_CONVERTER_COMMAND,
     DatabaseConversionRequiredError,
     DatabaseFormatError,
     DatabaseSchemaMismatchError,
@@ -398,16 +397,14 @@ def test_a_file_of_another_format_generation_is_refused_untouched(
 
     with pytest.raises(DatabaseFormatError) as refused:
         open_offline_database(notes_spec(data_dir))
-    # Only older data has a converter; newer data needs a newer vBot.
+    # Older data predates this vBot's format; newer data needs a newer vBot.
     assert isinstance(refused.value, DatabaseConversionRequiredError) is (file_generation == 0)
     with pytest.raises(DatabaseFormatError) as refused:
         open_database(notes_spec(data_dir))
     assert isinstance(refused.value, DatabaseConversionRequiredError) is (file_generation == 0)
     if isinstance(refused.value, DatabaseConversionRequiredError):
         assert refused.value.database == "notes"
-        assert refused.value.converter_command == (
-            f"{GENERATION_1_CONVERTER_COMMAND} {data_dir.resolve()}"
-        )
+        assert refused.value.data_dir == data_dir.resolve()
     assert path.read_bytes() == original
 
 
@@ -420,7 +417,6 @@ def test_a_marker_entry_of_another_generation_is_refused_before_the_file_is_read
     with pytest.raises(DatabaseConversionRequiredError) as refused:
         open_database(notes_spec(data_dir, format_generation=2))
     assert refused.value.database == "notes"
-    assert refused.value.converter_command.startswith(GENERATION_1_CONVERTER_COMMAND)
 
     def newer(payload: dict[str, Any]) -> None:
         payload["databases"]["notes"]["format_generation"] = 2

@@ -15,6 +15,4 @@ worktree and reconcile shared files with current source.
 Runtime inventory and Provider-definition tests verify that startup exposes
 `apply_patch` and excludes `write`. Restart the server to remove an already
 loaded Tool. Existing Session history is not rewritten, and the application
-never maps a persisted `write` grant to `apply_patch`. The Generation 1 converter
-replaces `write` with `apply_patch` in persisted Tool access, and a denied `write`
-with a denied `apply_patch` (`database/generation-1-conversion.md` -> Retired Tool names).
+never maps a persisted `write` grant to `apply_patch`.
