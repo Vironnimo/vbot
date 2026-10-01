@@ -658,7 +658,11 @@ describe('ChatView Projects', () => {
       flushSync();
       document.querySelector('.session-row__menu-item--danger').click();
       flushSync();
-      findButtonByText(t('common.delete')).click();
+      // The dialog's permanent-delete option also names "Delete"; confirm
+      // with the footer button.
+      Array.from(document.querySelectorAll('.modal-footer button'))
+        .find((button) => button.textContent.trim() === t('common.delete'))
+        .click();
       await waitForText('Older reply');
       const deletedReads = historyReads('builder-session');
 
