@@ -184,7 +184,7 @@ def _link_directory(link: Path, target: Path) -> None:
 
 
 def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     outside = make_tree(tmp_path / "outside")
     expected = contents(outside)
@@ -194,6 +194,18 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     read_only = tree / "sub" / "nested.txt"
     read_only.chmod(stat.S_IREAD)
     _link_directory(within / "link", outside)
+    # Each link refuses its first removal, as a read-only link does on Windows; clearing
+    # that attribute must never reach the read-only directory the link points at.
+    outside.chmod(stat.S_IREAD | stat.S_IEXEC)
+    real_unlink, refused_once = os.unlink, set()
+
+    def unlink(path: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(path).name in ("link", "linked") and path not in refused_once:
+            refused_once.add(path)
+            raise PermissionError(errno.EACCES, "read-only link", str(path))
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", unlink)
 
     for refused in (outside, within, within / ".." / "outside", within / "link" / "top.txt"):
         with pytest.raises(ValueError, match="not inside"):
@@ -202,5 +214,8 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     remove_tree(within / "entry", within=within)
     remove_tree(within / "missing", within=within)
 
+    assert len(refused_once) == 2
     assert list(within.iterdir()) == []
+    assert not os.stat(outside).st_mode & stat.S_IWRITE
     assert contents(outside) == expected
+    outside.chmod(stat.S_IRWXU)

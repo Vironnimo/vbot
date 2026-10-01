@@ -87,13 +87,15 @@ def remove_tree(path: Path, *, within: Path) -> None:
     target = Path(path).parent.resolve() / Path(path).name
     if target == root or not target.is_relative_to(root) or Path(path).name in ("", ".", ".."):
         raise ValueError(f"refusing to remove {path}: it is not inside {within}")
-    if not os.path.lexists(target):
+    try:
+        status = os.lstat(target)
+    except FileNotFoundError:
         return
-    if os.path.islink(target) or os.path.isjunction(target) or not target.is_dir():
+    if _is_link(status) or not stat.S_ISDIR(status.st_mode):
         try:
             os.unlink(target)
         except PermissionError:
-            os.chmod(target, os.lstat(target).st_mode | stat.S_IWRITE, follow_symlinks=False)
+            _make_writable(target)
             os.unlink(target)
         return
     _remove_tree(target)
@@ -105,5 +107,26 @@ def _remove_tree(path: Path) -> None:
 
 
 def _clear_read_only_and_retry(action: Callable[[str], object], path: str, _error: object) -> None:
-    os.chmod(path, os.lstat(path).st_mode | stat.S_IWRITE)
+    _make_writable(path)
     action(path)
+
+
+def _is_link(status: os.stat_result) -> bool:
+    """Whether an ``lstat`` result is a symbolic link or a Windows junction."""
+    if sys.platform == "win32" and status.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT:
+        return True
+    return stat.S_ISLNK(status.st_mode)
+
+
+def _make_writable(path: Path | str) -> None:
+    """Clear the read-only attribute of ``path`` itself, never of what a link points at.
+
+    Where ``os.chmod`` cannot leave links unfollowed (Windows before Python 3.13,
+    Linux), a link is left as it is: its removal then fails instead of changing a
+    directory outside the tree.
+    """
+    status = os.lstat(path)
+    if not _is_link(status):
+        os.chmod(path, status.st_mode | stat.S_IWRITE)
+    elif os.chmod in os.supports_follow_symlinks:
+        os.chmod(path, status.st_mode | stat.S_IWRITE, follow_symlinks=False)
