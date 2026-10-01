@@ -19,13 +19,13 @@ import core.tools._terminal_input as terminal_input
 import core.tools.terminal_backend as terminal_backend
 import core.tools.terminal_manager as terminal_module
 from core.tools.terminal_manager import TerminalManager
-from server._live_context import LiveUiError
-from server._live_terminals import TerminalTimings
-from server._live_tools import LiveToolExecutor
+from server.live._context import LiveUiError
+from server.live._terminals import TerminalTimings
+from server.live._tools import LiveToolExecutor
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.errors import RpcError
 from server.rpc.methods import METHODS
-from tests.server.live_tools_test_support import (
+from tests.server.live.tools_test_support import (
     CLAUDE_TRUST,
     CODEX_LOADING,
     CODEX_READY,
@@ -118,9 +118,6 @@ async def test_resolves_the_folder_from_a_project_or_an_existing_path(
     fx: Fixture, tmp_path: Path
 ) -> None:
     fx.app.projects.append({"project_id": "site", "display_name": "Site", "cwd": "C:\\work\\site"})
-    fx.ui.context["projects"].append(
-        {"project_id": "site", "name": "Site", "cwd": "C:\\work\\site"}
-    )
     await fx.ok("start_coding_terminal", program="codex", folder="site")
     await fx.ok("start_coding_terminal", program="codex", folder=str(tmp_path))
     assert [params["workdir"] for params in fx.app.params("terminal.start")] == [
@@ -136,7 +133,8 @@ async def test_resolves_the_folder_from_a_project_or_an_existing_path(
 
 @pytest.mark.asyncio
 async def test_asks_for_a_folder_when_no_project_is_selected(fx: Fixture) -> None:
-    fx.ui.context["selected_project_id"] = ""
+    assert fx.context is not None
+    fx.context["selected_project_id"] = None
     code, message = await fx.failed("start_coding_terminal", program="claude", task="Fix it")
     assert code == "folder_missing"
     assert message.startswith("No folder was given and no Project is selected in the app.")
@@ -219,7 +217,8 @@ async def test_stops_a_coding_terminal_with_its_interrupt_key(fx: Fixture) -> No
 @pytest.mark.asyncio
 async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: Fixture) -> None:
     fx.app.add_terminal("term_other")
-    fx.app.screens["term_start2"] = [SHELL] * 20 + [CODEX_READY]
+    # The program stays loading until the other calls are done.
+    fx.app.screens["term_start2"] = [SHELL]
     start = asyncio.create_task(fx.call("start_coding_terminal", program="codex", task="Go"))
     while fx.app.count("terminal.read") < 2:
         await asyncio.sleep(0)
@@ -234,6 +233,7 @@ async def test_other_calls_run_while_a_start_waits_but_never_write_into_it(fx: F
     assert not start.done()
     assert [terminal for terminal, _data, _revision in fx.app.inputs] == ["term_other"] * 2
 
+    fx.app.screens["term_start2"] = [CODEX_READY]
     result = await start
     assert result["ok"] is True, result
     assert [data for terminal, data, _rev in fx.app.inputs if terminal == "term_start2"] == [
@@ -526,40 +526,42 @@ class EmulatedTerminals:
         return any(item.pid == pid and item.program == program for item in self.all)
 
 
-class Ui:
-    """The owning app window: its selection and Terminal layout."""
-
-    def __init__(self, folder: Path) -> None:
-        self.context: JsonObject = {
-            "view": "chat",
-            "selected_agent_id": "coder",
-            "selected_project_id": "app",
-            "agents": [{"agent_id": "coder", "name": "Coder"}],
-            "projects": [{"project_id": "app", "name": "App", "cwd": str(folder)}],
-            "selected_project_team": [],
-        }
-
-    async def __call__(self, action: str, args: JsonObject) -> JsonObject:
-        return self.context if action == "context" else {"applied": True}
+async def ui(action: str, args: JsonObject) -> JsonObject:
+    """The owning app window, which applies every layout change."""
+    return {"applied": True}
 
 
 class Call:
-    """One Live call's Tool executor on a real RPC dispatcher."""
+    """One Live call's Tool executor on a real RPC dispatcher.
 
-    def __init__(self, state: Any, ui: Ui, terminals: EmulatedTerminals) -> None:
+    The app window shows the Project ``app`` in *folder*; the Project list
+    answers with it, everything else is the real dispatcher.
+    """
+
+    def __init__(self, state: Any, folder: Path, terminals: EmulatedTerminals) -> None:
         self.state = state
         self.terminals = terminals
         self.rpc_calls: list[tuple[str, JsonObject]] = []
+        project = {"project_id": "app", "display_name": "App", "cwd": str(folder)}
 
         async def rpc(method: str, params: JsonObject) -> JsonObject:
             self.rpc_calls.append((method, dict(params)))
+            if method == "project.list":
+                return {"projects": [project]}
             return await dispatch_method(state, method, params, METHODS)
 
         self.executor = LiveToolExecutor(
             rpc=rpc,
             ui=ui,
+            app_context=lambda: {
+                "view": "chat",
+                "selected_agent_id": "coder",
+                "selected_project_id": "app",
+                "chat_session": None,
+            },
             is_active=lambda: True,
             started_at=datetime.now(UTC),
+            end_call=lambda: None,
             timings=TerminalTimings(
                 poll_seconds=0.01,
                 ready_timeout_seconds=5.0,
@@ -634,7 +636,7 @@ async def call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator
     folder = tmp_path / "app"
     folder.mkdir()
     try:
-        yield Call(state, Ui(folder), terminals)
+        yield Call(state, folder, terminals)
     finally:
         await manager.aclose()
 
@@ -671,7 +673,7 @@ async def test_a_message_reaches_the_program_and_is_sent(call: Call) -> None:
     ("program", "prompt", "refusal"),
     [
         # A prompt the screen rules recognize ends the input line. Every observed prompt
-        # style is a screen-rule case of tests/core/model_tasks/test__live_programs.py.
+        # style is a screen-rule case of tests/server/live/test_programs.py.
         pytest.param(
             "codex",
             "PS C:\\work\\app> ",

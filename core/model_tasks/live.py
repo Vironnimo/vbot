@@ -1,23 +1,29 @@
 """Live voice: provider-neutral realtime voice calls owned by the server.
 
 The ``live_voice`` Task Model binding selects the voice Model and Connection.
-A Live call keeps the provider control channel, delegated reasoning, Tool
-execution, and announcements on the server. Accessors attach only media and
-answer UI requests through the :class:`LiveCallHost` the server supplies.
+A Live call keeps the provider control channel, delegated reasoning, and
+announcements here. The :class:`LiveCallHost` the server supplies owns what the
+Models are told and the Tools they may call (:class:`LiveBrief`), runs those
+Tools, and attaches the accessor's media and display.
 
 The bound Provider decides the media kind: ``webrtc`` (OpenAI; the accessor
 connects audio to the provider) or ``relay`` (xAI; audio passes through the
-server as PCM16 mono 24 kHz). A backend model answers delegated requests; a
-voice model that calls function Tools itself may run without one (direct
-Tools mode, backend ``""``).
+server as PCM16 mono 24 kHz). A backend model answers delegated requests with
+the host's Tools; a voice model that calls function Tools itself may run
+without one and call the host's Tools directly (direct Tools mode, backend
+``""``).
 
 Accessor updates published through :meth:`LiveCallHost.publish`:
 
 * ``{"type": "state", "phase": "connecting" | "live" | "closing" | "closed" | "failed"}``
+* ``{"type": "expiry", "seconds": float}`` (after ``live`` when the provider
+  limits the session: seconds until it ends the call)
 * ``{"type": "caption", "role": "user" | "assistant", "text": str, "final": bool}``
 * ``{"type": "activity", "busy": bool, "label": str | None}``
 * ``{"type": "playback_clear"}`` (relay media: drop audio not yet played)
-* ``{"type": "closed", "reason": str | None, "usage": dict | None}``
+* ``{"type": "closed", "reason": str | None, "usage": dict | None}``; reasons
+  include ``closed`` (an ordinary close), ``expired`` (the provider's session
+  limit), ``connection_lost``, ``start_timeout``, and ``aborted``
 
 Relay audio for the accessor goes through :meth:`LiveCallHost.publish_audio`.
 """
@@ -32,34 +38,11 @@ from typing import Any, Literal, Protocol
 from core.model_tasks._live_brain import BrainTarget, LiveBrain
 from core.model_tasks._live_call import LiveCallSession
 from core.model_tasks._live_openai import ControlJoinError, open_openai_live_wire
-from core.model_tasks._live_programs import (
-    CODING_PROGRAMS,
-    CliPrompt,
-    CodingProgram,
-    program_input_visible,
-    program_prompt,
-    program_ready,
-    program_text_pending,
-    selected_answer,
-    shell_prompt_visible,
-)
-from core.model_tasks._live_tools import (
-    LIVE_KEYS,
-    LIVE_READ_ONLY_TOOLS,
-    LIVE_TOOL_NAMES,
-    MAX_LIVE_NAME_CHARS,
-    MAX_LIVE_TEXT_CHARS,
-    TOOL_OPEN,
-    TOOL_OVERVIEW,
-    TOOL_READ,
-    TOOL_SEND_MESSAGE,
-    TOOL_START_AGENT_SESSION,
-    TOOL_START_CODING_TERMINAL,
-    TOOL_STOP,
-    TOOL_TERMINAL,
+from core.model_tasks._live_results import (
+    LIVE_UPDATE_PREFIX,
     live_failure,
+    live_result_text,
     live_success,
-    voice_instructions,
 )
 from core.model_tasks._live_wire import MEDIA_RELAY, MEDIA_WEBRTC, LiveWire
 from core.model_tasks._live_xai import open_xai_live_wire
@@ -89,39 +72,21 @@ from core.utils.logging import get_logger
 JsonObject = dict[str, Any]
 
 __all__ = [
-    "CODING_PROGRAMS",
-    "LIVE_KEYS",
     "LIVE_MEDIA_KINDS",
-    "LIVE_READ_ONLY_TOOLS",
     "LIVE_START_REJECTION_CODES",
-    "LIVE_TOOL_NAMES",
-    "MAX_LIVE_NAME_CHARS",
-    "MAX_LIVE_TEXT_CHARS",
-    "TOOL_OPEN",
-    "TOOL_OVERVIEW",
-    "TOOL_READ",
-    "TOOL_SEND_MESSAGE",
-    "TOOL_START_AGENT_SESSION",
-    "TOOL_START_CODING_TERMINAL",
-    "TOOL_STOP",
-    "TOOL_TERMINAL",
-    "CliPrompt",
-    "CodingProgram",
+    "LIVE_UPDATE_PREFIX",
+    "LiveBrief",
     "LiveCall",
     "LiveCallHost",
     "LiveRunNotice",
     "LiveRuntime",
     "LiveStartRejected",
+    "LiveToolRun",
     "LiveVoiceError",
     "LiveVoiceService",
     "live_failure",
+    "live_result_text",
     "live_success",
-    "program_input_visible",
-    "program_prompt",
-    "program_ready",
-    "program_text_pending",
-    "selected_answer",
-    "shell_prompt_visible",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -133,6 +98,8 @@ LIVE_MEDIA_KINDS = frozenset({MEDIA_WEBRTC, MEDIA_RELAY})
 LIVE_START_REJECTION_CODES = frozenset(
     {
         "not_configured",
+        "provider_unavailable",
+        "backend_unavailable",
         "invalid_offer",
         "access_denied",
         "rate_limited",
@@ -158,22 +125,62 @@ class LiveStartRejected(LiveVoiceError):  # noqa: N818 - names the outcome
         self.code = code
 
 
-class LiveCallHost(Protocol):
-    """Server-side attachment of one Live call to its owning accessor.
+@dataclass(frozen=True)
+class LiveBrief:
+    """What the Models of one call are told, and the Tools they may call.
 
-    ``execute_tool`` runs one prepared Live Tool call (a canonical name from
-    ``LIVE_TOOL_NAMES`` with validated arguments) and returns a Tool result
-    envelope, reporting operation failures inside it. Concurrent delegations
-    may call it concurrently; the host runs executions one at a time.
-    ``known_refs`` lists the refs earlier Tool results of the call named (one
-    ``- s1: Session at Coder`` line each, empty when none), so a later
-    delegation can target them without reading them again. ``publish``
-    delivers an accessor update, ``publish_audio`` relayed assistant audio
-    (PCM16 mono 24 kHz), and ``record`` one Tool call or delegation record for
-    local measurement, all without blocking.
+    ``voice_instructions`` configure the voice model. ``request_tool`` is the
+    function Tool through which a voice model without native delegation hands
+    the user's request on (one required text parameter, ``request``); it is
+    offered only when a backend model answers. ``delegation_instructions`` are
+    the backend model's system prompt. ``tools`` are the host's Tool
+    definitions (``name``, ``description``, JSON Schema ``parameters``),
+    offered to the backend model, or in direct Tools mode to the voice model.
     """
 
-    async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject: ...
+    voice_instructions: str
+    request_tool: JsonObject
+    delegation_instructions: str
+    tools: tuple[JsonObject, ...]
+
+
+@dataclass(frozen=True)
+class LiveToolRun:
+    """The outcome of one Tool call a Model made.
+
+    ``result`` is a Tool result envelope (:func:`live_success`,
+    :func:`live_failure`). ``changed`` names the Tool when it ran and may have
+    changed something in the app; it stays empty for lookups and for calls
+    rejected before they ran.
+    """
+
+    result: JsonObject
+    changed: str = ""
+
+
+class LiveCallHost(Protocol):
+    """Server-side owner of one Live call's Tools, accessor, and records.
+
+    ``brief`` supplies the call's instructions and Tools once the call knows
+    whether the voice model calls the Tools itself (*direct_tools*).
+    ``run_tool`` runs one Tool call as the Model made it (any name, raw
+    arguments) and never raises for operation failures: they come back as a
+    failure result naming the next valid call. *rejection* is the failure a
+    Provider Adapter already reported for unusable arguments; the host returns
+    it as the result without running anything. Concurrent delegations may call
+    ``run_tool`` concurrently. ``known_refs`` lists the refs earlier Tool
+    results named (one ``- s1: Session at Coder`` line each, empty when none),
+    so a later delegation can target them without reading them again.
+    ``publish`` delivers an accessor update, ``publish_audio`` relayed
+    assistant audio (PCM16 mono 24 kHz), and ``record`` one delegation record
+    for local measurement, all without blocking.
+    """
+
+    def brief(self, *, direct_tools: bool) -> LiveBrief: ...
+
+    async def run_tool(
+        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
+    ) -> LiveToolRun: ...
 
     def known_refs(self) -> str: ...
 
@@ -264,16 +271,12 @@ class LiveRuntime(Protocol):
 
 @dataclass(frozen=True)
 class _WireSetup:
-    """What opening one Provider's wire needs beyond the target.
-
-    ``wake_phrases`` address other vBot Agents during the call; the voice
-    instructions tell the voice model to ignore speech starting with them.
-    """
+    """What opening one Provider's wire needs beyond the target."""
 
     offer_sdp: str | None
     voice: str | None
     direct_tools: bool
-    wake_phrases: tuple[str, ...]
+    brief: LiveBrief
 
 
 async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
@@ -281,19 +284,19 @@ async def _open_openai(runtime: Any, target_ref: TaskModelTargetRef, setup: _Wir
         runtime,
         target_ref,
         offer_sdp=setup.offer_sdp or "",
-        instructions=voice_instructions(direct_tools=False, wake_phrases=setup.wake_phrases),
+        instructions=setup.brief.voice_instructions,
         voice=setup.voice,
     )
 
 
 async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSetup) -> LiveWire:
+    brief = setup.brief
     return await open_xai_live_wire(
         runtime,
         target_ref,
-        instructions=voice_instructions(
-            direct_tools=setup.direct_tools, wake_phrases=setup.wake_phrases
-        ),
+        instructions=brief.voice_instructions,
         voice=setup.voice,
+        tools=list(brief.tools) if setup.direct_tools else [brief.request_tool],
         direct_tools=setup.direct_tools,
     )
 
@@ -302,8 +305,8 @@ async def _open_xai(runtime: Any, target_ref: TaskModelTargetRef, setup: _WireSe
 class _ProviderWire:
     """How a Provider's Live calls connect.
 
-    ``direct_tools`` means the voice model can call the Live Tools itself, so
-    the backend model is optional.
+    ``direct_tools`` means the voice model can call the host's Tools itself,
+    so the backend model is optional.
     """
 
     media: str
@@ -359,17 +362,13 @@ class LiveVoiceService:
         *,
         media: str,
         offer_sdp: str | None = None,
-        wake_phrases: tuple[str, ...] = (),
         host: LiveCallHost,
     ) -> LiveCall:
         """Create a provider call and return it once control is joined.
 
         *media* is the kind the accessor prepared; WebRTC needs *offer_sdp*.
-        *wake_phrases* are validated, printable phrases that address other vBot
-        Agents during the call; the voice model is told to ignore speech
-        starting with them. Raises :class:`LiveStartRejected` for expected
-        failures, including ``media_mismatch`` when the bound target needs the
-        other media kind.
+        Raises :class:`LiveStartRejected` for expected failures, including
+        ``media_mismatch`` when the bound target needs the other media kind.
         """
 
         if media == MEDIA_WEBRTC and not _valid_offer(offer_sdp):
@@ -384,11 +383,10 @@ class LiveVoiceService:
         label = public_provider_target_id(
             target_ref.provider_id, target_ref.model_id, target_ref.local_connection_id
         )
+        direct_tools = plan.brain_target is None
+        brief = host.brief(direct_tools=direct_tools)
         setup = _WireSetup(
-            offer_sdp=offer_sdp,
-            voice=plan.voice,
-            direct_tools=plan.brain_target is None,
-            wake_phrases=wake_phrases,
+            offer_sdp=offer_sdp, voice=plan.voice, direct_tools=direct_tools, brief=brief
         )
         accounting = TaskUsage(self._usage_recorder, TASK_LIVE_VOICE, target_ref)
         usage_call_id = await accounting.start()
@@ -417,7 +415,9 @@ class LiveVoiceService:
             )
             raise LiveStartRejected(code, str(exc)) from exc
         except KeyError as exc:
-            raise LiveStartRejected("not_configured", "Live voice Provider is unavailable") from exc
+            raise LiveStartRejected(
+                "provider_unavailable", "Live voice Provider is unavailable"
+            ) from exc
         finally:
             if wire is None:
                 await accounting.finish(usage_call_id, status=status)
@@ -428,7 +428,9 @@ class LiveVoiceService:
             LiveBrain(
                 self._runtime,
                 brain_target,
-                host.execute_tool,
+                instructions=brief.delegation_instructions,
+                tools=brief.tools,
+                run_tool=host.run_tool,
                 conversation_id=f"live:{log_id}",
                 record=host.record,
                 usage_recorder=self._usage_recorder,
@@ -447,15 +449,14 @@ class LiveVoiceService:
         )
         call.start()
         _LOGGER.info(
-            "Live call started (call=%s target=%s media=%s backend_model=%s backend_effort=%s "
-            "wake_phrases=%d)",
+            "Live call started (call=%s target=%s media=%s backend_model=%s backend_effort=%s)",
             call.log_id,
             label,
             plan.wire.media,
             brain_target.model_id if brain_target is not None else "none",
             (brain_target.thinking_effort if brain_target is not None else None) or "default",
-            len(wake_phrases),
         )
+
         return call
 
     def _resolve_target(self) -> _CallPlan:
@@ -491,7 +492,7 @@ class LiveVoiceService:
         )
         if backend_model not in {model.model_id for model in candidates}:
             raise LiveStartRejected(
-                "not_configured", "The Live voice backend model is not available"
+                "backend_unavailable", "The Live voice backend model is not available"
             )
         return BrainTarget(
             provider_id=target_ref.provider_id,
@@ -522,7 +523,7 @@ def _backend_thinking_effort(options: JsonObject) -> str | None:
         effort = BACKEND_THINKING_EFFORT_DEFAULT
     if not isinstance(effort, str) or effort not in backend_thinking_efforts():
         raise LiveStartRejected(
-            "not_configured", "The Live voice backend reasoning effort is not valid"
+            "backend_unavailable", "The Live voice backend reasoning effort is not valid"
         )
     return effort or None
 
@@ -544,5 +545,5 @@ def _start_failure_code(error: VBotError) -> str:
     if isinstance(error, ProviderOutcomeUnknownError):
         return "outcome_unknown"
     if isinstance(error, ConfigError):
-        return "not_configured"
+        return "provider_unavailable"
     return "provider_error"

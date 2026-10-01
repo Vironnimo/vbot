@@ -356,6 +356,9 @@ def test_screen_prompt_markers_detect_common_shell_prompts() -> None:
     assert terminal_input._screen_has_prompt_marker("$ ") is True
     assert terminal_input._screen_has_prompt_marker("> ") is True
     assert terminal_input._screen_has_prompt_marker("❯ ") is True
+    assert terminal_input._screen_has_prompt_marker("viro@mac project % ") is True
+    assert terminal_input._screen_has_prompt_marker("% ") is True
+    assert terminal_input._screen_has_prompt_marker("Downloading 50 %") is False
     assert terminal_input._screen_has_prompt_marker("") is False
     assert terminal_input._screen_has_prompt_marker("hello world") is False
     assert terminal_input._screen_has_prompt_marker("PS") is False

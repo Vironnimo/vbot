@@ -8,10 +8,16 @@
     onDesktopLiveRequest,
   } from '$lib/desktopBridge.js';
   import { createLiveVoice, createLiveVoiceState } from '$lib/liveVoice.js';
+  import { microphoneInUse, onMicrophoneUse } from '$lib/microphoneUse.js';
   import { liveWakePhrases } from '$lib/wakewordSettings.js';
+  import LiveActivityPanel from './voice/LiveActivityPanel.svelte';
 
-  // The hold reason while Desktop Voice records a spoken command.
+  // The hold reasons while Desktop Voice records a spoken command and while
+  // a recording in this page (dictation) uses the microphone.
   const VOICE_COMMAND_HOLD = 'wakeword';
+  const RECORDING_HOLD = 'recording';
+  // The provider's session limit is announced this long before it ends the call.
+  const EXPIRY_WARNING_MS = 120_000;
 
   let {
     configured = false,
@@ -27,9 +33,65 @@
   let voice = $state(createLiveVoiceState());
   let controller;
   let audioElement;
+  let activityButton = $state();
+  let activityOpen = $state(false);
+  let recording = $state(microphoneInUse());
+  // Ticks each second while a call runs, for its time and warnings.
+  let clock = $state(Date.now());
 
   const running = $derived(voice.phase !== 'off');
   const caption = $derived(voice.captions.at(-1) ?? null);
+  const hasActivity = $derived(
+    voice.captions.length > 0 || voice.actions.length > 0,
+  );
+  const callTime = $derived(
+    voice.phase === 'live' && voice.liveSince
+      ? formatDuration(clock - voice.liveSince)
+      : '',
+  );
+  const idleLeft = $derived(
+    voice.phase === 'live' && voice.idleEndsAt
+      ? formatDuration(voice.idleEndsAt - clock)
+      : '',
+  );
+  const expiryLeft = $derived(
+    voice.phase === 'live' &&
+      voice.expiresAt &&
+      voice.expiresAt - clock <= EXPIRY_WARNING_MS
+      ? formatDuration(voice.expiresAt - clock)
+      : '',
+  );
+
+  function formatDuration(milliseconds) {
+    const seconds = Math.max(0, Math.round(milliseconds / 1000));
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const rest = String(seconds % 60).padStart(2, '0');
+    return hours
+      ? `${hours}:${String(minutes).padStart(2, '0')}:${rest}`
+      : `${minutes}:${rest}`;
+  }
+
+  $effect(() => {
+    if (!running) return;
+    clock = Date.now();
+    const timer = setInterval(() => {
+      clock = Date.now();
+    }, 1000);
+    return () => clearInterval(timer);
+  });
+
+  // Leaving the page would end the call; the browser asks first. The Desktop
+  // app closes its window without asking.
+  $effect(() => {
+    if (!running || isDesktopAccessor()) return;
+    const warn = (event) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  });
 
   $effect(() => {
     const isRunning = running;
@@ -38,6 +100,8 @@
 
   const MESSAGES = {
     not_configured: () => t('live.error.notConfigured'),
+    provider_unavailable: () => t('live.error.providerUnavailable'),
+    backend_unavailable: () => t('live.error.backendUnavailable'),
     not_usable: () => t('live.error.notUsable'),
     invalid_offer: () => t('live.error.invalidOffer'),
     access_denied: () => t('live.error.access'),
@@ -57,8 +121,13 @@
     desktop_restart_required: () => t('live.error.desktopRestart'),
     ui_action_failed: () => t('live.error.uiAction'),
     notification_failed: () => t('live.error.notification'),
+    link_failed: () => t('live.error.link'),
     replaced: () => t('live.notice.replaced'),
     ended: () => t('live.notice.ended'),
+    hung_up: () => t('live.notice.hungUp'),
+    idle: () => t('live.notice.idle'),
+    expired: () => t('live.notice.expired'),
+    idle_warning: () => t('live.notice.idleWarning'),
   };
   const TOAST_VARIANTS = { error: 'error', warn: 'warn', info: 'info' };
 
@@ -87,11 +156,16 @@
       checkMicrophoneAccess: desktop ? () => desktopMicrophoneAccess() : null,
       wakePhrases: () => liveWakePhrases(voiceStatus),
     });
+    controller.reportContext(untrack(() => uiActions.context?.() ?? null));
     const stopDesktopRequests = desktop
       ? onDesktopLiveRequest(handleDesktopRequest)
       : () => {};
+    const stopMicrophoneUse = onMicrophoneUse((inUse) => {
+      recording = inUse;
+    });
     return () => {
       stopDesktopRequests();
+      stopMicrophoneUse();
       controller.destroy();
     };
   });
@@ -110,8 +184,16 @@
     return true;
   }
 
+  // A running call learns what the app shows as it changes, without asking.
   $effect(() => {
-    if (serverUnavailable || !configured)
+    const context = uiActions.context?.() ?? null;
+    untrack(() => controller?.reportContext(context));
+  });
+
+  // A lost app connection does not end the call: the call has its own
+  // socket, which reattaches or fails the call by itself.
+  $effect(() => {
+    if (!configured)
       untrack(() => {
         if (voice.phase !== 'off') controller?.stop();
       });
@@ -122,15 +204,24 @@
   // silent. A snapshot without a recording releases it, also after a missed
   // event.
   $effect(() => {
-    const recording = Boolean(voiceStatus?.recording);
+    syncHold(VOICE_COMMAND_HOLD, Boolean(voiceStatus?.recording));
+  });
+
+  // Likewise while a recording in this page, such as a dictation in the chat
+  // composer, uses the microphone.
+  $effect(() => {
+    syncHold(RECORDING_HOLD, recording);
+  });
+
+  function syncHold(reason, wanted) {
     const active = voice.phase !== 'off' && voice.phase !== 'closing';
     untrack(() => {
       if (!controller) return;
-      const holding = controller.held(VOICE_COMMAND_HOLD);
-      if (recording && active && !holding) controller.hold(VOICE_COMMAND_HOLD);
-      else if (!recording && holding) controller.release(VOICE_COMMAND_HOLD);
+      const holding = controller.held(reason);
+      if (wanted && active && !holding) controller.hold(reason);
+      else if (!wanted && holding) controller.release(reason);
     });
-  });
+  }
 
   async function startVoice() {
     if (!configured || serverUnavailable) return;
@@ -141,15 +232,35 @@
     running ? t('live.stopButton') : t('live.startButton'),
   );
   const muteLabel = $derived(t('live.mute'));
+  const speakerLabel = $derived(
+    voice.speakerMuted ? t('live.speakerUnmute') : t('live.speakerMute'),
+  );
+  const activityLabel = $derived(
+    activityOpen ? t('live.activity.hide') : t('live.activity.show'),
+  );
   const busyLabel = $derived(t('live.busy'));
+  // A warning outranks the caption; `status` text is the app's, not speech.
   const captionText = $derived(
     voice.phase === 'connecting'
       ? t('live.state.connecting')
       : voice.phase === 'closing'
         ? t('live.state.closing')
-        : voice.held
-          ? t('live.state.held')
-          : (caption?.text ?? t('live.state.listening')),
+        : idleLeft
+          ? t('live.state.idle', { time: idleLeft })
+          : expiryLeft
+            ? t('live.state.expiring', { time: expiryLeft })
+            : voice.held
+              ? recording && !voiceStatus?.recording
+                ? t('live.state.heldRecording')
+                : t('live.state.held')
+              : (caption?.text ?? t('live.state.listening')),
+  );
+  const captionRole = $derived(
+    idleLeft || expiryLeft
+      ? 'warning'
+      : voice.phase === 'live' && caption && !voice.held
+        ? caption.role
+        : 'status',
   );
 </script>
 
@@ -178,10 +289,40 @@
         use:tooltip={{ text: busyLabel, placement: 'right' }}
       ></span>
     {/if}
+    {#if running || hasActivity}
+      <button
+        type="button"
+        class="live-voice__icon"
+        bind:this={activityButton}
+        aria-label={activityLabel}
+        aria-expanded={activityOpen}
+        use:tooltip={{ text: activityLabel, placement: 'right' }}
+        onclick={() => (activityOpen = !activityOpen)}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 4h10M3 8h10M3 12h6" />
+        </svg>
+      </button>
+    {/if}
     {#if running}
       <button
         type="button"
-        class="live-voice__mute"
+        class="live-voice__icon"
+        aria-label={speakerLabel}
+        aria-pressed={voice.speakerMuted}
+        use:tooltip={{ text: speakerLabel, placement: 'right' }}
+        disabled={voice.phase === 'closing'}
+        onclick={() => controller.muteSpeaker()}
+      >
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M3 6h2.5L9 3v10L5.5 10H3Z" />
+          {#if voice.speakerMuted}<path d="M11 6l3 4M14 6l-3 4" />
+          {:else}<path d="M11 6a3 3 0 0 1 0 4" />{/if}
+        </svg>
+      </button>
+      <button
+        type="button"
+        class="live-voice__icon live-voice__mute"
         aria-label={muteLabel}
         aria-pressed={voice.muted}
         use:tooltip={{
@@ -204,16 +345,35 @@
     <div class="sidebar-footer__row live-voice__caption-row">
       <span
         class="live-voice__caption"
-        data-role={voice.phase === 'live' && caption && !voice.held
-          ? caption.role
-          : 'status'}
+        data-role={captionRole}
         use:tooltip={{
           text: captionText,
           placement: 'right',
           whenTruncated: true,
         }}>{captionText}</span
       >
+      {#if idleLeft}
+        <button
+          type="button"
+          class="live-voice__stay"
+          onclick={() => controller.stay()}>{t('live.stay')}</button
+        >
+      {:else if callTime}
+        <span
+          class="live-voice__time"
+          aria-label={t('live.callTime', { time: callTime })}>{callTime}</span
+        >
+      {/if}
     </div>
+  {/if}
+  {#if activityOpen && (running || hasActivity)}
+    <LiveActivityPanel
+      {voice}
+      anchor={activityButton}
+      {uiActions}
+      onClose={() => (activityOpen = false)}
+      onLinkFailed={() => showNotice({ code: 'link_failed', severity: 'warn' })}
+    />
   {/if}
 {/if}
 <audio bind:this={audioElement} hidden></audio>
@@ -249,11 +409,12 @@
     color: var(--amber);
   }
   .live-voice__toggle:disabled,
-  .live-voice__mute:disabled {
+  .live-voice__icon:disabled {
     cursor: default;
   }
   .live-voice__toggle:focus-visible,
-  .live-voice__mute:focus-visible {
+  .live-voice__icon:focus-visible,
+  .live-voice__stay:focus-visible {
     outline: 1px solid var(--accent);
     outline-offset: 2px;
     border-radius: var(--r-sm);
@@ -266,7 +427,7 @@
     background: var(--amber);
     animation: live-voice-pulse 1.2s ease-in-out infinite;
   }
-  .live-voice__mute {
+  .live-voice__icon {
     display: flex;
     flex: 0 0 auto;
     align-items: center;
@@ -279,7 +440,7 @@
     color: var(--text-lo);
     cursor: pointer;
   }
-  .live-voice__mute svg {
+  .live-voice__icon svg {
     width: 14px;
     height: 14px;
     fill: none;
@@ -287,10 +448,11 @@
     stroke-linecap: round;
     stroke-width: 1.3;
   }
-  .live-voice__mute:hover {
+  .live-voice__icon:hover,
+  .live-voice__icon[aria-expanded='true'] {
     color: var(--text-hi);
   }
-  .live-voice__mute[aria-pressed='true'] {
+  .live-voice__icon[aria-pressed='true'] {
     color: var(--red);
   }
   .live-voice__caption-row {
@@ -308,6 +470,26 @@
   .live-voice__caption[data-role='user'],
   .live-voice__caption[data-role='status'] {
     color: var(--text-lo);
+  }
+  .live-voice__caption[data-role='warning'] {
+    color: var(--amber);
+  }
+  .live-voice__time {
+    flex: 0 0 auto;
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+  }
+  .live-voice__stay {
+    flex: 0 0 auto;
+    padding: 0 6px;
+    border: 1px solid var(--amber);
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--amber);
+    font: inherit;
+    font-size: var(--fs-label-sm);
+    cursor: pointer;
   }
   :global(.app-shell[data-sidebar-collapsed='true']) .live-voice__toggle {
     flex: 0 0 auto;

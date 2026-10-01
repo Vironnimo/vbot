@@ -20,9 +20,8 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
-from core.model_tasks._live_brain import DelegationInput, LiveBrain, record_tool_call
-from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_failure, live_result_text
+from core.model_tasks._live_brain import DelegationInput, LiveBrain
+from core.model_tasks._live_results import LIVE_UPDATE_PREFIX, live_failure, live_result_text
 from core.model_tasks._live_wire import (
     MEDIA_RELAY,
     RELAY_BYTES_PER_MS,
@@ -51,7 +50,7 @@ _LOGGER = get_logger(__name__)
 
 MAX_CONCURRENT_DELEGATIONS = 4
 START_TIMEOUT_SECONDS = 45.0
-CLOSE_TIMEOUT_SECONDS = 15.0
+CLOSE_TIMEOUT_SECONDS = 8.0
 DELEGATION_TIMEOUT_SECONDS = 240.0
 # Public-dialect delegations carry no text; wait until the user's speech settles.
 USER_QUIET_SECONDS = 0.4
@@ -62,8 +61,27 @@ _RECENT_UPDATES = 5
 _ANNOUNCED_RUN_IDS = 500
 _ANNOUNCEMENT_EXCERPT_CHARS = 600
 _CAPTION_MAX_CHARS = 1000
-_TEARDOWN_TIMEOUT_SECONDS = 5.0
+_TEARDOWN_TIMEOUT_SECONDS = 3.0
 _ABORT_CLOSE_TIMEOUT_SECONDS = 1.0
+# A provider close this close to the session limit is the limit (``expired``),
+# also when the provider reports it with its own reason or none at all.
+_EXPIRY_TOLERANCE_SECONDS = 60.0
+_EXPIRED_REASONS = frozenset({"max_duration"})
+# Run notices that arrive before the call is live; spoken once it is.
+_PENDING_NOTICES = 5
+# Agent-facing: the voice model reads these when vBot could not answer.
+_DELEGATION_FAILED = (
+    "vBot could not process this request because of an internal error. Actions it already "
+    "started may have completed; nothing was retried."
+)
+_TOOL_FAILED = (
+    "The Tool call failed because of an internal error. It may have partly completed; do not "
+    "repeat it. Look up what happened before you try anything else."
+)
+_TOOL_TIMED_OUT = (
+    "The Tool call took too long and was stopped. It may have completed; do not repeat it. "
+    "Look up what happened before you try anything else."
+)
 # Microphone audio waiting for the provider socket; older audio is dropped.
 _AUDIO_BACKLOG_BYTES = 2000 * RELAY_BYTES_PER_MS
 _ROLE_LABELS = {"user": "User", "assistant": "Assistant"}
@@ -91,6 +109,7 @@ class LiveCallSession:
         user_quiet: float = USER_QUIET_SECONDS,
         user_quiet_max_wait: float = USER_QUIET_MAX_WAIT_SECONDS,
         clock: Callable[[], float] = time.monotonic,
+        wall_clock: Callable[[], float] = time.time,
         usage_accounting: TaskUsage | None = None,
         usage_call_id: str = "",
     ) -> None:
@@ -105,6 +124,9 @@ class LiveCallSession:
         self._user_quiet = user_quiet
         self._user_quiet_max_wait = user_quiet_max_wait
         self._clock = clock
+        self._wall_clock = wall_clock
+        # When the provider ends the session at its limit, on ``clock``.
+        self._expires_at: float | None = None
         self._usage_accounting = usage_accounting
         self._usage_call_id = usage_call_id
         self._finishing = False
@@ -124,6 +146,10 @@ class LiveCallSession:
         self._updates: deque[str] = deque(maxlen=_RECENT_UPDATES)
         self._announced: deque[str] = deque(maxlen=_ANNOUNCED_RUN_IDS)
         self._usage: JsonObject | None = None
+        self._usage_dirty = False
+        self._usage_writer: asyncio.Task[None] | None = None
+        self._usage_failure_logged = False
+        self._unspoken: deque[LiveRunNotice] = deque(maxlen=_PENDING_NOTICES)
         self._started_at = clock()
         self._relay = wire.media.get("type") == MEDIA_RELAY
         self._audio_backlog: deque[bytes] = deque()
@@ -195,8 +221,12 @@ class LiveCallSession:
             return
         self._announced.append(notice.run_id)
         self._updates.append(_render_notice(notice))
-        if self._phase != "live":
-            return
+        if self._phase == "live":
+            self._speak(notice)
+        else:
+            self._unspoken.append(notice)
+
+    def _speak(self, notice: LiveRunNotice) -> None:
         # An excerpt is untrusted Agent output; where announcements count as
         # user input, the voice model would follow instructions quoted in it.
         text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
@@ -220,8 +250,6 @@ class LiveCallSession:
                 if isinstance(event, WireClosed):
                     closed = event
                     break
-                if isinstance(event, WireUsage) and self._usage_accounting is not None:
-                    await self._usage_accounting.update(self._usage_call_id, event.usage)
                 self._handle(event)
         except Exception as exc:
             _LOGGER.warning(
@@ -237,8 +265,14 @@ class LiveCallSession:
             if self._phase == "connecting":
                 self._set_phase("live")
                 _LOGGER.debug("Live call media connected (call=%s)", self._log_id)
+                if event.expires_at is not None:
+                    seconds = max(0.0, event.expires_at - self._wall_clock())
+                    self._expires_at = self._clock() + seconds
+                    self._publish({"type": "expiry", "seconds": round(seconds, 1)})
                 if self._relay:
                     self._spawn(self._pump_audio(), name=f"live-call-audio:{self._log_id}")
+                while self._unspoken:
+                    self._speak(self._unspoken.popleft())
         elif isinstance(event, WireAudio):
             if self._phase == "live" and not self._closing:
                 self._publish_audio(event.pcm)
@@ -254,6 +288,7 @@ class LiveCallSession:
                 self._spawn(self._run_tool(event), name=f"live-call-tool:{self._log_id}")
         elif isinstance(event, WireUsage):
             self._usage = event.usage
+            self._save_usage()
         elif isinstance(event, WireProblem):
             _LOGGER.warning(
                 "Live provider reported an error (call=%s code=%s)", self._log_id, event.code
@@ -278,11 +313,22 @@ class LiveCallSession:
         )
 
     async def _delegate(self, event: WireDelegation) -> None:
+        """Answer one delegation; the voice model always gets a result."""
+        try:
+            answer = await self._delegation_answer(event)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live delegation failed unexpectedly (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
+            answer = _DELEGATION_FAILED
+        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+
+    async def _delegation_answer(self, event: WireDelegation) -> str:
         if self._brain is None:
             _LOGGER.warning("Live delegation without a backend model (call=%s)", self._log_id)
-            answer = "No backend model is configured, so the request was not started."
-            await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
-            return
+            return "No backend model is configured, so the request was not started."
         brain = self._brain
         async with self._delegation_slots:
             self._set_busy(1)
@@ -306,58 +352,35 @@ class LiveCallSession:
                     )
             finally:
                 self._set_busy(-1)
-        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+        return answer
 
     async def _run_tool(self, event: WireToolCall) -> None:
-        async with self._delegation_slots:
-            self._set_busy(1)
-            started = self._clock()
-            try:
-                prepared = prepare_live_call(event.name, event.arguments)
-                result = (
-                    await self._execute_tool_call(prepared)
-                    if isinstance(prepared, PreparedLiveCall)
-                    else prepared
-                )
-            finally:
-                self._set_busy(-1)
-        record_tool_call(
-            self._host.record,
-            mode="direct",
-            called=event.name,
-            arguments=event.arguments,
-            prepared=prepared,
-            result=result,
-            duration=self._clock() - started,
-        )
-        text = live_result_text(result)
-        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
-
-    async def _execute_tool_call(self, call: PreparedLiveCall) -> JsonObject:
-        """Run one prepared direct Tool call once; failures become an error result."""
-
+        """Run one direct Tool call; the voice model always gets a result."""
         try:
-            async with asyncio.timeout(self._delegation_timeout):
-                return await self._host.execute_tool(call.name, dict(call.arguments))
-        except TimeoutError:
-            _LOGGER.warning("Live Tool call timed out (call=%s tool=%s)", self._log_id, call.name)
-            return live_failure(
-                "timeout",
-                "The Tool call took too long and was stopped. It may have completed; do not "
-                "repeat it. Call overview to see what happened.",
-            )
+            text = await self._tool_result_text(event)
         except Exception as exc:
             _LOGGER.warning(
-                "Live Tool call failed (call=%s tool=%s error_type=%s)",
+                "Live Tool call failed unexpectedly (call=%s error_type=%s)",
                 self._log_id,
-                call.name,
                 type(exc).__name__,
             )
-            return live_failure(
-                "tool_failed",
-                "The Tool call failed. It may have partly completed; do not repeat it. Call "
-                "overview to see what happened.",
-            )
+            text = live_result_text(live_failure("tool_failed", _TOOL_FAILED))
+        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
+
+    async def _tool_result_text(self, event: WireToolCall) -> str:
+        """Run one direct Tool call once through the host; a timeout stops it."""
+
+        async with self._delegation_slots:
+            self._set_busy(1)
+            try:
+                async with asyncio.timeout(self._delegation_timeout):
+                    run = await self._host.run_tool(event.name, event.arguments)
+            except TimeoutError:
+                _LOGGER.warning("Live Tool call timed out (call=%s)", self._log_id)
+                return live_result_text(live_failure("timeout", _TOOL_TIMED_OUT))
+            finally:
+                self._set_busy(-1)
+        return live_result_text(run.result)
 
     async def _pump_audio(self) -> None:
         """Forward microphone audio in arrival order until the call ends."""
@@ -416,6 +439,7 @@ class LiveCallSession:
     async def _teardown(self) -> None:
         for task in list(self._tasks):
             task.cancel()
+        cancelled = False
         try:
             async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
                 await self._wire.aclose()
@@ -424,13 +448,19 @@ class LiveCallSession:
         except (TimeoutError, asyncio.CancelledError):
             if self._reader is not None and self._reader is not asyncio.current_task():
                 self._reader.cancel()
+            # Only a cancellation of this task propagates, not the shielded reader's.
+            current = asyncio.current_task()
+            cancelled = current is not None and current.cancelling() > 0
         except Exception as exc:
             _LOGGER.warning(
                 "Live call teardown failed (call=%s error_type=%s)",
                 self._log_id,
                 type(exc).__name__,
             )
+        # A cancelled closer still ends the call and publishes its final state.
         await self._finish(None)
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _finish(self, closed: WireClosed | None) -> None:
         if self._done.is_set() or self._finishing:
@@ -441,11 +471,14 @@ class LiveCallSession:
         watchdog = self._watchdog
         if watchdog is not None and watchdog is not asyncio.current_task():
             watchdog.cancel()
+
         reason: str | None
         if self._abort_reason is not None:
             reason = self._abort_reason
+        elif not self._closing and self._expired(closed):
+            reason = "expired"
         elif closed is not None and closed.confirmed:
-            reason = closed.reason
+            reason = closed.reason or "closed"
         elif self._closing:
             reason = "closed"
         else:
@@ -468,6 +501,7 @@ class LiveCallSession:
             # A terminal Provider event need not close its transport. Settle
             # Usage first so cancellation during socket cleanup cannot lose it.
             try:
+                await self._close_brain()
                 async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
                     await self._wire.aclose()
             except Exception as exc:
@@ -493,7 +527,59 @@ class LiveCallSession:
                 )
                 self._done.set()
 
+    def _expired(self, closed: WireClosed | None) -> bool:
+        """Whether the provider ended the call at its session limit."""
+        if closed is not None and closed.reason in _EXPIRED_REASONS:
+            return True
+        return (
+            self._expires_at is not None
+            and self._clock() >= self._expires_at - _EXPIRY_TOLERANCE_SECONDS
+        )
+
+    async def _close_brain(self) -> None:
+        """Release the backend's connection; a failure cannot keep the call open."""
+        if self._brain is None:
+            return
+        try:
+            async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
+                await self._brain.aclose()
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call backend cleanup failed (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
+
+    def _save_usage(self) -> None:
+        """Save the latest cumulative Usage in the background; the reader never waits."""
+        if self._usage_accounting is None:
+            return
+        self._usage_dirty = True
+        if self._usage_writer is None or self._usage_writer.done():
+            self._usage_writer = asyncio.ensure_future(self._write_usage())
+            self._usage_writer.set_name(f"live-call-usage:{self._log_id}")
+            self._tasks.add(self._usage_writer)
+            self._usage_writer.add_done_callback(self._tasks.discard)
+
+    async def _write_usage(self) -> None:
+        accounting = self._usage_accounting
+        assert accounting is not None
+        while self._usage_dirty:
+            self._usage_dirty = False
+            try:
+                await accounting.update(self._usage_call_id, self._usage)
+            except Exception as exc:
+                # The close settles Usage again; a failed update never ends the call.
+                if not self._usage_failure_logged:
+                    self._usage_failure_logged = True
+                    _LOGGER.warning(
+                        "Live call Usage update failed (call=%s error_type=%s)",
+                        self._log_id,
+                        type(exc).__name__,
+                    )
+
     async def _send_command(self, send: Callable[[], Awaitable[None]]) -> bool:
+
         if self._done.is_set():
             return False
         try:

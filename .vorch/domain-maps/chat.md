@@ -69,7 +69,7 @@ New public Message ids use `msg_` plus 16 lowercase base32 characters (80 random
 
 Read these only when your task matches - not by default.
 
-- Exact completed-Run lookup for voice announcements (`chat.run_result`, preserving Agent/Project/Session/Run scope) -> `model_tasks/live.md`
+- Exact completed-Run lookup for voice announcements (`chat.run_result`, preserving Agent/Project/Session/Run scope) -> `model_tasks/live-operator.md`
 
 - Changing canonical request history, notes, Skill activation/catalog stability, the prompt-epoch Tool list or Tool-change announcements, reasoning replay, Assistant output-file references, Content Blocks, file mentions, attachment routing, or Tool-cycle repair -> `chat/request-building.md`
 - Changing Run admission/execution, Queue steering, streaming recovery, cancellation, Continuation, Tool progression, Model/Connection resolution, fallback, or Compaction boundaries -> `chat/run-execution.md`

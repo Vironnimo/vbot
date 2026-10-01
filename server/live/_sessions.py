@@ -1,24 +1,10 @@
-"""The Live Tools a voice call runs, acting as the app's user.
+"""The Session side of the Live Tools: starting, messaging, reading and stopping.
 
-Each Tool call arrives as one canonical, validated call (see
-``core/model_tasks/_live_arguments.py``) and returns a Tool Result envelope
-whose content is short plain text. Live starts ordinary top-level Sessions and
-Terminals, never subagents, and reads or changes the app only through vBot's
-canonical RPCs and the owner's UI requests. A failure says what was wrong and
-names the next valid call; an effect is never replayed, and a failure after a
-possible effect says so.
-
-UI requests to the owning accessor (``{"type": "ui_request", "action", "args"}``):
-
-* ``context``: the app selection (``view``, ``selected_agent_id``,
-  ``selected_project_id``), ``agents`` (``agent_id``, ``name``), ``projects``
-  (``project_id``, ``name``, ``cwd``), and ``selected_project_team``
-  (``agent_id`` as an ``agent_id@project_id`` address, ``name``);
-* ``open``: ``{"view": "chat" | "terminals" | "agents" | "projects"}``, with
-  ``agent_id`` and ``session_id`` for a chat Session, ``agent_id`` for an Agent
-  page, or ``project_id`` for a Project page; answers ``{"applied": bool}``;
-* ``terminal_view``: ``{"op": "show" | "maximize" | "show_group" | "restore" |
-  "refresh", "terminal_id"?, "group_id"?}``.
+Live starts ordinary top-level Sessions (never subagents) and talks to them
+through ``chat.stream`` like the user would, marked as passed on by Live voice.
+A target naming an Agent selects its one clear Session; a Terminal target goes
+to the Terminal side (``_terminals.py``). Session lines for ``overview`` are
+built here too.
 """
 
 from __future__ import annotations
@@ -26,50 +12,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from core.model_tasks.live import (
-    CODING_PROGRAMS,
-    LIVE_READ_ONLY_TOOLS,
-    TOOL_OPEN,
-    TOOL_OVERVIEW,
-    TOOL_READ,
-    TOOL_SEND_MESSAGE,
-    TOOL_START_AGENT_SESSION,
-    TOOL_START_CODING_TERMINAL,
-    TOOL_STOP,
-    TOOL_TERMINAL,
-    live_failure,
-    live_success,
-)
+from core.model_tasks.live import live_failure, live_success
 from core.tools._call_vocabulary import spelling
-from core.utils.paths import model_path
-from server._live_context import (
-    NAVIGATION_NOT_APPLIED,
-    OPERATION_FAILED,
-    UI_ACTION_OPEN,
+from server.live._brief import TOOL_READ, TOOL_SEND_MESSAGE, TOOL_START_AGENT_SESSION, TOOL_STOP
+from server.live._context import (
     UNCERTAIN_DELIVERY,
     JsonObject,
     LiveContext,
     LiveToolError,
-    LiveUiError,
-    RpcInvoker,
-    UiRequester,
     join_words,
     text_field,
 )
-from server._live_targets import (
+from server.live._targets import (
     AGENT,
-    GROUP,
     PROJECT,
     SESSION,
     TERMINAL,
     LiveAgent,
     LiveCatalog,
-    LiveProject,
     LiveRefs,
     SessionKey,
     Target,
@@ -77,15 +40,15 @@ from server._live_targets import (
     resolve_target,
     session_key,
     session_title,
-    terminal_title,
 )
-from server._live_terminals import LiveTerminals, TerminalTimings, terminal_line
+from server.live._terminals import LiveTerminals
 from server.rpc.errors import RpcError
-from server.rpc.validation import CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION
+from server.rpc.validation import CHAT_INPUT_ORIGIN_LIVE_VOICE
 
 _LOGGER = logging.getLogger("vbot.server.live")
 
-_LIST_CAP = 12
+# The most items one list in a result shows.
+LIST_CAP = 12
 _MAX_CUT_WORD_CHARS = 40
 _EXCERPT_CHARS = 160
 _CHAT_READ_LIMIT = 20
@@ -96,144 +59,28 @@ _QUESTION_END = re.compile(r"\?[\s\"')\]*_]*$")
 _FAILED_COMPLETIONS = {"failed": "failed", "interrupted": "interrupted"}
 # How a Session list marks a Session a Cron job or Channel started.
 _BACKGROUND_SESSION = "Cron or Channel Session"
-# With a target, open's view names the kind of thing to show.
-_OPEN_VIEW_KINDS = {
-    "chat": frozenset({SESSION, AGENT}),
-    "terminals": frozenset({TERMINAL, GROUP}),
-    "agents": frozenset({AGENT}),
-    "projects": frozenset({PROJECT}),
-}
-
-Handler = Callable[[JsonObject, LiveCatalog], Awaitable[JsonObject]]
 
 
-class LiveToolExecutor:
-    """Run the Live Tools for one call and keep the call's ref table.
+class LiveSessions:
+    """Run the Session Tools of one call on its context and ref table.
 
-    Executions of one call run one at a time; only a coding Terminal start
-    lets the others run while it waits for the program and types the task.
-    ``is_active`` turns false once the call stops or is replaced; multi-step
-    operations check it before each further effect. ``started_at`` bounds the
-    recently finished Sessions ``overview`` shows.
+    ``started_at`` bounds the recently finished Sessions lists show.
     """
 
     def __init__(
         self,
+        ctx: LiveContext,
+        refs: LiveRefs,
+        terminals: LiveTerminals,
         *,
-        rpc: RpcInvoker,
-        ui: UiRequester,
-        is_active: Callable[[], bool],
         started_at: datetime,
-        timings: TerminalTimings | None = None,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-        clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._ctx = LiveContext(rpc=rpc, ui=ui, is_active=is_active)
-        self._refs = LiveRefs()
+        self._ctx = ctx
+        self._refs = refs
+        self._terminals = terminals
         self._started_at = started_at
-        self._terminals = LiveTerminals(
-            self._ctx, self._refs, timings=timings or TerminalTimings(), sleep=sleep, clock=clock
-        )
-        self._handlers: dict[str, Handler] = {
-            TOOL_OVERVIEW: self._overview,
-            TOOL_START_AGENT_SESSION: self._start_agent_session,
-            TOOL_START_CODING_TERMINAL: self._start_coding_terminal,
-            TOOL_SEND_MESSAGE: self._send_message,
-            TOOL_READ: self._read,
-            TOOL_STOP: self._stop,
-            TOOL_OPEN: self._open,
-            TOOL_TERMINAL: self._terminal,
-        }
 
-    def session_ref(self, address: str, session_id: str) -> str:
-        """The call's ref for a Session, assigned on first mention."""
-        return self._refs.session(SessionKey(address=address, session_id=session_id))
-
-    def known_refs(self) -> str:
-        """The refs named so far in this call, one labeled line each, most recent last."""
-        return self._refs.legend()
-
-    async def execute(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one canonical Live Tool call and return its Tool Result envelope."""
-        handler = self._handlers.get(name)
-        if handler is None:
-            return live_failure(
-                "unknown_tool",
-                f'There is no Tool called "{name}". Call one of: {", ".join(self._handlers)}.',
-            )
-        try:
-            async with self._ctx.exclusive():
-                self._ctx.ensure_active()
-                return await handler(dict(arguments), LiveCatalog(self._ctx, self._refs))
-        except LiveToolError as exc:
-            return live_failure(exc.code, exc.message)
-        except LiveUiError as exc:
-            return live_failure(exc.code, exc.message)
-        except RpcError as exc:
-            return live_failure(exc.code, f"vBot could not do this: {exc.message}")
-        except Exception:
-            _LOGGER.exception("Live Tool failed unexpectedly (tool=%s)", name)
-            if name in LIVE_READ_ONLY_TOOLS:
-                return live_failure(
-                    OPERATION_FAILED,
-                    f"{name} failed unexpectedly; nothing was changed. Call it again once, and "
-                    "tell the user if it fails again.",
-                )
-            return live_failure(
-                OPERATION_FAILED,
-                f"The call failed unexpectedly. {UNCERTAIN_DELIVERY} Call overview to see what "
-                "happened.",
-            )
-
-    # -- overview -------------------------------------------------------------
-
-    async def _overview(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
-        agent_text = text_field(arguments, "agent")
-        if agent_text:
-            target = await resolve_target(
-                agent_text,
-                {AGENT},
-                tool=TOOL_OVERVIEW,
-                field="agent",
-                refs=self._refs,
-                catalog=catalog,
-            )
-            assert target.agent is not None
-            return live_success(await self._agent_overview(target.agent, catalog))
-        selection = await catalog.selection()
-        agents = await catalog.agents()
-        projects = await catalog.projects()
-        selected_project = await catalog.selected_project()
-        lines: list[str] = []
-        if selection is not None:
-            lines.append(await self._selection_line(selection, selected_project, catalog))
-        identity = [agent.name for agent in agents if not agent.project]
-        team = [agent.name for agent in agents if agent.project]
-        lines.append(f"Agents: {_capped(identity)}." if identity else "Agents: none.")
-        if team and selected_project is not None:
-            lines.append(f"Team of Project {selected_project.name}: {_capped(team)}.")
-        if projects:
-            listed = [
-                f"{project.name} ({model_path(project.folder)})" if project.folder else project.name
-                for project in projects
-            ]
-            lines.append(f"Projects: {_capped(listed)}.")
-        lines.append(await self._sessions_block(catalog))
-        lines.append(await self._terminals_block(catalog))
-        return live_success("\n".join(lines))
-
-    async def _selection_line(
-        self, selection: JsonObject, project: LiveProject | None, catalog: LiveCatalog
-    ) -> str:
-        parts = [f"App: {selection.get('view') or 'unknown'} view"]
-        agent_id = selection.get("selected_agent_id")
-        if isinstance(agent_id, str) and agent_id:
-            parts.append(f"selected Agent: {await catalog.agent_name(agent_id)}")
-        if project is not None:
-            parts.append(f"selected Project: {project.name}")
-        return "; ".join(parts) + "."
-
-    async def _sessions_block(self, catalog: LiveCatalog) -> str:
+    async def block(self, catalog: LiveCatalog) -> str:
         sessions = await catalog.sessions()
         touched = set(self._refs.touched())
         running = [item for item in sessions if item.get("has_active_run") is True]
@@ -243,31 +90,35 @@ class LiveToolExecutor:
             if item.get("has_active_run") is not True
             and (session_key(item) in touched or self._recent(item))
         ]
-        shown = (running + finished)[:_LIST_CAP]
+        shown = (running + finished)[:LIST_CAP]
         if not shown:
             return "Sessions: none running or finished since the call started."
         lines = ["Sessions (running, then recently finished):"]
-        lines += [await self._session_line(item, catalog) for item in shown]
+        lines += await asyncio.gather(*(self._session_line(item, catalog) for item in shown))
         hidden = len(running) + len(finished) - len(shown)
         if hidden:
             lines.append(f"- and {hidden} more")
         return "\n".join(lines)
 
-    async def _agent_overview(self, agent: LiveAgent, catalog: LiveCatalog) -> str:
+    async def agent_overview(self, agent: LiveAgent, catalog: LiveCatalog) -> str:
         sessions = [
             item for item in await catalog.sessions() if item["agent_address"] == agent.address
         ]
         if not sessions:
             return f"{agent.label} has no Sessions."
-        background = {session_key(item) for item in (await self._agent_sessions(agent, catalog))[1]}
-        shown = sessions[:_LIST_CAP]
+        background = {session_key(item) for item in (await self.agent_sessions(agent, catalog))[1]}
+        shown = sessions[:LIST_CAP]
         lines = [f"Sessions of {agent.label}, most recent first:"]
-        lines += [
-            await self._session_line(
-                item, catalog, origin=_BACKGROUND_SESSION if session_key(item) in background else ""
+        lines += await asyncio.gather(
+            *(
+                self._session_line(
+                    item,
+                    catalog,
+                    origin=_BACKGROUND_SESSION if session_key(item) in background else "",
+                )
+                for item in shown
             )
-            for item in shown
-        ]
+        )
         if len(sessions) > len(shown):
             lines.append(f"- and {len(sessions) - len(shown)} older")
         return "\n".join(lines)
@@ -276,6 +127,9 @@ class LiveToolExecutor:
         self, item: JsonObject, catalog: LiveCatalog, *, origin: str = ""
     ) -> str:
         key = session_key(item)
+        # Assigned before the first wait: refs follow the list order even
+        # though the lines load concurrently.
+        self._refs.session(key)
         name = await catalog.agent_name(key.address)
         title = str(item.get("title") or item.get("auto_title") or "").strip()
         ref = self._refs.session(key, session_title(name, title))
@@ -306,28 +160,11 @@ class LiveToolExecutor:
             return ""
         return str(result.get("content") or "").strip()
 
-    async def _terminals_block(self, catalog: LiveCatalog) -> str:
-        terminals = await catalog.terminals()
-        if not terminals:
-            return "Terminals: none."
-        live = [item for item in terminals if item.get("state") not in {"exited", "error"}]
-        ordered = live + [item for item in terminals if item not in live]
-        shown = ordered[:_LIST_CAP]
-        lines = ["Terminals:"]
-        for item in shown:
-            ref = self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
-            lines.append(f"- {terminal_line(ref, item)}")
-        if len(ordered) > len(shown):
-            lines.append(f"- and {len(ordered) - len(shown)} more")
-        return "\n".join(lines)
-
     def _recent(self, item: JsonObject) -> bool:
         active = _timestamp(item.get("last_active_at"))
         return active is not None and active >= self._started_at
 
-    # -- start_agent_session ------------------------------------------------
-
-    async def _start_agent_session(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
+    async def start(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         agent = await self._start_agent(
             text_field(arguments, "agent"), text_field(arguments, "project"), catalog
         )
@@ -438,9 +275,7 @@ class LiveToolExecutor:
             f"without project for the user's own Agents: {own or 'none'}.",
         )
 
-    # -- send_message, read, stop --------------------------------------------
-
-    async def _send_message(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
+    async def send_message(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         text = text_field(arguments, "text")
         target = await self._conversation_target(arguments, TOOL_SEND_MESSAGE, catalog)
         if target.terminal is not None:
@@ -468,7 +303,7 @@ class LiveToolExecutor:
             )
         return live_success(f"Sent to {ref} ({name}). An update follows when it finishes.")
 
-    async def _read(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
+    async def read(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         target = await self._conversation_target(arguments, TOOL_READ, catalog)
         if target.terminal is not None:
             return await self._terminals.read(target.terminal)
@@ -494,7 +329,7 @@ class LiveToolExecutor:
         body = "\n".join(blocks)
         return live_success(f"{ref} at {name}, {state}. Latest messages, quoted:\n{body}")
 
-    async def _stop(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
+    async def stop(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         target = await self._conversation_target(arguments, TOOL_STOP, catalog)
         if target.terminal is not None:
             return await self._terminals.interrupt(target.terminal)
@@ -535,7 +370,7 @@ class LiveToolExecutor:
             return target.session
         agent = target.agent
         assert agent is not None
-        sessions, background = await self._agent_sessions(agent, catalog)
+        sessions, background = await self.agent_sessions(agent, catalog)
 
         def clear(item: JsonObject) -> bool:
             return item.get("has_active_run") is True or (
@@ -575,7 +410,7 @@ class LiveToolExecutor:
             f"then call {tool} again with its ref as target.",
         )
 
-    async def _agent_sessions(
+    async def agent_sessions(
         self, agent: LiveAgent, catalog: LiveCatalog
     ) -> tuple[list[JsonObject], list[JsonObject]]:
         """The Agent's Sessions its name can select, then its Cron and Channel Sessions.
@@ -603,125 +438,9 @@ class LiveToolExecutor:
                 "agent_id": key.address,
                 "session_id": key.session_id,
                 "content": text,
-                "input_origin": CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+                "input_origin": CHAT_INPUT_ORIGIN_LIVE_VOICE,
             },
         )
-
-    # -- start_coding_terminal, terminal -------------------------------------
-
-    async def _start_coding_terminal(
-        self, arguments: JsonObject, catalog: LiveCatalog
-    ) -> JsonObject:
-        program = CODING_PROGRAMS.get(text_field(arguments, "program"))
-        if program is None:
-            raise LiveToolError(
-                "invalid_program",
-                f"program must be one of {', '.join(CODING_PROGRAMS)}. Call "
-                'start_coding_terminal again with {"program": "codex"} or {"program": "claude"}.',
-            )
-        count = arguments.get("count", 1)
-        return await self._terminals.start(
-            program=program,
-            count=count if isinstance(count, int) and count >= 1 else 1,
-            folder=text_field(arguments, "folder"),
-            name=text_field(arguments, "name"),
-            task=text_field(arguments, "task"),
-            catalog=catalog,
-        )
-
-    async def _terminal(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
-        return await self._terminals.run_action(arguments, catalog)
-
-    # -- open ----------------------------------------------------------------
-
-    async def _open(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
-        target_text = text_field(arguments, "target")
-        view = text_field(arguments, "view")
-        if not target_text:
-            if not view:
-                raise LiveToolError(
-                    "missing_target",
-                    'open needs a target or a view. Call open again, for example with {"target": '
-                    '"s2"} or {"view": "terminals"}; views are chat, terminals, agents, projects.',
-                )
-            await self._navigate({"view": view})
-            return live_success(f"Opened the {view} view.")
-        target = await resolve_target(
-            target_text,
-            _OPEN_VIEW_KINDS.get(view, {SESSION, TERMINAL, GROUP, AGENT, PROJECT}),
-            tool=TOOL_OPEN,
-            field="target",
-            refs=self._refs,
-            catalog=catalog,
-            kind_hint=(
-                "Or call open again with this target and the view of the kind meant: chat (a "
-                "Session), terminals (a Terminal or group), agents (an Agent), or projects (a "
-                "Project)."
-            ),
-        )
-        if target.session is not None:
-            return await self._open_session(target.session, catalog)
-        if target.terminal is not None:
-            ref = self._refs.terminal(
-                str(target.terminal["terminal_id"]), terminal_title(target.terminal)
-            )
-            await self._ctx.view("show", terminal_id=target.terminal["terminal_id"])
-            return live_success(f"Showing {ref} in the Terminals view.")
-        if target.group is not None:
-            label = target.group.get("name") or target.group["group_id"]
-            await self._ctx.view("show_group", group_id=target.group["group_id"])
-            return live_success(f'Showing the group "{label}" in the Terminals view.')
-        if target.project is not None:
-            return await self._open_project(target.project)
-        assert target.agent is not None
-        return await self._open_agent(target.agent, view, catalog)
-
-    async def _open_session(self, key: SessionKey, catalog: LiveCatalog) -> JsonObject:
-        await self._navigate(
-            {"view": "chat", "agent_id": key.address, "session_id": key.session_id}
-        )
-        name = await catalog.agent_name(key.address)
-        ref = self._refs.session(key, session_title(name))
-        return live_success(f"Showing {ref} ({name}) in the chat.")
-
-    async def _open_project(self, project: LiveProject) -> JsonObject:
-        await self._navigate({"view": "projects", "project_id": project.project_id})
-        return live_success(f"Showing the page of Project {project.name}.")
-
-    async def _open_agent(self, agent: LiveAgent, view: str, catalog: LiveCatalog) -> JsonObject:
-        project_id = agent.address.partition("@")[2]
-        if view != "agents":
-            sessions = (await self._agent_sessions(agent, catalog))[0]
-            if not sessions and view == "chat":
-                raise LiveToolError(
-                    "no_session",
-                    f"{agent.label} has no Session to show in the chat. Call overview with "
-                    f'{{"agent": "{agent.name}"}} to see its Sessions, or call open with '
-                    f'{{"target": "{agent.name}", "view": "agents"}} for its page.',
-                )
-            if sessions:
-                key = session_key(sessions[0])
-                await self._navigate(
-                    {"view": "chat", "agent_id": key.address, "session_id": key.session_id}
-                )
-                ref = self._refs.session(key, session_title(agent.label))
-                return live_success(
-                    f"Showing the latest Session of {agent.label}, {ref}, in the chat."
-                )
-        if project_id:
-            await self._navigate({"view": "projects", "project_id": project_id})
-            return live_success(
-                f"{agent.name} belongs to the team of Project {agent.project or project_id}, "
-                "which has no Agent page; showing that Project's page."
-            )
-        await self._navigate({"view": "agents", "agent_id": agent.address})
-        return live_success(f"Showing the page of Agent {agent.name}.")
-
-    async def _navigate(self, args: JsonObject) -> None:
-        self._ctx.ensure_active()
-        outcome = await self._ctx.ui(UI_ACTION_OPEN, args)
-        if outcome.get("applied") is not True:
-            raise LiveUiError(NAVIGATION_NOT_APPLIED)
 
 
 def _recent_messages(messages: Any) -> list[JsonObject]:
@@ -767,9 +486,3 @@ def _timestamp(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
-
-
-def _capped(items: list[str]) -> str:
-    shown = ", ".join(items[:_LIST_CAP])
-    hidden = len(items) - _LIST_CAP
-    return f"{shown}, and {hidden} more" if hidden > 0 else shown

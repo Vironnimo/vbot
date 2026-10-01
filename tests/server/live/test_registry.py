@@ -1,5 +1,5 @@
-"""Live call ownership: one active call, its owner socket, UI requests, Run announcements,
-local call records and shutdown."""
+"""Live call ownership: one active call, its owner socket, what the app shows, UI requests,
+the call's brief and Tools, Run announcements, local call records and shutdown."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, suppress
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -18,19 +19,17 @@ from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 from starlette.websockets import WebSocketDisconnect  # type: ignore[import-not-found]
 
 from core.model_tasks.live import LiveCallHost, LiveRunNotice, LiveStartRejected
-from server._live_record import LiveCallRecorder
 from server.app import create_app
 from server.events import ServerEventBus
-from server.live import (
+from server.live._record import LiveCallRecorder
+from server.live.owner import (
     LIVE_AUDIO_FRAME_MAX_BYTES,
     LIVE_SOCKET_CLOSE_ENDED,
     LIVE_SOCKET_CLOSE_LAGGED,
     LIVE_SOCKET_CLOSE_REPLACED,
-    LiveCallLimits,
-    LiveCallRegistry,
     LiveOwnerStream,
-    LiveRegistryClosedError,
 )
+from server.live.registry import LiveCallLimits, LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.errors import RpcError
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
@@ -43,6 +42,7 @@ FAST = LiveCallLimits(
     ui_request_timeout_seconds=5.0,
     shutdown_close_timeout_seconds=0.1,
     abort_timeout_seconds=0.5,
+    end_call_delay_seconds=0.01,
 )
 
 
@@ -113,17 +113,12 @@ class FakeService:
 
     def __init__(self) -> None:
         self.calls: list[FakeCall] = []
-        self.starts: list[tuple[str, str | None, tuple[str, ...]]] = []
+        self.starts: list[tuple[str, str | None]] = []
         self.rejection: str | None = None
         self.gate: asyncio.Event | None = None
 
     async def start_call(
-        self,
-        *,
-        media: str,
-        offer_sdp: str | None,
-        wake_phrases: tuple[str, ...],
-        host: LiveCallHost,
+        self, *, media: str, offer_sdp: str | None, host: LiveCallHost
     ) -> FakeCall:
         if self.rejection is not None:
             raise LiveStartRejected(self.rejection)
@@ -131,7 +126,7 @@ class FakeService:
             await self.gate.wait()
         call = FakeCall(f"call-{len(self.calls) + 1}", host, media)
         self.calls.append(call)
-        self.starts.append((media, offer_sdp, wake_phrases))
+        self.starts.append((media, offer_sdp))
         return call
 
 
@@ -150,11 +145,17 @@ class FakeRpc:
             raise self.error
         answers: dict[str, JsonObject] = {
             "chat.run_result": {"content": "Done.", "truncated": True},
+            "session.create": {"session_id": "ses_new"},
             "agent.list": {"agents": [{"id": "joel", "name": "Joel"}]},
             "project.list": {"projects": []},
             "terminal.list": {"terminals": [], "groups": []},
         }
         return answers.get(method, {"sessions": []})
+
+
+async def run_tool(call: FakeCall, name: str, arguments: JsonObject) -> JsonObject:
+    """Run one Live Tool call through the call's host and return its result."""
+    return (await call.host.run_tool(name, arguments)).result
 
 
 class OwnerReader:
@@ -190,6 +191,7 @@ class Harness:
         *,
         bus: ServerEventBus | None = None,
         recorder: LiveCallRecorder | None = None,
+        recording: Callable[[], bool] = lambda: True,
     ) -> None:
         self.bus = bus or ServerEventBus()
         self.rpc = FakeRpc()
@@ -200,6 +202,7 @@ class Harness:
             limits=limits,
             clock=lambda: STARTED_AT,
             recorder=recorder,
+            recording=recording,
         )
         self.readers: list[OwnerReader] = []
 
@@ -239,7 +242,7 @@ async def live() -> AsyncIterator[Harness]:
 @pytest.mark.asyncio
 async def test_start_buffers_updates_until_the_owner_attaches(live: Harness) -> None:
     call = await live.start()
-    assert live.service.starts == [("webrtc", "v=0 offer", ())]
+    assert live.service.starts == [("webrtc", "v=0 offer")]
     assert live.registry.active_call_id == call.id
     call.host.publish({"type": "state", "phase": "connecting"})
     call.host.publish({"type": "state", "phase": "live"})
@@ -353,7 +356,7 @@ async def test_a_newer_owner_socket_replaces_the_previous_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_lagging_owner_is_disconnected_and_keeps_the_newest_updates() -> None:
+async def test_a_lagging_owner_is_disconnected_and_its_updates_wait_for_the_next() -> None:
     harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
     try:
         call = await harness.start()
@@ -365,10 +368,11 @@ async def test_a_lagging_owner_is_disconnected_and_keeps_the_newest_updates() ->
         stale = OwnerReader(owner)
         harness.readers.append(stale)
         await settle(lambda: stale.done)
-        assert [frame["label"] for frame in stale.frames] == ["0", "1"]
+        assert stale.frames == []
+        # The buffer keeps the newest updates within its bound.
         fresh = harness.attach(call)
-        await settle(lambda: len(fresh.frames) == 1)
-        assert fresh.frames[0]["label"] == "2"
+        await settle(lambda: len(fresh.frames) == 2)
+        assert [frame["label"] for frame in fresh.frames] == ["1", "2"]
     finally:
         await harness.close()
 
@@ -385,8 +389,8 @@ async def test_unknown_calls_cannot_be_attached_stopped_or_answered(live: Harnes
 
 @pytest.mark.asyncio
 async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None:
-    call = await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
-    assert live.service.starts == [("relay", None, ("Hey Nabu", "Hey Jarvis"))]
+    call = await live.start_relay()
+    assert live.service.starts == [("relay", None)]
     call.host.publish_audio(b"\x01\x00")
     call.host.publish({"type": "state", "phase": "live"})
     reader = live.attach(call)
@@ -402,20 +406,20 @@ async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None
 
 
 @pytest.mark.asyncio
-async def test_relay_audio_counts_against_the_owner_queue_limit() -> None:
-    harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
+async def test_relay_audio_beyond_its_bound_is_dropped_and_keeps_the_owner() -> None:
+    harness = Harness(LiveCallLimits(owner_audio_limit_bytes=4))
     try:
         call = await harness.start_relay()
         owner = harness.registry.attach(call.id)
         assert owner is not None
         for index in range(3):
             call.host.publish_audio(bytes([index, 0]))
-        assert owner.close_code == LIVE_SOCKET_CLOSE_LAGGED
-        call.host.publish_audio(b"\x09\x00")
         call.host.publish({"type": "state", "phase": "live"})
-        fresh = harness.attach(call)
-        await settle(lambda: len(fresh.frames) == 1)
-        assert fresh.frames == [{"type": "state", "phase": "live"}]
+        assert owner.close_code is None
+        reader = OwnerReader(owner)
+        harness.readers.append(reader)
+        await settle(lambda: len(reader.frames) == 3)
+        assert reader.frames == [b"\x00\x00", b"\x01\x00", {"type": "state", "phase": "live"}]
     finally:
         await harness.close()
 
@@ -503,7 +507,7 @@ async def test_a_call_ending_without_a_closed_update_gets_one(live: Harness) -> 
 async def test_ui_requests_round_trip_through_the_owner(live: Harness) -> None:
     call = await live.start()
     reader = live.attach(call)
-    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
+    task = asyncio.create_task(run_tool(call, "open", {"view": "terminals"}))
     await settle(lambda: len(reader.frames) == 1)
     request = reader.frames[0]
     assert request["type"] == "ui_request"
@@ -524,7 +528,7 @@ async def test_ui_requests_round_trip_through_the_owner(live: Harness) -> None:
 async def test_an_owner_error_code_fails_the_operation(live: Harness) -> None:
     call = await live.start()
     reader = live.attach(call)
-    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
+    task = asyncio.create_task(run_tool(call, "open", {"view": "terminals"}))
     await settle(lambda: len(reader.frames) == 1)
     live.registry.resolve_ui_request(call.id, reader.frames[0]["request_id"], error="unknown_view")
     result = await task
@@ -539,7 +543,7 @@ async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
     try:
         call = await harness.start()
         harness.attach(call)
-        result = await call.host.execute_tool("open", {"view": "terminals"})
+        result = await run_tool(call, "open", {"view": "terminals"})
         assert result["error"]["code"] == "ui_timeout"
         assert "may or may not show the change" in result["error"]["message"]
     finally:
@@ -547,13 +551,22 @@ async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ui_requests_fail_without_an_owner_or_once_the_call_ended(live: Harness) -> None:
+async def test_ui_requests_wait_for_a_returning_owner_and_fail_without_one(
+    live: Harness,
+) -> None:
     call = await live.start()
-    unattached = await call.host.execute_tool("open", {"view": "terminals"})
+    unattached = await run_tool(call, "open", {"view": "terminals"})
     assert unattached["error"]["code"] == "ui_unavailable"
+    lost = live.attach(call)
+    await lost.stop()
+    lost.owner.detach()
+    # A request made while the owner reconnects reaches it once it is back.
+    task = asyncio.create_task(run_tool(call, "open", {"view": "terminals"}))
+    await drain()
     reader = live.attach(call)
-    task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
-    await settle(lambda: len(reader.frames) == 1)
+    await settle(lambda: len(reader.frames) == 2)
+    # The failed first open was reported to the app while nobody was attached.
+    assert reader.types() == ["action", "ui_request"]
     await call.abort()
     ended = await task
     assert ended["error"]["code"] == "ui_unavailable"
@@ -564,16 +577,17 @@ async def test_tool_executions_of_one_call_never_overlap(live: Harness) -> None:
     call = await live.start()
     gate = asyncio.Event()
     live.rpc.gate = gate
-    first = asyncio.create_task(call.host.execute_tool("overview", {}))
-    second = asyncio.create_task(call.host.execute_tool("overview", {}))
+    first = asyncio.create_task(run_tool(call, "overview", {}))
+    second = asyncio.create_task(run_tool(call, "overview", {}))
     await drain()
-    assert [method for method, _params in live.rpc.calls] == ["agent.list"]
+    # The first overview waits on the app; the second has not begun.
+    assert [method for method, _params in live.rpc.calls].count("agent.list") == 1
     gate.set()
     assert (await first)["data"]["content"].startswith("Agents: Joel.")
     assert (await second)["ok"] is True
     methods = [method for method, _params in live.rpc.calls]
     half = len(methods) // 2
-    assert methods[:half] == methods[half:]
+    assert sorted(methods[:half]) == sorted(methods[half:])
 
 
 @pytest.mark.asyncio
@@ -581,9 +595,140 @@ async def test_tools_report_voice_stopped_once_the_call_is_stopping(live: Harnes
     call = await live.start()
     call.close_mode = "hang"
     live.registry.stop(call.id)
-    result = await call.host.execute_tool("overview", {})
+    result = await run_tool(call, "overview", {})
     assert result["error"]["code"] == "voice_stopped"
     assert live.rpc.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_brief_carries_the_wake_phrases_of_the_start(live: Harness) -> None:
+    call = await live.start_relay(wake_phrases=("Hey Nabu", "Hey Jarvis"))
+    for direct_tools in (False, True):
+        brief = call.host.brief(direct_tools=direct_tools)
+        assert '"Hey Nabu", "Hey Jarvis"' in brief.voice_instructions
+        assert "end_call" in [tool["name"] for tool in brief.tools]
+
+
+@pytest.mark.asyncio
+async def test_a_later_call_keeps_the_refs_and_assignments_of_the_earlier_one(
+    live: Harness,
+) -> None:
+    first = await live.start()
+    assert "Earlier calls" not in first.host.brief(direct_tools=True).voice_instructions
+    await run_tool(first, "start_agent_session", {"agent": "joel", "task": "Plan the trip"})
+
+    second = await live.start()
+    for direct_tools in (False, True):
+        brief = second.host.brief(direct_tools=direct_tools)
+        for instructions in (brief.voice_instructions, brief.delegation_instructions):
+            assert '"task": "Plan the trip"' in instructions
+            assert "- s1: Session at Joel" in instructions
+    assert second.host.known_refs() == "- s1: Session at Joel"
+
+
+@pytest.mark.asyncio
+async def test_the_owner_reports_what_the_app_shows_to_the_call(live: Harness) -> None:
+    call = await live.start()
+    assert (await run_tool(call, "overview", {}))["data"]["content"].startswith("Agents: Joel.")
+    owner = live.registry.attach(call.id)
+    assert owner is not None
+    owner.receive_text(
+        json.dumps(
+            {
+                "type": "context",
+                "view": "terminals",
+                "selected_agent_id": "joel",
+                "selected_project_id": "",
+                "chat_session": {"agent_id": "joel"},
+                "extra": "ignored",
+            }
+        )
+    )
+    shown = "App: terminals view; selected Agent: Joel."
+    assert (await run_tool(call, "overview", {}))["data"]["content"].startswith(shown)
+    # Other frames, oversized or malformed frames, and a replaced owner change nothing.
+    newer = live.registry.attach(call.id)
+    assert newer is not None
+    for text in (
+        json.dumps({"type": "state", "view": "chat"}),
+        "not json",
+        json.dumps({"type": "context", "view": "chat", "pad": "x" * 5000}),
+    ):
+        newer.receive_text(text)
+    owner.receive_text(json.dumps({"type": "context", "view": "chat"}))
+    assert (await run_tool(call, "overview", {}))["data"]["content"].startswith(shown)
+
+
+@pytest.mark.asyncio
+async def test_end_call_closes_the_call_gracefully_after_the_goodbye(live: Harness) -> None:
+    call = await live.start()
+    reader = live.attach(call)
+    result = await run_tool(call, "end_call", {})
+    assert result["ok"] is True
+    assert call.close_calls == 0
+    await settle(lambda: call.close_calls == 1)
+    assert call.abort_calls == 0
+    assert live.registry.active_call_id is None
+    # The owner learns that the voice model hung up, not that the user stopped.
+    await settle(lambda: reader.done)
+    assert reader.frames[-1] == {
+        "type": "closed",
+        "reason": "hung_up",
+        "usage": {"total_tokens": 3},
+    }
+
+
+@pytest.mark.asyncio
+async def test_each_executed_tool_call_is_shown_to_the_owner_with_what_it_named(
+    live: Harness,
+) -> None:
+    call = await live.start()
+    reader = live.attach(call)
+    await run_tool(call, "start_agent_session", {"agent": "joel", "task": "Plan " + "x" * 300})
+    # A call that names no Live Tool runs nothing and shows nothing.
+    await run_tool(call, "browse", {})
+    await settle(lambda: reader.types() == ["action"])
+
+    action = reader.frames[0]
+    assert action["tool"] == "start_agent_session"
+    assert action["ok"] is True
+    assert action["arguments"]["agent"] == "joel"
+    assert action["arguments"]["task"].endswith("x...")
+    assert len(action["arguments"]["task"]) == 200
+    assert action["result"].startswith("Started a Session at Joel with the task: s1.")
+    assert action["links"] == [
+        {
+            "ref": "s1",
+            "kind": "session",
+            "agent_id": "joel",
+            "session_id": "ses_new",
+            "label": "Session at Joel",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_live_call_nobody_uses_is_warned_then_ended() -> None:
+    limits = replace(FAST, idle_seconds=0.3, idle_warning_seconds=0.2)
+    harness = Harness(limits)
+    try:
+        call = await harness.start()
+        reader = harness.attach(call)
+        call.host.publish({"type": "state", "phase": "live"})
+        await settle(lambda: "idle" in reader.types())
+        warning = reader.frames[-1]
+        assert warning["type"] == "idle"
+        assert 0 < warning["ends_in"] <= 0.2
+        # The owner keeps the call; the warning is withdrawn.
+        reader.owner.receive_text(json.dumps({"type": "stay"}))
+        await settle(lambda: reader.frames[-1] == {"type": "idle", "ends_in": None})
+        assert call.close_calls == 0
+        await settle(lambda: reader.done)
+        assert reader.types()[-3:] == ["idle", "idle", "closed"]
+        assert reader.frames[-1]["reason"] == "idle"
+        assert call.close_calls == 1
+    finally:
+        await harness.close()
 
 
 # -- call records -------------------------------------------------------------------
@@ -636,6 +781,32 @@ async def test_records_are_kept_as_json_lines_in_the_file_of_their_utc_day(
     assert record_lines(tmp_path / "live-calls" / "2026-09-26.jsonl")[0]["arguments"] == {
         "at": "2026-09-26 00:00:30+00:00"
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug_mode", [True, False])
+async def test_tool_calls_are_recorded_only_for_calls_started_in_debug_mode(
+    tmp_path: Path, debug_mode: bool
+) -> None:
+    directory = tmp_path / "live-calls"
+    harness = Harness(
+        recorder=LiveCallRecorder(directory, clock=RecordClock()), recording=lambda: debug_mode
+    )
+    call = await harness.start()
+    call.host.brief(direct_tools=True)
+    await call.host.run_tool("functions.overview", "{}")
+    await harness.close()
+
+    if not debug_mode:
+        assert not directory.exists()
+        return
+    [record] = record_lines(directory / "2026-09-25.jsonl")
+    assert (record["type"], record["mode"], record["called"], record["tool"]) == (
+        "tool",
+        "direct",
+        "functions.overview",
+        "overview",
+    )
 
 
 @pytest.mark.asyncio
@@ -927,7 +1098,7 @@ def test_socket_carries_ui_requests_answered_through_rpc(tmp_path: Path) -> None
         call = service.calls[0]
         with client.websocket_connect("/ws/live/call-1") as websocket:
             operation = portal(client).start_task_soon(
-                call.host.execute_tool, "open", {"view": "terminals"}
+                run_tool, call, "open", {"view": "terminals"}
             )
             request = websocket.receive_json()
             assert request == {
@@ -961,3 +1132,26 @@ def test_server_shutdown_ends_the_active_call(tmp_path: Path) -> None:
         rpc(client, "live.start", {"media": "webrtc", "sdp": "v=0 offer"})
     assert service.calls[0].close_calls == 1
     assert app.state.live_calls.active_call_id is None
+
+
+def test_socket_text_frames_reach_the_owner_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    received: list[str] = []
+    receive_text = LiveOwnerStream.receive_text
+
+    def record_text(owner: LiveOwnerStream, text: str) -> None:
+        received.append(text)
+        receive_text(owner, text)
+
+    monkeypatch.setattr(LiveOwnerStream, "receive_text", record_text)
+    app, _service = live_app(tmp_path)
+    with TestClient(app) as client:
+        rpc(client, "live.start", {"media": "webrtc", "sdp": "v=0 offer"})
+        with client.websocket_connect("/ws/live/call-1") as websocket:
+            websocket.send_json({"type": "context", "view": "terminals"})
+            for _ in range(500):
+                if received:
+                    break
+                portal(client).call(asyncio.sleep, 0.01)
+    assert [json.loads(text) for text in received] == [{"type": "context", "view": "terminals"}]

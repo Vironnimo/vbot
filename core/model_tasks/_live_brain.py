@@ -1,10 +1,11 @@
 """Delegated reasoning for Live calls.
 
 When the voice model delegates, the call's backend model answers through the
-ordinary Provider Adapter of the same Connection, using the Live Tools. Each
+ordinary Provider Adapter of the same Connection, using the host's Tools. Each
 delegation is one bounded Tool loop; the final text returns to the voice model.
-Model requests are replay safe and retried briefly; Tool executions never are.
-Every Tool call and every delegation is handed to the call's recorder.
+The call keeps one Adapter, so its connections stay warm across delegations.
+Model requests are replay safe and retried briefly; Tool calls never are. Every
+delegation is handed to the call's recorder with its step timings.
 """
 
 from __future__ import annotations
@@ -14,19 +15,11 @@ import inspect
 import json
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from core.chat.model_resolution import resolve_request_temperature
-from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
-from core.model_tasks._live_tools import (
-    DELEGATION_INSTRUCTIONS,
-    LIVE_READ_ONLY_TOOLS,
-    live_failure,
-    live_result_text,
-    live_tools,
-)
 from core.model_tasks.model_tasks import TaskModelTargetRef
 from core.model_tasks.task_execution import TaskUsage
 from core.providers.accounts import ConnectionRef
@@ -36,8 +29,11 @@ from core.usage import UsageRecorder
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
+if TYPE_CHECKING:
+    from core.model_tasks.live import LiveToolRun
+
 JsonObject = dict[str, Any]
-ToolExecutor = Callable[[str, JsonObject], Awaitable[JsonObject]]
+ToolRunner = Callable[..., Awaitable["LiveToolRun"]]
 Recorder = Callable[[JsonObject], None]
 
 _LOGGER = get_logger(__name__)
@@ -80,19 +76,25 @@ class _Progress:
     """What one delegation did so far; failure notes list the Tools that may change things."""
 
     performed: list[str] = field(default_factory=list)
-    steps: int = 0
-    tool_calls: int = 0
+    model_ms: list[int] = field(default_factory=list)
+    tool_ms: list[int] = field(default_factory=list)
 
 
 class LiveBrain:
-    """Answers the delegations of one Live call; history is per call."""
+    """Answers the delegations of one Live call; history is per call.
+
+    *run_tool* runs one Tool call as the Model made it (see
+    ``LiveCallHost.run_tool``). Call :meth:`aclose` once the call ended.
+    """
 
     def __init__(
         self,
         runtime: Any,
         target: BrainTarget,
-        execute_tool: ToolExecutor,
         *,
+        instructions: str,
+        tools: Sequence[JsonObject],
+        run_tool: ToolRunner,
         conversation_id: str,
         record: Recorder | None = None,
         max_steps: int = MAX_MODEL_STEPS,
@@ -102,7 +104,9 @@ class LiveBrain:
     ) -> None:
         self._runtime = runtime
         self._target = target
-        self._execute_tool = execute_tool
+        self._instructions = instructions
+        self._tools = [dict(tool) for tool in tools]
+        self._run_tool = run_tool
         self._record = record
         self._clock = clock
         self._conversation_id = conversation_id
@@ -110,12 +114,14 @@ class LiveBrain:
         self._sleep = sleep
         self._usage_recorder = usage_recorder
         self._history: deque[tuple[str, str]] = deque(maxlen=HISTORY_PAIRS)
+        self._adapter: Any = None
+        self._closed = False
 
     async def answer(self, delegation: DelegationInput) -> str:
         """Run one delegation and return speakable text; never raises for failures."""
 
         request_label = delegation.request or "(not stated; infer it from the conversation)"
-        messages: list[JsonObject] = [{"role": "system", "content": DELEGATION_INSTRUCTIONS}]
+        messages: list[JsonObject] = [{"role": "system", "content": self._instructions}]
         for past_request, past_answer in self._history:
             messages.append({"role": "user", "content": f"Delegated request: {past_request}"})
             messages.append({"role": "assistant", "content": past_answer})
@@ -142,42 +148,55 @@ class LiveBrain:
         self._history.append((request_label, answer))
         return answer
 
+    async def aclose(self) -> None:
+        """Release the Adapter; later delegations fail instead of opening another."""
+
+        self._closed = True
+        adapter, self._adapter = self._adapter, None
+        if adapter is not None:
+            await _close_adapter(adapter)
+
+    def _get_adapter(self) -> Any:
+        if self._closed:
+            raise RuntimeError("the Live call ended")
+        if self._adapter is None:
+            self._adapter = self._runtime.get_adapter(
+                ConnectionRef(self._target.provider_id, self._target.connection_id)
+            )
+        return self._adapter
+
     async def _run(self, messages: list[JsonObject], progress: _Progress) -> tuple[str, str | None]:
         """Return the final answer and, when the loop gave up, the reason."""
-        adapter = self._runtime.get_adapter(
-            ConnectionRef(self._target.provider_id, self._target.connection_id)
-        )
-        try:
-            request_context = _request_context(adapter, self._conversation_id)
-            for _step in range(self._max_steps):
-                progress.steps += 1
-                normalized = await self._send(adapter, messages, request_context)
-                tool_calls = normalized.get("tool_calls") or []
-                content = normalized.get("content")
-                if not tool_calls:
-                    text = content.strip() if isinstance(content, str) else ""
-                    if not text:
-                        raise ValueError("the backend model returned no answer")
-                    return text, None
-                assistant: JsonObject = {"role": "assistant", "content": content}
-                assistant["tool_calls"] = tool_calls
-                for key in ("reasoning", "reasoning_meta"):
-                    if normalized.get(key) is not None:
-                        assistant[key] = normalized[key]
-                messages.append(assistant)
-                for tool_call in tool_calls:
-                    result = await self._execute(tool_call, progress)
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.get("id"),
-                            "content": json.dumps(result, ensure_ascii=False),
-                        }
-                    )
-            reason = f"the request needed more than {self._max_steps} steps and was stopped"
-            return _failure_note(reason, progress.performed), reason
-        finally:
-            await _close_adapter(adapter)
+        adapter = self._get_adapter()
+        request_context = _request_context(adapter, self._conversation_id)
+        for _step in range(self._max_steps):
+            started = self._clock()
+            normalized = await self._send(adapter, messages, request_context)
+            progress.model_ms.append(_milliseconds(self._clock() - started))
+            tool_calls = normalized.get("tool_calls") or []
+            content = normalized.get("content")
+            if not tool_calls:
+                text = content.strip() if isinstance(content, str) else ""
+                if not text:
+                    raise ValueError("the backend model returned no answer")
+                return text, None
+            assistant: JsonObject = {"role": "assistant", "content": content}
+            assistant["tool_calls"] = tool_calls
+            for key in ("reasoning", "reasoning_meta"):
+                if normalized.get(key) is not None:
+                    assistant[key] = normalized[key]
+            messages.append(assistant)
+            for tool_call in tool_calls:
+                result = await self._execute(tool_call, progress)
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.get("id"),
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        reason = f"the request needed more than {self._max_steps} steps and was stopped"
+        return _failure_note(reason, progress.performed), reason
 
     async def _send(
         self, adapter: Any, messages: list[JsonObject], request_context: JsonObject
@@ -208,7 +227,7 @@ class LiveBrain:
                         self._target.model_id,
                     ),
                     thinking_effort=self._target.thinking_effort,
-                    tools=live_tools(),
+                    tools=[dict(tool) for tool in self._tools],
                     **request_context,
                 )
             except BaseException as exc:
@@ -232,35 +251,20 @@ class LiveBrain:
             return normalized
 
     async def _execute(self, tool_call: JsonObject, progress: _Progress) -> JsonObject:
-        """Prepare one Tool call, run it once when it is valid, and record it."""
+        """Run one Tool call once through the host and note what it may have changed."""
 
-        progress.tool_calls += 1
         started = self._clock()
-        arguments = tool_call.get("arguments")
-        rejection = tool_call.get(TOOL_CALL_REJECTION_FIELD)
-        # The Adapter may replace unusable arguments with an empty placeholder.
-        # Its rejection must survive Live aliases and their implied arguments.
-        prepared = (
-            live_failure(rejection["code"], rejection["message"])
-            if rejection is not None
-            else prepare_live_call(tool_call.get("name"), arguments)
+        # The Adapter may replace unusable arguments with an empty placeholder;
+        # its rejection is the result, whatever the host would make of them.
+        run = await self._run_tool(
+            tool_call.get("name"),
+            tool_call.get("arguments"),
+            rejection=tool_call.get(TOOL_CALL_REJECTION_FIELD),
         )
-        if isinstance(prepared, PreparedLiveCall):
-            if prepared.name not in LIVE_READ_ONLY_TOOLS:
-                progress.performed.append(prepared.name)
-            result = await self._execute_tool(prepared.name, dict(prepared.arguments))
-        else:
-            result = prepared
-        record_tool_call(
-            self._record,
-            mode="delegated",
-            called=tool_call.get("name"),
-            arguments=arguments,
-            prepared=prepared,
-            result=result,
-            duration=self._clock() - started,
-        )
-        return result
+        progress.tool_ms.append(_milliseconds(self._clock() - started))
+        if run.changed:
+            progress.performed.append(run.changed)
+        return run.result
 
     def _record_delegation(
         self,
@@ -270,58 +274,24 @@ class LiveBrain:
         failure: str | None,
         started: float,
     ) -> None:
-        record_live_event(
-            self._record,
-            {
-                "type": "delegation",
-                "request": delegation.request,
-                "answer": answer,
-                "steps": progress.steps,
-                "tool_calls": progress.tool_calls,
-                "failure": failure,
-                "duration_ms": _milliseconds(self._clock() - started),
-            },
-        )
-
-
-def record_tool_call(
-    record: Recorder | None,
-    *,
-    mode: str,
-    called: Any,
-    arguments: Any,
-    prepared: PreparedLiveCall | JsonObject,
-    result: JsonObject,
-    duration: float,
-) -> None:
-    """Record one Live Tool call: as called, as run, its result text, and its duration."""
-
-    run = prepared if isinstance(prepared, PreparedLiveCall) else None
-    record_live_event(
-        record,
-        {
-            "type": "tool",
-            "mode": mode,
-            "called": called,
-            "tool": run.name if run is not None else None,
-            "arguments": arguments,
-            "run_arguments": run.arguments if run is not None else None,
-            "ok": result.get("ok") is True,
-            "result": live_result_text(result),
-            "duration_ms": _milliseconds(duration),
-        },
-    )
-
-
-def record_live_event(record: Recorder | None, event: JsonObject) -> None:
-    """Hand one event to the call's recorder; recording never fails the call."""
-
-    if record is None:
-        return
-    try:
-        record(event)
-    except Exception as exc:
-        _LOGGER.warning("Live call record failed (error_type=%s)", type(exc).__name__)
+        if self._record is None:
+            return
+        try:
+            self._record(
+                {
+                    "type": "delegation",
+                    "request": delegation.request,
+                    "answer": answer,
+                    "steps": len(progress.model_ms),
+                    "tool_calls": len(progress.tool_ms),
+                    "model_ms": progress.model_ms,
+                    "tool_ms": progress.tool_ms,
+                    "failure": failure,
+                    "duration_ms": _milliseconds(self._clock() - started),
+                }
+            )
+        except Exception as exc:
+            _LOGGER.warning("Live call record failed (error_type=%s)", type(exc).__name__)
 
 
 def _milliseconds(seconds: float) -> int:
@@ -336,8 +306,7 @@ def _render_input(delegation: DelegationInput, request_label: str) -> str:
         sections.append("Recent vBot updates (quoted data):\n" + delegation.updates)
     if delegation.refs:
         sections.append(
-            "Refs earlier results in this call named (quoted data; still valid as targets):\n"
-            + delegation.refs
+            "Refs earlier results named (quoted data; still valid as targets):\n" + delegation.refs
         )
     sections.append(f"Delegated request: {request_label}")
     return "\n\n".join(sections)

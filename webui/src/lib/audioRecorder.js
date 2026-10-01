@@ -1,3 +1,5 @@
+import { claimMicrophone } from './microphoneUse.js';
+
 const AUDIO_MIME_CANDIDATES = Object.freeze([
   'audio/webm;codecs=opus',
   'audio/webm',
@@ -44,7 +46,10 @@ export async function createAudioRecorder(options = {}) {
   const stream = await navigatorObject.mediaDevices.getUserMedia({
     audio: true,
   });
+  // A running Live call pauses while this recording holds the microphone.
+  const releaseMicrophone = claimMicrophone();
   const stopTracks = () => {
+    releaseMicrophone();
     for (const track of stream.getTracks()) {
       try {
         track.stop();

@@ -13,7 +13,6 @@ from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
-from server._live_record import LiveCallRecorder
 from server.clients import ClientRegistry
 from server.events import (
     RESOURCE_KIND_CALENDAR,
@@ -24,7 +23,8 @@ from server.events import (
     ServerEventBus,
 )
 from server.file_delivery import FileDelivery
-from server.live import LiveCallRegistry
+from server.live._record import LiveCallRecorder
+from server.live.registry import LiveCallRegistry
 from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
@@ -101,7 +101,13 @@ def _build_live_call_registry(state: Any, recorder: LiveCallRecorder) -> LiveCal
     async def dispatch(method: str, params: JsonObject) -> JsonObject:
         return await dispatch_method(state, method, params, METHODS)
 
-    return LiveCallRegistry(events=state.event_bus, rpc=dispatch, recorder=recorder)
+    def recording() -> bool:
+        # Records hold what the Models sent and read; only Debug Mode keeps them.
+        return bool(state.runtime.storage.load_debug_settings()["enabled"])
+
+    return LiveCallRegistry(
+        events=state.event_bus, rpc=dispatch, recorder=recorder, recording=recording
+    )
 
 
 async def _shutdown_live_calls(state: Any, logger: logging.Logger) -> None:

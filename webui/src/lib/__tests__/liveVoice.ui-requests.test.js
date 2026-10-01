@@ -3,18 +3,39 @@ import { describe, expect, it } from 'vitest';
 import { deferred, flush, liveFixture } from './liveVoice.support.js';
 
 describe('Live voice UI requests', () => {
-  it('returns the App context and answers each request once', async () => {
+  it('answers each request once', async () => {
     const f = liveFixture();
     await f.goLive();
-    f.request('r1', 'context');
-    f.request('r1', 'context');
+    f.request('r1', 'open', { view: 'terminals' });
+    f.request('r1', 'open', { view: 'terminals' });
     await flush();
-    expect(f.uiActions.context).toHaveBeenCalledOnce();
+    expect(f.uiActions.open).toHaveBeenCalledOnce();
     expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
       'call-1',
       'r1',
-      { result: { view: 'chat', agents: [] } },
+      { result: { applied: true } },
     );
+  });
+
+  it('sends what the app shows whenever the call socket opens and when it changes', async () => {
+    const f = liveFixture();
+    const shown = {
+      view: 'chat',
+      selected_agent_id: 'main',
+      selected_project_id: null,
+      chat_session: null,
+    };
+    f.controller.reportContext(shown);
+    await f.goLive();
+    f.socket().handlers.onOpen();
+    f.controller.reportContext({ ...shown, view: 'terminals' });
+    // A report that is no object clears it; nothing is sent then.
+    f.controller.reportContext(null);
+    f.socket().handlers.onOpen();
+    expect(f.socket().sendJson.mock.calls).toEqual([
+      [{ type: 'context', ...shown }],
+      [{ type: 'context', ...shown, view: 'terminals' }],
+    ]);
   });
 
   it('opens a view alone or exactly one item and reports whether navigation applied', async () => {
@@ -62,7 +83,8 @@ describe('Live voice UI requests', () => {
   });
 
   it.each([
-    ['open', { view: 'settings' }, 'invalid_view'],
+    ['open', { view: 'browser' }, 'invalid_view'],
+    ['open', { view: 'settings', agent_id: 'joel' }, 'invalid_arguments'],
     [
       'open',
       { view: 'agents', agent_id: 'joel', session_id: 's1' },
@@ -79,7 +101,7 @@ describe('Live voice UI requests', () => {
     ['terminal_view', { op: 'close', terminal_id: 't1' }, 'invalid_arguments'],
     ['terminal_view', { op: 'show' }, 'invalid_arguments'],
     ['terminal_view', { op: 'show_group' }, 'invalid_arguments'],
-    ['context', ['unexpected'], 'invalid_arguments'],
+    ['context', {}, 'unsupported_action'],
     ['send_message', {}, 'unsupported_action'],
   ])(
     'answers an invalid %s request %j with %s without running it',
@@ -88,7 +110,6 @@ describe('Live voice UI requests', () => {
       await f.goLive();
       f.request('bad', action, args);
       await flush();
-      expect(f.uiActions.context).not.toHaveBeenCalled();
       expect(f.uiActions.open).not.toHaveBeenCalled();
       expect(f.uiActions.terminalView).not.toHaveBeenCalled();
       expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
@@ -156,15 +177,15 @@ describe('Live voice UI requests', () => {
     const f = liveFixture();
     await f.goLive();
     const pending = deferred();
-    f.uiActions.context.mockReturnValue(pending.promise);
-    f.request('r1', 'context');
+    f.uiActions.open.mockReturnValue(pending.promise);
+    f.request('r1', 'open', { view: 'chat' });
     await flush();
-    const [guard] = f.uiActions.context.mock.calls[0];
+    const [, guard] = f.uiActions.open.mock.calls[0];
     expect(guard.isCurrent()).toBe(true);
     f.controller.stop();
     expect(guard.isCurrent()).toBe(false);
     f.frame({ type: 'closed', reason: 'stopped', usage: null });
-    pending.resolve({ view: 'chat' });
+    pending.resolve(true);
     await flush();
     expect(f.api.sendLiveUiResult).not.toHaveBeenCalled();
   });
@@ -173,9 +194,9 @@ describe('Live voice UI requests', () => {
     const f = liveFixture();
     await f.goLive();
     f.controller.stop();
-    f.request('r1', 'context');
+    f.request('r1', 'open', { view: 'chat' });
     await flush();
-    expect(f.uiActions.context).not.toHaveBeenCalled();
+    expect(f.uiActions.open).not.toHaveBeenCalled();
     expect(f.api.sendLiveUiResult).toHaveBeenCalledExactlyOnceWith(
       'call-1',
       'r1',

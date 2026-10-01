@@ -1,4 +1,4 @@
-"""Terminal operations of a Live call: coding programs, typing, keys, and layout.
+"""Coding Terminals of a Live call: starting programs, typing, keys, and reading.
 
 Live starts Codex and Claude Code through ``terminal.start`` with the program's
 command alone. A task never becomes part of a command line: on Windows the
@@ -23,42 +23,43 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from core.model_tasks.live import (
-    MAX_LIVE_NAME_CHARS,
-    MAX_LIVE_TEXT_CHARS,
+from core.model_tasks.live import live_failure, live_success
+from core.tools._call_vocabulary import spelling
+from core.utils.paths import model_path
+from server.live._brief import MAX_LIVE_NAME_CHARS, MAX_LIVE_TEXT_CHARS
+from server.live._context import (
+    UNCERTAIN_DELIVERY,
+    VOICE_STOPPED,
+    JsonObject,
+    LiveContext,
+    LiveToolError,
+    count_phrase,
+    join_words,
+    text_field,
+)
+from server.live._programs import (
     CliPrompt,
     CodingProgram,
-    live_failure,
-    live_success,
     program_input_visible,
     program_prompt,
     program_ready,
     program_text_pending,
     selected_answer,
 )
-from core.tools._call_vocabulary import spelling
-from core.utils.paths import model_path
-from server._live_context import (
-    UNCERTAIN_DELIVERY,
-    VOICE_STOPPED,
-    JsonObject,
-    LiveContext,
-    LiveToolError,
-    LiveUiError,
-    join_words,
-    text_field,
-)
-from server._live_targets import (
-    GROUP,
+from server.live._targets import (
     TERMINAL,
     LiveCatalog,
     LiveRefs,
     coding_program,
-    resolve_target,
     terminal_label,
     terminal_title,
+)
+from server.live._terminal_layout import (
+    EDITABLE_GROUP_KINDS,
+    FINISHED_STATES,
+    LiveTerminalLayout,
+    action_target,
 )
 from server.rpc.errors import RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING, RpcError
 
@@ -86,8 +87,6 @@ _KEY_LABELS = {
 }
 _PASTE_START = "\x1b[200~"
 _PASTE_END = "\x1b[201~"
-_EDITABLE_GROUP_KINDS = frozenset({"user", "agent"})
-_FINISHED_STATES = frozenset({"exited", "error"})
 _STATE_WORDS = {
     "starting": "starting",
     "ready": "idle",
@@ -156,7 +155,10 @@ def text_problem(text: str) -> str | None:
 
 
 class LiveTerminals:
-    """Terminal operations for one Live call's Tool executions."""
+    """Coding Terminal operations for one Live call's Tool executions.
+
+    Layout actions of the ``terminal`` Tool go to :class:`LiveTerminalLayout`.
+    """
 
     def __init__(
         self,
@@ -172,6 +174,7 @@ class LiveTerminals:
         self._timings = timings
         self._sleep = sleep
         self._clock = clock
+        self._layout = LiveTerminalLayout(ctx, refs)
         # Terminals a start is still typing its task into.
         self._typing: set[str] = set()
 
@@ -222,10 +225,10 @@ class LiveTerminals:
         title = terminal_title({"launch_command": program.command, "name": name})
         refs = [self._refs.terminal(terminal_id, title) for terminal_id in started]
         head = (
-            f"Started {program.label} in {_count_phrase(len(refs), 'Terminal')} in "
+            f"Started {program.label} in {count_phrase(len(refs), 'Terminal')} in "
             f"{model_path(workdir)}: {', '.join(refs)}."
         )
-        if not await self._show_quietly("show", terminal_id=started[0]):
+        if not await self._layout.show_quietly("show", terminal_id=started[0]):
             head += " The app did not switch to it."
         if not task:
             return live_success(head)
@@ -344,7 +347,7 @@ class LiveTerminals:
         for group in groups:
             if (
                 str(group.get("name") or "").casefold() == label.casefold()
-                and group.get("kind") in _EDITABLE_GROUP_KINDS
+                and group.get("kind") in EDITABLE_GROUP_KINDS
             ):
                 return str(group["group_id"])
         created = await self._ctx.call("terminal.group.create", {"name": label})
@@ -400,48 +403,12 @@ class LiveTerminals:
     async def run_action(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
         """Run one ``terminal`` Tool action."""
         action = str(arguments.get("action") or "")
-        if action == "restore":
-            await self._ctx.view("restore")
-            return live_success("Restored the Terminals view to its group layout.")
-        if action == "create_group":
-            return await self._create_group(text_field(arguments, "name"))
-        if action == "reorder":
-            return await self._reorder(arguments, catalog)
-        target_text = text_field(arguments, "target")
-        if not target_text:
-            raise LiveToolError(
-                "missing_target",
-                f"{action} needs a target. Call terminal again with "
-                f'{{"action": "{action}", "target": '
-                f'"{"<group name>" if action.endswith("_group") else "t1"}"}}.',
-            )
-        if action in {"rename_group", "delete_group"}:
-            target = await resolve_target(
-                target_text,
-                {GROUP},
-                tool="terminal",
-                field="target",
-                refs=self._refs,
-                catalog=catalog,
-            )
-            assert target.group is not None
-            return await self._group_change(action, target.group, text_field(arguments, "name"))
-        target = await resolve_target(
-            target_text,
-            {TERMINAL},
-            tool="terminal",
-            field="target",
-            refs=self._refs,
-            catalog=catalog,
-        )
+        if action != "key":
+            return await self._layout.run(action, arguments, catalog)
+        target = await action_target(arguments, action, {TERMINAL}, self._refs, catalog)
         terminal = target.terminal
         assert terminal is not None
         ref = self._refs.terminal(str(terminal["terminal_id"]), terminal_title(terminal))
-        if action == "maximize":
-            await self._ctx.view("maximize", terminal_id=terminal["terminal_id"])
-            return live_success(f"Maximized {ref} in the Terminals view.")
-        if action == "close":
-            return await self._close(terminal, ref)
         key = text_field(arguments, "key")
         if key not in KEY_SEQUENCES:
             raise LiveToolError(
@@ -451,148 +418,6 @@ class LiveTerminals:
             )
         ref, program = self._writable(terminal, "terminal")
         return await self._press(terminal, ref, program, key, tool="terminal")
-
-    async def _create_group(self, name: str) -> JsonObject:
-        if not name or len(name) > MAX_LIVE_NAME_CHARS:
-            raise LiveToolError(
-                "invalid_name",
-                f"create_group needs a name of at most {MAX_LIVE_NAME_CHARS} characters. Call "
-                'terminal again with {"action": "create_group", "name": "<group name>"}.',
-            )
-        created = await self._ctx.call("terminal.group.create", {"name": name})
-        text = f'Created the Terminal group "{name}".'
-        shown = await self._show_quietly("show_group", group_id=created["group"]["group_id"])
-        return live_success(text if shown else f"{text} The app did not switch to it.")
-
-    async def _group_change(self, action: str, group: JsonObject, name: str) -> JsonObject:
-        label = str(group.get("name") or group["group_id"])
-        if group.get("kind") not in _EDITABLE_GROUP_KINDS:
-            raise LiveToolError(
-                "group_not_editable",
-                f'The group "{label}" is kept by the app and cannot be changed; only groups the '
-                "user or an Agent created can.",
-            )
-        if action == "rename_group":
-            if not name or len(name) > MAX_LIVE_NAME_CHARS:
-                raise LiveToolError(
-                    "invalid_name",
-                    f"rename_group needs a new name of at most {MAX_LIVE_NAME_CHARS} characters. "
-                    f'Call terminal again with {{"action": "rename_group", "target": "{label}", '
-                    '"name": "<new name>"}.',
-                )
-            await self._ctx.call(
-                "terminal.group.rename", {"group_id": group["group_id"], "name": name}
-            )
-            text = f'Renamed the group "{label}" to "{name}".'
-        else:
-            result = await self._ctx.call("terminal.group.delete", {"group_id": group["group_id"]})
-            killed = result.get("terminals_killed")
-            stopped = (
-                f" and stopped {_count_phrase(killed, 'Terminal')}"
-                if isinstance(killed, int) and killed
-                else ""
-            )
-            text = f'Deleted the group "{label}"{stopped}.'
-        return live_success(await self._after_change(text))
-
-    async def _reorder(self, arguments: JsonObject, catalog: LiveCatalog) -> JsonObject:
-        order = arguments.get("order")
-        if (
-            not isinstance(order, list)
-            or not order
-            or not all(isinstance(item, str) for item in order)
-        ):
-            raise LiveToolError(
-                "missing_order",
-                "reorder needs order: every Terminal ref of the group in the new order. Call "
-                'terminal again with {"action": "reorder", "order": ["t2", "t1"]}.',
-            )
-        terminals: list[JsonObject] = []
-        for item in order:
-            target = await resolve_target(
-                item, {TERMINAL}, tool="terminal", field="order", refs=self._refs, catalog=catalog
-            )
-            assert target.terminal is not None
-            terminals.append(target.terminal)
-        target_text = text_field(arguments, "target")
-        if target_text:
-            target = await resolve_target(
-                target_text,
-                {GROUP},
-                tool="terminal",
-                field="target",
-                refs=self._refs,
-                catalog=catalog,
-            )
-            group = target.group
-        else:
-            group_ids = {item.get("group_id") for item in terminals}
-            groups = await catalog.groups()
-            group = next(
-                (item for item in groups if len(group_ids) == 1 and item["group_id"] in group_ids),
-                None,
-            )
-        if group is None:
-            raise LiveToolError(
-                "missing_group",
-                "The Terminals are in different groups. Call terminal again with the group name "
-                'as target, for example {"action": "reorder", "target": "Codex", "order": '
-                '["t2", "t1"]}.',
-            )
-        label = str(group.get("name") or group["group_id"])
-        if group.get("kind") not in _EDITABLE_GROUP_KINDS:
-            raise LiveToolError(
-                "group_not_editable",
-                f'The group "{label}" is kept by the app and cannot be reordered.',
-            )
-        members = [
-            item for item in await catalog.terminals() if item.get("group_id") == group["group_id"]
-        ]
-        ids = [str(item["terminal_id"]) for item in terminals]
-        member_ids = {str(item["terminal_id"]) for item in members}
-        if len(ids) != len(member_ids) or set(ids) != member_ids:
-            refs = [
-                self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
-                for item in members
-            ]
-            raise LiveToolError(
-                "invalid_order",
-                f'order must name every Terminal of the group "{label}" exactly once: '
-                f"{', '.join(refs)}. Call terminal again with all of them in the new order.",
-            )
-        await self._ctx.call("terminal.group.order", {"group_id": group["group_id"], "order": ids})
-        new_order = ", ".join(
-            self._refs.terminal(str(item["terminal_id"]), terminal_title(item))
-            for item in terminals
-        )
-        return live_success(
-            await self._after_change(f'Reordered the group "{label}": {new_order}.')
-        )
-
-    async def _close(self, terminal: JsonObject, ref: str) -> JsonObject:
-        """Stop the Terminal, then forget it, like the app's close button."""
-        terminal_id = terminal["terminal_id"]
-        stopped = terminal.get("state") in _FINISHED_STATES
-        try:
-            if not stopped:
-                await self._ctx.call("terminal.kill", {"terminal_id": terminal_id})
-                stopped = True
-            self._ctx.ensure_active()
-            await self._ctx.call("terminal.forget", {"terminal_id": terminal_id})
-        except Exception as exc:
-            if not isinstance(exc, LiveToolError | RpcError):
-                _LOGGER.exception("Live Terminal close failed unexpectedly")
-            reason = exc.message if isinstance(exc, LiveToolError | RpcError) else "It failed."
-            if not stopped:
-                done = f"{ref} may still be running: stopping it failed."
-            elif isinstance(exc, LiveToolError) and exc.code == VOICE_STOPPED:
-                done = f"{ref} was stopped but not removed."
-            else:
-                done = f"{ref} was stopped but may not have been removed."
-            return live_failure(
-                "partial", f"{done} {reason} Call overview to check before closing it again."
-            )
-        return live_success(await self._after_change(f"Closed {ref}: stopped and removed."))
 
     # -- shared -------------------------------------------------------------
 
@@ -715,7 +540,7 @@ class LiveTerminals:
             if isinstance(revision, int) and not isinstance(revision, bool)
             else None,
             bracketed_paste=snapshot.get("bracketed_paste") is True,
-            finished=summary.get("state") in _FINISHED_STATES,
+            finished=summary.get("state") in FINISHED_STATES,
         )
 
     async def _input(
@@ -731,24 +556,6 @@ class LiveTerminals:
             # The manager rejects the input if the screen changed since this read.
             params["expected_screen_revision"] = revision
         await self._ctx.call("terminal.input", params)
-
-    async def _show_quietly(self, op: str, **args: Any) -> bool:
-        """Change the Terminals layout; ``False`` when the app did not."""
-        try:
-            self._ctx.ensure_active()
-            await self._ctx.view(op, **args)
-        except (LiveToolError, LiveUiError):
-            return False
-        except Exception:
-            _LOGGER.exception("Live Terminal layout update failed unexpectedly")
-            return False
-        return True
-
-    async def _after_change(self, text: str) -> str:
-        """Refresh the Terminals layout after a completed change; the change stays reported."""
-        if await self._show_quietly("refresh"):
-            return text
-        return f"{text} The app window did not update its Terminals view."
 
 
 def _unconfirmed_answer(program: CodingProgram, ref: str, screen: str) -> JsonObject | None:
@@ -912,7 +719,3 @@ def _message_problem(ref: str, program: CodingProgram, outcome: _Outcome) -> str
         f"Call read with {ref}; if its input line shows the message, call terminal with "
         f'{{"action": "key", "target": "{ref}", "key": "enter"}} to send it.'
     )
-
-
-def _count_phrase(count: int, noun: str) -> str:
-    return f"a {noun}" if count == 1 else f"{count} {noun}s"

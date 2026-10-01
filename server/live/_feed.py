@@ -14,13 +14,13 @@ from typing import Any
 from core.model_tasks.live import LiveRunNotice
 from core.projects import format_agent_address
 from core.runs import RUN_AGENT_ACTIVITY_FIELD
-from server._live_context import RpcInvoker
 from server.events import (
     RUN_COMPLETED_SERVER_EVENT,
     RUN_FAILED_SERVER_EVENT,
     RUN_INTERRUPTED_SERVER_EVENT,
     ServerEventBus,
 )
+from server.live._context import RpcInvoker
 from server.rpc.errors import RpcError
 
 JsonObject = dict[str, Any]

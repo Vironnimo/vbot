@@ -4,15 +4,51 @@ export default Object.freeze({
   'live.stopButton': 'Stop Live',
   'live.mute': 'Mute microphone',
   'live.unmute': 'Unmute microphone',
+  'live.speakerMute': 'Mute Live voice',
+  'live.speakerUnmute': 'Unmute Live voice',
+  'live.stay': 'Keep call',
+  'live.callTime': 'Call time {time}',
+  'live.activity.show': 'Show Live activity',
+  'live.activity.hide': 'Hide Live activity',
+  'live.activity.title': 'Live activity',
+  'live.activity.lastCall': 'Last Live call',
+  'live.activity.empty':
+    'Nothing yet. What you say and what Live voice does in vBot shows here.',
+  'live.activity.you': 'You',
+  'live.activity.assistant': 'Live voice',
+  'live.activity.failed': 'Failed',
+  'live.tool.overview': 'Looked at vBot',
+  'live.tool.start_agent_session': 'Started Sessions',
+  'live.tool.start_coding_terminal': 'Started coding Terminals',
+  'live.tool.send_message': 'Sent a message',
+  'live.tool.read': 'Read',
+  'live.tool.stop': 'Stopped work',
+  'live.tool.open': 'Showed in the app',
+  'live.tool.terminal': 'Used a Terminal',
+  'live.tool.end_call': 'Ended the call',
   'live.busy': 'Working…',
   'live.state.connecting': 'Connecting…',
   'live.state.listening': 'Listening…',
   'live.state.closing': 'Stopping…',
   'live.state.held': 'Paused for a voice command',
+  'live.state.heldRecording': 'Paused while you record',
+  'live.state.idle': 'Nobody is speaking; ends in {time}',
+  'live.state.expiring': 'The Provider ends this call in {time}',
   'live.notice.replaced': 'Live voice continues in another window.',
   'live.notice.ended': 'Live voice ended.',
+  'live.notice.hungUp': 'Live voice ended the call.',
+  'live.notice.idle':
+    'Live voice ended the call because nobody spoke for a while.',
+  'live.notice.idleWarning':
+    'Live voice ends soon because nobody is speaking. Say something to keep the call.',
+  'live.notice.expired':
+    "The call reached the Provider's time limit. Start Live again to continue.",
   'live.error.notConfigured':
     'Choose a Live voice Model in Settings → Voice first.',
+  'live.error.providerUnavailable':
+    'The Provider connection of the Live voice Model is missing or not set up. Check it in Settings → Providers.',
+  'live.error.backendUnavailable':
+    'The backend model of Live voice is not available. Choose another one in Settings → Voice.',
   'live.error.notUsable':
     'The Live voice Model cannot be used right now. Check its Provider connection in Settings.',
   'live.error.invalidOffer':
@@ -49,6 +85,7 @@ export default Object.freeze({
   'live.error.uiAction': 'Live voice could not change the view as requested.',
   'live.error.notification':
     'Live voice could not announce a finished Run. Check the chat for its result.',
+  'live.error.link': 'vBot could not show it. It may no longer exist.',
   'live.error.generic': 'Live voice reported a problem ({code}).',
   'app.title': 'vBot',
   'app.webuiOutdated':

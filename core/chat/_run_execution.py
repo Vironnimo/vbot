@@ -325,6 +325,7 @@ class RunExecution:
                                 context.session_snapshot.active_messages,
                             ),
                             sender=request.sender,
+                            input_origin=request.input_origin,
                         )
                         persisted_messages = [*session.take_deferred_notes(), user_message]
                     # One transaction persists the input, starts the Continuation

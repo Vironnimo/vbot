@@ -9,35 +9,30 @@ A target names a Session, Terminal, Terminal group, Agent, or Project. A ref
 (tolerant spellings such as ``S2``, ``s-2``, ``#s2``) decides. Otherwise each
 kind the Tool accepts contributes its matches: its exact ids (a Session or
 Terminal id, a group id, an Agent address, a Project id) if any match, else its
-id prefixes (>= 4 characters, Sessions and Terminals) and names together. The
-target resolves only when exactly one thing matches across all accepted kinds;
-a Terminal and an Agent of the same name are ambiguous, never decided by kind
-order. Names compare by :func:`core.tools._call_vocabulary.spelling`.
+names (Terminals, groups, Agents, Projects). The target resolves only when
+exactly one thing matches across all accepted kinds; a Terminal and an Agent of
+the same name are ambiguous, never decided by kind order. Names compare by
+:func:`core.tools._call_vocabulary.spelling`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from core.model_tasks.live import CODING_PROGRAMS, CodingProgram
 from core.projects import format_agent_address
 from core.tools._call_vocabulary import spelling
-from server._live_context import (
-    UI_ACTION_CONTEXT,
-    JsonObject,
-    LiveContext,
-    LiveToolError,
-    LiveUiError,
-)
+from server.live._context import JsonObject, LiveContext, LiveToolError
+from server.live._programs import CODING_PROGRAMS, CodingProgram
 
 _EXECUTABLE_SUFFIX = re.compile(r"\.(exe|cmd|bat|ps1)$", re.IGNORECASE)
 _REF = re.compile(r"^\s*#?\s*([st])\s*[-_.: ]?\s*(\d{1,6})\s*$", re.IGNORECASE)
-_MIN_PREFIX_CHARS = 4
 _SESSION_LIST_LIMIT = 100
+_TEAM_TTL_SECONDS = 60.0
 _MAX_AGENT_BATCH = 100
 _MAX_LISTED_CANDIDATES = 8
 _MAX_LEGEND_REFS = 30
@@ -166,7 +161,7 @@ class LiveRefs:
         self._labels.move_to_end(ref)
 
     def touched(self) -> list[SessionKey]:
-        """Sessions Live started or addressed in this call, oldest first."""
+        """Sessions Live started or addressed, oldest first."""
         return list(self._touched)
 
     def is_touched(self, key: SessionKey) -> bool:
@@ -181,171 +176,203 @@ class LiveRefs:
             return self._sessions.get(ref)
         return self._terminals.get(ref)
 
+    def link(self, ref: str) -> JsonObject | None:
+        """What a known ref names, for the app to show: ids plus the latest label."""
+        found = self.lookup(ref)
+        if found is None:
+            return None
+        label = self._labels.get(ref, "")
+        if isinstance(found, SessionKey):
+            return {
+                "ref": ref,
+                "kind": "session",
+                "agent_id": found.address,
+                "session_id": found.session_id,
+                "label": label,
+            }
+        return {"ref": ref, "kind": "terminal", "terminal_id": found, "label": label}
+
+
+class TeamCache:
+    """Project teams a call looked up, reused for a short while.
+
+    Reading a team rescans its Project (``project.show``), so a call keeps each
+    team for ``ttl`` seconds instead of reading it for every Tool call.
+    """
+
+    def __init__(self, *, ttl: float = _TEAM_TTL_SECONDS, clock: Callable[[], float]) -> None:
+        self._ttl = ttl
+        self._clock = clock
+        self._teams: dict[str, tuple[float, list[LiveAgent]]] = {}
+
+    def get(self, project_id: str) -> list[LiveAgent] | None:
+        cached = self._teams.get(project_id)
+        if cached is None or self._clock() - cached[0] > self._ttl:
+            return None
+        return cached[1]
+
+    def put(self, project_id: str, team: list[LiveAgent]) -> None:
+        self._teams[project_id] = (self._clock(), team)
+
+    def known(self) -> list[LiveAgent]:
+        return [agent for _, team in self._teams.values() for agent in team]
+
 
 class LiveCatalog:
     """App data one Tool execution reads, each loaded at most once.
 
-    The app window's context supplies the selection, the identity Agents, the
-    selected Project's team, and the Projects; without a window the canonical
-    RPCs supply the Agents and Projects, without a team.
+    The app window pushes what it shows (``view``, ``selected_agent_id``,
+    ``selected_project_id``, ``chat_session``); the canonical RPCs supply the
+    Agents, Projects, Sessions and Terminals. Loads run concurrently where they
+    do not depend on each other; call :meth:`discard` when the execution ends.
     """
 
-    def __init__(self, ctx: LiveContext, refs: LiveRefs) -> None:
+    def __init__(self, ctx: LiveContext, refs: LiveRefs, teams: TeamCache) -> None:
         self._ctx = ctx
         self._refs = refs
-        self._selection: JsonObject | None = None
-        self._selection_loaded = False
-        self._agents: list[LiveAgent] | None = None
-        self._projects: list[LiveProject] | None = None
-        self._teams: dict[str, list[LiveAgent]] = {}
-        self._sessions: list[JsonObject] | None = None
-        self._own_sessions: dict[str, frozenset[SessionKey]] = {}
-        self._terminals: tuple[list[JsonObject], list[JsonObject]] | None = None
+        self._teams = teams
+        self._loads: dict[str, asyncio.Future[Any]] = {}
 
-    async def selection(self) -> JsonObject | None:
-        """The app window's context, or ``None`` when no window answers."""
-        if not self._selection_loaded:
-            self._selection_loaded = True
-            try:
-                context = await self._ctx.ui(UI_ACTION_CONTEXT, {})
-            except LiveUiError:
-                context = None
-            self._selection = context if isinstance(context, dict) else None
-        return self._selection
+    def discard(self) -> None:
+        """Cancel loads nobody awaited."""
+        for load in self._loads.values():
+            if not load.done():
+                load.cancel()
+            elif not load.cancelled():
+                load.exception()
+        self._loads.clear()
+
+    async def _once(self, key: str, load: Callable[[], Awaitable[Any]]) -> Any:
+        future = self._loads.get(key)
+        if future is None:
+            future = self._loads[key] = asyncio.ensure_future(load())
+        return await asyncio.shield(future)
+
+    def selection(self) -> JsonObject | None:
+        """What the app window shows, or ``None`` when no window reported it."""
+        return self._ctx.app_context()
 
     async def selected_project(self) -> LiveProject | None:
-        selection = await self.selection()
-        project_id = (selection or {}).get("selected_project_id")
+        project_id = (self.selection() or {}).get("selected_project_id")
         if not isinstance(project_id, str) or not project_id:
             return None
         return next((item for item in await self.projects() if item.project_id == project_id), None)
 
     async def agents(self) -> list[LiveAgent]:
-        """Identity Agents, then the selected Project's team."""
-        if self._agents is None:
-            selection = await self.selection()
-            if selection is not None and isinstance(selection.get("agents"), list):
-                identity = [
-                    LiveAgent(address=str(item["agent_id"]), name=_name(item, "agent_id"))
-                    for item in _objects(selection["agents"])
-                    if _text(item.get("agent_id"))
-                ]
-                project = await self.selected_project()
-                team = [
-                    LiveAgent(
-                        address=str(item["agent_id"]),
-                        name=_name(item, "agent_id"),
-                        project=project.name if project else "",
-                    )
-                    for item in _objects(selection.get("selected_project_team"))
-                    if _text(item.get("agent_id"))
-                ]
-                self._agents = identity + team
-            else:
-                listed = await self._ctx.call("agent.list", {})
-                self._agents = [
-                    LiveAgent(address=str(item["id"]), name=_name(item, "id"))
-                    for item in _objects(listed.get("agents"))
-                    if _text(item.get("id"))
-                ]
-        return self._agents
+        """The user's own Agents, then the selected Project's team."""
+        return await self._once("agents", self._load_agents)  # type: ignore[no-any-return]
+
+    async def _load_agents(self) -> list[LiveAgent]:
+        listed, project = await asyncio.gather(
+            self._ctx.call("agent.list", {}), self.selected_project()
+        )
+        identity = [
+            LiveAgent(address=str(item["id"]), name=_name(item, "id"))
+            for item in _objects(listed.get("agents"))
+            if _text(item.get("id"))
+        ]
+        return identity + (await self.team(project) if project is not None else [])
 
     async def projects(self) -> list[LiveProject]:
-        if self._projects is None:
-            selection = await self.selection()
-            if selection is not None and isinstance(selection.get("projects"), list):
-                items = _objects(selection["projects"])
-            else:
-                items = _objects((await self._ctx.call("project.list", {})).get("projects"))
-            self._projects = [
-                LiveProject(
-                    project_id=str(item["project_id"]),
-                    name=str(item.get("name") or item.get("display_name") or item["project_id"]),
-                    folder=str(item.get("cwd") or ""),
-                )
-                for item in items
-                if _text(item.get("project_id"))
-            ]
-        return self._projects
+        return await self._once("projects", self._load_projects)  # type: ignore[no-any-return]
+
+    async def _load_projects(self) -> list[LiveProject]:
+        listed = await self._ctx.call("project.list", {})
+        return [
+            LiveProject(
+                project_id=str(item["project_id"]),
+                name=str(item.get("display_name") or item.get("name") or item["project_id"]),
+                folder=str(item.get("cwd") or ""),
+            )
+            for item in _objects(listed.get("projects"))
+            if _text(item.get("project_id"))
+        ]
 
     async def team(self, project: LiveProject) -> list[LiveAgent]:
         """The Project's team Agents, addressed as ``agent_id@project_id``."""
-        if project.project_id not in self._teams:
-            shown = await self._ctx.call("project.show", {"project_id": project.project_id})
-            scan = shown.get("scan")
-            scan = scan if isinstance(scan, dict) else {}
-            self._teams[project.project_id] = [
-                LiveAgent(
-                    address=format_agent_address(str(item["agent_id"]), project.project_id),
-                    name=str(item.get("display_name") or item["agent_id"]),
-                    project=project.name,
-                )
-                for item in _objects(scan.get("team"))
-                if _text(item.get("agent_id"))
-            ]
-        return self._teams[project.project_id]
+        cached = self._teams.get(project.project_id)
+        if cached is not None:
+            return cached
+        team: list[LiveAgent] = await self._once(
+            f"team:{project.project_id}", lambda: self._load_team(project)
+        )
+        self._teams.put(project.project_id, team)
+        return team
+
+    async def _load_team(self, project: LiveProject) -> list[LiveAgent]:
+        shown = await self._ctx.call("project.show", {"project_id": project.project_id})
+        scan = shown.get("scan")
+        scan = scan if isinstance(scan, dict) else {}
+        return [
+            LiveAgent(
+                address=format_agent_address(str(item["agent_id"]), project.project_id),
+                name=str(item.get("display_name") or item["agent_id"]),
+                project=project.name,
+            )
+            for item in _objects(scan.get("team"))
+            if _text(item.get("agent_id"))
+        ]
 
     async def agent_name(self, address: str) -> str:
         """The display name of an Agent address; the address when unknown."""
-        for agent in await self.agents():
+        for agent in [*await self.agents(), *self._teams.known()]:
             if agent.address == address:
                 return agent.name
-        for team in self._teams.values():
-            for agent in team:
-                if agent.address == address:
-                    return agent.name
         return address
 
     async def sessions(self) -> list[JsonObject]:
         """Top-level Sessions of the known Agents, most recently active first."""
-        if self._sessions is None:
-            addresses = list(
-                dict.fromkeys(
-                    [agent.address for agent in await self.agents()]
-                    + [key.address for key in self._refs.touched()]
-                )
-            )[:_MAX_AGENT_BATCH]
-            if not addresses:
-                self._sessions = []
-            else:
-                listed = await self._ctx.call(
-                    "session.list",
-                    {
-                        "agent_ids": addresses,
-                        "limit": _SESSION_LIST_LIMIT,
-                        "include_subagents": False,
-                        "include_memory_reflections": False,
-                        "include_skill_reflections": False,
-                    },
-                )
-                self._sessions = [
-                    item
-                    for item in _objects(listed.get("sessions"))
-                    if _text(item.get("id")) and _text(item.get("agent_address"))
-                ]
-        return self._sessions
+        return await self._once("sessions", self._load_sessions)  # type: ignore[no-any-return]
+
+    async def _load_sessions(self) -> list[JsonObject]:
+        addresses = list(
+            dict.fromkeys(
+                [agent.address for agent in await self.agents()]
+                + [key.address for key in self._refs.touched()]
+            )
+        )[:_MAX_AGENT_BATCH]
+        if not addresses:
+            return []
+        listed = await self._ctx.call(
+            "session.list",
+            {
+                "agent_ids": addresses,
+                "limit": _SESSION_LIST_LIMIT,
+                "include_subagents": False,
+                "include_memory_reflections": False,
+                "include_skill_reflections": False,
+            },
+        )
+        return [
+            item
+            for item in _objects(listed.get("sessions"))
+            if _text(item.get("id")) and _text(item.get("agent_address"))
+        ]
 
     async def own_sessions(self, address: str) -> frozenset[SessionKey]:
         """The Agent's Sessions that no Cron job or Channel started, by the Session list."""
-        if address not in self._own_sessions:
-            listed = await self._ctx.call(
-                "session.list",
-                {
-                    "agent_id": address,
-                    "limit": _SESSION_LIST_LIMIT,
-                    "include_subagents": False,
-                    "include_memory_reflections": False,
-                    "include_skill_reflections": False,
-                    "include_cron": False,
-                    "include_channels": False,
-                },
-            )
-            self._own_sessions[address] = frozenset(
-                session_key(item)
-                for item in _objects(listed.get("sessions"))
-                if _text(item.get("id")) and _text(item.get("agent_address"))
-            )
-        return self._own_sessions[address]
+        return await self._once(  # type: ignore[no-any-return]
+            f"own:{address}", lambda: self._load_own_sessions(address)
+        )
+
+    async def _load_own_sessions(self, address: str) -> frozenset[SessionKey]:
+        listed = await self._ctx.call(
+            "session.list",
+            {
+                "agent_id": address,
+                "limit": _SESSION_LIST_LIMIT,
+                "include_subagents": False,
+                "include_memory_reflections": False,
+                "include_skill_reflections": False,
+                "include_cron": False,
+                "include_channels": False,
+            },
+        )
+        return frozenset(
+            session_key(item)
+            for item in _objects(listed.get("sessions"))
+            if _text(item.get("id")) and _text(item.get("agent_address"))
+        )
 
     async def terminals(self) -> list[JsonObject]:
         return (await self._terminal_catalog())[0]
@@ -355,20 +382,19 @@ class LiveCatalog:
 
     def forget_terminals(self) -> None:
         """Reload the Terminal catalog on next use, after a Terminal change."""
-        self._terminals = None
+        load = self._loads.pop("terminals", None)
+        if load is not None and not load.done():
+            load.cancel()
 
     async def _terminal_catalog(self) -> tuple[list[JsonObject], list[JsonObject]]:
-        if self._terminals is None:
-            listed = await self._ctx.call("terminal.list", {})
-            self._terminals = (
-                [
-                    item
-                    for item in _objects(listed.get("terminals"))
-                    if _text(item.get("terminal_id"))
-                ],
-                [item for item in _objects(listed.get("groups")) if _text(item.get("group_id"))],
-            )
-        return self._terminals
+        return await self._once("terminals", self._load_terminals)  # type: ignore[no-any-return]
+
+    async def _load_terminals(self) -> tuple[list[JsonObject], list[JsonObject]]:
+        listed = await self._ctx.call("terminal.list", {})
+        return (
+            [item for item in _objects(listed.get("terminals")) if _text(item.get("terminal_id"))],
+            [item for item in _objects(listed.get("groups")) if _text(item.get("group_id"))],
+        )
 
 
 def session_key(item: JsonObject) -> SessionKey:
@@ -492,7 +518,7 @@ async def _ref_target(
     if found is None:
         raise LiveToolError(
             "unknown_ref",
-            f"There is no {ref} in this call. Call overview to see the current refs, then call "
+            f"There is no {ref}. Call overview to see the current refs, then call "
             f"{tool} again with one of them as {field}.",
         )
     if isinstance(found, SessionKey):
@@ -548,15 +574,8 @@ async def _exact_sessions(text: str, refs: LiveRefs, catalog: LiveCatalog) -> li
     ]
 
 
-async def _session_prefixes(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
-    prefix = _prefix(text)
-    if prefix is None:
-        return []
-    return [
-        Target(kind=SESSION, session=key)
-        for key in await _session_keys(refs, catalog)
-        if _id_prefix(key.session_id, prefix)
-    ]
+async def _no_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
+    return []
 
 
 async def _exact_terminals(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
@@ -568,16 +587,12 @@ async def _exact_terminals(text: str, refs: LiveRefs, catalog: LiveCatalog) -> l
     ]
 
 
-async def _terminal_names_and_prefixes(
-    text: str, refs: LiveRefs, catalog: LiveCatalog
-) -> list[Target]:
+async def _terminal_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> list[Target]:
     key = spelling(text)
-    prefix = _prefix(text)
     return [
         Target(kind=TERMINAL, terminal=item)
         for item in await catalog.terminals()
-        if (key and spelling(str(item.get("name") or "")) == key)
-        or (prefix is not None and _id_prefix(str(item["terminal_id"]), prefix))
+        if key and spelling(str(item.get("name") or "")) == key
     ]
 
 
@@ -640,10 +655,10 @@ async def _project_names(text: str, refs: LiveRefs, catalog: LiveCatalog) -> lis
     ]
 
 
-# Per kind: the exact-id matcher, then the matcher of names and id prefixes.
+# Per kind: the exact-id matcher, then the name matcher. Sessions have no names.
 _KIND_MATCHERS: dict[str, tuple[Matcher, Matcher]] = {
-    SESSION: (_exact_sessions, _session_prefixes),
-    TERMINAL: (_exact_terminals, _terminal_names_and_prefixes),
+    SESSION: (_exact_sessions, _no_names),
+    TERMINAL: (_exact_terminals, _terminal_names),
     GROUP: (_exact_groups, _group_names),
     AGENT: (_exact_agents, _agent_names),
     PROJECT: (_exact_projects, _project_names),
@@ -655,17 +670,6 @@ async def _session_keys(refs: LiveRefs, catalog: LiveCatalog) -> list[SessionKey
     for item in await catalog.sessions():
         keys[session_key(item)] = None
     return list(keys)
-
-
-def _prefix(text: str) -> str | None:
-    """The text as an id prefix, or ``None`` when it is too short to be one."""
-    value = text.strip().lower()
-    return value if len(spelling(value)) >= _MIN_PREFIX_CHARS else None
-
-
-def _id_prefix(identifier: str, prefix: str) -> bool:
-    """Match a prefix of the whole id or of its random part after the type prefix."""
-    return identifier.startswith(prefix) or identifier.partition("_")[2].startswith(prefix)
 
 
 def _kinds_phrase(kinds: frozenset[str]) -> str:

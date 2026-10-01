@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from server._live_context import LiveUiError
+from server.live._context import LiveUiError
 from server.rpc.errors import RpcError
-from tests.server.live_tools_test_support import (
+from tests.server.live.tools_test_support import (
     AFTER,
     PROJECT_FOLDER_SHOWN,
     Fixture,
@@ -49,11 +49,17 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     }
     fx.app.add_terminal("term_a", name="Build")
     fx.app.add_terminal("term_b", "pwsh", state="exited")
+    fx.context = {
+        "view": "chat",
+        "selected_agent_id": "main",
+        "selected_project_id": "vbot",
+        "chat_session": {"agent_id": "writer", "session_id": "ses_ask"},
+    }
 
     text = await fx.ok("overview")
 
     assert text.splitlines()[:4] == [
-        "App: chat view; selected Agent: Main; selected Project: vBot.",
+        "App: chat view; showing s2 (Writer); selected Agent: Main; selected Project: vBot.",
         "Agents: Main, Coder, Writer.",
         "Team of Project vBot: Reviewer.",
         f"Projects: vBot ({PROJECT_FOLDER_SHOWN}).",
@@ -70,6 +76,7 @@ async def test_overview_shows_selection_agents_sessions_and_terminals(fx: Fixtur
     assert f'- t1 Codex "Build" in {PROJECT_FOLDER_SHOWN}: idle' in text
     assert f"- t2 pwsh in {PROJECT_FOLDER_SHOWN}: exited" in text
     assert fx.app.effects() == []
+    assert fx.ui.requests == []
 
 
 @pytest.mark.asyncio
@@ -91,8 +98,10 @@ async def test_overview_keeps_refs_stable_and_caps_long_lists(fx: Fixture) -> No
 
 
 @pytest.mark.asyncio
-async def test_overview_without_an_app_window_uses_the_canonical_catalogs(fx: Fixture) -> None:
-    fx.ui.error = LiveUiError("ui_unavailable")
+async def test_overview_without_an_app_window_report_leaves_out_the_selection(
+    fx: Fixture,
+) -> None:
+    fx.context = None
     text = await fx.ok("overview")
     assert text.splitlines()[0] == "Agents: Main, Coder, Writer."
     assert "Team of" not in text
@@ -126,7 +135,7 @@ async def test_starts_several_sessions_at_an_agent_as_speech(fx: Fixture) -> Non
             "agent_id": "coder",
             "session_id": f"ses_new{index}",
             "content": "Fix the tests",
-            "input_origin": "speech_transcription",
+            "input_origin": "live_voice",
         }
         for index in (1, 2, 3)
     ]
@@ -137,10 +146,11 @@ async def test_starts_a_team_agent_of_the_selected_or_named_project(fx: Fixture)
     text = await fx.ok("start_agent_session", agent="Reviewer", task="Review it")
     assert text.startswith("Started a Session at Reviewer (vBot team) with the task: s1.")
     assert fx.app.params("session.create") == [{"agent_id": "reviewer@vbot"}]
-    fx.ui.context["selected_project_id"] = ""
-    fx.ui.context["selected_project_team"] = []
+    assert fx.context is not None
+    fx.context["selected_project_id"] = None
     await fx.ok("start_agent_session", agent="reviewer", project="vBot", task="Again")
     assert fx.app.params("session.create")[-1] == {"agent_id": "reviewer@vbot"}
+    # Reading a team rescans its Project, so the call reuses it for a while.
     assert fx.app.params("project.show") == [{"project_id": "vbot"}]
 
 
@@ -150,7 +160,8 @@ async def test_does_not_guess_an_unknown_or_ambiguous_agent(fx: Fixture) -> None
     assert code == "target_not_found"
     assert 'No Agent matches "Codr". Agents: Main, Coder, Writer, Reviewer (vBot team).' in message
     assert "call start_agent_session again with one of them as agent" in message
-    fx.ui.context["selected_project_team"] = [{"agent_id": "coder@vbot", "name": "Coder"}]
+    fx.app.teams["vbot"] = [{"agent_id": "coder", "display_name": "Coder"}]
+    fx.clock.now += 61  # The cached team expires.
     # The exact id decides; the shared name does not.
     text = await fx.ok("start_agent_session", agent="coder", task="x")
     assert text.startswith("Started a Session at Coder with")
@@ -200,7 +211,7 @@ async def test_sends_to_a_session_by_ref_in_tolerant_spellings(fx: Fixture) -> N
         text = await fx.ok("send_message", target=spelling, text="yes, go on")
         assert text == "Sent to s1 (Coder). An update follows when it finishes."
     assert {params["session_id"] for params in fx.app.params("chat.stream")} == {"ses_1"}
-    assert fx.app.params("chat.stream")[0]["input_origin"] == "speech_transcription"
+    assert fx.app.params("chat.stream")[0]["input_origin"] == "live_voice"
 
 
 @pytest.mark.asyncio
@@ -292,7 +303,7 @@ async def test_unknown_refs_and_targets_name_the_next_call(fx: Fixture) -> None:
     code, message = await fx.failed("send_message", target="s7", text="yes")
     assert (code, message) == (
         "unknown_ref",
-        "There is no s7 in this call. Call overview to see the current refs, then call "
+        "There is no s7. Call overview to see the current refs, then call "
         "send_message again with one of them as target.",
     )
     code, message = await fx.failed("send_message", target="the other one", text="yes")
@@ -416,6 +427,17 @@ async def test_open_picks_the_kind_by_view_when_names_are_shared(fx: Fixture) ->
 
 
 @pytest.mark.asyncio
+async def test_opens_views_that_show_no_single_thing_only_without_a_target(fx: Fixture) -> None:
+    assert await fx.ok("open", view="settings") == "Opened the settings view."
+    code, message = await fx.failed("open", view="cron", target="Coder")
+    assert code == "invalid_view"
+    assert message.startswith(
+        'The cron view shows no single thing. Call open again with only {"view": "cron"}'
+    )
+    assert fx.ui.of("open") == [{"view": "settings"}]
+
+
+@pytest.mark.asyncio
 async def test_open_reports_navigation_that_did_not_happen(fx: Fixture) -> None:
     code, message = await fx.failed("open")
     assert code == "missing_target"
@@ -426,6 +448,17 @@ async def test_open_reports_navigation_that_did_not_happen(fx: Fixture) -> None:
     code, message = await fx.failed("open", view="agents")
     assert code == "ui_timeout"
     assert "may or may not show the change" in message
+
+
+# -- end_call ----------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_end_call_asks_the_call_to_end_after_a_goodbye(fx: Fixture) -> None:
+    text = await fx.ok("end_call")
+    assert text == "The call ends in a few seconds. Say a short goodbye now; running work goes on."
+    assert fx.ended == 1
+    assert fx.app.effects() == []
 
 
 # -- execution and refs ------------------------------------------------------------------

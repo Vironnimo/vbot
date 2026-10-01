@@ -23,7 +23,7 @@ This supplementary map covers xAI-specific Connection, OAuth, catalog, and Respo
 
 ## Realtime voice
 
-- Grok Voice (`grok-voice-think-fast-2.0`: both Connections, `live_voice` task, `tools: false` for Chat) runs only as a Live voice Model over `wss://api.x.ai/v1/realtime`, never through `/responses`. The wire, its verified event facts, and relay media are owned by `model_tasks/live.md` -> xAI wire.
+- Grok Voice (`grok-voice-think-fast-2.0`: both Connections, `live_voice` task, `tools: false` for Chat) runs only as a Live voice Model over `wss://api.x.ai/v1/realtime`, never through `/responses`. The wire, its verified event facts, and relay media are owned by `model_tasks/live-wires.md` -> xAI wire.
 - The realtime handshake sends the Connection's auth header and uses the same shared OAuth request recovery as HTTP requests. The SuperGrok subscription token was accepted live (2026-09-24); the API-key Connection is unverified for realtime.
 
 ## OAuth edge cases

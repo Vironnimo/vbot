@@ -16,7 +16,7 @@ These eight channels describe canonical vBot Agent/Chat communication. A Live vo
 |---|---|---|
 | Persisted note (`role: "note"`) | Session history | `chat.md` + `chat/request-building.md` - embedded into provider requests as a synthetic user message wrapped in `<system-reminder>` tags |
 | Reply-surface reminder | Append-only tagged chronology | `chat/request-building.md` - appended by Chat at executor start; producers only pass the surface value |
-| Speech-transcription reminder | Request-time only, hidden | `chat/request-building.md` - added when `input_origin="speech_transcription"` |
+| Input-origin reminder | Request-time only, hidden | `chat/request-building.md` - added for `input_origin` `speech_transcription` or `live_voice` |
 | Skill announcement | Once per Prompt Epoch | `skills.md` - tail note when a Skill becomes available+allowed |
 | Tool-change announcement | Persisted note, once per change within a Prompt Epoch | `chat/request-building.md` -> Tool catalog per prompt epoch - `[tool-change]` note when a Tool is enabled, removed or changes its parameters while the Tool list stays pinned |
 | Continuation checkpoint reminder | Request-time only | `compaction.md` - ContinuationStrategy appends it to the active request |

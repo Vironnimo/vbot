@@ -112,7 +112,6 @@
     getDataStoreStatus,
     getServedWebuiBuild,
     reportClientMetrics,
-    showProject,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
   import { isWebuiOutdated } from '$lib/webuiBuild.js';
@@ -595,7 +594,6 @@
     activeView: () => activeViewId,
     requestTransition: requestAutosaveTransition,
     chatSelection: () => chatShownSession,
-    loadProject: showProject,
     terminalsView: () => terminalsView,
     afterRender: tick,
   });

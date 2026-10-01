@@ -6,7 +6,7 @@ import unicodedata
 from typing import Any
 
 from core.model_tasks.live import LIVE_MEDIA_KINDS, LiveStartRejected
-from server.live import LiveCallRegistry, LiveRegistryClosedError
+from server.live.registry import LiveCallRegistry, LiveRegistryClosedError
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string

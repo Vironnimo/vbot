@@ -14,6 +14,9 @@ import { isPlainObject } from '../values.js';
 // receives call updates there and answers UI requests.
 const LIVE_WEBSOCKET_ENDPOINT = '/ws/live';
 const LIVE_MEDIA_KINDS = new Set(['webrtc', 'relay']);
+// Microphone audio waiting in the socket beyond this (2 s of PCM16 mono
+// 24 kHz) is dropped: late speech only confuses the voice model.
+const LIVE_AUDIO_BUFFER_LIMIT_BYTES = 96000;
 // `live.start` accepts at most this many wake phrases.
 const LIVE_WAKE_PHRASES_MAX = 8;
 // Server close codes of the owner socket, named by what the caller should do:
@@ -118,8 +121,8 @@ export function sendLiveUiResult(callId, requestId, outcome, options = {}) {
 
 // Owner socket for one Live call. Text frames are JSON objects for `onEvent`;
 // a malformed frame reaches `onError` without closing the socket. Binary
-// frames are relay audio for `onAudio` (an ArrayBuffer), and `sendAudio`
-// sends microphone audio while the socket is open. `onClose` receives the
+// frames are relay audio for `onAudio` (an ArrayBuffer). While the socket is
+// open, `sendAudio` sends microphone audio and `sendJson` one JSON report. `onClose` receives the
 // close event and its outcome: `ended` (after the `closed` frame),
 // `unknown_call`, `replaced` (a newer owner socket took over; do not reattach),
 // `lagged` (the socket fell behind; reattach) or `lost`.
@@ -201,9 +204,17 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
   // Audio is live data: nothing is queued while the socket is not open.
   const sendAudio = (data) => {
     if (closed || socket.readyState !== openState) return false;
+    if (socket.bufferedAmount > LIVE_AUDIO_BUFFER_LIMIT_BYTES) return false;
     socket.send(data);
     return true;
   };
 
-  return { close, sendAudio, socket };
+  // A JSON report for the server; dropped while the socket is not open.
+  const sendJson = (frame) => {
+    if (closed || socket.readyState !== openState) return false;
+    socket.send(JSON.stringify(frame));
+    return true;
+  };
+
+  return { close, sendAudio, sendJson, socket };
 }

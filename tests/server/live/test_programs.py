@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from core.model_tasks.live import (
+from server.live._programs import (
     CODING_PROGRAMS,
     CodingProgram,
     program_input_visible,

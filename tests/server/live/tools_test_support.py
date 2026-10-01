@@ -8,9 +8,10 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from server._live_context import LiveUiError
-from server._live_terminals import TerminalTimings
-from server._live_tools import LiveToolExecutor
+from server.live._context import LiveUiError
+from server.live._memory import LiveMemory
+from server.live._terminals import TerminalTimings
+from server.live._tools import LiveToolExecutor
 from server.rpc.errors import RpcError
 
 JsonObject = dict[str, Any]
@@ -250,31 +251,17 @@ class FakeApp:
 
 
 class FakeUi:
-    """The owning app window: its context, navigation, and Terminal layout."""
+    """The owning app window: its navigation and Terminal layout."""
 
     def __init__(self) -> None:
         self.requests: list[tuple[str, JsonObject]] = []
         self.error: LiveUiError | None = None
         self.applied = True
-        self.context: JsonObject = {
-            "view": "chat",
-            "selected_agent_id": "main",
-            "selected_project_id": "vbot",
-            "agents": [
-                {"agent_id": "main", "name": "Main"},
-                {"agent_id": "coder", "name": "Coder"},
-                {"agent_id": "writer", "name": "Writer"},
-            ],
-            "projects": [{"project_id": "vbot", "name": "vBot", "cwd": PROJECT_FOLDER}],
-            "selected_project_team": [{"agent_id": "reviewer@vbot", "name": "Reviewer"}],
-        }
 
     async def __call__(self, action: str, args: JsonObject) -> JsonObject:
         self.requests.append((action, args))
         if self.error is not None:
             raise self.error
-        if action == "context":
-            return self.context
         if action == "open":
             return {"applied": self.applied}
         return {}
@@ -297,20 +284,34 @@ class FakeClock:
 
 
 class Fixture:
-    def __init__(self) -> None:
+    def __init__(self, memory: LiveMemory | None = None) -> None:
         self.app = FakeApp()
         self.ui = FakeUi()
         self.clock = FakeClock()
         self.active = True
+        self.ended = 0
+        # What the app window last reported it shows; ``None`` before any report.
+        self.context: JsonObject | None = {
+            "view": "chat",
+            "selected_agent_id": "main",
+            "selected_project_id": "vbot",
+            "chat_session": None,
+        }
         self.executor = LiveToolExecutor(
             rpc=self.app,
             ui=self.ui,
+            app_context=lambda: self.context,
             is_active=lambda: self.active,
             started_at=CALL_START,
+            end_call=self._end_call,
+            memory=memory,
             timings=TerminalTimings(),
             sleep=self.clock.sleep,
             clock=self.clock,
         )
+
+    def _end_call(self) -> None:
+        self.ended += 1
 
     async def call(self, tool: str, **arguments: Any) -> JsonObject:
         return await self.executor.execute(tool, arguments)

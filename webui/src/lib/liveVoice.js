@@ -1,5 +1,6 @@
 import * as defaultApi from './api.js';
 import { createRelayAudio, isRelayAudioFormat } from './liveAudio.js';
+import { liveUiOperation, uiErrorCode } from './liveUiRequests.js';
 import { isPlainObject } from './values.js';
 
 // Live voice accessor controller. The server owns the provider call, delegated
@@ -14,30 +15,23 @@ const STARTUP_TIMEOUT_MS = 45000;
 // exist. The provider answers with its own reachable candidates, so a slow
 // local interface must not block the call.
 const ICE_GATHERING_TIMEOUT_MS = 5000;
-// Stop keeps the socket and peer only to receive the final `closed` frame.
-const CLOSE_TIMEOUT_MS = 5000;
+// Stop keeps the socket and peer only to receive the final `closed` frame;
+// the server waits up to 8 s for the provider to confirm the close.
+const CLOSE_TIMEOUT_MS = 12000;
 const PEER_DISCONNECT_GRACE_MS = 5000;
 // The server keeps a call through a short owner-socket loss; reattach within it.
 const SOCKET_REATTACH_WINDOW_MS = 8000;
 const SOCKET_REATTACH_DELAY_MS = 500;
-const CAPTION_LIMIT = 20;
+// The server sends a heartbeat at least every 25 s; a socket silent for
+// longer than this is half-open and gets replaced.
+const SOCKET_SILENCE_LIMIT_MS = 60000;
+const SOCKET_WATCHDOG_INTERVAL_MS = 10000;
+const CAPTION_LIMIT = 40;
 const CAPTION_TEXT_LIMIT = 2000;
-const OPEN_VIEWS = new Set(['chat', 'terminals', 'agents', 'projects']);
-// The ids that name one item of a view in an open request.
-const OPEN_TARGET_IDS = {
-  chat: ['agent_id', 'session_id'],
-  agents: ['agent_id'],
-  projects: ['project_id'],
-};
-const TERMINAL_VIEW_OPS = new Set([
-  'context',
-  'refresh',
-  'show',
-  'maximize',
-  'restore',
-  'show_group',
-]);
-const ERROR_CODE_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+const ACTION_LIMIT = 40;
+const LINK_KINDS = new Set(['session', 'terminal']);
+// Call endings the server names, as notices; others are a plain `ended`.
+const ENDED_NOTICES = { hung_up: 'hung_up', idle: 'idle', expired: 'expired' };
 const MICROPHONE_CONSTRAINTS = Object.freeze({
   audio: {
     echoCancellation: true,
@@ -58,15 +52,6 @@ class LiveVoiceFailure extends Error {
 
 const failure = (code) => new LiveVoiceFailure(code);
 const isText = (value) => typeof value === 'string' && value.length > 0;
-
-// UI owners report failures as `{code}` errors or plain `Error('<code>')`.
-function uiErrorCode(error) {
-  for (const candidate of [error?.code, error?.message]) {
-    if (typeof candidate === 'string' && ERROR_CODE_PATTERN.test(candidate))
-      return candidate;
-  }
-  return 'operation_failed';
-}
 
 function stopTracks(stream) {
   for (const track of stream?.getTracks?.() ?? []) {
@@ -131,8 +116,20 @@ export function createLiveVoiceState() {
     muted: false,
     busy: false,
     activityLabel: null,
-    // Bounded transient captions: {role: 'user'|'assistant', text, final}.
+    // The assistant is silenced by the user; the call goes on.
+    speakerMuted: false,
+    // Epoch milliseconds: when the call went live, when the provider ends it,
+    // and when the server ends an idle call; null when not known.
+    liveSince: null,
+    expiresAt: null,
+    idleEndsAt: null,
+    // Bounded transient captions: {seq, role: 'user'|'assistant', text, final}.
     captions: [],
+    // What the operator did, oldest first, bounded: {seq, tool, ok,
+    // arguments, result, links: [{ref, kind, label, agent_id?, session_id?,
+    // terminal_id?}]}. Captions and actions share `seq`, their order of arrival.
+    // Both stay after the call until the next start.
+    actions: [],
     // Last error code that ended a call; kept until the next start.
     error: '',
     // The call is held (microphone and assistant audio off) for something
@@ -143,10 +140,13 @@ export function createLiveVoiceState() {
   };
 }
 
-// `uiActions` execute server UI requests: `context(guard)`,
-// `open({view, agent_id?, session_id?}, guard)` (false when not applied) and
-// `terminalView({op, terminal_id?, group_id?}, guard)`. `guard.isCurrent()`
-// turns false once the requesting call stops. `onNotice({code, severity})`
+// `uiActions` execute server UI requests:
+// `open({view, agent_id?, session_id?, project_id?}, guard)` (false when not
+// applied) and `terminalView({op, terminal_id?, group_id?}, guard)`.
+// `guard.isCurrent()` turns false once the requesting call stops.
+// `reportContext(context)` tells the running call what the app shows
+// (`{view, selected_agent_id, selected_project_id, chat_session}`); the call
+// sends it whenever its socket opens. `onNotice({code, severity})`
 // reports errors ('error'/'warn') and call endings the user did not request
 // ('info'). An optional `checkMicrophoneAccess()` runs before the microphone
 // opens and resolves a notice code that ends the start, or null to continue.
@@ -169,6 +169,10 @@ export function createLiveVoice({
   // The current call attempt. Its identity is the generation token: every
   // asynchronous step re-checks it, so Stop or a newer call silences late work.
   let current = null;
+  // What the app shows, as last reported; every owner socket receives it.
+  let appContext = null;
+  // Orders captions and actions of the current state.
+  let sequence = 0;
 
   const isCurrent = (call) => call !== null && call === current;
   const notify = (code, severity) => onNotice({ code, severity });
@@ -225,10 +229,12 @@ export function createLiveVoice({
       track.enabled = enabled;
   }
 
+  const silenced = (call) => isHeld(call) || state.speakerMuted;
+
   // WebRTC plays through the audio element; relay audio is dropped on arrival
-  // while held (see attachSocket).
+  // while held or silenced (see attachSocket).
   function applyOutput(call) {
-    const muted = isHeld(call);
+    const muted = silenced(call);
     if (!audio || call.outputMuted === muted) return;
     call.outputMuted = muted;
     audio.muted = muted;
@@ -260,6 +266,10 @@ export function createLiveVoice({
       held: false,
       busy: false,
       activityLabel: null,
+      speakerMuted: false,
+      liveSince: null,
+      expiresAt: null,
+      idleEndsAt: null,
     });
     if (call.announcedActive) onActive(false);
   }
@@ -297,6 +307,7 @@ export function createLiveVoice({
     call.closing = true;
     state.phase = 'closing';
     state.busy = false;
+    state.idleEndsAt = null;
     releaseMedia(call);
     cancel(call, call.startupTimer);
     cancel(call, call.disconnectTimer);
@@ -347,13 +358,21 @@ export function createLiveVoice({
     const owns = () => isCurrent(call) && call.socket === connection;
     try {
       connection = api.openLiveCallSocket(call.callId, {
-        onEvent: (frame) => {
+        onOpen: () => {
           if (!owns()) return;
           call.socketLostAt = null;
+          call.socketHeardAt = now();
+          sendContext(call);
+        },
+        onEvent: (frame) => {
+          if (!owns()) return;
+          call.socketHeardAt = now();
           handleFrame(frame, call);
         },
         onAudio: (pcm) => {
-          if (owns() && !call.closing && !isHeld(call)) call.relay?.play(pcm);
+          if (!owns()) return;
+          call.socketHeardAt = now();
+          if (!call.closing && !silenced(call)) call.relay?.play(pcm);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -364,6 +383,38 @@ export function createLiveVoice({
       return;
     }
     call.socket = connection;
+    call.socketHeardAt = now();
+    if (!call.socketWatchdog) watchSocket(call);
+  }
+
+  function sendContext(call) {
+    if (appContext) call.socket?.sendJson({ type: 'context', ...appContext });
+  }
+
+  function reportContext(context) {
+    appContext = isPlainObject(context) ? { ...context } : null;
+    if (current) sendContext(current);
+  }
+
+  // A half-open socket delivers nothing, not even heartbeats: replace it.
+  function watchSocket(call) {
+    call.socketWatchdog = schedule(
+      call,
+      () => {
+        const connection = call.socket;
+        if (
+          connection &&
+          !call.closing &&
+          now() - call.socketHeardAt >= SOCKET_SILENCE_LIMIT_MS
+        ) {
+          call.socket = null;
+          connection.close();
+          socketLost(call);
+        }
+        watchSocket(call);
+      },
+      SOCKET_WATCHDOG_INTERVAL_MS,
+    );
   }
 
   // Only a lagging or dropped socket may reattach. The server closes it for
@@ -393,6 +444,7 @@ export function createLiveVoice({
       call.reachedLive = true;
       cancel(call, call.startupTimer);
       state.phase = 'live';
+      state.liveSince = now();
       call.announcedActive = true;
       onActive(true);
     } else if (phase === 'failed') {
@@ -417,15 +469,60 @@ export function createLiveVoice({
     let next;
     if (index >= 0) {
       next = captions.toSpliced(index, 1, {
+        seq: captions[index].seq,
         role,
         text: boundCaption(text || captions[index].text),
         final,
       });
     } else {
       if (!text) return;
-      next = [...captions, { role, text: boundCaption(text), final }];
+      sequence += 1;
+      next = [
+        ...captions,
+        { seq: sequence, role, text: boundCaption(text), final },
+      ];
     }
     state.captions = next.slice(-CAPTION_LIMIT);
+  }
+
+  // A link names one Session (agent_id, session_id) or Terminal (terminal_id).
+  function actionLink(link) {
+    if (!isPlainObject(link) || !LINK_KINDS.has(link.kind)) return null;
+    if (!isText(link.ref)) return null;
+    const ids =
+      link.kind === 'session'
+        ? { agent_id: link.agent_id, session_id: link.session_id }
+        : { terminal_id: link.terminal_id };
+    if (!Object.values(ids).every(isText)) return null;
+    return {
+      ref: link.ref,
+      kind: link.kind,
+      label: isText(link.label) ? link.label : link.ref,
+      ...ids,
+    };
+  }
+
+  function applyAction(frame) {
+    if (!isText(frame.tool)) return;
+    sequence += 1;
+    const action = {
+      seq: sequence,
+      tool: frame.tool,
+      ok: frame.ok === true,
+      arguments: isPlainObject(frame.arguments) ? { ...frame.arguments } : {},
+      result: typeof frame.result === 'string' ? frame.result : '',
+      links: (Array.isArray(frame.links) ? frame.links : [])
+        .map(actionLink)
+        .filter(Boolean),
+    };
+    state.actions = [...state.actions, action].slice(-ACTION_LIMIT);
+  }
+
+  // Seconds from now as epoch milliseconds; null for anything else.
+  function deadline(seconds) {
+    return Number.isFinite(seconds) && seconds >= 0
+      ? now() + seconds * 1000
+      : null;
   }
 
   function applyError(call, frame) {
@@ -452,69 +549,9 @@ export function createLiveVoice({
         const code = call.failed ? 'call_failed' : 'connection_failed';
         state.error = code;
         notify(code, 'error');
-      } else notify('ended', 'info');
+      } else notify(ENDED_NOTICES[state.closeReason] ?? 'ended', 'info');
     }
     finish(call);
-  }
-
-  function uiAction(name) {
-    const action = uiActions[name];
-    if (typeof action !== 'function') throw failure('unsupported_action');
-    return action;
-  }
-
-  // An open request shows a view alone or exactly one item of it: a Chat
-  // Session (agent_id and session_id), an Agent page, or a Project page.
-  function openTarget(args) {
-    const { view } = args;
-    const ids = {
-      agent_id: args.agent_id ?? undefined,
-      session_id: args.session_id ?? undefined,
-      project_id: args.project_id ?? undefined,
-    };
-    const given = Object.keys(ids).filter((key) => ids[key] !== undefined);
-    if (!given.length) return { view };
-    const expected = OPEN_TARGET_IDS[view] ?? [];
-    if (
-      given.length !== expected.length ||
-      !expected.every((key) => isText(ids[key]))
-    )
-      throw failure('invalid_arguments');
-    return Object.fromEntries([
-      ['view', view],
-      ...expected.map((key) => [key, ids[key]]),
-    ]);
-  }
-
-  // Validates one UI request and returns the operation that executes it.
-  function uiOperation(actionName, rawArgs, guard) {
-    const args = rawArgs ?? {};
-    if (!isPlainObject(args)) throw failure('invalid_arguments');
-    if (actionName === 'context') {
-      const context = uiAction('context');
-      return () => context(guard);
-    }
-    if (actionName === 'open') {
-      if (!OPEN_VIEWS.has(args.view)) throw failure('invalid_view');
-      const target = openTarget(args);
-      const open = uiAction('open');
-      return async () => ({ applied: (await open(target, guard)) !== false });
-    }
-    if (actionName === 'terminal_view') {
-      const { op } = args;
-      if (!TERMINAL_VIEW_OPS.has(op)) throw failure('invalid_arguments');
-      const target = { op };
-      if (op === 'show' || op === 'maximize') {
-        if (!isText(args.terminal_id)) throw failure('invalid_arguments');
-        target.terminal_id = args.terminal_id;
-      } else if (op === 'show_group') {
-        if (!isText(args.group_id)) throw failure('invalid_arguments');
-        target.group_id = args.group_id;
-      }
-      const terminalView = uiAction('terminalView');
-      return () => terminalView(target, guard);
-    }
-    throw failure('unsupported_action');
   }
 
   function handleUiRequest(call, frame) {
@@ -536,7 +573,7 @@ export function createLiveVoice({
     }
     let operation;
     try {
-      operation = uiOperation(frame.action, frame.args, {
+      operation = liveUiOperation(uiActions, frame.action, frame.args, {
         isCurrent: () => isCurrent(call) && !call.closing,
       });
     } catch (error) {
@@ -572,6 +609,20 @@ export function createLiveVoice({
         // The user talks over the assistant: drop its queued speech at once.
         call.relay?.clear();
         break;
+      case 'action':
+        applyAction(frame);
+        break;
+      case 'expiry':
+        state.expiresAt = deadline(frame.seconds);
+        break;
+      case 'idle': {
+        // A warning names when the call ends; `ends_in: null` withdraws it.
+        const warned = state.idleEndsAt !== null;
+        state.idleEndsAt = call.closing ? null : deadline(frame.ends_in);
+        if (!warned && state.idleEndsAt !== null)
+          notify('idle_warning', 'warn');
+        break;
+      }
       case 'error':
         applyError(call, frame);
         break;
@@ -709,6 +760,9 @@ export function createLiveVoice({
       startupTimer: null,
       disconnectTimer: null,
       socketLostAt: null,
+      socketHeardAt: 0,
+      socketWatchdog: null,
+
       closing: false,
       stopRequested: false,
       errorReported: false,
@@ -721,6 +775,7 @@ export function createLiveVoice({
       holds: new Map(),
     };
     current = call;
+    sequence = 0;
     Object.assign(state, createLiveVoiceState(), { phase: 'connecting' });
     armStartupTimer(call);
     try {
@@ -805,6 +860,22 @@ export function createLiveVoice({
     applyMicrophone(call);
   }
 
+  // Silence or restore the assistant; the microphone and the call go on.
+  function muteSpeaker(muted = !state.speakerMuted) {
+    const call = current;
+    if (!call || call.closing) return;
+    state.speakerMuted = muted === true;
+    if (state.speakerMuted) call.relay?.clear();
+    applyOutput(call);
+  }
+
+  // Keep a call the server warned about idling.
+  function stay() {
+    const call = current;
+    if (!call || call.closing) return false;
+    return call.socket?.sendJson?.({ type: 'stay' }) === true;
+  }
+
   // Hold the running call for `reason`: the microphone stops sending and the
   // assistant goes silent (queued relay audio is dropped) until every hold of
   // every reason is released. Holds count per reason, are independent of the
@@ -856,10 +927,14 @@ export function createLiveVoice({
     start,
     stop,
     mute,
+    muteSpeaker,
+    stay,
     hold,
     release,
     held,
+    reportContext,
     active: () => state.phase === 'live',
+
     destroy,
     handleFrame: (frame) => handleFrame(frame),
   };

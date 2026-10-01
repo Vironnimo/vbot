@@ -60,7 +60,8 @@ async def persist_steering_input(context: _RunExecutionContext, item: QueuedRunI
     session.begin_defer_notes()
     _append_input_origin_note(session, request.input_origin)
     message = ChatMessage.user(
-        _assign_session_image_references(request.content, context.session_snapshot.active_messages)
+        _assign_session_image_references(request.content, context.session_snapshot.active_messages),
+        input_origin=request.input_origin,
     )
     await session.append_many_async([*session.take_deferred_notes(), message])
     context.run.emit(

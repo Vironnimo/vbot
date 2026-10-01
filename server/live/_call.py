@@ -1,68 +1,58 @@
-"""Server ownership of Live voice calls.
+"""The server side of one Live call: the host the call runs on.
 
-One Live call is active per server; starting another ends it. The accessor that
-started a call owns its media and display: it attaches one owner socket at
-``/ws/live/{call_id}`` and answers UI requests through ``live.ui_result``. The
-registry buffers call updates until the owner attaches, ends a call whose owner
-never attaches or does not return, runs the call's Live Tools, and feeds vBot
-Runs that finish during the call to it.
-
-Owner socket frames, server to accessor:
-
-* JSON text: call updates as the call publishes them (``state``, ``caption``,
-  ``activity``, ``playback_clear``, ``error``, ``closed``); a call replaced by
-  a newer start gets ``{"type": "closed", "reason": "replaced", "usage": null}``,
-  and a call that ends without its own ``closed`` update gets one with
-  ``reason: null``;
-* JSON text: ``{"type": "ui_request", "request_id", "action", "args"}`` - see
-  ``server/_live_tools.py`` for ``context``, ``open`` and ``terminal_view``;
-* JSON text: ``{"type": "heartbeat", "timestamp"}`` while otherwise idle;
-* binary, relay calls only: assistant audio as raw PCM in the call's
-  ``media.audio`` format. Audio is never buffered: it is dropped while no
-  owner is attached.
-
-Accessor to server: binary frames of a relay call are microphone PCM in the
-same format (even length, at most 64 KiB each); malformed binary frames and
-all text frames are ignored.
-
-Close codes: 1000 after the ``closed`` update, 1008 for an unknown or already
-forgotten call, 1013 when the owner fell behind, 4000 when a newer owner socket
-replaced this one (do not reconnect). After any other close the owner may
-reconnect within the reattach grace; the call ends if it does not.
+A :class:`LiveCallEntry` is the call's :class:`core.model_tasks.live.LiveCallHost`:
+it briefs the call, runs its Live Tools, feeds it finished Runs, keeps the
+owner socket's updates, answers UI requests through the owner, and ends the
+call when its owner does not attach or return, when the voice model hangs up,
+or when nobody uses it.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import time
 from collections import deque
-from collections.abc import AsyncGenerator, Callable, Coroutine
+from collections.abc import Callable, Coroutine
 from contextlib import suppress
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any, Protocol
+from datetime import datetime
+from typing import Any
 
-from core.model_tasks.live import LiveCall, LiveCallHost
+from core.model_tasks.live import LiveBrief, LiveCall, LiveToolRun
 from core.utils.ids import new_id
-from server._live_context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
-from server._live_feed import LiveRunFeed
-from server._live_record import LiveCallRecorder
-from server._live_tools import LiveToolExecutor
 from server.events import ServerEventBus
+from server.live._brief import live_brief
+from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
+from server.live._feed import LiveRunFeed
+from server.live._memory import LiveMemory
+from server.live._record import LiveCallRecorder
+from server.live._tools import LiveToolExecutor
+from server.live.owner import (
+    LIVE_AUDIO_FRAME_MAX_BYTES,
+    LIVE_CONTEXT_FRAME_MAX_CHARS,
+    LIVE_SOCKET_CLOSE_ENDED,
+    LIVE_SOCKET_CLOSE_LAGGED,
+    LIVE_SOCKET_CLOSE_REPLACED,
+    LiveOwnerStream,
+)
 
 JsonObject = dict[str, Any]
 
 _LOGGER = logging.getLogger("vbot.server.live")
 
-LIVE_SOCKET_CLOSE_ENDED = 1000
-LIVE_SOCKET_CLOSE_UNKNOWN_CALL = 1008
-LIVE_SOCKET_CLOSE_LAGGED = 1013
-LIVE_SOCKET_CLOSE_REPLACED = 4000
-
-LIVE_AUDIO_FRAME_MAX_BYTES = 64 * 1024
-
 CLOSED_REASON_REPLACED = "replaced"
+# Why vBot ended a call: the voice model hung up, or nobody used the call.
+CLOSED_REASON_HUNG_UP = "hung_up"
+CLOSED_REASON_IDLE = "idle"
 _NOTIFICATION_FAILED = "notification_failed"
+
+# Updates that may be dropped first when a buffer is full; the rest carry
+# state an owner must see.
+_DISPOSABLE_UPDATES = frozenset({"caption", "activity", "heartbeat", "action"})
+# Updates that show someone speaks; they keep a call from idling.
+_SPEECH_UPDATES = frozenset({"caption", "playback_clear"})
 
 
 @dataclass(frozen=True)
@@ -74,97 +64,25 @@ class LiveCallLimits:
     ui_request_timeout_seconds: float = 20.0
     update_buffer_limit: int = 200
     owner_queue_limit: int = 1_000
-    shutdown_close_timeout_seconds: float = 5.0
-    abort_timeout_seconds: float = 5.0
+    # One minute of PCM16 mono 24 kHz audio.
+    owner_audio_limit_bytes: int = 60 * 48_000
+    shutdown_close_timeout_seconds: float = 3.0
+    abort_timeout_seconds: float = 4.0
+    # Time for the voice model's goodbye before ``end_call`` closes the call.
+    end_call_delay_seconds: float = 5.0
+    # A live call without speech, Tool calls, or delegated work ends after
+    # this long; ``idle_warning_seconds`` before, the owner is warned.
+    idle_seconds: float = 600.0
+    idle_warning_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.owner_queue_limit < self.update_buffer_limit:
             raise ValueError("owner_queue_limit must hold the whole update buffer")
+        if not 0 < self.idle_warning_seconds < self.idle_seconds:
+            raise ValueError("idle_warning_seconds must fall within idle_seconds")
 
 
-class LiveVoiceStarter(Protocol):
-    """The Live voice service surface the registry uses."""
-
-    async def start_call(
-        self,
-        *,
-        media: str,
-        offer_sdp: str | None,
-        wake_phrases: tuple[str, ...],
-        host: LiveCallHost,
-    ) -> LiveCall: ...
-
-
-class LiveRegistryClosedError(Exception):
-    """The server is shutting down and starts no further Live calls."""
-
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-OwnerFrame = JsonObject | bytes
-
-
-class LiveOwnerStream:
-    """Frames for one attached owner socket, in delivery order.
-
-    JSON objects go out as text frames and ``bytes`` as binary audio frames.
-    """
-
-    def __init__(self, entry: _LiveCallEntry, limit: int) -> None:
-        self._entry = entry
-        self._limit = limit
-        self._frames: deque[OwnerFrame] = deque()
-        self._wakeup = asyncio.Event()
-        self._close_code: int | None = None
-        self._finished = False
-
-    @property
-    def close_code(self) -> int | None:
-        """The code to close the socket with once the stream ended, else ``None``."""
-        return self._close_code
-
-    @property
-    def finished(self) -> bool:
-        """Whether :meth:`frames` yielded every frame and ended; close the socket then."""
-        return self._finished
-
-    def send(self, frame: OwnerFrame) -> bool:
-        """Queue one frame; ``False`` when the stream ended or fell behind."""
-        if self._close_code is not None or len(self._frames) >= self._limit:
-            return False
-        self._frames.append(frame)
-        self._wakeup.set()
-        return True
-
-    def end(self, code: int) -> None:
-        """End the stream after the queued frames; the first code wins."""
-        if self._close_code is None:
-            self._close_code = code
-            self._wakeup.set()
-
-    async def frames(self) -> AsyncGenerator[OwnerFrame, None]:
-        """Yield queued frames until the stream ends."""
-        while True:
-            while self._frames:
-                yield self._frames.popleft()
-            if self._close_code is not None:
-                self._finished = True
-                return
-            self._wakeup.clear()
-            await self._wakeup.wait()
-
-    def receive_audio(self, pcm: bytes) -> None:
-        """Hand one inbound binary frame to the call as microphone audio."""
-        self._entry.receive_audio(self, pcm)
-
-    def detach(self) -> None:
-        """Release ownership after the socket closed."""
-        self._entry.detach(self)
-
-
-class _LiveCallEntry:
+class LiveCallEntry:
     """The server side of one call: its host, owner socket, UI requests and feed."""
 
     def __init__(
@@ -173,13 +91,18 @@ class _LiveCallEntry:
         limits: LiveCallLimits,
         rpc: RpcInvoker,
         events: ServerEventBus,
-        on_finalized: Callable[[_LiveCallEntry], None],
+        on_finalized: Callable[[LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
+        memory: LiveMemory,
+        recap: str = "",
+        wake_phrases: tuple[str, ...] = (),
         recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
         self._recorder = recorder
+        self._recap = recap
+        self._wake_phrases = wake_phrases
         self._rpc = rpc
         self._events = events
         self._on_finalized = on_finalized
@@ -192,13 +115,30 @@ class _LiveCallEntry:
         self._closing = False
         self._closed_published = False
         self._finalized = False
-        self._buffer: deque[JsonObject] = deque(maxlen=limits.update_buffer_limit)
+        self._buffer: deque[JsonObject] = deque()
         self._owner: LiveOwnerStream | None = None
+        self._owner_attached = False
         self._malformed_audio_logged = False
+        self._app_context: JsonObject | None = None
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
         self._executor = LiveToolExecutor(
-            rpc=rpc, ui=self.ui_request, is_active=self._is_active, started_at=started_at
+            rpc=rpc,
+            ui=self.ui_request,
+            app_context=lambda: self._app_context,
+            is_active=self._is_active,
+            started_at=started_at,
+            end_call=self.end_soon,
+            memory=memory,
+            report=self.publish,
+            record=self.record if recorder is not None else None,
         )
+        self._ending = False
+        # Why vBot ended the call, when it did (hung up, idle).
+        self._end_reason: str | None = None
+        self._idle_watch: asyncio.Task[None] | None = None
+        self._active_at = 0.0
+        self._busy = False
+        self._idle_warned = False
         self._feed: LiveRunFeed | None = None
         self._timer: asyncio.Task[None] | None = None
         self._watcher: asyncio.Task[None] | None = None
@@ -222,28 +162,52 @@ class _LiveCallEntry:
 
     # -- LiveCallHost -----------------------------------------------------
 
-    async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one prepared Live Tool call; the executor runs one call's executions in turn."""
-        return await self._executor.execute(name, arguments)
+    def brief(self, *, direct_tools: bool) -> LiveBrief:
+        """The call's instructions and Live Tools."""
+        self._executor.mode = "direct" if direct_tools else "delegated"
+        return live_brief(
+            direct_tools=direct_tools, wake_phrases=self._wake_phrases, recap=self._recap
+        )
+
+    async def run_tool(
+        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
+    ) -> LiveToolRun:
+        """Run one Tool call as a Model made it; the executor runs them in turn."""
+        self._mark_active()
+        try:
+            return await self._executor.run(name, arguments, rejection=rejection)
+        finally:
+            self._mark_active()
 
     def known_refs(self) -> str:
-        """The refs this call's Tool results named so far, one labeled line each."""
+        """The refs Tool results named so far, one labeled line each."""
         return self._executor.known_refs()
 
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
         if self._closed_published:
             return
-        if update.get("type") == "closed":
+        kind = update.get("type")
+        if kind == "closed":
             self._closed_published = True
             self.active = False
             self._cancel_timer()
+            self._stop_idle_watch()
+            if self._end_reason is not None and update.get("reason") != CLOSED_REASON_REPLACED:
+                update = {**update, "reason": self._end_reason}
+        elif kind == "state" and update.get("phase") == "live":
+            self._start_idle_watch()
+        elif kind == "activity":
+            self._busy = update.get("busy") is True
+            self._mark_active()
+        elif kind in _SPEECH_UPDATES:
+            self._mark_active()
         self._deliver(update)
         if self._closed_published and self._owner is not None:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
 
     def record(self, event: JsonObject) -> None:
-        """Keep one Tool call or delegation record locally for measurement."""
+        """Keep one Tool call or delegation record locally; only in Debug Mode."""
         if self._recorder is not None:
             self._recorder.record(self.call_id, event)
 
@@ -283,6 +247,61 @@ class _LiveCallEntry:
             self.active = False
             self._spawn(self._close(call))
         return True
+
+    def end_soon(self) -> None:
+        """Close gracefully once the voice model had time to say goodbye."""
+        if self._ending or self._closing or self.ended:
+            return
+        self._ending = True
+        self._spawn(self._end_after_goodbye())
+
+    async def _end_after_goodbye(self) -> None:
+        await asyncio.sleep(self._limits.end_call_delay_seconds)
+        _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
+        self._end_reason = self._end_reason or CLOSED_REASON_HUNG_UP
+        self.request_close()
+
+    # -- idle hangup ----------------------------------------------------------
+
+    def _mark_active(self) -> None:
+        """Speech or work happened: the idle period starts over."""
+        self._active_at = time.monotonic()
+        if self._idle_warned and not self._closed_published:
+            self._idle_warned = False
+            self._deliver({"type": "idle", "ends_in": None})
+
+    def _start_idle_watch(self) -> None:
+        if self._idle_watch is None and not self._closing and not self.ended:
+            self._mark_active()
+            self._idle_watch = self._spawn(self._watch_idle())
+
+    def _stop_idle_watch(self) -> None:
+        watch, self._idle_watch = self._idle_watch, None
+        if watch is not None and watch is not asyncio.current_task():
+            watch.cancel()
+
+    async def _watch_idle(self) -> None:
+        """End a live call nobody uses; warn the owner shortly before."""
+        limits = self._limits
+        while not self._closing and not self.ended:
+            if self._busy:
+                self._mark_active()
+            idle_for = time.monotonic() - self._active_at
+            warn_after = limits.idle_seconds - limits.idle_warning_seconds
+            if idle_for < warn_after:
+                await asyncio.sleep(warn_after - idle_for)
+            elif idle_for < limits.idle_seconds:
+                if not self._idle_warned:
+                    self._idle_warned = True
+                    ends_in = round(limits.idle_seconds - idle_for, 1)
+                    self._deliver({"type": "idle", "ends_in": ends_in})
+                await asyncio.sleep(limits.idle_seconds - idle_for)
+            else:
+                _LOGGER.info("Live call ended after idling (call=%s)", self.log_id)
+                self._idle_watch = None
+                self._end_reason = self._end_reason or CLOSED_REASON_IDLE
+                self.request_close()
+                return
 
     async def replace(self) -> None:
         """End the call immediately because a newer call starts."""
@@ -370,20 +389,28 @@ class _LiveCallEntry:
         previous = self._owner
         if previous is not None:
             previous.end(LIVE_SOCKET_CLOSE_REPLACED)
-        owner = LiveOwnerStream(self, self._limits.owner_queue_limit)
+            self._requeue(previous.take_undelivered())
+        owner = LiveOwnerStream(
+            self, self._limits.owner_queue_limit, self._limits.owner_audio_limit_bytes
+        )
         while self._buffer:
             owner.send(self._buffer.popleft())
         self._owner = owner
+        self._owner_attached = True
         self._cancel_timer()
         if self.ended or self._closed_published:
             owner.end(LIVE_SOCKET_CLOSE_ENDED)
         return owner
 
     def detach(self, owner: LiveOwnerStream) -> None:
-        """Forget a closed owner socket and allow a bounded reconnect."""
+        """Forget a closed owner socket and allow a bounded reconnect.
+
+        Updates it had not taken wait for the next owner socket.
+        """
         if self._owner is not owner:
             return
         self._owner = None
+        self._requeue(owner.take_undelivered())
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def receive_audio(self, owner: LiveOwnerStream, pcm: bytes) -> None:
@@ -402,6 +429,21 @@ class _LiveCallEntry:
             return
         call.push_audio(pcm)
 
+    def receive_text(self, owner: LiveOwnerStream, text: str) -> None:
+        """Keep what the current owner reports the app shows; ``stay`` keeps an idle call."""
+        if owner is not self._owner or self.ended or len(text) > LIVE_CONTEXT_FRAME_MAX_CHARS:
+            return
+        try:
+            frame = json.loads(text)
+        except ValueError:
+            return
+        if not isinstance(frame, dict):
+            return
+        if frame.get("type") == "context":
+            self._app_context = _app_context(frame)
+        elif frame.get("type") == "stay":
+            self._mark_active()
+
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner
         if owner is not None:
@@ -409,11 +451,32 @@ class _LiveCallEntry:
                 return
             self._owner_lagged(owner)
         self._buffer.append(frame)
+        self._trim_buffer()
+
+    def _requeue(self, updates: list[JsonObject]) -> None:
+        """Put updates a socket did not take before those buffered since."""
+        if updates:
+            self._buffer.extendleft(reversed(updates))
+            self._trim_buffer()
+
+    def _trim_buffer(self) -> None:
+        """Bound the buffer, dropping the oldest disposable updates first."""
+        excess = len(self._buffer) - self._limits.update_buffer_limit
+        if excess <= 0:
+            return
+        kept: deque[JsonObject] = deque()
+        for update in self._buffer:
+            if excess and update.get("type") in _DISPOSABLE_UPDATES:
+                excess -= 1
+                continue
+            kept.append(update)
+        self._buffer = kept
 
     def _owner_lagged(self, owner: LiveOwnerStream) -> None:
         _LOGGER.warning("Live owner socket fell behind (call=%s)", self.log_id)
         self._owner = None
         owner.end(LIVE_SOCKET_CLOSE_LAGGED)
+        self._requeue(owner.take_undelivered())
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def _arm_timer(self, seconds: float, reason: str) -> None:
@@ -438,8 +501,12 @@ class _LiveCallEntry:
     # -- UI requests ------------------------------------------------------
 
     async def ui_request(self, action: str, args: JsonObject) -> JsonObject:
-        """Ask the owning accessor to read or change its display."""
-        if self._owner is None:
+        """Ask the owning accessor to read or change its display.
+
+        While the owner reconnects, the request waits for it within the UI
+        request timeout; before any owner attached, there is nobody to ask.
+        """
+        if self.ended or self._closed_published or not self._owner_attached:
             raise LiveUiError(UI_UNAVAILABLE)
         request_id = new_id("ui", claim=lambda candidate: candidate not in self._ui_requests)
         future: asyncio.Future[JsonObject] = asyncio.get_running_loop().create_future()
@@ -474,145 +541,23 @@ class _LiveCallEntry:
         return task
 
 
-class LiveCallRegistry:
-    """Own the server's Live calls: one active call plus those still finishing.
+def _app_context(frame: JsonObject) -> JsonObject:
+    """The known fields of a context report, as text or ``None``."""
 
-    ``rpc`` dispatches one registered RPC method in-process; the call's Tools
-    and Run announcements go through it so they behave like any accessor call.
-    ``recorder`` keeps the calls' Tool call and delegation records locally.
-    """
+    def text(value: Any) -> str | None:
+        return value if isinstance(value, str) and value else None
 
-    def __init__(
-        self,
-        *,
-        events: ServerEventBus,
-        rpc: RpcInvoker,
-        limits: LiveCallLimits | None = None,
-        clock: Callable[[], datetime] = _utc_now,
-        recorder: LiveCallRecorder | None = None,
-    ) -> None:
-        self._events = events
-        self._rpc = rpc
-        self._recorder = recorder
-        self._limits = limits or LiveCallLimits()
-        self._clock = clock
-        self._start_lock = asyncio.Lock()
-        self._active: _LiveCallEntry | None = None
-        # Attachable entries: the active call, calls still closing, and ended
-        # calls holding updates their owner has not received yet.
-        self._entries: dict[str, _LiveCallEntry] = {}
-        self._linger: dict[str, asyncio.TimerHandle] = {}
-        self._closed = False
-
-    @property
-    def active_call_id(self) -> str | None:
-        """The id of the active call, if any."""
-        return self._active.call_id if self._active is not None else None
-
-    async def start(
-        self,
-        service: LiveVoiceStarter,
-        *,
-        media: str,
-        offer_sdp: str | None = None,
-        wake_phrases: tuple[str, ...] = (),
-    ) -> LiveCall:
-        """Start a call with *media* (WebRTC needs *offer_sdp*), ending the active call first.
-
-        *wake_phrases* (validated) address other vBot Agents during the call.
-        :class:`core.model_tasks.live.LiveStartRejected` propagates unchanged.
-        """
-        async with self._start_lock:
-            if self._closed:
-                raise LiveRegistryClosedError
-            previous, self._active = self._active, None
-            if previous is not None:
-                await previous.replace()
-            entry = _LiveCallEntry(
-                limits=self._limits,
-                rpc=self._rpc,
-                events=self._events,
-                on_finalized=self._entry_finalized,
-                started_at=self._clock(),
-                after_sequence=self._events.last_sequence,
-                recorder=self._recorder,
-            )
-            call = await service.start_call(
-                media=media, offer_sdp=offer_sdp, wake_phrases=wake_phrases, host=entry
-            )
-            if self._closed:
-                # Shutdown began while the provider created the call.
-                entry.call = call
-                await entry.replace()
-                raise LiveRegistryClosedError
-            self._entries[call.id] = entry
-            self._active = entry
-            entry.bind(call)
-            return call
-
-    def stop(self, call_id: str) -> bool:
-        """Close the call gracefully in the background; ``False`` for unknown calls."""
-        entry = self._entries.get(call_id)
-        if entry is None or not entry.request_close():
-            return False
-        if self._active is entry:
-            self._active = None
-        return True
-
-    def attach(self, call_id: str) -> LiveOwnerStream | None:
-        """Attach an owner socket; ``None`` when no such call can be attached."""
-        if self._closed:
-            return None
-        entry = self._entries.get(call_id)
-        if entry is None:
-            return None
-        owner = entry.attach()
-        if entry.ended:
-            self._forget(entry)
-        return owner
-
-    def resolve_ui_request(
-        self,
-        call_id: str,
-        request_id: str,
-        *,
-        result: JsonObject | None = None,
-        error: str | None = None,
-    ) -> bool:
-        """Answer a UI request of *call_id*; ``False`` when nothing awaits it."""
-        entry = self._entries.get(call_id)
-        if entry is None:
-            return False
-        return entry.resolve_ui_request(request_id, result=result, error=error)
-
-    async def aclose(self) -> None:
-        """End every call at server shutdown; starts are refused afterwards."""
-        self._closed = True
-        self._active = None
-        entries = list(self._entries.values())
-        await asyncio.gather(*(entry.shutdown() for entry in entries))
-        for handle in self._linger.values():
-            handle.cancel()
-        self._linger.clear()
-        self._entries.clear()
-        if self._recorder is not None:
-            await self._recorder.drain()
-
-    def _entry_finalized(self, entry: _LiveCallEntry) -> None:
-        if self._active is entry:
-            self._active = None
-        if self._closed or not entry.has_undelivered_updates:
-            self._forget(entry)
-            return
-        # Keep final updates attachable briefly for an owner that is reconnecting.
-        self._linger[entry.call_id] = asyncio.get_running_loop().call_later(
-            self._limits.reattach_grace_seconds, self._forget, entry
-        )
-
-    def _forget(self, entry: _LiveCallEntry) -> None:
-        call_id = entry.call_id
-        if self._entries.get(call_id) is entry:
-            del self._entries[call_id]
-        handle = self._linger.pop(call_id, None)
-        if handle is not None:
-            handle.cancel()
+    session = frame.get("chat_session")
+    chat_session = (
+        {"agent_id": session["agent_id"], "session_id": session["session_id"]}
+        if isinstance(session, dict)
+        and text(session.get("agent_id"))
+        and text(session.get("session_id"))
+        else None
+    )
+    return {
+        "view": text(frame.get("view")),
+        "selected_agent_id": text(frame.get("selected_agent_id")),
+        "selected_project_id": text(frame.get("selected_project_id")),
+        "chat_session": chat_session,
+    }

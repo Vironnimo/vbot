@@ -35,9 +35,19 @@ export const shouldRenderMessage = (message) =>
 const senderDisplayName = (message) =>
   trimmedString(message?.sender?.display_name);
 
+// A User message names its sender and whether Live voice passed it on.
+const userLabel = (message) => {
+  const name = senderDisplayName(message) || t('chat.role.user');
+  const label =
+    message?.input_origin === 'live_voice'
+      ? t('chat.role.userViaLive', { name })
+      : name;
+  return label.toUpperCase();
+};
+
 export const labelForMessage = (message) => {
   if (message.role === 'user') {
-    return (senderDisplayName(message) || t('chat.role.user')).toUpperCase();
+    return userLabel(message);
   }
   if (message.role === 'assistant') {
     return t('chat.role.assistant').toUpperCase();
@@ -80,8 +90,7 @@ export const labelForEvent = (event) => {
     return t('chat.event.interrupted');
   }
   if (event.type === 'user_message_persisted') {
-    const displayName = senderDisplayName(messageFromEvent(event));
-    return (displayName || t('chat.role.user')).toUpperCase();
+    return userLabel(messageFromEvent(event));
   }
   return t('common.unknown').toUpperCase();
 };
