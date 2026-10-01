@@ -603,13 +603,19 @@
   font-variant-numeric: tabular-nums;
 }
 
-.projects-claude-md-suggestion {
+.projects-claude-md-suggestion,
+.projects-remove-copy {
   display: flex;
   align-items: flex-start;
   gap: 8px;
   color: var(--text-med);
   font-size: var(--fs-label-sm);
   line-height: 1.4;
+}
+
+/* Remove dialog: the identity-file copy choice with its explanation. */
+.projects-remove-copy .projects-help {
+  margin-top: 4px;
 }
 
 /* ── Responsive ───────────────────────────────────────────────────────────── */

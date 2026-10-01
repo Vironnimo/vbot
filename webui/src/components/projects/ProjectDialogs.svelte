@@ -261,44 +261,47 @@
 {#if projectsState.removeConfirmProject}
   <Modal
     title={t('projects.remove.confirmTitle')}
+    class="projects-view__modal"
     onClose={cancelRemove}
     closeDisabled={Boolean(projectsState.removingProjectId)}
   >
     {#snippet body()}
-      <p>
-        {projectsState.removePermanently
-          ? t('projects.remove.permanentBody', {
-              name:
-                projectsState.removeConfirmProject.display_name ||
-                projectsState.removeConfirmProject.project_id,
-            })
-          : t('projects.remove.body', {
-              name:
-                projectsState.removeConfirmProject.display_name ||
-                projectsState.removeConfirmProject.project_id,
-            })}
-      </p>
-      <div class="projects-toggle-row">
-        <span>
-          {t('projects.remove.copyIdentityFiles')}
-        </span>
-        <Toggle
-          size="sm"
-          checked={projectsState.copyRootedAgentIdentityFiles}
+      <div class="modal-body">
+        <p>
+          {projectsState.removePermanently
+            ? t('projects.remove.permanentBody', {
+                name:
+                  projectsState.removeConfirmProject.display_name ||
+                  projectsState.removeConfirmProject.project_id,
+              })
+            : t('projects.remove.body', {
+                name:
+                  projectsState.removeConfirmProject.display_name ||
+                  projectsState.removeConfirmProject.project_id,
+              })}
+        </p>
+        <div class="projects-remove-copy">
+          <Toggle
+            size="sm"
+            checked={projectsState.copyRootedAgentIdentityFiles}
+            disabled={Boolean(projectsState.removingProjectId)}
+            ariaLabel={t('projects.remove.copyIdentityFiles')}
+            onChange={(next) =>
+              (projectsState.copyRootedAgentIdentityFiles = next)}
+          />
+          <div>
+            <span>{t('projects.remove.copyIdentityFiles')}</span>
+            <p class="projects-help">
+              {t('projects.remove.copyIdentityFilesHelp')}
+            </p>
+          </div>
+        </div>
+        <ArchiveDeleteOption
+          permanent={projectsState.removePermanently}
           disabled={Boolean(projectsState.removingProjectId)}
-          ariaLabel={t('projects.remove.copyIdentityFiles')}
-          onChange={(next) =>
-            (projectsState.copyRootedAgentIdentityFiles = next)}
+          onChange={(next) => (projectsState.removePermanently = next)}
         />
       </div>
-      <p class="modal-hint">
-        {t('projects.remove.copyIdentityFilesHelp')}
-      </p>
-      <ArchiveDeleteOption
-        permanent={projectsState.removePermanently}
-        disabled={Boolean(projectsState.removingProjectId)}
-        onChange={(next) => (projectsState.removePermanently = next)}
-      />
     {/snippet}
     {#snippet footer()}
       <Button
