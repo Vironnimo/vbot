@@ -1,16 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  buildEmbeddingModelChoices,
-  buildRecallBackendOptions,
+  buildEmbeddingModelOptions,
+  buildRecallMethodOptions,
   buildRecallSettingsPayload,
-  describeEmbeddingPrivacy,
+  describeEmbeddingModel,
   describeRecallIndexStatus,
+  describeRecallMethod,
   getRecallSettings,
-  recallBackendForMeaning,
-  recallBackendNeedsAdvanced,
-  recallMeaningAvailable,
   recallSearchesByMeaning,
+  recommendedEmbeddingTarget,
 } from '../settingsView.js';
 
 const NOW_MS = Date.parse('2026-10-01T12:00:00Z');
@@ -45,11 +44,11 @@ function status(overrides = {}) {
   };
 }
 
-describe('recall backend', () => {
+describe('recall search method', () => {
   it('keeps the recall backend within the offered backends', () => {
     expect(getRecallSettings({})).toEqual({
       backend: 'sqlite_fts',
-      available_backends: ['sqlite_fts', 'vector', 'hybrid'],
+      available_backends: ['sqlite_fts', 'hybrid', 'vector'],
     });
     expect(
       getRecallSettings({
@@ -59,157 +58,175 @@ describe('recall backend', () => {
     expect(buildRecallSettingsPayload({ backend: 'sqlite_fts' })).toEqual({
       recall: { backend: 'sqlite_fts' },
     });
-    expect(
-      buildRecallBackendOptions({ available_backends: ['vector', 'custom'] }),
-    ).toEqual([
-      { value: 'vector', label: 'Meaning only' },
-      { value: 'custom', label: 'custom' },
-    ]);
   });
 
-  it.each([
-    ['sqlite_fts', true, 'hybrid'],
-    ['custom', true, 'hybrid'],
-    ['hybrid', true, 'hybrid'],
-    ['vector', true, 'vector'],
-    ['hybrid', false, 'sqlite_fts'],
-    ['vector', false, 'sqlite_fts'],
-  ])(
-    'maps the meaning switch from %s turned %s to %s',
-    (backend, on, expected) => {
-      expect(recallBackendForMeaning(backend, on)).toBe(expected);
-      expect(recallSearchesByMeaning(expected)).toBe(on);
-    },
-  );
-
-  it('opens Advanced only for a backend the switch does not select', () => {
+  it('lists the methods simplest first, recommends keywords and meaning, and names an Extension method by its id', () => {
     expect(
-      ['sqlite_fts', 'hybrid', 'vector', 'custom'].map(
-        recallBackendNeedsAdvanced,
-      ),
-    ).toEqual([false, false, true, true]);
-    expect(recallMeaningAvailable({})).toBe(true);
-    expect(recallMeaningAvailable({ available_backends: ['sqlite_fts'] })).toBe(
-      false,
+      buildRecallMethodOptions({
+        available_backends: ['custom', 'vector', 'hybrid', 'sqlite_fts'],
+      }),
+    ).toEqual([
+      { value: 'sqlite_fts', label: 'Keywords', secondaryLabel: '' },
+      {
+        value: 'hybrid',
+        label: 'Keywords and meaning',
+        secondaryLabel: 'Recommended',
+      },
+      { value: 'vector', label: 'Meaning only', secondaryLabel: '' },
+      { value: 'custom', label: 'custom', secondaryLabel: '' },
+    ]);
+    expect(describeRecallMethod('hybrid')).toBe(
+      'Also finds conversations that say the same thing in other words.',
     );
+    expect(describeRecallMethod('custom')).toBe(
+      'A search method added by an Extension.',
+    );
+    expect(
+      ['sqlite_fts', 'hybrid', 'vector', 'custom'].map(recallSearchesByMeaning),
+    ).toEqual([false, true, true, false]);
   });
 });
 
-describe('embedding model choices', () => {
-  it('groups recommended targets by where they run, best first', () => {
-    const targets = [
-      target('openai/text-embedding-3-large', {
-        facts: {
-          local: false,
-          multilingual: true,
-          recommended_rank: 7,
-          input_price_per_million: 0.13,
-          note: 'Higher-quality OpenAI model at a higher price.',
-        },
-      }),
-      target('openai/text-embedding-3-small', {
-        facts: {
-          local: false,
-          multilingual: true,
-          recommended_rank: 3,
-          input_price_per_million: 0.02,
-          note: 'Inexpensive general-purpose OpenAI model.',
-        },
-      }),
-      target('local/harrier-0.6b', {
-        kind: 'local',
-        usable: false,
-        facts: {
-          local: true,
-          multilingual: true,
-          recommended_rank: 2,
-          input_price_per_million: 0,
-        },
-        metadata: { license: 'MIT', download_bytes: 715_629_047 },
-      }),
-      target('ollama/nomic-embed-text', {
-        facts: {
-          local: true,
-          multilingual: false,
-          recommended_rank: null,
-          input_price_per_million: null,
-        },
-      }),
-      target('mistral/mistral-embed', {
-        facts: { local: false, recommended_rank: 9 },
-      }),
-      ...[4, 5, 6, 8].map((rank) =>
-        target(`cloud/rank-${rank}`, {
-          facts: { local: false, recommended_rank: rank },
+describe('embedding model picker', () => {
+  const targets = [
+    target('openai/text-embedding-3-large', {
+      facts: {
+        multilingual: true,
+        recommended_rank: 7,
+        input_price_per_million: 0.13,
+      },
+    }),
+    target('openai/text-embedding-3-small', {
+      facts: {
+        multilingual: true,
+        recommended_rank: 3,
+        input_price_per_million: 0.02,
+        note: 'Inexpensive general-purpose OpenAI model.',
+      },
+    }),
+    target('local/harrier-0.6b', {
+      kind: 'local',
+      usable: false,
+      facts: { local: true, multilingual: true, recommended_rank: 2 },
+      metadata: { license: 'MIT', download_bytes: 715_629_047 },
+    }),
+    target('ollama/nomic-embed-text', {
+      facts: { local: true, multilingual: false, recommended_rank: null },
+    }),
+    target('mistral/mistral-embed', {
+      usable: false,
+      facts: { recommended_rank: null },
+    }),
+    target('cloud/unpriced', { facts: { recommended_rank: null } }),
+  ];
+
+  it('groups the Models by where they run, recommended first, with their facts', () => {
+    expect(
+      buildEmbeddingModelOptions(targets, 'gone/old-model').map(
+        ({ value, secondaryLabel, group, disabled }) => ({
+          value,
+          secondaryLabel,
+          group,
+          disabled: disabled === true,
         }),
       ),
-    ];
-
-    const choices = buildEmbeddingModelChoices(
-      targets,
-      'ollama/nomic-embed-text',
-    );
-
-    expect(choices.local).toEqual([
+    ).toEqual([
+      // vBot installs it when it is chosen, so it stays selectable.
       {
-        id: 'local/harrier-0.6b',
-        label: 'local/harrier-0.6b',
-        providerId: '',
-        local: true,
-        usable: false,
-        // vBot installs it on request.
-        installable: true,
-        download: '716 MB download · MIT license',
-        facts: ['Multilingual', 'Free, runs locally'],
-        note: '',
+        value: 'local/harrier-0.6b',
+        secondaryLabel: 'Not installed · 716 MB',
+        group: 'On this computer',
+        disabled: false,
       },
-      // Unranked, but selected: it stays visible. A local runtime's Model is
-      // never installed by vBot.
-      expect.objectContaining({
-        id: 'ollama/nomic-embed-text',
-        installable: false,
-        download: '',
-        facts: ['English only', 'Free, runs locally'],
-      }),
+      {
+        value: 'ollama/nomic-embed-text',
+        secondaryLabel: 'Free · English only',
+        group: 'On this computer',
+        disabled: false,
+      },
+      {
+        value: 'openai/text-embedding-3-small',
+        secondaryLabel: '$0.02 / 1M tokens',
+        group: 'Cloud',
+        disabled: false,
+      },
+      {
+        value: 'openai/text-embedding-3-large',
+        secondaryLabel: '$0.13 / 1M tokens',
+        group: 'Cloud',
+        disabled: false,
+      },
+      {
+        value: 'cloud/unpriced',
+        secondaryLabel: '',
+        group: 'Cloud',
+        disabled: false,
+      },
+      {
+        value: 'mistral/mistral-embed',
+        secondaryLabel: 'Unavailable',
+        group: 'Cloud',
+        disabled: true,
+      },
+      // A saved Model no longer offered stays visible as the selection.
+      {
+        value: 'gone/old-model',
+        secondaryLabel: 'Unavailable',
+        group: 'No longer offered',
+        disabled: false,
+      },
     ]);
-    // Four per group: ranks 3-6; ranks 7-9 are left to All models.
-    expect(choices.cloud.map((choice) => choice.id)).toEqual([
-      'openai/text-embedding-3-small',
-      'cloud/rank-4',
-      'cloud/rank-5',
-      'cloud/rank-6',
-    ]);
-    expect(choices.cloud[0]).toMatchObject({
-      facts: ['Multilingual', '$0.02 per 1M tokens'],
-      note: 'Inexpensive general-purpose OpenAI model.',
-    });
-    expect(choices.cloud[1].facts).toEqual(['Price unknown']);
-    expect(buildEmbeddingModelChoices([], '')).toEqual({
-      local: [],
-      cloud: [],
-    });
+    expect(
+      buildEmbeddingModelOptions(targets, '').find(
+        (option) => option.value === 'openai/text-embedding-3-small',
+      ).tooltip,
+    ).toBe('Inexpensive general-purpose OpenAI model.');
   });
 
-  it('says where conversation text goes for the chosen target', () => {
-    const providerName = (id) => ({ openai: 'OpenAI' })[id] ?? '';
+  it('says where conversation text goes, or which Model to choose', () => {
+    const providerName = (id) =>
+      ({ openai: 'OpenAI', ollama: 'Ollama' })[id] ?? '';
+    const byId = (id) => targets.find((item) => item.id === id);
+    const describe = (id) =>
+      describeEmbeddingModel(
+        byId(id) ?? null,
+        id,
+        providerName,
+        recommendedEmbeddingTarget(targets),
+      );
 
+    expect(describe('openai/text-embedding-3-small')).toEqual({
+      text: 'Conversation text is sent to OpenAI to build the search index, at $0.02 per 1M tokens.',
+      attention: false,
+    });
+    expect(describe('cloud/unpriced').text).toBe(
+      'Conversation text is sent to cloud to build the search index.',
+    );
+    expect(describe('ollama/nomic-embed-text').text).toBe(
+      'Runs in Ollama on this computer. Conversation text stays here.',
+    );
     expect(
-      describeEmbeddingPrivacy(
-        target('openai/text-embedding-3-small'),
-        providerName,
-      ),
-    ).toBe('Conversation text is sent to OpenAI to build the search index.');
-    expect(
-      describeEmbeddingPrivacy(target('ollama/bge-m3'), providerName),
-    ).toBe('Conversation text is sent to ollama to build the search index.');
-    expect(
-      describeEmbeddingPrivacy(
+      describeEmbeddingModel(
         target('local/granite-embedding-r2', { kind: 'local' }),
+        'local/granite-embedding-r2',
         providerName,
-      ),
-    ).toBe('Conversation text stays on this computer.');
-    expect(describeEmbeddingPrivacy(null, providerName)).toBe(
-      'Conversation text is sent to the chosen model’s Provider to build the search index.',
+      ).text,
+    ).toBe('Runs on this computer, free. Conversation text stays here.');
+    expect(describe('local/harrier-0.6b')).toEqual({
+      text: 'This model is not installed yet. Choose it again to install it.',
+      attention: true,
+    });
+    expect(describe('gone/old-model')).toEqual({
+      text: 'This model is no longer offered. Choose another one.',
+      attention: true,
+    });
+    // The best recommended Model that can be chosen is suggested.
+    expect(describe('')).toEqual({
+      text: 'Choose a model to search by meaning. local/harrier-0.6b is a good start.',
+      attention: true,
+    });
+    expect(describeEmbeddingModel(null, '', providerName, null).text).toBe(
+      'Choose a model to search by meaning. Connect a Provider that offers embedding models if the list is empty.',
     );
   });
 });
@@ -273,7 +290,7 @@ describe('recall index status line', () => {
         state: 'error',
         summary: 'Indexed 0 of 2 passages · about 10 tokens waiting',
         problem:
-          'The local embedding model is not installed yet. Install it under On this computer, or choose another model.',
+          'The local embedding model is not installed. Choose it under Embedding model to install it, or choose another model.',
       },
     ],
     [

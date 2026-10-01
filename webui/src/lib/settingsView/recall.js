@@ -1,11 +1,14 @@
-// Conversation search (Recall) settings: the backend choice behind the
-// "Also search by meaning" switch, the recommended embedding Models with
-// their facts, and the semantic index status line.
+// Conversation search (Recall) settings: the search method, the embedding
+// Model picker's options and the chosen Model's description, and the
+// semantic index status line.
 
 import { activeLocaleTag, t, tOr } from '../i18n.js';
 import { formatCost } from '../statisticsView.js';
 import { formatRelativeTime } from '../timeText.js';
-import { describeLocalModelDownload } from './localModels.js';
+import {
+  describeLocalModelDownload,
+  formatDownloadSize,
+} from './localModels.js';
 import { textOrEmpty } from './values.js';
 
 const RECALL_BACKEND_KEYWORD = 'sqlite_fts';
@@ -15,21 +18,13 @@ const RECALL_BACKEND_HYBRID = 'hybrid';
 // conversation text.
 const MEANING_BACKENDS = Object.freeze(['vector', RECALL_BACKEND_HYBRID]);
 
-// The two backends the switch selects; any other stored backend is shown in
-// the Advanced backend list.
-const SWITCH_BACKENDS = Object.freeze([
-  RECALL_BACKEND_KEYWORD,
-  RECALL_BACKEND_HYBRID,
-]);
-
+// First-party backends in the order the method picker lists them; an
+// Extension's backends follow.
 const RECALL_BACKEND_DEFAULTS = Object.freeze([
   RECALL_BACKEND_KEYWORD,
-  'vector',
   RECALL_BACKEND_HYBRID,
+  'vector',
 ]);
-
-// Recommended Models shown per group before "All models".
-const RECOMMENDED_PER_GROUP = 4;
 
 // Index states without a status line: semantic search is off, or no
 // embedding Model is chosen yet.
@@ -73,41 +68,42 @@ export function buildRecallSettingsPayload(formValues) {
   };
 }
 
-export function buildRecallBackendOptions(recallSettings) {
-  return normalizeRecallBackends(recallSettings?.available_backends).map(
-    (backend) => ({
+function backendOrder(backend) {
+  const index = RECALL_BACKEND_DEFAULTS.indexOf(backend);
+  return index === -1 ? RECALL_BACKEND_DEFAULTS.length : index;
+}
+
+// The search method picker: keywords, keywords and meaning (recommended),
+// meaning only, then any Extension's backends under their id.
+export function buildRecallMethodOptions(recallSettings) {
+  return normalizeRecallBackends(recallSettings?.available_backends)
+    .map((backend, index) => ({ backend, index }))
+    .sort(
+      (left, right) =>
+        backendOrder(left.backend) - backendOrder(right.backend) ||
+        left.index - right.index,
+    )
+    .map(({ backend }) => ({
       value: backend,
       label: tOr(`settings.recall.backends.${backend}`, backend),
-    }),
+      secondaryLabel:
+        backend === RECALL_BACKEND_HYBRID
+          ? t('settings.recall.methodRecommended')
+          : '',
+    }));
+}
+
+// What the chosen search method finds, for the line under its label.
+export function describeRecallMethod(backend) {
+  return tOr(
+    `settings.recall.backendDescriptions.${backend}`,
+    t('settings.recall.methodExtension'),
   );
 }
 
 // Whether the backend ranks by meaning, so it needs an embedding Model.
 export function recallSearchesByMeaning(backend) {
   return MEANING_BACKENDS.includes(backend);
-}
-
-// The backend after the "Also search by meaning" switch changed: on keeps a
-// backend that already searches by meaning and otherwise chooses keywords
-// and meaning combined; off returns to keywords only.
-export function recallBackendForMeaning(backend, on) {
-  if (!on) {
-    return RECALL_BACKEND_KEYWORD;
-  }
-  return recallSearchesByMeaning(backend) ? backend : RECALL_BACKEND_HYBRID;
-}
-
-// Whether the switch can turn meaning search on with the advertised backends.
-export function recallMeaningAvailable(recallSettings) {
-  return normalizeRecallBackends(recallSettings?.available_backends).includes(
-    RECALL_BACKEND_HYBRID,
-  );
-}
-
-// A backend the switch does not select (meaning only, or an Extension's)
-// shows the Advanced backend list open.
-export function recallBackendNeedsAdvanced(backend) {
-  return !SWITCH_BACKENDS.includes(backend);
 }
 
 function finiteOrNull(value) {
@@ -120,6 +116,12 @@ function targetIsLocal(target) {
   return target.kind === 'local' || target.facts?.local === true;
 }
 
+// A Model vBot runs itself that is not installed yet; choosing it offers the
+// installation.
+export function embeddingTargetNeedsInstall(target) {
+  return target?.kind === 'local' && target.usable === false;
+}
+
 function compareRecommended(left, right) {
   const leftRank = finiteOrNull(left.facts?.recommended_rank) ?? Infinity;
   const rightRank = finiteOrNull(right.facts?.recommended_rank) ?? Infinity;
@@ -129,90 +131,158 @@ function compareRecommended(left, right) {
   return left.label.localeCompare(right.label);
 }
 
-function embeddingChoice(target) {
-  const local = targetIsLocal(target);
-  const multilingual = target.facts?.multilingual;
+function priceText(target) {
   const price = finiteOrNull(target.facts?.input_price_per_million);
-  const facts = [];
-  if (multilingual === true) {
-    facts.push(t('settings.recall.model.factMultilingual'));
-  } else if (multilingual === false) {
-    facts.push(t('settings.recall.model.factEnglish'));
+  if (targetIsLocal(target) && (price === null || price === 0)) {
+    return t('settings.recall.model.free');
   }
-  // A Model on this computer reports no price or a zero price.
-  if (local && (price === null || price === 0)) {
-    facts.push(t('settings.recall.model.factLocal'));
-  } else if (price === null) {
-    facts.push(t('settings.recall.model.factPriceUnknown'));
-  } else {
-    facts.push(
-      t('settings.recall.model.factPrice', {
+  return price === null
+    ? ''
+    : t('settings.recall.model.price', {
         price: formatCost(price, activeLocaleTag()),
-      }),
+      });
+}
+
+// The short facts beside a picker option: installation state or price, and
+// a language limit.
+function optionFacts(target) {
+  const facts = [];
+  if (embeddingTargetNeedsInstall(target)) {
+    const size = formatDownloadSize(target.metadata?.download_bytes);
+    facts.push(
+      size
+        ? t('settings.recall.model.notInstalledSize', { size })
+        : t('settings.recall.model.notInstalled'),
     );
+  } else if (!target.usable) {
+    facts.push(t('settings.recall.model.unavailable'));
+  } else {
+    facts.push(priceText(target));
   }
-  const usable = target.usable !== false;
-  // A Model vBot runs itself is installed on request; `download` names what
-  // installing it fetches.
-  const installable = target.kind === 'local' && !usable;
-  return {
-    id: target.id,
-    label: target.label,
-    providerId: target.providerId ?? '',
-    local,
-    usable,
-    installable,
-    download: installable ? describeLocalModelDownload(target.metadata) : '',
-    facts,
-    note: textOrEmpty(target.facts?.note),
-  };
+  if (target.facts?.multilingual === false) {
+    facts.push(t('settings.recall.model.englishOnly'));
+  }
+  return facts.filter(Boolean).join(' · ');
 }
 
-// The short recommended list: targets vBot runs itself and targets with a
-// recommendation rank, best first, split into "On this computer" and
-// "Cloud". The selected target always stays visible in its group.
-export function buildEmbeddingModelChoices(targets, selectedId = '') {
-  const list = Array.isArray(targets) ? targets : [];
-  const recommended = list
-    .filter(
-      (target) =>
-        target.kind === 'local' ||
-        finiteOrNull(target.facts?.recommended_rank) !== null,
-    )
+/**
+ * The embedding Model picker's options: Models on this computer, then cloud
+ * Models, each recommended first. A Model vBot runs itself stays selectable
+ * before it is installed, because choosing it offers the installation; any
+ * other unusable target is disabled. A saved target no longer offered stays
+ * listed so the picker can show it.
+ */
+export function buildEmbeddingModelOptions(targets, selectedId = '') {
+  const list = (Array.isArray(targets) ? targets : [])
+    .slice()
     .sort(compareRecommended);
-  const groups = { local: [], cloud: [] };
-  for (const target of recommended) {
-    const group = targetIsLocal(target) ? groups.local : groups.cloud;
-    if (group.length < RECOMMENDED_PER_GROUP) {
-      group.push(target);
-    }
+  const groups = [
+    [t('settings.recall.model.groupLocal'), list.filter(targetIsLocal)],
+    [
+      t('settings.recall.model.groupCloud'),
+      list.filter((target) => !targetIsLocal(target)),
+    ],
+  ];
+  const options = groups.flatMap(([group, members]) =>
+    members.map((target) => ({
+      value: target.id,
+      label: target.label,
+      secondaryLabel: optionFacts(target),
+      group,
+      disabled: !target.usable && !embeddingTargetNeedsInstall(target),
+      searchText: `${target.label} ${target.id}`,
+      tooltip: textOrEmpty(target.facts?.note),
+    })),
+  );
+  if (selectedId && !list.some((target) => target.id === selectedId)) {
+    options.push({
+      value: selectedId,
+      label: selectedId,
+      secondaryLabel: t('settings.recall.model.unavailable'),
+      group: t('settings.recall.model.groupSaved'),
+      code: true,
+    });
   }
-  const selected = list.find((target) => target.id === selectedId);
-  if (
-    selected &&
-    !groups.local.includes(selected) &&
-    !groups.cloud.includes(selected)
-  ) {
-    (targetIsLocal(selected) ? groups.local : groups.cloud).push(selected);
-  }
-  return {
-    local: groups.local.map(embeddingChoice),
-    cloud: groups.cloud.map(embeddingChoice),
-  };
+  return options;
 }
 
-// Where the chosen target sends conversation text. `providerName` resolves a
-// Provider id to its display name.
-export function describeEmbeddingPrivacy(target, providerName) {
+// The best recommended Model that can be chosen, for the prompt shown while
+// no Model is chosen; null when none is recommended.
+export function recommendedEmbeddingTarget(targets) {
+  const list = Array.isArray(targets) ? targets : [];
+  return (
+    list
+      .filter(
+        (target) =>
+          finiteOrNull(target.facts?.recommended_rank) !== null &&
+          (target.usable || embeddingTargetNeedsInstall(target)),
+      )
+      .sort(compareRecommended)[0] ?? null
+  );
+}
+
+/**
+ * The line under the embedding Model label: where conversation text goes and
+ * what indexing costs, or which Model to choose while none is.
+ *
+ * @param {object | null} target - The chosen target, or null.
+ * @param {string} selectedId - The chosen target id ('' when none).
+ * @param {(providerId: string) => string} providerName - Provider display name.
+ * @param {object | null} recommended - `recommendedEmbeddingTarget(...)`.
+ * @returns {{ text: string, attention: boolean }}
+ */
+export function describeEmbeddingModel(
+  target,
+  selectedId,
+  providerName,
+  recommended = null,
+) {
+  if (!selectedId) {
+    return {
+      text: recommended
+        ? t('settings.recall.model.chooseRecommended', {
+            model: recommended.label,
+          })
+        : t('settings.recall.model.choose'),
+      attention: true,
+    };
+  }
   if (!target) {
-    return t('settings.recall.model.privacyUnknown');
+    return { text: t('settings.recall.model.notOffered'), attention: true };
+  }
+  if (embeddingTargetNeedsInstall(target)) {
+    return { text: t('settings.recall.model.installNeeded'), attention: true };
   }
   if (target.kind === 'local') {
-    return t('settings.recall.model.privacyLocal');
+    return { text: t('settings.recall.model.privacyLocal'), attention: false };
   }
-  return t('settings.recall.model.privacyProvider', {
-    provider: providerName(target.providerId) || target.providerId,
-  });
+  const provider = providerName(target.providerId) || target.providerId;
+  if (targetIsLocal(target)) {
+    return {
+      text: t('settings.recall.model.privacyLocalRuntime', { provider }),
+      attention: false,
+    };
+  }
+  const price = finiteOrNull(target.facts?.input_price_per_million);
+  return {
+    text:
+      price === null
+        ? t('settings.recall.model.privacyProvider', { provider })
+        : t('settings.recall.model.privacyProviderPrice', {
+            provider,
+            price: formatCost(price, activeLocaleTag()),
+          }),
+    attention: false,
+  };
+}
+
+// What the installation dialog says about a Model before it is installed:
+// its note and what installing fetches.
+export function describeEmbeddingInstall(target) {
+  return {
+    note: textOrEmpty(target?.facts?.note),
+    download: describeLocalModelDownload(target?.metadata),
+  };
 }
 
 function countText(value) {

@@ -49,13 +49,14 @@ export {
 export {
   getRecallSettings,
   buildRecallSettingsPayload,
-  buildRecallBackendOptions,
+  buildRecallMethodOptions,
+  describeRecallMethod,
   recallSearchesByMeaning,
-  recallBackendForMeaning,
-  recallMeaningAvailable,
-  recallBackendNeedsAdvanced,
-  buildEmbeddingModelChoices,
-  describeEmbeddingPrivacy,
+  embeddingTargetNeedsInstall,
+  buildEmbeddingModelOptions,
+  recommendedEmbeddingTarget,
+  describeEmbeddingModel,
+  describeEmbeddingInstall,
   describeRecallIndexStatus,
 } from './settingsView/recall.js';
 export {

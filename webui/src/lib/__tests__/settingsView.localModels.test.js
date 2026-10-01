@@ -83,7 +83,8 @@ describe('local Model installation', () => {
       },
       {
         tone: 'neutral',
-        message: 'Downloading the model. You can leave this page.',
+        message:
+          'Downloading the model. You can close this dialog; the download continues.',
         progress: { percent: 34, text: '120 MB of 347 MB' },
         action: 'installing',
       },

@@ -224,6 +224,9 @@ class TaskModelOptionField:
     max_value: float | None = None
     step: float | None = None
     options_by: TaskModelOptionsBy | None = None
+    # Hint shown in an empty text or number field, such as what leaving it
+    # empty means.
+    placeholder: str = ""
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name.strip():
@@ -276,6 +279,8 @@ class TaskModelOptionField:
             payload["step"] = self.step
         if self.options_by is not None:
             payload["options_by"] = self.options_by.to_dict()
+        if self.placeholder:
+            payload["placeholder"] = self.placeholder
         return payload
 
 

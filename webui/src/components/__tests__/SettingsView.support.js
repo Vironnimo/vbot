@@ -99,7 +99,7 @@ export async function openSubAgentsPanel() {
 export async function openRecallPanel() {
   await openSettingsSection('Memory', 'recall');
   await waitForCondition(() =>
-    activeSection.querySelector('#settings-recall-meaning'),
+    activeSection.querySelector('#settings-recall-backend'),
   );
 }
 
@@ -231,7 +231,12 @@ export function selectSearchableOption(id, label) {
   const option = Array.from(
     getSearchablePanel(id)?.querySelectorAll('.searchable-dropdown__option') ??
       [],
-  ).find((item) => item.textContent.trim() === label);
+  ).find(
+    (item) =>
+      item
+        .querySelector('.searchable-dropdown__option-label')
+        .textContent.trim() === label,
+  );
   expect(option).toBeTruthy();
   option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   flushSync();
@@ -261,7 +266,12 @@ export function openSimpleDropdown(id) {
 export function selectSimpleOption(id, label) {
   const option = Array.from(
     getSimpleList(id)?.querySelectorAll('.dropdown-option') ?? [],
-  ).find((item) => item.textContent.trim() === label);
+  ).find(
+    (item) =>
+      item
+        .querySelector('.dropdown-primitive__option-label')
+        .textContent.trim() === label,
+  );
   expect(option).toBeTruthy();
   option.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   flushSync();

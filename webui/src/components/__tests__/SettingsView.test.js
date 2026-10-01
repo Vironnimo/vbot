@@ -961,11 +961,32 @@ describe('SettingsView', () => {
       );
     }
 
-    function embeddingChoice(id) {
-      return recallElement(`[data-embedding-choice="${id}"]`);
+    // The open Model picker's options as [group, [option ids]].
+    function pickerGroups() {
+      const panel = document.body.querySelector('.searchable-dropdown__panel');
+      return Array.from(
+        panel.querySelectorAll('.searchable-dropdown__group'),
+        (group) => [
+          group
+            .querySelector('.searchable-dropdown__group-label')
+            .textContent.trim(),
+          Array.from(
+            group.querySelectorAll('.searchable-dropdown__option'),
+            (option) =>
+              option
+                .querySelector('.searchable-dropdown__option-label')
+                .textContent.trim(),
+          ),
+        ],
+      );
     }
 
-    it('turns on search by meaning with a recommended embedding model and follows the index status', async () => {
+    function installDialog() {
+      return document.body.querySelector('.modal [data-local-install]')
+        ?.parentElement;
+    }
+
+    it('chooses the search method first, then an embedding model in the Model picker, and follows the index status', async () => {
       const settings = settingsPayload();
       settings.recall.available_backends = ['sqlite_fts', 'vector', 'hybrid'];
       const props = reactiveProps({ recallIndexStatus: null });
@@ -978,59 +999,54 @@ describe('SettingsView', () => {
         props,
       );
       await openRecallPanel();
-      const meaningSwitch = recallElement('#settings-recall-meaning');
       const modelRow = recallElement('[data-recall-model]');
-      const note = recallElement('[data-recall-embedding-note]');
+      const modelLine = recallElement('[data-recall-model-line]');
       const indexRow = recallElement('[data-recall-index]');
-      expect(meaningSwitch.getAttribute('aria-checked')).toBe('false');
+      expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
+        'Keywords',
+      );
+      // Keyword search needs no embedding model.
       expect(modelRow.hidden).toBe(true);
-      expect(note.hidden).toBe(true);
       expect(indexRow.hidden).toBe(true);
-      // Keywords only is a switch choice, so Advanced stays closed.
-      expect(recallElement('#settings-recall-advanced').hidden).toBe(true);
 
-      meaningSwitch.click();
-      flushSync();
-      expect(meaningSwitch.getAttribute('aria-checked')).toBe('true');
+      openSimpleDropdown('settings-recall-backend');
+      selectSimpleOption('settings-recall-backend', 'Keywords and meaning');
       expect(modelRow.hidden).toBe(false);
-      expect(note.dataset.recallEmbeddingNote).toBe('missing');
-      await waitForCondition(() =>
-        embeddingChoice('openai/text-embedding-3-small'),
+      await waitForCondition(
+        () => modelLine.dataset.recallModelLine === 'attention',
       );
-      // Recommended Models only, grouped; one not set up yet is disabled.
-      expect(
-        Array.from(
-          modelRow.querySelectorAll('[data-recall-model-group]'),
-          (group) => [
-            group.dataset.recallModelGroup,
-            Array.from(
-              group.querySelectorAll('[data-embedding-choice]'),
-              (choice) => choice.dataset.embeddingChoice,
-            ),
-          ],
-        ),
-      ).toEqual([
-        ['local', ['local/granite-embedding-r2']],
-        ['cloud', ['openai/text-embedding-3-small']],
-      ]);
-      const local = embeddingChoice('local/granite-embedding-r2');
-      expect(local.querySelector('input').disabled).toBe(true);
-      const cloud = embeddingChoice('openai/text-embedding-3-small');
-      expect(cloud.textContent).toContain('Multilingual · $0.02 per 1M tokens');
-      expect(cloud.textContent).toContain(
-        'Inexpensive general-purpose OpenAI model.',
+      // The best recommended Model is suggested while none is chosen.
+      expect(modelLine.textContent).toContain(
+        'Granite Embedding R2 is a good start.',
       );
+      expect(indexRow.hidden).toBe(true);
 
-      cloud.querySelector('input').click();
-      flushSync();
-      expect(note.dataset.recallEmbeddingNote).toBe('in-use');
-      expect(note.textContent).toContain(
-        'Conversation text is sent to OpenAI to build the search index.',
+      await openSearchableDropdown('settings-specialized-text_embedding');
+      expect(pickerGroups()).toEqual([
+        ['On this computer', ['Granite Embedding R2']],
+        [
+          'Cloud',
+          ['OpenAI / Text Embedding 3 Small', 'OpenRouter / Unranked Embed'],
+        ],
+      ]);
+      selectSearchableOption(
+        'settings-specialized-text_embedding',
+        'OpenAI / Text Embedding 3 Small',
       );
-      // The Model's options sit under Advanced.
+      expect(modelLine.dataset.recallModelLine).toBe('chosen');
+      expect(modelLine.textContent).toContain(
+        'Conversation text is sent to OpenAI to build the search index, at $0.02 per 1M tokens.',
+      );
+      // The Model's options stay folded until asked for.
       await waitForCondition(() =>
-        recallElement('#task-model-text_embedding-dimensions'),
+        recallElement('#settings-recall-model-options-toggle'),
       );
+      expect(recallElement('#task-model-text_embedding-dimensions')).toBeNull();
+      recallElement('#settings-recall-model-options-toggle').click();
+      flushSync();
+      expect(
+        recallElement('#task-model-text_embedding-dimensions'),
+      ).toBeTruthy();
 
       // One save state covers the backend and the embedding binding.
       getButton('Save').click();
@@ -1057,9 +1073,11 @@ describe('SettingsView', () => {
         () => saveStateText('recall') === t('common.saved'),
       );
 
-      // Saving reads the status again; pushed updates replace it.
+      // Saving reads the status again; nothing indexed offers no rebuild.
       await waitForCondition(() => indexRow.hidden === false);
       expect(indexRow.textContent).toContain(t('settings.recall.status.empty'));
+      expect(indexRow.textContent).not.toContain(t('settings.recall.rebuild'));
+      // Pushed updates replace it.
       props.recallIndexStatus = recallIndexStatusPayload({
         state: 'indexing',
         indexed: 812,
@@ -1072,13 +1090,13 @@ describe('SettingsView', () => {
         'Indexing: 812 of 995 passages · about 400K tokens waiting (~$0.004)',
       );
 
-      meaningSwitch.click();
-      flushSync();
+      openSimpleDropdown('settings-recall-backend');
+      selectSimpleOption('settings-recall-backend', 'Keywords');
       expect(modelRow.hidden).toBe(true);
       expect(indexRow.hidden).toBe(true);
     });
 
-    it('installs a local embedding model in place and offers it once ready', async () => {
+    it('installs a local embedding model once when it is chosen, then uses it', async () => {
       const settings = settingsPayload();
       settings.recall = {
         backend: 'hybrid',
@@ -1096,34 +1114,47 @@ describe('SettingsView', () => {
         },
       });
       await openRecallPanel();
-      const granite = () => embeddingChoice('local/granite-embedding-r2');
-      await waitForCondition(() =>
-        granite()?.querySelector('[data-local-install="missing"]'),
+      await waitForCondition(
+        () => !getSimpleTrigger('settings-specialized-text_embedding').disabled,
       );
-      expect(granite().querySelector('input').disabled).toBe(true);
-      expect(granite().textContent).toContain(
-        'Not set up on this computer yet.',
-      );
-      expect(granite().textContent).toContain(
-        '347 MB download · Apache-2.0 license',
+      await openSearchableDropdown('settings-specialized-text_embedding');
+      const granite = Array.from(
+        document.body.querySelectorAll('.searchable-dropdown__option'),
+      ).find((option) => option.textContent.includes('Granite'));
+      expect(granite.disabled).toBe(false);
+      expect(granite.textContent).toContain('Not installed · 347 MB');
+      selectSearchableOption(
+        'settings-specialized-text_embedding',
+        'Granite Embedding R2',
       );
 
+      // Choosing it opens its installation instead of selecting it.
+      await waitForCondition(() =>
+        installDialog()?.querySelector('[data-local-install="missing"]'),
+      );
+      const dialog = document.body.querySelector('.modal');
+      expect(dialog.textContent).toContain('Install Granite Embedding R2');
+      expect(dialog.textContent).toContain(
+        '347 MB download · Apache-2.0 license',
+      );
+      expect(
+        getSimpleTrigger('settings-specialized-text_embedding').textContent,
+      ).toContain(t('settings.recall.model.placeholder'));
+
       vi.useFakeTimers();
-      [...granite().querySelectorAll('button')]
-        .find((button) => button.textContent.trim() === 'Install')
-        .click();
+      buttonByText('Install').click();
       await flushAsyncUpdates();
       expect(rpcMock).toHaveBeenCalledWith('task_model.local_setup_install', {
         target: 'local/granite-embedding-r2',
       });
       expect(
-        granite()
+        dialog
           .querySelector('[role="progressbar"]')
           .getAttribute('aria-valuenow'),
       ).toBe('34');
-      expect(granite().textContent).toContain('120 MB of 347 MB');
+      expect(dialog.textContent).toContain('120 MB of 347 MB');
 
-      // The finished installation makes the Model selectable.
+      // The finished installation closes the dialog and chooses the Model.
       localSetups.set('local/granite-embedding-r2', {
         state: 'ready',
         phase: 'verifying',
@@ -1132,11 +1163,16 @@ describe('SettingsView', () => {
       });
       await vi.advanceTimersByTimeAsync(1500);
       await flushAsyncUpdates(20);
-      expect(granite().querySelector('input').disabled).toBe(false);
-      expect(granite().querySelector('[data-local-install]')).toBeNull();
+      expect(document.body.querySelector('.modal')).toBeNull();
+      expect(
+        getSimpleTrigger('settings-specialized-text_embedding').textContent,
+      ).toContain('Granite Embedding R2');
+      expect(recallElement('[data-recall-model-line]').textContent).toContain(
+        'Runs on this computer, free. Conversation text stays here.',
+      );
     });
 
-    it('opens Advanced for a meaning-only backend and rebuilds a failed index after confirmation', async () => {
+    it('shows a stored meaning-only method and rebuilds a failed index after confirmation', async () => {
       const settings = settingsPayload();
       settings.recall = {
         backend: 'vector',
@@ -1166,29 +1202,23 @@ describe('SettingsView', () => {
       });
       await openRecallPanel();
 
-      expect(
-        recallElement('#settings-recall-meaning').getAttribute('aria-checked'),
-      ).toBe('true');
-      expect(recallElement('#settings-recall-advanced').hidden).toBe(false);
       expect(getSimpleTrigger('settings-recall-backend').textContent).toContain(
-        t('settings.recall.backends.vector'),
+        'Meaning only',
       );
-      // The selected Model stays in the short list though it has no rank.
       await waitForCondition(() =>
-        embeddingChoice('openrouter/unranked-embed'),
+        getSimpleTrigger(
+          'settings-specialized-text_embedding',
+        ).textContent.includes('OpenRouter / Unranked Embed'),
       );
-      expect(
-        embeddingChoice('openrouter/unranked-embed').querySelector('input')
-          .checked,
-      ).toBe(true);
-      expect(recallElement('#settings-recall-all-models').hidden).toBe(true);
+      // A Model without options offers no options disclosure.
+      expect(recallElement('#settings-recall-model-options-toggle')).toBeNull();
       const indexRow = recallElement('[data-recall-index]');
       await waitForCondition(() => indexRow.dataset.recallIndex === 'error');
       expect(
         indexRow.querySelector('[data-recall-index-problem]').textContent,
       ).toContain(t('settings.recall.indexError.provider_auth'));
 
-      getButton(t('settings.recall.rebuild')).click();
+      buttonByText(t('settings.recall.rebuild')).click();
       flushSync();
       expect(document.body.textContent).toContain(
         t('settings.recall.rebuildTitle'),
