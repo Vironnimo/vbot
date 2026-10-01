@@ -14,18 +14,25 @@ any test: the selection is then the complete suite, whose run records afresh.
 from __future__ import annotations
 
 import contextlib
+import copy
 import json
 import os
 import sqlite3
+import subprocess
+import tomllib
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from tests.file_dependencies import COLLECTION, DATA_FILE, TESTMON_DATA, recorded_path
 
-# Changes that can affect any test: pytest and plugin configuration.
-FULL_SUITE_TRIGGERS = frozenset({"pyproject.toml"})
+PYPROJECT = "pyproject.toml"
+# pyproject.toml tables whose change can affect any test: the pytest options and
+# the configuration of the coverage tracer that pytest-testmon records with.
+TEST_RUN_CONFIGURATION = (("tool", "pytest"), ("tool", "coverage"))
+# pyproject.toml tables that only Ruff and mypy read, outside every test run.
+STATIC_CHECK_CONFIGURATION = (("tool", "ruff"), ("tool", "mypy"))
 _CODE_SUFFIXES = (".py", ".pyi")
 # Stay below SQLite's limit on the parameters of one statement.
 _CHUNK = 500
@@ -207,8 +214,10 @@ def select(root: Path, changed: Iterable[str] | None, records: Path | None = Non
     *root*); *changed* are the paths that differ from that state, None when that
     state is unknown. Changed Python code selects through pytest-testmon's record
     of the code each test executed; any other changed file selects the tests that
-    read it. A test that failed in its last run is selected whatever changed, until
-    it passes. Records that are missing, unreadable or without a tested state
+    read it. ``pyproject.toml`` selects by the tables that changed: its test run
+    configuration every test, its Ruff and mypy configuration none, anything else
+    its readers. A test that failed in its last run is selected whatever changed,
+    until it passes. Records that are missing, unreadable or without a tested state
     select every test.
     """
     records = records or root
@@ -230,19 +239,75 @@ def _select(root: Path, changed: Iterable[str] | None, records: Path) -> Selecti
         return Selection(frozenset(), durations, True, reason)
     changed = set(changed)
     data_files = {path for path in changed if not path.endswith(_CODE_SUFFIXES)}
+    if PYPROJECT in data_files:
+        affected_tests = _affected_by_pyproject(root, records)
+        if affected_tests == "every test":
+            reason = f"{PYPROJECT} changed in a way that can affect every test"
+            return Selection(frozenset(), durations, True, reason)
+        if affected_tests == "no test":
+            data_files.discard(PYPROJECT)
     tests = readers(root, data_files, records)
-    triggers = sorted(FULL_SUITE_TRIGGERS & data_files)
-    if triggers:
-        return Selection(frozenset(), durations, True, f"{triggers[0]} changed")
     if COLLECTION in tests:
         reason = "a file that test modules read while they are imported changed"
         return Selection(frozenset(), durations, True, reason)
-    if len(data_files) < len(changed):
+    if any(path.endswith(_CODE_SUFFIXES) for path in changed):
         affected = _affected_by_code(root, records)
         if isinstance(affected, str):
             return Selection(frozenset(), durations, True, affected)
         tests |= affected
     return Selection(frozenset(tests | failed), durations, complete=False)
+
+
+def _affected_by_pyproject(
+    root: Path, records: Path
+) -> Literal["every test", "its readers", "no test"]:
+    """Return which tests the change of *root*'s ``pyproject.toml`` can affect.
+
+    It is judged against the file in the state *records* describe. A change to the
+    test run configuration can affect every test, a change only to the Ruff and mypy
+    configuration none, and any other change the tests that read the file. A file
+    that cannot be compared (not in that state, or unreadable now) affects every test.
+    """
+    state = tested_state(records)
+    if state is None or PYPROJECT in state[1]:
+        return "every test"
+    try:
+        tested = subprocess.run(
+            ["git", "cat-file", "blob", f"{state[0]}:{PYPROJECT}"],
+            cwd=root,
+            capture_output=True,
+            check=True,
+        ).stdout
+        before = tomllib.loads(tested.decode("utf-8"))
+        after = tomllib.loads((root / PYPROJECT).read_text(encoding="utf-8"))
+    except (OSError, subprocess.CalledProcessError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return "every test"
+    if any(_table(before, key) != _table(after, key) for key in TEST_RUN_CONFIGURATION):
+        return "every test"
+    ignored = (*TEST_RUN_CONFIGURATION, *STATIC_CHECK_CONFIGURATION)
+    if _without(before, ignored) != _without(after, ignored):
+        return "its readers"
+    return "no test"
+
+
+def _table(document: dict[str, Any], key: tuple[str, ...]) -> Any:
+    """Return the value at the dotted *key* of a TOML *document*, None when absent."""
+    value: Any = document
+    for part in key:
+        if not isinstance(value, dict):
+            return None
+        value = value.get(part)
+    return value
+
+
+def _without(document: dict[str, Any], keys: Iterable[tuple[str, ...]]) -> dict[str, Any]:
+    """Return a copy of a TOML *document* without the tables at *keys*."""
+    remainder = copy.deepcopy(document)
+    for *parents, name in keys:
+        table = _table(remainder, tuple(parents))
+        if isinstance(table, dict):
+            table.pop(name, None)
+    return remainder
 
 
 def _affected_by_code(root: Path, records: Path) -> set[str] | str:

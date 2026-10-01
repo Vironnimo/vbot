@@ -332,6 +332,20 @@ IMPACT_PROJECT = {
         "def test_git_repository(tmp_path):\n"
         '    subprocess.run(["git", "init", "-q", "--bare"], cwd=tmp_path, check=True)\n'
     ),
+    # pytest.ini configures the runs; these tables are what a change selects by.
+    "pyproject.toml": (
+        '[project]\nname = "impact"\nversion = "1.0"\n\n'
+        '[tool.pytest.ini_options]\naddopts = ""\n\n'
+        "[tool.ruff]\nline-length = 100\n"
+    ),
+    "test_version.py": (
+        "import tomllib\n"
+        "from pathlib import Path\n"
+        "\n"
+        "\n"
+        "def test_version():\n"
+        '    assert tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]\n'
+    ),
 }
 HARMLESS_CALC = "def double(x):\n    return x * 2\n\n\ndef half(x):\n    return x / 2\n"
 BROKEN_CALC = "def double(x):\n    return x * 3\n"
@@ -488,6 +502,46 @@ def test_a_checkout_without_usable_test_impact_data_runs_the_complete_suite(
     if records == "corrupt":
         # testmon cannot open it: the complete run starts without it and records afresh.
         assert not testmon_data.exists()
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "selected"),
+    [
+        ('addopts = ""', 'addopts = "-x"', None),
+        ('version = "1.0"', 'version = "1.1"', ["test_version.py"]),
+        ("line-length = 100", "line-length = 120", []),
+    ],
+    ids=["test run configuration", "read by tests", "static checks only"],
+)
+def test_pyproject_change_runs_the_tests_it_can_affect(
+    impact_project: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old: str,
+    new: str,
+    selected: list[str] | None,
+) -> None:
+    # The pytest command is recorded instead of started; None selects every test.
+    commands: list[list[str]] = []
+
+    def run(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> Any:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(commit_check, "_run", run)
+    _write(impact_project, "pyproject.toml", IMPACT_PROJECT["pyproject.toml"].replace(old, new))
+    _git(impact_project, "add", "pyproject.toml")
+
+    _check_tests(impact_project)
+
+    if selected is None:
+        [command] = commands
+        assert command[-2:] == ["-n", str(cpu_pool.check_cores())]
+    elif not selected:
+        assert commands == []
+    else:
+        [command] = commands
+        arguments = Path(command[-1].removeprefix("@")).read_text(encoding="utf-8")
+        assert arguments.split() == selected
 
 
 @pytest.mark.parametrize(
