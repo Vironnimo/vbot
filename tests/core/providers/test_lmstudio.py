@@ -68,9 +68,31 @@ def test_native_llm_entry_preserves_local_capabilities() -> None:
     assert model.capabilities.reasoning.control == REASONING_CONTROL_ON_OFF
 
 
-def test_non_chat_entry_is_skipped() -> None:
+def test_native_embedding_entry_becomes_a_local_embedding_model() -> None:
+    # Native /api/v1/models embedding entry (trimmed); it carries no capabilities.
+    model = LMStudioAdapter.normalize_catalog_entry(
+        {
+            "type": "embedding",
+            "key": "text-embedding-nomic-embed-text-v1.5",
+            "display_name": "Nomic Embed Text v1.5",
+            "publisher": "nomic-ai",
+            "architecture": "nomic-bert",
+            "max_context_length": 2048,
+        }
+    )
+
+    assert (model.model_id, model.name, model.context_window) == (
+        "text-embedding-nomic-embed-text-v1.5",
+        "Nomic Embed Text v1.5",
+        2048,
+    )
+    assert model.capabilities.task_types == ("text_embedding",)
+    assert model.metadata["lmstudio"] == {"local": True}
+
+
+def test_entry_of_another_type_is_skipped() -> None:
     with pytest.raises(CatalogEntrySkipped):
-        LMStudioAdapter.normalize_catalog_entry({"type": "embedding", "key": "nomic-embed"})
+        LMStudioAdapter.normalize_catalog_entry({"type": "tts", "key": "kokoro"})
 
 
 @pytest.mark.parametrize(

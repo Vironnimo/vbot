@@ -6,7 +6,7 @@ LM Studio is a keyless local Provider that combines its native Model-management 
 
 The bundled `lmstudio` Provider points at `http://localhost:1234` and exposes one `local` Connection (`type: none`, `auto_refresh: true`). It follows the shared keyless addition contract in `providers/connections.md`: before addition it is passive and appears only in Add Provider; adding enables the Connection and refreshes its catalog without loading a Model.
 
-Discovery uses native `GET /api/v1/models`, not the sparse OpenAI-compatible Model list. `LMStudioAdapter.normalize_catalog_entry()` keeps only `type: llm`, maps `key`/`display_name`, vision, Tool training, binary reasoning support, architecture, and `max_context_length`, and stamps `metadata.lmstudio.local: true` so the shared local context policy applies.
+Discovery uses native `GET /api/v1/models`, not the sparse OpenAI-compatible Model list. `LMStudioAdapter.normalize_catalog_entry()` keeps `type: llm` and `type: embedding` entries, maps `key`/`display_name`, architecture, and `max_context_length`, plus vision, Tool training, and binary reasoning support for `llm` entries, and stamps `metadata.lmstudio.local: true` so the shared local context policy applies. An `embedding` entry becomes a text embedding Model (see `providers/catalog-discovery.md`), never a chat Model.
 
 ## Chat and model loading
 
@@ -19,6 +19,6 @@ Model loading is transport behavior only. It emits no Provider-specific Chat mes
 ## Constraints and verification
 
 - LM Studio's native `/api/v1/chat` is not used because vBot needs the complete existing Chat Completions message and Tool contract.
-- The native API also advertises embedding Models, but this Chat Provider catalog intentionally skips them; specialized embedding execution has a separate domain and lifecycle.
+- Embedding requests go to the OpenAI-compatible `POST /v1/embeddings` through the shared task client (`model_tasks/embeddings.md`), which does not call the native load endpoint. Whether LM Studio loads an unloaded embedding Model on demand for that endpoint (its just-in-time loading setting) has not been verified live.
 - Real-hardware verification must avoid loading LM Studio and Ollama Models simultaneously on constrained hosts. That is a test-execution constraint, not runtime coordination policy.
 - Focused coverage lives in `tests/core/providers/test_lmstudio.py`, Provider discovery/runtime tests, and Settings Provider tests.

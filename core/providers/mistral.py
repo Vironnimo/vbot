@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
 from core.providers._chat_completions_catalog import (
     _parse_optional_int,
     _read_optional_non_empty_string,
@@ -47,6 +53,9 @@ MISTRAL_METADATA_KEY = "mistral"
 PROMPT_MODE_METADATA_KEY = "prompt_mode"
 PROMPT_MODE_REASONING = "reasoning"
 MISTRAL_CONTENT_CHUNKS_META_KEY = "content_chunks"
+# Mistral's catalog has no embedding capability flag; its embedding Models are
+# the non-chat ``*-embed`` ids (``mistral-embed``, ``codestral-embed-2505``).
+_EMBEDDING_MODEL_ID = re.compile(r"(?:^|-)embed(?:-|$)")
 
 
 def _flatten_thinking(value: Any) -> str:
@@ -87,12 +96,22 @@ class MistralAdapter(OpenAICompatibleAdapter):
         if not isinstance(capabilities_raw, dict):
             capabilities_raw = {}
 
-        if raw.get("archived") is True or capabilities_raw.get("completion_chat") is not True:
-            raise CatalogEntrySkipped(f"Skipped non-chat model: {raw.get('id')}")
-
+        if raw.get("archived") is True:
+            raise CatalogEntrySkipped(f"Skipped archived model: {model_id}")
         # Absent → ``None`` (honest "unknown"), filled by the read-side default
         # chain at use time — no fake ``0`` written into the catalog.
         context_window = _parse_optional_int(raw.get("max_context_length"))
+        if capabilities_raw.get("completion_chat") is not True:
+            if not _EMBEDDING_MODEL_ID.search(model_id):
+                raise CatalogEntrySkipped(f"Skipped non-chat model: {model_id}")
+            return Model(
+                model_id=model_id,
+                name=name,
+                capabilities=text_embedding_capabilities(),
+                context_window=context_window,
+                max_output_tokens=None,
+            )
+
         reasoning_supported = capabilities_raw.get("reasoning", False) is True
         vision_supported = capabilities_raw.get("vision", False) is True
         tools_supported = capabilities_raw.get("function_calling", False) is True

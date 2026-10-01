@@ -40,7 +40,6 @@ import httpx
 
 from core.models.models import (
     REASONING_CONTROL_LEVELS,
-    Capabilities,
     Model,
 )
 from core.providers._http_shared import (
@@ -53,18 +52,16 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers._ollama_catalog import (
+    _capability_names,
     _enrich_from_show,
     _is_gpt_oss_model,
-    _ollama_reasoning_capabilities,
+    _ollama_capabilities,
     _positive_int,
 )
 from core.providers._ollama_cloud import (
     OllamaCloudAdapter,
 )
 from core.providers._ollama_constants import (
-    _CAPABILITY_THINKING,
-    _CAPABILITY_TOOLS,
-    _CAPABILITY_VISION,
     _LOGGER,
     _OPTION_KWARG_MAP,
     _SHOW_DETAIL_CONCURRENCY,
@@ -253,30 +250,13 @@ class OllamaAdapter(ProviderAdapter):
             if isinstance(family_value, str):
                 family = family_value
 
-        raw_capabilities = raw.get("capabilities")
-        capability_names = (
-            {name for name in raw_capabilities if isinstance(name, str)}
-            if isinstance(raw_capabilities, list)
-            else set()
-        )
-        tools = _CAPABILITY_TOOLS in capability_names
-        vision = _CAPABILITY_VISION in capability_names
-        thinking = _CAPABILITY_THINKING in capability_names
-
         is_remote = bool(raw.get("remote_host"))
         locality_field = REMOTE_METADATA_FIELD if is_remote else LOCAL_METADATA_FIELD
 
         return Model(
             model_id=model_id,
             name=model_id,
-            capabilities=Capabilities(
-                vision=vision,
-                tools=tools,
-                json_mode=False,
-                reasoning=_ollama_reasoning_capabilities(model_id, thinking),
-                input_modalities=("text", "image") if vision else ("text",),
-                output_modalities=("text",),
-            ),
+            capabilities=_ollama_capabilities(model_id, _capability_names(raw.get("capabilities"))),
             context_window=(
                 _positive_int(details.get("context_length"))
                 if isinstance(details, Mapping)

@@ -11,8 +11,11 @@ from core.models.models import (
     Capabilities,
     Model,
     ReasoningCapabilities,
+    text_embedding_capabilities,
 )
 from core.providers._ollama_constants import (
+    _CAPABILITY_COMPLETION,
+    _CAPABILITY_EMBEDDING,
     _CAPABILITY_THINKING,
     _CAPABILITY_TOOLS,
     _CAPABILITY_VISION,
@@ -24,36 +27,50 @@ from core.providers._ollama_constants import (
 def _enrich_from_show(model: Model, show_response: Mapping[str, Any]) -> Model:
     """Return *model* enriched with capabilities and window from ``/api/show``."""
 
-    capabilities_list = show_response.get("capabilities")
-    capability_names = (
-        {name for name in capabilities_list if isinstance(name, str)}
-        if isinstance(capabilities_list, list)
-        else set()
-    )
-
-    tools = _CAPABILITY_TOOLS in capability_names
-    vision = _CAPABILITY_VISION in capability_names
-    thinking = _CAPABILITY_THINKING in capability_names
-
-    reasoning = _ollama_reasoning_capabilities(model.model_id, thinking)
-    input_modalities = ("text", "image") if vision else ("text",)
-
     return Model(
         model_id=model.model_id,
         name=model.name,
-        capabilities=Capabilities(
-            vision=vision,
-            tools=tools,
-            json_mode=False,
-            reasoning=reasoning,
-            input_modalities=input_modalities,
-            output_modalities=("text",),
+        capabilities=_ollama_capabilities(
+            model.model_id, _capability_names(show_response.get("capabilities"))
         ),
         context_window=_context_window_from_show(show_response),
         max_output_tokens=model.max_output_tokens,
         family=model.family,
         metadata=_ollama_enriched_metadata(model),
         connections=model.connections,
+    )
+
+
+def _capability_names(raw_capabilities: Any) -> set[str]:
+    """Return the capability names of an ``/api/tags`` or ``/api/show`` entry."""
+
+    if not isinstance(raw_capabilities, list):
+        return set()
+    return {name for name in raw_capabilities if isinstance(name, str)}
+
+
+def _ollama_capabilities(model_id: str, capability_names: set[str]) -> Capabilities:
+    """Project Ollama capability names into vBot capabilities.
+
+    ``embedding`` marks a Model that returns vectors through the embeddings
+    API. Without ``completion`` it is an embedding Model only, never offered as
+    a chat Model; an entry without capability names stays a conservative
+    text Model until ``/api/show`` reports them.
+    """
+
+    embedding = _CAPABILITY_EMBEDDING in capability_names
+    if embedding and _CAPABILITY_COMPLETION not in capability_names:
+        return text_embedding_capabilities()
+    vision = _CAPABILITY_VISION in capability_names
+    return Capabilities(
+        vision=vision,
+        tools=_CAPABILITY_TOOLS in capability_names,
+        json_mode=False,
+        reasoning=_ollama_reasoning_capabilities(
+            model_id, _CAPABILITY_THINKING in capability_names
+        ),
+        input_modalities=("text", "image") if vision else ("text",),
+        output_modalities=("text", "embeddings") if embedding else ("text",),
     )
 
 

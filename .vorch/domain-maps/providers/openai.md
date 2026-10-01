@@ -11,7 +11,7 @@ Single `openai` provider covering both OpenAI Platform API-key access and ChatGP
   - `openai:api-key` - `type: api_key`, `auth.credential_key: OPENAI_API_KEY`, `base_url` defaults to the provider-level OpenAI Platform URL. Per-Model `metadata.openai.wire_policies.api-key.protocol` selects public Responses; absent metadata keeps the conservative `/chat/completions` fallback.
   - `openai:subscription` - `type: oauth`, `base_url: https://chatgpt.com/backend-api`, `mode: codex_responses`, `models_endpoint: /codex/models`. ChatGPT Plus/Pro Codex OAuth device flow.
 - Runtime endpoints: `POST <base_url>/chat/completions` or `POST <base_url>/responses` (api-key, selected per Model); subscription Runs prefer `WS(S) <base_url>/codex/responses` and retain `POST <base_url>/codex/responses` SSE as the compatibility path.
-- Catalog: the provider has no provider-level `models_endpoint`. Only the `subscription` connection carries `models_endpoint`; refresh of the `api-key` connection is not supported in this provider.
+- Catalog: the provider has no provider-level `models_endpoint`. `subscription` discovers the Codex catalog at `/codex/models`; `api-key` discovers `GET /v1/models` only for its embedding Models (see Response And Catalog Normalization). Its chat, speech, image, and Live Voice Models stay curated in `openai.overrides.json`.
 
 ## Connection Configuration
 
@@ -137,7 +137,8 @@ The public Model pages and API changelog document `gpt-6-sol` and `gpt-6-luna` o
 - Malformed Tool Call argument JSON produces a canonical rejected Call instead of fake empty arguments; valid sibling Calls are preserved. The shared canonical normalization contract applies to both Responses and Chat Completions.
 - Generic `/models` entries may expose modalities, supported parameters, context windows, and output limits through raw fields, `architecture`, or `top_provider`. Normalize discoverable facts into `Model.capabilities` and `Model.metadata`; do not treat sparse catalogs as negative evidence for every missing capability.
 - Missing per-model output-token limits remain `max_output_tokens: null`; request fallback limits come from provider defaults such as `max_tokens: 8192`.
-- `OpenAIAdapter.normalize_catalog_entry()` preserves provider-discovered ids, names, modalities, and limits, and normalizes capability parameters to vBot runtime names such as `tools`, `response_format`, `reasoning`, and `parallel_tool_calls`. Today only the `subscription` connection runs discovery; if `api-key` ever gains a `models_endpoint`, the adapter normalization must be reviewed for that path.
+- `OpenAIAdapter.normalize_catalog_entry()` preserves provider-discovered ids, names, modalities, and limits, and normalizes capability parameters to vBot runtime names such as `tools`, `response_format`, `reasoning`, and `parallel_tool_calls`.
+- Platform discovery (`api-key`, `GET /v1/models`) lists bare ids with no capability facts. The Codex discovery hooks (account routing, Codex headers, `client_version`) apply only to a `codex_responses` Connection, so this request carries just the API key. `accepts_discovered_model` keeps only `text-embedding-*` ids, which normalize to text embedding Models (`dimensions` only for `text-embedding-3-*`); price and limits arrive from the models.dev `openai` section during refresh. Every other Platform Model stays curated. A curated Model that also has a generated `api-key` entry needs a `canonical` pointer in its override (as `gpt-5.2` has), because an `api-key` refresh replaces the generated `api-key` entries and the override alone must still load. xAI and OpenCode Zen inherit this Adapter but accept every entry of their own listings.
 
 ## Codex Catalog (`/codex/models`)
 

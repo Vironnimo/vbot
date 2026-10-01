@@ -101,7 +101,7 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 ## Constraints & Gotchas
 
 - Do not replace this composite Adapter with a generic OpenAI-compatible JSON entry: header selection, Gemini translation/signature replay, Messages caching, terminal outcomes, exact routing, and Zen error semantics are genuine Provider policy.
-- Do not inherit OpenAI Codex discovery query parameters or ChatGPT account headers merely because the outer Adapter extends `OpenAIAdapter`; Zen explicitly overrides discovery parameters and headers.
+- Do not inherit OpenAI Codex discovery query parameters or ChatGPT account headers merely because the outer Adapter extends `OpenAIAdapter`; the inherited hooks apply them only to a `codex_responses` Connection, and Zen overrides `accepts_discovered_model` to keep every entry instead of the OpenAI Platform's embedding-only filter.
 - The public catalog proves presence, not entitlement, regional availability, Tool correctness, caching, or successful inference. Regression tests use mocked provider responses; the dated live checks above cover authentication, route establishment, and free-tier rejection only. The remaining full capability probes are tracked in `.vorch/FLAGGED.md`.
 
 ## Official Sources

@@ -64,7 +64,7 @@ from core.providers.errors import (
 )
 from core.providers.openai import OPENAI_RESPONSES_PROTOCOL, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
@@ -161,23 +161,15 @@ class OpenCodeZenAdapter(OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols."""
 
     @classmethod
-    async def resolve_discovery_params(cls, fetch_json: Any) -> dict[str, str]:
-        """Zen's public Model listing has no Codex client-version query."""
-
-        del cls, fetch_json
-        return {}
-
-    @classmethod
-    def discovery_headers(
+    def accepts_discovered_model(
         cls,
-        _provider_config: ProviderConfig,
-        _credential_value: str,
-        headers: Mapping[str, str],
-    ) -> dict[str, str]:
-        """Use the selected Zen Connection header without OpenAI account routing."""
+        raw: Mapping[str, Any],
+        connection: ConnectionConfig | None,
+    ) -> bool:
+        """Keep every entry of Zen's Model listing."""
 
-        del cls
-        return dict(headers)
+        del cls, raw, connection
+        return True
 
     def __init__(
         self,

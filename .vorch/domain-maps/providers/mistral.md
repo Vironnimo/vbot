@@ -21,9 +21,9 @@ OpenAI-style runtime provider with Mistral-specific reasoning and model catalog 
 
 ## Catalog Normalization
 
-- Keeps only active chat models where `capabilities.completion_chat == true` and the model is not archived; skipped entries raise `CatalogEntrySkipped` for discovery to ignore.
+- Keeps active (not archived) chat models where `capabilities.completion_chat == true`, plus non-chat `*-embed` ids (`mistral-embed`, `codestral-embed`), which become text embedding Models because the catalog has no embedding capability flag. Other entries raise `CatalogEntrySkipped` for discovery to ignore.
 - Maps vision from `capabilities.vision`, tools from `capabilities.function_calling`, reasoning from `capabilities.reasoning`, and audio transcription from `capabilities.audio_transcription`.
-- Persists normalized input/output modalities, supported parameters, and chat-oriented task types.
+- Persists normalized input/output modalities, supported parameters, and task types (chat-oriented, or only `text_embedding` for embedding Models).
 - `context_window` comes from `max_context_length`.
 - `/models` does not provide per-model max output limits, so normalized `max_output_tokens` stays `null`; runtime requests still use provider defaults such as `max_tokens: 8192`.
 

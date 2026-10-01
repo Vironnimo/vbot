@@ -109,6 +109,45 @@ def test_current_tags_facts_are_used_before_show_enrichment() -> None:
     assert model.capabilities.input_modalities == ("text", "image")
 
 
+@pytest.mark.parametrize(
+    ("capabilities", "task_types"),
+    [
+        pytest.param(["embedding"], ("text_embedding",), id="embedding-only"),
+        pytest.param(
+            ["completion", "embedding"], ("chat", "text_output", "text_embedding"), id="both"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_embedding_capability_tags_the_model_for_text_embedding(
+    capabilities: list[str], task_types: tuple[str, ...]
+) -> None:
+    tags_model = OllamaAdapter.normalize_catalog_entry(
+        {
+            "model": "nomic-embed-text:latest",
+            "details": {"family": "nomic-bert"},
+            "capabilities": capabilities,
+        }
+    )
+    untagged = OllamaAdapter.normalize_catalog_entry(
+        {"model": "nomic-embed-text:latest", "details": {"family": "nomic-bert"}}
+    )
+    show = {
+        "capabilities": capabilities,
+        "model_info": {"general.architecture": "nomic-bert", "nomic-bert.context_length": 2048},
+    }
+
+    enriched = await OllamaAdapter.enrich_discovered_models(
+        {"nomic-embed-text:latest": untagged}, _show(show)
+    )
+
+    # Both catalog paths read the capability; locality stays stamped.
+    for model in (tags_model, enriched["nomic-embed-text:latest"]):
+        assert set(model.capabilities.task_types) == set(task_types)
+        assert model.metadata["ollama"] == {"local": True}
+    assert enriched["nomic-embed-text:latest"].context_window == 2048
+
+
 def test_tags_entry_without_model_id_raises() -> None:
     with pytest.raises(ProviderError):
         OllamaAdapter.normalize_catalog_entry({"details": {}})

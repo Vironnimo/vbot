@@ -14,7 +14,12 @@ from typing import TYPE_CHECKING, Any, cast
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
 from core.providers._codex_websocket import (
     CodexWebSocket,
     _CodexWebSocketTransportError,
@@ -195,9 +200,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         _provider_config: ProviderConfig,
         credential_value: str,
         headers: Mapping[str, str],
+        *,
+        connection: ConnectionConfig | None = None,
     ) -> dict[str, str]:
-        """Add ChatGPT account routing and Codex headers for ``/codex/models``."""
+        """Add ChatGPT account routing and Codex headers for ``/codex/models``.
 
+        The Platform ``/models`` listing needs only the Connection's API key.
+        """
+
+        if not _is_codex_connection(connection):
+            return dict(headers)
         account_id = extract_chatgpt_account_id(credential_value)
         if account_id is None:
             raise ProviderAuthError(
@@ -206,18 +218,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return {**headers, "chatgpt-account-id": account_id, **CODEX_EXTRA_HEADERS}
 
     @classmethod
-    def discovery_params(cls) -> dict[str, str]:
+    def discovery_params(cls, *, connection: ConnectionConfig | None = None) -> dict[str, str]:
         """Return safe fallback parameters required by ``/codex/models`` discovery."""
 
+        if not _is_codex_connection(connection):
+            return {}
         return {"client_version": CODEX_CLIENT_VERSION_FALLBACK}
 
     @classmethod
     async def resolve_discovery_params(
         cls,
         fetch_json: Callable[[str], Awaitable[Any]],
+        *,
+        connection: ConnectionConfig | None = None,
     ) -> dict[str, str]:
         """Resolve the current stable Codex version used to gate the model catalog."""
 
+        if not _is_codex_connection(connection):
+            return {}
         payload = await fetch_json(CODEX_PACKAGE_METADATA_URL)
         if not isinstance(payload, Mapping) or payload.get("name") != "@openai/codex":
             raise ValueError("Codex package metadata has an unexpected shape")
@@ -232,12 +250,18 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         connection: ConnectionConfig | None,
     ) -> bool:
-        """Exclude Codex catalog entries that OpenAI marks as hidden."""
+        """Keep visible Codex entries and the Platform's embedding Models.
+
+        The Platform ``/models`` listing carries ids only; its chat, speech
+        and image Models are curated in ``openai.overrides.json``. Discovery
+        adds just the ``text-embedding-*`` Models, whose id is the fact.
+        """
 
         del cls
-        if getattr(connection, "mode", None) != CODEX_RESPONSES_MODE:
-            return True
-        return raw.get("visibility") != "hide"
+        if _is_codex_connection(connection):
+            return raw.get("visibility") != "hide"
+        model_id = raw.get("id")
+        return isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX)
 
     @classmethod
     def normalize_catalog_entry(
@@ -245,8 +269,20 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one OpenAI Subscription ``/codex/models`` entry."""
+        """Normalize one Codex ``/codex/models`` or Platform embedding entry."""
 
+        model_id = raw.get("id")
+        if isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX):
+            # Only the third generation supports shortened vectors (``dimensions``).
+            return Model(
+                model_id=model_id,
+                name=model_id,
+                capabilities=text_embedding_capabilities(
+                    ("dimensions",) if model_id.startswith("text-embedding-3-") else ()
+                ),
+                context_window=None,
+                max_output_tokens=None,
+            )
         normalized_raw = _normalize_catalog_raw(raw)
         base_model = OpenAICompatibleAdapter.normalize_catalog_entry(normalized_raw, defaults)
         capabilities = _optional_mapping(normalized_raw.get("capabilities"))
@@ -955,3 +991,13 @@ def _responses_stream_state() -> ResponsesStreamState:
     stay fatal; Chat's recovery budget bounds the retries.
     """
     return ResponsesStreamState(lenient_unknown_errors=True, rejected_requests_fatal=True)
+
+
+# Platform embedding Model ids; the ``/models`` listing has no other fact.
+_PLATFORM_EMBEDDING_PREFIX = "text-embedding-"
+
+
+def _is_codex_connection(connection: ConnectionConfig | None) -> bool:
+    """Return whether discovery targets the ChatGPT subscription Codex catalog."""
+
+    return getattr(connection, "mode", None) == CODEX_RESPONSES_MODE

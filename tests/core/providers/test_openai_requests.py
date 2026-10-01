@@ -374,8 +374,10 @@ async def test_codex_sse_cache_scope_headers_follow_the_request_context(
 
 
 def test_codex_discovery_headers_add_account_routing_and_beta_headers() -> None:
+    config = subscription_config()
+    connection = config.connections[0]
     headers = OpenAIAdapter.discovery_headers(
-        subscription_config(), jwt_with_account(), {"User-Agent": "vbot-test"}
+        config, jwt_with_account(), {"User-Agent": "vbot-test"}, connection=connection
     )
 
     assert headers == {
@@ -384,7 +386,7 @@ def test_codex_discovery_headers_add_account_routing_and_beta_headers() -> None:
         **CODEX_EXTRA_HEADERS,
     }
     with pytest.raises(ProviderAuthError):
-        OpenAIAdapter.discovery_headers(subscription_config(), "not-a-jwt", {})
+        OpenAIAdapter.discovery_headers(config, "not-a-jwt", {}, connection=connection)
 
 
 # ---------------------------------------------------------------------------
