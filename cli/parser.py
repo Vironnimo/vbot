@@ -117,9 +117,8 @@ class _CliParser(argparse.ArgumentParser):
 
     def _parse_optional(self, arg_string):
         result = super()._parse_optional(arg_string)
-        # Python 3.14 returns a list of interpretations; older supported versions a tuple.
-        interpretations = result if isinstance(result, list) else [result]
-        if result is not None and all(item[0] is None for item in interpretations):
+        # A list of (action, option string, separator, explicit argument) interpretations.
+        if result is not None and all(item[0] is None for item in result):
             self._unknown_options.append(arg_string.split("=", 1)[0])
         return result
 
