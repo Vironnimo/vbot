@@ -86,11 +86,13 @@ step() { status_line WORK "$1"; }
 
 # Preserve every setup line in the log, exposing phases and elapsed time live.
 show_setup_progress() {
+    # $1: seconds without a new phase before an elapsed-time update (default 10).
+    local report_seconds="${1:-10}"
     local line="" pending="" read_status=0 phase="Installing and configuring vBot"
     local started=$SECONDS last_report=$SECONDS
     while true; do
         line=""
-        if IFS= read -r -t 10 line; then read_status=0; else read_status=$?; fi
+        if IFS= read -r -t "$report_seconds" line; then read_status=0; else read_status=$?; fi
         pending+="$line"
         if [ "$read_status" -eq 0 ] || [ "$read_status" -eq 1 ]; then
             if [ "$read_status" -eq 0 ] || [ -n "$pending" ]; then
@@ -107,7 +109,7 @@ show_setup_progress() {
             pending=""
         fi
         [ "$read_status" -ne 1 ] || break
-        if [ $((SECONDS - last_report)) -ge 10 ]; then
+        if [ $((SECONDS - last_report)) -ge "$report_seconds" ]; then
             step "$phase ($((SECONDS - started))s elapsed)"
             last_report=$SECONDS
         fi

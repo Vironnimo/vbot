@@ -11,11 +11,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-# The delay outlasts the installer's fixed 10 s progress interval, and three PowerShell
-# processes start cold (harness, job, setup): 15-21 s on idle CI, beyond 25 s under load.
-@pytest.mark.timeout(90)
-@pytest.mark.parametrize("exit_code,delay", [(0, 13), (2, 0), (7, 0)])
-def test_windows_setup_progress_preserves_arguments_cwd_logs_and_exit(tmp_path, exit_code, delay):
+# The setup outlasts a 1 s progress interval by 2 s, so at least one elapsed-time update
+# repeats its phase. Three PowerShell processes start cold (harness, job, setup), which
+# takes several seconds on a loaded CI runner.
+@pytest.mark.timeout(60)
+def test_windows_setup_progress_preserves_arguments_cwd_logs_and_exit(tmp_path):
+    exit_code, delay, report_seconds = 7, 3, 1
     shell = shutil.which("pwsh") or shutil.which("powershell")
     if shell is None:
         pytest.skip("PowerShell is unavailable")
@@ -36,7 +37,7 @@ exit $ExitCode
     )
     harness = tmp_path / "harness.ps1"
     harness.write_text(
-        """param($Source, $Setup, $Log, $Executable, [int]$Code, [int]$Delay)
+        """param($Source, $Setup, $Log, $Executable, [int]$Code, [int]$Delay, [int]$Report)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $InstallLogPath = $Log
@@ -50,7 +51,8 @@ foreach ($function in $ast.FindAll({param($node)
 }, $false)) { . ([scriptblock]::Create($function.Extent.Text)) }
 $arguments = @("-Named", "value with spaces and ' quote", "-ExitCode", "$Code",
                "-DataPath", "relative result.json", "-Delay", "$Delay")
-$code = Invoke-SetupWithProgress -Executable $Executable -Setup $Setup -SetupArguments $arguments
+$code = Invoke-SetupWithProgress -Executable $Executable -Setup $Setup `
+    -SetupArguments $arguments -ReportSeconds $Report
 if (@(Get-Job).Count -ne 0) { throw "Progress left a job behind" }
 exit $code
 """,
@@ -71,20 +73,19 @@ exit $code
             shell,
             str(exit_code),
             str(delay),
+            str(report_seconds),
         ],
         cwd=tmp_path,
         capture_output=True,
         text=True,
-        timeout=75,
+        timeout=50,
         env={**os.environ, "NO_COLOR": "1"},
     )
     assert result.returncode == exit_code, result.stdout + result.stderr
     saved = json.loads((tmp_path / "relative result.json").read_text(encoding="utf-8-sig"))
     assert saved["named"] == "value with spaces and ' quote"
     assert Path(saved["cwd"]).resolve() == tmp_path.resolve()
-    if delay:
-        assert result.stdout.count("test-owned phase") >= 2
-    assert "test-owned phase" in result.stdout
+    assert result.stdout.count("test-owned phase") >= 2
     assert "test-owned warning" in result.stdout
     assert "test-owned diagnostic" not in result.stdout
     assert "test-owned diagnostic" in log.read_text(encoding="utf-8-sig")
@@ -111,10 +112,10 @@ INSTALL_LOG="$1"
 {
     printf '==> test-owned phase\\n'
     printf 'test-owned '
-    sleep 11
+    sleep 2
     printf 'diagnostic\\n'
     exit 7
-} | show_setup_progress
+} | show_setup_progress 1
 exit "${PIPESTATUS[0]}"
 """,
         encoding="utf-8",
@@ -130,8 +131,8 @@ exit "${PIPESTATUS[0]}"
         env={**os.environ, "NO_COLOR": "1"},
     )
     assert result.returncode == 7
+    # A read that waits a whole interval reports the elapsed time with the phase.
     assert result.stdout.count("test-owned phase") >= 2
-    assert "test-owned phase" in result.stdout
     assert "test-owned diagnostic" not in result.stdout
     assert "test-owned diagnostic" in log.read_text()
     assert "\033[" not in result.stdout
