@@ -14,7 +14,7 @@ Every delete path archives: `agent.delete` -> `archive_agent`, `project.rm` -> `
 
 A delete with `permanent: true` archives the same way, then purges exactly the entry it created (`purge([entry_id], reason="permanent")`, `server/rpc/archive_methods.py::purge_permanently`), after the archive released the reference lock. One transactional path therefore removes the Agent, Project or Session; there is no separate erase path. When that purge does not finish, the entry stays `purging`, the delete result reports `purge_pending`, and the retention sweep continues it.
 
-`archive.list`, `archive.show`, `archive.restore` and `archive.purge` (`server/rpc/archive_methods.py`) reach the service; the CLI `vbot archive` area calls them (`cli.md`). No WebUI view exists yet.
+`archive.list`, `archive.show`, `archive.restore` and `archive.purge` (`server/rpc/archive_methods.py`) reach the service; the CLI `vbot archive` area calls them (`cli.md`), and so does the WebUI's Configure -> Archive view, whose delete dialogs also offer `permanent: true` (`webui/archive.md`).
 
 Entries whose retention period has ended are purged in the background (Retention below).
 

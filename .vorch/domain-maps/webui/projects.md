@@ -23,7 +23,7 @@ The view forwards user intent to the controller; the controller alone sequences 
 - Project selection and navigation away from Projects flush the tracked manage-project and Team-override autosaves first. If a request is already in flight, the controller reconciles its returned Project/scan into the persisted baseline without replacing newer form or Team-field values; the coordinator then submits the remaining delta before the transition proceeds.
 - Re-pointing a Project changes its configured root through the dedicated update path, then refreshes Project and scan state. It does not move files on disk.
 - List rows have a context menu built in `ProjectsView.svelte`: Copy path (through `lib/clipboard.js`), Re-point... only while `needsRePoint(project)`, then Remove... It opens the controller's existing re-point and remove dialogs for that row's Project, which need not be the shown one (`ProjectsView.test.js`).
-- Remove uses a confirmation surface and the backend's rooted-Agent handling choice. Removing a Project and deciding what happens to Project-rooted Agents are one explicit operation, not an implicit client-side cascade.
+- Remove uses a confirmation surface, the backend's rooted-Agent handling choice and the Archive option (move to the Archive or delete permanently, `webui/archive.md` -> Delete dialogs). Removing a Project and deciding what happens to Project-rooted Agents are one explicit operation, not an implicit client-side cascade.
 
 ## Scan and Team projection
 
