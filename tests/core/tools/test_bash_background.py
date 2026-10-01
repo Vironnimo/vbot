@@ -88,8 +88,22 @@ async def test_foreground_hands_off_after_its_delay_and_delivers_the_result_late
 async def test_automatic_handoff_includes_capped_output_and_usable_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.5)
+    monkeypatch.setattr(bash_module, "FOREGROUND_HANDOFF_SECONDS", 0.01)
     spool_manager = make_spool_manager(tmp_path)
+    spawn = spool_manager.spawn
+
+    async def spawn_with_output(*args: Any, **kwargs: Any) -> str:
+        # The handoff deadline starts once the output exists, however slowly the
+        # interpreter starts, so the handoff snapshot always holds it.
+        process_id = await spawn(*args, **kwargs)
+        async with asyncio.timeout(10):
+            while "HANDOFF-END" not in str(
+                (await spool_manager.snapshot(process_id, AGENT_ID))["output"]
+            ):
+                await asyncio.sleep(0.01)
+        return process_id
+
+    monkeypatch.setattr(spool_manager, "spawn", spawn_with_output)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
 
@@ -110,13 +124,10 @@ async def test_automatic_handoff_includes_capped_output_and_usable_process(
         assert data["delivery"] == "automatic"
         assert "process_note" not in data
         process_id = data["process_id"]
-        # Handoff can beat child startup or stdout collection. Its snapshot is
-        # bounded even when the command has not produced its output yet.
-        assert data.get("truncated") in {None, True}
+        assert data["truncated"] is True
         assert len(data["output"]) <= 4000
-        if "HANDOFF-END" in data["output"]:
-            assert data["truncated"] is True
-            assert "[earlier output truncated" in data["output"]
+        assert "HANDOFF-END" in data["output"]
+        assert "[earlier output truncated" in data["output"]
         log_file = Path(data["log_file"])
         assert log_file.exists()
 
