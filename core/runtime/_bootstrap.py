@@ -752,8 +752,10 @@ def _archive_services(runtime: Runtime) -> ArchiveServices:
         raise RuntimeError("Archive services are not available")
 
     def import_usage() -> None:
-        if runtime._usage_recorder is not None:
-            runtime._usage_recorder.import_session_history(sessions)
+        # A purge deletes Sessions only after their usage reached the usage ledger.
+        if runtime._usage_recorder is None:
+            raise RuntimeError("the usage ledger is not available")
+        runtime._usage_recorder.import_session_history(sessions)
 
     async def remove_agent_from_recall(agent_id: str) -> None:
         await runtime.recall.remove_agent_from_recall(agent_id)
