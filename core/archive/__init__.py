@@ -15,6 +15,7 @@ from core.archive._types import (
     RestoreOutcome,
     RestoreProblem,
     SessionArchiveOutcome,
+    SkippedPurge,
 )
 from core.archive.archive import ArchiveService, ArchiveServices
 from core.archive.errors import (
@@ -48,4 +49,5 @@ __all__ = [
     "RestoreOutcome",
     "RestoreProblem",
     "SessionArchiveOutcome",
+    "SkippedPurge",
 ]

@@ -14,7 +14,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.archive import (
+    ArchiveEntryBusyError,
     ArchiveEntryDetail,
+    ArchiveEntryNotFoundError,
     ArchiveListing,
     PurgeOutcome,
     RestoreCheck,
@@ -27,6 +29,7 @@ from core.sessions import (
     ArchiveEntryCursor,
     ArchiveEntryFilter,
 )
+from core.utils.logging import get_logger
 from core.utils.timestamps import is_canonical_timestamp
 from server.events import (
     RESOURCE_KIND_AGENTS,
@@ -49,6 +52,8 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
+
+_LOGGER = get_logger("server.rpc.archive")
 
 _LIST_LIMIT_MAX = 200
 _SHOW_SESSION_LIMIT_MAX = 500
@@ -139,24 +144,52 @@ async def _purge_entries(state: Any, params: JsonObject) -> JsonObject:
 async def purge_permanently(state: Any, entry_id: str) -> JsonObject:
     """Purge the entry a permanent delete just created; the delete result's purge fields.
 
-    ``archive_entry_id`` is ``None`` once the entry is gone; while its deletion
-    is pending, it names the entry that stays ``purging``.
+    The archive has succeeded, so nothing here fails the delete. ``archive_entry_id``
+    always names the entry. ``purged`` says whether this purge deleted it and
+    ``purge_pending`` whether its deletion began and continues automatically;
+    otherwise ``purge_reason`` says why it was not deleted: ``busy`` (another
+    operation, such as a restore, took the entry first), ``gone`` (another
+    operation deleted or restored it first), or a failure that left it unchanged.
+    For a pending entry, ``purge_reason`` is the pending reason.
     """
     try:
         outcome = await state.runtime.archive.purge([entry_id], reason="permanent")
+    except ArchiveEntryNotFoundError:
+        return _permanent_purge(entry_id, reason="gone")
+    except ArchiveEntryBusyError:
+        return _permanent_purge(entry_id, reason="busy")
     except Exception as exc:
-        raise _map_expected_error(exc) from exc
-    purged = any(entry.entry_id == entry_id for entry in outcome.purged)
-    return {
-        "archive_entry_id": None if purged else entry_id,
-        "purged": purged,
-        "purge_pending": any(entry.entry_id == entry_id for entry in outcome.pending),
-    }
+        _LOGGER.warning(
+            "Permanent delete left its archive entry in the archive (entry=%s): %s",
+            entry_id,
+            exc,
+        )
+        return _permanent_purge(entry_id, reason=type(exc).__name__)
+    if any(entry.entry_id == entry_id for entry in outcome.purged):
+        return _permanent_purge(entry_id, purged=True)
+    for pending in outcome.pending:
+        if pending.entry_id == entry_id:
+            return _permanent_purge(entry_id, pending=True, reason=pending.reason)
+    for skipped in outcome.skipped:
+        if skipped.entry_id == entry_id:
+            return _permanent_purge(entry_id, reason=skipped.reason)
+    return _permanent_purge(entry_id, reason="gone")
 
 
 def not_purged() -> JsonObject:
     """The purge fields of a delete that only archived."""
-    return {"purged": False, "purge_pending": False}
+    return {"purged": False, "purge_pending": False, "purge_reason": None}
+
+
+def _permanent_purge(
+    entry_id: str, *, purged: bool = False, pending: bool = False, reason: str | None = None
+) -> JsonObject:
+    return {
+        "archive_entry_id": entry_id,
+        "purged": purged,
+        "purge_pending": pending,
+        "purge_reason": reason,
+    }
 
 
 def _entry_filter(params: JsonObject) -> ArchiveEntryFilter:
@@ -322,6 +355,11 @@ def _purge_payload(outcome: PurgeOutcome) -> JsonObject:
         "pending": [
             {"entry_id": entry.entry_id, "reason": entry.reason} for entry in outcome.pending
         ],
+        "skipped": [
+            {"entry_id": entry.entry_id, "reason": entry.reason, "state": entry.state}
+            for entry in outcome.skipped
+        ],
+        "gone": list(outcome.gone),
     }
 
 

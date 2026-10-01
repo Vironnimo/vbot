@@ -317,7 +317,11 @@ def test_agent_update_rejects_incomplete_changes_before_any_request(
         pytest.param(
             ("--permanent", "--yes"),
             {"id": "writer", "permanent": True},
-            {"archive_entry_id": None, "purged": True, "external_workspace": "C:/notes/writer"},
+            {
+                "archive_entry_id": "arc_7k2m9q4xw1ab",
+                "purged": True,
+                "external_workspace": "C:/notes/writer",
+            },
             [
                 "deleted agent writer permanently (12 sessions)",
                 "external Workspace left in place: C:/notes/writer",

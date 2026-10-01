@@ -267,10 +267,10 @@ async def test_rm_permanent_deletes_the_anchor_and_sessions_or_reports_it_pendin
     assert not state.runtime.projects.exists("vbot")
     assert result["session_count"] == 1
     if usage_import == "works":
-        assert (result["archive_entry_id"], result["purged"], result["purge_pending"]) == (
-            None,
+        assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
             True,
             False,
+            None,
         )
         assert not ledger.page(ArchiveEntryFilter()).entries
         assert not any((tmp_path / "data" / "archive").rglob("*"))

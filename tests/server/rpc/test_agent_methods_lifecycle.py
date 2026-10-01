@@ -407,10 +407,11 @@ async def test_agent_delete_permanent_leaves_no_agent_session_entry_or_payload(
         agents.close()
 
     assert result["agent_id"] == "coder"
-    assert (result["archive_entry_id"], result["purged"], result["purge_pending"]) == (
-        None,
+    assert result["archive_entry_id"].startswith("arc_")
+    assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
         True,
         False,
+        None,
     )
     assert result["session_count"] == 2
     assert not state.runtime.chat_sessions.archive_ledger.page(ArchiveEntryFilter()).entries

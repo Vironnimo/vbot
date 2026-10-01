@@ -384,6 +384,107 @@ def test_a_pending_purge_fails_and_names_the_call_that_continues_it(
 
 
 @pytest.mark.parametrize(
+    ("result", "code", "shown", "attention"),
+    [
+        pytest.param(
+            {"gone": ["arc_7k2m9q4xw1ab"]},
+            0,
+            "- id=arc_7k2m9q4xw1ab gone (no longer in the archive: another operation deleted "
+            "or restored it)",
+            None,
+            id="gone",
+        ),
+        pytest.param(
+            {"skipped": [{"entry_id": "arc_7k2m9q4xw1ab", "reason": "busy", "state": "restoring"}]},
+            1,
+            "- id=arc_7k2m9q4xw1ab skipped reason=busy state=restoring",
+            "arc_7k2m9q4xw1ab was not deleted: another operation, such as a restore, holds it "
+            "(restoring); 'vbot archive show arc_7k2m9q4xw1ab' shows its state",
+            id="busy",
+        ),
+    ],
+)
+def test_a_purge_names_entries_another_operation_took_first(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    result: dict[str, Any],
+    code: int,
+    shown: str,
+    attention: str | None,
+) -> None:
+    rpc.reply("archive.purge", {"purged": [], "pending": [], "skipped": [], "gone": []} | result)
+
+    exit_code, out, err = run_cli("archive", "purge", "arc_7k2m9q4xw1ab", "--yes")
+
+    assert exit_code == code
+    assert out.splitlines() == ["purged no archive entries", shown]
+    # Nothing retries an entry another operation holds or already removed.
+    assert "retries" not in err
+    if attention is not None:
+        assert attention in err
+
+
+@pytest.mark.parametrize(
+    ("purge", "code", "clause", "attention"),
+    [
+        pytest.param(
+            {"purge_reason": "gone"},
+            0,
+            "but another operation deleted or restored the entry before vBot could delete it "
+            "permanently",
+            "archive entry arc_7k2m9q4xw1ab is no longer in the archive; if another operation "
+            "restored it, it is live again",
+            id="gone",
+        ),
+        pytest.param(
+            {"purge_reason": "busy"},
+            1,
+            "but it was not deleted permanently",
+            "arc_7k2m9q4xw1ab was not deleted: another operation, such as a restore, holds it; "
+            "'vbot archive show arc_7k2m9q4xw1ab' shows its state",
+            id="busy",
+        ),
+        pytest.param(
+            {"purge_reason": "usage_import_failed"},
+            1,
+            "but it was not deleted permanently",
+            "arc_7k2m9q4xw1ab was not deleted (usage_import_failed) and stays in the archive "
+            "unchanged; run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to try again",
+            id="unchanged",
+        ),
+    ],
+)
+def test_a_permanent_deletion_whose_purge_did_not_delete_the_entry_says_why(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    purge: dict[str, Any],
+    code: int,
+    clause: str,
+    attention: str,
+) -> None:
+    rpc.reply(
+        "agent.delete",
+        {
+            "agent_id": "coder",
+            "session_count": 12,
+            "archive_entry_id": "arc_7k2m9q4xw1ab",
+            "purged": False,
+            "purge_pending": False,
+        }
+        | purge,
+    )
+
+    exit_code, out, err = run_cli("agent", "delete", "coder", "--permanent", "--yes")
+
+    assert exit_code == code
+    assert out.splitlines()[0] == (
+        f"archived agent coder as archive entry arc_7k2m9q4xw1ab (12 sessions), {clause}"
+    )
+    assert attention in err
+    assert "retries" not in err
+
+
+@pytest.mark.parametrize(
     ("command", "corrected"),
     [
         pytest.param(
@@ -458,7 +559,13 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
 ) -> None:
     rpc.reply(
         method,
-        result | {"archive_entry_id": "arc_7k2m9q4xw1ab", "purged": False, "purge_pending": True},
+        result
+        | {
+            "archive_entry_id": "arc_7k2m9q4xw1ab",
+            "purged": False,
+            "purge_pending": True,
+            "purge_reason": "stopped",
+        },
     )
 
     code, out, err = run_cli(*command, "--permanent", "--yes")
@@ -467,8 +574,8 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
     assert rpc.params(method)["permanent"] is True
     assert out.splitlines()[0] == shown
     assert (
-        "vBot retries it automatically, or run 'vbot archive purge arc_7k2m9q4xw1ab --yes' "
-        "to continue it now"
+        "deletion of arc_7k2m9q4xw1ab is pending (stopped); vBot retries it automatically, or "
+        "run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it now"
     ) in err
 
 

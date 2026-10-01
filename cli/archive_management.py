@@ -183,15 +183,17 @@ def archive_purge(
     payload = _rpc_call(instance, "archive.purge", params)
     if not payload.ok:
         return payload.to_command_result()
-    purged = [entry for entry in payload.data.get("purged") or () if isinstance(entry, dict)]
-    pending = [entry for entry in payload.data.get("pending") or () if isinstance(entry, dict)]
+    purged = _records(payload.data.get("purged"))
+    pending = _records(payload.data.get("pending"))
+    skipped = _records(payload.data.get("skipped"))
+    gone = _strings(payload.data.get("gone"))
     session_total = sum(
         count for entry in purged if isinstance(count := entry.get("session_count"), int)
     )
     if purged:
         noun = "archive entry" if len(purged) == 1 else "archive entries"
         first = f"purged {len(purged)} {noun} ({sessions_text(session_total)})"
-    elif pending:
+    elif pending or skipped or gone:
         first = "purged no archive entries"
     else:
         first = "no archive entries matched; nothing was purged"
@@ -208,23 +210,47 @@ def archive_purge(
         for entry in purged
     )
     lines.extend(
+        f"- id={entry_id} gone (no longer in the archive: another operation deleted or restored it)"
+        for entry_id in gone
+    )
+    lines.extend(
         record_fields([f"- id={entry.get('entry_id')}", "pending", f"reason={entry.get('reason')}"])
         for entry in pending
     )
-    if not pending:
-        return CommandResult(ok=True, message="\n".join(lines), instance=instance)
-    pending_ids = [str(entry.get("entry_id")) for entry in pending]
-    if len(pending) == 1:
-        attention = pending_purge_attention(pending_ids[0], str(pending[0].get("reason")))
-    else:
-        retry = selection if all_matching else tuple(pending_ids)
-        command = format_command(("vbot", "archive", "purge", *retry, "--yes"))
-        attention = (
-            f"deletion of {len(pending)} archive entries is pending; vBot retries them "
-            f"automatically, or run '{command}' to continue them now"
+    lines.extend(
+        record_fields(
+            [
+                f"- id={entry.get('entry_id')}",
+                "skipped",
+                f"reason={entry.get('reason')}",
+                *((f"state={entry['state']}",) if entry.get("state") else ()),
+            ]
         )
+        for entry in skipped
+    )
+    attention: list[str] = []
+    if pending:
+        pending_ids = [str(entry.get("entry_id")) for entry in pending]
+        if len(pending) == 1:
+            attention.append(pending_purge_attention(pending_ids[0], str(pending[0].get("reason"))))
+        else:
+            retry = selection if all_matching else tuple(pending_ids)
+            command = format_command(("vbot", "archive", "purge", *retry, "--yes"))
+            attention.append(
+                f"deletion of {len(pending)} archive entries is pending; vBot retries them "
+                f"automatically, or run '{command}' to continue them now"
+            )
+    attention.extend(
+        skipped_purge_attention(
+            str(entry.get("entry_id")), str(entry.get("reason")), entry.get("state")
+        )
+        for entry in skipped
+    )
     return CommandResult(
-        ok=False, message="\n".join(lines), instance=instance, attention=(attention,)
+        ok=not attention,
+        message="\n".join(lines),
+        instance=instance,
+        attention=tuple(attention),
     )
 
 
@@ -239,11 +265,58 @@ def sessions_text(count: object) -> str:
 
 
 def pending_purge_attention(entry_id: str, reason: str | None = None) -> str:
-    """The attention line for an entry whose permanent deletion did not finish."""
+    """The attention line for an entry whose permanent deletion began and did not finish."""
     detail = f" ({reason})" if reason else ""
     return (
         f"deletion of {entry_id} is pending{detail}; vBot retries it automatically, "
         f"or run 'vbot archive purge {entry_id} --yes' to continue it now"
+    )
+
+
+def skipped_purge_attention(entry_id: str, reason: str, state: object = None) -> str:
+    """The attention line for an entry a purge left unchanged; nothing retries it."""
+    if reason == "busy":
+        held = f" ({state})" if isinstance(state, str) and state else ""
+        return (
+            f"{entry_id} was not deleted: another operation, such as a restore, holds "
+            f"it{held}; 'vbot archive show {entry_id}' shows its state"
+        )
+    return (
+        f"{entry_id} was not deleted ({reason}) and stays in the archive unchanged; run "
+        f"'vbot archive purge {entry_id} --yes' to try again"
+    )
+
+
+def unfinished_permanent_delete(
+    data: Mapping[str, Any], entry_id: str
+) -> tuple[str, tuple[str, ...], bool]:
+    """How a permanent delete ends whose purge did not delete the entry.
+
+    Returns the clause after the archived form, the attention lines and whether
+    the command succeeded.
+    """
+    reason = data.get("purge_reason")
+    if data.get("purge_pending") is True:
+        detail = reason if isinstance(reason, str) else None
+        return (
+            "but deleting it permanently did not finish",
+            (pending_purge_attention(entry_id, detail),),
+            False,
+        )
+    if reason == "gone":
+        return (
+            "but another operation deleted or restored the entry before vBot could delete "
+            "it permanently",
+            (
+                f"archive entry {entry_id} is no longer in the archive; if another operation "
+                "restored it, it is live again",
+            ),
+            True,
+        )
+    return (
+        "but it was not deleted permanently",
+        (skipped_purge_attention(entry_id, str(reason)),),
+        False,
     )
 
 
@@ -449,6 +522,12 @@ def _agent_address(agent_id: object, project_id: object) -> str:
 
 def _mapping(value: object) -> Mapping[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _records(value: object) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def _strings(value: object) -> list[str]:

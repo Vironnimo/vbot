@@ -368,7 +368,9 @@ class ArchiveService:
         fails, nothing is deleted. An entry whose deletion does not finish, because
         of that, a failure partway or :meth:`stop`, is reported pending and stays
         ``purging`` with what is left; the retention sweep continues it, and
-        purging it again continues it at once.
+        purging it again continues it at once. An entry another operation took
+        between that check and the purge is reported skipped (still held, nothing
+        deleted) or gone (no longer in the archive).
         """
         services = self._services
         entries = await services.sessions.run_async(self._purge_targets, entry_ids, all_matching)

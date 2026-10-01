@@ -318,7 +318,7 @@ def test_project_override_set_coerces_the_value(
         pytest.param(
             ("--permanent", "--yes"),
             {"project_id": "vbot", "permanent": True},
-            {"archive_entry_id": None, "purged": True, "session_count": 3},
+            {"archive_entry_id": "arc_7k2m9q4xw1ab", "purged": True, "session_count": 3},
             ["removed project vbot permanently (3 sessions); the repo is untouched"],
             id="permanent",
         ),

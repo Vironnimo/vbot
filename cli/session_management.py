@@ -6,8 +6,8 @@ import json
 from collections.abc import Sequence
 
 from cli.archive_management import (
-    pending_purge_attention,
     permanent_delete_refusal,
+    unfinished_permanent_delete,
 )
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
@@ -138,20 +138,21 @@ def session_delete(
     next_session = f"next session: {_string_or_default(payload.data.get('next_session_id'), '?')}"
     entry_id = _string_or_default(payload.data.get("archive_entry_id"), "-")
     attention: tuple[str, ...] = ()
+    ok = True
     if payload.data.get("purged") is True:
         message = f"deleted session {session_id} for {agent_id} permanently; {next_session}"
-    elif payload.data.get("purge_pending") is True:
+    elif permanent:
+        clause, attention, ok = unfinished_permanent_delete(payload.data, entry_id)
         message = (
             f"deleted session {session_id} for {agent_id} (archived as archive entry "
-            f"{entry_id}), but deleting it permanently did not finish; {next_session}"
+            f"{entry_id}), {clause}; {next_session}"
         )
-        attention = (pending_purge_attention(entry_id),)
     else:
         message = (
             f"deleted session {session_id} for {agent_id} (archived as archive entry "
             f"{entry_id}); {next_session}; restore with: vbot archive restore {entry_id}"
         )
-    return CommandResult(ok=not attention, message=message, instance=instance, attention=attention)
+    return CommandResult(ok=ok, message=message, instance=instance, attention=attention)
 
 
 def session_link_channel(

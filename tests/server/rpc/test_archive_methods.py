@@ -343,6 +343,8 @@ async def test_purge_deletes_named_entries_or_all_matching_ones(tmp_path: Path) 
             }
         ],
         "pending": [],
+        "skipped": [],
+        "gone": [],
     }
     assert [entry["entry_id"] for entry in matching["purged"]] == [entries["project"]]
     assert ledger.entry(entries["agent"]) is None
@@ -369,8 +371,57 @@ async def test_a_purge_whose_usage_import_fails_reports_every_entry_pending(
     assert result == {
         "purged": [],
         "pending": [{"entry_id": entry_id, "reason": "usage_import_failed"}],
+        "skipped": [],
+        "gone": [],
     }
     assert state.runtime.sessions.archive_ledger.entry(entry_id) is not None
+
+
+def _taken_before_the_claim(
+    state: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, taken_by: str
+) -> None:
+    """Let another operation restore or purge an entry just before a purge claims it."""
+    ledger = state.runtime.sessions.archive_ledger
+    begin_purge = ledger.begin_purge
+
+    def taken_first(entry_id: str) -> Any:
+        monkeypatch.setattr(ledger, "begin_purge", begin_purge)
+        if taken_by == "restore":
+            ledger.begin_restore(entry_id, {"target_id": None})
+        else:
+            entry = begin_purge(entry_id)
+            while ledger.purge_next_session(entry.entry_key):
+                pass
+            ledger.finish_purge(entry.entry_key)
+        return begin_purge(entry_id)
+
+    monkeypatch.setattr(ledger, "begin_purge", taken_first)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("taken_by", "reason"), [("restore", "busy"), ("purge", "gone")], ids=["busy", "gone"]
+)
+async def test_a_permanent_delete_another_operation_preempts_still_succeeds_and_says_why(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, taken_by: str, reason: str
+) -> None:
+    state = _make_state(tmp_path)
+    state.runtime.agents.create("manager")
+    state.runtime.sessions.create("manager", session_id="notes")
+    _taken_before_the_claim(state, monkeypatch, taken_by)
+
+    result = await rpc_result(
+        state, "session.delete", agent_id="manager", session_id="notes", permanent=True
+    )
+
+    # The Session was archived; the purge reports why it did not delete the entry.
+    entry_id = result["archive_entry_id"]
+    assert entry_id.startswith("arc_")
+    assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
+        False,
+        False,
+        reason,
+    )
 
 
 @pytest.mark.asyncio

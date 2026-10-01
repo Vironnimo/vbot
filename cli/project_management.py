@@ -20,9 +20,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from cli.archive_management import (
-    pending_purge_attention,
     permanent_delete_refusal,
     sessions_text,
+    unfinished_permanent_delete,
 )
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
@@ -204,14 +204,15 @@ def project_remove(
     entry_id = _string_or_default(payload.data.get("archive_entry_id"), "-")
     sessions = sessions_text(payload.data.get("session_count"))
     attention: tuple[str, ...] = ()
+    ok = True
     if payload.data.get("purged") is True:
         lines = [f"removed project {removed_id} permanently ({sessions}); the repo is untouched"]
-    elif payload.data.get("purge_pending") is True:
+    elif permanent:
+        clause, attention, ok = unfinished_permanent_delete(payload.data, entry_id)
         lines = [
             f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}), "
-            "but deleting it permanently did not finish"
+            f"{clause}"
         ]
-        attention = (pending_purge_attention(entry_id),)
     else:
         lines = [
             f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}); "
@@ -227,9 +228,7 @@ def project_remove(
         lines.extend(
             _format_agent_file_effects("backed_up_files", payload.data.get("backed_up_files"))
         )
-    return CommandResult(
-        ok=not attention, message="\n".join(lines), instance=instance, attention=attention
-    )
+    return CommandResult(ok=ok, message="\n".join(lines), instance=instance, attention=attention)
 
 
 def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:

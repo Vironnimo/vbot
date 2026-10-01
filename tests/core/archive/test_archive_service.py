@@ -19,10 +19,11 @@ from core.archive import (
     ArchiveRestoreConflictError,
     ArchiveService,
     PendingPurge,
+    SkippedPurge,
     _purge,
 )
 from core.chat import ChatSessionError
-from core.sessions import ArchiveEntryFilter, ArchiveTree, SessionAddress
+from core.sessions import ArchiveEntry, ArchiveEntryFilter, ArchiveTree, SessionAddress
 from core.utils.timestamps import format_canonical_timestamp
 from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
@@ -407,6 +408,44 @@ async def test_a_refused_purge_deletes_nothing(world: ArchiveWorld, refusal: str
 
     assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
     assert world.payload(archived.entry_id, "agent").is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("taken_by", ["restore", "purge"])
+async def test_an_entry_taken_before_the_claim_is_skipped_or_gone(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, taken_by: str
+) -> None:
+    coder = world.agents.create("coder")
+    entry_id = (await world.service.archive_agent("coder")).entry_id
+    ledger = world.sessions.archive_ledger
+    begin_purge = ledger.begin_purge
+
+    def taken_first(claimed_id: str) -> ArchiveEntry:
+        # Another operation reaches the entry between the purge's check and its claim.
+        monkeypatch.setattr(ledger, "begin_purge", begin_purge)
+        if taken_by == "restore":
+            ledger.begin_restore(claimed_id, {"target_id": None})
+        else:
+            entry = begin_purge(claimed_id)
+            while ledger.purge_next_session(entry.entry_key):
+                pass
+            ledger.finish_purge(entry.entry_key)
+        return begin_purge(claimed_id)
+
+    monkeypatch.setattr(ledger, "begin_purge", taken_first)
+    outcome = await world.service.purge([entry_id])
+
+    assert outcome.purged == outcome.pending == ()
+    if taken_by == "restore":
+        # Held by the restore: nothing of it is deleted, and nothing retries it.
+        assert (outcome.skipped, outcome.gone) == (
+            (SkippedPurge(entry_id, "busy", "restoring"),),
+            (),
+        )
+        assert world.session_rows("coder") == [(coder.current_session_id, "archived")]
+        assert world.payload(entry_id, "agent").is_dir()
+    else:
+        assert (outcome.skipped, outcome.gone) == ((), (entry_id,))
 
 
 @pytest.mark.asyncio

@@ -44,6 +44,7 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
         "archive_entry_id": "arc_s1",
         "purged": False,
         "purge_pending": False,
+        "purge_reason": None,
     }
     assert resolver.resolved == [(None, "builder")]
     # Archived (not hard-deleted) under the identity scope.
@@ -231,9 +232,10 @@ async def test_delete_permanent_leaves_no_session_or_entry(tmp_path: Path) -> No
         "agent_id": "builder",
         "session_id": "s1",
         "next_session_id": current,
-        "archive_entry_id": None,
+        "archive_entry_id": result["archive_entry_id"],
         "purged": True,
         "purge_pending": False,
+        "purge_reason": None,
     }
     assert not state.runtime.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
     with sqlite3.connect(tmp_path / "data" / "sessions.db") as connection:

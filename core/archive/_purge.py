@@ -17,9 +17,10 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 from core.archive._operations import prune_empty_parents, stored_path
-from core.archive._types import PendingPurge, PurgedEntry, PurgeOutcome
+from core.archive._types import PendingPurge, PurgedEntry, PurgeOutcome, SkippedPurge
 from core.sessions import (
     ARCHIVE_ROOT,
+    ARCHIVE_STATE_PURGING,
     ArchiveEntry,
     ArchiveEntryBusyError,
     ArchiveEntryNotFoundError,
@@ -39,6 +40,8 @@ PURGE_WORKERS = BoundedWorkerPool(name="archive", max_workers=1)
 # The reason a pending entry reports when a stop request ended its purge.
 STOPPED = "stopped"
 USAGE_IMPORT_FAILED = "usage_import_failed"
+# The reason a skipped entry reports when another operation held it.
+BUSY = "busy"
 
 # One WARNING per entry and failure kind until that entry is purged, and one
 # per data directory while the usage import keeps failing.
@@ -60,26 +63,38 @@ def purge_entries(
     """Purge ``entries`` one after another; one that does not finish is reported pending.
 
     Every entry is claimed first, so an entry reported pending stays
-    ``purging`` and is continued later. Only an entry another operation holds
-    or that is gone by now is reported pending without being claimed. When
-    ``stopping`` is set, the purge ends before the next Session or tree.
+    ``purging`` and is continued later. An entry another operation holds is
+    skipped unchanged, and one that is no longer in the archive is reported
+    gone. When ``stopping`` is set, the purge ends before the next Session or tree.
     """
     ledger = services.sessions.archive_ledger
     claimed: list[ArchiveEntry] = []
     pending: list[PendingPurge] = []
+    skipped: list[SkippedPurge] = []
+    gone: list[str] = []
     for entry in entries:
         try:
             claimed.append(ledger.begin_purge(entry.entry_id))
-        except (ArchiveEntryBusyError, ArchiveEntryNotFoundError) as error:
-            # Another operation got there first: an expected outcome, not a failure.
+        except ArchiveEntryNotFoundError:
+            # Another operation deleted or restored it first: an expected outcome.
+            _LOGGER.debug("Archive entry gone before its purge (entry=%s)", entry.entry_id)
+            gone.append(entry.entry_id)
+        except ArchiveEntryBusyError as error:
             _LOGGER.debug(
-                "Archive entry not claimed for a purge (entry=%s): %s", entry.entry_id, error
+                "Archive entry not claimed for a purge (entry=%s state=%s)",
+                entry.entry_id,
+                error.state,
             )
-            pending.append(PendingPurge(entry.entry_id, type(error).__name__))
+            skipped.append(SkippedPurge(entry.entry_id, BUSY, error.state))
         except Exception as error:
-            pending.append(_failed(entry.entry_id, error))
+            # The claim changed nothing; an entry already ``purging`` stays so.
+            failure = _failed(entry.entry_id, error)
+            if entry.state == ARCHIVE_STATE_PURGING:
+                pending.append(PendingPurge(entry.entry_id, failure))
+            else:
+                skipped.append(SkippedPurge(entry.entry_id, failure, entry.state))
     if not claimed:
-        return PurgeOutcome(pending=tuple(pending))
+        return PurgeOutcome(pending=tuple(pending), skipped=tuple(skipped), gone=tuple(gone))
     usage_import = ("usage_import", services.data_dir)
     try:
         services.import_usage()
@@ -95,7 +110,9 @@ def purge_entries(
             pending=(
                 *pending,
                 *(PendingPurge(entry.entry_id, USAGE_IMPORT_FAILED) for entry in claimed),
-            )
+            ),
+            skipped=tuple(skipped),
+            gone=tuple(gone),
         )
     if _FAILURES.ended(usage_import):
         _LOGGER.info("Usage import before a purge no longer fails")
@@ -106,7 +123,7 @@ def purge_entries(
             purged.append(result)
         else:
             pending.append(result)
-    return PurgeOutcome(tuple(purged), tuple(pending))
+    return PurgeOutcome(tuple(purged), tuple(pending), tuple(skipped), tuple(gone))
 
 
 def _purge_claimed(
@@ -138,7 +155,7 @@ def _purge_claimed(
         _LOGGER.debug("Archive entry purge stopped; it continues later (entry=%s)", entry.entry_id)
         return PendingPurge(entry.entry_id, STOPPED)
     except Exception as error:
-        return _failed(entry.entry_id, error)
+        return PendingPurge(entry.entry_id, _failed(entry.entry_id, error))
     if _FAILURES.ended(entry.entry_id):
         _LOGGER.info("Archive entry purge no longer fails (entry=%s)", entry.entry_id)
     _LOGGER.info(
@@ -153,13 +170,14 @@ def _purge_claimed(
     return PurgedEntry(entry.entry_id, entry.kind, entry.subject_id, entry.session_count)
 
 
-def _failed(entry_id: str, error: Exception) -> PendingPurge:
+def _failed(entry_id: str, error: Exception) -> str:
+    """Log a purge failure once per entry and failure kind; the failure's class."""
     failure = type(error).__name__
     if _FAILURES.started(entry_id, failure):
         _LOGGER.warning(
-            "Archive entry could not be purged; it is retried (entry=%s reason=%s): %s",
+            "Archive entry could not be purged (entry=%s reason=%s): %s",
             entry_id,
             failure,
             error,
         )
-    return PendingPurge(entry_id, failure)
+    return failure

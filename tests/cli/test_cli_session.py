@@ -155,7 +155,7 @@ def test_session_delete_requires_confirmation_before_any_request(
         pytest.param(
             ("--permanent",),
             {**SESSION, "permanent": True},
-            {"archive_entry_id": None, "purged": True},
+            {"archive_entry_id": "arc_3d8n0v6tz2kc", "purged": True},
             "deleted session session-one for assistant permanently; next session: session-two",
             id="permanent",
         ),

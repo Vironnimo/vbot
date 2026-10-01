@@ -109,13 +109,12 @@ class PurgedEntry:
 
 @dataclass(frozen=True)
 class PendingPurge:
-    """An entry whose permanent deletion did not finish.
+    """An entry whose permanent deletion began and did not finish.
 
-    It stays ``purging`` and the retention sweep continues it, unless ``reason``
-    is ``ArchiveEntryBusyError`` or ``ArchiveEntryNotFoundError``: then another
-    operation held or removed the entry before the purge could claim it.
-    ``reason`` is ``usage_import_failed``, ``stopped`` or the failure's exception
-    class.
+    It stays ``purging`` with what is left, never restorable again; the
+    retention sweep continues it, and purging it again continues it at once.
+    ``reason`` is ``usage_import_failed``, ``stopped`` (a stop request) or the
+    failure's exception class.
     """
 
     entry_id: str
@@ -123,9 +122,32 @@ class PendingPurge:
 
 
 @dataclass(frozen=True)
+class SkippedPurge:
+    """An entry a purge left exactly as it was: nothing of it was deleted.
+
+    ``reason`` is ``busy`` when another operation held it (``state`` names that
+    operation's entry state, such as ``restoring``), or the exception class of a
+    failure that kept the purge from claiming it. Nothing retries it on its own;
+    an ``archived`` entry stays restorable.
+    """
+
+    entry_id: str
+    reason: str
+    state: str | None = None
+
+
+@dataclass(frozen=True)
 class PurgeOutcome:
+    """What a purge did with each entry it was given.
+
+    ``gone`` names the entries no longer in the archive when the purge reached
+    them: another operation deleted or restored them in the meantime.
+    """
+
     purged: tuple[PurgedEntry, ...] = ()
     pending: tuple[PendingPurge, ...] = ()
+    skipped: tuple[SkippedPurge, ...] = ()
+    gone: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,4 +207,5 @@ __all__ = [
     "RestoreOutcome",
     "RestoreProblem",
     "SessionArchiveOutcome",
+    "SkippedPurge",
 ]
