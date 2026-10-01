@@ -920,6 +920,8 @@ export default Object.freeze({
     'Items of this kind cannot be restored; you can only delete them.',
   'archive.problem.entryBusy':
     'Another operation is working on it. Try again in a moment.',
+  'archive.problem.entryPurging':
+    'It is being deleted permanently and can no longer be restored.',
   'archive.problem.payloadMissing': 'Its archived files are missing.',
   'archive.problem.payloadInvalid': 'Its archived files cannot be read.',
   'archive.problem.olderFormat':

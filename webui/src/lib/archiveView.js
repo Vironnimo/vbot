@@ -303,6 +303,18 @@ function takenSessionIds(problem) {
   return [...new Set(ids)].join(', ');
 }
 
+// Why another operation holds an entry ({state, path, message}): an
+// interrupted restore explains itself and how to unblock it, and an entry
+// being deleted never becomes restorable again.
+function entryBusyText(busy) {
+  const message = text(busy?.message);
+  if (text(busy?.path) && message) return message;
+  if (busy?.state === ARCHIVE_STATE_PURGING) {
+    return t('archive.problem.entryPurging');
+  }
+  return t('archive.problem.entryBusy');
+}
+
 // A restore blocker or warning ({code, message, ...details}) in words. Codes
 // this view does not know show the server's message.
 export function restoreProblemText(problem, { warning = false } = {}) {
@@ -312,10 +324,7 @@ export function restoreProblemText(problem, { warning = false } = {}) {
     case 'kind_not_restorable':
       return t('archive.problem.kindNotRestorable');
     case 'entry_busy':
-      // An interrupted restore explains itself and how to unblock it.
-      return text(problem.path) && message
-        ? message
-        : t('archive.problem.entryBusy');
+      return entryBusyText(problem);
     case 'payload_missing':
       return t('archive.problem.payloadMissing');
     case 'payload_invalid':
@@ -446,7 +455,7 @@ export function archiveErrorText(error) {
     case 'archive_entry_not_found':
       return t('archive.error.notFound');
     case 'archive_entry_busy':
-      return t('archive.problem.entryBusy');
+      return entryBusyText(data);
     case 'archive_not_restorable': {
       const blockers = Array.isArray(data.blockers) ? data.blockers : [];
       const texts = blockers

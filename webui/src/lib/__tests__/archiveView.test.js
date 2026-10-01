@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   archiveDeletionText,
+  archiveErrorText,
   archiveRow,
   canRestoreAs,
   permanentDeleteNotice,
@@ -148,6 +149,34 @@ describe('archive view rules', () => {
     expect(
       restoreProblemText({ code: 'future_problem', message: 'Server says no' }),
     ).toBe('Server says no');
+  });
+
+  it.each([
+    [
+      'an interrupted restore that cannot finish',
+      { state: 'restoring', path: '/data/agents/coder', message: 'Move it.' },
+      () => 'Move it.',
+    ],
+    [
+      'an entry being deleted',
+      { state: 'purging', message: 'it is being deleted' },
+      () => t('archive.problem.entryPurging'),
+    ],
+    [
+      'an entry another operation uses',
+      { state: 'archiving' },
+      () => t('archive.problem.entryBusy'),
+    ],
+  ])('says why %s is busy', (_name, busy, expected) => {
+    expect(restoreProblemText({ code: 'entry_busy', ...busy })).toBe(
+      expected(),
+    );
+    const error = {
+      code: 'archive_entry_busy',
+      message: 'archive entry e1 is busy',
+      details: { data: { entry_id: 'e1', ...busy } },
+    };
+    expect(archiveErrorText(error)).toBe(expected());
   });
 
   it.each([
