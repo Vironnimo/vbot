@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import sys
+from collections import ChainMap
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +16,7 @@ import psutil  # type: ignore[import-untyped]
 import pytest
 
 import core.tools.bash as bash_module
+import core.tools.process_manager as process_manager_module
 from core.tools.bash import bash_handler
 from core.tools.process_manager import ProcessManager
 from tests.core.tools.bash_test_support import (
@@ -28,6 +30,35 @@ from tests.core.tools.bash_test_support import manager as manager
 from tests.core.tools.bash_test_support import shell_env_cache as shell_env_cache
 
 _SLEEP = "import time; time.sleep(30)"
+
+
+def _deadline_starts_after_output(monkeypatch: pytest.MonkeyPatch, marker: str) -> None:
+    """Start each real Bash deadline only once the command has printed ``marker``.
+
+    The deadline stays the production one; interpreter startup just no longer decides
+    whether output exists before the kill, so the deadline can be short.
+    """
+    schedule_timeout = bash_module._schedule_timeout
+
+    def schedule(
+        process_manager: ProcessManager, context: Any, process_id: str, timeout: float | None
+    ) -> tuple[asyncio.Task[None], ChainMap[str, bool]]:
+        state: ChainMap[str, bool] = ChainMap({"timed_out": False})
+
+        async def deadline() -> None:
+            async with asyncio.timeout(10):
+                while marker not in str(
+                    (await process_manager.snapshot(process_id, context.agent_id))["output"]
+                ):
+                    await asyncio.sleep(0.01)
+            task, timer_state = schedule_timeout(process_manager, context, process_id, timeout)
+            state.maps.insert(0, timer_state)
+            if task is not None:
+                await task
+
+        return asyncio.create_task(deadline()), state
+
+    monkeypatch.setattr(bash_module, "_schedule_timeout", schedule)
 
 
 # --- Cancellation ----------------------------------------------------------
@@ -210,18 +241,20 @@ async def test_omitted_timeout_resolves_mode_default_and_retires_after_exit(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("depth", "noisy", "default_timeout"),
+    ("depth", "noisy"),
     [
-        (0, False, 0.05),
+        (0, False),
         # Output is no heartbeat: a command that keeps printing still ends.
-        (1, True, 0.7),
+        (1, True),
     ],
 )
 async def test_omitted_timeout_ends_silent_and_noisy_foreground_commands(
-    manager, tmp_path, monkeypatch, depth, noisy, default_timeout
+    manager, tmp_path, monkeypatch, depth, noisy
 ):
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    monkeypatch.setattr(bash_module, "DEFAULT_TIMEOUT_SECONDS", default_timeout)
+    monkeypatch.setattr(bash_module, "DEFAULT_TIMEOUT_SECONDS", 0.05)
+    if noisy:
+        _deadline_starts_after_output(monkeypatch, "working")
     command = (
         "import time\nwhile True:\n    print('working', flush=True)\n    time.sleep(0.02)"
         if noisy
@@ -386,6 +419,7 @@ async def test_timeout_failure_carries_the_output_tail(
     spool_manager = make_spool_manager(tmp_path)
     try:
         monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+        _deadline_starts_after_output(monkeypatch, "diag-marker")
         output = "x" * 9000 + "diag-marker"
 
         result = await bash_handler(
@@ -393,8 +427,7 @@ async def test_timeout_failure_carries_the_output_tail(
             {
                 "command": f"print({output!r}, flush=True); {_SLEEP}",
                 "mode": "foreground",
-                # Long enough for the output to exist before the kill.
-                "timeout": 1.5,
+                "timeout": 0.05,
             },
             spool_manager,
         )
@@ -497,6 +530,8 @@ async def test_descendant_pipe_does_not_hide_exit_or_block_timeout(
     """A command that exits while its timeout fires and readers drain keeps its result."""
     caplog.set_level(logging.DEBUG, logger="vbot.tools.process_manager")
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    # The descendant keeps the pipes open; closing them needs no real drain wait.
+    monkeypatch.setattr(process_manager_module, "PROCESS_OUTPUT_DRAIN_SECONDS", 0.01)
     original_spawn = manager.spawn
     original_readers = manager._await_reader_tasks
     original_kill = manager.kill
