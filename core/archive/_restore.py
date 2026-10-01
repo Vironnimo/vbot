@@ -140,8 +140,7 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
             _abort(services, plan)
             raise
     restored = ledger.entry_by_key(entry.entry_key)
-    if restored is not None:
-        follow_up(services, restored)
+    grant_agent_ids = follow_up(services, restored) if restored is not None else ()
     return RestoreOutcome(
         entry_id=entry.entry_id,
         kind=entry.kind,
@@ -149,26 +148,29 @@ def restore(services: ArchiveServices, entry_id: str, target_id: str | None) -> 
         target_id=target,
         addresses=addresses,
         warnings=plan.check.warnings,
+        grant_agent_ids=grant_agent_ids,
     )
 
 
-def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> None:
+def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> tuple[str, ...]:
     """Finish a ``restored`` entry, then delete it.
 
     Roster position, delegation grants, Project roots, Sub-Agent links and
-    empty payload directories.
+    empty payload directories. Returns the Agents whose delegation lists name a
+    restored Agent again.
     """
     ledger = services.sessions.archive_ledger
     target = _restore_target(entry)
     renamed = target != entry.subject_id
     facts = entry.facts
+    grant_agent_ids: tuple[str, ...] = ()
     if entry.kind == ARCHIVE_KIND_AGENT:
         roster_index = facts.get("roster_index")
         services.agents.place_in_roster(
             target, roster_index if isinstance(roster_index, int) else None
         )
         grants = [grant for grant in facts.get("grants") or () if isinstance(grant, Mapping)]
-        services.agents.restore_delegation_grants(target, grants)
+        grant_agent_ids = services.agents.restore_delegation_grants(target, grants)
         if renamed:
             _retarget_links(services, None, entry.subject_id, None, target)
     elif entry.kind == ARCHIVE_KIND_PROJECT:
@@ -181,6 +183,7 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> None:
         if not path.exists():
             prune_empty_parents(services, path)
     ledger.finish_restore(entry.entry_key)
+    return grant_agent_ids
 
 
 def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:

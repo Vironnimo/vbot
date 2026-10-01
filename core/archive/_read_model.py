@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from core.agents import AGENT_FORMAT_VERSION
-from core.archive import _restore
+from core.archive import _restore, _retention
 from core.archive._operations import stored_path
 from core.archive._types import ArchiveEntryDetail, ArchiveListing, ArchivePage
 from core.projects import PROJECT_FORMAT_VERSION
@@ -43,8 +43,11 @@ def page(
     limit: int,
 ) -> ArchivePage:
     entries = services.sessions.archive_ledger.page(filters, cursor=cursor, limit=limit)
+    retention_days = services.retention_days()
     return ArchivePage(
-        tuple(listing(services, entry) for entry in entries.entries), entries.next_cursor
+        tuple(listing(services, entry, retention_days) for entry in entries.entries),
+        entries.next_cursor,
+        retention_days,
     )
 
 
@@ -62,7 +65,7 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
     marked = entry.facts.get("user_folders")
     named = set(marked) if isinstance(marked, list) else set()
     return ArchiveEntryDetail(
-        listing=listing(services, entry),
+        listing=listing(services, entry, services.retention_days()),
         sessions=ledger.members(entry.entry_key, limit=session_limit),
         files=files,
         restore=_restore.check(services, entry_id, None),
@@ -70,9 +73,17 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
     )
 
 
-def listing(services: ArchiveServices, entry: ArchiveEntry) -> ArchiveListing:
+def listing(
+    services: ArchiveServices, entry: ArchiveEntry, retention_days: int | None
+) -> ArchiveListing:
     reason = _not_restorable_reason(services, entry)
-    return ArchiveListing(entry, _label(services, entry), reason is None, reason)
+    return ArchiveListing(
+        entry,
+        _label(services, entry),
+        reason is None,
+        reason,
+        _retention.purge_at(entry, retention_days),
+    )
 
 
 def _label(services: ArchiveServices, entry: ArchiveEntry) -> str:

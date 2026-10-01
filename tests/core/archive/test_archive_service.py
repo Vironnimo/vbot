@@ -7,6 +7,7 @@ import json
 import shutil
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,7 @@ from core.archive import (
 )
 from core.chat import ChatSessionError
 from core.sessions import ArchiveEntryFilter, ArchiveTree, SessionAddress
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
 
@@ -61,6 +63,7 @@ async def test_an_archived_agent_returns_with_its_sessions_grants_and_roster_pos
     restored = await world.service.restore(archived.entry_id)
 
     assert (restored.target_id, len(restored.addresses)) == ("coder", 2)
+    assert restored.grant_agent_ids == ("manager",)
     assert agents.get("coder").current_session_id == coder.current_session_id
     assert sessions.exists(second)
     assert agents.get("manager").tools["subagent"]["allowed_agents"] == ["x", "coder"]
@@ -116,6 +119,7 @@ async def test_an_external_workspace_stays_in_place_and_returns_with_the_agent(
     archived = await world.service.archive_agent("coder")
 
     assert (external / "notes.md").read_text(encoding="utf-8") == "mine"
+    assert archived.external_workspace == workspace
     if workspace_state == "gone":
         shutil.rmtree(external)
     restored = await world.service.restore(archived.entry_id)
@@ -431,3 +435,31 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     assert [problem.code for problem in agent_detail.restore.blockers] == ["payload_missing"]
     assert (session_detail.files, session_detail.restore.possible) == ("none", True)
     assert agent_detail.user_folders == session_detail.user_folders == ()
+
+
+@pytest.mark.asyncio
+async def test_purge_at_ends_the_retention_period_of_entries_retention_deletes(
+    world: ArchiveWorld, tmp_path: Path
+) -> None:
+    world.agents.create("manager")
+    world.agents.create("writer")
+    archived = await world.service.archive_agent("writer")
+    pending = await world.service.archive_agent("manager")
+    world.sessions.archive_ledger.begin_purge(pending.entry_id)
+    # Retention never deletes folders the user may own; only a manual purge does.
+    legacy = legacy_agent_entry(world, tmp_path / "notes")
+
+    page = await world.service.list(ArchiveEntryFilter())
+    kept = await ArchiveService(replace(world.services, retention_days=lambda: None)).list(
+        ArchiveEntryFilter()
+    )
+
+    start = datetime.fromisoformat(world.entry(archived.entry_id).retention_start)
+    assert page.retention_days == 30
+    assert {item.entry.entry_id: item.purge_at for item in page.entries} == {
+        archived.entry_id: format_canonical_timestamp(start + timedelta(days=30)),
+        pending.entry_id: None,
+        legacy: None,
+    }
+    assert kept.retention_days is None
+    assert {item.purge_at for item in kept.entries} == {None}

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.archive import _operations, _purge, _read_model, _recovery, _restore
+from core.archive._retention import default_retention_days
 from core.archive._types import (
     AgentArchiveOutcome,
     ArchiveEntryDetail,
@@ -74,7 +75,8 @@ class ArchiveServices:
     ``agent_references`` names the Channels and live automations that keep an
     Identity Agent from being archived; ``import_usage`` brings the usage ledger
     up to date before a purge; ``invalidate_project`` drops a Project's Team and
-    Skill caches.
+    Skill caches; ``retention_days`` is the retention period in days (``None``
+    keeps entries until they are deleted).
     """
 
     data_dir: Path
@@ -92,6 +94,7 @@ class ArchiveServices:
     remove_session_from_recall: Callable[[str, str, str | None], Awaitable[None]]
     invalidate_agent_skills: Callable[[str], None]
     invalidate_project: Callable[[str], None]
+    retention_days: Callable[[], int | None] = default_retention_days
 
 
 class ArchiveService:
@@ -379,7 +382,7 @@ class ArchiveService:
         cursor: ArchiveEntryCursor | None = None,
         limit: int = 50,
     ) -> ArchivePage:
-        """One page of entries, newest first."""
+        """One page of entries, newest first, with the retention period and each ``purge_at``."""
         return await self._services.sessions.run_async(
             _read_model.page, self._services, filters, cursor, limit
         )

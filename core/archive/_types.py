@@ -44,12 +44,17 @@ class RestoreCheck:
 
 @dataclass(frozen=True)
 class AgentArchiveOutcome:
-    """An archived Identity Agent: its entry, how many Sessions it took, the changed grants."""
+    """An archived Identity Agent: its entry, how many Sessions it took, the changed grants.
+
+    ``external_workspace`` is the Workspace folder outside the Agent's directory
+    that the archive left in place, if any.
+    """
 
     entry_id: str
     agent_id: str
     session_count: int
     policy_agent_ids: tuple[str, ...]
+    external_workspace: str | None = None
 
 
 @dataclass(frozen=True)
@@ -79,7 +84,11 @@ class SessionArchiveOutcome:
 
 @dataclass(frozen=True)
 class RestoreOutcome:
-    """A restored entry: where its Agent, Project or Sessions live now."""
+    """A restored entry: where its Agent, Project or Sessions live now.
+
+    ``grant_agent_ids`` are the Agents whose delegation lists name a restored
+    Agent again.
+    """
 
     entry_id: str
     kind: str
@@ -87,6 +96,7 @@ class RestoreOutcome:
     target_id: str
     addresses: tuple[SessionAddress, ...]
     warnings: tuple[RestoreProblem, ...]
+    grant_agent_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -117,19 +127,24 @@ class ArchiveListing:
 
     ``restorable`` is decided from the entry's kind, state, recorded payload
     format and whether its payload trees exist; a restore still runs the full
-    check (:meth:`ArchiveService.restore_check`).
+    check (:meth:`ArchiveService.restore_check`). ``purge_at`` is when the
+    retention period ends for the entry, ``None`` when retention never deletes it.
     """
 
     entry: ArchiveEntry
     label: str
     restorable: bool
     not_restorable_reason: str | None
+    purge_at: str | None = None
 
 
 @dataclass(frozen=True)
 class ArchivePage:
+    """One page of entries and the retention period in days (``None``: kept until deleted)."""
+
     entries: tuple[ArchiveListing, ...]
     next_cursor: ArchiveEntryCursor | None
+    retention_days: int | None = None
 
 
 @dataclass(frozen=True)

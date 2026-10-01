@@ -80,6 +80,7 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
         tree = services.data_dir / payload_path(ref.entry_id, "agent")
         try:
             with services.agents.archive_files(agent_id, tree) as archived:
+                external_workspace = archived.workspace if archived.workspace_external else None
                 session_count = ledger.commit_scope(
                     ref.entry_key,
                     ArchiveScope(agent_id=agent_id),
@@ -98,7 +99,9 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
         _LOGGER.exception(
             "Archive cleanup failed; it completes at the next start (entry=%s)", ref.entry_id
         )
-    return AgentArchiveOutcome(ref.entry_id, agent_id, session_count, policy_agent_ids)
+    return AgentArchiveOutcome(
+        ref.entry_id, agent_id, session_count, policy_agent_ids, external_workspace
+    )
 
 
 def _agent_facts(archived: ArchivedAgent) -> dict[str, Any]:
