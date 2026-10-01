@@ -26,18 +26,15 @@ from core.utils.retry import MAX_RETRIES
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_EMBEDDINGS_URL = f"{OPENROUTER_BASE_URL}/embeddings"
-GENERIC_BASE_URL = "https://example.test/v1"
 MODEL_ID = "google/gemini-embedding-2"
 
 
-def _client(
-    provider_id: str = "openrouter", base_url: str = OPENROUTER_BASE_URL
-) -> ProviderEmbeddingClient:
+def _client() -> ProviderEmbeddingClient:
     provider = ProviderConfig(
-        id=provider_id,
-        name=provider_id,
-        adapter=provider_id,
-        base_url=base_url,
+        id="openrouter",
+        name="OpenRouter",
+        adapter="openrouter",
+        base_url=OPENROUTER_BASE_URL,
         connections=[],
         extra_headers={"X-Title": "vBot"},
     )
@@ -62,52 +59,35 @@ _BASE_BODY = {"model": MODEL_ID, "encoding_format": "float"}
 
 
 @pytest.mark.parametrize(
-    ("provider_id", "inputs", "options", "purpose", "expected_fields"),
+    ("inputs", "options", "input_type", "expected_fields"),
     [
-        pytest.param("openrouter", ["a", "b"], {}, None, {}, id="defaults"),
+        pytest.param(["a", "b"], {}, None, {}, id="defaults"),
         # A single text still travels as a one-element array.
-        pytest.param("openrouter", ["only"], {"dimensions": None}, None, {}, id="unset-dimensions"),
+        pytest.param(["only"], {"dimensions": None}, None, {}, id="unset-dimensions"),
+        pytest.param(["a"], {"dimensions": 256}, None, {"dimensions": 256}, id="dimensions"),
         pytest.param(
-            "openrouter", ["a"], {"dimensions": 256}, None, {"dimensions": 256}, id="dimensions"
-        ),
-        pytest.param(
-            "openrouter",
             ["a"],
             {"dimensions": 256, "extra_options": {"user": "abc", "empty": ""}},
             None,
             {"dimensions": 256, "user": "abc"},
             id="extra-options-merged-without-empty-values",
         ),
-        pytest.param(
-            "openrouter", ["a"], {}, "query", {"input_type": "search_query"}, id="query-purpose"
-        ),
-        pytest.param(
-            "openrouter",
-            ["a"],
-            {},
-            "document",
-            {"input_type": "search_document"},
-            id="document-purpose",
-        ),
-        # ``input_type`` is verified for OpenRouter only.
-        pytest.param("generic", ["a"], {}, "query", {}, id="other-provider-omits-input-type"),
+        pytest.param(["a"], {}, "search_query", {"input_type": "search_query"}, id="input-type"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
 async def test_embed_sends_the_expected_request(
-    provider_id: str,
     inputs: list[str],
     options: dict[str, Any],
-    purpose: str | None,
+    input_type: str | None,
     expected_fields: dict[str, Any],
 ) -> None:
-    base_url = OPENROUTER_BASE_URL if provider_id == "openrouter" else GENERIC_BASE_URL
-    route = respx.post(f"{base_url}/embeddings").mock(
+    route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
         return_value=httpx.Response(200, json=_vectors_for(inputs))
     )
 
-    await _client(provider_id, base_url).embed(inputs, options=options, purpose=purpose)
+    await _client().embed(inputs, options=options, input_type=input_type)
 
     request = route.calls.last.request
     assert json.loads(request.content) == {**_BASE_BODY, "input": inputs, **expected_fields}
@@ -116,28 +96,25 @@ async def test_embed_sends_the_expected_request(
 
 
 @pytest.mark.parametrize(
-    ("options", "purpose"),
+    "options",
     [
-        pytest.param({"dimensions": 0}, None, id="zero-dimensions"),
-        pytest.param({"dimensions": 256.0}, None, id="float-dimensions"),
+        pytest.param({"dimensions": 0}, id="zero-dimensions"),
+        pytest.param({"dimensions": 256.0}, id="float-dimensions"),
         *(
-            pytest.param({"extra_options": {field: "override"}}, None, id=f"reserved-{field}")
+            pytest.param({"extra_options": {field: "override"}}, id=f"reserved-{field}")
             for field in ("model", "input", "encoding_format", "dimensions", "input_type")
         ),
-        pytest.param({}, "classification", id="unknown-purpose"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
-async def test_invalid_request_options_fail_before_any_request(
-    options: dict[str, Any], purpose: str | None
-) -> None:
+async def test_invalid_request_options_fail_before_any_request(options: dict[str, Any]) -> None:
     route = respx.post(OPENROUTER_EMBEDDINGS_URL).mock(
         return_value=httpx.Response(200, json=_vectors_for(["a"]))
     )
 
     with pytest.raises(ProviderError) as raised:
-        await _client().embed(["a"], options=options, purpose=purpose)
+        await _client().embed(["a"], options=options)
 
     assert raised.value.retryable is False
     assert route.call_count == 0

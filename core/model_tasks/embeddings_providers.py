@@ -1,6 +1,6 @@
 """Provider HTTP client for the `text_embedding` task-model binding.
 
-OpenAI-compatible embeddings POST ``/api/v1/embeddings`` with a single
+OpenAI-compatible embeddings POST ``<base>/embeddings`` with a single
 ``input`` string or an array of strings, return ``data[].embedding``
 floats in the same order as the request (using a complete ``index`` mapping
 when supplied), and let callers pin ``encoding_format="float"`` and (Matryoshka)
@@ -35,11 +35,6 @@ JsonObject = dict[str, Any]
 EMBEDDINGS_ENDPOINT = "/embeddings"
 DEFAULT_EMBEDDING_TIMEOUT = 60.0
 _PAYLOAD_DETAIL_LIMIT = 500
-_OPENROUTER_PROVIDER_ID = "openrouter"
-_OPENROUTER_INPUT_TYPES = {
-    "query": "search_query",
-    "document": "search_document",
-}
 
 
 @dataclass(frozen=True)
@@ -93,9 +88,9 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         inputs: list[str],
         *,
         options: JsonObject,
-        purpose: str | None = None,
+        input_type: str | None = None,
     ) -> ProviderEmbeddingResponse:
-        """Call the provider's ``/api/v1/embeddings`` endpoint.
+        """Call the provider's OpenAI-compatible ``/embeddings`` endpoint.
 
         *inputs* is forwarded verbatim as the ``input`` array — the
         wire contract accepts a single string or an array, and we always
@@ -103,12 +98,10 @@ class ProviderEmbeddingClient(ProviderTaskClient):
         task-model options dict; ``dimensions`` is forwarded when set as
         a positive integer, and the ``extra_options`` escape hatch may
         add provider-specific fields but cannot override authored wire
-        fields.
+        fields. *input_type* is sent only when given; the Model family's
+        profile decides it (:mod:`core.model_tasks.embedding_profiles`).
         """
 
-        input_type: str | None = None
-        if getattr(self._provider, "id", None) == _OPENROUTER_PROVIDER_ID:
-            input_type = _input_type_for_purpose(purpose)
         payload = _build_embeddings_payload(
             self._model_id,
             inputs,
@@ -132,7 +125,7 @@ def _build_embeddings_payload(
     *,
     input_type: str | None = None,
 ) -> JsonObject:
-    """Build the OpenAI/OpenRouter ``/api/v1/embeddings`` request payload.
+    """Build the OpenAI-compatible ``/embeddings`` request payload.
 
     ``input`` is always an array — a single-element array is the
     OpenAI-compatible way to request one embedding. ``encoding_format``
@@ -255,15 +248,6 @@ def _parse_embeddings_response(
         model_id=_parse_response_model_id(payload),
         usage=_parse_embedding_usage(payload.get("usage")),
     )
-
-
-def _input_type_for_purpose(purpose: str | None) -> str | None:
-    if purpose is None:
-        return None
-    try:
-        return _OPENROUTER_INPUT_TYPES[purpose]
-    except KeyError as error:
-        raise ProviderError(f"Unsupported embedding purpose: {purpose}", retryable=False) from error
 
 
 def _parse_response_model_id(payload: JsonObject) -> str | None:

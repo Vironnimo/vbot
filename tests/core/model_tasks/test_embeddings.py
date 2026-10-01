@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -20,6 +21,10 @@ from core.model_tasks import (
     EmbeddingService,
     EmbeddingUnsupportedTargetError,
     TaskModelError,
+)
+from core.model_tasks.embedding_profiles import (
+    EMBEDDING_PROFILE_CONTRACT_VERSION,
+    embedding_profile,
 )
 from core.model_tasks.embeddings_providers import (
     EmbeddingUsage,
@@ -67,9 +72,9 @@ class _FakeProviderClient:
         self.embed_calls: list[tuple[list[str], dict[str, Any], str | None]] = []
 
     async def embed(
-        self, inputs: list[str], options: dict[str, Any], purpose: str | None = None
+        self, inputs: list[str], options: dict[str, Any], input_type: str | None = None
     ) -> ProviderEmbeddingResponse:
-        self.embed_calls.append((list(inputs), dict(options), purpose))
+        self.embed_calls.append((list(inputs), dict(options), input_type))
         if self._embed_exception is not None:
             raise self._embed_exception
         return ProviderEmbeddingResponse(
@@ -163,8 +168,8 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
     assert result.actual_model_id == actual_model_id
     assert result.usage == usage
     assert result.space_fingerprint == service.resolve_space().fingerprint
-    # Inputs travel verbatim, with the binding's effective options and the purpose.
-    assert client.embed_calls == [(["alpha", "beta"], {"dimensions": 3}, "query")]
+    # Inputs travel with the binding's effective options and the family's query mode.
+    assert client.embed_calls == [(["alpha", "beta"], {"dimensions": 3}, "search_query")]
     _runtime, target_ref = provider_factory.call_args.args
     assert (
         target_ref.provider_id,
@@ -172,6 +177,64 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
         target_ref.connection_id,
         target_ref.local_connection_id,
     ) == ("openrouter", "google/gemini-embedding-2", "openrouter:api-key", "api-key")
+
+
+_QWEN_QUERY_PREFIX = (
+    "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:"
+)
+
+
+@pytest.mark.parametrize(
+    ("model_id", "purpose", "sent_inputs", "input_type"),
+    [
+        pytest.param(
+            "google/gemini-embedding-001",
+            "document",
+            ["alpha"],
+            "search_document",
+            id="input-type-family",
+        ),
+        pytest.param(
+            "qwen/qwen3-embedding-8b",
+            "query",
+            [f"{_QWEN_QUERY_PREFIX}alpha"],
+            None,
+            id="query-instruction-family",
+        ),
+        pytest.param(
+            "qwen/qwen3-embedding-8b", "document", ["alpha"], None, id="plain-document-side"
+        ),
+        pytest.param(
+            "intfloat/multilingual-e5-large",
+            "document",
+            ["passage: alpha"],
+            None,
+            id="document-prefix-family",
+        ),
+        pytest.param(
+            "openai/text-embedding-3-small", "query", ["alpha"], None, id="symmetric-family"
+        ),
+        pytest.param("example/unknown-embed", "query", ["alpha"], None, id="unknown-model"),
+        pytest.param("intfloat/multilingual-e5-large", None, ["alpha"], None, id="no-purpose"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_embed_applies_the_model_family_purpose_handling(
+    provider_factory: MagicMock,
+    model_id: str,
+    purpose: Any,
+    sent_inputs: list[str],
+    input_type: str | None,
+) -> None:
+    texts = ["alpha"]
+
+    await _service(f"openrouter/{model_id}::api-key").embed(texts, purpose=purpose)
+
+    assert provider_factory.return_value.embed_calls == [
+        (sent_inputs, {"dimensions": None}, input_type)
+    ]
+    # Prefixes exist only on the wire; the caller's text is never rewritten.
+    assert texts == ["alpha"]
 
 
 @pytest.mark.parametrize(
@@ -219,7 +282,9 @@ async def test_failed_provider_execution_is_an_execution_error(
     assert logged == ([] if log_level is None else [(log_level, logs_traceback)])
 
 
-def test_space_fingerprint_covers_target_and_effective_options() -> None:
+def test_space_fingerprint_covers_target_options_and_family_handling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def space(target: str, **options: Any) -> Any:
         return _service(target, **options).resolve_space()
 
@@ -240,3 +305,20 @@ def test_space_fingerprint_covers_target_and_effective_options() -> None:
         space(api_key, dimensions=256, extra_options={"user": "recall"}).fingerprint
         != baseline.fingerprint
     )
+
+    # The Model family's purpose handling and its profile contract version
+    # shape every request, so changing either starts a new space.
+    profile = embedding_profile("google/gemini-embedding-2")
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            "core.model_tasks.embeddings.embedding_profile",
+            lambda _model_id: replace(profile, query="retrieval_query"),
+        )
+        changed_handling = space(api_key, dimensions=768, extra_options={"user": "recall"})
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            "core.model_tasks.embedding_profiles.EMBEDDING_PROFILE_CONTRACT_VERSION",
+            EMBEDDING_PROFILE_CONTRACT_VERSION + 1,
+        )
+        changed_version = space(api_key, dimensions=768, extra_options={"user": "recall"})
+    assert baseline.fingerprint not in {changed_handling.fingerprint, changed_version.fingerprint}

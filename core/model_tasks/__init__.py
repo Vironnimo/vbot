@@ -16,11 +16,11 @@ if TYPE_CHECKING:
         TASK_TEXT_TO_SPEECH,
         TASK_VIDEO_GENERATION,
     )
+    from core.model_tasks.embedding_profiles import EmbeddingPurpose
     from core.model_tasks.embeddings import (
         EmbeddingConfigurationError,
         EmbeddingError,
         EmbeddingExecutionError,
-        EmbeddingPurpose,
         EmbeddingResult,
         EmbeddingService,
         EmbeddingSpaceIdentity,
@@ -122,7 +122,7 @@ _EXPORT_MODULES = {
     "EmbeddingConfigurationError": "core.model_tasks.embeddings",
     "EmbeddingError": "core.model_tasks.embeddings",
     "EmbeddingExecutionError": "core.model_tasks.embeddings",
-    "EmbeddingPurpose": "core.model_tasks.embeddings",
+    "EmbeddingPurpose": "core.model_tasks.embedding_profiles",
     "EmbeddingResult": "core.model_tasks.embeddings",
     "EmbeddingService": "core.model_tasks.embeddings",
     "EmbeddingSpaceIdentity": "core.model_tasks.embeddings",

@@ -22,9 +22,14 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
+from core.model_tasks.embedding_profiles import (
+    EMBEDDING_PURPOSES,
+    EmbeddingPurpose,
+    embedding_profile,
+)
 from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
 from core.providers.task_client import TaskClientRuntime
@@ -36,9 +41,6 @@ from core.utils.logging import get_logger
 JsonObject = dict[str, Any]
 _LOGGER = get_logger("embeddings")
 _EMBEDDING_SPACE_CONTRACT_VERSION = 1
-
-EmbeddingPurpose = Literal["query", "document"]
-_EMBEDDING_PURPOSES = frozenset({"query", "document"})
 
 
 class EmbeddingError(_BaseEmbeddingError):
@@ -128,6 +130,11 @@ class EmbeddingService:
     ) -> EmbeddingResult:
         """Embed a batch of texts using the configured binding.
 
+        *purpose* selects the Model family's query or document handling
+        (``input_type`` field or text prefix, see
+        :mod:`core.model_tasks.embedding_profiles`); ``None`` sends the texts
+        unchanged. Prefixes exist only on the wire, never in the caller's text.
+
         Raises:
             EmbeddingConfigurationError: No ``text_embedding`` binding
                 is configured, the target is malformed, or the input
@@ -146,7 +153,7 @@ class EmbeddingService:
                 raise EmbeddingConfigurationError(
                     f"Embedding input at index {index} is not a string"
                 )
-        if purpose is not None and purpose not in _EMBEDDING_PURPOSES:
+        if purpose is not None and purpose not in EMBEDDING_PURPOSES:
             raise EmbeddingConfigurationError(f"Unsupported embedding purpose: {purpose}")
 
         _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
@@ -157,6 +164,7 @@ class EmbeddingService:
             )
 
         identity = self._space_identity(target_ref, options)
+        request = embedding_profile(target_ref.model_id).request(texts, purpose)
         provider_client = ProviderEmbeddingClient.from_runtime(
             self._runtime,
             target_ref,
@@ -164,9 +172,9 @@ class EmbeddingService:
         )
         try:
             response = await provider_client.embed(
-                list(texts),
+                request.inputs,
                 options=options,
-                purpose=purpose,
+                input_type=request.input_type,
             )
         except EmbeddingError:
             raise
@@ -209,8 +217,9 @@ class EmbeddingService:
         """Return the full configured embedding-space identity without executing it.
 
         The fingerprint covers the normalized target (including connection and
-        account), the effective options after schema defaults, and this wire
-        contract version. Recall uses it to reject vectors produced by any
+        account), the effective options after schema defaults, the Model
+        family's purpose handling with its profile contract version, and this
+        wire contract version. Recall uses it to reject vectors produced by any
         materially different execution configuration, even when provider and
         model ids stay unchanged.
         """
@@ -230,6 +239,7 @@ class EmbeddingService:
                     "contract_version": _EMBEDDING_SPACE_CONTRACT_VERSION,
                     "target": target_ref.target,
                     "options": options,
+                    "profile": embedding_profile(target_ref.model_id).space_identity(),
                 },
                 ensure_ascii=False,
                 allow_nan=False,

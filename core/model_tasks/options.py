@@ -281,10 +281,9 @@ def _text_embedding_fields(
     ``dimensions`` integer; non-Matryoshka models reject it. The
     backend emits an empty default for optional ``number`` fields, and
     the wire layer drops empties — so this field is harmless for
-    models that ignore it. Future embedding fields (e.g. ``input_type``
-    for asymmetric query/document embedding) belong here too, gated
-    by ``model.capabilities.supported_parameters`` like the rest of
-    the model-aware schema builders.
+    models that ignore it. Query/document handling (``input_type`` or
+    text prefixes) is not an option: the Model family's embedding
+    profile decides it per request.
     """
 
     supported: frozenset[str] | None = (
