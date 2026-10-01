@@ -23,7 +23,12 @@ from typing import Any
 from core.model_tasks._live_brain import EFFECTS_LABEL, BrainTarget, DelegationInput, LiveBrain
 from scripts.provider_probe.live_cases import LiveCase, ScriptedVbot, describe, live_cases, matches
 from server.live._arguments import run_live_call
-from server.live._brief import DELEGATION_INSTRUCTIONS, LIVE_READ_ONLY_TOOLS, live_tools
+from server.live._brief import (
+    DELEGATION_INSTRUCTIONS,
+    LIVE_READ_ONLY_TOOLS,
+    TOOL_OVERVIEW,
+    live_tools,
+)
 
 JsonObject = dict[str, Any]
 
@@ -125,9 +130,14 @@ async def evaluate_live_case(
         record=records.append,
         max_steps=MAX_TRIAL_STEPS,
     )
+    # Like a real call, the request comes with what vBot shows right now.
+    state = (await vbot(TOOL_OVERVIEW, {}))["data"]["content"]
     answer = await brain.answer(
         DelegationInput(
-            request=case.request, conversation=case.conversation, updates="\n".join(case.updates)
+            request=case.request,
+            conversation=case.conversation,
+            updates="\n".join(case.updates),
+            state=state,
         )
     )
     judged = verdict(case, records)

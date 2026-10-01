@@ -15,6 +15,7 @@ from typing import Any
 
 from core.model_tasks.live import live_failure, live_success
 from server.live._brief import (
+    TOOL_END_CALL,
     TOOL_OPEN,
     TOOL_OVERVIEW,
     TOOL_READ,
@@ -138,7 +139,8 @@ def live_cases() -> list[LiveCase]:
         LiveCase(
             id="status",
             request="Was läuft gerade?",
-            right=(Expected(TOOL_OVERVIEW),),
+            # The request comes with the overview, so answering from it is right too.
+            right=(None, Expected(TOOL_OVERVIEW)),
         ),
         LiveCase(
             id="stop_second",
@@ -186,6 +188,29 @@ def live_cases() -> list[LiveCase]:
             id="maximize_terminal",
             request="Mach das Codex-Terminal groß.",
             right=(Expected(TOOL_TERMINAL, {"action": "maximize", "target": "t1"}),),
+        ),
+        LiveCase(
+            id="agent_not_in_terminal",
+            request="Sag dem Researcher im Codex-Terminal, er soll die Neuerungen von Python "
+            "3.14 zusammenfassen.",
+            right=(
+                Expected(
+                    TOOL_START_AGENT_SESSION,
+                    {"agent": "Researcher", "task": Contains("3.14", without="Terminal")},
+                ),
+                None,
+            ),
+            lookup_ok=False,
+        ),
+        LiveCase(
+            id="sleep_ends_call",
+            request="Okay, geh schlafen.",
+            earlier=(
+                "User: Starte Codex in vBot und reparier den fehlschlagenden Test.",
+                "Assistant: Codex läuft und hat die Aufgabe bekommen.",
+            ),
+            right=(Expected(TOOL_END_CALL),),
+            lookup_ok=False,
         ),
         LiveCase(
             id="unclear",
@@ -281,9 +306,11 @@ class ScriptedVbot:
                 "Reviewer",
                 "Parser review",
                 "finished",
-                "Found three issues in the parser. First, empty input crashes the tokenizer. "
-                "Second, line numbers are off by one after comments. Third, the error messages "
-                "omit the file name.",
+                "Found three issues in the parser. First, empty input crashes the tokenizer "
+                "because it reads past the end of the buffer. Second, line numbers are off by one "
+                "after block comments, so every later error points to the wrong line. Third, the "
+                "error messages omit the file name, which makes multi-file builds hard to debug. "
+                "I suggest fixing the tokenizer first.",
             ),
         ]
         self.terminals = {"t1": "Codex"}
@@ -314,15 +341,18 @@ class ScriptedVbot:
             "App: chat view; selected Agent: Coder; selected Project: vBot.",
             f"Agents: {', '.join(_AGENTS)}.",
             f"Projects: vBot ({_VBOT_FOLDER}).",
-            "Sessions (running, then recently finished):",
+            "Sessions (running, then recently finished; older ones are not listed):",
             *(_line(item) for item in self.sessions),
             "Terminals:",
             *(
-                f"- {ref} {label} in {_VBOT_FOLDER}: running"
+                f"- {ref} {label} in {_VBOT_FOLDER}: working"
                 for ref, label in self.terminals.items()
             ),
         ]
         return live_success("\n".join(lines))
+
+    def _end_call(self, arguments: JsonObject) -> JsonObject:
+        return live_success("The call ends in a few seconds.")
 
     def _start_agent_session(self, arguments: JsonObject) -> JsonObject:
         label = self._agent(str(arguments.get("agent") or ""))
@@ -500,5 +530,7 @@ class ScriptedVbot:
 def _line(item: _Session) -> str:
     head = f'- {item.ref} {item.agent} "{item.title}"'
     if item.last and item.state != "working":
-        return f'{head}: {item.state}: "{item.last}"'
+        # Like the real overview: the message's last 160 characters.
+        last = item.last if len(item.last) <= 160 else "..." + item.last[-157:]
+        return f'{head}: {item.state}: "{last}"'
     return f"{head}: {item.state}"

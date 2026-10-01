@@ -154,7 +154,8 @@ class LiveBrain:
             )
             failure = _failure_reason(exc)
             answer = _failure_note(failure)
-        answer = f"{answer}\n\n{_effects_line(progress.effects)}"
+        effects = _effects_line(progress.effects)
+        answer = f"{answer}\n\n{effects}" if answer else effects
         self._record_delegation(delegation, answer, progress, failure, started)
         self._history.append((request_label, answer))
         return answer
@@ -188,7 +189,9 @@ class LiveBrain:
             content = normalized.get("content")
             if not tool_calls:
                 text = content.strip() if isinstance(content, str) else ""
-                if not text:
+                # After a change (such as ending the call) the effects line says
+                # everything; without one, silence is a failure.
+                if not text and not progress.effects:
                     raise ValueError("the backend model returned no answer")
                 return text, None
             assistant: JsonObject = {"role": "assistant", "content": content}

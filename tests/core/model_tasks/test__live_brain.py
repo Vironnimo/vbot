@@ -259,6 +259,18 @@ async def test_history_keeps_previous_requests_and_answers_of_the_call():
 
 
 @pytest.mark.asyncio
+async def test_an_empty_answer_is_the_effects_line_after_a_change_and_a_failure_otherwise():
+    harness = Harness([_tool_turn(("send_message", {})), _answer(""), _answer(" ")])
+    harness.tool_results.append({"ok": True, "data": {"content": "The call ends soon."}})
+
+    assert await harness.brain.answer(DELEGATION) == f"{EFFECTS_LABEL} The call ends soon."
+    assert await harness.brain.answer(DELEGATION) == (
+        "The request could not be completed: the backend model request failed. Nothing was "
+        "retried." + NOTHING
+    )
+
+
+@pytest.mark.asyncio
 async def test_retryable_model_failures_are_retried_but_tools_never_replayed():
     harness = Harness(
         [
