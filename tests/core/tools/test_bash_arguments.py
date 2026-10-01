@@ -309,12 +309,24 @@ async def test_timeout_message_names_the_next_call(
     offers_background: bool,
 ) -> None:
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    schedule_timeout = bash_module._schedule_timeout
+    requested: list[float | None] = []
+
+    def schedule_soon(
+        process_manager: ProcessManager, context: Any, process_id: str, timeout: float | None
+    ) -> Any:
+        # The real deadline, without waiting the half second the message names.
+        requested.append(timeout)
+        return schedule_timeout(process_manager, context, process_id, 0.01)
+
+    monkeypatch.setattr(bash_module, "_schedule_timeout", schedule_soon)
 
     context = make_context(tmp_path, nesting_depth=depth)
     result = await _dispatch(
         manager, context, {"command": "import time; time.sleep(30)", **arguments}
     )
 
+    assert requested == [0.5]
     assert result["error"]["code"] == "process_timeout"
     assert context.presentation_details == [
         {

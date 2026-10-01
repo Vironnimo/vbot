@@ -48,7 +48,7 @@ from tests.core.tools.process_manager_test_support import (
 SERVER = (
     "import time\n"
     "print('booting', flush=True)\n"
-    "time.sleep(0.3)\n"
+    "time.sleep(0.05)\n"
     "print('Server READY on port 3000', flush=True)\n"
     "time.sleep(30)"
 )
@@ -537,7 +537,7 @@ async def test_terminal_manual_result_cancels_pending_completion_after_persisten
 async def test_wait_returns_the_final_result_when_the_command_exits(manager, tmp_path):
     persisted: list[Callable[[], None]] = []
     context = make_context(tmp_path, result_persisted_hook=persisted.append)
-    process_id = await spawn(manager, "import time; time.sleep(0.3); print('work done')")
+    process_id = await spawn(manager, "import time; time.sleep(0.05); print('work done')")
 
     result = await dispatch(manager, context, {"action": "wait", "process_id": process_id})
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,28 +18,71 @@ from core.agents.temporary import (
     TemporaryAgentRegistry,
     TemporaryExecutionGroups,
 )
-from core.database import write_bootstrap_marker
+from core.database import open_database
 from core.extensions import (
     ExtensionAPI,
     ExtensionRecord,
     ExtensionRegistrationIdentity,
     ExtensionRegistry,
 )
-from core.extensions.databases import Database, ExtensionDatabases
+from core.extensions.databases import Database, ExtensionDatabases, extension_database_spec
 from core.extensions.extensions import ExtensionDeclarations
 from core.extensions.operations import ExtensionHost
 from core.runs import ChatRunManager, RunExecutionOwner
 from core.sessions import ChatSessionManager
 from core.tools import ToolContext, ToolRegistry
 from core.tools.availability import ToolAccess
+from resources.extensions.swarm import _store_values
+from resources.extensions.swarm._store_database import DATABASE_NAME
 from resources.extensions.swarm.extension import register
-from resources.extensions.swarm.store import SwarmStore
+from resources.extensions.swarm.store import SCHEMA_SQL, SwarmStore
 from tests.core.chat.chat_loop_support import StubAdapter, StubAgent, StubRuntime, build_chat_loop
 from tests.resources.extensions.swarm.swarm_test_support import open_swarm_database
 
 
+def _swarm_database_path(data_dir: Path) -> Path:
+    return extension_database_spec(data_dir, "swarm", DATABASE_NAME, SCHEMA_SQL).path
+
+
+@pytest.fixture(scope="session")
+def swarm_data_template(
+    tmp_path_factory: pytest.TempPathFactory, current_session_store_template: Path
+) -> Path:
+    """Build one data directory with empty Session and Swarm databases per test worker.
+
+    Creating both schemas costs more than the rest of a fixture's setup; each test
+    copies these files instead.
+    """
+    template = tmp_path_factory.mktemp("swarm-data")
+    for name in ("data-store.json", "sessions.db"):
+        shutil.copy2(current_session_store_template / name, template)
+    open_database(extension_database_spec(template, "swarm", DATABASE_NAME, SCHEMA_SQL)).close()
+    return template
+
+
+def _clone_swarm_data(template: Path, data_dir: Path, *, sessions: bool = True) -> None:
+    """Copy the template's Swarm database, and its data store with Sessions, into data_dir."""
+    database = _swarm_database_path(data_dir)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_swarm_database_path(template), database)
+    if sessions:
+        for name in ("data-store.json", "sessions.db"):
+            shutil.copy2(template / name, data_dir)
+
+
+def _wake_without_default_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give profiles without their own ``coalesce_ms`` no wake delay.
+
+    Otherwise each test that enqueues a wake waits out the 250 ms default, at the
+    latest when Extension close awaits the pending wake. Tests of coalescing set
+    ``coalesce_ms`` themselves.
+    """
+    monkeypatch.setitem(_store_values._DELIVERY_DEFAULTS, "coalesce_ms", 0)
+
+
 @pytest.fixture
-def swarm_database(tmp_path: Path) -> Iterator[Database]:
+def swarm_database(tmp_path: Path, swarm_data_template: Path) -> Iterator[Database]:
+    _clone_swarm_data(swarm_data_template, tmp_path, sessions=False)
     database = open_swarm_database(tmp_path)
     yield database
     database.close()
@@ -53,7 +97,12 @@ async def store(swarm_database: Database) -> AsyncIterator[SwarmStore]:
 
 
 @pytest_asyncio.fixture
-async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[SimpleNamespace]:
+async def board(
+    tmp_path: Path,
+    swarm_data_template: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[SimpleNamespace]:
     """Register the Extension and bind three participants of one open Swarm.
 
     Indirect parametrization with ``False`` creates participants whose Sessions do not
@@ -61,7 +110,8 @@ async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator
     """
 
     inbox = getattr(request, "param", True)
-    write_bootstrap_marker(tmp_path)
+    _clone_swarm_data(swarm_data_template, tmp_path)
+    _wake_without_default_delay(monkeypatch)
     sessions = ChatSessionManager(tmp_path)
     manager = ChatRunManager()
     identity = SimpleNamespace(name="swarm", epoch="registration")
@@ -187,11 +237,15 @@ async def board(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator
 
 
 @pytest_asyncio.fixture
-async def lifecycle(tmp_path: Path) -> AsyncIterator[SimpleNamespace]:
+async def lifecycle(
+    tmp_path: Path, swarm_data_template: Path, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[SimpleNamespace]:
     """Load the production Extension into a real ChatLoop whose Provider answers forty Runs."""
 
     # Tasks of earlier tests on this worker's shared Event Loop, which ``settled`` ignores.
     earlier_tasks = asyncio.all_tasks()
+    _clone_swarm_data(swarm_data_template, tmp_path)
+    _wake_without_default_delay(monkeypatch)
     responses = [{"content": "Run finished"} for index in range(40)] + [
         {"content": "completion recorded"} for _ in range(40)
     ]
