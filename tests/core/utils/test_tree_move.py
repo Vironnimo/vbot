@@ -201,8 +201,11 @@ def test_remove_tree_deletes_only_inside_its_root_and_never_follows_links(
     real_unlink, refused_once = os.unlink, set()
 
     def unlink(path: Any, *args: Any, **kwargs: Any) -> None:
-        if Path(path).name in ("link", "linked") and path not in refused_once:
-            refused_once.add(path)
+        # By name: a retry may name the link by its full path where the first
+        # attempt used a name relative to a directory descriptor (Linux rmtree).
+        name = Path(path).name
+        if name in ("link", "linked") and name not in refused_once:
+            refused_once.add(name)
             raise PermissionError(errno.EACCES, "read-only link", str(path))
         real_unlink(path, *args, **kwargs)
 
