@@ -84,6 +84,7 @@ from core.providers._ollama_wire import (
     _extract_ollama_tool_calls,
     _extract_ollama_usage,
     _normalize_ollama_done_reason,
+    _ollama_openai_base_url,
     _ollama_stream_tool_calls,
     _to_ollama_messages,
 )
@@ -173,6 +174,12 @@ class OllamaAdapter(ProviderAdapter):
             base_url=self._base_url,
             debug_recorder=debug_recorder,
         )
+
+    @classmethod
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        """Ollama serves its OpenAI-compatible API under ``/v1`` beside ``/api``."""
+
+        return _ollama_openai_base_url(base_url)
 
     def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
         """Classify a transport failure, naming the likely cause for connect errors.

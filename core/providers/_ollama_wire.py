@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.providers._ollama_constants import (
+    _OLLAMA_OPENAI_PATH,
     _OLLAMA_TOOL_DONE_REASONS,
 )
 from core.providers.adapter import (
@@ -21,6 +22,17 @@ from core.providers.adapter import (
     tool_result_text,
 )
 from core.providers.errors import ProviderError
+
+
+def _ollama_openai_base_url(native_base_url: str) -> str:
+    """Return the OpenAI-compatible base for a native Ollama base URL."""
+
+    normalized = native_base_url.rstrip("/")
+    return (
+        normalized
+        if normalized.endswith(_OLLAMA_OPENAI_PATH)
+        else f"{normalized}{_OLLAMA_OPENAI_PATH}"
+    )
 
 
 def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

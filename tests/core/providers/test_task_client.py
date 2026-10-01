@@ -33,7 +33,12 @@ _THINGS_URL = f"{_PROVIDER_BASE_URL}/things"
 _OK = {"ok": True}
 
 
-def _make_provider(connection_base_url: str | None = None) -> ProviderConfig:
+def _make_provider(
+    connection_base_url: str | None = None,
+    *,
+    adapter: str = "openai_compatible",
+    base_url: str = _PROVIDER_BASE_URL,
+) -> ProviderConfig:
     connection = ConnectionConfig(
         id="api-key",
         type="api_key",
@@ -44,8 +49,8 @@ def _make_provider(connection_base_url: str | None = None) -> ProviderConfig:
     return ProviderConfig(
         id="example",
         name="Example",
-        adapter="openai_compatible",
-        base_url=_PROVIDER_BASE_URL,
+        adapter=adapter,
+        base_url=base_url,
         connections=[connection],
         extra_headers={"X-Title": "vBot"},
     )
@@ -92,14 +97,34 @@ class _StubRuntime:
 
 
 @pytest.mark.parametrize(
-    "connection_base_url", [None, _CONNECTION_BASE_URL], ids=["provider-url", "connection-url"]
+    ("adapter", "base_url", "connection_base_url", "expected_base_url"),
+    [
+        ("openai_compatible", _PROVIDER_BASE_URL, None, _PROVIDER_BASE_URL),
+        ("openai_compatible", _PROVIDER_BASE_URL, _CONNECTION_BASE_URL, _CONNECTION_BASE_URL),
+        # Native chat bases map to the Adapter's OpenAI-compatible API.
+        ("ollama", "http://localhost:11434", None, "http://localhost:11434/v1"),
+        ("ollama_cloud", "https://ollama.com", None, "https://ollama.com/v1"),
+        ("lmstudio", "http://localhost:1234", "http://lab:1234/", "http://lab:1234/v1"),
+        ("lmstudio", "http://localhost:1234/v1", None, "http://localhost:1234/v1"),
+    ],
+    ids=[
+        "provider-url",
+        "connection-url",
+        "ollama-native",
+        "ollama-cloud-native",
+        "lmstudio-connection-native",
+        "lmstudio-already-v1",
+    ],
 )
 @respx.mock
 @pytest.mark.asyncio
 async def test_from_runtime_binds_the_resolved_connection_credential_and_base_url(
+    adapter: str,
+    base_url: str,
     connection_base_url: str | None,
+    expected_base_url: str,
 ) -> None:
-    route = respx.post(f"{connection_base_url or _PROVIDER_BASE_URL}/things").mock(
+    route = respx.post(f"{expected_base_url}/things").mock(
         return_value=httpx.Response(200, json=_OK)
     )
     target = SimpleNamespace(
@@ -109,7 +134,8 @@ async def test_from_runtime_binds_the_resolved_connection_credential_and_base_ur
         local_connection_id="api-key",
     )
     client = ProviderTaskClient.from_runtime(
-        _StubRuntime(_make_provider(connection_base_url)), target
+        _StubRuntime(_make_provider(connection_base_url, adapter=adapter, base_url=base_url)),
+        target,
     )
 
     result = await client.post_and_parse("/things", timeout=5.0, parse=_json, json={"model": "m"})

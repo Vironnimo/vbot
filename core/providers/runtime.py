@@ -15,19 +15,11 @@ from core.models.database import ModelDatabaseRefresh, begin_runtime_model_datab
 from core.models.models import Model, ModelRegistry
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
-from core.providers.anthropic import AnthropicAdapter
+from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.credentials import ProviderCredentialResolver
 from core.providers.github_copilot import GitHubCopilotAdapter
-from core.providers.kimi import KimiAdapter
 from core.providers.lmstudio import LMStudioAdapter
-from core.providers.minimax import MiniMaxAdapter
-from core.providers.mistral import MistralAdapter
-from core.providers.nous import NousAdapter
-from core.providers.ollama import OllamaAdapter, OllamaCloudAdapter
-from core.providers.openai import OpenAIAdapter
-from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.opencode_go import OpenCodeGoAdapter
-from core.providers.opencode_zen import OpenCodeZenAdapter
+from core.providers.ollama import OllamaAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import (
     ConnectionConfig,
@@ -37,7 +29,6 @@ from core.providers.providers import (
     resolve_effective_context_window,
 )
 from core.providers.reasoning import ReasoningIntent, ReasoningReplayPolicy
-from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
     OAuthTokenGetter,
@@ -45,7 +36,6 @@ from core.providers.token_getter import (
     TokenGetter,
 )
 from core.providers.token_store import TokenStore
-from core.providers.xai import XAIAdapter
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.retry import caller_owns_retries
@@ -58,25 +48,6 @@ LOCAL_CATALOG_REFRESH_TTL_SECONDS = 30.0
 # Automatic local catalog refreshes stage, validate, publish, and discard the
 # complete Model DB copy here, never on the Event Loop.
 _LOCAL_CATALOG_WORKERS = BoundedWorkerPool(name="local-catalog", max_workers=1)
-
-ADAPTER_TYPES: dict[str, type[ProviderAdapter]] = {
-    "openai_compatible": OpenAICompatibleAdapter,
-    "openai": OpenAIAdapter,
-    "openrouter": OpenRouterAdapter,
-    "kimi": KimiAdapter,
-    "minimax": MiniMaxAdapter,
-    "mistral": MistralAdapter,
-    "nous": NousAdapter,
-    "stepfun": StepFunAdapter,
-    "opencode_go": OpenCodeGoAdapter,
-    "opencode_zen": OpenCodeZenAdapter,
-    "github_copilot": GitHubCopilotAdapter,
-    "anthropic": AnthropicAdapter,
-    "ollama": OllamaAdapter,
-    "ollama_cloud": OllamaCloudAdapter,
-    "lmstudio": LMStudioAdapter,
-    "xai": XAIAdapter,
-}
 
 
 class ProviderRuntime:

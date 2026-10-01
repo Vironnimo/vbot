@@ -61,6 +61,12 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         )
 
     @classmethod
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        """LM Studio serves its OpenAI-compatible API under ``/v1``."""
+
+        return _chat_base_url(base_url)
+
+    @classmethod
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
