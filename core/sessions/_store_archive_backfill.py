@@ -10,6 +10,9 @@ vBot wrote after a downgrade. Only this module knows the legacy layouts: an
 adopted tree is recorded by its path, so no other code branches on them.
 
 Every step skips what an entry already records, so adoption is idempotent.
+An adopted tree that may be a folder the user owns rather than a copy vBot made
+(every ``files`` tree, and a Workspace moved in from outside the data directory)
+is named in the entry's ``user_folders`` fact.
 """
 # ruff: noqa: E501
 
@@ -147,7 +150,10 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
                 archived_at=archived_at,
                 retention_start=now,
                 origin=ARCHIVE_ORIGIN_BACKFILL,
-                facts={"backfill": {**facts["backfill"], "match": "none"}},
+                facts={
+                    "backfill": {**facts["backfill"], "match": "none"},
+                    "user_folders": [extra.path for extra in tree.extras],
+                },
                 trees=_fixed(tree.extras),
             )
             counts[ARCHIVE_KIND_FILES] += 1
@@ -420,6 +426,8 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
             continue
         if child.name == "workspace" and child.is_dir():
             moved = True
+            if isinstance(workspace, str) and _outside(workspace, data_dir):
+                facts["user_folders"] = [_relative(child, data_dir)]
             trees.append(
                 ArchiveTree(
                     _relative(child, data_dir),
@@ -438,6 +446,17 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     return _LegacyTree(
         ARCHIVE_KIND_AGENT, subject, _relative(container, data_dir), trees, mtime, facts, extras
     )
+
+
+def _outside(workspace: str, data_dir: Path) -> bool:
+    """Whether a stored Workspace path names a folder outside the data directory."""
+    path = Path(workspace)
+    if not path.is_absolute():
+        return False
+    try:
+        return not path.resolve().is_relative_to(Path(data_dir).resolve())
+    except (OSError, RuntimeError):
+        return not path.is_relative_to(data_dir)
 
 
 def _inside_agent_home(workspace: str, agent_id: str, data_dir: Path) -> bool:
@@ -484,7 +503,12 @@ def _files_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     mtime = _mtime(container)
     path = _relative(container, data_dir)
     return _LegacyTree(
-        ARCHIVE_KIND_FILES, path, path, [ArchiveTree(path, ARCHIVE_TREE_FILES, None)], mtime, {}
+        ARCHIVE_KIND_FILES,
+        path,
+        path,
+        [ArchiveTree(path, ARCHIVE_TREE_FILES, None)],
+        mtime,
+        {"user_folders": [path]},
     )
 
 

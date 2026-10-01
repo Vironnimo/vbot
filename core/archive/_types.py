@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.sessions import ArchiveEntry, ArchiveEntryCursor, ArchiveMember, SessionAddress
+from core.sessions import (
+    ArchiveEntry,
+    ArchiveEntryCursor,
+    ArchiveMember,
+    ArchiveTree,
+    SessionAddress,
+)
 
 # Restore problems another target id avoids; every other blocker it does not.
 RESTORE_CONFLICT_CODES = frozenset({"agent_id_taken", "project_id_taken", "session_address_taken"})
@@ -131,13 +137,16 @@ class ArchiveEntryDetail:
     """One entry with its first Sessions, its payload state and its restore check.
 
     ``files`` is ``present`` when every payload tree exists, ``missing`` when
-    one is gone and ``none`` for an entry without trees.
+    one is gone and ``none`` for an entry without trees. ``user_folders`` are the
+    trees that may be folders the user owns rather than copies vBot made, such
+    as a Workspace an older vBot moved into the archive; a purge deletes them too.
     """
 
     listing: ArchiveListing
     sessions: tuple[ArchiveMember, ...]
     files: str
     restore: RestoreCheck
+    user_folders: tuple[ArchiveTree, ...] = ()
 
 
 __all__ = [

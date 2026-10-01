@@ -59,11 +59,14 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
         files = "present"
     else:
         files = "missing"
+    marked = entry.facts.get("user_folders")
+    named = set(marked) if isinstance(marked, list) else set()
     return ArchiveEntryDetail(
         listing=listing(services, entry),
         sessions=ledger.members(entry.entry_key, limit=session_limit),
         files=files,
         restore=_restore.check(services, entry_id, None),
+        user_folders=tuple(tree for tree in entry.trees if tree.path in named),
     )
 
 

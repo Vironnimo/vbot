@@ -19,7 +19,7 @@ from core.archive import (
     PendingPurge,
 )
 from core.chat import ChatSessionError
-from core.sessions import ArchiveEntryFilter, SessionAddress
+from core.sessions import ArchiveEntryFilter, ArchiveTree, SessionAddress
 from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
 
@@ -134,6 +134,10 @@ async def test_a_moved_legacy_workspace_returns_to_its_folder_or_the_default_one
     folder = (tmp_path / "repo").resolve()
     entry_id = legacy_agent_entry(world, folder)
     moved = world.data_dir / "archive" / "coder" / "workspace"
+    # The moved folder is the user's own, which the entry names.
+    assert (await world.service.show(entry_id)).user_folders == (
+        ArchiveTree("archive/coder/workspace", "workspace", str(folder)),
+    )
     if in_use != "nothing":
         folder.mkdir()
         (folder / "other.txt").write_text("other", encoding="utf-8")
@@ -398,3 +402,4 @@ async def test_entries_list_with_labels_and_show_their_sessions_files_and_restor
     assert agent_detail.listing.not_restorable_reason == "payload_missing"
     assert [problem.code for problem in agent_detail.restore.blockers] == ["payload_missing"]
     assert (session_detail.files, session_detail.restore.possible) == ("none", True)
+    assert agent_detail.user_folders == session_detail.user_folders == ()

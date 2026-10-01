@@ -126,9 +126,11 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     _write(archive / "agents/deepseek/agent/agent.json", {"id": "deepseek", "name": "DeepSeek"})
     _write(archive / "agents/main/agent/agent.json", {"format_version": 1, "id": "main"})
     _write(archive / "projects/team/project.json", {"format_version": 1, "cwd": "C:/repo/team"})
+    # A Workspace of the user's own, which an older vBot moved into the archive.
+    repo = str(tmp_path.parent / f"{tmp_path.name}-repo")
     _write(
         archive / "coder/agent/agent.json",
-        {"format_version": 2, "workspace": "C:/repo/coder", "root_project_id": "team"},
+        {"format_version": 2, "workspace": repo, "root_project_id": "team"},
     )
     _write(archive / "coder/workspace/notes.md", "kept")
     # Other trees beside an Agent's files outlive its restore in an entry of their own.
@@ -210,17 +212,22 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     )
     coder = entries[(ARCHIVE_KIND_AGENT, "coder")]
     assert coder.facts["payload_format"] == 2
-    assert coder.facts["workspace"] == {"path": "C:/repo/coder", "external": True, "moved": True}
+    assert coder.facts["workspace"] == {"path": repo, "external": True, "moved": True}
+    assert coder.facts["user_folders"] == ["archive/coder/workspace"]
     assert coder.trees == (
         ArchiveTree("archive/coder/agent", "agent", "agents/coder"),
-        ArchiveTree("archive/coder/workspace", "workspace", "C:/repo/coder"),
+        ArchiveTree("archive/coder/workspace", "workspace", repo),
     )
+    assert entries[(ARCHIVE_KIND_FILES, "archive/sessions")].facts["user_folders"] == [
+        "archive/sessions"
+    ]
     extras = entries[(ARCHIVE_KIND_FILES, "archive/coder")]
     assert (extras.archived_at, extras.session_count) == (coder.archived_at, 0)
     assert extras.trees == (
         ArchiveTree("archive/coder/exports", "files", None),
         ArchiveTree("archive/coder/log.txt", "files", None),
     )
+    assert extras.facts["user_folders"] == ["archive/coder/exports", "archive/coder/log.txt"]
 
     # Adopting again finds everything recorded.
     manager.close()

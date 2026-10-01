@@ -118,6 +118,7 @@ def legacy_agent_entry(world: ArchiveWorld, folder: Path) -> str:
             "name": "Coder",
             "payload_format": AGENT_FORMAT_VERSION,
             "workspace": {"path": str(folder), "external": True, "moved": True},
+            "user_folders": ["archive/coder/workspace"],
         },
     ).entry_id
 
