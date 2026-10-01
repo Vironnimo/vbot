@@ -23,6 +23,7 @@ from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_FILES,
     ARCHIVE_KIND_PROJECT,
+    ARCHIVE_ROOT,
     ARCHIVE_STATE_ARCHIVED,
     ARCHIVE_STATE_ARCHIVING,
     ARCHIVE_STATE_RESTORED,
@@ -35,12 +36,15 @@ from core.sessions import (
 )
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
-from core.utils.tree_move import move_tree
+from core.utils.tree_move import move_tree, remove_tree
 
 if TYPE_CHECKING:
     from core.archive.archive import ArchiveServices
 
 _LOGGER = get_logger("archive")
+
+# The configuration file that tells an Agent or Project payload tree apart from another one.
+_CONFIG_FILES = {ARCHIVE_TREE_AGENT: "agent.json", ARCHIVE_TREE_PROJECT: "project.json"}
 
 
 def recover(services: ArchiveServices) -> bool:
@@ -62,12 +66,6 @@ def recover(services: ArchiveServices) -> bool:
                 adoption.entries,
             )
             changed = True
-    try:
-        changed = _adopt_orphan_payloads(services) or changed
-    except Exception:
-        _LOGGER.exception(
-            "Archive payloads without an entry could not be adopted; retried at the next start"
-        )
     for entry in ledger.unsettled():
         try:
             changed = _settle(services, entry) or changed
@@ -76,6 +74,13 @@ def recover(services: ArchiveServices) -> bool:
                 "Archive entry recovery failed; it is retried at the next start (entry=%s)",
                 entry.entry_id,
             )
+    # After settling: an undone archive may leave a payload to adopt.
+    try:
+        changed = _adopt_orphan_payloads(services) or changed
+    except Exception:
+        _LOGGER.exception(
+            "Archive payloads without an entry could not be adopted; retried at the next start"
+        )
     return changed
 
 
@@ -121,37 +126,67 @@ def _settle(services: ArchiveServices, entry: ArchiveEntry) -> bool:
 
 
 def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
-    """Move an interrupted archive's files back and delete its entry; its Sessions never left."""
+    """Undo an interrupted archive and delete its entry; its Sessions never left.
+
+    A payload tree whose source path is free moves back. A payload tree beside
+    an intact source is a partial copy that an interrupted move between volumes
+    left, and is removed. Only when its configuration file differs from the
+    source's did a new Agent or Project take the id after the archive failed:
+    the payload is then the old one's only copy, so it stays and is adopted as a
+    recovered entry.
+    """
+    archive_root = services.data_dir / ARCHIVE_ROOT
+    kept: list[str] = []
     for tree in entry.trees:
         if tree.source_path is None:
             continue
         payload = stored_path(services, tree.path)
         source = stored_path(services, tree.source_path)
-        if payload.exists() and not os.path.lexists(source):
+        if not payload.exists():
+            continue
+        if not os.path.lexists(source):
             source.parent.mkdir(parents=True, exist_ok=True)
             move_tree(payload, source)
+        elif _partial_copy(payload, source, tree.role):
+            remove_tree(payload, within=archive_root)
+        else:
+            kept.append(tree.path)
     if entry.kind == ARCHIVE_KIND_PROJECT:
         reroot_agents(services, entry.facts.get("unrooted_agents") or (), entry.subject_id)
-    retained = [tree.path for tree in entry.trees if stored_path(services, tree.path).exists()]
-    if retained:
+    services.sessions.archive_ledger.abandon(entry.entry_key)
+    for tree in entry.trees:
+        prune_empty_parents(services, stored_path(services, tree.path))
+    if kept:
         _LOGGER.warning(
-            "Interrupted archive could not be rolled back; its files stay in the archive "
-            "(entry=%s kind=%s subject=%s)",
+            "Interrupted archive undone; a new %s took the id, so the archived files stay "
+            "for a recovered entry (entry=%s subject=%s paths=%s)",
+            entry.kind,
+            entry.entry_id,
+            entry.subject_id,
+            ", ".join(kept),
+        )
+    else:
+        _LOGGER.warning(
+            "Interrupted archive rolled back (entry=%s kind=%s subject=%s)",
             entry.entry_id,
             entry.kind,
             entry.subject_id,
         )
-        return False
-    services.sessions.archive_ledger.abandon(entry.entry_key)
-    for tree in entry.trees:
-        prune_empty_parents(services, stored_path(services, tree.path))
-    _LOGGER.warning(
-        "Interrupted archive rolled back (entry=%s kind=%s subject=%s)",
-        entry.entry_id,
-        entry.kind,
-        entry.subject_id,
-    )
     return True
+
+
+def _partial_copy(payload: Path, source: Path, role: str) -> bool:
+    """Whether a payload tree beside its intact source is an unfinished copy of it."""
+    name = _CONFIG_FILES.get(role)
+    if name is None:
+        return False
+    copied = payload / name
+    if not copied.exists():
+        return True
+    try:
+        return copied.read_bytes() == (source / name).read_bytes()
+    except OSError:
+        return False
 
 
 def _adopt_orphan_payloads(services: ArchiveServices) -> bool:

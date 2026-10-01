@@ -105,6 +105,51 @@ def test_interrupted_archives_are_rolled_back(world: ArchiveWorld, tmp_path: Pat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["partial-copy", "only-copy"])
+async def test_an_interrupted_archive_beside_an_intact_source_never_loses_either(
+    world: ArchiveWorld, payload: str
+) -> None:
+    agents, ledger = world.agents, world.sessions.archive_ledger
+    agents.create("coder", "Coder")
+    home = world.data_dir / "agents" / "coder"
+    ref = ledger.begin(
+        ARCHIVE_KIND_AGENT,
+        subject_id="coder",
+        agent_id="coder",
+        trees=lambda entry_id: (
+            ArchiveTree(f"archive/entries/{entry_id}/agent", ARCHIVE_TREE_AGENT, "agents/coder"),
+        ),
+    )
+    copy = world.payload(ref.entry_id, "agent")
+    if payload == "partial-copy":
+        # A move between volumes stopped while it copied; the source is whole.
+        shutil.copytree(home, copy)
+        shutil.rmtree(copy / "workspace")
+    else:
+        # The archive failed and its files could not go back; a new Agent then took the id.
+        copy.parent.mkdir(parents=True)
+        os.replace(home, copy)
+        agents.create("coder", "Newcomer")
+
+    world.service.recover()
+
+    listings = (await world.service.list(ArchiveEntryFilter())).entries
+    if payload == "partial-copy":
+        assert agents.get("coder").name == "Coder"
+        assert (listings, copy.exists()) == ((), False)
+    else:
+        # The old Agent's only copy stays, as a recovered entry under the same id.
+        assert agents.get("coder").name == "Newcomer"
+        [listing] = listings
+        assert (listing.entry.entry_id, listing.entry.origin, listing.label) == (
+            ref.entry_id,
+            ARCHIVE_ORIGIN_RECOVERED,
+            "Coder",
+        )
+        assert (copy / "agent.json").is_file()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("id_reused", [False, True], ids=["id-free", "id-reused"])
 async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_next_start(
     world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, id_reused: bool
