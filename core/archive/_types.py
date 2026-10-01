@@ -46,8 +46,8 @@ class RestoreCheck:
 class AgentArchiveOutcome:
     """An archived Identity Agent: its entry, how many Sessions it took, the changed grants.
 
-    ``external_workspace`` is the Workspace folder outside the Agent's directory
-    that the archive left in place, if any.
+    ``external_workspace`` is the absolute path of the Workspace folder outside the
+    Agent's own directory that the archive left in place, if any.
     """
 
     entry_id: str
@@ -208,6 +208,8 @@ class ArchiveEntryDetail:
     one is gone and ``none`` for an entry without trees. ``user_folders`` are the
     trees that may be folders the user owns rather than copies vBot made, such
     as a Workspace an older vBot moved into the archive; a purge deletes them too.
+    ``external_workspace`` is the absolute path of an archived Agent's Workspace
+    outside its own directory, which the archive left in place.
     """
 
     listing: ArchiveListing
@@ -215,6 +217,7 @@ class ArchiveEntryDetail:
     files: str
     restore: RestoreCheck
     user_folders: tuple[ArchiveTree, ...] = ()
+    external_workspace: str | None = None
 
 
 __all__ = [

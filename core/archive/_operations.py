@@ -80,7 +80,9 @@ def archive_agent(services: ArchiveServices, agent_id: str) -> AgentArchiveOutco
         tree = services.data_dir / payload_path(ref.entry_id, "agent")
         try:
             with services.agents.archive_files(agent_id, tree) as archived:
-                external_workspace = archived.workspace if archived.workspace_external else None
+                external_workspace = (
+                    archived.agent.workspace if archived.workspace_external else None
+                )
                 session_count = ledger.commit_scope(
                     ref.entry_key,
                     ArchiveScope(agent_id=agent_id),

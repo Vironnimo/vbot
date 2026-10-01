@@ -489,7 +489,9 @@ def _detail_lines(details: object) -> list[str]:
         lines.append(f"rooted in project: {details['root_project_id']}")
     workspace = details.get("workspace")
     if isinstance(workspace, dict) and workspace.get("external") and workspace.get("path"):
-        lines.append(f"workspace: {workspace['path']} (outside the data directory, left in place)")
+        lines.append(
+            f"workspace: {workspace['path']} (outside the Agent's own directory, left in place)"
+        )
     grants = _strings(details.get("grants"))
     if grants:
         lines.append(f"delegation grants: {', '.join(grants)}")

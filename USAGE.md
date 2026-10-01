@@ -563,7 +563,7 @@ Deleting an Agent, Project, or Session moves its vBot-owned state into the archi
 
 ### Archive
 
-Deleting an Identity Agent, a Project, or a Session creates one archive entry (`arc_` plus 12 characters), and the command prints its id together with the command that restores it. An Agent's entry holds its configuration, Workspace, Memory, private Skills, and Sessions; a custom Workspace outside the data directory stays where it is. A Project's entry holds its vBot metadata and Sessions; the repository is never touched. Each entry is restored or deleted as a whole, and deleting the same id again creates another entry.
+Deleting an Identity Agent, a Project, or a Session creates one archive entry (`arc_` plus 12 characters), and the command prints its id together with the command that restores it. An Agent's entry holds its configuration, Workspace, Memory, private Skills, and Sessions; a Workspace outside the Agent's own directory (`<data-dir>/agents/<agent-id>/`) stays where it is, and the delete names its absolute path. A Project's entry holds its vBot metadata and Sessions; the repository is never touched. Each entry is restored or deleted as a whole, and deleting the same id again creates another entry.
 
 ```bash
 vbot archive list --kind agent

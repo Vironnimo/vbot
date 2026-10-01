@@ -211,7 +211,7 @@ def test_archive_show_prints_facts_sessions_files_and_the_restore_check(
         '- id=ses_review title="Draft review" last_active_at=2026-09-30T13:00:00.000000Z',
         "files: present",
         "- agent: archive/entries/arc_7k2m9q4xw1ab/agent (from agents/coder)",
-        "workspace: C:/notes/coder (outside the data directory, left in place)",
+        "workspace: C:/notes/coder (outside the Agent's own directory, left in place)",
         "delegation grants: planner, orchestrator",
         "restore: blocked",
         "- agent_id_taken: an Agent with id coder exists; restore it under a new id with "

@@ -280,13 +280,16 @@ def _detail_payload(detail: ArchiveEntryDetail) -> JsonObject:
                 for tree in entry.trees
             ],
         },
-        "details": _entry_details(entry.facts),
+        "details": _entry_details(entry.facts, detail.external_workspace),
         "restore": _restore_check_payload(detail.restore),
     }
 
 
-def _entry_details(facts: Mapping[str, Any]) -> JsonObject:
-    """The recorded facts a reader needs, without restore or cleanup internals."""
+def _entry_details(facts: Mapping[str, Any], external_workspace: str | None) -> JsonObject:
+    """The recorded facts a reader needs, without restore or cleanup internals.
+
+    An external Workspace is named by its absolute path.
+    """
     details: JsonObject = {}
     for key in ("name", "root_project_id", "roster_index", "cwd", "reason"):
         if key in facts:
@@ -296,6 +299,8 @@ def _entry_details(facts: Mapping[str, Any]) -> JsonObject:
         details["workspace"] = {
             key: workspace.get(key) for key in ("path", "external") if key in workspace
         }
+        if external_workspace is not None:
+            details["workspace"]["path"] = external_workspace
     if "grants" in facts:
         details["grants"] = _agent_ids(facts["grants"])
     if "unrooted_agents" in facts:

@@ -118,18 +118,25 @@ async def test_a_repeated_archive_keeps_both_entries_and_restore_as_avoids_the_t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("workspace_state", ["present", "gone"])
+@pytest.mark.parametrize(
+    ("location", "workspace_state"),
+    [("outside-data-dir", "present"), ("outside-data-dir", "gone"), ("in-data-dir", "present")],
+)
 async def test_an_external_workspace_stays_in_place_and_returns_with_the_agent(
-    world: ArchiveWorld, tmp_path: Path, workspace_state: str
+    world: ArchiveWorld, tmp_path: Path, location: str, workspace_state: str
 ) -> None:
-    external = tmp_path / "repo"
+    # Outside the Agent's own directory, even inside the data directory.
+    external = tmp_path / "repo" if location == "outside-data-dir" else world.data_dir / "shared"
     workspace = world.agents.create("coder", workspace=external).workspace
     (external / "notes.md").write_text("mine", encoding="utf-8")
 
     archived = await world.service.archive_agent("coder")
 
     assert (external / "notes.md").read_text(encoding="utf-8") == "mine"
+    # Named by its absolute path.
     assert archived.external_workspace == workspace
+    shown = await world.service.show(archived.entry_id)
+    assert Path(shown.external_workspace or "") == Path(workspace)
     if workspace_state == "gone":
         shutil.rmtree(external)
     restored = await world.service.restore(archived.entry_id)

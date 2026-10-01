@@ -74,12 +74,21 @@ def show(services: ArchiveServices, entry_id: str, session_limit: int) -> Archiv
         files = "missing"
     marked = entry.facts.get("user_folders")
     named = set(marked) if isinstance(marked, list) else set()
+    workspace = entry.facts.get("workspace")
+    external_workspace = (
+        str(stored_path(services, workspace["path"]))
+        if isinstance(workspace, dict)
+        and workspace.get("external") is True
+        and isinstance(workspace.get("path"), str)
+        else None
+    )
     return ArchiveEntryDetail(
         listing=listing(services, entry, _retention_days(services)[0]),
         sessions=ledger.members(entry.entry_key, limit=session_limit),
         files=files,
         restore=_restore.check(services, entry_id, None),
         user_folders=tuple(tree for tree in entry.trees if tree.path in named),
+        external_workspace=external_workspace,
     )
 
 
