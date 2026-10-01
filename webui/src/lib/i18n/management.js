@@ -329,9 +329,9 @@ export default Object.freeze({
   'agents.deleteDescription':
     'Moves the Agent, its private Skills and its Sessions to the Archive, where you can restore them. An Agent that is still referenced or has active Runs cannot be deleted.',
   'agents.deleteConfirm':
-    'Delete {name}? The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside vBot’s data directory stays where it is. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'Delete {name}? The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. An Agent that is still referenced or has active Runs cannot be deleted.',
   'agents.deletePermanentConfirm':
-    'Delete {name} permanently? The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside vBot’s data directory stays where it is. Recorded usage and costs stay in Statistics.',
+    'Delete {name} permanently? The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. Recorded usage and costs stay in Statistics.',
   'agents.deleteBusy':
     'This Agent has an active or queued Run and cannot be deleted right now.',
   'agents.deleteInUse':
@@ -1032,7 +1032,7 @@ export default Object.freeze({
   'archive.detail.rootProject': 'Root Project',
   'archive.detail.workspace': 'Workspace',
   'archive.detail.workspaceExternal':
-    'Outside vBot’s data directory; it was left in place.',
+    'Outside the Agent’s own folder; it was left in place.',
   'archive.detail.grants': 'Agents that delegated to it',
   'archive.detail.unrootedAgents': 'Agents reset to their Default Workspace',
   'archive.detail.sessions': 'Sessions',
