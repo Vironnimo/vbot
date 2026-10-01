@@ -58,7 +58,20 @@ def test_desktop_client_round_trip_has_no_server_data(tmp_path: Path):
             "server_port": True,
             "server_data_directory": "relative-data",
         },
+        # Every installer records the channel URL and the release signing key.
+        {
+            "schema_version": 1,
+            "install_shape": "desktop-client",
+            "release_url": state.CHANNEL_URLS["release"],
+        },
+        {
+            "schema_version": 1,
+            "install_shape": "desktop-client",
+            "release_url": "https://example.invalid/releases/latest",
+            "release_public_key": "",
+        },
     ],
+    ids=["schema", "client_target", "server_target", "no_key", "unknown_channel"],
 )
 def test_installation_rejects_malformed_schema_and_targets(
     tmp_path: Path, payload: dict[str, object]

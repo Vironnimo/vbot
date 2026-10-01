@@ -133,6 +133,10 @@ class Installation:
     release_url: str = CHANNEL_URLS["release"]
     release_public_key: str = ""
 
+    def __post_init__(self) -> None:
+        if self.release_url not in CHANNEL_URLS.values():
+            raise ApplicationError("Unknown application update channel")
+
     @property
     def owns_server(self) -> bool:
         return self.install_shape != "desktop-client"
@@ -144,10 +148,8 @@ class Installation:
 
     @property
     def channel(self) -> str:
-        """``release``, ``main``, or ``custom`` for a deliberately configured URL."""
-        return next(
-            (name for name, url in CHANNEL_URLS.items() if url == self.release_url), "custom"
-        )
+        """The update channel ``release_url`` publishes: ``release`` or ``main``."""
+        return next(name for name, url in CHANNEL_URLS.items() if url == self.release_url)
 
     def version(self, version_id: str | None = None) -> Path:
         if version_id is None:
@@ -204,9 +206,8 @@ def load_installation(root: Path) -> Installation:
         or not Path(data).is_absolute()
     ):
         raise ApplicationError("Application server target is incomplete")
-    url = value.get("release_url", CHANNEL_URLS["release"])
-    key = value.get("release_public_key", "")
-    if not isinstance(url, str) or not url.startswith("https://") or not isinstance(key, str):
+    url, key = value.get("release_url"), value.get("release_public_key")
+    if not isinstance(url, str) or url not in CHANNEL_URLS.values() or not isinstance(key, str):
         raise ApplicationError("Invalid application release configuration")
     return Installation(root, shape, host, port, data, url, key)
 

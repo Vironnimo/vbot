@@ -418,7 +418,7 @@ class ApplicationFacade:
                 self._source_label = {
                     "release": "Published releases",
                     "main": "Newest main builds",
-                }.get(channel, "A custom release source")
+                }[channel]
         return self._source_label
 
 
