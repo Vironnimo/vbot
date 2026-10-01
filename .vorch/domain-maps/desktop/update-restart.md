@@ -1,6 +1,6 @@
 # Desktop update restart
 
-Read when changing how a packaged Desktop notices a newly activated version, restarts into it, or restores its window afterwards. Owner: `desktop/restart.py` (`DesktopRestart`), wired in `desktop/main.py`; the successor claim lives in `desktop/_windows.py`. The WebUI side (banner, idle preparation) is `webui/app-shell.md`; version activation is `cli/windows-application.md`.
+Read when changing how a packaged Desktop notices a newly activated version, restarts into it, or restores its window afterwards. Owner: `desktop/restart.py` (`DesktopRestart`), wired in `desktop/main.py`; the successor claim lives in `desktop/_windows.py`. The WebUI side (banner, idle preparation) is `webui/app-shell.md`; version activation is `cli/application.md`.
 
 ## Relaunch contract
 
