@@ -280,7 +280,6 @@ def test_restore_stops_verifies_and_restarts_the_previously_running_server(
         return CommandResult(ok=True, message="started", instance=resolved)
 
     _classified(monkeypatch, state, "absent")
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(data_store_management, "stop_server", stop)
     monkeypatch.setattr(data_store_management, "start_server", start)
 
@@ -332,7 +331,6 @@ def test_restore_checks_process_shutdown_even_after_listener_closed(
         return SnapshotRestore("snapshot")
 
     _classified(monkeypatch, "absent")
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(data_store_management, "stop_server", stop)
     monkeypatch.setattr(data_store_management, "restore_data_snapshot", restore)
     monkeypatch.setattr(
@@ -425,7 +423,6 @@ def test_unregister_releases_locally_and_a_restore_registers_it_again(
     path = notes_spec(tmp_path, name=_EXTENSION).path
     _stopped_server(monkeypatch, instance)
     monkeypatch.setattr(data_store_management, "live_server_ports", lambda _data_dir: ())
-    monkeypatch.setattr(data_store_management, "is_systemd_managed", lambda *_args: False)
     monkeypatch.setattr(
         data_store_management,
         "stop_server",

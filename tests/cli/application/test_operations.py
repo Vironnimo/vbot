@@ -12,6 +12,7 @@ import pytest
 
 from cli.application import operations
 from cli.application.state import ApplicationError, Installation, Operation, load_operation
+from core.utils import processes as core_processes
 
 
 def _install(root: Path) -> Installation:
@@ -69,7 +70,7 @@ def test_worker_spawn_is_detached_and_strips_run_caller_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, in_service: bool
 ):
     install = _install(tmp_path)
-    monkeypatch.setattr(operations, "_service_cgroup", lambda: in_service)
+    monkeypatch.setattr(core_processes, "_service_cgroup", lambda: in_service)
     operation = Operation(id="upd_spawn")
     captured: dict[str, object] = {}
     monkeypatch.setenv("VBOT_RUN_SESSION_ID", "session-secret")

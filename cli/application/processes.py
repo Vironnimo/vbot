@@ -12,7 +12,7 @@ import psutil  # type: ignore[import-untyped]
 
 from cli.application.autostart import UNIT_NAME, owned_unit, run_command
 from cli.application.operations import child_environment
-from cli.application.state import ApplicationError, Installation
+from cli.application.state import ApplicationError, Installation, discover
 from cli.server_management import (
     UNRESPONSIVE_SERVER_MESSAGE,
     CommandResult,
@@ -43,6 +43,21 @@ def target(install: Installation) -> ServerInstance:
     return resolve_instance(
         host=install.server_host, port=install.server_port, data_dir=install.server_data_directory
     )
+
+
+def owning_installation(instance: ServerInstance) -> Installation | None:
+    """The packaged installation whose recorded server *instance* is, if any.
+
+    Such a server starts and stops through its installation, never as a plain
+    process: a systemd user unit may run it.
+    """
+    install = discover()
+    if install is None or not install.owns_server:
+        return None
+    owned = target(install)
+    if owned.port != instance.port or owned.data_dir.resolve() != instance.data_dir.resolve():
+        return None
+    return install
 
 
 def server_state(

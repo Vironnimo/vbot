@@ -46,6 +46,25 @@ def add_parsers(subparsers) -> None:
     )
 
 
+# Commands that manage an installed application, and what a source checkout,
+# which is no installation, does instead.
+_INSTALLATION_AREAS = {
+    "application": "This command requires a packaged vBot installation",
+    "update": (
+        "vbot update updates a packaged vBot installation. "
+        "This is a source checkout: update it with git"
+    ),
+    "uninstall": (
+        "vbot uninstall removes a packaged vBot installation. "
+        "This is a source checkout: stop its server and delete the checkout yourself"
+    ),
+    "autostart": (
+        "vbot autostart registers a packaged vBot installation. "
+        "This is a source checkout: start its server with: vbot server start"
+    ),
+}
+
+
 def _print(value, *, lines: list[str] | None = None) -> None:
     if lines is None or output_mode.get() == "plain":
         print(json.dumps(value, ensure_ascii=False, indent=2))
@@ -115,15 +134,8 @@ def dispatch(args: argparse.Namespace) -> int | None:
         return 0
     install = discover()
     if install is None:
-        if args.area == "application" or (
-            args.area == "update"
-            and (
-                getattr(args, "update_action", None)
-                or getattr(args, "detach", False)
-                or getattr(args, "package", None)
-            )
-        ):
-            raise ApplicationError("This command requires a packaged vBot installation")
+        if args.area in _INSTALLATION_AREAS:
+            raise ApplicationError(_INSTALLATION_AREAS[args.area])
         return None
     from core.utils.logging import LogManager
 
@@ -245,10 +257,6 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
     if args.area == "autostart":
         from cli.application.autostart import autostart
 
-        if args.task_name or args.service_name:
-            raise ApplicationError(
-                "Packaged Autostart uses this installation's owned logon registration"
-            )
         registration = autostart(install, args.command)
         lines = [f"Autostart: {'enabled' if registration['enabled'] else 'disabled'}."]
         if "unit" in registration:
@@ -259,34 +267,24 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         return 0
     if args.area == "uninstall":
         from cli.application.integration import uninstall
-        from cli.uninstall_management import (
-            UninstallMode,
-            UninstallResult,
-            _choose_mode,
-            _confirm_mode,
-        )
 
         data = Path(install.server_data_directory) if install.server_data_directory else None
         if args.uninstall_mode is None:
             if not sys.stdin.isatty():
                 raise ApplicationError("Select --app-only, --data-only or --all explicitly")
             print(f"Application: {install.root}")
-            choice = _choose_mode(data, input_fn=input, output_fn=print)
-            if isinstance(choice, UninstallResult):
-                print(choice.message)
-                return 0 if choice.ok else 1
-            mode = choice.value
+            mode = _choose_removal(data)
         else:
             mode = args.uninstall_mode
         if mode in {"all", "data-only"} and data is None:
             raise ApplicationError("This Desktop Client does not own server data")
-        if not args.yes:
+        if mode is not None and not args.yes:
             if not sys.stdin.isatty():
                 raise ApplicationError("Use --yes to confirm the explicitly selected removal mode")
-            confirmed = _confirm_mode(UninstallMode(mode), data, input_fn=input, output_fn=print)
-            if confirmed is not None:
-                print(confirmed.message)
-                return 0 if confirmed.ok else 1
+            mode = mode if _confirm_removal(mode, data) else None
+        if mode is None:
+            print("uninstall: cancelled; no changes made")
+            return 0
         removal = uninstall(install, remove_data=mode == "all", data_only=mode == "data-only")
         lines = (
             [
@@ -383,3 +381,45 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
         if getattr(args, "host", None) in {None, "127.0.0.1"}:
             args.host = install.server_host
     return None
+
+
+def _answer(prompt: str) -> str | None:
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        return None
+
+
+def _choose_removal(data: Path | None) -> str | None:
+    """Ask what to remove; ``None`` cancels."""
+    if data is None:
+        print("This Desktop Client owns no local server or server data directory.")
+        choices = {"1": "app-only"}
+        print("  1) Application only")
+        print("  2) Cancel")
+        cancel = "2"
+    else:
+        choices = {"1": "app-only", "2": "data-only", "3": "all"}
+        print("What do you want to remove?")
+        print(f"  1) Application only (keep data at {data})")
+        print(f"  2) Data only (reset {data}, keep the application)")
+        print("  3) Application and data")
+        print("  4) Cancel")
+        cancel = "4"
+    while True:
+        answer = _answer(f"Selection [{cancel}]: ")
+        if answer is None or answer in {"", cancel, "q", "quit", "cancel"}:
+            return None
+        if answer in choices:
+            return choices[answer]
+        print(f"Enter {', '.join([*choices, cancel])}.")
+
+
+def _confirm_removal(mode: str, data: Path | None) -> bool:
+    if mode == "app-only":
+        return _answer("Remove the vBot application and keep its data? Type YES to continue: ") == (
+            "YES"
+        )
+    print("WARNING: This permanently deletes settings, credentials, Agents, and Sessions.")
+    print(f"Data directory: {data}")
+    return _answer("Type DELETE to continue: ") == "DELETE"

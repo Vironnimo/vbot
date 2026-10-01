@@ -22,7 +22,7 @@ from cli.application.state import (
     load_operation,
     operations,
 )
-from core.utils.processes import subprocess_creation_flags
+from core.utils.processes import outside_service_unit, subprocess_creation_flags
 from core.utils.server_control import process_started
 
 #: Set only for a tray host started by its predecessor's restart handoff.
@@ -53,19 +53,6 @@ def child_environment(install: Installation) -> dict[str, str]:
     return environment
 
 
-def _service_cgroup() -> bool:
-    """Whether this process runs inside a systemd service, such as the server's unit.
-
-    Everything left in a service's control group is killed when the service
-    stops, so a process that must outlive the server leaves it first.
-    """
-    try:
-        groups = Path("/proc/self/cgroup").read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    return any(line.rsplit(":", 1)[-1].endswith(".service") for line in groups)
-
-
 def worker_alive(operation: Operation) -> bool:
     if type(operation.worker_pid) is not int or not isinstance(
         operation.worker_created, (float, int)
@@ -84,22 +71,18 @@ def worker_alive(operation: Operation) -> bool:
 def spawn_worker(install: Installation, operation: Operation) -> None:
     executable = install.interpreter(role="Update")
     # The worker stops the server; started from inside the server's systemd
-    # unit, it moves into its own scope so that the stop does not end it too.
-    scope = (
-        ["systemd-run", "--user", "--scope", "--quiet", "--collect", "--"]
-        if os.name != "nt" and _service_cgroup()
-        else []
+    # unit, it leaves the unit so that the stop does not end it too.
+    args = outside_service_unit(
+        [
+            str(executable),
+            "-m",
+            "cli.application.worker",
+            "--root",
+            str(install.root),
+            "--operation",
+            operation.id,
+        ]
     )
-    args = [
-        *scope,
-        str(executable),
-        "-m",
-        "cli.application.worker",
-        "--root",
-        str(install.root),
-        "--operation",
-        operation.id,
-    ]
     startup_log = install.root / "logs" / f"{operation.id}-startup.log"
     startup_log.parent.mkdir(parents=True, exist_ok=True)
     with startup_log.open("ab") as output:

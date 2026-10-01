@@ -1,15 +1,15 @@
 # vBot installer for Windows.
 #
-# Installs the native application. -Dev selects main updates; -SourceCheckout
-# and current-checkout setup retain the separate Python development workflow.
+# Downloads the signed vBot installer of the latest release, of a chosen release
+# (-Version) or of the newest main build (-Main), verifies it against the release
+# metadata and installs it per user. Installations update from the same channel.
 #   irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 # To pass options, download and run as a file, or:
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Dev
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Main
 [CmdletBinding()]
 param(
     [string]$InstallDir = "",
-    [switch]$Dev,
-    [switch]$SourceCheckout,
+    [switch]$Main,
     [string]$Version = "",
     [string]$DataDir = (Join-Path $HOME ".vbot"),
     [string]$HostName = "127.0.0.1",
@@ -18,9 +18,7 @@ param(
     [switch]$Desktop,
     [switch]$DesktopClient,
     [switch]$NoAutostart,
-    [switch]$SkipWebuiBuild,
-    [switch]$AllowElevatedInstall,
-    [string]$TaskName = "vBot"
+    [switch]$AllowElevatedInstall
 )
 
 Set-StrictMode -Version Latest
@@ -28,14 +26,10 @@ $ErrorActionPreference = "Stop"
 # The trap below covers the whole script, including the option checks, and
 # reports this log.
 $InstallLogPath = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-install-{0:yyyyMMdd-HHmmss}-{1}.log" -f (Get-Date), $PID)
-$PreserveInstallLog = $false
 [System.IO.File]::WriteAllText($InstallLogPath, "vBot installation log`r`n", (New-Object System.Text.UTF8Encoding($false)))
 
-if ($Dev -and -not [string]::IsNullOrWhiteSpace($Version)) {
-    throw "-Version selects a specific release tag and cannot be combined with -Dev."
-}
-if ($Dev -and $SourceCheckout) {
-    throw "-Dev selects the native main installation; -SourceCheckout selects source-only installation. Choose one."
+if ($Main -and -not [string]::IsNullOrWhiteSpace($Version)) {
+    throw "-Version selects a specific release and cannot be combined with -Main."
 }
 if ($Desktop -and $DesktopClient) {
     throw "-Desktop and -DesktopClient are mutually exclusive."
@@ -45,16 +39,8 @@ if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) 
     $Version = "v$Version"
 }
 
-$RepoOwner = "Vironnimo"
-$RepoName = "vbot"
-$RepoUrl = "https://github.com/$RepoOwner/$RepoName.git"
-$ApiBase = "https://api.github.com/repos/$RepoOwner/$RepoName"
+$ApiBase = "https://api.github.com/repos/Vironnimo/vbot"
 $ApiHeaders = @{ "User-Agent" = "vbot-installer"; "Accept" = "application/vnd.github+json" }
-$AssetWaitSeconds = 300
-$AssetPollSeconds = 10
-$RootMarkerName = ".vbot-install-root"
-$VenvMarkerName = ".vbot-install-venv"
-$LegacyRootMarkerName = ".vbot-bootstrap"
 
 trap {
     $message = $_.Exception.Message
@@ -93,75 +79,6 @@ function Write-Status {
 }
 function Write-Step { param([string]$Message) Write-Status "WORK" $Message }
 
-function Invoke-CapturedNative {
-    # Windows PowerShell 5.1 turns each redirected stderr line of a native command
-    # into an error record, and "Stop" would abort on the first one, even for
-    # progress text. Return both streams as text; callers check $LASTEXITCODE.
-    param([string]$FilePath, [string[]]$ArgumentList)
-    $ErrorActionPreference = "Continue"
-    & $FilePath @ArgumentList 2>&1 | ForEach-Object { $_.ToString() }
-}
-
-function Invoke-SetupWithProgress {
-    param(
-        [string]$Executable,
-        [string]$Setup,
-        [string[]]$SetupArguments,
-        # Seconds without a new phase before an elapsed-time update.
-        [int]$ReportSeconds = 10
-    )
-    $job = Start-Job -ScriptBlock {
-        param($Executable, $Setup, $SetupArguments, $WorkingDirectory)
-        Set-Location -LiteralPath $WorkingDirectory
-        & $Executable -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Setup @SetupArguments 2>&1
-        [pscustomobject]@{ VbotSetupExitCode = $LASTEXITCODE }
-    } -ArgumentList $Executable, $Setup, $SetupArguments, (Get-Location).ProviderPath
-    $phase = "Installing and configuring vBot"
-    $started = [DateTime]::UtcNow
-    $lastReport = $started
-    $setupResult = $null
-    try {
-        do {
-            $null = Wait-Job -Job $job -Timeout 1
-            $finished = $job.State -ne "Running"
-            foreach ($entry in @(Receive-Job -Job $job)) {
-                if ($null -ne $entry.PSObject.Properties["VbotSetupExitCode"]) {
-                    $setupResult = [int]$entry.VbotSetupExitCode
-                    continue
-                }
-                $line = $entry.ToString()
-                Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
-                if ($VerbosePreference -eq "Continue") { Write-Host $line }
-                elseif ($line.StartsWith("==> ")) {
-                    $phase = $line.Substring(4)
-                    $started = [DateTime]::UtcNow
-                    $lastReport = $started
-                    Write-Step $phase
-                }
-                elseif ($line.StartsWith("Warning:")) { Write-Status "WARN" $line }
-            }
-            $now = [DateTime]::UtcNow
-            if (($now - $lastReport).TotalSeconds -ge $ReportSeconds -and $job.State -eq "Running") {
-                Write-Step ("{0} ({1}s elapsed)" -f $phase, [int]($now - $started).TotalSeconds)
-                $lastReport = $now
-            }
-        } while (-not $finished)
-        if ($null -eq $setupResult -or $job.State -ne "Completed") {
-            throw "The checkout setup process ended without a result."
-        }
-        return $setupResult
-    }
-    finally {
-        if ($job.State -eq "Running") { Stop-Job -Job $job }
-        Remove-Job -Job $job -Force
-    }
-}
-
-function Test-Have {
-    param([string]$Name)
-    return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
-}
-
 function Test-IsElevated {
     $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object System.Security.Principal.WindowsPrincipal($identity)
@@ -170,96 +87,12 @@ function Test-IsElevated {
     )
 }
 
-function Update-SessionPath {
-    $machine = [System.Environment]::GetEnvironmentVariable("Path", "Machine")
-    $user = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $parts = @($machine, $user) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-    $env:Path = $parts -join [System.IO.Path]::PathSeparator
-}
-
-function Install-WithWinget {
-    param([string]$Id, [string]$Label)
-    if (-not (Test-Have "winget")) {
-        throw "$Label is required but not found, and winget is unavailable to install it automatically. Install $Label manually and re-run."
-    }
-    Write-Step "Installing required component: $Label"
-    winget install --id $Id --exact --silent --accept-package-agreements --accept-source-agreements
-    Update-SessionPath
-}
-
-function Test-PythonOk {
-    if (-not (Test-Have "python")) {
-        return $false
-    }
-    $null = Invoke-CapturedNative -FilePath "python" -ArgumentList @(
-        "-c", "import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)"
-    )
-    return ($LASTEXITCODE -eq 0)
-}
-
-function Confirm-Python {
-    if (Test-PythonOk) {
-        return
-    }
-    Install-WithWinget -Id "Python.Python.3.12" -Label "Python 3.12"
-    if (-not (Test-PythonOk)) {
-        throw "Python was installed but isn't usable in this session. Open a new terminal and re-run."
-    }
-}
-
-function Confirm-Git {
-    if (Test-Have "git") {
-        return
-    }
-    Install-WithWinget -Id "Git.Git" -Label "Git"
-    if (-not (Test-Have "git")) {
-        throw "Git was installed but isn't on PATH in this session. Open a new terminal and re-run."
-    }
-}
-
-function Confirm-Node {
-    if ((Test-Have "node") -and (Test-Have "npm")) {
-        return
-    }
-    Install-WithWinget -Id "OpenJS.NodeJS.LTS" -Label "Node.js LTS"
-    if (-not ((Test-Have "node") -and (Test-Have "npm"))) {
-        throw "Node.js was installed but isn't on PATH in this session. Open a new terminal and re-run."
-    }
-}
-
-function Confirm-NativeBuildTools {
-    # Main updates recompile the Windows launchers only when their sources change.
-    # That needs LLVM's clang-cl and llvm-rc on PATH plus the Visual Studio C++ build
-    # tools with the Windows SDK, so a missing compiler warns instead of stopping.
-    $missing = @("clang-cl", "llvm-rc" | Where-Object { -not (Test-Have $_) })
-    if ($missing.Count -eq 0) {
-        return
-    }
-    $llvmBin = Join-Path $env:ProgramFiles "LLVM\bin"
-    $remedy = if (Test-Path -LiteralPath (Join-Path $llvmBin "clang-cl.exe") -PathType Leaf) {
-        "add $llvmBin to PATH"
-    }
-    else {
-        "install LLVM (winget install LLVM.LLVM) and add its bin directory to PATH"
-    }
-    Write-Status "WARN" "$($missing -join ' and ') not found. Main updates that change the Windows launchers fail until you $remedy; they also need the Visual Studio C++ build tools with the Windows SDK."
-}
-
-function Get-LatestTag {
-    # A repo without releases answers 404 here; surface the -Dev hint instead of
-    # the raw API error (mirrors install.sh).
-    try {
-        $release = Invoke-RestMethod -Uri "$ApiBase/releases/latest" -Headers $ApiHeaders
-    }
-    catch {
-        throw "Could not determine the latest release ($($_.Exception.Message)). Use -Dev to install from main."
-    }
-    return $release.tag_name
-}
-
 function Get-OfficialRelease {
-    param([string]$Tag)
-    $uri = if ([string]::IsNullOrWhiteSpace($Tag)) {
+    param([string]$Tag, [bool]$MainBuild)
+    $uri = if ($MainBuild) {
+        "$ApiBase/releases/tags/main-build"
+    }
+    elseif ([string]::IsNullOrWhiteSpace($Tag)) {
         "$ApiBase/releases/latest"
     }
     else {
@@ -285,46 +118,24 @@ function Get-ServerHealthUrl {
     return "http://${connectHost}:$ServerPort/health"
 }
 
-function Invoke-NativeCommand {
-    param([string[]]$Arguments)
-    $application = Join-Path $InstallDir "vBot.exe"
-    $previousHandoff = [Environment]::GetEnvironmentVariable("VBOT_UPDATE_HANDOFF", "Process")
-    try {
-        # Initial installation cannot resume a Run belonging to another instance.
-        [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $null, "Process")
-        Invoke-CapturedNative -FilePath $application -ArgumentList $Arguments | ForEach-Object {
-            $line = $_
-            Add-Content -LiteralPath $InstallLogPath -Value $line -Encoding UTF8
-            if ($VerbosePreference -eq "Continue") { Write-Host $line }
-            elseif ($line -match '^\[(WORK|OK|WARN|ERROR|INFO)\] (.+)$') {
-                Write-Status -State $Matches[1] -Message $Matches[2]
-            }
-        }
-        $commandExitCode = $LASTEXITCODE
-    }
-    finally {
-        [Environment]::SetEnvironmentVariable("VBOT_UPDATE_HANDOFF", $previousHandoff, "Process")
-    }
-    if ($commandExitCode -ne 0) {
-        throw "vbot $($Arguments -join ' ') failed. The installation and logs were retained; inspect $InstallLogPath and the current application status before retrying the failed step."
-    }
-}
-
 function Install-NativeRelease {
-    param([string]$Tag, [string]$Shape)
-    $release = Get-OfficialRelease -Tag $Tag
+    param([string]$Tag, [string]$Shape, [bool]$MainBuild)
+    $release = Get-OfficialRelease -Tag $Tag -MainBuild $MainBuild
     if ($null -eq $release -or [string]::IsNullOrWhiteSpace([string]$release.tag_name)) {
         throw "The official release response did not identify a version."
     }
-    $releaseVersion = ([string]$release.tag_name) -replace '^v', ''
-    $assetName = "vBot-$releaseVersion-windows-x86_64-$Shape.exe"
-    $asset = @($release.assets | Where-Object { $_.name -ceq $assetName })
+    # The installer carries the application version: vBot-<version>-windows-x86_64-<shape>.exe.
+    $pattern = '^vBot-(.+)-windows-x86_64-' + [regex]::Escape($Shape) + '\.exe$'
+    $asset = @($release.assets | Where-Object { [string]$_.name -cmatch $pattern })
     if ($asset.Count -ne 1) {
-        throw "The native $Shape package for release $($release.tag_name) is not yet published. Use -SourceCheckout to install that release from source."
+        throw "Release $($release.tag_name) publishes no single vBot $Shape installer for Windows."
     }
+    $null = [string]$asset[0].name -cmatch $pattern
+    $releaseVersion = $Matches[1]
+    $label = if ($MainBuild) { "the newest main build ($releaseVersion)" } else { "vBot $releaseVersion" }
     $digestText = [string]$asset[0].digest
     if ($digestText -notmatch '^sha256:([0-9a-fA-F]{64})$') {
-        throw "The native package has no valid GitHub SHA-256 digest; refusing to run it."
+        throw "The installer has no valid GitHub SHA-256 digest; refusing to run it."
     }
     $expectedDigest = $Matches[1].ToUpperInvariant()
     $assetUri = $null
@@ -333,11 +144,11 @@ function Install-NativeRelease {
         $assetUri.Scheme -cne "https" -or
         $assetUri.Host -cne "github.com"
     ) {
-        throw "The native package does not have an official HTTPS GitHub download URL."
+        throw "The installer does not have an official HTTPS GitHub download URL."
     }
     $installer = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-{0}-{1}.exe" -f $releaseVersion, $PID)
     try {
-        Write-Step "Downloading verified vBot $releaseVersion package"
+        Write-Step "Downloading $label"
         $previousProgressPreference = $ProgressPreference
         $ProgressPreference = "SilentlyContinue"
         try {
@@ -348,18 +159,19 @@ function Install-NativeRelease {
         }
         $actualDigest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
         if ($actualDigest -cne $expectedDigest) {
-            throw "The downloaded native package digest does not match the official release metadata."
+            throw "The downloaded installer digest does not match the official release metadata."
         }
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
         if ($signature.Status -ne "NotSigned" -and $signature.Status -ne "Valid") {
-            throw "The native package contains an invalid Authenticode signature."
+            throw "The installer contains an invalid Authenticode signature."
         }
         foreach ($value in @($InstallDir, $DataDir, $HostName)) {
             if ($value -match '["\r\n]') {
-                throw "Native installer paths and host names cannot contain quotes or newlines."
+                throw "Installer paths and host names cannot contain quotes or newlines."
             }
         }
-        $tasks = if ($Dev -or $NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
+        Write-Step "Installing $label"
+        $tasks = if ($NoAutostart -or $Shape -eq "desktop-client") { "" } else { "startup" }
         $arguments = @(
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -372,7 +184,7 @@ function Install-NativeRelease {
         )
         $process = Start-Process -FilePath $installer -ArgumentList $arguments -WindowStyle Hidden -Wait -PassThru
         if ($process.ExitCode -ne 0) {
-            throw "The native vBot installer exited with code $($process.ExitCode)."
+            throw "The vBot installer exited with code $($process.ExitCode)."
         }
     }
     finally {
@@ -381,21 +193,13 @@ function Install-NativeRelease {
     $statePath = Join-Path $InstallDir "application.json"
     $activePath = Join-Path $InstallDir "active-version"
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf) -or -not (Test-Path -LiteralPath $activePath -PathType Leaf)) {
-        throw "The native installer exited successfully but did not create a complete vBot installation."
+        throw "The vBot installer exited successfully but did not create a complete installation."
     }
     $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     if ([string]$state.install_shape -cne $Shape) {
-        throw "The installed vBot shape does not match the requested native package."
+        throw "The installed vBot shape does not match the requested installer."
     }
-    if ($Dev) {
-        Write-Step "Preparing the main installation"
-        Invoke-NativeCommand -Arguments @("application", "source", "main")
-        Invoke-NativeCommand -Arguments @("update")
-        if ($Shape -ne "desktop-client" -and -not $NoAutostart) {
-            Invoke-NativeCommand -Arguments @("autostart", "enable")
-        }
-    }
-    if ($Shape -ne "desktop-client" -and -not $NoAutostart) {
+    if ($tasks -eq "startup") {
         $ready = $false
         for ($attempt = 0; $attempt -lt 30 -and -not $ready; $attempt++) {
             try {
@@ -410,195 +214,12 @@ function Install-NativeRelease {
             throw "vBot was installed, but its requested server startup could not be verified."
         }
     }
-    if ($Dev) { Write-Status "OK" "vBot is installed and follows main." }
-    else { Write-Status "OK" "vBot $releaseVersion is installed." }
+    $following = if ($MainBuild) { "it updates from main builds" } else { "it updates from releases" }
+    Write-Status "OK" "$label is installed at $InstallDir; $following."
 }
 
-function Get-WebuiAssetUrl {
-    param([string]$Tag)
-    $release = Invoke-RestMethod -Uri "$ApiBase/releases/tags/$Tag" -Headers $ApiHeaders
-    $asset = $release.assets | Where-Object { $_.name -eq "webui-dist.tar.gz" } | Select-Object -First 1
-    if ($null -eq $asset) {
-        return $null
-    }
-    return $asset.browser_download_url
-}
-
-function Wait-WebuiAssetUrl {
-    param([string]$Tag)
-
-    $deadline = [DateTime]::UtcNow.AddSeconds($AssetWaitSeconds)
-    do {
-        try {
-            $url = Get-WebuiAssetUrl -Tag $Tag
-            if (-not [string]::IsNullOrWhiteSpace($url)) {
-                return $url
-            }
-        }
-        catch {
-            throw "Could not query release $Tag while waiting for its WebUI asset: $($_.Exception.Message)"
-        }
-        if ([DateTime]::UtcNow -lt $deadline) {
-            Start-Sleep -Seconds $AssetPollSeconds
-        }
-    } while ([DateTime]::UtcNow -lt $deadline)
-
-    throw "Release $Tag still has no webui-dist.tar.gz asset after $AssetWaitSeconds seconds. The install directory was not created; re-run once the release workflow finishes."
-}
-
-function Add-ToUserPath {
-    param([string]$PathToAdd)
-    $userPath = [System.Environment]::GetEnvironmentVariable("Path", "User")
-    $target = $PathToAdd.TrimEnd('\', '/')
-    if (-not [string]::IsNullOrWhiteSpace($userPath)) {
-        foreach ($entry in ($userPath -split [System.IO.Path]::PathSeparator)) {
-            if (-not [string]::IsNullOrWhiteSpace($entry) -and ($entry.TrimEnd('\', '/') -ieq $target)) {
-                return
-            }
-        }
-    }
-    $updated = if ([string]::IsNullOrWhiteSpace($userPath)) {
-        $PathToAdd
-    }
-    else {
-        "$userPath$([System.IO.Path]::PathSeparator)$PathToAdd"
-    }
-    [System.Environment]::SetEnvironmentVariable("Path", $updated, "User")
-    Write-Host "The vBot command will be available in new terminal windows."
-}
-
-function Add-VbotShim {
-    param([string]$InstallDir, [string]$VenvDir)
-    $binDir = Join-Path $InstallDir "bin"
-    New-Item -ItemType Directory -Path $binDir -Force | Out-Null
-    $pythonExe = Join-Path $VenvDir "Scripts\python.exe"
-    $shim = Join-Path $binDir "vbot.cmd"
-    # Run the module through Python instead of pip's generated vbot.exe. During
-    # `vbot update`, pip may replace that package launcher; keeping it out of the
-    # live process tree prevents Windows from locking the file against itself.
-    # Expose only vbot, so the venv's python/pip do not shadow the user's.
-    $escapedPythonExe = $pythonExe.Replace("%", "%%")
-    # -P keeps same-named packages in the caller's directory (cli, core, ...) from
-    # shadowing vBot's own.
-    $content = "@echo off`r`n`"$escapedPythonExe`" -P -m cli.main %*`r`n"
-    [System.IO.File]::WriteAllText($shim, $content, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Step "Making the vBot command available"
-    Add-ToUserPath -PathToAdd $binDir
-}
-
-function Write-ManagedRootMarker {
-    param([string]$InstallDir)
-    # Mark this directory as a self-contained managed install so uninstall.ps1
-    # knows it may remove the whole tree (venv + source), not just a pip package.
-    # Written right after the clone, so an installer that fails mid-install still
-    # leaves a marked tree that uninstall.ps1 can remove wholesale.
-    $marker = Join-Path $InstallDir $RootMarkerName
-    $lines = @(
-        "# vBot managed install marker.",
-        "# This directory is a self-contained vBot install created by scripts/install.ps1",
-        "# (it has its own virtual environment in .venv). Running scripts/uninstall.ps1",
-        "# (uninstall.sh on Linux) removes this entire directory, the 'vbot' launcher,",
-        "# and the autostart task. Your data directory is never touched."
-    )
-    $content = ($lines -join "`r`n") + "`r`n"
-    [System.IO.File]::WriteAllText($marker, $content, (New-Object System.Text.UTF8Encoding($false)))
-
-    # Releases published before install.ps1 became the public entrypoint contain
-    # an uninstaller that recognizes only the retired marker. Write it only for
-    # those checkouts so installing an older explicit/latest tag still uninstalls
-    # completely with the Uninstaller bundled in that tag.
-    $uninstaller = Join-Path $InstallDir "scripts\uninstall.ps1"
-    $supportsCurrentMarker = (Test-Path -LiteralPath $uninstaller -PathType Leaf) -and ((Get-Content -Raw -LiteralPath $uninstaller) -match '\.vbot-install-root')
-    if (-not $supportsCurrentMarker) {
-        $legacyMarker = Join-Path $InstallDir $LegacyRootMarkerName
-        $legacyContent = "# Compatibility marker for a vBot release with the previous Uninstaller contract.`r`n"
-        [System.IO.File]::WriteAllText($legacyMarker, $legacyContent, (New-Object System.Text.UTF8Encoding($false)))
-    }
-}
-
-function Write-ManagedVenvMarker {
-    param([string]$InstallDir)
-    $marker = Join-Path $InstallDir $VenvMarkerName
-    $lines = @(
-        "# vBot managed virtual-environment marker.",
-        "# scripts/install.ps1 created .venv in this existing checkout. Uninstall removes",
-        "# the managed environment and launcher but preserves the checkout and data."
-    )
-    $content = ($lines -join "`r`n") + "`r`n"
-    [System.IO.File]::WriteAllText($marker, $content, (New-Object System.Text.UTF8Encoding($false)))
-}
-
-function Expand-WebuiArchive {
-    param(
-        [string]$Archive,
-        [string]$Destination
-    )
-
-    $extractScript = @'
-import sys
-import tarfile
-from pathlib import Path
-
-archive_path = Path(sys.argv[1])
-destination = Path(sys.argv[2])
-with tarfile.open(archive_path, mode='r:gz') as archive:
-    members = archive.getmembers()
-    names = [member.name.rstrip('/') for member in members if member.name.rstrip('/')]
-    has_current_layout = any(name == 'webui/dist' or name.startswith('webui/dist/') for name in names)
-    has_legacy_layout = any(name == 'dist' or name.startswith('dist/') for name in names)
-    if has_current_layout:
-        extract_root = destination
-        allowed_prefixes = ('webui/', 'resources/extensions/')
-    elif has_legacy_layout:
-        extract_root = destination / 'webui'
-        allowed_prefixes = ('dist/',)
-    else:
-        raise SystemExit('WebUI archive has no recognized layout')
-    for member in members:
-        if not (member.isdir() or member.isfile()):
-            raise SystemExit(f'unsafe member type in WebUI archive: {member.name}')
-        name = member.name.rstrip('/')
-        if name and not any(name == prefix.rstrip('/') or name.startswith(prefix) for prefix in allowed_prefixes):
-            raise SystemExit(f'unexpected path in WebUI archive: {member.name}')
-        target = (extract_root / member.name).resolve()
-        if not target.is_relative_to(extract_root.resolve()):
-            raise SystemExit(f'unsafe path in WebUI archive: {member.name}')
-    archive.extractall(extract_root)
-'@
-    & python -c $extractScript $Archive $Destination
-    if ($LASTEXITCODE -ne 0) {
-        throw "Refusing to unpack the WebUI archive: it contains an unsafe path or member type."
-    }
-}
-
-$installDirWasProvided = $PSBoundParameters.ContainsKey("InstallDir")
-$localCheckout = $null
-if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
-    $candidateRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
-    if (
-        (Test-Path -LiteralPath (Join-Path $candidateRoot "pyproject.toml") -PathType Leaf) -and
-        (Test-Path -LiteralPath (Join-Path $candidateRoot "scripts\setup.ps1") -PathType Leaf)
-    ) {
-        $localCheckout = $candidateRoot
-    }
-}
-$useExistingCheckout = (
-    $null -ne $localCheckout -and
-    -not $installDirWasProvided -and
-    -not $Dev -and
-    [string]::IsNullOrWhiteSpace($Version)
-)
-$useNativeInstaller = -not $useExistingCheckout -and -not $SourceCheckout
-if ($useExistingCheckout) {
-    $InstallDir = $localCheckout
-}
-elseif ([string]::IsNullOrWhiteSpace($InstallDir)) {
-    $InstallDir = if ($useNativeInstaller) {
-        Join-Path $env:LOCALAPPDATA "Programs\vBot"
-    }
-    else {
-        Join-Path $HOME "vbot"
-    }
+if ([string]::IsNullOrWhiteSpace($InstallDir)) {
+    $InstallDir = Join-Path $env:LOCALAPPDATA "Programs\vBot"
 }
 elseif ($InstallDir -eq "~") {
     $InstallDir = $HOME
@@ -611,311 +232,17 @@ elseif (-not [System.IO.Path]::IsPathRooted($InstallDir)) {
 }
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 
-if ($useExistingCheckout) {
-    if (
-        -not (Test-Path -LiteralPath (Join-Path $InstallDir "pyproject.toml") -PathType Leaf) -or
-        -not (Test-Path -LiteralPath (Join-Path $InstallDir "scripts\setup.ps1") -PathType Leaf)
-    ) {
-        throw "The current checkout is incomplete: $InstallDir."
-    }
+if (Test-Path -LiteralPath $InstallDir) {
+    throw "$InstallDir already exists. To update an existing installation run 'vBot.exe update' there; otherwise remove it or pass -InstallDir to choose another location."
 }
-elseif (Test-Path -LiteralPath $InstallDir) {
-    throw "$InstallDir already exists. To update an existing install run 'vbot update'; otherwise remove it or pass -InstallDir to choose another location."
-}
-
 if ((Test-IsElevated) -and -not $AllowElevatedInstall) {
-    throw "Refusing to install from an elevated PowerShell because the checkout, virtual environment, and runtime files must belong to the normal user. Close this Administrator window and run the installer from a normal PowerShell. -AllowElevatedInstall is reserved for disposable automation."
+    throw "Refusing to install from an elevated PowerShell because the installation and its runtime files must belong to the normal user. Close this Administrator window and run the installer from a normal PowerShell. -AllowElevatedInstall is reserved for disposable automation."
 }
 
-if ($useNativeInstaller) {
-    if ($Dev) {
-        Write-Step "Checking main build requirements"
-        Confirm-Git
-        if (-not $DesktopClient) { Confirm-Node }
-        Confirm-NativeBuildTools
-    }
-    $shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
-    Install-NativeRelease -Tag $Version -Shape $shape
-    if (-not $PreserveInstallLog) {
-        Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
-    }
-    # return, unlike exit, keeps an `irm | iex` window open to show the result.
-    # A caller running this script sees the last native probe's exit code
-    # unless the success resets it.
-    $global:LASTEXITCODE = 0
-    return
-}
-
-Write-Step "Checking system requirements"
-if (-not $useExistingCheckout) {
-    Confirm-Git
-}
-Confirm-Python
-if (-not $DesktopClient -and -not $SkipWebuiBuild -and ($Dev -or $useExistingCheckout)) {
-    Confirm-Node
-}
-
-if ($useExistingCheckout) {
-    $rootMarker = Join-Path $InstallDir $RootMarkerName
-    $legacyRootMarker = Join-Path $InstallDir $LegacyRootMarkerName
-    $venvMarker = Join-Path $InstallDir $VenvMarkerName
-    if (-not (Test-Path -LiteralPath $rootMarker) -and -not (Test-Path -LiteralPath $legacyRootMarker) -and -not (Test-Path -LiteralPath $venvMarker)) {
-        Write-ManagedVenvMarker -InstallDir $InstallDir
-    }
-}
-elseif ($Dev) {
-    Write-Step "Downloading vBot from main"
-    $cloneOutput = @(Invoke-CapturedNative -FilePath "git" -ArgumentList @(
-        "clone", "--quiet", "--depth", "1", $RepoUrl, $InstallDir
-    ))
-    $cloneExitCode = $LASTEXITCODE
-    if ($cloneOutput.Count -gt 0) {
-        Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
-    }
-    if ($cloneExitCode -ne 0) {
-        throw "Could not download vBot from main."
-    }
-    Write-ManagedRootMarker -InstallDir $InstallDir
-}
-else {
-    if (-not [string]::IsNullOrWhiteSpace($Version)) {
-        $tag = $Version
-    }
-    else {
-        $tag = Get-LatestTag
-        if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw "Could not determine the latest release. Use -Dev to install from main."
-        }
-    }
-    $assetUrl = $null
-    if (-not $DesktopClient) {
-        Write-Step "Preparing vBot $tag"
-        $assetUrl = Wait-WebuiAssetUrl -Tag $tag
-    }
-
-    Write-Step "Downloading vBot $tag"
-    $cloneOutput = @(Invoke-CapturedNative -FilePath "git" -ArgumentList @(
-        "clone", "--quiet", "--depth", "1", "--branch", $tag, $RepoUrl, $InstallDir
-    ))
-    $cloneExitCode = $LASTEXITCODE
-    if ($cloneOutput.Count -gt 0) {
-        Add-Content -LiteralPath $InstallLogPath -Value $cloneOutput -Encoding UTF8
-    }
-    if ($cloneExitCode -ne 0) {
-        throw "Could not download vBot $tag."
-    }
-    Write-ManagedRootMarker -InstallDir $InstallDir
-
-    if (-not $DesktopClient) {
-        $webuiDir = Join-Path $InstallDir "webui"
-        New-Item -ItemType Directory -Path $webuiDir -Force | Out-Null
-        $archive = Join-Path $InstallDir "webui-dist.tar.gz"
-        $previousProgressPreference = $ProgressPreference
-        $ProgressPreference = "SilentlyContinue"
-        try {
-            Invoke-WebRequest -Uri $assetUrl -OutFile $archive -Headers $ApiHeaders
-            Expand-WebuiArchive -Archive $archive -Destination $InstallDir
-        }
-        finally {
-            $ProgressPreference = $previousProgressPreference
-            Remove-Item $archive -Force
-        }
-        if (-not (Test-Path (Join-Path $webuiDir "dist\index.html"))) {
-            throw "Prebuilt WebUI did not unpack to webui/dist."
-        }
-    }
-}
-
-Write-Step "Installing and configuring vBot"
-$venvDir = Join-Path $InstallDir ".venv"
-$venvOutput = @(Invoke-CapturedNative -FilePath "python" -ArgumentList @("-m", "venv", $venvDir))
-$venvExitCode = $LASTEXITCODE
-if ($venvOutput.Count -gt 0) {
-    Add-Content -LiteralPath $InstallLogPath -Value $venvOutput -Encoding UTF8
-}
-if ($venvExitCode -ne 0) {
-    throw "Could not create vBot's private Python environment."
-}
-# Put the venv first on PATH so the installer installs into it (mirrors `source activate`).
-$env:VIRTUAL_ENV = $venvDir
-$env:PATH = "$(Join-Path $venvDir 'Scripts')$([System.IO.Path]::PathSeparator)$env:PATH"
-
-$setup = Join-Path $InstallDir "scripts\setup.ps1"
-if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) {
-    $legacySetup = Join-Path $InstallDir "scripts\install.ps1"
-    $legacySetupContent = if (Test-Path -LiteralPath $legacySetup -PathType Leaf) { Get-Content -Raw -LiteralPath $legacySetup } else { "" }
-    if (-not $useExistingCheckout -and $legacySetupContent -match 'function Install-PythonPackage') {
-        $setup = $legacySetup
-        Write-Step "Using the checkout installer contract from release $tag"
-    }
-    else {
-        throw "The selected checkout has no usable internal setup script."
-    }
-}
-$setupArgList = @("-SkipPathUpdate")
-if ($Dev) {
-    $setupArgList += "-Dev"
-}
-elseif (-not $useExistingCheckout) {
-    $setupArgList += "-SkipWebuiBuild"
-}
-if ($SkipWebuiBuild -and $setupArgList -notcontains "-SkipWebuiBuild") {
-    $setupArgList += "-SkipWebuiBuild"
-}
-if ($PSBoundParameters.ContainsKey("DataDir")) {
-    $setupArgList += @("-DataDir", $DataDir)
-}
-if ($PSBoundParameters.ContainsKey("HostName")) {
-    $setupArgList += @("-HostName", $HostName)
-}
-if ($PSBoundParameters.ContainsKey("Port")) {
-    $setupArgList += @("-Port", "$Port")
-}
-if ($Desktop) {
-    $setupArgList += "-Desktop"
-}
-if ($DesktopClient) {
-    $setupArgList += "-DesktopClient"
-}
-if ($NoAutostart) {
-    $setupArgList += "-NoAutostart"
-}
-if ($PSBoundParameters.ContainsKey("TaskName")) {
-    $setupArgList += @("-TaskName", $TaskName)
-}
-
-$setupSupportsRecoverableProblems = (Get-Content -Raw -LiteralPath $setup) -match '\$RecoverableProblemExitCode'
-$powerShellExecutable = if ($PSVersionTable.PSEdition -eq "Core") {
-    Join-Path $PSHOME "pwsh.exe"
-}
-else {
-    Join-Path $PSHOME "powershell.exe"
-}
-# Array splatting into another PowerShell script binds entries positionally, so
-# option names such as -SkipPathUpdate can become values for unrelated parameters.
-# A child PowerShell process parses the forwarded tokens as real named arguments.
-$setupExitCode = Invoke-SetupWithProgress -Executable $powerShellExecutable -Setup $setup -SetupArguments $setupArgList
-$setupReportedProblems = $setupSupportsRecoverableProblems -and $setupExitCode -eq 2
-if ($setupExitCode -ne 0 -and -not $setupReportedProblems) {
-    throw "The vBot checkout setup failed with exit code $setupExitCode."
-}
-
-Add-VbotShim -InstallDir $InstallDir -VenvDir $venvDir
-
-Write-Step "Verifying the installation"
-$vbotExe = Join-Path $venvDir "Scripts\vbot.exe"
-if ($DesktopClient) {
-    Write-Host ""
-    Write-Status "OK" "vBot is ready."
-    Write-Host "Open vBot Desktop from the Start menu, or open a new terminal and run: vbot desktop"
-}
-else {
-    # The setup manifest is the source of truth for the effective target. In
-    # particular, an existing settings.json may select a port different from
-    # the installer's default when -Port was not explicitly supplied.
-    $summaryHost = $HostName
-    $summaryPort = $Port
-    $summaryDataDir = $DataDir
-    $installStatePath = Join-Path $InstallDir ".vbot-install.json"
-    if (Test-Path -LiteralPath $installStatePath -PathType Leaf) {
-        $installState = Get-Content -Raw -LiteralPath $installStatePath | ConvertFrom-Json
-        $serverHostProperty = $installState.PSObject.Properties["server_host"]
-        $serverPortProperty = $installState.PSObject.Properties["server_port"]
-        $serverDataDirectoryProperty = $installState.PSObject.Properties["server_data_directory"]
-        if (
-            $null -ne $serverHostProperty -and $null -ne $serverHostProperty.Value -and
-            $null -ne $serverPortProperty -and $null -ne $serverPortProperty.Value -and
-            $null -ne $serverDataDirectoryProperty -and $null -ne $serverDataDirectoryProperty.Value
-        ) {
-            $summaryHost = [string]$serverHostProperty.Value
-            $summaryPort = [int]$serverPortProperty.Value
-            $summaryDataDir = [string]$serverDataDirectoryProperty.Value
-        }
-    }
-
-    $serverStatusOutput = @(Invoke-CapturedNative -FilePath $vbotExe -ArgumentList @(
-        "server", "status", "--host", $summaryHost, "--port", $summaryPort, "--data-dir", $summaryDataDir
-    ))
-    $serverStatusExitCode = $LASTEXITCODE
-    $serverStatusText = $serverStatusOutput -join [Environment]::NewLine
-    Add-Content -LiteralPath $InstallLogPath -Value $serverStatusText -Encoding UTF8
-    $serverRunning = $serverStatusText -match '(?m)^running: yes\s*$'
-    $portConflict = $serverStatusText -match '(?m)^conflict: port occupied by non-vBot process\s*$'
-
-    $autostartEnabled = $false
-    $autostartStatusKnown = $true
-    if (-not $NoAutostart) {
-        $autostartStatusOutput = @(Invoke-CapturedNative -FilePath $vbotExe -ArgumentList @(
-            "autostart", "status", "--host", $summaryHost, "--port", $summaryPort,
-            "--data-dir", $summaryDataDir, "--task-name", $TaskName
-        ))
-        $autostartStatusExitCode = $LASTEXITCODE
-        $autostartStatusText = $autostartStatusOutput -join [Environment]::NewLine
-        Add-Content -LiteralPath $InstallLogPath -Value $autostartStatusText -Encoding UTF8
-        $autostartEnabled = $autostartStatusExitCode -eq 0 -and $autostartStatusText -match '(?m)^autostart: enabled\b'
-        $autostartStatusKnown = $autostartStatusExitCode -eq 0
-    }
-
-    $problems = New-Object System.Collections.Generic.List[string]
-    if ($setupReportedProblems) {
-        $problems.Add("Autostart setup failed. Any existing Task Scheduler entry was not successfully refreshed for this installation.") | Out-Null
-    }
-    elseif (-not $NoAutostart -and -not $autostartStatusKnown) {
-        $problems.Add("Autostart status could not be verified.") | Out-Null
-    }
-    elseif (-not $NoAutostart -and -not $autostartEnabled) {
-        $problems.Add("Per-user Autostart is not enabled; Administrator elevation is not required.") | Out-Null
-    }
-    if ($serverStatusExitCode -ne 0) {
-        $problems.Add("The final server status check failed.") | Out-Null
-    }
-    elseif (-not $serverRunning -and -not $NoAutostart) {
-        $serverProblem = if ($portConflict) {
-            "The server is not running because port $summaryPort is occupied by another process."
-        }
-        else {
-            "The server is not running, so the WebUI is not available."
-        }
-        $problems.Add($serverProblem) | Out-Null
-    }
-
-    Write-Host ""
-    if ($problems.Count -eq 0 -and $serverRunning) {
-        Write-Status "OK" "vBot is ready."
-        Write-Host "Open: http://${summaryHost}:$summaryPort/"
-        if ($Desktop) {
-            Write-Host "Desktop: open vBot Desktop from the Start menu."
-        }
-    }
-    elseif ($problems.Count -eq 0 -and $NoAutostart -and -not $serverRunning) {
-        Write-Status "OK" "vBot is installed."
-        Write-Host "Autostart was not requested, so the server was not started."
-        Write-Host "Start it with:"
-        Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
-    }
-    else {
-        $PreserveInstallLog = $true
-        Write-Status "WARN" "vBot was installed, but it needs attention."
-        foreach ($problem in $problems) {
-            Write-Host "- $problem"
-        }
-        if ($serverRunning) {
-            Write-Host "Open: http://${summaryHost}:$summaryPort/"
-        }
-        if (-not $NoAutostart -and ($setupReportedProblems -or -not $autostartEnabled)) {
-            Write-Host "Enable Autostart and start vBot with:"
-            Write-Host "  & `"$vbotExe`" autostart enable --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`" --task-name `"$TaskName`""
-        }
-        elseif (-not $serverRunning) {
-            Write-Host "Start the server with:"
-            Write-Host "  & `"$vbotExe`" server start --host $summaryHost --port $summaryPort --data-dir `"$summaryDataDir`""
-        }
-        Write-Host "Technical details: $InstallLogPath"
-    }
-}
-
-if (-not $PreserveInstallLog) {
-    Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
-}
-# The installation finished; a caller must not see a native probe's exit code.
+$shape = if ($DesktopClient) { "desktop-client" } elseif ($Desktop) { "server-desktop" } else { "server" }
+Install-NativeRelease -Tag $Version -Shape $shape -MainBuild ([bool]$Main)
+Remove-Item -LiteralPath $InstallLogPath -Force -ErrorAction SilentlyContinue
+# return, unlike exit, keeps an `irm | iex` window open to show the result.
+# A caller running this script sees the last native probe's exit code unless the
+# success resets it.
 $global:LASTEXITCODE = 0

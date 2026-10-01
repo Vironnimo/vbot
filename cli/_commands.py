@@ -28,11 +28,9 @@ from cli._dispatch_connections import (
 from cli._dispatch_lifecycle import (
     ServerCommandContext,
     _launch_desktop,
-    dispatch_autostart_command,
     dispatch_desktop_command,
     dispatch_doctor_command,
     dispatch_server_command,
-    dispatch_update_command,
 )
 from cli._dispatch_operations import (
     _statistics_report_adapter,
@@ -59,11 +57,8 @@ from cli._output import (
     print_config_command_result,
     print_management_command_result,
     print_server_command_start,
-    print_update_command_result,
-    print_update_command_start,
     with_command_output,
 )
-from cli._progress import ProgressPrinter
 from cli.agent_management import (
     agent_create,
     agent_delete,
@@ -72,7 +67,6 @@ from cli.agent_management import (
     agent_show,
     agent_update,
 )
-from cli.autostart_management import DEFAULT_TASK_NAME
 from cli.channel_management import (
     channel_access,
     channel_add,
@@ -112,7 +106,6 @@ from cli.parser import parse_args
 from cli.prompt_management import prompt_list, prompt_preview, prompt_reset, prompt_update
 from cli.provider_management import provider_list, provider_set_key, provider_status, provider_usage
 from cli.server_management import (
-    DEFAULT_SERVICE_NAME,
     CommandResult,
     ServerInstance,
     get_status,
@@ -122,8 +115,6 @@ from cli.server_management import (
 )
 from cli.skill_management import list_skills
 from cli.tool_management import tool_list
-from cli.uninstall_management import UninstallMode, UninstallResult, run_uninstall
-from cli.update_management import read_checkout_version
 from core.utils.config import VBOT_ROOT, Config
 
 __all__ = [
@@ -133,8 +124,6 @@ __all__ = [
     "print_command_result",
     "print_management_command_result",
     "print_channel_command_result",
-    "print_update_command_result",
-    "print_update_command_start",
     "_agent_changes_from_args",
     "_channel_changes_from_args",
     "_model_filters_from_args",
@@ -233,7 +222,6 @@ def run(
     doctor_settings_fn: Callable[[str | Path | None], CommandResult] = doctor_settings,
     doctor_config_fn: Callable[[str | Path | None], CommandResult] = doctor_config,
     launch_desktop_fn: Callable[[Sequence[str]], None] = _launch_desktop,
-    uninstall_fn: Callable[..., UninstallResult] = run_uninstall,
 ) -> int:
     """Run the CLI and return an automation-safe process exit code."""
 
@@ -255,7 +243,6 @@ def run(
             host=args.host,
             port=args.port,
             data_dir=args.data_dir,
-            service_name=getattr(args, "service_name", None) or DEFAULT_SERVICE_NAME,
             resolve=resolve,
             start=start,
             stop=stop,
@@ -274,42 +261,6 @@ def run(
             doctor_settings_fn=doctor_settings_fn,
             doctor_config_fn=doctor_config_fn,
         )
-        print_management_command_result(result)
-        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
-
-    if args.area == "update":
-        version_before = read_checkout_version()
-        print_update_command_start(version_before)
-        with ProgressPrinter() as progress:
-            result = dispatch_update_command(
-                args, resolve=resolve, stop=stop, start=start, progress=progress.emit
-            )
-        print_update_command_result(
-            result,
-            version_before=version_before,
-            version_after=read_checkout_version(),
-            shown_messages=progress.messages,
-        )
-        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
-
-    if args.area == "uninstall":
-        uninstall_result = uninstall_fn(
-            mode=UninstallMode(args.uninstall_mode) if args.uninstall_mode else None,
-            assume_yes=args.yes,
-            host=args.host,
-            port=args.port,
-            data_dir=args.data_dir,
-            task_name=args.task_name or DEFAULT_TASK_NAME,
-            service_name=args.service_name or DEFAULT_SERVICE_NAME,
-            resolve=resolve,
-            stop=stop,
-            start=start,
-        )
-        print(uninstall_result.message)
-        return SUCCESS_EXIT_CODE if uninstall_result.ok else FAILURE_EXIT_CODE
-
-    if args.area == "autostart":
-        result = dispatch_autostart_command(args, resolve=resolve, start=start)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

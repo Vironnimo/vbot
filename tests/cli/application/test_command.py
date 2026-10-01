@@ -102,12 +102,6 @@ def test_tray_style_no_restart_update_does_not_forward_handoff_or_detach(
     assert captured == [(False, None)]
 
 
-def test_source_checkout_update_dispatch_remains_unclaimed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(command, "discover", lambda: None)
-
-    assert command.dispatch(parse_args(["update", "--no-restart"])) is None
-
-
 def test_channel_selection_records_the_channel_without_starting_or_updating(
     tmp_path, monkeypatch, capsys
 ):
@@ -219,6 +213,10 @@ def test_native_update_readable_output_uses_shared_status_markers(
     tmp_path, monkeypatch, capsys, phase, code
 ):
     install = _install(tmp_path)
+    (tmp_path / "versions" / "rel_next").mkdir()
+    (tmp_path / "versions" / "rel_next" / "release.json").write_text(
+        '{"version":"1.2.4"}', encoding="utf-8"
+    )
     terminal = Operation(
         id="upd_output",
         phase=phase,
@@ -231,10 +229,6 @@ def test_native_update_readable_output_uses_shared_status_markers(
     monkeypatch.setattr(command, "discover", lambda: install)
     monkeypatch.delenv("VBOT_UPDATE_HANDOFF", raising=False)
     monkeypatch.setattr(operations, "request_update", lambda *a, **kw: Operation(id=terminal.id))
-    monkeypatch.setattr(
-        "cli.update_management.read_checkout_version",
-        lambda path: "1.2.3" if "rel_current" in str(path) else "1.2.4",
-    )
 
     def wait(_install, operation_id, *, progress):
         assert operation_id == terminal.id

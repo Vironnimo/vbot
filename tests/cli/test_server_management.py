@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from cli import _server_target, server_management
+from cli.application import processes as application_processes
 from cli.server_management import (
     UNRECORDED_SERVER_MESSAGE,
     UNRESPONSIVE_LISTENER_MESSAGE,
@@ -772,42 +773,10 @@ def test_restart_server_stops_then_starts_an_unmanaged_server(
         started = "started" if start_ok else "server readiness timed out"
         return CommandResult(ok=start_ok, message=started, instance=target, process_id=7)
 
-    result = restart_server(
-        instance, stop=stop, start=start, is_managed=lambda _instance, _name: False
-    )
+    result = restart_server(instance, stop=stop, start=start)
 
     assert (result.ok, result.message) == (ok, message)
     assert calls == events
-
-
-def test_restart_server_routes_a_systemd_managed_server_through_its_unit(
-    instance: ServerInstance,
-) -> None:
-    def do_restart(target: ServerInstance, name: str) -> CommandResult:
-        return CommandResult(ok=True, message=f"restarted via systemd ({name})", instance=target)
-
-    result = restart_server(
-        instance,
-        service_name="vbot",
-        stop=lambda _target: pytest.fail("managed stop must not run on a systemd install"),
-        is_managed=lambda _instance, _name: True,
-        do_restart=do_restart,
-    )
-
-    assert (result.ok, result.message) == (True, "restarted via systemd (vbot)")
-
-
-@pytest.mark.parametrize("service_name", ["../../outside", "--system"])
-def test_restart_server_rejects_an_unsafe_service_name_before_lifecycle_work(
-    instance: ServerInstance, service_name: str
-) -> None:
-    def unexpected(_instance: ServerInstance) -> CommandResult:
-        raise AssertionError("an invalid service name must fail before server lifecycle work")
-
-    result = restart_server(instance, service_name=service_name, stop=unexpected, start=unexpected)
-
-    assert result.ok is False
-    assert result.message.startswith("invalid systemd service name")
 
 
 def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
@@ -824,10 +793,9 @@ def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
         return SimpleNamespace(pid=7654)
 
     monkeypatch.setattr(server_management, "_open_scheduled_restart_process", open_process)
+    monkeypatch.setattr(process_utils, "_service_cgroup", lambda: False)
 
-    result = server_management.schedule_server_restart(
-        instance, service_name="vbot-test", wait_pid=4321
-    )
+    result = server_management.schedule_server_restart(instance, wait_pid=4321)
 
     assert result.ok is True
     assert "7654" in result.message
@@ -844,8 +812,6 @@ def test_schedule_server_restart_detaches_exact_target_and_strips_run_context(
         "9001",
         "--data-dir",
         str(instance.data_dir),
-        "--service-name",
-        "vbot-test",
     ]
     assert not any(key.startswith("VBOT_RUN_") for key in captured["environment"])
 
@@ -861,8 +827,9 @@ def test_vbot_run_context_requires_agent_and_session_identity() -> None:
     )
 
 
+@pytest.mark.parametrize("packaged", [False, True], ids=["source-checkout", "installation"])
 def test_scheduled_restart_waits_then_runs_once_and_logs_result(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, packaged: bool
 ) -> None:
     instance = make_instance(tmp_path, port=9001)
     events: list[object] = []
@@ -896,10 +863,25 @@ def test_scheduled_restart_waits_then_runs_once_and_logs_result(
     monkeypatch.setattr(
         server_management,
         "restart_server",
-        lambda target, *, service_name, **_options: CommandResult(
-            ok=True, message=f"restarted {service_name}", instance=target
-        ),
+        lambda target, **_options: CommandResult(ok=True, message="restarted", instance=target),
     )
+    # An installation's server restarts through the installation, which may hand
+    # the start to its systemd user unit.
+    install = SimpleNamespace(root=tmp_path / "application")
+    monkeypatch.setattr(
+        application_processes, "owning_installation", lambda _target: install if packaged else None
+    )
+
+    def lifecycle(action: str) -> Any:
+        def run(candidate: object, **_options: object) -> CommandResult:
+            assert candidate is install
+            events.append(action)
+            return CommandResult(ok=True, message=f"{action}ed via installation", instance=instance)
+
+        return run
+
+    monkeypatch.setattr(application_processes, "stop", lifecycle("stopp"))
+    monkeypatch.setattr(application_processes, "start", lifecycle("start"))
 
     result = server_management._run_scheduled_restart(
         [
@@ -912,15 +894,16 @@ def test_scheduled_restart_waits_then_runs_once_and_logs_result(
             "9001",
             "--data-dir",
             str(instance.data_dir),
-            "--service-name",
-            "vbot-test",
         ]
     )
 
     assert result == 0
+    restarted = ["stopp", "start"] if packaged else []
+    message = "started via installation" if packaged else "restarted"
     assert events == [
         ("wait", 60.0),
         ("sleep", 0.5),
-        ("log", "Scheduled update restart result: %s", "restarted vbot-test"),
+        *restarted,
+        ("log", "Scheduled update restart result: %s", message),
         "close",
     ]

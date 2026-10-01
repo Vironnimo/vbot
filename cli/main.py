@@ -23,8 +23,6 @@ if TYPE_CHECKING:
         print_channel_command_result,
         print_command_result,
         print_management_command_result,
-        print_update_command_result,
-        print_update_command_start,
         run,
     )
 
@@ -84,8 +82,6 @@ __all__ = [
     "print_command_result",
     "print_management_command_result",
     "print_channel_command_result",
-    "print_update_command_result",
-    "print_update_command_start",
     "_agent_changes_from_args",
     "_channel_changes_from_args",
     "_model_filters_from_args",

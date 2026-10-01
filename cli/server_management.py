@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import locale
 import logging
 import os
-import re
-import shlex
 import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 from typing import Any, Literal
 
 import httpx
@@ -42,7 +37,7 @@ from cli._server_target import (
 )
 from core.storage.layout import initialize_data_directory
 from core.utils.logging import CONSOLE_LOGGING_ENV_VAR, LogManager
-from core.utils.processes import subprocess_creation_flags
+from core.utils.processes import outside_service_unit, subprocess_creation_flags
 from core.utils.server_control import (
     CONTROL_INITIATOR_HEADER,
     CONTROL_SHUTDOWN_PATH,
@@ -84,37 +79,6 @@ PROCESS_CREATE_TIME_TOLERANCE_SECONDS = 0.001
 CLI_SERVER_LOGGER_NAME = "cli.server_management"
 
 
-DEFAULT_SERVICE_NAME = "vbot"
-
-
-_SYSTEMD_SERVICE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.@-]*$")
-
-
-_SYSTEMD_SERVICE_NAME_MAX_LENGTH = 200
-
-
-# A bare systemctl probe (is-active) returns immediately, but `restart` blocks on
-# the unit's stop+start: the stop alone can take the unit's whole TimeoutStopSec
-# (10s in the unit we install) before SIGKILL, plus the fresh start. The restart
-# cap must stay comfortably above that sum, or a slow-but-successful restart trips
-# the subprocess timeout and gets misreported as a failure. Keep it above the
-# unit's TimeoutStopSec if that value is ever raised.
-_SYSTEMCTL_PROBE_TIMEOUT_SECONDS = 10.0
-
-
-_SYSTEMCTL_RESTART_TIMEOUT_SECONDS = 30.0
-
-
-# Conventional "command timed out" exit code, kept distinct from 127 (not found).
-_SYSTEMCTL_TIMEOUT_RETURN_CODE = 124
-
-
-_SYSTEMD_RESTART_READY_TIMEOUT_SECONDS = 10.0
-
-
-_SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS = 0.2
-
-
 _SCHEDULED_RESTART_WAIT_TIMEOUT_SECONDS = 60.0
 
 
@@ -122,36 +86,6 @@ _SCHEDULED_RESTART_SETTLE_SECONDS = 0.5
 
 
 _RUN_CONTEXT_ENV_PREFIX = "VBOT_RUN_"
-
-
-def is_valid_systemd_service_name(service_name: str) -> bool:
-    """Return whether a user-supplied basename is safe as one systemd unit file."""
-
-    return (
-        bool(service_name)
-        and len(service_name) <= _SYSTEMD_SERVICE_NAME_MAX_LENGTH
-        and not service_name.endswith(".service")
-        and _SYSTEMD_SERVICE_NAME_PATTERN.fullmatch(service_name) is not None
-    )
-
-
-def decode_command_output(output: bytes | str | None) -> str:
-    """Decode captured local-command output without locale-dependent loss.
-
-    Git and Node commonly emit UTF-8 even on legacy Windows code pages, while
-    native tools such as ``schtasks`` may use the process locale. Prefer UTF-8,
-    then fall back to the locale with escaped undecodable bytes so lifecycle
-    decisions never receive ``None`` merely because output decoding failed.
-    """
-
-    if output is None:
-        return ""
-    if isinstance(output, str):
-        return output
-    try:
-        return output.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return output.decode(locale.getpreferredencoding(False), errors="backslashreplace")
 
 
 def start_server_process(instance: ServerInstance) -> subprocess.Popen[bytes]:
@@ -611,279 +545,13 @@ def _request_cooperative_shutdown(
     return response.status_code == httpx.codes.ACCEPTED
 
 
-@dataclass(frozen=True)
-class _SystemctlRun:
-    """Minimal result of a systemctl invocation."""
-
-    returncode: int
-    stdout: str
-    stderr: str
-
-
-SystemctlRunner = Callable[[list[str]], _SystemctlRun]
-
-
-def _run_systemctl(args: list[str]) -> _SystemctlRun:
-    """Run a systemctl command, mapping a missing binary or a timeout to a clean failure.
-
-    A `restart` waits out the unit's stop+start, so it gets a longer cap than the
-    instant probes; a timeout carries its own message so a slow-but-eventually-fine
-    restart is never misreported as "systemctl unavailable".
-    """
-
-    timeout = (
-        _SYSTEMCTL_RESTART_TIMEOUT_SECONDS
-        if "restart" in args or "stop" in args
-        else _SYSTEMCTL_PROBE_TIMEOUT_SECONDS
-    )
-    try:
-        completed = subprocess.run(args, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return _SystemctlRun(
-            returncode=_SYSTEMCTL_TIMEOUT_RETURN_CODE,
-            stdout="",
-            stderr=f"systemctl timed out after {timeout:.0f}s",
-        )
-    except OSError:
-        return _SystemctlRun(returncode=127, stdout="", stderr="systemctl unavailable")
-    return _SystemctlRun(
-        returncode=completed.returncode,
-        stdout=decode_command_output(completed.stdout).strip(),
-        stderr=decode_command_output(completed.stderr).strip(),
-    )
-
-
-def _systemd_user_unit_dir() -> Path:
-    return Path.home() / ".config" / "systemd" / "user"
-
-
-def is_systemd_managed(
-    instance: ServerInstance,
-    service_name: str = DEFAULT_SERVICE_NAME,
-    *,
-    platform: str = sys.platform,
-    runner: SystemctlRunner = _run_systemctl,
-    unit_dir: Path | None = None,
-) -> bool:
-    """Return whether a systemd user unit currently owns ``instance``.
-
-    A same-named active unit is insufficient: its generated ``ExecStart`` must
-    target the selected host, port, and data directory. Gating on the unit file
-    first keeps non-systemd hosts from spawning a systemctl probe.
-    """
-
-    if not platform.startswith("linux") or not is_valid_systemd_service_name(service_name):
-        return False
-    units = unit_dir or _systemd_user_unit_dir()
-    unit_path = units / f"{service_name}.service"
-    if not unit_path.is_file() or not _systemd_unit_targets_instance(unit_path, instance):
-        return False
-    active = runner(["systemctl", "--user", "is-active", f"{service_name}.service"])
-    return active.returncode == 0 and active.stdout.strip() == "active"
-
-
-def _systemd_unit_targets_instance(unit_path: Path, instance: ServerInstance) -> bool:
-    """Match one vBot-generated unit's command to the selected server instance."""
-
-    try:
-        unit_lines = unit_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return False
-    exec_start_values = [
-        line.removeprefix("ExecStart=").strip()
-        for line in unit_lines
-        if line.startswith("ExecStart=")
-    ]
-    if len(exec_start_values) != 1 or not exec_start_values[0]:
-        return False
-    try:
-        command = [value.replace("%%", "%") for value in shlex.split(exec_start_values[0])]
-    except ValueError:
-        return False
-    try:
-        module_index = command.index("-m")
-        if command[module_index + 1] != "server.main":
-            return False
-        arguments = command[module_index + 2 :]
-        host = arguments[arguments.index("--host") + 1]
-        port = int(arguments[arguments.index("--port") + 1])
-        data_dir = Path(arguments[arguments.index("--data-dir") + 1]).resolve()
-    except (IndexError, ValueError):
-        return False
-    return (
-        host == instance.host and port == instance.port and data_dir == instance.data_dir.resolve()
-    )
-
-
-def _await_vbot_health(
-    instance: ServerInstance,
-    *,
-    timeout_seconds: float = _SYSTEMD_RESTART_READY_TIMEOUT_SECONDS,
-    interval_seconds: float = _SYSTEMD_RESTART_PROBE_INTERVAL_SECONDS,
-) -> HealthProbeResult:
-    """Poll the health endpoint until the vBot server answers or the deadline passes."""
-
-    deadline = time.monotonic() + timeout_seconds
-    health = probe_health(instance)
-    while not health.is_vbot and time.monotonic() < deadline:
-        time.sleep(interval_seconds)
-        health = probe_health(instance)
-    return health
-
-
-def _systemd_restart(
-    instance: ServerInstance,
-    service_name: str,
-    *,
-    runner: SystemctlRunner = _run_systemctl,
-    await_health: Callable[[ServerInstance], HealthProbeResult] = _await_vbot_health,
-) -> CommandResult:
-    """Restart the server through its systemd user unit and confirm health."""
-
-    restarted = runner(["systemctl", "--user", "restart", f"{service_name}.service"])
-    if restarted.returncode != 0:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"systemctl --user restart {service_name} failed: "
-                f"{restarted.stderr or restarted.stdout}"
-            ),
-            instance=instance,
-        )
-    health = await_health(instance)
-    if health.is_vbot:
-        return CommandResult(
-            ok=True,
-            message="restarted via systemd",
-            instance=instance,
-            health=health,
-            webui=probe_webui(instance),
-            log_path=instance.log_path,
-        )
-    return CommandResult(
-        ok=False,
-        message="restarted via systemd, but the server did not become healthy in time",
-        instance=instance,
-        health=health,
-        log_path=instance.log_path,
-    )
-
-
-def stop_systemd_server(
-    instance: ServerInstance,
-    service_name: str,
-    *,
-    runner: SystemctlRunner = _run_systemctl,
-) -> CommandResult:
-    """Stop an active systemd-owned server without removing or disabling its unit."""
-
-    if not is_valid_systemd_service_name(service_name):
-        return CommandResult(
-            ok=False,
-            message="invalid systemd service name",
-            instance=instance,
-        )
-    stopped = runner(["systemctl", "--user", "stop", f"{service_name}.service"])
-    if stopped.returncode != 0:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"systemctl --user stop {service_name} failed: {stopped.stderr or stopped.stdout}"
-            ),
-            instance=instance,
-        )
-    return CommandResult(ok=True, message="stopped via systemd", instance=instance)
-
-
-def start_systemd_server(
-    instance: ServerInstance,
-    service_name: str,
-    *,
-    runner: SystemctlRunner = _run_systemctl,
-    await_health: Callable[[ServerInstance], HealthProbeResult] = _await_vbot_health,
-) -> CommandResult:
-    """Start an existing systemd user unit and confirm that vBot becomes healthy."""
-
-    if not is_valid_systemd_service_name(service_name):
-        return CommandResult(
-            ok=False,
-            message="invalid systemd service name",
-            instance=instance,
-        )
-    started = runner(["systemctl", "--user", "start", f"{service_name}.service"])
-    if started.returncode != 0:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"systemctl --user start {service_name} failed: {started.stderr or started.stdout}"
-            ),
-            instance=instance,
-        )
-    health = await_health(instance)
-    if health.is_vbot:
-        return CommandResult(
-            ok=True,
-            message="started via systemd",
-            instance=instance,
-            health=health,
-            webui=probe_webui(instance),
-            log_path=instance.log_path,
-        )
-    return CommandResult(
-        ok=False,
-        message="started via systemd, but the server did not become healthy in time",
-        instance=instance,
-        health=health,
-        log_path=instance.log_path,
-    )
-
-
-def restart_via_systemd_if_managed(
-    instance: ServerInstance,
-    *,
-    service_name: str = DEFAULT_SERVICE_NAME,
-    is_managed: Callable[[ServerInstance, str], bool] = is_systemd_managed,
-    do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
-) -> CommandResult | None:
-    """Restart via systemd when the target is unit-managed; return None otherwise."""
-
-    if not is_managed(instance, service_name):
-        return None
-    return do_restart(instance, service_name)
-
-
 def restart_server(
     instance: ServerInstance,
     *,
-    service_name: str = DEFAULT_SERVICE_NAME,
     stop: Callable[[ServerInstance], CommandResult] = stop_server,
     start: Callable[[ServerInstance], CommandResult] = start_server,
-    is_managed: Callable[[ServerInstance, str], bool] = is_systemd_managed,
-    do_restart: Callable[[ServerInstance, str], CommandResult] = _systemd_restart,
 ) -> CommandResult:
-    """Restart the local server, delegating to systemd when the unit owns it.
-
-    On a systemd-managed install the managed stop/start would fight the unit (its
-    ``Restart=`` directive races the spawned replacement, or systemd's view
-    desyncs from the unmanaged process), so route the restart through the unit
-    instead. Everywhere else fall back to the managed terminate-then-start path.
-    """
-
-    if not is_valid_systemd_service_name(service_name):
-        return CommandResult(
-            ok=False,
-            message=(
-                "invalid systemd service name; start with a letter or number, then use only "
-                "letters, numbers, '.', '_', '@', or '-', without a .service suffix"
-            ),
-            instance=instance,
-        )
-
-    via_systemd = restart_via_systemd_if_managed(
-        instance, service_name=service_name, is_managed=is_managed, do_restart=do_restart
-    )
-    if via_systemd is not None:
-        return via_systemd
+    """Restart the local server: terminate it, then start it again."""
 
     stop_result = stop(instance)
     if not stop_result.ok and stop_result.message != "not running":
@@ -923,30 +591,28 @@ def has_vbot_run_context(environment: Mapping[str, str] | None = None) -> bool:
 def schedule_server_restart(
     instance: ServerInstance,
     *,
-    service_name: str = DEFAULT_SERVICE_NAME,
     wait_pid: int | None = None,
 ) -> CommandResult:
     """Detach one private restart attempt from the current server-owned process tree."""
 
-    if not is_valid_systemd_service_name(service_name):
-        return CommandResult(ok=False, message="invalid systemd service name", instance=instance)
     parent_pid = _restart_handoff_wait_pid(instance) if wait_pid is None else wait_pid
-    arguments = [
-        sys.executable,
-        "-m",
-        "cli.server_management",
-        "--scheduled-restart",
-        "--wait-pid",
-        str(parent_pid),
-        "--host",
-        instance.host,
-        "--port",
-        str(instance.port),
-        "--data-dir",
-        str(instance.data_dir),
-        "--service-name",
-        service_name,
-    ]
+    # The helper outlives the server, so it also leaves the server's systemd unit.
+    arguments = outside_service_unit(
+        [
+            sys.executable,
+            "-m",
+            "cli.server_management",
+            "--scheduled-restart",
+            "--wait-pid",
+            str(parent_pid),
+            "--host",
+            instance.host,
+            "--port",
+            str(instance.port),
+            "--data-dir",
+            str(instance.data_dir),
+        ]
+    )
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -1012,7 +678,6 @@ def _run_scheduled_restart(argv: list[str]) -> int:
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--data-dir", required=True)
-    parser.add_argument("--service-name", required=True)
     arguments = parser.parse_args(argv)
     instance = resolve_instance(
         host=arguments.host,
@@ -1037,16 +702,34 @@ def _run_scheduled_restart(argv: list[str]) -> int:
             )
             return 1
         time.sleep(_SCHEDULED_RESTART_SETTLE_SECONDS)
-        result = restart_server(
-            instance,
-            service_name=arguments.service_name,
-            stop=partial(stop_server, initiator="scheduled_restart"),
-        )
+        result = _restart_target(instance)
         log = logger.info if result.ok else logger.error
         log("Scheduled update restart result: %s", result.message)
         return 0 if result.ok else 1
     finally:
         manager.close()
+
+
+def _restart_target(instance: ServerInstance) -> CommandResult:
+    """Restart *instance* the way its owner starts it.
+
+    The server of a packaged installation restarts through the installation, so
+    that a systemd user unit that ran it runs it again.
+    """
+    from cli.application import processes
+    from cli.application.state import ApplicationError, exclusive
+
+    install = processes.owning_installation(instance)
+    if install is None:
+        return restart_server(instance, stop=partial(stop_server, initiator="scheduled_restart"))
+    try:
+        with exclusive(install.root):
+            stopped = processes.stop(install, initiator="scheduled_restart")
+            if not stopped.ok:
+                return stopped
+            return processes.start(install)
+    except ApplicationError as exc:
+        return CommandResult(ok=False, message=str(exc), instance=instance)
 
 
 def get_status(instance: ServerInstance) -> CommandResult:
@@ -1115,20 +798,12 @@ __all__ = [
     "PROCESS_CREATE_TIME_TOLERANCE_SECONDS",
     "WILDCARD_HOSTS",
     "CLI_SERVER_LOGGER_NAME",
-    "DEFAULT_SERVICE_NAME",
-    "is_valid_systemd_service_name",
-    "decode_command_output",
     "start_server_process",
     "start_server",
     "find_listening_process",
     "ServerState",
     "classify_server",
     "stop_server",
-    "SystemctlRunner",
-    "is_systemd_managed",
-    "stop_systemd_server",
-    "start_systemd_server",
-    "restart_via_systemd_if_managed",
     "restart_server",
     "has_vbot_run_context",
     "schedule_server_restart",

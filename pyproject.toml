@@ -29,7 +29,6 @@ dependencies = ["psutil", "pillow>=12.3,<13", "pillow-heif>=1.8,<2", "mcp==2.1.1
 vbot = "cli.main:main"
 
 [project.gui-scripts]
-vbot-autostart = "cli.autostart_management:windows_autostart_main"
 vbot-desktop = "desktop.main:main"
 
 [project.urls]

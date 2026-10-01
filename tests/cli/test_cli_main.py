@@ -17,7 +17,6 @@ from cli.server_management import (
     ServerInstance,
     WebUIProbeResult,
 )
-from cli.uninstall_management import UninstallMode, UninstallResult
 from core.utils.config import VBOT_ROOT
 from tests.cli.cli_test_support import make_instance
 
@@ -46,39 +45,22 @@ def test_home_prints_app_and_data_directories_without_a_server(
     ]
 
 
-def test_uninstall_receives_the_selection_target_and_lifecycle_services(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize(
+    "argv",
+    [["update"], ["uninstall", "--all", "--yes"], ["autostart", "enable"]],
+    ids=lambda argv: argv[0],
+)
+def test_a_source_checkout_refuses_installation_lifecycle_commands(
+    argv: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    captured: dict[str, object] = {}
+    def fail_resolve(**kwargs: object) -> ServerInstance:
+        raise AssertionError(f"a source checkout has no installation to manage: {kwargs}")
 
-    def uninstall_fn(**kwargs: object) -> UninstallResult:
-        captured.update(kwargs)
-        return UninstallResult(ok=True, message="uninstall launched")
+    exit_code = cli_main.run(argv, resolve=fail_resolve)
 
-    exit_code = cli_main.run(
-        [
-            "uninstall", "--all", "--yes",
-            "--host", "localhost", "--port", "9000", "--data-dir", "custom-data",
-            "--task-name", "My Task", "--service-name", "my-service",
-        ],
-        uninstall_fn=uninstall_fn,
-    )  # fmt: skip
-
-    assert exit_code == 0
-    expected = {
-        "mode": UninstallMode.ALL,
-        "assume_yes": True,
-        "host": "localhost",
-        "port": 9000,
-        "data_dir": "custom-data",
-        "task_name": "My Task",
-        "service_name": "my-service",
-        "resolve": cli_main.resolve_instance,
-        "stop": cli_main.stop_server,
-        "start": cli_main.start_server,
-    }
-    assert {key: captured.get(key) for key in expected} == expected
-    assert capsys.readouterr().out.splitlines() == ["uninstall launched"]
+    assert exit_code == 1
+    captured = capsys.readouterr()
+    assert "This is a source checkout" in captured.out + captured.err
 
 
 @pytest.mark.parametrize(
@@ -356,46 +338,6 @@ def test_restart_does_not_start_when_stop_fails(tmp_path: Path) -> None:
     )
 
     assert exit_code == 1
-
-
-@pytest.mark.parametrize(
-    ("ok", "before", "after"),
-    [
-        pytest.param(True, "0.1.22", "0.1.23", id="updated"),
-        pytest.param(True, "0.1.23", "0.1.23", id="already-current"),
-        pytest.param(False, "0.1.22", "0.1.22", id="failed"),
-    ],
-)
-def test_update_announces_the_version_before_work_and_ends_with_a_version_summary(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-    monkeypatch: pytest.MonkeyPatch,
-    ok: bool,
-    before: str,
-    after: str,
-) -> None:
-    versions = iter([before, after])
-    monkeypatch.setattr(_commands, "read_checkout_version", lambda: next(versions))
-
-    def dispatch(
-        _args: object, *, resolve: object, stop: object, start: object, progress: object
-    ) -> CommandResult:
-        assert (resolve, stop, start) == (
-            cli_main.resolve_instance,
-            cli_main.stop_server,
-            cli_main.start_server,
-        )
-        assert before in capsys.readouterr().out
-        return CommandResult(ok=ok, message="update details", instance=make_instance(tmp_path))
-
-    monkeypatch.setattr(_commands, "dispatch_update_command", dispatch)
-
-    exit_code = cli_main.run(["update"])
-
-    assert exit_code == (0 if ok else 1)
-    output = capsys.readouterr().out
-    for text in ("update details", before, after):
-        assert text in output
 
 
 @pytest.mark.parametrize(("ok", "prefix"), [(True, "success:"), (False, "error:")])
