@@ -262,11 +262,27 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
+class _ProgressBar:
+    """Stand-in for ``tqdm.auto.tqdm``, the progress bar class Hugging Face downloads use."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def __enter__(self) -> _ProgressBar:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        pass
+
+    def update(self, n: float | None = 1) -> bool | None:
+        return None
+
+
 @pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
     engine_name: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Stand-in torch and transformers modules: the adapters import both lazily, and
+    # Stand-in torch, transformers and tqdm modules: the adapters import them lazily, and
     # the real native imports cost several seconds without adding adapter coverage.
     from core.model_tasks.speech_local import (
         _PROGRESS,
@@ -320,6 +336,10 @@ def test_native_transformers_adapter_contracts_without_weights(
     setattr(transformers, engine_type.model_class, SimpleNamespace(from_pretrained=load_model))
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
+    tqdm = ModuleType("tqdm.auto")
+    tqdm.tqdm = _ProgressBar  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "tqdm", ModuleType("tqdm"))
+    monkeypatch.setitem(sys.modules, "tqdm.auto", tqdm)
     options = {"device": "cpu", "language": "de", "prompt": "vBot"}
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
