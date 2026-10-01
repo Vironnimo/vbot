@@ -29,9 +29,8 @@ from core.skills.skills import (
     find_skill_package_dir,
     scan_skill_names,
 )
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import spelling
 from core.tools.availability import SKILL_MANAGE_TOOL_NAME
+from core.tools.call_syntax import normalize_call_arguments, spelling
 from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.copy_match import copy_warnings, replace_copied
 from core.tools.fuzzy_match import (

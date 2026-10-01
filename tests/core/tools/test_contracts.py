@@ -14,7 +14,7 @@ from core.tools import (
     compile_tool_contract,
     tool_success,
 )
-from core.tools._argument_repair import normalize_call_arguments
+from core.tools.call_syntax import normalize_call_arguments
 from tests.core.tools.tools_test_support import JsonObject, make_context
 
 

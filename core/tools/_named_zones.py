@@ -15,7 +15,7 @@ from datetime import UTC, date, datetime, time, timedelta, timezone, tzinfo
 from functools import cache, lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 
 _UTC_NAMES = frozenset({"utc", "z", "gmt", "zulu", "etcutc", "etcgmt", "universal", "utc0", "gmt0"})
 _OFFSET = re.compile(r"^(?:utc|gmt)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)

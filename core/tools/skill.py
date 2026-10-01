@@ -20,10 +20,10 @@ from core.skills.skills import (
     format_skill_activation_context,
     format_skill_catalog_entries,
 )
-from core.tools._argument_repair import normalize_call_arguments
 from core.tools._read_text import ReadPosition, render_text_window
 from core.tools.arguments import optional_int
 from core.tools.bash import format_bash_env_usage
+from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.tools.model_names import SHELL_MODEL_NAME
 from core.tools.tools import (

@@ -30,8 +30,8 @@ from core.subagents._constants import (
     SUBAGENT_WORK_SESSION_CONFLICT_MESSAGE_TEMPLATE,
 )
 from core.subagents.catalog import SubAgentPromptTarget, subagent_targets
-from core.tools._call_vocabulary import is_placeholder, spelling
 from core.tools.arguments import required_string
+from core.tools.call_syntax import is_placeholder, spelling
 from core.tools.tools import JsonObject, ToolContext, tool_failure
 from core.utils.logging import get_logger
 

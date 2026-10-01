@@ -13,8 +13,12 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from core.tools import ToolContractError
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
+from core.tools.call_syntax import (
+    SpellingAliases,
+    is_placeholder,
+    normalize_call_arguments,
+    spelling,
+)
 from core.tools.contracts import ToolContract
 
 from ._store_values import post_number

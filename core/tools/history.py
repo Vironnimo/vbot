@@ -13,7 +13,6 @@ from core.sessions import (
     SessionHistoryRecord,
     SessionHistorySnapshot,
 )
-from core.tools._argument_repair import normalize_call_arguments
 from core.tools._history_protocol import (
     HISTORY_ACTIONS as HISTORY_ACTIONS,
 )
@@ -44,6 +43,7 @@ from core.tools._history_protocol import (
     _Snapshot,
     _validate_history_action_arguments,
 )
+from core.tools.call_syntax import normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,

@@ -20,8 +20,7 @@ from functools import cache
 from pathlib import PurePath
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, spelling
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments, spelling
 from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
 from core.tools.model_names import BASH_TOOL_NAME, SHELL_MODEL_NAME
 from core.tools.tools import JsonObject, ToolDisplayPart

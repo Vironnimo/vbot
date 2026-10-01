@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from difflib import get_close_matches
 from typing import Any
 
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 
 from . import agent_text as text
 from ._store_values import discussion_ref, post_ref

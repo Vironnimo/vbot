@@ -12,9 +12,6 @@ from functools import cache
 from pathlib import Path
 from typing import Any
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases as _SpellingAliases
-from core.tools._call_vocabulary import spelling as _spelling
 from core.tools._path_suggestions import corrected_paths
 from core.tools._search_arguments import parse_search_args
 from core.tools._search_execution import (
@@ -28,6 +25,9 @@ from core.tools._search_results import ResultPage, path_label, render_events
 from core.tools._search_selection import FileSelection
 from core.tools._tool_context import _path_argument
 from core.tools.arguments import optional_int
+from core.tools.call_syntax import SpellingAliases as _SpellingAliases
+from core.tools.call_syntax import normalize_call_arguments
+from core.tools.call_syntax import spelling as _spelling
 from core.tools.contracts import ToolContractError, _load_json_value, compile_tool_contract
 from core.tools.file_state import os_error_reason
 from core.tools.search import SearchBudget

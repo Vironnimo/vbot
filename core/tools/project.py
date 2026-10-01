@@ -15,9 +15,8 @@ from core.projects import (
     cwd_exists,
 )
 from core.settings import PROJECT_ID_PATTERN
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases
 from core.tools.arguments import required_string
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import compile_tool_contract
 from core.tools.file_state import FileReadState
 from core.tools.model_names import SHELL_MODEL_NAME

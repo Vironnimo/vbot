@@ -16,9 +16,8 @@ from core.memory import (
     MemoryService,
     MemoryWriter,
 )
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import spelling
 from core.tools.availability import MEMORY_TOOL_NAME
+from core.tools.call_syntax import normalize_call_arguments, spelling
 from core.tools.contracts import compile_tool_contract
 from core.tools.tools import (
     JsonObject,

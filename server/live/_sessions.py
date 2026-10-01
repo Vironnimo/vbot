@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from core.model_tasks.live import live_failure, live_success
-from core.tools._call_vocabulary import spelling
+from core.tools.call_syntax import spelling
 from server.live._brief import TOOL_READ, TOOL_SEND_MESSAGE, TOOL_START_AGENT_SESSION, TOOL_STOP
 from server.live._context import (
     UNCERTAIN_DELIVERY,

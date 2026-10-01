@@ -19,8 +19,12 @@ from collections.abc import Mapping
 from typing import Any
 
 from core.channels.config import ALLOWED_CHANNEL_PLATFORMS
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
+from core.tools.call_syntax import (
+    SpellingAliases,
+    is_placeholder,
+    normalize_call_arguments,
+    spelling,
+)
 from core.tools.contracts import ToolContract, ToolContractError
 
 ACTION_FIELD = "action"

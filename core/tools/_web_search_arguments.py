@@ -14,8 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases
+from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract, ToolContractError
 
 RECENCY_VALUES = ("day", "week", "month", "year")
