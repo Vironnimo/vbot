@@ -211,6 +211,7 @@
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
+  let archiveRefreshToken = $derived(appControllerState.archiveRefreshToken);
   let sessionInvalidations = $derived(appControllerState.sessionInvalidations);
   let dataStoreIncident = $derived(appControllerState.dataStoreIncident);
   let webuiOutdated = $derived(appControllerState.webuiOutdated);
@@ -1035,6 +1036,7 @@
           {providerAuthEvent}
           onToast={desktop.showToast}
           agents={selection.agents}
+          projects={selection.projects}
           desktopCapabilities={desktop.desktopCapabilities}
           desktopVoice={desktop.desktopVoice}
           onDebugEnabledChange={handleDebugEnabledChange}
@@ -1043,6 +1045,10 @@
           {recallIndexStatus}
           {clientsRefreshToken}
           {channelsRefreshToken}
+          {archiveRefreshToken}
+          agentsRefreshToken={selection.agentsRefreshToken}
+          {projectsRefreshToken}
+          {sessionsRefreshToken}
           initialScrollPosition={settingsScrollPosition}
           onScrollPositionChange={rememberSettingsScrollPosition}
         />

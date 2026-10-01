@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences, ReflectionService, TriggerService
 from core.chat import (
     ChatMessage,
@@ -408,6 +409,7 @@ class StubRecall:
         self.rebuilds = 0
         self.binding_changes = 0
         self.removed_agents: list[str] = []
+        self.removed_sessions: list[tuple[str | None, str, str]] = []
 
     async def index_status(self) -> IndexStatus:
         return self.status
@@ -501,6 +503,34 @@ class StubRuntime:
 
     async def rename_agent(self, agent_id: str, new_agent_id: str) -> AgentRenameOutcome:
         return await rename_identity_agent(self._rename_services(), agent_id, new_agent_id)
+
+    @property
+    def archive(self) -> ArchiveService:
+        """The real archive service over these doubles, built per use so a test can swap a store."""
+        return ArchiveService(
+            ArchiveServices(
+                data_dir=self.storage.data_dir,
+                sessions=self.chat_sessions,
+                agents=cast(Any, self.agents),
+                projects=cast(Any, self.projects),
+                agent_resolver=cast(Any, self.agent_resolver),
+                runs=self.chat_run_manager,
+                automation=self.automation_references,
+                terminals=cast(Any, self.terminal_manager),
+                snapshot_barrier=self.snapshot_barrier,
+                agent_references=self.agent_references,
+                import_usage=lambda: None,
+                remove_agent_from_recall=self.recall.remove_agent_from_recall,
+                remove_session_from_recall=self.remove_session_from_recall,
+                invalidate_agent_skills=self.invalidate_agent_skills,
+                invalidate_project=lambda _project_id: None,
+            )
+        )
+
+    async def remove_session_from_recall(
+        self, agent_id: str, session_id: str, project_id: str | None
+    ) -> None:
+        self.recall.removed_sessions.append((project_id, agent_id, session_id))
 
     async def agent_references(self, agent_id: str) -> tuple[str, ...]:
         references = [

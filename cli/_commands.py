@@ -11,6 +11,7 @@ from cli._dispatch_agents import (
     _project_add_fields_from_args,
     _project_set_changes_from_args,
     dispatch_agent_command,
+    dispatch_archive_command,
     dispatch_chat_command,
     dispatch_data_store_command,
     dispatch_project_command,
@@ -147,7 +148,7 @@ def run(
     ] = agent_create,
     update_agent: Callable[[ServerInstance, str, dict[str, Any]], CommandResult] = agent_update,
     rename_agent: Callable[[ServerInstance, str, str], CommandResult] = agent_rename,
-    delete_agent: Callable[[ServerInstance, str], CommandResult] = agent_delete,
+    delete_agent: Callable[[ServerInstance, str, bool, bool], CommandResult] = agent_delete,
     add_channel: Callable[
         [
             ServerInstance,
@@ -286,6 +287,11 @@ def run(
 
     if args.area == "session":
         result = dispatch_session_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "archive":
+        result = dispatch_archive_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 

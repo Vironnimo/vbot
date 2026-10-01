@@ -289,8 +289,8 @@ def test_identity_reference_changes_roll_back_together(manager, monkeypatch) -> 
 def test_identity_reference_retarget_skips_unrelated_sessions(manager) -> None:
     # The rename moved ``parent``; ``archived`` stayed at the old id, and ``gone`` never existed.
     manager.create("new", session_id="parent")
-    manager.create("old", session_id="archived")
-    manager.archive_identity_agent_sessions("old")
+    archived = manager.create("old", session_id="archived")
+    asyncio.run(manager.archive(archived.address))
     changed = manager.create("child", session_id="changed")
     unrelated = manager.create("child", session_id="unrelated")
     qualified = manager.create("child", session_id="qualified")

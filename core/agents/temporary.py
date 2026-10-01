@@ -262,13 +262,17 @@ async def release_temporary_group(
     *,
     delete: bool,
     close_terminals: SessionTerminalCloser | None,
+    archive_reason: str = "extension",
 ) -> int:
     """Archive or delete one owner group's participant Sessions; return how many.
 
     Like an ordinary Session removal, it first closes the Terminal Sessions of
     each live participant, all under one no-Run boundary. Raises
     :class:`RunAdmissionBlockedError` while any of them has active, queued or
-    guarded work; nothing changes then. Deleting also removes archived ones.
+    guarded work; nothing changes then. Archiving makes them one archive entry
+    that records ``archive_reason``: ``extension`` when the owner asked,
+    ``extension_removed`` when vBot cleans up after a removed Extension.
+    Deleting also removes archived ones.
     """
     addresses: list[SessionAddress] = []
     after = ""
@@ -290,7 +294,9 @@ async def release_temporary_group(
             return await sessions.delete_temporary_group(owner_name=owner_name, group_id=group_id)
         if not addresses:
             return 0
-        return await sessions.archive_temporary_group(owner_name=owner_name, group_id=group_id)
+        return await sessions.archive_temporary_group(
+            owner_name=owner_name, group_id=group_id, reason=archive_reason
+        )
 
 
 @dataclass

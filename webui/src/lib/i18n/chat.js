@@ -429,9 +429,13 @@ export default Object.freeze({
   'sessions.delete': 'Delete',
   'sessions.moreHint': '{count} more sessions — scroll to load',
   'sessions.delete_confirm_channel':
-    'Delete session "{name}"? It is archived and can be restored. The channel conversation will start fresh on the next incoming message.',
+    'Delete session "{name}"? It moves to the Archive, where you can restore it. The channel conversation will start fresh on the next incoming message.',
   'sessions.delete_confirm':
-    'Delete session "{name}"? It is archived and can be restored.',
+    'Delete session "{name}"? It moves to the Archive, where you can restore it.',
+  'sessions.delete_permanent_confirm_channel':
+    'Delete session "{name}" permanently? It is deleted now and cannot be restored. The channel conversation will start fresh on the next incoming message.',
+  'sessions.delete_permanent_confirm':
+    'Delete session "{name}" permanently? It is deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
   'sessions.delete_error': 'The session could not be deleted.',
   'sessions.delete_busy':
     'This Session cannot be deleted while a Run is active or queued. Wait until it finishes or stop it, then try again.',

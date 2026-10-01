@@ -62,6 +62,12 @@ def _assert_store_untouched(sessions: FakeSessions) -> None:
         ("session.get", {"agent_id": "builder", "session_id": "s1", "limit": 1}, "limit"),
         ("session.fork", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
         ("session.delete", {"agent_id": "builder", "session_id": "s1", "bogus": 1}, "bogus"),
+        # An invalid permanent flag archives nothing either.
+        (
+            "session.delete",
+            {"agent_id": "builder", "session_id": "s1", "permanent": "yes"},
+            "permanent",
+        ),
         (
             "session.rename",
             {"agent_id": "builder", "session_id": "s1", "title": "Hi", "bogus": 1},

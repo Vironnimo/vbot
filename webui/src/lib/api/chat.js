@@ -217,7 +217,13 @@ export function setSessionCompactionPolicy(
   );
 }
 
-export function deleteSession(agentId, sessionId, options = {}) {
+// Archives the Session; `permanent` deletes it right away instead.
+export function deleteSession(
+  agentId,
+  sessionId,
+  { permanent = false } = {},
+  options = {},
+) {
   requireNonEmptyString(
     agentId,
     'Agent id must be a non-empty string',
@@ -232,7 +238,11 @@ export function deleteSession(agentId, sessionId, options = {}) {
 
   return rpc(
     'session.delete',
-    { agent_id: agentId, session_id: sessionId },
+    {
+      agent_id: agentId,
+      session_id: sessionId,
+      ...(permanent === true ? { permanent: true } : {}),
+    },
     options,
   );
 }

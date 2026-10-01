@@ -12,6 +12,7 @@ import {
 import {
   RESOURCE_TOKEN_AGENTS,
   RESOURCE_TOKEN_MEMORIES,
+  RESOURCE_TOKEN_ARCHIVE,
   RESOURCE_TOKEN_CALENDAR,
   RESOURCE_TOKEN_CHANNELS,
   RESOURCE_TOKEN_CLIENTS,
@@ -115,6 +116,7 @@ function sessionDeletionFromScope(scope) {
 export function createAppControllerState() {
   return {
     activeRuns: [],
+    archiveRefreshToken: 0,
     calendarRefreshToken: 0,
     channelsRefreshToken: 0,
     cronRefreshToken: 0,
@@ -288,6 +290,7 @@ export function createAppController({
         state.debugTracesRefreshToken += 1;
         state.terminalsRefreshToken += 1;
         state.skillsRefreshToken += 1;
+        state.archiveRefreshToken += 1;
         refreshOwners.push(onLoadProjects, onReloadAgents);
       }
       // Recovery owners are independent. Optional projections cannot hold up
@@ -398,6 +401,9 @@ export function createAppController({
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_SKILLS)) {
       state.skillsRefreshToken += 1;
+    }
+    if (tokenKeys.includes(RESOURCE_TOKEN_ARCHIVE)) {
+      state.archiveRefreshToken += 1;
     }
     if (tokenKeys.includes(RESOURCE_TOKEN_AGENTS)) {
       await onReloadAgents();

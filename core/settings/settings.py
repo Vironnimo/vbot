@@ -85,6 +85,7 @@ SUPPORTED_APPEARANCE_CHAT_WORKING_MODES = frozenset({"normal", "compact"})
 SETTINGS_UPDATE_SECTIONS = frozenset(
     {
         "appearance",
+        "archive",
         "debug",
         "server",
         "skills",
@@ -125,6 +126,15 @@ SUBAGENT_SETTING_FIELDS = (
     "max_subagents_per_turn",
     "subagent_timeout_minutes",
 )
+# How many days an archive entry rests before vBot deletes it permanently;
+# ``None`` keeps archived items until they are deleted by hand. The default lives
+# in ``normalizers.py``.
+MIN_ARCHIVE_RETENTION_DAYS = 1
+MAX_ARCHIVE_RETENTION_DAYS = 3650
+ARCHIVE_RETENTION_DAYS_RULE = (
+    f"must be an integer from {MIN_ARCHIVE_RETENTION_DAYS} to {MAX_ARCHIVE_RETENTION_DAYS}, "
+    "or null to keep archived items until they are deleted"
+)
 
 
 class SettingsValidationError(ValueError):
@@ -149,6 +159,17 @@ def default_timezone_name() -> str:
         return validate_timezone_name(get_localzone_name(), label="system timezone")
     except (SettingsValidationError, OSError):
         return "UTC"
+
+
+def is_archive_retention_days(value: Any) -> bool:
+    """Return whether ``value`` is a valid ``archive.retention_days``, including ``None``."""
+    if value is None:
+        return True
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and MIN_ARCHIVE_RETENTION_DAYS <= value <= MAX_ARCHIVE_RETENTION_DAYS
+    )
 
 
 def available_timezone_names() -> tuple[str, ...]:
@@ -179,6 +200,9 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
 
     if "appearance" in params:
         parsed_update["appearance"] = _parse_appearance_update(params["appearance"])
+
+    if "archive" in params:
+        parsed_update["archive"] = _parse_archive_update(params["archive"])
 
     if "skills" in params:
         parsed_update["skills"] = _parse_skills_update(params["skills"])
@@ -981,6 +1005,27 @@ def _parse_debug_update(debug: Any) -> JsonObject:
             raise SettingsValidationError("params.debug.trace_limit must not exceed 500")
         parsed["trace_limit"] = trace_limit
 
+    return parsed
+
+
+def _parse_archive_update(archive: Any) -> JsonObject:
+    if not isinstance(archive, dict):
+        raise SettingsValidationError("params.archive must be an object")
+
+    unsupported_fields = sorted(set(archive) - {"retention_days"})
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported archive settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+    if "retention_days" in archive:
+        retention_days = archive["retention_days"]
+        if not is_archive_retention_days(retention_days):
+            raise SettingsValidationError(
+                f"params.archive.retention_days {ARCHIVE_RETENTION_DAYS_RULE}"
+            )
+        parsed["retention_days"] = retention_days
     return parsed
 
 

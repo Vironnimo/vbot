@@ -1,3 +1,4 @@
+import { permanentDeleteNotice } from '../archiveView.js';
 import { t } from '../i18n.js';
 import {
   emptyScanSkills,
@@ -138,6 +139,7 @@ export function createProjectDialogs({
   function openRemove(project) {
     state.removeConfirmProject = project;
     state.copyRootedAgentIdentityFiles = false;
+    state.removePermanently = false;
   }
 
   function cancelRemove() {
@@ -167,10 +169,10 @@ export function createProjectDialogs({
     state.listError = '';
     state.editError = '';
     try {
-      const result = await operations.removeProject(
-        project.project_id,
-        state.copyRootedAgentIdentityFiles,
-      );
+      const result = await operations.removeProject(project.project_id, {
+        copyRootedAgentIdentityFiles: state.copyRootedAgentIdentityFiles,
+        permanent: state.removePermanently,
+      });
       if (!isActive()) {
         return;
       }
@@ -186,13 +188,20 @@ export function createProjectDialogs({
       const copyState = state.copyRootedAgentIdentityFiles
         ? t('projects.remove.filesCopied')
         : t('projects.remove.filesNotCopied');
-      state.statusMessage =
-        affectedCount === 1
-          ? t('projects.remove.successOneAgent', { copyState })
-          : t('projects.remove.successManyAgents', {
-              count: affectedCount,
-              copyState,
-            });
+      const removed = !state.removePermanently
+        ? t('projects.remove.archived')
+        : permanentDeleteNotice(result, t('projects.remove.deletedPermanently'))
+            .text;
+      const reset =
+        affectedCount === 0
+          ? ''
+          : affectedCount === 1
+            ? t('projects.remove.resetOneAgent', { copyState })
+            : t('projects.remove.resetManyAgents', {
+                count: affectedCount,
+                copyState,
+              });
+      state.statusMessage = [removed, reset].filter(Boolean).join(' ');
       await loadProjects();
     } catch (error) {
       if (!isActive()) {

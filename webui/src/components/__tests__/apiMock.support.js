@@ -33,7 +33,8 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     createAgent: (params) => call('agent.create', params),
     updateAgent: (params) => call('agent.update', params),
     renameAgent: (id, newId) => call('agent.rename', { id, new_id: newId }),
-    deleteAgent: (id) => call('agent.delete', { id }),
+    deleteAgent: (id, { permanent = false } = {}) =>
+      call('agent.delete', { id, ...(permanent ? { permanent } : {}) }),
     listAgentMemories: (agentId) => call('memory.list', { agent_id: agentId }),
     addAgentMemory: (agentId, scope, content) =>
       call('memory.add', { agent_id: agentId, scope, content }),
@@ -75,8 +76,12 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     loadChatHistory: (params) => call('chat.history', params),
     loadReflectionRuns: (params) => call('chat.reflections', params),
     createSession: (params) => call('session.create', params),
-    deleteSession: (agentId, sessionId) =>
-      call('session.delete', { agent_id: agentId, session_id: sessionId }),
+    deleteSession: (agentId, sessionId, { permanent = false } = {}) =>
+      call('session.delete', {
+        agent_id: agentId,
+        session_id: sessionId,
+        ...(permanent ? { permanent } : {}),
+      }),
     listSessionActivity: (agentIds) =>
       call('session.activity_list', { agent_ids: agentIds }),
     getSession: (agentId, sessionId) =>
@@ -167,10 +172,14 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     addProject: (params) => call('project.add', params),
     setProject: (projectId, changes) =>
       call('project.set', { project_id: projectId, ...changes }),
-    removeProject: (projectId, copyIdentityFiles = false) =>
-      call('project.remove', {
+    removeProject: (
+      projectId,
+      { copyRootedAgentIdentityFiles = false, permanent = false } = {},
+    ) =>
+      call('project.rm', {
         project_id: projectId,
-        copy_identity_files: copyIdentityFiles,
+        copy_rooted_agent_identity_files: copyRootedAgentIdentityFiles,
+        ...(permanent ? { permanent } : {}),
       }),
     setOverride: (projectId, agentId, field, value) =>
       call('project.set_override', {
@@ -189,6 +198,14 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     debugTraceList: () => call('debug.trace_list'),
     debugTraceGet: (traceId) => call('debug.trace_get', { trace_id: traceId }),
     debugTraceClear: () => call('debug.trace_clear'),
+    listArchiveEntries: (params = {}) => call('archive.list', params),
+    showArchiveEntry: (entryId) => call('archive.show', { entry_id: entryId }),
+    restoreArchiveEntry: (entryId, { targetId = '' } = {}) =>
+      call('archive.restore', {
+        entry_id: entryId,
+        ...(targetId ? { target_id: targetId } : {}),
+      }),
+    purgeArchiveEntries: (params = {}) => call('archive.purge', params),
     ...overrides,
   };
 }

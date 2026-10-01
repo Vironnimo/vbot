@@ -101,6 +101,7 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "_start_cron_service",
         "_start_calendar_service",
         "_start_provider_usage_service",
+        "_start_archive_retention",
     ):
         monkeypatch.setattr(runtime, name, Mock(side_effect=AssertionError(name)))
 
@@ -202,7 +203,7 @@ def test_runtime_start_is_idempotent_and_restart_rebuilds_services(config: Confi
     # Started outside an Event Loop, the performance monitor stays off.
     assert not runtime.performance.monitoring
     runtime.agents.create("coder", "Coder Agent")
-    runtime.agents.delete("main")
+    asyncio.run(runtime.archive.archive_agent("main"))
 
     runtime.stop()
     _assert_not_started(runtime)
@@ -742,6 +743,7 @@ _ASYNC_SHUTDOWN = (
     "cron.aclose",
     "calendar_actions.aclose",
     "bootstrap.aclose",
+    "archive_retention.aclose",
     "triggers.aclose",
     "reflection.aclose",
     "session_titles.aclose",
@@ -771,6 +773,7 @@ _SYNC_SHUTDOWN = (
     "cron.stop",
     "calendar_actions.stop",
     "bootstrap.stop",
+    "archive_retention.stop",
     "decisions.close",
     "speech.close",
     "provider_usage.close",
@@ -856,6 +859,7 @@ async def test_runtime_shutdown_runs_every_step_before_reporting_failures(
         ("_channel_service", "channels"),
         ("_cron_service", "cron"),
         ("_bootstrap_service", "bootstrap"),
+        ("_archive", "archive_retention"),
         ("_trigger_service", "triggers"),
         ("_reflection_service", "reflection"),
         ("_session_title_service", "session_titles"),

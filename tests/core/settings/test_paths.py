@@ -114,6 +114,11 @@ def test_atomic_patch_sets_multiple_nested_values() -> None:
             id="oversized-integer",
         ),
         pytest.param(
+            [{"op": "set", "path": "archive.retention_days", "value": 0}],
+            "archive.retention_days must be at least 1",
+            id="retention-below-range",
+        ),
+        pytest.param(
             [{"op": "set", "path": "compaction.trigger.threshold", "value": 10**400}],
             "compaction.trigger.threshold must be at most 1",
             id="oversized-float",
@@ -263,6 +268,23 @@ def test_unset_removes_override_and_restores_default() -> None:
     assert updated == {}
     assert changed == ("web_search.provider",)
     assert build_effective_settings(updated)["web_search"]["provider"] == "brave"
+
+
+def test_archive_retention_null_disables_it_and_unset_restores_the_default() -> None:
+    disabled, changed = apply_settings_patch(
+        {"archive": {"retention_days": 14}},
+        parse_patch_operations([{"op": "set", "path": "archive.retention_days", "value": None}]),
+    )
+    cleared, _changed = apply_settings_patch(
+        disabled, parse_patch_operations([{"op": "unset", "path": "archive.retention_days"}])
+    )
+
+    assert disabled == {"archive": {"retention_days": None}}
+    assert changed == ("archive.retention_days",)
+    assert build_effective_settings(disabled)["archive"] == {"retention_days": None}
+    assert setting_details(disabled, "archive.retention_days")["value"] is None
+    assert cleared == {}
+    assert build_effective_settings(cleared)["archive"] == {"retention_days": 30}
 
 
 def test_unset_prunes_empty_nested_task_options() -> None:

@@ -775,9 +775,30 @@ describe('AgentsView', () => {
     });
     expect(listedAgentIds()).toEqual(['alpha', 'bravo']);
 
-    await deleteFromEditor();
+    // The dialog's permanent option skips the Archive.
+    getButton(t('agents.delete')).click();
+    flushSync();
+    const dialog = getDialog(t('agents.delete'));
+    expect(dialog.textContent).toContain(t('archive.deleteNotice.kept'));
+    [...dialog.querySelectorAll('[role="checkbox"]')]
+      .find((box) =>
+        box.textContent.includes(t('archive.deleteOption.permanent')),
+      )
+      .click();
+    flushSync();
+    expect(dialog.textContent).toContain(
+      t('agents.deletePermanentConfirm', { name: 'Alpha' }),
+    );
+    getButton(t('archive.deletePermanently')).click();
     await waitForCondition(() => navigation.place[0] === 'bravo', 100);
-    expect(agentDelete).toHaveBeenLastCalledWith({ id: 'alpha' });
+    expect(agentDelete).toHaveBeenLastCalledWith({
+      id: 'alpha',
+      permanent: true,
+    });
+    expect(onToast).toHaveBeenLastCalledWith({
+      title: t('agents.deletedPermanently'),
+      variant: 'success',
+    });
     expect(listedAgentIds()).toEqual(['bravo']);
     expect(textInputValue('agent-name')).toBe('Bravo');
   });

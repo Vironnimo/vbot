@@ -17,6 +17,7 @@ from core.settings.normalizers import (
     normalize_agent_default_value,
     normalize_agent_defaults,
     normalize_appearance_settings,
+    normalize_archive_settings,
     normalize_compaction_settings,
     normalize_debug_settings,
     normalize_defaults_settings,
@@ -281,6 +282,29 @@ def apply_debug_settings(
     return dict(normalized_debug)
 
 
+def apply_archive_settings(
+    settings: dict[str, Any],
+    archive: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge archive settings into an in-memory settings mapping."""
+
+    if not isinstance(archive, Mapping):
+        raise StorageError("Archive settings must be a mapping")
+
+    unsupported_fields = sorted(set(archive) - {"retention_days"})
+    if unsupported_fields:
+        raise StorageError(f"Unsupported archive settings: {', '.join(unsupported_fields)}")
+
+    normalized_archive = normalize_archive_settings(
+        {
+            **normalize_archive_settings(settings.get("archive")),
+            **dict(archive),
+        }
+    )
+    settings["archive"] = normalized_archive
+    return dict(normalized_archive)
+
+
 def apply_server_settings(
     settings: dict[str, Any],
     server: Mapping[str, Any],
@@ -484,6 +508,7 @@ _SECTION_APPLIERS: dict[str, Callable[[dict[str, Any], Any], Any]] = {
     "model_tasks": apply_model_task_settings,
     "providers": apply_providers_settings,
     "debug": apply_debug_settings,
+    "archive": apply_archive_settings,
     "server": apply_server_settings,
     "extensions": apply_extensions_settings,
     "reflection": apply_reflection_settings,

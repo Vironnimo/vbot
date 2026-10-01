@@ -1,10 +1,10 @@
 """core.agents — agent persistence and workspace lifecycle."""
 
+from core.agents._config import AGENT_FORMAT_VERSION
 from core.agents.agents import (
     WORKSPACE_IDENTITY_FILES,
     Agent,
     AgentAlreadyExistsError,
-    AgentDeleteResult,
     AgentError,
     AgentListResult,
     AgentNotFoundError,
@@ -14,6 +14,8 @@ from core.agents.agents import (
     AgentRenameResult,
     AgentStore,
     AgentUpdateResult,
+    ArchivedAgent,
+    ArchivedAgentPayload,
     InvalidAgentIdError,
     InvalidAgentOrderError,
     default_workspace_dir,
@@ -28,10 +30,10 @@ from core.agents.agents import (
 from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, TemporaryAgentRegistry
 
 __all__ = [
+    "AGENT_FORMAT_VERSION",
     "WORKSPACE_IDENTITY_FILES",
     "Agent",
     "AgentAlreadyExistsError",
-    "AgentDeleteResult",
     "AgentError",
     "AgentNotFoundError",
     "AgentListResult",
@@ -41,6 +43,8 @@ __all__ = [
     "AgentRenameResult",
     "AgentStore",
     "AgentUpdateResult",
+    "ArchivedAgent",
+    "ArchivedAgentPayload",
     "InvalidAgentIdError",
     "InvalidAgentOrderError",
     "default_workspace_dir",

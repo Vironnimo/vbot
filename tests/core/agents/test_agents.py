@@ -378,7 +378,7 @@ def test_unknown_or_case_variant_agent_id_is_not_found(store: AgentStore, agent_
         lambda: store.get_raw(agent_id),
         lambda: store.update(agent_id, name="Renamed"),
         lambda: store.rename(agent_id, "other"),
-        lambda: store.delete(agent_id),
+        lambda: store.archive_files(agent_id, store.data_dir / "payload").__enter__(),
         lambda: store.reset_current_after_session_removed(agent_id, "ses_missing"),
     ):
         with pytest.raises(AgentNotFoundError, match=agent_id):

@@ -9,15 +9,18 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
+from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences
 from core.chat import ChatSessionError
 from core.database import SnapshotBarrier
 from core.runs import ChatRunManager
 from core.sessions import (
     FORK_SOURCE_META_KEY,
+    ArchiveEntryRef,
 )
 from server.events import ServerEventBus
 
@@ -111,7 +114,7 @@ class FakeSessions:
             self.archive_started.set()
         if self.archive_release is not None:
             await self.archive_release.wait()
-        return SimpleNamespace(id=address.session_id)
+        return ArchiveEntryRef(entry_key=len(self.archived), entry_id=f"arc_{address.session_id}")
 
     def newest_session_id(self, agent_id: str, project_id: str | None = None) -> str | None:
         self.listed.append((agent_id, project_id))
@@ -290,6 +293,26 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
         cron=cast(Any, runtime.cron_service),
         calendar=cast(Any, runtime.calendar_service),
     )
+    # The real archive service composes these fakes, as the server's Runtime does.
+    runtime.archive = ArchiveService(
+        ArchiveServices(
+            data_dir=Path("unused-data-dir"),
+            sessions=cast(Any, sessions),
+            agents=cast(Any, runtime.agents),
+            projects=cast(Any, None),
+            agent_resolver=cast(Any, resolver),
+            runs=chat_runs,
+            automation=runtime.automation_references,
+            terminals=cast(Any, runtime.terminal_manager),
+            snapshot_barrier=runtime.snapshot_barrier,
+            agent_references=_no_agent_references,
+            import_usage=lambda: None,
+            remove_agent_from_recall=_forget_agent,
+            remove_session_from_recall=_remove_session_from_recall,
+            invalidate_agent_skills=lambda _agent_id: None,
+            invalidate_project=lambda _project_id: None,
+        )
+    )
     state = SimpleNamespace(
         runtime=runtime,
         event_bus=ServerEventBus(),
@@ -302,3 +325,11 @@ def stub_session_state() -> tuple[SimpleNamespace, FakeResolver, FakeSessions]:
     state._recall_removals = recall_removals  # type: ignore[attr-defined]
     state._agent_current = agent_current  # type: ignore[attr-defined]
     return state, resolver, sessions
+
+
+async def _no_agent_references(_agent_id: str) -> tuple[str, ...]:
+    return ()
+
+
+async def _forget_agent(_agent_id: str) -> None:
+    return None

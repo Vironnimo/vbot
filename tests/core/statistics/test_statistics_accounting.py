@@ -143,7 +143,7 @@ async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuil
     assert report.usage.totals.measured_input_tokens == 57
     assert service.report().costs.totals == report.costs.totals
 
-    await manager.archive(session.address)
+    archived_entry = await manager.archive(session.address)
     manager.delete(SessionAddress(None, "main", other))
     archived = service.report()
     assert archived.overview.total_sessions == 0
@@ -152,7 +152,8 @@ async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuil
     assert archived.costs.totals == report.costs.totals
     index.discard()
     assert service.report().costs.totals == report.costs.totals
-    manager.restore(session.address)
+    manager.archive_ledger.begin_restore(archived_entry.entry_id, {"target_id": None})
+    manager.archive_ledger.commit_restore(archived_entry.entry_key)
     assert service.report().usage.totals.model_calls == 3
 
 

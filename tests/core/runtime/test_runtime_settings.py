@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from core.runtime import Runtime, SettingsChangeEffects
+from core.sessions import ArchiveEntryFilter
 from core.utils.config import Config
 from tests.core.runtime.runtime_test_support import (
     CAPABILITY_EXT_SOURCE,
@@ -76,6 +77,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "timezone_reloads": 0,
     "speech_preloads": 0,
     "embedding_binding_changes": 0,
+    "retention_changes": 0,
     "commands_changed": False,
     "skills_changed": False,
 }
@@ -179,6 +181,10 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"embedding_binding_changes": 1},
             id="text-embedding-binding",
         ),
+        # A changed retention period wakes the archive's retention sweep.
+        pytest.param(
+            {}, {"archive": {"retention_days": 14}}, (), {"retention_changes": 1}, id="retention"
+        ),
     ],
 )
 def test_settings_changes_refresh_only_their_live_services(
@@ -197,6 +203,7 @@ def test_settings_changes_refresh_only_their_live_services(
     timezone_reload = Mock()
     speech_preload = Mock()
     binding_change = Mock()
+    retention_change = Mock()
     monkeypatch.setattr(shared_runtime, "reload_extensions", extension_reload)
     monkeypatch.setattr(shared_runtime, "apply_extension_disabled_change", disabled_change)
     monkeypatch.setattr(shared_runtime, "reload_skills_async", skills_reload)
@@ -205,6 +212,7 @@ def test_settings_changes_refresh_only_their_live_services(
     monkeypatch.setattr(shared_runtime, "reload_timezone", timezone_reload)
     monkeypatch.setattr(shared_runtime.speech, "preload_configured", speech_preload)
     monkeypatch.setattr(shared_runtime.recall, "embedding_binding_changed", binding_change)
+    monkeypatch.setattr(shared_runtime.archive, "retention_changed", retention_change)
 
     effects = asyncio.run(
         shared_runtime.apply_settings_change(previous, current, refresh_sections=refresh_sections)
@@ -219,9 +227,23 @@ def test_settings_changes_refresh_only_their_live_services(
         "timezone_reloads": timezone_reload.call_count,
         "speech_preloads": speech_preload.call_count,
         "embedding_binding_changes": binding_change.call_count,
+        "retention_changes": retention_change.call_count,
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
     } == {**_NO_EFFECTS, **expected}
+
+
+def test_archive_retention_never_falls_back_to_the_default_period(runtime: Runtime) -> None:
+    def listed() -> tuple[int | None, bool]:
+        page = asyncio.run(runtime.archive.list(ArchiveEntryFilter()))
+        return page.retention_days, page.retention_unknown
+
+    write_settings(runtime.storage.data_dir, {"archive": {"retention_days": 14}})
+    assert listed() == (14, False)
+    # A damaged file would read as the default 30 days, which may be shorter.
+    runtime.storage.settings_path.write_text('{"archive": ', encoding="utf-8")
+    assert runtime.storage.load_archive_settings() == {"retention_days": 30}
+    assert listed() == (None, True)
 
 
 def test_session_search_periods_follow_the_current_timezone_setting(config: Config) -> None:

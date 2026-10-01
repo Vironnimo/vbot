@@ -276,7 +276,8 @@ export default Object.freeze({
   'agents.delete': 'Delete agent',
   'agents.deleteDisabledMinimum': 'The last remaining agent cannot be deleted.',
   'agents.created': 'Agent created.',
-  'agents.deleted': 'Agent deleted.',
+  'agents.deleted': 'Agent moved to the Archive.',
+  'agents.deletedPermanently': 'Agent deleted permanently.',
   'agents.loadError': 'Agents could not be loaded.',
   'agents.saveError': 'Agent could not be saved.',
   'agents.deleteError': 'Agent could not be deleted.',
@@ -326,13 +327,15 @@ export default Object.freeze({
   'agents.details.anyConnection': 'Chosen when a Run starts',
   'agents.deleteTitle': 'Delete this Agent',
   'agents.deleteDescription':
-    'Moves the Agent to the archive. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'Moves the Agent, its private Skills and its Sessions to the Archive, where you can restore them. An Agent that is still referenced or has active Runs cannot be deleted.',
   'agents.deleteConfirm':
-    'Delete {name}? The Agent, its Workspace and its Sessions move to the archive and no longer appear in vBot. An Agent that is still referenced or has active Runs cannot be deleted.',
+    'Delete {name}? The Agent, its private Skills and its Sessions move to the Archive, where you can restore them. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. An Agent that is still referenced or has active Runs cannot be deleted.',
+  'agents.deletePermanentConfirm':
+    'Delete {name} permanently? The Agent, its private Skills and its Sessions are deleted now and cannot be restored. A Workspace outside the Agent’s own folder in vBot’s data directory stays where it is. Recorded usage and costs stay in Statistics.',
   'agents.deleteBusy':
     'This Agent has an active or queued Run and cannot be deleted right now.',
   'agents.deleteInUse':
-    'A schedule, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
+    'A schedule, Bootstrap job, Calendar action or Channel still uses this Agent, so it cannot be deleted. Remove or retarget it first.',
   'agents.menu.label': 'Actions for {name}',
   'agents.menu.openChat': 'Open chat',
   'agents.menu.copyId': 'Copy ID',
@@ -553,23 +556,27 @@ export default Object.freeze({
   'projects.menu.rePoint': 'Re-point…',
   'projects.menu.remove': 'Remove…',
   'projects.remove.confirmTitle': 'Remove project',
-  'projects.remove.rootedAgentsBody':
-    'Removing {name} clears it from every affected Rooted Agent and resets those Agents to their Default Workspace. Their Sessions and history stay unchanged. The repository and old Workspace files are never touched.',
+  'projects.remove.body':
+    'Remove {name}? The Project and its Sessions move to the Archive, where you can restore them. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
+  'projects.remove.permanentBody':
+    'Remove {name} permanently? The Project’s vBot data and its Sessions are deleted now and cannot be restored. Rooted Agents that use it are reset to their Default Workspace; their own Sessions stay. The repository and old Workspace files are never touched.',
   'projects.remove.copyIdentityFiles':
     'Copy SOUL.md, USER.md, and MEMORY.md to affected Default Workspaces',
   'projects.remove.copyIdentityFilesHelp':
     'When enabled, existing destination versions are backed up before replacement. One choice applies to every affected Agent.',
-  'projects.remove.successOneAgent':
-    'Project removed. 1 Agent was reset; identity files {copyState}.',
-  'projects.remove.successManyAgents':
-    'Project removed. {count} Agents were reset; identity files {copyState}.',
+  'projects.remove.archived': 'Project moved to the Archive.',
+  'projects.remove.deletedPermanently': 'Project deleted permanently.',
+  'projects.remove.resetOneAgent':
+    '1 Agent was reset; identity files {copyState}.',
+  'projects.remove.resetManyAgents':
+    '{count} Agents were reset; identity files {copyState}.',
   'projects.remove.filesCopied': 'were copied',
   'projects.remove.filesNotCopied': 'were not copied',
   'projects.remove.error': 'Project could not be removed.',
   'projects.remove.busy':
     'This project has an active or queued run and cannot be removed right now.',
   'projects.remove.inUse':
-    'A cron job points at one of this project’s agents, so it cannot be removed. Remove or retarget the cron job first.',
+    'A schedule, Bootstrap job or Calendar action uses one of this project’s agents, so it cannot be removed. Remove or retarget it first.',
   'projects.detail.sectionAutoLoad': 'Auto-load files',
   'projects.detail.autoLoadInfo':
     'These files are embedded into the system prompt of every session in this project — the agent always sees their full content, with higher weight than normal chat history, and they are never dropped or summarized by context compaction.\n\nPaths are relative to the project folder (absolute paths also work), files load in list order, and missing files are skipped. When an outside Identity Agent explicitly loads the project with the project Tool, the same files are returned as Project Context.',
@@ -818,4 +825,219 @@ export default Object.freeze({
   'agents.rename.confirm': 'Change ID',
   'agents.renamed': 'Agent ID changed.',
   'agents.renameError': 'Could not change Agent ID.',
+  'archive.deletePermanently': 'Delete permanently',
+  'archive.deleteOption.permanent':
+    'Delete permanently instead of moving it to the Archive',
+  'archive.deleteNotice.days':
+    'It stays in Settings › Archive for {days} days, then vBot deletes it automatically.',
+  'archive.deleteNotice.oneDay':
+    'It stays in Settings › Archive for one day, then vBot deletes it automatically.',
+  'archive.deleteNotice.off':
+    'It stays in Settings › Archive until you delete it there.',
+  'archive.deleteNotice.unknown':
+    'It stays in Settings › Archive for now: vBot cannot read the retention period from its settings file, so automatic deletion is paused.',
+  'archive.deleteNotice.kept':
+    'It stays in Settings › Archive for the retention period set there.',
+  'archive.deletePending':
+    'Deleted. vBot finishes removing its data in the background.',
+  'archive.deleteGone':
+    'Moved to the Archive, but another action deleted or restored it there before vBot could delete it permanently.',
+  'archive.deleteBusy':
+    'Moved to the Archive, but another action, such as a restore, is using it there, so it was not deleted permanently.',
+  'archive.deleteKept':
+    'Moved to the Archive, but it could not be deleted permanently. Delete it later in Settings › Archive.',
+  'archive.title': 'Archive',
+  'archive.listLabel': 'Archived items',
+  'archive.empty': 'The Archive is empty',
+  'archive.emptyDescription':
+    'Agents, Projects and Sessions you delete appear here, where you can restore them.',
+  'archive.emptyFiltered': 'Nothing in the Archive matches these filters',
+  'archive.loadError': 'Could not load the Archive.',
+  'archive.loadMore': 'Load more',
+  'archive.filter.kind': 'Filter by kind',
+  'archive.filter.scope': 'Filter by Agent or Project',
+  'archive.filter.allKinds': 'All kinds',
+  'archive.filter.agents': 'Agents',
+  'archive.filter.projects': 'Projects',
+  'archive.filter.sessions': 'Sessions',
+  'archive.filter.ownerGroups': 'Extension Sessions',
+  'archive.filter.files': 'Files from older versions',
+  'archive.filter.agentGroup': 'Agents',
+  'archive.filter.projectGroup': 'Projects',
+  'archive.filter.allScopes': 'All Agents and Projects',
+  'archive.kind.agent': 'Agent',
+  'archive.kind.project': 'Project',
+  'archive.kind.session': 'Session',
+  'archive.kind.ownerGroup': 'Extension Sessions',
+  'archive.kind.files': 'Files',
+  'archive.retention.off': 'Archived items are never deleted automatically.',
+  'archive.retention.unknown':
+    'Automatic deletion is paused: vBot cannot read the retention period from its settings file, so it deletes nothing automatically until it can.',
+  'archive.count.one': '1 item',
+  'archive.count.many': '{count} items',
+  'archive.count.shown': '{count} items shown',
+  'archive.selection.count': '{count} selected',
+  'archive.selection.clear': 'Clear selection',
+  'archive.row.select': 'Select {name}',
+  'archive.row.oneSession': '1 Session',
+  'archive.row.sessions': '{count} Sessions',
+  'archive.row.agentInProject': '{agent} in {project}',
+  'archive.row.archivedAt': 'Archived {date}',
+  'archive.row.purgeAt': 'Deleted automatically on {date}',
+  'archive.row.purging': 'Being deleted',
+  'archive.row.neverDeleted': 'Never deleted automatically',
+  'archive.row.neverDeletedFiles':
+    'Files from an older vBot version may be folders of your own, so vBot deletes them only when you do.',
+  'archive.row.neverDeletedFolders':
+    'This item may hold folders of your own, so vBot deletes it only when you do.',
+  'archive.row.neverDeletedRecovered':
+    'vBot found this item in its Archive folder without a record of when it was archived, so it deletes it only when you do.',
+  'archive.row.deleteOnly': 'Cannot be restored',
+  'archive.state.archiving': 'Being archived',
+  'archive.state.restoring': 'Being restored',
+  'archive.action.restore': 'Restore',
+  'archive.action.restoreAs': 'Restore as…',
+  'archive.restoreAs.title': 'Restore under a new ID',
+  'archive.restoreAs.hint':
+    'Restores {name} under the ID you enter. Its Sessions keep their history; Channel conversations start fresh.',
+  'archive.restoreAs.agentLabel': 'New Agent ID',
+  'archive.restoreAs.projectLabel': 'New Project ID',
+  'archive.restoreAs.sessionLabel': 'New Session ID',
+  'archive.restore.conflict':
+    'The ID {id} is in use now. Enter another ID to restore it.',
+  'archive.restore.conflictUnnamed':
+    'Its ID is in use now. Enter another ID to restore it.',
+  'archive.restore.success': '{name} restored.',
+  'archive.restore.error': 'Could not restore',
+  'archive.error.notFound': 'This item is no longer in the Archive.',
+  'archive.problem.kindNotRestorable':
+    'Items of this kind cannot be restored; you can only delete them.',
+  'archive.problem.entryBusy':
+    'Another operation is working on it. Try again in a moment.',
+  'archive.problem.entryPurging':
+    'It is being deleted permanently and can no longer be restored.',
+  'archive.problem.payloadMissing': 'Its archived files are missing.',
+  'archive.problem.payloadInvalid': 'Its archived files cannot be read.',
+  'archive.problem.olderFormat':
+    'An older vBot version archived it in a format this version cannot restore.',
+  'archive.problem.newerFormat':
+    'A newer vBot version archived it. Update vBot to restore it.',
+  'archive.problem.invalidTargetId':
+    'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
+  'archive.problem.agentIdTaken': 'An Agent with the ID {id} exists.',
+  'archive.problem.projectIdTaken': 'A Project with the ID {id} exists.',
+  'archive.problem.sessionTaken': 'A Session with the ID {ids} exists.',
+  'archive.problem.projectCwdClaimed':
+    'The Project {project} already uses the repository {cwd}.',
+  'archive.problem.agentNotInTeam':
+    'The Agent {agent} of the Project {project} no longer exists.',
+  'archive.problem.projectMissing': 'The Project {project} no longer exists.',
+  'archive.problem.agentMissing': 'The Agent {agent} no longer exists.',
+  'archive.problem.workspaceTaken':
+    'The Workspace folder {path} is in use. Move it away first.',
+  'archive.problem.workspaceTakenWarning':
+    'The Workspace folder {path} is in use, so the archived Workspace becomes the Agent’s default Workspace.',
+  'archive.problem.ownerManaged':
+    'An Extension manages one of its Sessions, so it cannot be restored.',
+  'archive.problem.grantTargetMissing':
+    'The Agent {agent} no longer exists, so its permission to delegate to this Agent is not restored.',
+  'archive.problem.rootProjectMissing':
+    'The Project {project} no longer exists, so the Agent is restored without it.',
+  'archive.problem.externalWorkspaceMissing':
+    'The Workspace folder {path} is gone, so the Agent uses its default Workspace.',
+  'archive.purge.confirmTitle': 'Delete permanently?',
+  'archive.purge.confirm':
+    'Delete {name} permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purge.confirmOwnFolders':
+    'Delete {name} permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirmOne':
+    'Delete 1 item permanently? Its Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirmOneOwnFolders':
+    'Delete 1 item permanently? It may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirm':
+    'Delete {count} items permanently? Their Sessions and files are deleted now and cannot be restored. Recorded usage and costs stay in Statistics.',
+  'archive.purgeMany.confirmOwnFolders':
+    'Delete {count} items permanently? Some may hold folders of your own, which are deleted too. Nothing can be restored afterwards. Recorded usage and costs stay in Statistics.',
+  'archive.purge.success': '{name} deleted permanently.',
+  'archive.purge.successOne': '1 item deleted permanently.',
+  'archive.purge.successMany': '{count} items deleted permanently.',
+  'archive.purge.pendingOne':
+    '1 item could not be deleted completely yet. vBot retries automatically.',
+  'archive.purge.pendingMany':
+    '{count} items could not be deleted completely yet. vBot retries automatically.',
+  'archive.purge.goneOne':
+    '1 item was no longer in the Archive: another action deleted or restored it.',
+  'archive.purge.goneMany':
+    '{count} items were no longer in the Archive: another action deleted or restored them.',
+  'archive.purge.busyOne':
+    '1 item was not deleted because another action, such as a restore, is using it.',
+  'archive.purge.busyMany':
+    '{count} items were not deleted because another action, such as a restore, is using them.',
+  'archive.purge.failedOne':
+    '1 item could not be deleted and stays in the Archive unchanged. Try again later.',
+  'archive.purge.failedMany':
+    '{count} items could not be deleted and stay in the Archive unchanged. Try again later.',
+  'archive.purge.keptOne':
+    '1 item that may hold folders of your own was kept. Delete it by itself to remove it.',
+  'archive.purge.keptMany':
+    '{count} items that may hold folders of your own were kept. Delete each by itself to remove it.',
+  'archive.purge.nothing': 'Nothing was deleted.',
+  'archive.purge.error': 'Could not delete',
+  'archive.purgeAll.everything': 'Empty Archive…',
+  'archive.purgeAll.everythingTitle': 'Empty the Archive?',
+  'archive.purgeAll.matching': 'Delete all matching…',
+  'archive.purgeAll.nothing': 'Nothing here can be deleted right now.',
+  'archive.purgeAll.onlyOwnFolders':
+    'Deleting everything here skips items that may hold folders of your own. Delete each by itself to remove it.',
+  'archive.purgeAll.keptOne':
+    '1 item that may hold folders of your own is kept; delete it by itself to remove it.',
+  'archive.purgeAll.keptMany':
+    '{count} items that may hold folders of your own are kept; delete each by itself to remove it.',
+  'archive.detail.breadcrumb': 'Breadcrumb',
+  'archive.detail.backToList': 'Back to the Archive',
+  'archive.detail.backHint': 'Back',
+  'archive.detail.loadError': 'Could not load this item.',
+  'archive.detail.notFound': 'This item is no longer in the Archive',
+  'archive.detail.notFoundDescription':
+    'It was restored or deleted permanently.',
+  'archive.detail.archivedAt': 'Archived {moment}',
+  'archive.detail.blocked': 'It cannot be restored right now:',
+  'archive.detail.openMissingScope': 'Show it in the Archive',
+  'archive.detail.warnings': 'Restoring it changes this:',
+  'archive.detail.facts': 'Details',
+  'archive.detail.deletion': 'Deletion',
+  'archive.detail.purgeAt': 'Deleted automatically on {date}.',
+  'archive.detail.retentionUnknown':
+    'Not deleted automatically for now: vBot cannot read the retention period from its settings file.',
+  'archive.detail.neverDeletedFiles':
+    'Never deleted automatically: files from an older vBot version may be folders of your own.',
+  'archive.detail.neverDeletedFolders':
+    'Never deleted automatically: the folders marked below may be your own.',
+  'archive.detail.neverDeletedRecovered':
+    'Never deleted automatically: vBot found it in its Archive folder without a record of when it was archived.',
+  'archive.detail.id': 'ID',
+  'archive.detail.agent': 'Agent',
+  'archive.detail.project': 'Project',
+  'archive.detail.extension': 'Extension',
+  'archive.detail.reason': 'Archived because',
+  'archive.detail.reasonExtension': 'The Extension archived these Sessions',
+  'archive.detail.reasonExtensionRemoved': 'The Extension was removed',
+  'archive.detail.repository': 'Repository',
+  'archive.detail.rootProject': 'Root Project',
+  'archive.detail.workspace': 'Workspace',
+  'archive.detail.workspaceExternal':
+    'Outside the Agent’s own folder; it was left in place.',
+  'archive.detail.grants': 'Agents that delegated to it',
+  'archive.detail.unrootedAgents': 'Agents reset to their Default Workspace',
+  'archive.detail.sessions': 'Sessions',
+  'archive.detail.lastActivity': 'Last active {moment}',
+  'archive.detail.moreSessions': '{count} more Sessions',
+  'archive.detail.files': 'Files',
+  'archive.detail.treeAgent': 'Agent data',
+  'archive.detail.treeWorkspace': 'Workspace',
+  'archive.detail.treeProject': 'Project data',
+  'archive.detail.treeFiles': 'Files',
+  'archive.detail.userFolder': 'May be your own folder',
+  'archive.detail.userFolderHint':
+    'An older vBot version moved this folder into the archive. It may be a folder of your own rather than a copy; deleting the item deletes it too.',
 });

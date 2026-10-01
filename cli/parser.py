@@ -10,6 +10,7 @@ from typing import NoReturn
 
 from cli._parser_agents import (
     _add_agent_parsers,
+    _add_archive_parsers,
     _add_chat_parser,
     _add_data_store_parsers,
     _add_project_parsers,
@@ -51,11 +52,13 @@ from cli._parser_operations import (
     _add_statistics_parsers,
 )
 from cli._progress import status_line
+from cli._recovery import format_command
 
 AREA_ALIASES = {
     "agents": "agent",
     "projects": "project",
     "sessions": "session",
+    "archives": "archive",
     "channels": "channel",
     "tools": "tool",
     "prompts": "prompt",
@@ -166,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_agent_parsers(subparsers)
     _add_project_parsers(subparsers)
     _add_session_parsers(subparsers)
+    _add_archive_parsers(subparsers)
     _add_chat_parser(subparsers)
     _add_data_store_parsers(subparsers)
     _add_channel_parsers(subparsers)
@@ -260,7 +264,47 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             )
     if getattr(args, "area", None) == "chat" and args.prompt is None and _stdin_is_terminal():
         parser.error("chat needs a message: pass it as <prompt> or pipe it on stdin")
+    if getattr(args, "area", None) == "archive" and args.command == "purge":
+        _check_archive_purge_selection(parser, args)
     return args
+
+
+def _check_archive_purge_selection(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
+    """A purge names its entries or selects them with --all, never both.
+
+    The errors never offer an --all command: deleting a whole selection stays the
+    caller's explicit choice, so they point to the list and to deleting by id.
+    """
+    filters = [
+        option
+        for name in ("kind", "agent", "project")
+        if getattr(args, name) is not None
+        for option in (f"--{name}", getattr(args, name))
+    ]
+    listing = format_command(("vbot", "archive", "list", *filters))
+    by_ids = (
+        format_command(("vbot", "archive", "purge", *args.entry_ids, "--yes"))
+        if args.entry_ids
+        else "vbot archive purge <entry-id>... --yes"
+    )
+    if args.all and args.entry_ids:
+        parser.error(
+            f"archive purge takes entry ids or --all, not both; to delete the named entries, "
+            f"run '{by_ids}'"
+        )
+    if not args.all and not args.entry_ids:
+        shown = "the matching entries" if filters else "the entries"
+        parser.error(
+            f"archive purge needs entry ids or --all; '{listing}' shows {shown} and their "
+            f"ids, then run '{by_ids}'"
+        )
+    if filters and not args.all:
+        parser.error(
+            f"{', '.join(filters[::2])} only apply with --all; to delete the named entries, "
+            f"run '{by_ids}'"
+        )
 
 
 def _stdin_is_terminal() -> bool:

@@ -44,7 +44,7 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 - Updates preserve `project_id` and `created_at`, reject a cwd already owned by another Project, rebuild the complete value, and write atomically.
 - Listing is deterministic and skips corrupt Project files with a warning instead of failing the entire collection. `exists(project_id)` is validity-aware and returns false for an unreadable or invalid config rather than reporting directory presence as a usable Project.
 - `set_override()` and `clear_override()` atomically rewrite one supported field. Clearing the last field removes the Agent's override object unless it still holds unknown fields, which stay on disk; clearing an absent value is a no-op. Both return the Project as persisted.
-- Store deletion archives the Project Anchor and atomically archives its live SQLite Sessions rather than deleting repository content. A live owner-managed (Extension) Session in the Project refuses the removal with an error naming its owner (`sessions/owned-execution.md` -> Authority); it leaves when its owner deletes or archives its group, or when core archives it after the owner was removed (`extensions.md`). Archived ones never block (`test_delete_waits_for_owner_managed_sessions_to_leave_the_project`). The anchor moves through the all-or-nothing `move_tree` (`core/utils/tree_move.py`, see `agent.md`), so a failed move leaves the anchor untouched. If either side fails, it restores the active anchor and any previous archive and raises `ProjectError`; if compensation also fails, nothing is deleted and the error names where the Project files and the staged previous archive remain. It is a persistence primitive, not the complete user-facing removal workflow.
+- `archive_files(project_id, tree)` moves the Project Anchor into an archive payload around the archive service's Session commit and yields the Project (`None` when its config cannot be read; the Anchor is archived all the same); repository content is never touched. The Session commit refuses while a live owner-managed (Extension) Session is in the Project, with an error naming its owner (`sessions/owned-execution.md` -> Authority); it leaves when its owner deletes or archives its group, or when core archives it after the owner was removed (`extensions.md`). Archived ones never block (`tests/core/sessions/test_archive_ledger.py`). The anchor moves through the all-or-nothing `move_tree` (`core/utils/tree_move.py`, see `agent.md`), so a failed move leaves the anchor untouched, and a failing commit moves it back; if that fails too, the error names where the Project files remain. `restore_files(source, target_id)` refuses a taken id and a repository another Project claims before anything changes, moves the Anchor back and rewrites its `project.json` to the target id (unknown fields stay); a failure writes the archived `project.json` bytes back before the Anchor returns, so the payload stays unchanged; `inspect_archived` and `restore_target_problem` report what blocks a restore. These are persistence primitives, not the user-facing removal or restore workflow (`archive.md`).
 
 `normalize_cwd()` resolves an absolute real path, strips trailing separators, and preserves case. `cwd_identity_key()` additionally case-folds on Windows and is the duplicate-detection key. The Store intentionally permits a cwd that does not currently exist; the `project.add` RPC is the boundary that requires an existing directory.
 
@@ -61,14 +61,14 @@ The repository at `cwd` remains outside the anchor and is never mutated. Changin
 
 ## Removal Coordination
 
-`project.rm` coordinates domain boundaries before invoking archive storage:
+`project.rm` holds the server Agent-reference lock and calls `ArchiveService.archive_project` (`archive.md`), which coordinates the domain boundaries; the RPC maps its refusals (`project_in_use`, `project_busy`) and returns the archive entry id with the unrooted Agents and their copied and backed-up identity files:
 
-- It acquires `ChatRunManager.project_admission_guard` under the server Agent-reference lock. Guard acquisition atomically rejects active or queued Project-anchored work and Identity-Agent work whose internal `working_project_id` selects the Project; while held, every Run ingress rejects new work for either relationship until removal finishes.
+- It acquires `ChatRunManager.project_admission_guard`. Guard acquisition atomically rejects active or queued Project-anchored work and Identity-Agent work whose internal `working_project_id` selects the Project; while held, every Run ingress rejects new work for either relationship until removal finishes.
 - It rejects removal while a live Cron job, Bootstrap job or Calendar action targets an Agent of the Project (`AutomationReferences.project_references`, `automation.md`).
-- It identifies Identity Agents rooted in the Project. When their Workspace moves back to the Agent default, the workflow can preserve `SOUL.md`, `USER.md`, and `MEMORY.md`, updates those Agents, and rolls back the coordinated changes if removal fails.
-- It archives the Project Anchor, invalidates Team and Skill caches, and publishes Agent and Project resource changes.
+- It identifies Identity Agents rooted in the Project and records each unroot in the entry before it happens. When their Workspace moves back to the Agent default, the workflow can preserve `SOUL.md`, `USER.md`, and `MEMORY.md`, updates those Agents, and rolls back the coordinated changes if removal fails; a restore roots them again.
+- It archives the Project Anchor and Sessions, and invalidates Team and Skill caches; the RPC publishes Agent and Project resource changes.
 
-Do not move these product-level guards into a low-level filesystem helper or call the Store archive primitive as a substitute for the RPC removal workflow.
+Do not move these product-level guards into a low-level filesystem helper or call the Store archive primitive as a substitute for the archive service's removal workflow.
 
 ## Validation Ownership
 
@@ -85,8 +85,8 @@ When adding a persisted field, decide whether it is a Project default, a capabil
 ## Source & Tests
 
 - Entity, defaults, overrides, serialization: `core/projects/projects.py`
-- Persistence and archive lifecycle: `core/projects/store.py`
+- Persistence and the Anchor's archive and restore: `core/projects/store.py`
 - Anchor and cwd path rules: `core/projects/paths.py`
 - Address parsing: `core/projects/address.py`
-- Public mutations and removal coordination: `server/rpc/project_methods.py`
-- Primary tests: `tests/core/projects/test_projects.py`, `tests/core/projects/test_store.py`, and `tests/server/rpc/test_project_methods.py`
+- Public mutations: `server/rpc/project_methods.py`; removal coordination: `core/archive/` (`archive.md`)
+- Primary tests: `tests/core/projects/test_projects.py`, `tests/core/projects/test_store.py`, `tests/server/rpc/test_project_methods.py`, and `tests/server/rpc/test_project_methods_delete.py`

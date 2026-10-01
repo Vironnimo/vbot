@@ -237,6 +237,7 @@ class ExtensionHostFactory:
                             group_id,
                             delete=False,
                             close_terminals=self._close_session_terminals,
+                            archive_reason="extension_removed",
                         )
                     except RunAdmissionBlockedError:
                         if self.logger is not None:

@@ -66,6 +66,8 @@ async def apply_settings_change(
     if text_embedding_binding(previous) != text_embedding_binding(current):
         runtime.recall.embedding_binding_changed()
 
+    if previous.get("archive") != current.get("archive"):
+        runtime.archive.retention_changed()
     if previous.get("keep_awake") != current.get("keep_awake"):
         runtime.reload_keep_awake()
     if previous.get("timezone") != current.get("timezone"):

@@ -70,6 +70,8 @@ export function createProjectsState({ selectedProjectId = '' } = {}) {
     removingProjectId: '',
     removeConfirmProject: null,
     copyRootedAgentIdentityFiles: false,
+    // Whether the confirmed removal skips the Archive.
+    removePermanently: false,
     expandedMembers: {},
     overrideDrafts: {},
     overrideBusyKey: '',

@@ -19,6 +19,11 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
+from cli.archive_management import (
+    permanent_delete_refusal,
+    sessions_text,
+    unfinished_permanent_delete,
+)
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
@@ -169,18 +174,50 @@ def project_remove(
     instance: ServerInstance,
     project_id: str,
     copy_rooted_agent_files: bool = False,
+    permanent: bool = False,
+    confirm: bool = False,
 ) -> CommandResult:
-    """Archive a project via ``project.rm`` RPC, or surface the block reason."""
+    """Archive a project as an archive entry via ``project.rm`` RPC, or delete it permanently.
 
+    A permanent deletion cannot be undone, so it needs ``confirm`` (``--yes``).
+    The repo itself is never touched.
+    """
+
+    if permanent and not confirm:
+        command: tuple[str, ...] = ("vbot", "project", "remove", project_id)
+        if copy_rooted_agent_files:
+            command += ("--copy-rooted-agent-files",)
+        return CommandResult(
+            ok=False,
+            message=permanent_delete_refusal(f"project {project_id}", (*command, "--permanent")),
+            instance=instance,
+        )
     params: dict[str, object] = {"project_id": project_id}
     if copy_rooted_agent_files:
         params["copy_rooted_agent_identity_files"] = True
+    if permanent:
+        params["permanent"] = True
     payload = _rpc_call(instance, "project.rm", params)
     if not payload.ok:
         return payload.to_command_result()
     removed_id = _string_or_default(payload.data.get("project_id"), project_id)
-    archive_path = _string_or_default(payload.data.get("archive_path"), "-")
-    lines = [f"removed project {removed_id} (archived to {archive_path})"]
+    entry_id = _string_or_default(payload.data.get("archive_entry_id"), "-")
+    sessions = sessions_text(payload.data.get("session_count"))
+    attention: tuple[str, ...] = ()
+    ok = True
+    if payload.data.get("purged") is True:
+        lines = [f"removed project {removed_id} permanently ({sessions}); the repo is untouched"]
+    elif permanent:
+        clause, attention, ok = unfinished_permanent_delete(payload.data, entry_id)
+        lines = [
+            f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}), "
+            f"{clause}"
+        ]
+    else:
+        lines = [
+            f"removed project {removed_id} (archived as archive entry {entry_id}, {sessions}); "
+            f"restore with: vbot archive restore {entry_id}"
+        ]
     if "affected_agent_ids" in payload.data:
         lines.append(
             f"affected_rooted_agents: {_format_string_list(payload.data.get('affected_agent_ids'))}"
@@ -191,7 +228,7 @@ def project_remove(
         lines.extend(
             _format_agent_file_effects("backed_up_files", payload.data.get("backed_up_files"))
         )
-    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+    return CommandResult(ok=ok, message="\n".join(lines), instance=instance, attention=attention)
 
 
 def project_detect(instance: ServerInstance, cwd: str | None) -> CommandResult:

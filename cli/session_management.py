@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 from collections.abc import Sequence
 
+from cli.archive_management import (
+    permanent_delete_refusal,
+    unfinished_permanent_delete,
+)
 from cli.formatting import record_fields
 from cli.formatting import string_or_default as _string_or_default
 from cli.rpc_client import httpx as httpx
@@ -100,38 +104,55 @@ def session_delete(
     agent_id: str,
     session_id: str,
     confirm: bool,
+    permanent: bool = False,
 ) -> CommandResult:
-    """Delete (archive) a session via `session.delete` RPC.
+    """Archive a session via `session.delete` RPC, or delete it permanently.
 
     A typed command is already deliberate, but the destructive call still
     requires an explicit ``--yes`` so a stray invocation cannot drop a
     conversation. Without it the command refuses and explains how to proceed.
-    The session is archived (recoverable by hand), not erased.
+    Without ``permanent`` the session moves into an archive entry that
+    ``vbot archive restore`` brings back.
     """
 
     if not confirm:
-        return CommandResult(
-            ok=False,
-            message=(
-                f"refusing to delete session {session_id} for {agent_id} without confirmation; "
-                "re-run with --yes (the session is archived, not erased)"
-            ),
-            instance=instance,
-        )
+        if permanent:
+            message = permanent_delete_refusal(
+                f"session {session_id} for {agent_id}",
+                ("vbot", "session", "delete", agent_id, session_id, "--permanent"),
+            )
+        else:
+            message = (
+                f"refusing to delete session {session_id} for {agent_id} without "
+                "confirmation; re-run with --yes (the session moves to the archive; add "
+                "--permanent to delete it now)"
+            )
+        return CommandResult(ok=False, message=message, instance=instance)
 
-    params = {"agent_id": agent_id, "session_id": session_id}
+    params: dict[str, object] = {"agent_id": agent_id, "session_id": session_id}
+    if permanent:
+        params["permanent"] = True
     payload = _rpc_call(instance, "session.delete", params)
     if not payload.ok:
         return payload.to_command_result()
-    next_session_id = _string_or_default(payload.data.get("next_session_id"), "?")
-    return CommandResult(
-        ok=True,
-        message=(
-            f"deleted session {session_id} for {agent_id} (archived, recoverable); "
-            f"next session: {next_session_id}"
-        ),
-        instance=instance,
-    )
+    next_session = f"next session: {_string_or_default(payload.data.get('next_session_id'), '?')}"
+    entry_id = _string_or_default(payload.data.get("archive_entry_id"), "-")
+    attention: tuple[str, ...] = ()
+    ok = True
+    if payload.data.get("purged") is True:
+        message = f"deleted session {session_id} for {agent_id} permanently; {next_session}"
+    elif permanent:
+        clause, attention, ok = unfinished_permanent_delete(payload.data, entry_id)
+        message = (
+            f"deleted session {session_id} for {agent_id} (archived as archive entry "
+            f"{entry_id}), {clause}; {next_session}"
+        )
+    else:
+        message = (
+            f"deleted session {session_id} for {agent_id} (archived as archive entry "
+            f"{entry_id}); {next_session}; restore with: vbot archive restore {entry_id}"
+        )
+    return CommandResult(ok=ok, message=message, instance=instance, attention=attention)
 
 
 def session_link_channel(

@@ -222,17 +222,19 @@ def test_fork_titles_and_classifies_the_copy_in_its_one_write(manager, monkeypat
         asyncio.run(manager.fork(source.address, run_kind="reflection"))
 
 
-def test_archive_hides_session_until_explicit_restore(manager) -> None:
+def test_archive_hides_session_until_its_entry_is_restored(manager) -> None:
     address = _address("coder", "session-one")
     manager.create("coder", session_id=address.session_id)
 
-    asyncio.run(manager.archive(address))
+    ref = asyncio.run(manager.archive(address))
 
     assert manager.exists(address) is False
     assert manager.list("coder") == []
     with pytest.raises(ChatSessionError, match="does not exist"):
         manager.get(address)
-    manager.restore(address)
+    ledger = manager.archive_ledger
+    ledger.begin_restore(ref.entry_id, {"target_id": None})
+    assert ledger.commit_restore(ref.entry_key) == (address,)
     assert manager.exists(address) is True
 
 
@@ -248,5 +250,3 @@ def test_archived_address_can_start_a_fresh_generation(manager) -> None:
 
     assert [message.content for message in replacement.load()] == ["new"]
     assert replacement.load_since(original_cursor) is None
-    with pytest.raises(ChatSessionError, match="live session already exists"):
-        manager.restore(address)

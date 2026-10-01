@@ -140,16 +140,45 @@ def test_session_delete_requires_confirmation_before_any_request(
     assert rpc.calls == []
 
 
-def test_session_delete_archives_the_session_and_names_the_next_one(
-    rpc: FakeRpc, run_cli: RunCli
+@pytest.mark.parametrize(
+    ("options", "params", "deleted", "shown"),
+    [
+        pytest.param(
+            (),
+            SESSION,
+            {"archive_entry_id": "arc_3d8n0v6tz2kc", "purged": False},
+            "deleted session session-one for assistant (archived as archive entry "
+            "arc_3d8n0v6tz2kc); next session: session-two; restore with: "
+            "vbot archive restore arc_3d8n0v6tz2kc",
+            id="archived",
+        ),
+        pytest.param(
+            ("--permanent",),
+            {**SESSION, "permanent": True},
+            {"archive_entry_id": "arc_3d8n0v6tz2kc", "purged": True},
+            "deleted session session-one for assistant permanently; next session: session-two",
+            id="permanent",
+        ),
+    ],
+)
+def test_session_delete_archives_or_deletes_the_session_and_names_the_next_one(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    options: tuple[str, ...],
+    params: dict[str, Any],
+    deleted: dict[str, Any],
+    shown: str,
 ) -> None:
-    rpc.reply("session.delete", {**SESSION, "next_session_id": "session-two"})
+    rpc.reply(
+        "session.delete",
+        {**SESSION, "next_session_id": "session-two", "purge_pending": False} | deleted,
+    )
 
-    code, out, _err = run_cli("session", "delete", "assistant", "session-one", "--yes")
+    code, out, _err = run_cli("session", "delete", "assistant", "session-one", "--yes", *options)
 
     assert code == 0
-    assert rpc.calls == [("session.delete", SESSION)]
-    assert "archived" in out and "session-two" in out
+    assert rpc.calls == [("session.delete", params)]
+    assert out.splitlines() == [shown]
 
 
 def test_session_fork_keeps_the_qualified_target_agent(rpc: FakeRpc, run_cli: RunCli) -> None:

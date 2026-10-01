@@ -36,6 +36,10 @@ RPC_ERROR_PERFORMANCE_RECORDING_ACTIVE = "performance_recording_active"
 RPC_ERROR_PERFORMANCE_RECORDING_INACTIVE = "performance_recording_inactive"
 RPC_ERROR_TERMINAL_PROGRAM_NOT_RUNNING = "terminal_program_not_running"
 RPC_ERROR_SETTINGS_CONFLICT = "settings_conflict"
+RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND = "archive_entry_not_found"
+RPC_ERROR_ARCHIVE_ENTRY_BUSY = "archive_entry_busy"
+RPC_ERROR_ARCHIVE_RESTORE_CONFLICT = "archive_restore_conflict"
+RPC_ERROR_ARCHIVE_NOT_RESTORABLE = "archive_not_restorable"
 
 
 class RpcError(Exception):

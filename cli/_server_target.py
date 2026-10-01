@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -70,12 +71,16 @@ class WebUIProbeResult:
 
 @dataclass(frozen=True)
 class RpcFailure:
-    """Evidence about one failed RPC, never a rollback claim for a whole command."""
+    """Evidence about one failed RPC, never a rollback claim for a whole command.
+
+    ``data`` is the server error's structured ``data`` object, when it sent one.
+    """
 
     method: str
     request_state: Literal["not_sent", "unknown", "responded"]
     code: str | None = None
     http_status: int | None = None
+    data: Mapping[str, Any] | None = field(default=None, compare=False, hash=False)
 
 
 @dataclass(frozen=True)

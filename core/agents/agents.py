@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import builtins
 import shutil
-import tempfile
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, TypeVar
 
+from core.agents import _archive
 from core.agents import _workspace as workspace_ops
 from core.agents._config import (
     AGENT_FORMAT,
@@ -61,7 +61,6 @@ from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     Agent,
     AgentAlreadyExistsError,
-    AgentDeleteResult,
     AgentError,
     AgentListResult,
     AgentNotFoundError,
@@ -70,6 +69,8 @@ from core.agents._types import (
     AgentRename,
     AgentRenameResult,
     AgentUpdateResult,
+    ArchivedAgent,
+    ArchivedAgentPayload,
     InvalidAgentIdError,
     InvalidAgentOrderError,
     _AgentOrderDocument,
@@ -111,12 +112,12 @@ from core.tools.availability import (
 )
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
-from core.utils.tree_move import move_tree
 
 __all__ = [
     "Agent",
     "AgentAlreadyExistsError",
-    "AgentDeleteResult",
+    "ArchivedAgent",
+    "ArchivedAgentPayload",
     "AgentError",
     "AgentListResult",
     "AgentNotFoundError",
@@ -1002,97 +1003,64 @@ class AgentStore:
             self.get_raw(agent.id) for agent in self.list() if agent.root_project_id == project_id
         ]
 
-    def delete(self, agent_id: str) -> AgentDeleteResult:
-        """Archive the Agent's files and live Sessions as one compensated operation.
+    def archive_files(self, agent_id: str, tree: Path) -> AbstractContextManager[ArchivedAgent]:
+        """Move the Agent's directory to the payload ``tree`` for the caller's commit.
 
-        Files move first; if Session archiving fails, restore them and any prior
-        archive. Product-level reference and Run admission guards belong to the
-        caller. Delegation allow-lists are no such reference: once the archive is
-        committed, the bare id leaves every other Agent's allow-list (a qualified
-        ``agent@project`` entry names a Project's Team Agent and stays), so the
-        grant does not pass to a later Agent with the same id.
-
-        Every tree moves through :func:`move_tree`, whose failure always means "not
-        moved", so compensation never has to guess which copy is whole. It only moves
-        trees back and removes the empty staging directory; it never deletes archive
-        content, because that may be the last complete copy of an Agent's data.
-
-        A default workspace lives inside the agent directory, so it travels into
-        the archive with the first move; the ``exists`` check below is then False
-        (its live path is already gone) and the second move is skipped. Only a
-        custom workspace outside the agent tree (e.g. a repo an identity agent is
-        rooted in) still exists after the first move and is archived beside it.
+        Use as ``with store.archive_files(agent_id, tree) as archived:`` and commit
+        the Sessions inside the body; a failing body moves the tree back. The
+        store lock and a compound mutation of the snapshot barrier are held across
+        the body. A Workspace outside the Agent's directory stays where it is.
+        Product-level reference and Run admission guards belong to the caller.
         """
-        with self._snapshot_barrier.compound_mutation(), self._change():
-            agent = self.get(agent_id)
-            archive_dir = self._archive_dir(agent_id)
-            archive_dir.parent.mkdir(parents=True, exist_ok=True)
-            backup_root = Path(
-                tempfile.mkdtemp(prefix=f".{agent_id}-archive-", dir=archive_dir.parent)
-            )
-            previous_archive = backup_root / "previous"
-            committed = False
-            try:
-                if archive_dir.exists():
-                    move_tree(archive_dir, previous_archive)
-                try:
-                    archive_dir.mkdir()
-                    agent_archive = archive_dir / "agent"
-                    workspace_archive = archive_dir / "workspace"
-                    workspace_path = Path(agent.workspace)
-                    agent_moved = False
-                    workspace_moved = False
-                    try:
-                        move_tree(self._agent_dir(agent_id), agent_archive)
-                        agent_moved = True
-                        if workspace_path.exists():
-                            move_tree(workspace_path, workspace_archive)
-                            workspace_moved = True
-                        self._session_manager().archive_identity_agent_sessions(agent_id)
-                    except Exception:
-                        if workspace_moved:
-                            move_tree(workspace_archive, workspace_path)
-                        if agent_moved:
-                            move_tree(agent_archive, self._agent_dir(agent_id))
-                        # Both trees are back, so only the empty staging directory is
-                        # left; unlike ``rmtree``, ``rmdir`` refuses to delete anything else.
-                        with suppress(OSError):
-                            archive_dir.rmdir()
-                        if previous_archive.exists():
-                            move_tree(previous_archive, archive_dir)
-                        raise
-                except Exception:
-                    # Covers mkdir failure after previous archive was staged away.
-                    if not archive_dir.exists() and previous_archive.exists():
-                        move_tree(previous_archive, archive_dir)
-                    raise
-                committed = True
-            except Exception as exc:
-                # A failed move never removes anything, so what is left is where it is told.
-                retained = []
-                if not self._agent_dir(agent_id).exists():
-                    retained.append(f"Agent files retained at {archive_dir}")
-                if previous_archive.exists():
-                    retained.append(f"previous archive retained at {previous_archive}")
-                if retained:
-                    raise AgentError(
-                        f"Agent archival failed ({exc}); {'; '.join(retained)}"
-                    ) from exc
-                if isinstance(exc, OSError):
-                    raise AgentError(f"Agent archival failed: {exc}") from exc
-                raise
-            finally:
-                if committed or not previous_archive.exists():
-                    shutil.rmtree(backup_root, ignore_errors=True)
+        return _archive.archive_files(self, agent_id, tree)
 
-            # Grants and the collection document follow only once the archive is
-            # committed, so a failed delete never narrows a grant to a still existing
-            # Agent. Neither may report failure after the irreversible archive: an
-            # allow-list entry left behind names no Agent (a later rename to the id
-            # removes it), and a stale order id is filtered even if persistence fails.
-            policy_agent_ids = self._remove_from_allow_lists(agent_id, best_effort=True)
-            self.list_with_order()
-            return AgentDeleteResult(archive_dir=archive_dir, policy_agent_ids=policy_agent_ids)
+    def remove_delegation_grants(
+        self, agent_id: str, record: Callable[[builtins.list[_archive.Grant]], None]
+    ) -> tuple[str, ...]:
+        """Remove an archived Agent's bare id from every delegation list, best effort.
+
+        ``record`` receives each grant (holder id and position) before any
+        config is written. A qualified ``agent@project`` entry names a Project's
+        Team Agent and stays. Returns the ids of the Agents whose configs changed.
+        """
+        return _archive.remove_delegation_grants(self, agent_id, record)
+
+    def inspect_archived(self, source: Path) -> ArchivedAgentPayload:
+        """Read an archived Agent directory without changing it; report why it cannot return."""
+        return _archive.inspect_archived(self, source)
+
+    def restore_target_problem(self, agent_id: str) -> str | None:
+        """Why an archived Agent cannot return as ``agent_id``: ``invalid_target_id``,
+        ``agent_id_taken``, or ``None`` when it can."""
+        return _archive.restore_target_problem(self, agent_id)
+
+    def restore_files(
+        self,
+        source: Path,
+        target_id: str,
+        *,
+        workspace: str | None,
+        root_project_id: str | None,
+    ) -> AbstractContextManager[Agent]:
+        """Move an archived Agent directory back as ``target_id`` for the caller's commit.
+
+        The archived ``agent.json`` is rewritten to the target id, Workspace and
+        root first; ``workspace=None`` keeps the archived Workspace. A failing body
+        moves the tree back into ``source``.
+        """
+        return _archive.restore_files(
+            self, source, target_id, workspace=workspace, root_project_id=root_project_id
+        )
+
+    def restore_delegation_grants(
+        self, agent_id: str, grants: Iterable[Mapping[str, Any]]
+    ) -> tuple[str, ...]:
+        """Re-add ``agent_id`` to the recorded delegation lists; best effort, idempotent."""
+        return _archive.restore_delegation_grants(self, agent_id, builtins.list(grants))
+
+    def place_in_roster(self, agent_id: str, index: int | None) -> None:
+        """Move a restored Agent to its recorded roster position; best effort, idempotent."""
+        _archive.place_in_roster(self, agent_id, index)
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> Agent:
         """Re-point an identity agent's current session after one is gone.
@@ -1242,14 +1210,6 @@ class AgentStore:
 
     def _default_workspace(self, agent_id: str) -> Path:
         return default_workspace_dir(self._data_dir, agent_id)
-
-    def _archive_dir(self, agent_id: str) -> Path:
-        # Agent archives live under their own ``agents/`` subtree, mirroring the
-        # legacy Session sources (``archive/sessions/``) and Project archives
-        # (``archive/projects/``): a flat ``archive/<agent-id>`` would let an Agent named
-        # ``sessions`` or ``projects`` collide with those roots — and delete's
-        # replace-archive rmtree would then wipe them wholesale.
-        return self._data_dir / "archive" / "agents" / agent_id
 
     def _write_agent(self, agent: Agent) -> None:
         """Write one config; it never waits under the lock (see ``_repairing_read``)."""

@@ -559,7 +559,28 @@ vbot session delete coder SESSION_ID --yes
 
 `session list` returns at most 100 Sessions by default. Use `--limit`, pass the returned JSON as `--cursor`, or explicitly request `--all` to collect every page.
 
-Deleting an Agent, Project, or Session archives its vBot-owned state rather than silently erasing it. Project source repositories are never archived or removed.
+Deleting an Agent, Project, or Session moves its vBot-owned state into the archive rather than erasing it (see [Archive](#archive)). Project source repositories are never archived or removed.
+
+### Archive
+
+Deleting an Identity Agent, a Project, or a Session creates one archive entry (`arc_` plus 12 characters), and the command prints its id together with the command that restores it. An Agent's entry holds its configuration, Workspace, Memory, private Skills, and Sessions; a Workspace outside the Agent's own directory (`<data-dir>/agents/<agent-id>/`) stays where it is, and the delete names its absolute path. A Project's entry holds its vBot metadata and Sessions; the repository is never touched. Each entry is restored or deleted as a whole, and deleting the same id again creates another entry.
+
+```bash
+vbot archive list --kind agent
+vbot archive show arc_7k2m9q4xw1ab
+vbot archive restore arc_7k2m9q4xw1ab
+vbot archive restore arc_7k2m9q4xw1ab --as coder-2
+vbot archive purge arc_7k2m9q4xw1ab --yes
+vbot archive purge --all --kind session --agent coder --yes
+```
+
+- `list` shows entries newest first, 50 per page (`--limit`, `--cursor`, or `--all` for every page), filtered by `--kind` (`agent`, `project`, `session`, `owner_group`, `files`), `--agent`, and `--project`. Each row says whether the entry can be restored and, if not, why.
+- `show` lists the entry's Sessions and files and whether a restore is possible, naming every reason that blocks it. Run it before restoring.
+- `restore` brings back the Agent, Project, or Session with its Sessions, the Agent's place in the Agent list, the delegation lists that named it, and the Identity Agents rooted in the Project. When the id is in use again, it refuses and names the conflict; `--as <new-id>` restores under another id, and the restored Sessions then lose their Channel links. Entries of kind `owner_group` (an Extension's Sessions) and `files` (archive folders of older vBot versions) can only be deleted.
+- `purge` deletes entries permanently and cannot be undone, so it requires `--yes`. Name the entries, or select them with `--all` and the `list` filters. `--all` never deletes entries that may contain folders you own (kind `files`, and rows marked `user_folders=yes`): it lists them as kept, and only naming them deletes them. Usage already recorded stays in Statistics, and uploaded attachments are not deleted. A purge that does not finish reports the entry as pending and exits non-zero; vBot continues it automatically, and running the same command again continues it at once. An entry that another command restored or deleted in the meantime is reported as gone; one that a restore still holds is reported as skipped, and `vbot archive show <entry-id>` shows its state.
+- `vbot agent delete <agent-id> --permanent --yes`, `vbot project remove <project-id> --permanent --yes`, and `vbot session delete <agent> <session-id> --yes --permanent` delete immediately instead of archiving. Deleting an Agent this way leaves the entries of Sessions deleted earlier; remove them with `vbot archive purge --all --kind session --agent <agent-id> --yes`.
+- vBot deletes an entry permanently once its retention period has ended: 30 days after it was archived by default, checked every hour. `list` names the period and each entry's `purge_at`, the date its period ends. Change it with `vbot config set archive.retention_days 14` (1 to 3650 days); `vbot config set archive.retention_days null` keeps entries until you purge them. A changed period applies to existing entries at once, so a shorter one deletes older entries at the next check. Entries of kind `files`, entries that may contain folders you own, and entries vBot found in its archive folder without their record (`origin=recovered`, for example after restoring a data snapshot) are never deleted automatically. Entries that an older vBot version archived count their period from the first start after updating. When vBot cannot read the period because `settings.json` is damaged, it deletes no entry automatically until the setting reads again; `list` says so, and `vbot doctor settings` shows the problem.
+- The entries' files live under `<data-dir>/archive/`; use these commands instead of moving or deleting files there by hand.
 
 ## Chat, Queue, and Built-in Commands
 
@@ -1072,6 +1093,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Agents | `agent list`, `agent show`, `agent create`, `agent update`, `agent rename`, `agent reorder`, `agent delete` |
 | Projects | `project add`, `project list`, `project show`, `project set`, `project override set`, `project override clear`, `project detect`, `project remove` |
 | Sessions | `session list`, `session create`, `session fork`, `session rename`, `session policy set`, `session delete`, `session channel link` |
+| Archive | `archive list`, `archive show`, `archive restore`, `archive purge` |
 | Chat | `chat [<prompt>] [--agent ...] [-c \| --session ...] [--model ...] [--thinking-effort ...] [--temperature ...] [--json]` |
 | Data store | `data-store status`, `data-store snapshot list|create|verify|restore`, `data-store incident acknowledge`, `data-store unregister` |
 | Channels | `channel add`, `channel list`, `channel update`, `channel token set`, `channel enable`, `channel disable`, `channel status`, `channel identity`, `channel access`, `channel admin grant`, `channel admin revoke`, `channel whatsapp setup/status/pair`, `channel remove` |

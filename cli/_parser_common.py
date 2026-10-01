@@ -104,6 +104,8 @@ AREA_HELP = {
     "agent": "Inspect and manage agent configs",
     "project": "Inspect and manage projects and their scanned teams",
     "session": "Inspect and manage agent chat sessions",
+    "archive": "List, inspect, restore and permanently delete archived Agents, Projects "
+    "and Sessions",
     "chat": "Send one message to an Agent Session and print the answer",
     "data-store": (
         "Inspect, snapshot, verify, recover, and release the canonical SQLite databases"
@@ -143,7 +145,7 @@ AGENT_HELP = {
     "update": "Update an agent config",
     "rename": "Change an Identity Agent id and retarget live references",
     "reorder": "Set the Identity Agent roster order",
-    "delete": "Delete an agent config",
+    "delete": "Archive an Identity Agent with its Sessions, or delete it permanently",
 }
 
 
@@ -154,7 +156,7 @@ PROJECT_HELP = {
     "set": "Update one project's config",
     "set-override": "Set one project-team agent override",
     "clear-override": "Clear one project-team agent override",
-    "rm": "Remove a project, archiving its anchor",
+    "rm": "Remove a project, archiving its anchor and Sessions, or delete them permanently",
     "detect": "Detect source formats and context files in a directory",
 }
 
@@ -162,12 +164,23 @@ PROJECT_HELP = {
 SESSION_HELP = {
     "list": "List one agent's chat sessions",
     "create": "Create a new chat session for one agent",
-    "delete": "Delete (archive) one agent's chat session",
+    "delete": "Archive one agent's chat session, or delete it permanently",
     "fork": "Fork a session, optionally to another agent",
     "rename": "Set or clear a session's display title",
     "set-compaction-policy": "Set or clear a Session Policy override",
     "link-channel": "Link a session to a channel conversation for outbound replies",
 }
+
+
+ARCHIVE_HELP = {
+    "list": "List archived Agents, Projects, Sessions and Extension groups",
+    "show": "Show one archive entry's Sessions, files and restore check",
+    "restore": "Restore an archive entry, optionally under a new id",
+    "purge": "Delete archive entries permanently",
+}
+
+
+PERMANENT_DELETE_HELP = "Delete now instead of archiving; cannot be undone (requires --yes)"
 
 
 DATA_STORE_HELP = {

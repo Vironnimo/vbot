@@ -308,15 +308,25 @@ def test_project_override_set_coerces_the_value(
         pytest.param(
             (),
             {"project_id": "vbot"},
-            {"archived": True, "archive_path": "/data/projects/_archive/vbot-2026.zip"},
-            ["removed project vbot (archived to /data/projects/_archive/vbot-2026.zip)"],
+            {"archive_entry_id": "arc_7k2m9q4xw1ab", "session_count": 3},
+            [
+                "removed project vbot (archived as archive entry arc_7k2m9q4xw1ab, 3 sessions); "
+                "restore with: vbot archive restore arc_7k2m9q4xw1ab"
+            ],
             id="archived",
+        ),
+        pytest.param(
+            ("--permanent", "--yes"),
+            {"project_id": "vbot", "permanent": True},
+            {"archive_entry_id": "arc_7k2m9q4xw1ab", "purged": True, "session_count": 3},
+            ["removed project vbot permanently (3 sessions); the repo is untouched"],
+            id="permanent",
         ),
         pytest.param(
             ("--copy-rooted-agent-files",),
             {"project_id": "vbot", "copy_rooted_agent_identity_files": True},
             {
-                "archive_path": "C:/data/projects/.archive/vbot",
+                "archive_entry_id": "arc_7k2m9q4xw1ab",
                 "affected_agent_ids": ["librarian"],
                 "copied_files": {"librarian": ["SOUL.md", "MEMORY.md"]},
                 "backed_up_files": {"librarian": ["SOUL.md"]},

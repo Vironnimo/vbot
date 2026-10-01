@@ -14,6 +14,7 @@
     skillInventory,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
+  import { permanentDeleteNotice } from '$lib/archiveView.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { writeClipboardText } from '$lib/clipboard.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
@@ -29,6 +30,7 @@
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import ConfirmDialog from './ui/ConfirmDialog.svelte';
+  import ArchiveDeleteOption from './archive/ArchiveDeleteOption.svelte';
   import AgentListPane from './agents/AgentListPane.svelte';
 
   const noop = () => {};
@@ -140,6 +142,8 @@
   let pendingAgentReload = false;
   // The Agent whose deletion awaits confirmation, and the one being deleted.
   let deleteCandidate = $state(null);
+  // Whether the confirmed deletion skips the Archive.
+  let deletePermanently = $state(false);
   let deletingAgentId = $state('');
   let isCreateModalOpen = $state(false);
   let isLoading = $state(false);
@@ -551,6 +555,7 @@
   // Every deletion, from a list row or the editor, is confirmed first.
   function requestAgentDelete(agent) {
     if (!agent || agents.length < 2 || deletingAgentId) return;
+    deletePermanently = false;
     deleteCandidate = agent;
   }
 
@@ -558,12 +563,21 @@
   // corrects the entry.
   async function confirmAgentDelete() {
     const agent = deleteCandidate;
+    const permanent = deletePermanently;
     deleteCandidate = null;
     if (!agent || deletingAgentId) return;
     deletingAgentId = agent.id;
     try {
-      await deleteAgent(agent.id);
-      onToast({ title: t('agents.deleted'), variant: 'success' });
+      const result = await deleteAgent(agent.id, { permanent });
+      if (permanent) {
+        const notice = permanentDeleteNotice(
+          result,
+          t('agents.deletedPermanently'),
+        );
+        onToast({ title: notice.text, variant: notice.variant });
+      } else {
+        onToast({ title: t('agents.deleted'), variant: 'success' });
+      }
       await loadAgents({ showLoading: false });
     } catch (error) {
       onToast({
@@ -756,13 +770,26 @@
   {#if deleteCandidate}
     <ConfirmDialog
       title={t('agents.delete')}
-      body={t('agents.deleteConfirm', {
-        name: deleteCandidate.name || deleteCandidate.id,
-      })}
-      confirmLabel={t('common.delete')}
+      body={deletePermanently
+        ? t('agents.deletePermanentConfirm', {
+            name: deleteCandidate.name || deleteCandidate.id,
+          })
+        : t('agents.deleteConfirm', {
+            name: deleteCandidate.name || deleteCandidate.id,
+          })}
+      confirmLabel={deletePermanently
+        ? t('archive.deletePermanently')
+        : t('common.delete')}
       onConfirm={confirmAgentDelete}
       onCancel={() => (deleteCandidate = null)}
-    />
+    >
+      {#snippet bodyExtra()}
+        <ArchiveDeleteOption
+          permanent={deletePermanently}
+          onChange={(next) => (deletePermanently = next)}
+        />
+      {/snippet}
+    </ConfirmDialog>
   {/if}
 
   {#if isCreateModalOpen}

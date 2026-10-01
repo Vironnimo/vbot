@@ -181,6 +181,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         notifications={"run_completed": False},
         providers={"openrouter": {"routing": _OPENROUTER_ROUTING}},
         server={"keep_awake": True, "timezone": "America/New_York"},
+        archive={"retention_days": None},
     )
 
     # The response is the complete settings payload, read back from storage.
@@ -200,6 +201,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
     }
     assert result["subagents"] == _SUBAGENTS
     assert result["compaction"] == _COMPACTION
+    assert result["archive"] == {"retention_days": None}
     assert result["defaults"] == {"agent": {"model": "openai/gpt-4.1-mini"}}
     # A partial section merges with its defaults.
     assert result["reflection"] == {

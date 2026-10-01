@@ -97,7 +97,7 @@ CREATE UNIQUE INDEX sessions_one_live_address
   ON sessions (project_id, agent_id, session_id)
   WHERE state = 'live';
 
--- Archived generations of one address (id allocation, restore).
+-- Archived generations of one address (id allocation).
 CREATE INDEX sessions_archived_address
   ON sessions (project_id, agent_id, session_id)
   WHERE state = 'archived';
@@ -490,6 +490,74 @@ CREATE INDEX run_execution_owners_group
 -- Exact Run ids of one owner group (one probe per id, independent of history).
 CREATE INDEX run_execution_owners_group_run
   ON run_execution_owners (owner_name, group_id, run_id);
+
+-- One archived unit: an Agent, a Project, Sessions, an Extension group or legacy
+-- files. subject_id names the archived thing (Agent, Project, Session or group
+-- id, or a legacy path); project_id and agent_id are its Session scope ('' when
+-- the entry has none); owner_name is set for Extension groups only. A purge is
+-- due at retention_start plus the retention period. origin is operation,
+-- backfill or recovered.
+CREATE TABLE archive_entries (
+  entry_key INTEGER PRIMARY KEY,
+  entry_id TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  state TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  project_id TEXT NOT NULL DEFAULT '',
+  agent_id TEXT NOT NULL DEFAULT '',
+  owner_name TEXT,
+  archived_at TEXT NOT NULL,
+  retention_start TEXT NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'operation',
+  cleanup_pending INTEGER NOT NULL DEFAULT 0 CHECK (cleanup_pending IN (0, 1)),
+  facts_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(facts_json) AND json_type(facts_json) = 'object')
+) STRICT;
+
+-- Archive list pages, newest first.
+CREATE INDEX archive_entries_by_archived
+  ON archive_entries (archived_at DESC, entry_id DESC);
+
+-- Archive list pages of one Agent or Project scope, newest first.
+CREATE INDEX archive_entries_by_scope
+  ON archive_entries (project_id, agent_id, archived_at DESC, entry_id DESC);
+
+-- Earlier archives of one subject (restore preflight names the newest one).
+CREATE INDEX archive_entries_by_subject
+  ON archive_entries (kind, subject_id);
+
+-- Entries due for the retention purge, oldest retention start first.
+CREATE INDEX archive_entries_due
+  ON archive_entries (retention_start, entry_key)
+  WHERE state = 'archived';
+
+-- Unsettled entries for startup recovery and purge resumption.
+CREATE INDEX archive_entries_unsettled
+  ON archive_entries (state, entry_key)
+  WHERE state <> 'archived' OR cleanup_pending = 1;
+
+-- Which archived Session generation belongs to which entry (exactly one each).
+CREATE TABLE archive_entry_sessions (
+  session_key INTEGER PRIMARY KEY REFERENCES sessions (session_key) ON DELETE CASCADE,
+  entry_key INTEGER NOT NULL REFERENCES archive_entries (entry_key) ON DELETE CASCADE
+) STRICT;
+
+-- Members of one entry: counts, restore, and purge in descending key order.
+CREATE INDEX archive_entry_sessions_by_entry
+  ON archive_entry_sessions (entry_key, session_key);
+
+-- Payload trees of an entry: data-dir relative POSIX paths under archive/.
+-- role is agent, workspace, project or files; source_path is where the tree
+-- came from (absolute or data-dir relative), for restore, recovery and display.
+CREATE TABLE archive_entry_trees (
+  path TEXT PRIMARY KEY,
+  entry_key INTEGER NOT NULL REFERENCES archive_entries (entry_key) ON DELETE CASCADE,
+  role TEXT NOT NULL,
+  source_path TEXT
+) STRICT, WITHOUT ROWID;
+
+-- Trees of one entry (purge, restore, recovery).
+CREATE INDEX archive_entry_trees_by_entry
+  ON archive_entry_trees (entry_key);
 """
 
 # An entry belongs to the search indexes while it is searchable and current in

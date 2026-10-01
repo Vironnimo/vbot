@@ -45,7 +45,7 @@ vbot skill unshare <agent-id> <name>
 - Prefer `read <name> --scope ...` for a single editable Skill; omitting the name returns every complete `SKILL.md` in that scope. Neither read proves an Agent’s effective availability.
 - `create` and `update` validate the full `SKILL.md` through the shared Skill authoring service and apply the change live. Prefer `--file` for multiline content.
 - `file write` and `file remove` manage supporting files such as `references/schema.md`; paths are relative to the named Skill and traversal is rejected server-side.
-- `delete` and `file remove` require `--yes`. Their operations are destructive within the editable scope, though deleting an Identity Agent later archives its complete private Skill home with the Agent.
+- `delete` and `file remove` require `--yes`. Their operations are destructive within the editable scope, though deleting an Identity Agent moves its complete private Skill home into the archive with the Agent, from where `vbot archive restore` brings it back.
 - Mutation output includes the normalized Skill name, operation, scope, and validation warnings. Run `skill read <name> --scope ...` to verify content. `skill list` reports the global pool; use the `skill` Tool in the target Agent to verify its scoped availability.
 
 ## Disable and share policy

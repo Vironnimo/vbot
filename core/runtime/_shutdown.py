@@ -125,6 +125,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("calendar_actions", calendar.actions.stop, calendar.actions.aclose)
     if (bootstrap := runtime._bootstrap_service) is not None:
         yield _Step("bootstrap", bootstrap.stop, bootstrap.aclose)
+    if (archive := runtime._archive) is not None:
+        # A purge in progress ends before its next Session; the next start continues it.
+        yield _Step("archive_retention", archive.stop, archive.aclose)
     if (triggers := runtime._trigger_service) is not None:
         yield _Step("triggers", None, triggers.aclose)
     if (reflection := runtime._reflection_service) is not None:

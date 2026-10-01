@@ -7,6 +7,11 @@ from collections.abc import Mapping, Sequence
 from difflib import get_close_matches
 from typing import Any
 
+from cli.archive_management import (
+    permanent_delete_refusal,
+    sessions_text,
+    unfinished_permanent_delete,
+)
 from cli.formatting import bool_text as _bool_text
 from cli.formatting import format_string_list as _format_string_list
 from cli.formatting import record_fields
@@ -149,14 +154,48 @@ def agent_rename(
     )
 
 
-def agent_delete(instance: ServerInstance, agent_id: str) -> CommandResult:
-    """Delete an agent via `agent.delete` RPC."""
+def agent_delete(
+    instance: ServerInstance, agent_id: str, permanent: bool = False, confirm: bool = False
+) -> CommandResult:
+    """Archive an Identity Agent via `agent.delete` RPC, or delete it permanently.
 
-    payload = _rpc_call(instance, "agent.delete", {"id": agent_id})
+    A permanent deletion cannot be undone, so it needs ``confirm`` (``--yes``).
+    """
+
+    if permanent and not confirm:
+        return CommandResult(
+            ok=False,
+            message=permanent_delete_refusal(
+                f"agent {agent_id}", ("vbot", "agent", "delete", agent_id, "--permanent")
+            ),
+            instance=instance,
+        )
+    params: dict[str, object] = {"id": agent_id}
+    if permanent:
+        params["permanent"] = True
+    payload = _rpc_call(instance, "agent.delete", params)
     if not payload.ok:
         return payload.to_command_result()
-    deleted_id = _string_or_default(payload.data.get("agent_id"), agent_id)
-    return CommandResult(ok=True, message=f"deleted {deleted_id}", instance=instance)
+    data = payload.data
+    deleted_id = _string_or_default(data.get("agent_id"), agent_id)
+    entry_id = _string_or_default(data.get("archive_entry_id"), "-")
+    sessions = sessions_text(data.get("session_count"))
+    attention: tuple[str, ...] = ()
+    ok = True
+    if data.get("purged") is True:
+        lines = [f"deleted agent {deleted_id} permanently ({sessions})"]
+    elif permanent:
+        clause, attention, ok = unfinished_permanent_delete(data, entry_id)
+        lines = [f"archived agent {deleted_id} as archive entry {entry_id} ({sessions}), {clause}"]
+    else:
+        lines = [
+            f"archived agent {deleted_id} as archive entry {entry_id} ({sessions}); "
+            f"restore with: vbot archive restore {entry_id}"
+        ]
+    workspace = data.get("external_workspace")
+    if isinstance(workspace, str) and workspace:
+        lines.append(f"external Workspace left in place: {workspace}")
+    return CommandResult(ok=ok, message="\n".join(lines), instance=instance, attention=attention)
 
 
 def agent_reorder(instance: ServerInstance, agent_ids: Sequence[str]) -> CommandResult:

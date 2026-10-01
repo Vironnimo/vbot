@@ -12,7 +12,7 @@ import pytest
 from core.projects.resolver import AgentResolutionError
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.runs import Run, RunAdmission
-from core.sessions import SessionAddress
+from core.sessions import ArchiveEntryFilter, SessionAddress
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
 from tests.server.rpc_test_support import call, rpc_error, rpc_result
@@ -33,7 +33,10 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
-    assert result["archived"] is True
+    entry = state.runtime.sessions.archive_ledger.entry(result["archive_entry_id"])
+    assert entry is not None and (entry.kind, entry.subject_id) == ("project", "vbot")
+    assert (result["session_count"], result["purged"], result["purge_pending"]) == (0, False, False)
+    assert "archive_path" not in result
     assert not state.runtime.projects.exists("vbot")
     assert state.runtime.terminal_manager.closed_projects == ["vbot"]
     # The repo (cwd) is never touched by removal.
@@ -75,10 +78,10 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     default_workspace.joinpath("USER.md").write_text("destination", encoding="utf-8")
     state.runtime.agents.update("coder", root_project_id="vbot")
 
-    def fail_archive(_project_id: str) -> Path:
+    def fail_archive(_project_id: str, _tree: Path) -> Any:
         raise OSError("archive failed")
 
-    monkeypatch.setattr(state.runtime.projects, "delete", fail_archive)
+    monkeypatch.setattr(state.runtime.projects, "archive_files", fail_archive)
 
     with pytest.raises(OSError):
         await call(state, "project.rm", project_id="vbot", copy_rooted_agent_identity_files=True)
@@ -89,6 +92,8 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     assert restored.workspace == agent.workspace
     assert Path(agent.workspace, "USER.md").read_text(encoding="utf-8") == "source"
     assert default_workspace.joinpath("USER.md").read_text(encoding="utf-8") == "destination"
+    # The failed archive leaves no entry behind.
+    assert not state.runtime.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
 
 
 @pytest.mark.asyncio
@@ -237,4 +242,45 @@ async def test_rm_ignores_automations_that_never_start_a_run_for_the_project(
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
-    assert result["archived"] is True
+    assert result["archive_entry_id"].startswith("arc_")
+
+
+def _usage_import_fails() -> None:
+    raise OSError("usage ledger unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usage_import", ["works", "fails"])
+async def test_rm_permanent_deletes_the_anchor_and_sessions_or_keeps_them_archived(
+    tmp_path: Path, usage_import: str
+) -> None:
+    state = _make_state(tmp_path)
+    if usage_import == "fails":
+        state.runtime.import_usage = _usage_import_fails
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot")
+    state.runtime.sessions.create("builder", session_id="s1", project_id="vbot")
+
+    result = await rpc_result(state, "project.rm", project_id="vbot", permanent=True)
+
+    ledger = state.runtime.sessions.archive_ledger
+    assert not state.runtime.projects.exists("vbot")
+    assert result["session_count"] == 1
+    if usage_import == "works":
+        assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
+            True,
+            False,
+            None,
+        )
+        assert not ledger.page(ArchiveEntryFilter()).entries
+        assert not any((tmp_path / "data" / "archive").rglob("*"))
+    else:
+        # The Project is archived and stays restorable; nothing was deleted.
+        assert (result["purged"], result["purge_pending"], result["purge_reason"]) == (
+            False,
+            False,
+            "usage_import_failed",
+        )
+        entry = ledger.entry(result["archive_entry_id"])
+        assert entry is not None and entry.state == "archived"
+    assert repo.exists()

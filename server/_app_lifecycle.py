@@ -15,6 +15,7 @@ from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
 from server.clients import ClientRegistry
 from server.events import (
+    RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_EXTENSIONS,
@@ -74,6 +75,7 @@ def _initialize_app_state(
     )
     app.state.cron_change_bridge_unsubscribe = _register_cron_change_bridge(app.state)
     app.state.calendar_change_bridge_unsubscribe = _register_calendar_change_bridge(app.state)
+    app.state.archive_change_bridge_unsubscribe = _register_archive_change_bridge(app.state)
     app.state.skill_change_bridge_unsubscribe = _register_skill_change_bridge(app.state)
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
@@ -211,6 +213,20 @@ def _unregister_calendar_change_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.calendar_change_bridge_unsubscribe = None
+
+
+def _register_archive_change_bridge(state: Any) -> Any:
+    """Publish every archive entry change, including ones no RPC request made."""
+    return state.runtime.archive.add_changed_callback(
+        lambda: publish_resource_changed(state, RESOURCE_KIND_ARCHIVE)
+    )
+
+
+def _unregister_archive_change_bridge(state: Any) -> None:
+    unsubscribe = state.archive_change_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.archive_change_bridge_unsubscribe = None
 
 
 def _register_skill_change_bridge(state: Any) -> Any:

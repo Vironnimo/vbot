@@ -11,7 +11,7 @@ vbot agent create <agent-id> <display-name> [flags]
 vbot agent update <agent-id> [flags]
 vbot agent rename <current-agent-id> <new-agent-id>
 vbot agent reorder <agent-id>...
-vbot agent delete <agent-id>
+vbot agent delete <agent-id> [--permanent --yes]
 ```
 
 Use command help for the full argument syntax. Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--excluded-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
@@ -34,7 +34,7 @@ Gotchas:
 - `--workspace` relocates only the Identity Agent's SOUL/Memory home. Use it only when the user explicitly wants those identity files stored at another path. `--copy-workspace-files` copies `SOUL.md`, `USER.md`, and `MEMORY.md` to the destination; without it, the Agent points at the destination and seeds a missing `SOUL.md`. `--default-workspace` moves it back to its data-dir home. Neither flag selects a Project.
 - `--clear-project` removes the Project selection without changing Workspace or Memory.
 - `rename` moves the complete Identity Agent tree and retargets live server-owned references (Channels, non-terminal Cron jobs, bare Identity Agent delegation entries, and functional Sub-Agent parent links). It preserves external custom Workspace paths and historical provenance, refuses collisions or busy old/new ids, and rolls back if a reference update fails. It also refuses a new id that references still name, often leftovers of a deleted Agent (`agent_in_use`); the error lists each one, such as `channel:<channel-id>` or `cron:<job-id>`, to change or remove before retrying. Delegation entries that name the new id do not block: no Agent has that id, so the rename removes them and the renamed Agent does not inherit them.
-- `delete` moves the Agent, its Workspace and its Sessions to the archive and removes its id from every other Agent's delegation list. It refuses the last Agent, an Agent with active or queued Runs (`agent_busy`), and one that a Channel, Cron job or Calendar action still targets (`agent_in_use`; the error lists each).
+- `delete` moves the Agent with its private Skills, Memory and Sessions into the archive as one archive entry and prints the entry id. A Workspace outside the Agent's own directory (`<data-dir>/agents/<agent-id>/`) stays where it is; the output names its absolute path, and a restore re-attaches it if it still exists. The Agent's id leaves every other Agent's delegation list; a restore adds it back. It refuses the last Agent, an Agent with active or queued Runs (`agent_busy`), and one that a Channel, Cron job or Calendar action still targets (`agent_in_use`; the error lists each). `--permanent --yes` deletes the Agent and its Sessions immediately instead and cannot be undone; recorded usage stays in Statistics. Sessions deleted earlier keep their own archive entries; `vbot archive purge --all --kind session --agent <agent-id> --yes` deletes them.
 
 ```bash
 vbot agent create coder Coder --model openai/gpt-5.2 --tool-access-mode all --allowed-skills '*'
@@ -63,7 +63,7 @@ vbot project set <project-id> [--cwd <path>] [--format opencode|claude] [add fla
 vbot project override set <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access <value>
 vbot project override clear <project-id> <agent-id> model|temperature|thinking_effort|compaction_policy|tool_access
 vbot project detect [<path>]
-vbot project remove <project-id> [--copy-rooted-agent-files]
+vbot project remove <project-id> [--copy-rooted-agent-files] [--permanent --yes]
 ```
 
 - Paths refer to the server machine; prefer absolute paths when it differs from the CLI machine. `detect` without a path inspects the server working directory.
@@ -76,7 +76,7 @@ vbot project remove <project-id> [--copy-rooted-agent-files]
 - Capability flags on `add`/`set` are `--allowed-tools`, `--enabled-bundled-skills`, `--enabled-global-skills`, and `--disabled-project-skills`; each replaces its complete list, and an empty flag value clears it.
 - `override set` changes only one Project Agent's vBot-owned top-tier value; it does not edit the repo profile. `compaction_policy` and `tool_access` take a JSON object as one shell argument. A Tool override replaces the repository Tool policy but remains inside the Project's `--allowed-tools` ceiling; for example, `'{"mode":"selected","allowed":["read"]}'` selects only `read` when the Project permits it. `override clear` removes that one field and resumes the normal Agent → Project → global chain.
 - `add`, `set`, `override set`, and `override clear` print the saved Project plus a fresh Team/scan report, including effective Tools, repository Tool denials, overrides, and configuration-source provenance.
-- `remove` archives the project's runtime anchor (never the repo) and prints the archive path. It unroots Identity Agents that selected the Project; an Agent with a custom Workspace is moved back to its default Workspace. Use `--copy-rooted-agent-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` before that reset. The result lists affected Agents plus copied/backed-up files. Removal is blocked while a Project Agent has an active or queued Run (`project_busy`) or a Cron job targets a Project Agent (`project_in_use`) — clear those first.
+- `remove` archives the Project's runtime anchor and its Sessions (never the repo) as one archive entry and prints the entry id; `--permanent --yes` deletes them immediately instead. It unroots Identity Agents that selected the Project; an Agent with a custom Workspace is moved back to its default Workspace. Use `--copy-rooted-agent-files` to copy `SOUL.md`, `USER.md`, and `MEMORY.md` before that reset. The result lists affected Agents plus copied/backed-up files. Removal is blocked while a Project Agent has an active or queued Run (`project_busy`) or a Cron job, Bootstrap job or Calendar action targets a Project Agent (`project_in_use`) — clear those first.
 
 ## Sessions
 
@@ -86,7 +86,7 @@ vbot session create <agent> [--id <session-id>] [--make-current]
 vbot session fork <agent> <session-id> [--target-agent <agent>]
 vbot session rename <agent> <session-id> (--title <text> | --clear-title)
 vbot session policy set <agent> <session-id> (--policy <json-object> | --clear)
-vbot session delete <agent> <session-id> --yes
+vbot session delete <agent> <session-id> --yes [--permanent]
 vbot session channel link <agent-id> <session-id> --channel <channel-id> --conversation <platform-conv-id>
 ```
 
@@ -94,5 +94,21 @@ vbot session channel link <agent-id> <session-id> --channel <channel-id> --conve
 - `create` without `--id` lets the server generate the id; `--make-current` switches the agent's active session.
 - `fork` copies the complete Session into a fresh id. `--target-agent` may re-home it to another Identity or Project Agent; the result prints the new id and fork provenance.
 - `rename --clear-title` restores automatic display. `policy set --clear` resumes live Agent/global inheritance. Setting requires the complete `enabled`, `trigger`, and `strategy` object; read and preserve the relevant Policy from `list` before editing. The result prints override, effective Policy, and source.
-- `delete` requires `--yes`; the session is archived (recoverable), not erased.
+- `delete` requires `--yes` and moves the Session into the archive; `--permanent` deletes it immediately.
 - `channel link` routes the session's outbound replies to a platform conversation (e.g. a Telegram chat id).
+
+## Archive
+
+```bash
+vbot archive list [--kind agent|project|session|owner_group|files] [--agent <agent-id>] [--project <project-id>]
+vbot archive show <entry-id>
+vbot archive restore <entry-id> [--as <new-id>]
+vbot archive purge <entry-id>... --yes
+vbot archive purge --all [--kind ...] [--agent <agent-id>] [--project <project-id>] --yes
+```
+
+- Deleting an Agent, Project or Session creates an archive entry (`arc_...`). Each entry is restored or deleted as a unit; archiving the same id again creates another entry.
+- Entries are deleted permanently once the retention period has passed since they were archived (`archive.retention_days`, default 30; `null` keeps them until deleted). A changed period applies to existing entries immediately: lowering it with `vbot config set` deletes the entries that are now older right away. `list` names the period in its header and shows each entry's `purge_at`, the date its period ends. `purge_at=-` means no automatic deletion is scheduled: the period is off, the row is `kind=files` or marked `user_folders=yes` or `origin=recovered`, its deletion is already under way (`state=purging`), or the header says automatic deletion is paused because vBot cannot read the period (`vbot doctor settings` shows the problem).
+- `show` lists the entry's Sessions and files and whether a restore is possible. Run it before restoring.
+- `restore` brings back the Agent, Project or Session with its Sessions, delegation grants and Project roots. If the id is in use, it refuses and names the conflict; re-run with `--as <new-id>` to restore under a new id. Entries of kind `owner_group` (Sessions of an Extension) and `files` cannot be restored.
+- `purge` deletes entries permanently and cannot be undone. Recorded usage stays in Statistics; uploaded attachments are not deleted. `purge --all` never deletes entries that may hold folders of the user (`files` entries and rows marked `user_folders=yes`); it lists them as `kept`, and only `purge <entry-id>... --yes` deletes them.

@@ -690,6 +690,7 @@ async def _settings_response(state: Any) -> JsonObject:
             "trace_limit": debug["trace_limit"],
             "trace_count": await _trace_count(runtime),
         },
+        "archive": runtime.storage.load_archive_settings(),
         "reflection": dict(reflection),
         "speech": speech,
         "model_tasks": model_tasks,

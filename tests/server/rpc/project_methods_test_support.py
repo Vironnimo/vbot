@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from core.agents.agents import AgentStore
+from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences
 from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.projects.projects import PROJECT_DEFAULT_ALLOWED_TOOLS
@@ -108,6 +109,12 @@ class _FakeTerminalManager:
     async def close_project_scope(self, project_id: str) -> None:
         self.closed_projects.append(project_id)
 
+    async def close_agent_scope(self, _agent_id: str, _project_id: str | None) -> None:
+        return None
+
+    async def close_scope(self, _owner: object) -> None:
+        return None
+
 
 def _openai_configured() -> ModelConfigurationChecker:
     return ModelConfigurationChecker(
@@ -206,9 +213,50 @@ def _make_state(
             }
         ),
     )
+    runtime.import_usage = lambda: None
+    runtime.archive = ArchiveService(
+        ArchiveServices(
+            data_dir=data_dir,
+            sessions=sessions,
+            agents=agents,
+            projects=projects,
+            agent_resolver=resolver,
+            runs=chat_runs,
+            automation=runtime.automation_references,
+            terminals=cast(Any, runtime.terminal_manager),
+            snapshot_barrier=barrier,
+            agent_references=_no_agent_references,
+            # A test makes the usage import fail by replacing ``runtime.import_usage``.
+            import_usage=lambda: runtime.import_usage(),
+            remove_agent_from_recall=_forget_agent,
+            remove_session_from_recall=_forget_session,
+            invalidate_agent_skills=lambda _agent_id: None,
+            invalidate_project=lambda project_id: _invalidate_project(runtime, project_id),
+        )
+    )
     return SimpleNamespace(
         runtime=runtime,
         chat_runs=chat_runs,
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
     )
+
+
+async def _no_agent_references(_agent_id: str) -> tuple[str, ...]:
+    return ()
+
+
+async def _forget_agent(_agent_id: str) -> None:
+    return None
+
+
+async def _forget_session(_agent_id: str, _session_id: str, _project_id: str | None) -> None:
+    return None
+
+
+def _invalidate_project(runtime: SimpleNamespace, project_id: str) -> None:
+    # A test spies on the Skill half by setting ``invalidate_project_skills`` later.
+    runtime.agent_resolver.invalidate_team_cache(project_id)
+    invalidate_project_skills = getattr(runtime, "invalidate_project_skills", None)
+    if callable(invalidate_project_skills):
+        invalidate_project_skills(project_id)

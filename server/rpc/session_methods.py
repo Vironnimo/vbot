@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.archive import ArchiveSubjectInUseError
 from core.channels import ChannelConfigError
 from core.compaction import COMPACTION_POLICY_META_KEY, effective_compaction_policy
 from core.projects import (
@@ -26,7 +27,6 @@ from core.sessions import (
     SessionListCursor,
     SessionListFilters,
 )
-from core.tools.terminal_manager import TerminalOwner
 from core.utils.errors import StorageError
 from core.utils.logging import get_logger
 from core.utils.timestamps import canonical_timestamp
@@ -35,6 +35,7 @@ from server.events import (
     RESOURCE_KIND_SESSIONS,
 )
 from server.rpc.agent_refs import _agent_reference_lock
+from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -45,7 +46,6 @@ from server.rpc.errors import (
 )
 from server.rpc.event_bridge import publish_resource_changed, publish_session_changed
 from server.rpc.payloads import _global_compaction_policy_loader
-from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _optional_bool,
     _optional_positive_integer,
@@ -192,66 +192,46 @@ async def _set_session_agent_overrides(state: Any, params: JsonObject) -> JsonOb
 async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     """Archive one session and report where the viewing accessor should land.
 
-    Decisions baked in: the session is archived, not hard-deleted (#1,
-    recoverable); deletion is refused while a run is active or queued on it (#4)
-    and while a Bootstrap job, Cron job or Calendar action pins it; the response
-    carries ``next_session_id`` for #2 navigation; and the removed
+    Decisions baked in: the session moves into an archive entry, not hard-deleted
+    (#1, recoverable), unless ``permanent`` purges that entry right after the
+    archive; deletion is refused while a run is active or queued on it
+    (#4) and while a Bootstrap job, Cron job or Calendar action pins it; the
+    response carries ``next_session_id`` for #2 navigation; and the removed
     session is dropped from the active recall index immediately (#6). Channel-
     bound and sub-agent sessions need no special handling — a channel session
     simply resumes empty on the next inbound message, and an active sub-agent
     child is already covered by the per-session busy guard.
     """
-    supported_fields = {"agent_id", "session_id"}
+    supported_fields = {"agent_id", "session_id", "permanent"}
     _reject_unsupported(params, supported_fields, "session.delete")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
-    deleting_current = False
+    permanent = _optional_bool(params, "permanent", default=False)
+    address = _session_address(agent_id, session_id, project_id)
     try:
         # One resolver seam validates both agent sources, exactly like
         # session.create, so an unknown agent fails before any file work.
         await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
-        chat_sessions = state.runtime.chat_sessions
         try:
-            async with (
-                _agent_reference_lock(state),
-                _state_chat_runs(state).session_admission_guard(
-                    _session_address(agent_id, session_id, project_id)
-                ),
-            ):
-                _ensure_no_session_references(
-                    state, _session_address(agent_id, session_id, project_id)
-                )
-                # Existence check under the guard: concurrent deletes cannot both
-                # cross the storage boundary, and a missing Session still maps to
-                # the ordinary domain error.
-                await chat_sessions.get_async(_session_address(agent_id, session_id, project_id))
-                # An identity agent tracks a current-session pointer; note when we
-                # are deleting it so the re-aim is broadcast below.
-                if project_id is None:
-                    deleting_current = await chat_sessions.run_async(
-                        lambda: state.runtime.agents.get(agent_id).current_session_id == session_id
-                    )
-                await state.runtime.terminal_manager.close_scope(
-                    TerminalOwner(project_id, agent_id, session_id)
-                )
-                # Archiving the row and re-aiming the current pointer is one unit
-                # for data snapshots.
-                async with state.runtime.snapshot_barrier.compound_mutation_async():
-                    await chat_sessions.archive(_session_address(agent_id, session_id, project_id))
-                    next_session_id = await chat_sessions.run_async(
-                        _resolve_post_delete_landing,
-                        state,
-                        agent_id,
-                        session_id,
-                        project_id,
-                    )
-                await state.runtime.remove_session_from_recall(agent_id, session_id, project_id)
+            async with _agent_reference_lock(state):
+                outcome = await state.runtime.archive.archive_session(address)
+        except ArchiveSubjectInUseError as exc:
+            raise RpcError(
+                RPC_ERROR_SESSION_IN_USE,
+                f"cannot delete Session referenced by {', '.join(exc.references)}",
+                data={"references": [dict(reference) for reference in exc.details]},
+            ) from exc
         except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_SESSION_BUSY,
                 f"cannot delete session with an active or queued run: {session_id}",
             ) from exc
+        next_session_id = outcome.next_session_id
+        if project_id is not None:
+            next_session_id = await state.runtime.chat_sessions.run_async(
+                _project_agent_landing, state, agent_id, project_id
+            )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     # Same emit point as session.create/rename: other windows on this agent
@@ -270,52 +250,31 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     )
     # Re-aiming the identity current pointer is an agent-config change, so refresh
     # agent state in other windows (the current marking + return-to-current path).
-    if deleting_current:
+    if outcome.was_current:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-    _LOGGER.info(
-        "Session archived (agent=%s session=%s)",
-        format_agent_address(agent_id, project_id),
-        session_id,
+    # The purge runs after the reference lock is released; it needs none.
+    purge = (
+        await purge_permanently(state, outcome.entry_id)
+        if permanent
+        else {"archive_entry_id": outcome.entry_id, **not_purged()}
     )
-    return {"agent_id": agent_id, "session_id": session_id, "next_session_id": next_session_id}
+    return {
+        "agent_id": agent_id,
+        "session_id": session_id,
+        "next_session_id": next_session_id,
+        **purge,
+    }
 
 
-def _ensure_no_session_references(state: Any, address: SessionAddress) -> None:
-    """Refuse archiving a Session that a Bootstrap job, Cron job or Calendar action pins.
+def _project_agent_landing(state: Any, agent_id: str, project_id: str) -> str:
+    """Return the session a viewing accessor of a Project Agent switches to after a delete (#2).
 
-    Each of them starts its Runs in exactly that Session, so every later start
-    would fail. The refusal names them in ``message`` and, as
-    ``data.references`` (``kind``, ``id`` and the ``name`` the user knows it by:
-    the job name, or the title of the action's event), for accessors.
-    """
-    references = state.runtime.automation_references.session_references(address)
-    if references:
-        named = ", ".join(reference.label for reference in references)
-        raise RpcError(
-            RPC_ERROR_SESSION_IN_USE,
-            f"cannot delete Session referenced by {named}",
-            data={"references": [reference.to_dict() for reference in references]},
-        )
-
-
-def _resolve_post_delete_landing(
-    state: Any, agent_id: str, session_id: str, project_id: str | None
-) -> str:
-    """Return the session a viewing accessor should switch to after a delete (#2).
-
-    The most-recently-active remaining session, or a fresh empty one when none
-    remain. For an identity agent this goes through the shared
-    ``reset_current_after_session_removed`` seam, which re-aims the current
-    pointer when the deleted session was the current one and creates the fresh
-    session when none remain — so the landing is that agent's resulting current
-    and no session is ever created twice. A project config agent has no
-    server-side current pointer, so the landing is derived directly from the
-    remaining sessions (creating a fresh one when none remain).
+    A Project Agent has no server-side current pointer: the landing is its most
+    recently active remaining session, or a fresh empty one when none remain.
+    (An Identity Agent's landing is its resulting current Session, which the
+    archive re-aims.)
     """
     chat_sessions = state.runtime.chat_sessions
-    if project_id is None:
-        agent = state.runtime.agents.reset_current_after_session_removed(agent_id, session_id)
-        return str(agent.current_session_id)
     newest_session_id = chat_sessions.newest_session_id(agent_id, project_id)
     if newest_session_id is not None:
         return str(newest_session_id)

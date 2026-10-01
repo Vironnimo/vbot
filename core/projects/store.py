@@ -8,9 +8,9 @@ repo (see add-projects.md → Speicherort & Datenmodell). Layout::
 
 The anchor holds **no run config** — only Project configuration; config comes live
 from the scan/repo. This module owns creation, read, list, cwd-mutation, and
-removal. Removal **archives** the project subtree using the same mechanic as agent deletion
-(``move_tree`` into ``<data_dir>/archive/...`` replacing an existing archive),
-so nothing is hard-deleted and the repo is never touched.
+moving the Anchor into an archive payload and back (``archive_files`` and
+``restore_files``); the archive domain (``core.archive``) decides where payloads
+live and records them. The repo is never touched.
 
 The duplicate-cwd guard lives here: two projects may not point at the same repo
 (compared via :func:`core.projects.paths.cwd_identity_key`).
@@ -19,21 +19,27 @@ The duplicate-cwd guard lives here: two projects may not point at the same repo
 from __future__ import annotations
 
 import builtins
+import json
 import os
 import shutil
-import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
 from core.database import SnapshotBarrier
-from core.json_documents import JsonDocumentWriteError, document_change, write_json_document
+from core.json_documents import (
+    JsonDocumentWriteError,
+    document_change,
+    document_version_state,
+    write_json_document,
+)
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
+    PROJECT_FORMAT_VERSION,
     Project,
     ProjectAlreadyExistsError,
     ProjectError,
@@ -48,6 +54,7 @@ from core.settings import (
     DEFAULT_PROJECT_SOURCE_FORMAT,
     is_valid_project_id,
 )
+from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 from core.utils.tree_move import move_tree
@@ -64,10 +71,10 @@ _PROJECTS_DIRNAME = "projects"
 def _validate_project_id(project_id: str) -> str:
     """Reject any project id that is not a bare slug before it becomes a path segment.
 
-    The id is a path segment under ``<data_dir>/projects/`` and :meth:`ProjectStore.delete`
-    archives that directory with ``move_tree`` (replacing the prior archive). A separator
-    or ``..`` component (``../agents``, ``/etc``) would let an operation escape the
-    projects subtree and move or remove an arbitrary directory.
+    The id is a path segment under ``<data_dir>/projects/`` and
+    :meth:`ProjectStore.archive_files` moves that directory with ``move_tree``. A
+    separator or ``..`` component (``../agents``, ``/etc``) would let an operation
+    escape the projects subtree and move an arbitrary directory.
     Every legitimately created id is a :func:`slugify_project_id` slug, so this only ever
     rejects crafted input — and it does so at the path-building choke point every store
     and session-path call funnels through, not only at config validation.
@@ -77,10 +84,16 @@ def _validate_project_id(project_id: str) -> str:
     return project_id
 
 
-# Project archives live under their own subtree so a project id can never
-# collide with an agent id in the shared archive namespace.
-_ARCHIVE_PROJECTS_DIRNAME = "projects"
-_ARCHIVE_DIRNAME = "archive"
+@dataclass(frozen=True)
+class ArchivedProjectPayload:
+    """An archived Anchor as read from its payload: the Project, or why it cannot return.
+
+    ``problem`` is ``payload_missing``, ``payload_invalid``, ``older_format`` or
+    ``newer_format``.
+    """
+
+    project: Project | None
+    problem: str | None = None
 
 
 class ProjectStore:
@@ -374,67 +387,107 @@ class ProjectStore:
         self._write_project(updated)
         return self._read_project(self._config_path(project.project_id))
 
-    def delete(self, project_id: str) -> Path:
-        """Archive the Project Anchor and its live Sessions, preserving the repo.
+    @contextmanager
+    def archive_files(self, project_id: str, tree: Path) -> Iterator[Project | None]:
+        """Move the Project Anchor to the payload ``tree`` for the caller's commit.
 
-        Mirrors :meth:`core.agents.AgentStore.delete`: move the active directory
-        under ``<data_dir>/archive/projects/<project-id>/``, replacing an
-        existing archive for the same id. The repo (cwd) is never touched —
-        removing a project is not deleting a repo. If Session archiving fails,
-        restore the active anchor and any prior archive. Product-level reference
-        and Run admission guards belong to the caller. Returns the archive path.
+        Use as ``with store.archive_files(project_id, tree) as project:`` and
+        commit the Sessions inside the body; a failing body moves the Anchor
+        back. The store lock and a compound mutation of the snapshot barrier are
+        held across the body. Yields the Project, or ``None`` when its config
+        cannot be read (the Anchor is archived all the same). The repo (cwd) is
+        never touched. Product-level reference and Run admission guards belong
+        to the caller.
         """
         with self._snapshot_barrier.compound_mutation(), self._change():
             project_dir = self._stored_project_dir(project_id)
             if project_dir is None:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
-
-            archive_dir = self._archive_dir(project_id)
-            archive_dir.parent.mkdir(parents=True, exist_ok=True)
-            backup_root = Path(
-                tempfile.mkdtemp(prefix=f".{project_id}-archive-", dir=archive_dir.parent)
-            )
-            previous_archive = backup_root / "previous"
-            committed = False
             try:
-                if archive_dir.exists():
-                    move_tree(archive_dir, previous_archive)
-                project_moved = False
-                try:
-                    move_tree(project_dir, archive_dir)
-                    project_moved = True
-                    self._session_manager().archive_project_sessions(project_id)
-                except Exception:
-                    if project_moved:
-                        move_tree(archive_dir, project_dir)
-                    if previous_archive.exists():
-                        # Restore prior archive whether move or DB step failed.
-                        # If project_moved and DB rolled back, archive_dir is already
-                        # gone (moved back), so this recreates the previous archive.
-                        # If move failed, archive_dir never existed: a failed
-                        # ``move_tree`` leaves no destination behind.
-                        move_tree(previous_archive, archive_dir)
-                    raise
-                committed = True
-            except Exception as exc:
-                # A failed move never removes anything, so what is left is where it is told.
-                retained = []
-                if not project_dir.exists():
-                    retained.append(f"Project files retained at {archive_dir}")
-                if previous_archive.exists():
-                    retained.append(f"previous archive retained at {previous_archive}")
-                if retained:
-                    raise ProjectError(
-                        f"Project archival failed ({exc}); {'; '.join(retained)}"
-                    ) from exc
-                if isinstance(exc, OSError):
-                    raise ProjectError(f"Project archival failed: {exc}") from exc
+                project: Project | None = self._read_project(project_dir / _PROJECT_CONFIG_FILENAME)
+            except (ProjectError, OSError):
+                project = None
+            try:
+                tree.parent.mkdir(parents=True, exist_ok=True)
+                move_tree(project_dir, tree)
+            except OSError as exc:
+                raise ProjectError(f"Project archival failed: {exc}") from exc
+            try:
+                yield project
+            except BaseException as exc:
+                _move_back(tree, project_dir, exc, "Project archival failed")
                 raise
-            finally:
-                if committed or not previous_archive.exists():
-                    shutil.rmtree(backup_root, ignore_errors=True)
 
-            return archive_dir
+    def inspect_archived(self, source: Path) -> ArchivedProjectPayload:
+        """Read an archived Anchor directory without changing it; report why it cannot return."""
+        path = source / _PROJECT_CONFIG_FILENAME
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return ArchivedProjectPayload(None, "payload_missing")
+        except (OSError, ValueError):
+            return ArchivedProjectPayload(None, "payload_invalid")
+        version = document_version_state(raw, PROJECT_FORMAT_VERSION)
+        if version != "current":
+            return ArchivedProjectPayload(None, f"{version}_format")
+        try:
+            return ArchivedProjectPayload(project_from_dict(load_validated_project_json(path)))
+        except (ProjectError, OSError, ValueError):
+            return ArchivedProjectPayload(None, "payload_invalid")
+
+    def restore_target_problem(self, project_id: str) -> str | None:
+        """Why an archived Anchor cannot return as ``project_id``: ``invalid_target_id``,
+        ``project_id_taken``, or ``None`` when it can."""
+        if not is_valid_project_id(project_id):
+            return "invalid_target_id"
+        projects_dir = self._data_dir / _PROJECTS_DIRNAME
+        if has_id_entry(projects_dir, project_id) or os.path.lexists(projects_dir / project_id):
+            return "project_id_taken"
+        return None
+
+    @contextmanager
+    def restore_files(self, source: Path, target_id: str) -> Iterator[Project]:
+        """Move an archived Anchor back as ``target_id`` for the caller's commit.
+
+        Refuses a taken id and a repo another Project claims before anything
+        changes. Once moved, its ``project.json`` is rewritten to the target id;
+        unknown fields stay. If the rewrite or the body raises, ``project.json``
+        gets its archived bytes back and the Anchor moves back into ``source``,
+        so a failed restore leaves the payload as it was.
+        """
+        with self._snapshot_barrier.compound_mutation(), self._change():
+            _validate_project_id(target_id)
+            if self.restore_target_problem(target_id) is not None:
+                raise ProjectAlreadyExistsError(f"Project already exists: {target_id}")
+            project = project_from_dict(
+                load_validated_project_json(source / _PROJECT_CONFIG_FILENAME)
+            )
+            self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
+            restored = replace(project, project_id=target_id, updated_at=_utc_now())
+            project_dir = self._project_dir(target_id)
+            config = project_dir / _PROJECT_CONFIG_FILENAME
+            try:
+                archived_document = (source / _PROJECT_CONFIG_FILENAME).read_bytes()
+                project_dir.parent.mkdir(parents=True, exist_ok=True)
+                move_tree(source, project_dir)
+            except OSError as exc:
+                raise ProjectError(f"Project restore failed: {exc}") from exc
+            try:
+                try:
+                    write_json_document(config, restored.to_dict(), project_format())
+                except JsonDocumentWriteError as error:
+                    raise ProjectError(str(error)) from error
+                yield self._read_project(config)
+            except BaseException as exc:
+                try:
+                    atomic_write_bytes(config, archived_document)
+                except OSError as error:
+                    # The payload keeps the rewritten document, which restores all the same.
+                    _LOGGER.warning(
+                        "Could not return %s to its archived content: %s", config, error
+                    )
+                _move_back(project_dir, source, exc, "Project restore failed")
+                raise
 
     def session_owning_agents(self, project_id: str) -> builtins.list[str]:
         """Return the agent ids that own at least one session under this anchor.
@@ -501,9 +554,6 @@ class ProjectStore:
         config_path = project_dir / _PROJECT_CONFIG_FILENAME
         return config_path if config_path.is_file() else None
 
-    def _archive_dir(self, project_id: str) -> Path:
-        return self._data_dir / _ARCHIVE_DIRNAME / _ARCHIVE_PROJECTS_DIRNAME / project_id
-
     def _reject_duplicate_cwd(self, cwd: str, *, exclude_project_id: str | None) -> None:
         target_key = cwd_identity_key(cwd)
         for existing in self.list():
@@ -532,6 +582,16 @@ class ProjectStore:
                 f"expected {config_path.parent.name}, got {project.project_id}"
             )
         return project
+
+
+def _move_back(source: Path, destination: Path, error: BaseException, failure: str) -> None:
+    """Return a moved Anchor; when that fails too, say where the files are."""
+    try:
+        move_tree(source, destination)
+    except OSError as move_error:
+        raise ProjectError(
+            f"{failure} ({error}); Project files retained at {source}"
+        ) from move_error
 
 
 def _copy_overrides(overrides: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:

@@ -709,6 +709,40 @@ export function createSettingsRpcMock(options = {}) {
       return { extensions: options.extensions ?? [] };
     }
 
+    // The Archive page loads its items when it is first shown.
+    if (method === 'archive.list') {
+      return {
+        entries: deepClone(options.archiveEntries ?? []),
+        next_cursor: null,
+        retention_days: currentSettings.archive?.retention_days,
+        retention_unknown: false,
+      };
+    }
+
+    if (method === 'archive.show') {
+      const entry = (options.archiveEntries ?? []).find(
+        (item) => item.entry_id === params.entry_id,
+      );
+      if (!entry) {
+        throw Object.assign(new Error('unknown archive entry'), {
+          code: 'archive_entry_not_found',
+        });
+      }
+      return {
+        entry: deepClone(entry),
+        sessions: [],
+        session_count: entry.session_count ?? 0,
+        files: { state: 'present', trees: [] },
+        details: {},
+        restore: {
+          possible: true,
+          target_id: entry.subject_id,
+          blockers: [],
+          warnings: [],
+        },
+      };
+    }
+
     throw new Error(`Unexpected RPC method: ${method}`);
   };
 }

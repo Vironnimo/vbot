@@ -7,11 +7,15 @@ a broken or busy database must not read as a missing Session.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.errors import ChatSessionError
 from core.database.errors import DatabaseCorruptError
+
+if TYPE_CHECKING:
+    from core.sessions._types import SessionAddress
 
 
 class SessionNotFoundError(ChatSessionError):
@@ -24,6 +28,71 @@ class SessionPageCursorError(ChatSessionError):
 
 class SessionStoreCorruptError(DatabaseCorruptError):
     """Raised when stored Session rows cannot be trusted."""
+
+
+class ArchiveEntryError(Exception):
+    """An archive entry operation was refused; nothing changed."""
+
+
+class ArchiveEntryNotFoundError(ArchiveEntryError):
+    """Raised when no archive entry has the given id (or ids)."""
+
+    def __init__(self, entry_id: str, *more_entry_ids: str) -> None:
+        entry_ids = (entry_id, *more_entry_ids)
+        noun = "archive entry" if len(entry_ids) == 1 else "archive entries"
+        super().__init__(f"{noun} not found: {', '.join(entry_ids)}")
+        self.entry_id = entry_id
+        self.entry_ids = entry_ids
+
+
+class ArchiveEntryBusyError(ArchiveEntryError):
+    """Raised when another operation holds the entry (archiving, restoring or purging).
+
+    ``reason`` says what that means for the caller when retrying would not help,
+    such as an entry being deleted or an interrupted restore that cannot finish;
+    ``details`` are its facts (``path``, ``problem``).
+    """
+
+    def __init__(
+        self,
+        entry_id: str,
+        state: str,
+        *,
+        reason: str | None = None,
+        details: Mapping[str, Any] | None = None,
+    ) -> None:
+        super().__init__(
+            f"archive entry {entry_id} is {state}: {reason}"
+            if reason is not None
+            else f"archive entry {entry_id} is {state}; retry after that operation finished"
+        )
+        self.entry_id = entry_id
+        self.state = state
+        self.reason = reason
+        self.details: dict[str, Any] = dict(details or {})
+
+
+class ArchiveMembersManagedError(ArchiveEntryError):
+    """Raised when an Extension manages member Sessions a restore would make live."""
+
+    def __init__(self, entry_id: str) -> None:
+        super().__init__(
+            f"cannot restore archive entry {entry_id}: an Extension manages its Sessions; "
+            "use that Extension to resume them"
+        )
+        self.entry_id = entry_id
+
+
+class ArchiveAddressTakenError(ArchiveEntryError):
+    """Raised when live Sessions occupy addresses a restore would give back."""
+
+    def __init__(self, entry_id: str, addresses: tuple[SessionAddress, ...]) -> None:
+        super().__init__(
+            f"cannot restore archive entry {entry_id}: live Sessions already use "
+            + ", ".join(address.session_id for address in addresses)
+        )
+        self.entry_id = entry_id
+        self.addresses = addresses
 
 
 @dataclass(frozen=True)

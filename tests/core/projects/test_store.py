@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import errno
 import json
 import os
@@ -14,7 +13,6 @@ from threading import Event
 
 import pytest
 
-from core.chat import ChatSessionError
 from core.database import write_bootstrap_marker
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
@@ -198,38 +196,107 @@ def test_a_change_waiting_for_a_data_snapshot_never_holds_up_project_reads(
     assert (gate.capture.attempts, gate.capture.waited_changes) == (1, 1)
 
 
-@pytest.mark.parametrize("failed_restore", ["active", "previous"])
-def test_delete_keeps_previous_archive_when_compensation_fails(
-    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, failed_restore: str
+def _payload(data_dir: Path) -> Path:
+    return data_dir / "archive" / "entries" / "arc_test" / "project"
+
+
+def test_archive_files_moves_only_the_anchor_and_restore_files_brings_it_back(
+    data_dir: Path, repo: Path
+) -> None:
+    marker = repo / "keep.txt"
+    marker.write_text("repo content", encoding="utf-8")
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    payload = _payload(data_dir)
+
+    with store.archive_files("vbot", payload) as archived:
+        assert archived is not None and archived.display_name == "vBot"
+    document = json.loads((payload / "project.json").read_text(encoding="utf-8"))
+    document["future_field"] = {"kept": True}
+    (payload / "project.json").write_text(json.dumps(document), encoding="utf-8")
+
+    assert not (data_dir / "projects" / "vbot").exists()
+    # Archiving never touches the repository.
+    assert marker.read_text(encoding="utf-8") == "repo content"
+    inspected = store.inspect_archived(payload)
+    assert inspected.problem is None and inspected.project is not None
+    archived_bytes = (payload / "project.json").read_bytes()
+    with (
+        pytest.raises(RuntimeError, match="database unavailable"),
+        store.restore_files(payload, "vbot-old"),
+    ):
+        raise RuntimeError("database unavailable")
+    # A failed restore leaves the payload exactly as archived.
+    assert (payload / "project.json").read_bytes() == archived_bytes
+    assert not store.exists("vbot-old")
+    with store.restore_files(payload, "vbot-old") as restored:
+        assert restored.project_id == "vbot-old"
+    assert not payload.exists()
+    assert store.get("vbot-old").display_name == "vBot"
+    stored = json.loads((data_dir / "projects" / "vbot-old" / "project.json").read_text("utf-8"))
+    assert (stored["project_id"], stored["future_field"]) == ("vbot-old", {"kept": True})
+
+
+def test_restore_files_refuses_a_taken_id_or_a_claimed_repo_without_changes(
+    data_dir: Path, repo: Path, tmp_path: Path
+) -> None:
+    store = ProjectStore(data_dir)
+    store.create("vbot", "vBot", repo)
+    other_repo = tmp_path / "repos" / "other"
+    other_repo.mkdir(parents=True)
+    store.create("other", "Other", other_repo)
+    payload = _payload(data_dir)
+    with store.archive_files("vbot", payload):
+        pass
+    before = (payload / "project.json").read_bytes()
+
+    with pytest.raises(ProjectAlreadyExistsError), store.restore_files(payload, "other"):
+        pytest.fail("a taken id is refused before anything moves")
+    # Another Project claimed the repo meanwhile.
+    store.create("again", "Again", repo)
+    with (
+        pytest.raises(ProjectError, match="already points at this folder: again"),
+        store.restore_files(payload, "vbot"),
+    ):
+        pytest.fail("a claimed repo is refused before anything moves")
+
+    assert (payload / "project.json").read_bytes() == before
+    assert store.restore_target_problem("other") == "project_id_taken"
+    assert store.restore_target_problem("Not A Slug") == "invalid_target_id"
+    assert store.restore_target_problem("vbot") is None
+
+
+@pytest.mark.parametrize("move_back", ["succeeds", "refused"])
+def test_archive_files_moves_the_anchor_back_when_the_commit_fails(
+    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, move_back: str
 ) -> None:
     store = ProjectStore(data_dir)
     try:
-        store.create("vbot", "First", repo)
-        archive = store.delete("vbot")
-        (archive / "keep.txt").write_text("previous", encoding="utf-8")
-        store.create("vbot", "Second", repo)
+        store.create("vbot", "vBot", repo)
+        anchor = data_dir / "projects" / "vbot"
+        payload = _payload(data_dir)
         real_replace = os.replace
 
-        def fail_archive(_project_id):
-            raise RuntimeError("database unavailable")
-
         def replace(source, destination):
-            if (
-                failed_restore == "active" and Path(destination) == data_dir / "projects" / "vbot"
-            ) or (failed_restore == "previous" and Path(source).name == "previous"):
+            if move_back == "refused" and Path(destination) == anchor:
                 raise OSError("rollback unavailable")
             real_replace(source, destination)
 
-        monkeypatch.setattr(store._session_manager(), "archive_project_sessions", fail_archive)
         monkeypatch.setattr(tree_move, "_replace", replace)
-        with pytest.raises(ProjectError, match="rollback unavailable"):
-            store.delete("vbot")
+        expected = (
+            (RuntimeError, "database unavailable")
+            if move_back == "succeeds"
+            else (ProjectError, f"Project files retained at {re.escape(str(payload))}")
+        )
+        with pytest.raises(expected[0], match=expected[1]), store.archive_files("vbot", payload):
+            raise RuntimeError("database unavailable")
 
-        retained = list(archive.parent.glob(".vbot-archive-*/previous/keep.txt"))
-        assert len(retained) == 1
-        assert retained[0].read_text(encoding="utf-8") == "previous"
-        if failed_restore == "active":  # the Project files stay in the archive, never deleted
-            assert (archive / "project.json").is_file()
+        if move_back == "succeeds":
+            assert store.get("vbot").display_name == "vBot"
+            assert not payload.exists()
+        else:  # the Project files stay whole in the payload, never deleted
+            assert (payload / "project.json").is_file()
+            assert not anchor.exists()
     finally:
         store.close()
 
@@ -246,15 +313,12 @@ def test_delete_keeps_previous_archive_when_compensation_fails(
         ),
     ],
 )
-def test_delete_keeps_the_anchor_and_previous_archive_when_the_move_cannot_complete(
+def test_archive_files_keeps_the_anchor_when_the_move_cannot_complete(
     data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch, blocker: str
 ) -> None:
     store = ProjectStore(data_dir)
     try:
-        store.create("vbot", "First", repo)
-        previous_archive = store.delete("vbot")
-        (previous_archive / "keep.txt").write_text("previous", encoding="utf-8")
-        store.create("vbot", "Second", repo)
+        store.create("vbot", "vBot", repo)
         anchor = data_dir / "projects" / "vbot"
         real_replace = os.replace
 
@@ -269,43 +333,18 @@ def test_delete_keeps_the_anchor_and_previous_archive_when_the_move_cannot_compl
         else:
             held = (anchor / "held.txt").open("w", encoding="utf-8")
         try:
-            with pytest.raises(ProjectError, match="Project archival failed"):
-                store.delete("vbot")
+            with (
+                pytest.raises(ProjectError, match="Project archival failed"),
+                store.archive_files("vbot", _payload(data_dir)),
+            ):
+                pytest.fail("the body runs only after a complete move")
         finally:
             if held is not None:
                 held.close()
 
-        # A move that fails means nothing moved: no partial copy replaces or removes a whole tree.
-        assert store.get("vbot").display_name == "Second"
-        assert (previous_archive / "keep.txt").read_text(encoding="utf-8") == "previous"
-        assert [path.name for path in previous_archive.parent.iterdir()] == ["vbot"]
-    finally:
-        store.close()
-
-
-def test_delete_across_volumes_archives_the_anchor_though_the_original_stays_partly(
-    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    store = ProjectStore(data_dir)
-    try:
-        store.create("vbot", "vBot", repo)
-        real_replace = os.replace
-
-        def replace(source, destination):
-            if data_dir / "archive" in Path(destination).parents:  # another volume
-                raise OSError(errno.EXDEV, "Invalid cross-device link")
-            real_replace(source, destination)
-
-        def remove_nothing(_path):
-            raise PermissionError(errno.EACCES, "held open by another program")
-
-        monkeypatch.setattr(tree_move, "_replace", replace)
-        monkeypatch.setattr(tree_move, "_remove_tree", remove_nothing)
-
-        archive = store.delete("vbot")
-
-        assert (archive / "project.json").is_file()
-        assert store.list() == []
+        # A move that fails means nothing moved: no partial copy replaces or removes a tree.
+        assert store.get("vbot").display_name == "vBot"
+        assert not _payload(data_dir).exists()
     finally:
         store.close()
 
@@ -447,10 +486,10 @@ def test_update_clears_a_field_with_its_empty_value(
             id="get-unknown-project",
         ),
         pytest.param(
-            lambda store, repos: store.delete("missing"),
+            lambda store, repos: store.archive_files("missing", repos / "payload").__enter__(),
             ProjectNotFoundError,
             "Project not found: missing",
-            id="delete-unknown-project",
+            id="archive-unknown-project",
         ),
         # A Project id is a storage path segment; traversal is refused.
         pytest.param(
@@ -700,7 +739,7 @@ def test_invalid_stored_config_is_not_a_usable_project(
 def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: Path) -> None:
     # Ids are exact. A case-insensitive filesystem (Windows) opens the stored ``vbot``
     # Anchor for ``VBOT``; that different id must still name no Project on every
-    # platform, and deleting it must never archive the real Project.
+    # platform, and archiving it must never move the real Project.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
 
@@ -709,7 +748,7 @@ def test_case_variant_of_a_stored_project_id_is_not_found(data_dir: Path, repo: 
     with pytest.raises(ProjectNotFoundError):
         store.update("VBOT", display_name="Renamed")
     with pytest.raises(ProjectNotFoundError):
-        store.delete("VBOT")
+        store.archive_files("VBOT", _payload(data_dir)).__enter__()
 
     assert store.exists("VBOT") is False
     assert store.session_owning_agents("VBOT") == []
@@ -752,100 +791,10 @@ def test_find_by_cwd_matches_the_cwd_identity(
     assert (project.project_id if project else None) == found
 
 
-def test_delete_archives_the_anchor_and_replaces_an_older_archive(
+def test_archive_files_rejects_a_path_traversal_id_and_leaves_the_sibling_untouched(
     data_dir: Path, repo: Path
 ) -> None:
-    marker = repo / "keep.txt"
-    marker.write_text("repo content", encoding="utf-8")
-    store = ProjectStore(data_dir)
-    store.create("vbot", "vBot", repo)
-
-    first_archive = store.delete("vbot")
-
-    assert first_archive == data_dir / "archive" / "projects" / "vbot"
-    assert (first_archive / "project.json").is_file()
-    assert not (data_dir / "projects" / "vbot").exists()
-
-    store.create("vbot", "vBot Again", repo)
-    second_archive = store.delete("vbot")
-
-    assert second_archive == first_archive
-    payload = json.loads((second_archive / "project.json").read_text("utf-8"))
-    assert payload["display_name"] == "vBot Again"
-    # Removal never touches the repository.
-    assert marker.read_text(encoding="utf-8") == "repo content"
-
-
-def test_delete_archives_project_sessions_before_the_project_id_is_reused(
-    data_dir: Path, repo: Path
-) -> None:
-    sessions = ChatSessionManager(data_dir)
-    store = ProjectStore(data_dir, sessions=sessions)
-    store.create("vbot", "vBot", repo)
-    address = sessions.create("builder", session_id="session-one", project_id="vbot").address
-
-    store.delete("vbot")
-    store.create("vbot", "vBot Again", repo)
-
-    assert sessions.exists(address) is False
-    assert store.session_owning_agents("vbot") == []
-    sessions.close()
-
-
-def test_delete_waits_for_owner_managed_sessions_to_leave_the_project(
-    data_dir: Path, repo: Path
-) -> None:
-    sessions = ChatSessionManager(data_dir)
-    store = ProjectStore(data_dir, sessions=sessions)
-    store.create("vbot", "vBot", repo)
-    sessions.create_bound_temporary_session(
-        SessionAddress("vbot", "tmp_participant", "ses_participant"),
-        owner_name="swarm",
-        group_id="swr_group",
-        participant_id="prt_peer",
-        config={},
-    )
-
-    with pytest.raises(ChatSessionError, match=r"managed by an Extension \(swarm\)"):
-        store.delete("vbot")
-    assert store.get("vbot").display_name == "vBot"
-
-    # Archiving the group, by its owner or after the owner was removed, releases the Project.
-    asyncio.run(sessions.archive_temporary_group(owner_name="swarm", group_id="swr_group"))
-    store.delete("vbot")
-    with pytest.raises(ProjectNotFoundError):
-        store.get("vbot")
-    sessions.close()
-
-
-def test_delete_restores_active_project_and_previous_archive_on_session_failure(
-    data_dir: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    sessions = ChatSessionManager(data_dir)
-    store = ProjectStore(data_dir, sessions=sessions)
-    store.create("vbot", "First", repo)
-    previous_archive = store.delete("vbot")
-    marker = previous_archive / "keep.txt"
-    marker.write_text("previous", encoding="utf-8")
-    store.create("vbot", "Second", repo)
-
-    def fail_archive(_project_id: str) -> None:
-        raise RuntimeError("database unavailable")
-
-    monkeypatch.setattr(sessions, "archive_project_sessions", fail_archive)
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        store.delete("vbot")
-
-    assert store.get("vbot").display_name == "Second"
-    assert marker.read_text(encoding="utf-8") == "previous"
-    sessions.close()
-
-
-def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
-    data_dir: Path, repo: Path
-) -> None:
-    # A traversal id must be refused before any archive move, so the data-dir sibling
+    # A traversal id must be refused before any move, so the data-dir sibling
     # that the resolved path (projects/../secret) would target survives untouched.
     store = ProjectStore(data_dir)
     store.create("vbot", "vBot", repo)
@@ -854,7 +803,7 @@ def test_delete_rejects_path_traversal_id_leaves_sibling_untouched(
     sibling.joinpath("keep.txt").write_text("important", encoding="utf-8")
 
     with pytest.raises(ProjectError):
-        store.delete("../secret")
+        store.archive_files("../secret", _payload(data_dir)).__enter__()
 
     assert sibling.is_dir()
     assert sibling.joinpath("keep.txt").read_text(encoding="utf-8") == "important"

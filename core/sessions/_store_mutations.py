@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from core.chat.errors import ChatSessionError
 from core.sessions import (
@@ -229,16 +229,6 @@ def append_messages(
 # -- Lifecycle -------------------------------------------------------------------
 
 
-def archive(connection: sqlite3.Connection, address: SessionAddress) -> None:
-    state = _store_values._require_live(connection, address)
-    _store_values._reject_owner_managed_mutation(connection, state)
-    connection.execute(
-        "UPDATE sessions SET state = 'archived', archived_at = ?, "
-        "state_revision = state_revision + 1 WHERE session_key = ?",
-        (utc_now_timestamp(), state["session_key"]),
-    )
-
-
 def _same_scope(source: SessionAddress, target: SessionAddress) -> bool:
     return (source.project_id or None, source.agent_id) == (
         target.project_id or None,
@@ -352,24 +342,6 @@ def fork(
     if run_kind is not None:
         record_run_kind_by_key(connection, fork_key, run_kind)
     return target
-
-
-def restore(connection: sqlite3.Connection, address: SessionAddress) -> None:
-    """Make the newest archived generation at *address* live again."""
-    if _store_values._find_live(connection, address) is not None:
-        raise ChatSessionError(f"live session already exists: {address.session_id}")
-    row = connection.execute(
-        "SELECT session_key FROM sessions WHERE project_id = ? AND agent_id = ? "
-        "AND session_id = ? AND state = 'archived' ORDER BY session_key DESC LIMIT 1",
-        _store_values._scope(address),
-    ).fetchone()
-    if row is None:
-        raise ChatSessionError(f"archived session does not exist: {address.session_id}")
-    connection.execute(
-        "UPDATE sessions SET state = 'live', archived_at = NULL, "
-        "state_revision = state_revision + 1 WHERE session_key = ?",
-        (row["session_key"],),
-    )
 
 
 def _detach_session(connection: sqlite3.Connection, session_key: int) -> None:
@@ -505,20 +477,3 @@ def retarget_identity_agent_references(
             SessionIdentityReferenceUpdate(_store_values._address(row), previous, updated)
         )
     return tuple(updates)
-
-
-def _archive_scope(connection: sqlite3.Connection, where: str, params: tuple[Any, ...]) -> None:
-    _store_values._reject_owner_managed_scope_mutation(connection, where, params)
-    connection.execute(
-        "UPDATE sessions AS s SET state = 'archived', archived_at = ?, "
-        f"state_revision = state_revision + 1 WHERE {where}",
-        (utc_now_timestamp(), *params),
-    )
-
-
-def archive_identity_agent_sessions(connection: sqlite3.Connection, agent_id: str) -> None:
-    _archive_scope(connection, _GLOBAL_AGENT_SCOPE, (agent_id,))
-
-
-def archive_project_sessions(connection: sqlite3.Connection, project_id: str) -> None:
-    _archive_scope(connection, "s.project_id = ? AND s.state = 'live'", (project_id,))

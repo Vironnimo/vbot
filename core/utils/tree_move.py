@@ -13,6 +13,7 @@ import errno
 import os
 import shutil
 import stat
+import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -73,11 +74,92 @@ def _discard_tree(path: Path, what: str) -> None:
         _LOGGER.warning("Could not remove the %s at %s: %s", what, path, error)
 
 
+def remove_tree(path: Path, *, within: Path, stop: Callable[[], None] | None = None) -> None:
+    """Delete the file, directory tree or link at ``path``, which must lie inside ``within``.
+
+    The containment check resolves the parent directories but not ``path`` itself,
+    so a ``path`` that is a symbolic link or junction is removed as a link entry and
+    whatever it points at stays untouched; links inside a tree are never followed
+    either. Read-only attributes, such as those of ``.git`` objects, are cleared. A
+    missing ``path`` counts as removed. A ``path`` outside ``within``, or ``within``
+    itself, raises ``ValueError`` before anything is deleted.
+
+    ``stop`` is called before each entry of a tree is deleted; whatever it raises
+    ends the removal there and propagates. What is not deleted yet stays, and a
+    later removal of the same ``path`` finishes it.
+    """
+    root = Path(within).resolve()
+    target = Path(path).parent.resolve() / Path(path).name
+    if target == root or not target.is_relative_to(root) or Path(path).name in ("", ".", ".."):
+        raise ValueError(f"refusing to remove {path}: it is not inside {within}")
+    try:
+        status = os.lstat(target)
+    except FileNotFoundError:
+        return
+    if _is_link(status) or not stat.S_ISDIR(status.st_mode):
+        try:
+            os.unlink(target)
+        except PermissionError:
+            _make_writable(target)
+            os.unlink(target)
+        return
+    if stop is None:
+        _remove_tree(target)
+    else:
+        _remove_tree_stoppable(target, stop)
+
+
+def _remove_tree_stoppable(path: Path, stop: Callable[[], None]) -> None:
+    """Delete a directory tree bottom-up, calling ``stop`` before each entry.
+
+    Links and junctions inside it are removed as entries, never followed.
+    """
+    with os.scandir(path) as entries:
+        children = [Path(entry.path) for entry in entries]
+    for child in children:
+        stop()
+        status = os.lstat(child)
+        if _is_link(status) or not stat.S_ISDIR(status.st_mode):
+            _retry_writable(os.unlink, child)
+        else:
+            _remove_tree_stoppable(child, stop)
+    stop()
+    _retry_writable(os.rmdir, path)
+
+
+def _retry_writable(action: Callable[[Path], object], path: Path) -> None:
+    try:
+        action(path)
+    except PermissionError:
+        _make_writable(path)
+        action(path)
+
+
 def _remove_tree(path: Path) -> None:
     """Delete a tree, clearing read-only attributes such as those of ``.git`` objects."""
     shutil.rmtree(path, onexc=_clear_read_only_and_retry)
 
 
 def _clear_read_only_and_retry(action: Callable[[str], object], path: str, _error: object) -> None:
-    os.chmod(path, os.lstat(path).st_mode | stat.S_IWRITE)
+    _make_writable(path)
     action(path)
+
+
+def _is_link(status: os.stat_result) -> bool:
+    """Whether an ``lstat`` result is a symbolic link or a Windows junction."""
+    if sys.platform == "win32" and status.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT:
+        return True
+    return stat.S_ISLNK(status.st_mode)
+
+
+def _make_writable(path: Path | str) -> None:
+    """Clear the read-only attribute of ``path`` itself, never of what a link points at.
+
+    Where ``os.chmod`` cannot leave links unfollowed (Linux), a link is left as it
+    is: its removal then fails instead of changing a directory outside the tree.
+    """
+    status = os.lstat(path)
+    if not _is_link(status):
+        os.chmod(path, status.st_mode | stat.S_IWRITE)
+    elif os.chmod in os.supports_follow_symlinks:
+        os.chmod(path, status.st_mode | stat.S_IWRITE, follow_symlinks=False)

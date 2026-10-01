@@ -6,7 +6,9 @@ import argparse
 import os
 import re
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from cli._server_target import CommandResult
 
@@ -20,6 +22,7 @@ class RecoveryGuidance:
 _INSPECTIONS = {
     "agent": ("agent", "list"),
     "project": ("project", "list"),
+    "archive": ("archive", "list"),
     "channel": ("channel", "list"),
     "provider": ("provider", "list"),
     "model": ("model", "list"),
@@ -74,7 +77,20 @@ _CODE_GUIDANCE = {
     "and stop it before starting another.",
     "performance_recording_inactive": "No performance recording is running. Inspect the "
     "current status or list stored recordings.",
+    "archive_restore_conflict": "The id is taken by a live resource. Re-run with --as <new-id> "
+    "to restore under a new id, or remove the conflicting resource first.",
+    "archive_not_restorable": "Resolve the blockers above, then restore the entry again.",
+    "archive_entry_busy": "Another operation is using this archive entry. Retry after it finished.",
 }
+
+_ARCHIVE_CODES = frozenset(
+    {
+        "archive_entry_not_found",
+        "archive_entry_busy",
+        "archive_restore_conflict",
+        "archive_not_restorable",
+    }
+)
 
 # Names both lists without parsing the address: 'agent list' holds only Identity Agents.
 _AGENT_NOT_FOUND_EXPLANATION = (
@@ -119,6 +135,17 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         inspection = ["session", "list", args.id]
     elif code == "oauth_not_supported":
         inspection = ["provider", "list"]
+    elif code in _ARCHIVE_CODES:
+        inspection = ["archive", "list"]
+    if code in {"archive_entry_busy", "archive_not_restorable"} and failure is not None:
+        data = failure.data or {}
+        explanation = (
+            _archive_busy_guidance(data)
+            if code == "archive_entry_busy"
+            else _not_restorable_guidance(data)
+        )
+        if isinstance(data.get("entry_id"), str):
+            inspection = ["archive", "show", data["entry_id"]]
 
     if failure and failure.request_state in {"not_sent", "unknown"}:
         # The transport result already explains delivery and possible partial effects.
@@ -143,6 +170,48 @@ def recovery_guidance(args: argparse.Namespace, result: CommandResult | None) ->
         if all(not any(ord(char) < 32 for char in token) for token in command)
     )
     return RecoveryGuidance(explanation, safe_commands)
+
+
+def _archive_busy_guidance(data: Mapping[str, Any]) -> str:
+    """What to do about an archive entry another operation holds, by what holds it."""
+    if isinstance(data.get("problem"), str):
+        return (
+            "An interrupted restore of this entry cannot finish. Resolve the problem the "
+            "message names, or move the folder it names out of the data directory, then "
+            "restart the server ('vbot server restart'): its next start finishes or undoes "
+            "the restore."
+        )
+    if data.get("state") == "purging":
+        return (
+            "This entry is being deleted permanently and will not become restorable. vBot "
+            f"finishes the deletion in the background; '{_purge_command(data)}' finishes it now."
+        )
+    return _CODE_GUIDANCE["archive_entry_busy"]
+
+
+# Blockers no action resolves: only deleting such an entry is left.
+_FINAL_BLOCKERS = ("kind_not_restorable", "older_format", "payload_missing")
+
+
+def _not_restorable_guidance(data: Mapping[str, Any]) -> str:
+    """Resolve the blockers; offer deleting the entry only when none can be resolved."""
+    codes = {
+        blocker.get("code") for blocker in data.get("blockers") or () if isinstance(blocker, dict)
+    }
+    final = [code for code in _FINAL_BLOCKERS if code in codes]
+    if not final:
+        return _CODE_GUIDANCE["archive_not_restorable"]
+    return (
+        f"This entry can never be restored ({', '.join(final)}). If it is no longer needed, "
+        f"'{_purge_command(data)}' deletes it permanently."
+    )
+
+
+def _purge_command(data: Mapping[str, Any]) -> str:
+    entry_id = data.get("entry_id")
+    if not isinstance(entry_id, str):
+        return "vbot archive purge <entry-id> --yes"
+    return format_command(("vbot", "archive", "purge", entry_id, "--yes"))
 
 
 def _inspection(args: argparse.Namespace) -> list[str] | None:
