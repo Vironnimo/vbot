@@ -27,7 +27,18 @@ const SOCKET_SILENCE_LIMIT_MS = 60000;
 const SOCKET_WATCHDOG_INTERVAL_MS = 10000;
 const CAPTION_LIMIT = 20;
 const CAPTION_TEXT_LIMIT = 2000;
-const OPEN_VIEWS = new Set(['chat', 'terminals', 'agents', 'projects']);
+const OPEN_VIEWS = new Set([
+  'chat',
+  'terminals',
+  'agents',
+  'projects',
+  'calendar',
+  'cron',
+  'skills',
+  'settings',
+  'statistics',
+  'logs',
+]);
 // The ids that name one item of a view in an open request.
 const OPEN_TARGET_IDS = {
   chat: ['agent_id', 'session_id'],
@@ -35,7 +46,6 @@ const OPEN_TARGET_IDS = {
   projects: ['project_id'],
 };
 const TERMINAL_VIEW_OPS = new Set([
-  'context',
   'refresh',
   'show',
   'maximize',
@@ -148,10 +158,13 @@ export function createLiveVoiceState() {
   };
 }
 
-// `uiActions` execute server UI requests: `context(guard)`,
-// `open({view, agent_id?, session_id?}, guard)` (false when not applied) and
-// `terminalView({op, terminal_id?, group_id?}, guard)`. `guard.isCurrent()`
-// turns false once the requesting call stops. `onNotice({code, severity})`
+// `uiActions` execute server UI requests:
+// `open({view, agent_id?, session_id?, project_id?}, guard)` (false when not
+// applied) and `terminalView({op, terminal_id?, group_id?}, guard)`.
+// `guard.isCurrent()` turns false once the requesting call stops.
+// `reportContext(context)` tells the running call what the app shows
+// (`{view, selected_agent_id, selected_project_id, chat_session}`); the call
+// sends it whenever its socket opens. `onNotice({code, severity})`
 // reports errors ('error'/'warn') and call endings the user did not request
 // ('info'). An optional `checkMicrophoneAccess()` runs before the microphone
 // opens and resolves a notice code that ends the start, or null to continue.
@@ -174,6 +187,8 @@ export function createLiveVoice({
   // The current call attempt. Its identity is the generation token: every
   // asynchronous step re-checks it, so Stop or a newer call silences late work.
   let current = null;
+  // What the app shows, as last reported; every owner socket receives it.
+  let appContext = null;
 
   const isCurrent = (call) => call !== null && call === current;
   const notify = (code, severity) => onNotice({ code, severity });
@@ -356,6 +371,7 @@ export function createLiveVoice({
           if (!owns()) return;
           call.socketLostAt = null;
           call.socketHeardAt = now();
+          sendContext(call);
         },
         onEvent: (frame) => {
           if (!owns()) return;
@@ -378,6 +394,15 @@ export function createLiveVoice({
     call.socket = connection;
     call.socketHeardAt = now();
     if (!call.socketWatchdog) watchSocket(call);
+  }
+
+  function sendContext(call) {
+    if (appContext) call.socket?.sendJson({ type: 'context', ...appContext });
+  }
+
+  function reportContext(context) {
+    appContext = isPlainObject(context) ? { ...context } : null;
+    if (current) sendContext(current);
   }
 
   // A half-open socket delivers nothing, not even heartbeats: replace it.
@@ -525,10 +550,6 @@ export function createLiveVoice({
   function uiOperation(actionName, rawArgs, guard) {
     const args = rawArgs ?? {};
     if (!isPlainObject(args)) throw failure('invalid_arguments');
-    if (actionName === 'context') {
-      const context = uiAction('context');
-      return () => context(guard);
-    }
     if (actionName === 'open') {
       if (!OPEN_VIEWS.has(args.view)) throw failure('invalid_view');
       const target = openTarget(args);
@@ -585,9 +606,7 @@ export function createLiveVoice({
         (error) => {
           if (!isCurrent(call)) return;
           answer({ error: uiErrorCode(error) });
-          // Reading the app's state changes nothing the user would miss.
-          if (!call.closing && frame.action !== 'context')
-            notify('ui_action_failed', 'warn');
+          if (!call.closing) notify('ui_action_failed', 'warn');
         },
       );
   }
@@ -899,7 +918,9 @@ export function createLiveVoice({
     hold,
     release,
     held,
+    reportContext,
     active: () => state.phase === 'live',
+
     destroy,
     handleFrame: (frame) => handleFrame(frame),
   };

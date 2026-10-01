@@ -25,22 +25,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.model_tasks.live import (
-    MAX_LIVE_NAME_CHARS,
-    MAX_LIVE_TEXT_CHARS,
-    CliPrompt,
-    CodingProgram,
-    live_failure,
-    live_success,
-    program_input_visible,
-    program_prompt,
-    program_ready,
-    program_text_pending,
-    selected_answer,
-)
+from core.model_tasks.live import live_failure, live_success
 from core.tools._call_vocabulary import spelling
 from core.utils.paths import model_path
-from server._live_context import (
+from server.live._brief import MAX_LIVE_NAME_CHARS, MAX_LIVE_TEXT_CHARS
+from server.live._context import (
     UNCERTAIN_DELIVERY,
     VOICE_STOPPED,
     JsonObject,
@@ -50,7 +39,16 @@ from server._live_context import (
     join_words,
     text_field,
 )
-from server._live_targets import (
+from server.live._programs import (
+    CliPrompt,
+    CodingProgram,
+    program_input_visible,
+    program_prompt,
+    program_ready,
+    program_text_pending,
+    selected_answer,
+)
+from server.live._targets import (
     GROUP,
     TERMINAL,
     LiveCatalog,

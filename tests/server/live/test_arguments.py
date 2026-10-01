@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import pytest
 
-from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
+from core.model_tasks.live import LiveToolRun, live_success
+from server.live._arguments import PreparedLiveCall, prepare_live_call, run_live_call
 
 JsonObject = dict[str, Any]
 
@@ -74,6 +76,8 @@ def test_accepts_canonical_calls_in_wire_spellings(
         ),
         ("cancel", {"session": "s4"}, ("stop", {"target": "s4"})),
         ("navigate", {"view": "Terminal"}, ("open", {"view": "terminals"})),
+        ("navigate", {"view": "cronjobs"}, ("open", {"view": "cron"})),
+        ("hangup", {}, ("end_call", {})),
     ],
 )
 def test_maps_other_tool_names_whose_intent_is_clear(
@@ -129,47 +133,6 @@ def test_repairs_field_names_and_values_of_other_harnesses(
 
 
 @pytest.mark.parametrize(
-    ("arguments", "expected"),
-    [
-        (
-            {"action": "send", "agent_id": "coder", "session_id": "ses_1", "text": "go"},
-            ("send_message", {"target": "ses_1", "text": "go"}),
-        ),
-        ({"action": "sessions", "agent_id": "coder"}, ("overview", {"agent": "coder"})),
-        ({"action": "open", "view": "terminals"}, ("open", {"view": "terminals"})),
-    ],
-)
-def test_maps_exact_calls_of_the_former_app_tool(
-    arguments: JsonObject, expected: tuple[str, JsonObject]
-) -> None:
-    assert prepared("vbot_app", arguments) == expected
-
-
-@pytest.mark.parametrize(
-    ("arguments", "expected"),
-    [
-        (
-            {"action": "start", "program": "codex", "count": 2, "workdir": "C:\\work"},
-            ("start_coding_terminal", {"program": "codex", "count": 2, "folder": "C:\\work"}),
-        ),
-        (
-            {"action": "input", "terminal_id": "term_1", "key": "enter"},
-            ("terminal", {"action": "key", "target": "term_1", "key": "enter"}),
-        ),
-        (
-            {"action": "input", "terminal_id": "term_1", "text": "go"},
-            ("send_message", {"target": "term_1", "text": "go"}),
-        ),
-        ({"action": "restore"}, ("terminal", {"action": "restore"})),
-    ],
-)
-def test_maps_exact_calls_of_the_former_terminal_tool(
-    arguments: JsonObject, expected: tuple[str, JsonObject]
-) -> None:
-    assert prepared("vbot_terminal", arguments) == expected
-
-
-@pytest.mark.parametrize(
     ("name", "arguments", "expected"),
     [
         ("send_message", {"target": "s2", "text": "None"}, {"target": "s2", "text": "None"}),
@@ -214,46 +177,14 @@ def test_a_stand_in_or_blank_value_leaves_the_field_out(
     assert problem in message
 
 
-@pytest.mark.parametrize("submit", [False, "false", 0, None])
-def test_refuses_former_terminal_input_that_must_not_press_enter(submit: Any) -> None:
-    code, message = refused(
-        "vbot_terminal",
-        {"action": "input", "terminal_id": "term_1", "text": "draft", "submit": submit},
-    )
-    assert code == "invalid_arguments"
-    assert "nothing was typed" in message
-    assert 'send_message types the text and presses Enter: call it with {"target": "term_1"' in (
-        message
-    )
-
-
-def test_maps_former_terminal_input_with_submit_to_send_message() -> None:
-    assert prepared(
-        "vbot_terminal", {"action": "input", "terminal_id": "term_1", "text": "go", "submit": True}
-    ) == ("send_message", {"target": "term_1", "text": "go"})
-
-
-def test_refuses_former_terminal_input_with_both_a_key_and_text() -> None:
-    code, message = refused(
-        "vbot_terminal", {"action": "input", "terminal_id": "term_1", "key": "enter", "text": "y"}
-    )
-    assert code == "invalid_arguments"
-    assert '"action": "key", "target": "term_1"' in message
-    assert 'send_message with {"target": "term_1"' in message
-
-
 def test_refuses_unknown_tools_and_names_the_offered_ones() -> None:
     offered = (
         "Call one of: overview, start_agent_session, start_coding_terminal, send_message, read, "
-        "stop, open, terminal."
+        "stop, open, terminal, end_call."
     )
     assert refused("shell", {"command": "ls"}) == (
         "unknown_tool",
         f'There is no Tool called "shell". {offered}',
-    )
-    assert refused("vbot_app", {"action": "bogus"}) == (
-        "unknown_tool",
-        f"vbot_app is no longer available. {offered}",
     )
 
 
@@ -291,3 +222,112 @@ def test_refuses_invalid_calls_with_an_example_of_a_valid_one(
     assert code == "invalid_arguments"
     assert problem in message
     assert f"Call {name} again, for example with {{" in message
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 10.0
+
+    def __call__(self) -> float:
+        self.now += 0.25
+        return self.now
+
+
+async def run(
+    name: Any, arguments: Any, *, rejection: JsonObject | None = None, execute: Any = None
+) -> tuple[LiveToolRun, list[tuple[str, JsonObject]], list[JsonObject]]:
+    executed: list[tuple[str, JsonObject]] = []
+    records: list[JsonObject] = []
+
+    async def succeed(tool: str, tool_arguments: JsonObject) -> JsonObject:
+        executed.append((tool, tool_arguments))
+        return live_success("Done.")
+
+    result = await run_live_call(
+        name,
+        arguments,
+        execute=execute or succeed,
+        rejection=rejection,
+        record=records.append,
+        mode="direct",
+        clock=Clock(),
+    )
+    return result, executed, records
+
+
+@pytest.mark.asyncio
+async def test_a_call_runs_once_as_prepared_and_is_recorded_as_written_and_as_run() -> None:
+    result, executed, records = await run("functions.show", '{"terminal": "t1"}')
+
+    assert executed == [("open", {"target": "t1"})]
+    assert result == LiveToolRun(live_success("Done."), changed="open")
+    assert records == [
+        {
+            "type": "tool",
+            "mode": "direct",
+            "called": "functions.show",
+            "tool": "open",
+            "arguments": '{"terminal": "t1"}',
+            "run_arguments": {"target": "t1"},
+            "ok": True,
+            "result": "Done.",
+            "stopped": False,
+            "duration_ms": 250,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_read_only_call_changes_nothing() -> None:
+    result, _executed, _records = await run("overview", {})
+    assert result.changed == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("name", "arguments", "rejection", "code"),
+    [
+        ("shell", {"command": "ls"}, None, "unknown_tool"),
+        ("send_message", "not json", None, "invalid_arguments"),
+        ("send_message", {"target": "s1"}, None, "invalid_arguments"),
+        (
+            "send_message",
+            "{broken",
+            {"code": "invalid_arguments", "message": "Not JSON."},
+            "invalid_arguments",
+        ),
+    ],
+    ids=["unknown-tool", "undecodable", "missing-field", "adapter-rejection"],
+)
+async def test_a_refused_call_does_not_run_and_is_recorded(
+    name: str, arguments: Any, rejection: JsonObject | None, code: str
+) -> None:
+    result, executed, records = await run(name, arguments, rejection=rejection)
+
+    assert executed == []
+    assert result.changed == ""
+    assert result.result["error"]["code"] == code
+    assert [(record["tool"], record["ok"], record["stopped"]) for record in records] == [
+        (None, False, False)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_call_is_still_recorded_without_a_result() -> None:
+    records: list[JsonObject] = []
+    started = asyncio.Event()
+
+    async def hang(tool: str, tool_arguments: JsonObject) -> JsonObject:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError("unreachable")
+
+    task = asyncio.create_task(
+        run_live_call("stop", {"target": "s1"}, execute=hang, record=records.append, clock=Clock())
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert [(r["tool"], r["result"], r["stopped"]) for r in records] == [("stop", None, True)]

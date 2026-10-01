@@ -43,13 +43,7 @@ import httpx
 from websockets.asyncio.client import connect as websocket_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus, InvalidURI, WebSocketException
 
-from core.model_tasks._live_tools import (
-    LIVE_TOOL_REQUEST,
-    live_failure,
-    live_result_text,
-    live_tools,
-    request_tool,
-)
+from core.model_tasks._live_results import live_failure, live_result_text
 from core.model_tasks._live_wire import (
     RELAY_BYTES_PER_MS,
     RELAY_SAMPLE_RATE,
@@ -140,6 +134,7 @@ async def open_xai_live_wire(
     *,
     instructions: str,
     voice: str | None,
+    tools: list[JsonObject],
     direct_tools: bool,
     connect: WebSocketConnector | None = None,
     clock: Clock = time.monotonic,
@@ -147,7 +142,9 @@ async def open_xai_live_wire(
 ) -> XaiLiveWire:
     """Join the realtime socket and configure the session.
 
-    *direct_tools* registers the Live Tools instead of ``vbot_request``.
+    *tools* are the function Tools the voice model gets. With *direct_tools*
+    every call of them is handed on as a Tool call; otherwise *tools* is the
+    one delegation Tool, whose calls become delegations.
     Handshake failures raise Provider errors (HTTP 401/403 as
     :class:`~core.providers.errors.ProviderAuthError`, 429 as a rate limit);
     transport failures raise :class:`~core.providers.errors.NetworkError`.
@@ -155,7 +152,9 @@ async def open_xai_live_wire(
 
     client = _XaiLiveClient.from_runtime(runtime, target_ref)
     socket = await client.connect(connect or websocket_connect)
-    session = _XaiSession(direct_tools=direct_tools, clock=clock, wall_clock=wall_clock)
+    session = _XaiSession(
+        tools=tools, direct_tools=direct_tools, clock=clock, wall_clock=wall_clock
+    )
     try:
         await socket.send(json.dumps(session.configure(instructions, voice), ensure_ascii=False))
     except ConnectionClosed as exc:
@@ -397,10 +396,15 @@ class _XaiSession:
     def __init__(
         self,
         *,
+        tools: list[JsonObject],
         direct_tools: bool,
         clock: Clock = time.monotonic,
         wall_clock: Clock = time.time,
     ) -> None:
+        if not direct_tools and len(tools) != 1:
+            raise ValueError("a delegating session offers exactly one delegation Tool")
+        self._tools = [dict(tool) for tool in tools]
+        self._request_tool = "" if direct_tools else str(tools[0]["name"])
         self._direct_tools = direct_tools
         self._clock = clock
         self._wall_clock = wall_clock
@@ -443,7 +447,7 @@ class _XaiSession:
         """Return the ``session.update`` that configures this session."""
 
         audio_format = {"type": "audio/pcm", "rate": RELAY_SAMPLE_RATE}
-        tools = live_tools() if self._direct_tools else [request_tool()]
+        tools = [dict(tool) for tool in self._tools]
         session: JsonObject = {
             "instructions": instructions,
             "turn_detection": dict(TURN_DETECTION),
@@ -838,7 +842,8 @@ class _XaiSession:
                 WireToolCall(call_id=call.call_id, name=call.name, arguments=arguments)
             )
             return
-        if called_tool_name(call.name, {LIVE_TOOL_REQUEST}) == LIVE_TOOL_REQUEST:
+        request_tool = self._request_tool
+        if called_tool_name(call.name, {request_tool}) == request_tool:
             request = arguments.get("request") if isinstance(arguments, dict) else None
             if isinstance(request, str) and request.strip():
                 self._awaiting[call.call_id] = _KIND_DELEGATION
@@ -848,13 +853,13 @@ class _XaiSession:
                 return
             error = live_failure(
                 "invalid_arguments",
-                f"request must be the user's request as text. Call {LIVE_TOOL_REQUEST} again "
+                f"request must be the user's request as text. Call {request_tool} again "
                 'with {"request": "<the user\'s request>"}.',
             )
         else:
             error = live_failure(
                 "unknown_tool",
-                f'There is no Tool called "{call.name}". Call {LIVE_TOOL_REQUEST} with the '
+                f'There is no Tool called "{call.name}". Call {request_tool} with the '
                 "user's request.",
             )
         step.commands.append(_call_output(call.call_id, live_result_text(error)))

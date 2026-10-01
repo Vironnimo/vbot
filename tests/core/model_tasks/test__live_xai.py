@@ -14,13 +14,6 @@ from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosedError, InvalidStatus
 from websockets.http11 import Response
 
-from core.model_tasks._live_tools import (
-    DIRECT_VOICE_INSTRUCTIONS,
-    LIVE_TOOL_NAMES,
-    VOICE_INSTRUCTIONS,
-    live_tools,
-    request_tool,
-)
 from core.model_tasks._live_wire import (
     WireAudio,
     WireCaption,
@@ -45,6 +38,31 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.token_getter import StaticTokenGetter
 
 TARGET = "xai/grok-voice-think-fast-2.0::subscription"
+INSTRUCTIONS = "Talk with the user."
+
+
+def _object(properties: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
+REQUEST_TOOL = {
+    "name": "vbot_request",
+    "description": "Ask vBot.",
+    "parameters": _object({"request": {"type": "string"}}),
+}
+TOOLS = [
+    {"name": "overview", "description": "What runs.", "parameters": _object({})},
+    {
+        "name": "open",
+        "description": "Show something.",
+        "parameters": _object({"target": {"type": "string"}}),
+    },
+]
 ONE_SECOND = 48_000  # bytes of PCM16 mono 24 kHz
 
 
@@ -57,7 +75,12 @@ class Clock:
 
 
 def _session(*, direct: bool = False, clock: Clock | None = None) -> _XaiSession:
-    session = _XaiSession(direct_tools=direct, clock=clock or Clock(), wall_clock=lambda: 1000.0)
+    session = _XaiSession(
+        tools=TOOLS if direct else [REQUEST_TOOL],
+        direct_tools=direct,
+        clock=clock or Clock(),
+        wall_clock=lambda: 1000.0,
+    )
     session.receive({"type": "session.updated", "session": {}})
     return session
 
@@ -117,12 +140,12 @@ def _decoded(output: str) -> Any:
 
 
 def test_session_update_configures_voice_vad_audio_transcription_and_delegation_tool():
-    update = _XaiSession(direct_tools=False).configure(VOICE_INSTRUCTIONS, "eve")
+    update = _XaiSession(tools=[REQUEST_TOOL], direct_tools=False).configure(INSTRUCTIONS, "eve")
 
     assert update == {
         "type": "session.update",
         "session": {
-            "instructions": VOICE_INSTRUCTIONS,
+            "instructions": INSTRUCTIONS,
             "voice": "eve",
             "turn_detection": {
                 "type": "server_vad",
@@ -137,21 +160,28 @@ def test_session_update_configures_voice_vad_audio_transcription_and_delegation_
                 },
                 "output": {"format": {"type": "audio/pcm", "rate": 24000}},
             },
-            "tools": [{"type": "function", **request_tool()}],
+            "tools": [{"type": "function", **REQUEST_TOOL}],
         },
     }
 
 
 def test_direct_tools_mode_registers_the_app_tools_in_flat_shape():
-    update = _XaiSession(direct_tools=True).configure(DIRECT_VOICE_INSTRUCTIONS, None)
+    update = _XaiSession(tools=TOOLS, direct_tools=True).configure(INSTRUCTIONS, None)
 
     assert "voice" not in update["session"]
-    assert update["session"]["tools"] == [{"type": "function", **tool} for tool in live_tools()]
+    assert update["session"]["tools"] == [{"type": "function", **tool} for tool in TOOLS]
     assert all("strict" not in tool for tool in update["session"]["tools"])
 
 
+def test_a_delegating_session_offers_exactly_one_tool():
+    with pytest.raises(ValueError):
+        _XaiSession(tools=TOOLS, direct_tools=False)
+
+
 def test_session_starts_on_session_updated_and_drops_audio_before():
-    session = _XaiSession(direct_tools=False, clock=Clock(), wall_clock=lambda: 1000.0)
+    session = _XaiSession(
+        tools=[REQUEST_TOOL], direct_tools=False, clock=Clock(), wall_clock=lambda: 1000.0
+    )
 
     assert session.audio(b"\x01\x00") == []
     step = session.receive({"type": "session.updated", "session": {}})
@@ -667,7 +697,7 @@ def test_max_duration_closes_the_socket_and_confirms_the_close():
 
 
 def test_a_rejected_setup_is_a_problem_that_ends_the_call():
-    session = _XaiSession(direct_tools=False)
+    session = _XaiSession(tools=[REQUEST_TOOL], direct_tools=False)
     step = session.receive(
         {"type": "error", "error": {"type": "invalid_request_error", "message": "bad voice"}}
     )
@@ -787,8 +817,9 @@ async def _open(connect: FakeConnect, token_getter: Any = None, **kwargs: Any) -
     return await open_xai_live_wire(
         _runtime(token_getter),
         parse_task_model_target_id(TARGET),
-        instructions=kwargs.pop("instructions", VOICE_INSTRUCTIONS),
+        instructions=kwargs.pop("instructions", INSTRUCTIONS),
         voice=kwargs.pop("voice", "eve"),
+        tools=kwargs.pop("tools", [REQUEST_TOOL]),
         direct_tools=kwargs.pop("direct_tools", False),
         connect=connect,
         **kwargs,
@@ -800,7 +831,7 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
     socket = FakeSocket()
     connect = FakeConnect(socket)
 
-    wire = await _open(connect, direct_tools=True, instructions=DIRECT_VOICE_INSTRUCTIONS)
+    wire = await _open(connect, direct_tools=True, tools=TOOLS)
 
     url, options = connect.calls[0]
     assert url == "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0"
@@ -808,8 +839,8 @@ async def test_open_joins_the_pinned_model_with_connection_auth_and_configures_t
     assert options["max_size"] == 16 * 1024 * 1024
     assert options["ssl"] is not None
     assert socket.sent[0]["type"] == "session.update"
-    assert socket.sent[0]["session"]["instructions"] == DIRECT_VOICE_INSTRUCTIONS
-    assert [tool["name"] for tool in socket.sent[0]["session"]["tools"]] == list(LIVE_TOOL_NAMES)
+    assert socket.sent[0]["session"]["instructions"] == INSTRUCTIONS
+    assert [tool["name"] for tool in socket.sent[0]["session"]["tools"]] == ["overview", "open"]
     assert re.fullmatch(r"live_[a-z0-9]{16}", wire.call_id)
     assert wire.media == relay_media()
     assert wire.announces_as_user_input is True

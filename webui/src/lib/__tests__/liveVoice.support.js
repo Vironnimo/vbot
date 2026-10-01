@@ -91,7 +91,13 @@ export function liveFixture(overrides = {}) {
     stopLiveCall: vi.fn().mockResolvedValue({ stopping: true }),
     sendLiveUiResult: vi.fn().mockResolvedValue({ accepted: true }),
     openLiveCallSocket: vi.fn((callId, handlers) => {
-      const socket = { callId, handlers, close: vi.fn(), sendAudio: vi.fn() };
+      const socket = {
+        callId,
+        handlers,
+        close: vi.fn(),
+        sendAudio: vi.fn(),
+        sendJson: vi.fn(),
+      };
       sockets.push(socket);
       return socket;
     }),
@@ -113,7 +119,6 @@ export function liveFixture(overrides = {}) {
     pause: vi.fn(),
   };
   const uiActions = {
-    context: vi.fn().mockResolvedValue({ view: 'chat', agents: [] }),
     open: vi.fn().mockResolvedValue(true),
     terminalView: vi.fn().mockResolvedValue({ visible_order: ['t1'] }),
   };

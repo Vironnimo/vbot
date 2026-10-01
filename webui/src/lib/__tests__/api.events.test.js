@@ -397,12 +397,16 @@ describe('openLiveCallSocket()', () => {
     expect(onEvent).not.toHaveBeenCalled();
 
     const frame = new ArrayBuffer(2);
+    const report = { type: 'context', view: 'chat' };
     expect(connection.sendAudio(frame)).toBe(false);
+    expect(connection.sendJson(report)).toBe(false);
     connection.socket.readyState = AudioSocket.OPEN;
     expect(connection.sendAudio(frame)).toBe(true);
+    expect(connection.sendJson(report)).toBe(true);
     connection.close();
     expect(connection.sendAudio(frame)).toBe(false);
-    expect(connection.socket.sent).toEqual([frame]);
+    expect(connection.sendJson(report)).toBe(false);
+    expect(connection.socket.sent).toEqual([frame, JSON.stringify(report)]);
   });
 
   it.each([

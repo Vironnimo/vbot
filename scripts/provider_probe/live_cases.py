@@ -13,7 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
-from core.model_tasks._live_tools import (
+from core.model_tasks.live import live_failure, live_success
+from server.live._brief import (
     TOOL_OPEN,
     TOOL_OVERVIEW,
     TOOL_READ,
@@ -22,8 +23,6 @@ from core.model_tasks._live_tools import (
     TOOL_START_CODING_TERMINAL,
     TOOL_STOP,
     TOOL_TERMINAL,
-    live_failure,
-    live_success,
 )
 
 JsonObject = dict[str, Any]

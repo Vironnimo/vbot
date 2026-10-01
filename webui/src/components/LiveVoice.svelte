@@ -87,6 +87,7 @@
       checkMicrophoneAccess: desktop ? () => desktopMicrophoneAccess() : null,
       wakePhrases: () => liveWakePhrases(voiceStatus),
     });
+    controller.reportContext(untrack(() => uiActions.context?.() ?? null));
     const stopDesktopRequests = desktop
       ? onDesktopLiveRequest(handleDesktopRequest)
       : () => {};
@@ -109,6 +110,12 @@
       controller.stop();
     return true;
   }
+
+  // A running call learns what the app shows as it changes, without asking.
+  $effect(() => {
+    const context = uiActions.context?.() ?? null;
+    untrack(() => controller?.reportContext(context));
+  });
 
   // A lost app connection does not end the call: the call has its own
   // socket, which reattaches or fails the call by itself.

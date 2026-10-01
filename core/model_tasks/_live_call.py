@@ -20,9 +20,8 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from core.model_tasks._live_arguments import PreparedLiveCall, prepare_live_call
-from core.model_tasks._live_brain import DelegationInput, LiveBrain, record_tool_call
-from core.model_tasks._live_tools import LIVE_UPDATE_PREFIX, live_failure, live_result_text
+from core.model_tasks._live_brain import DelegationInput, LiveBrain
+from core.model_tasks._live_results import LIVE_UPDATE_PREFIX, live_failure, live_result_text
 from core.model_tasks._live_wire import (
     MEDIA_RELAY,
     RELAY_BYTES_PER_MS,
@@ -73,7 +72,11 @@ _DELEGATION_FAILED = (
 )
 _TOOL_FAILED = (
     "The Tool call failed because of an internal error. It may have partly completed; do not "
-    "repeat it. Call overview to see what happened."
+    "repeat it. Look up what happened before you try anything else."
+)
+_TOOL_TIMED_OUT = (
+    "The Tool call took too long and was stopped. It may have completed; do not repeat it. "
+    "Look up what happened before you try anything else."
 )
 # Microphone audio waiting for the provider socket; older audio is dropped.
 _AUDIO_BACKLOG_BYTES = 2000 * RELAY_BYTES_PER_MS
@@ -353,50 +356,19 @@ class LiveCallSession:
         await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
 
     async def _tool_result_text(self, event: WireToolCall) -> str:
+        """Run one direct Tool call once through the host; a timeout stops it."""
+
         async with self._delegation_slots:
             self._set_busy(1)
-            started = self._clock()
             try:
-                prepared = prepare_live_call(event.name, event.arguments)
-                result = (
-                    await self._execute_tool_call(prepared)
-                    if isinstance(prepared, PreparedLiveCall)
-                    else prepared
-                )
+                async with asyncio.timeout(self._delegation_timeout):
+                    run = await self._host.run_tool(event.name, event.arguments)
+            except TimeoutError:
+                _LOGGER.warning("Live Tool call timed out (call=%s)", self._log_id)
+                return live_result_text(live_failure("timeout", _TOOL_TIMED_OUT))
             finally:
                 self._set_busy(-1)
-        record_tool_call(
-            self._host.record,
-            mode="direct",
-            called=event.name,
-            arguments=event.arguments,
-            prepared=prepared,
-            result=result,
-            duration=self._clock() - started,
-        )
-        return live_result_text(result)
-
-    async def _execute_tool_call(self, call: PreparedLiveCall) -> JsonObject:
-        """Run one prepared direct Tool call once; failures become an error result."""
-
-        try:
-            async with asyncio.timeout(self._delegation_timeout):
-                return await self._host.execute_tool(call.name, dict(call.arguments))
-        except TimeoutError:
-            _LOGGER.warning("Live Tool call timed out (call=%s tool=%s)", self._log_id, call.name)
-            return live_failure(
-                "timeout",
-                "The Tool call took too long and was stopped. It may have completed; do not "
-                "repeat it. Call overview to see what happened.",
-            )
-        except Exception as exc:
-            _LOGGER.warning(
-                "Live Tool call failed (call=%s tool=%s error_type=%s)",
-                self._log_id,
-                call.name,
-                type(exc).__name__,
-            )
-            return live_failure("tool_failed", _TOOL_FAILED)
+        return live_result_text(run.result)
 
     async def _pump_audio(self) -> None:
         """Forward microphone audio in arrival order until the call ends."""
@@ -487,6 +459,7 @@ class LiveCallSession:
         watchdog = self._watchdog
         if watchdog is not None and watchdog is not asyncio.current_task():
             watchdog.cancel()
+
         reason: str | None
         if self._abort_reason is not None:
             reason = self._abort_reason
@@ -514,6 +487,7 @@ class LiveCallSession:
             # A terminal Provider event need not close its transport. Settle
             # Usage first so cancellation during socket cleanup cannot lose it.
             try:
+                await self._close_brain()
                 async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
                     await self._wire.aclose()
             except Exception as exc:
@@ -538,6 +512,20 @@ class LiveCallSession:
                     self._clock() - self._started_at,
                 )
                 self._done.set()
+
+    async def _close_brain(self) -> None:
+        """Release the backend's connection; a failure cannot keep the call open."""
+        if self._brain is None:
+            return
+        try:
+            async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
+                await self._brain.aclose()
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live call backend cleanup failed (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
 
     def _save_usage(self) -> None:
         """Save the latest cumulative Usage in the background; the reader never waits."""

@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from core.model_tasks.live import LiveStartRejected
-from server.live import LiveRegistryClosedError
+from server.live.registry import LiveRegistryClosedError
 from server.rpc.errors import RpcError
 from server.rpc.live_methods import _start, _status, _stop, _ui_result
 from server.rpc.methods import build_method_handlers

@@ -15,7 +15,7 @@ Owner socket frames, server to accessor:
   and a call that ends without its own ``closed`` update gets one with
   ``reason: null``;
 * JSON text: ``{"type": "ui_request", "request_id", "action", "args"}`` - see
-  ``server/_live_tools.py`` for ``context``, ``open`` and ``terminal_view``;
+  ``server/live/_tools.py`` for ``open`` and ``terminal_view``;
 * JSON text: ``{"type": "heartbeat", "timestamp"}`` while otherwise idle;
 * binary, relay calls only: assistant audio as raw PCM in the call's
   ``media.audio`` format. Audio is never buffered: it is dropped while no
@@ -29,8 +29,12 @@ heartbeat frames first, never a ``state``, ``ui_request``, ``error``, or
 buffer, so a reconnecting owner still receives a pending UI request.
 
 Accessor to server: binary frames of a relay call are microphone PCM in the
-same format (even length, at most 64 KiB each); malformed binary frames and
-all text frames are ignored.
+same format (even length, at most 64 KiB each). A JSON text frame
+``{"type": "context", "view", "selected_agent_id", "selected_project_id",
+"chat_session"}`` reports what the app shows (``chat_session`` is
+``{"agent_id", "session_id"}`` or ``null``); the owner sends one after it
+attaches and another whenever that changes. Malformed frames and other text
+frames are ignored.
 
 Close codes: 1000 after the ``closed`` update, 1008 for an unknown or already
 forgotten call, 1013 when the owner fell behind, 4000 when a newer owner socket
@@ -41,6 +45,7 @@ reconnect within the reattach grace; the call ends if it does not.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections import deque
 from collections.abc import AsyncGenerator, Callable, Coroutine
@@ -49,13 +54,14 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
-from core.model_tasks.live import LiveCall, LiveCallHost
+from core.model_tasks.live import LiveBrief, LiveCall, LiveCallHost, LiveToolRun
 from core.utils.ids import new_id
-from server._live_context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
-from server._live_feed import LiveRunFeed
-from server._live_record import LiveCallRecorder
-from server._live_tools import LiveToolExecutor
 from server.events import ServerEventBus
+from server.live._brief import live_brief
+from server.live._context import UI_TIMEOUT, UI_UNAVAILABLE, LiveUiError, RpcInvoker
+from server.live._feed import LiveRunFeed
+from server.live._record import LiveCallRecorder
+from server.live._tools import LiveToolExecutor
 
 JsonObject = dict[str, Any]
 
@@ -67,6 +73,7 @@ LIVE_SOCKET_CLOSE_LAGGED = 1013
 LIVE_SOCKET_CLOSE_REPLACED = 4000
 
 LIVE_AUDIO_FRAME_MAX_BYTES = 64 * 1024
+LIVE_CONTEXT_FRAME_MAX_CHARS = 4096
 
 CLOSED_REASON_REPLACED = "replaced"
 _NOTIFICATION_FAILED = "notification_failed"
@@ -85,6 +92,8 @@ class LiveCallLimits:
     owner_audio_limit_bytes: int = 60 * 48_000
     shutdown_close_timeout_seconds: float = 3.0
     abort_timeout_seconds: float = 4.0
+    # Time for the voice model's goodbye before ``end_call`` closes the call.
+    end_call_delay_seconds: float = 5.0
 
     def __post_init__(self) -> None:
         if self.owner_queue_limit < self.update_buffer_limit:
@@ -99,7 +108,6 @@ class LiveVoiceStarter(Protocol):
         *,
         media: str,
         offer_sdp: str | None,
-        wake_phrases: tuple[str, ...],
         host: LiveCallHost,
     ) -> LiveCall: ...
 
@@ -206,6 +214,10 @@ class LiveOwnerStream:
         """Hand one inbound binary frame to the call as microphone audio."""
         self._entry.receive_audio(self, pcm)
 
+    def receive_text(self, text: str) -> None:
+        """Hand one inbound text frame to the call; only context reports count."""
+        self._entry.receive_context(self, text)
+
     def detach(self) -> None:
         """Release ownership after the socket closed."""
         self._entry.detach(self)
@@ -223,10 +235,12 @@ class _LiveCallEntry:
         on_finalized: Callable[[_LiveCallEntry], None],
         started_at: datetime,
         after_sequence: int,
+        wake_phrases: tuple[str, ...] = (),
         recorder: LiveCallRecorder | None = None,
     ) -> None:
         self._limits = limits
         self._recorder = recorder
+        self._wake_phrases = wake_phrases
         self._rpc = rpc
         self._events = events
         self._on_finalized = on_finalized
@@ -243,10 +257,18 @@ class _LiveCallEntry:
         self._owner: LiveOwnerStream | None = None
         self._owner_attached = False
         self._malformed_audio_logged = False
+        self._app_context: JsonObject | None = None
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
         self._executor = LiveToolExecutor(
-            rpc=rpc, ui=self.ui_request, is_active=self._is_active, started_at=started_at
+            rpc=rpc,
+            ui=self.ui_request,
+            app_context=lambda: self._app_context,
+            is_active=self._is_active,
+            started_at=started_at,
+            end_call=self.end_soon,
+            record=self.record if recorder is not None else None,
         )
+        self._ending = False
         self._feed: LiveRunFeed | None = None
         self._timer: asyncio.Task[None] | None = None
         self._watcher: asyncio.Task[None] | None = None
@@ -270,9 +292,16 @@ class _LiveCallEntry:
 
     # -- LiveCallHost -----------------------------------------------------
 
-    async def execute_tool(self, name: str, arguments: JsonObject) -> JsonObject:
-        """Run one prepared Live Tool call; the executor runs one call's executions in turn."""
-        return await self._executor.execute(name, arguments)
+    def brief(self, *, direct_tools: bool) -> LiveBrief:
+        """The call's instructions and Live Tools."""
+        self._executor.mode = "direct" if direct_tools else "delegated"
+        return live_brief(direct_tools=direct_tools, wake_phrases=self._wake_phrases)
+
+    async def run_tool(
+        self, name: Any, arguments: Any, *, rejection: JsonObject | None = None
+    ) -> LiveToolRun:
+        """Run one Tool call as a Model made it; the executor runs them in turn."""
+        return await self._executor.run(name, arguments, rejection=rejection)
 
     def known_refs(self) -> str:
         """The refs this call's Tool results named so far, one labeled line each."""
@@ -291,7 +320,7 @@ class _LiveCallEntry:
             self._owner.end(LIVE_SOCKET_CLOSE_ENDED)
 
     def record(self, event: JsonObject) -> None:
-        """Keep one Tool call or delegation record locally for measurement."""
+        """Keep one Tool call or delegation record locally; only in Debug Mode."""
         if self._recorder is not None:
             self._recorder.record(self.call_id, event)
 
@@ -331,6 +360,18 @@ class _LiveCallEntry:
             self.active = False
             self._spawn(self._close(call))
         return True
+
+    def end_soon(self) -> None:
+        """Close gracefully once the voice model had time to say goodbye."""
+        if self._ending or self._closing or self.ended:
+            return
+        self._ending = True
+        self._spawn(self._end_after_goodbye())
+
+    async def _end_after_goodbye(self) -> None:
+        await asyncio.sleep(self._limits.end_call_delay_seconds)
+        _LOGGER.info("Live call ended by the voice model (call=%s)", self.log_id)
+        self.request_close()
 
     async def replace(self) -> None:
         """End the call immediately because a newer call starts."""
@@ -458,6 +499,17 @@ class _LiveCallEntry:
             return
         call.push_audio(pcm)
 
+    def receive_context(self, owner: LiveOwnerStream, text: str) -> None:
+        """Keep what the current owner reports the app shows."""
+        if owner is not self._owner or self.ended or len(text) > LIVE_CONTEXT_FRAME_MAX_CHARS:
+            return
+        try:
+            frame = json.loads(text)
+        except ValueError:
+            return
+        if isinstance(frame, dict) and frame.get("type") == "context":
+            self._app_context = _app_context(frame)
+
     def _deliver(self, frame: JsonObject) -> None:
         owner = self._owner
         if owner is not None:
@@ -555,12 +607,35 @@ class _LiveCallEntry:
         return task
 
 
+def _app_context(frame: JsonObject) -> JsonObject:
+    """The known fields of a context report, as text or ``None``."""
+
+    def text(value: Any) -> str | None:
+        return value if isinstance(value, str) and value else None
+
+    session = frame.get("chat_session")
+    chat_session = (
+        {"agent_id": session["agent_id"], "session_id": session["session_id"]}
+        if isinstance(session, dict)
+        and text(session.get("agent_id"))
+        and text(session.get("session_id"))
+        else None
+    )
+    return {
+        "view": text(frame.get("view")),
+        "selected_agent_id": text(frame.get("selected_agent_id")),
+        "selected_project_id": text(frame.get("selected_project_id")),
+        "chat_session": chat_session,
+    }
+
+
 class LiveCallRegistry:
     """Own the server's Live calls: one active call plus those still finishing.
 
     ``rpc`` dispatches one registered RPC method in-process; the call's Tools
     and Run announcements go through it so they behave like any accessor call.
-    ``recorder`` keeps the calls' Tool call and delegation records locally.
+    ``recorder`` keeps the Tool call and delegation records of calls that start
+    while ``recording()`` is true (Debug Mode).
     """
 
     def __init__(
@@ -571,10 +646,12 @@ class LiveCallRegistry:
         limits: LiveCallLimits | None = None,
         clock: Callable[[], datetime] = _utc_now,
         recorder: LiveCallRecorder | None = None,
+        recording: Callable[[], bool] = lambda: True,
     ) -> None:
         self._events = events
         self._rpc = rpc
         self._recorder = recorder
+        self._recording = recording
         self._limits = limits or LiveCallLimits()
         self._clock = clock
         self._start_lock = asyncio.Lock()
@@ -616,11 +693,10 @@ class LiveCallRegistry:
                 on_finalized=self._entry_finalized,
                 started_at=self._clock(),
                 after_sequence=self._events.last_sequence,
-                recorder=self._recorder,
+                wake_phrases=wake_phrases,
+                recorder=self._recorder if self._recording_enabled() else None,
             )
-            call = await service.start_call(
-                media=media, offer_sdp=offer_sdp, wake_phrases=wake_phrases, host=entry
-            )
+            call = await service.start_call(media=media, offer_sdp=offer_sdp, host=entry)
             if self._closed:
                 # Shutdown began while the provider created the call.
                 entry.call = call
@@ -630,6 +706,13 @@ class LiveCallRegistry:
             self._active = entry
             entry.bind(call)
             return call
+
+    def _recording_enabled(self) -> bool:
+        try:
+            return bool(self._recording())
+        except Exception:
+            _LOGGER.warning("Live call recording check failed", exc_info=True)
+            return False
 
     def stop(self, call_id: str) -> bool:
         """Close the call gracefully in the background; ``False`` for unknown calls."""

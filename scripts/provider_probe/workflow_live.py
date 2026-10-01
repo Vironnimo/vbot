@@ -18,8 +18,9 @@ from types import SimpleNamespace
 from typing import Any
 
 from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
-from core.model_tasks._live_tools import LIVE_READ_ONLY_TOOLS
 from scripts.provider_probe.live_cases import LiveCase, ScriptedVbot, describe, live_cases, matches
+from server.live._arguments import run_live_call
+from server.live._brief import DELEGATION_INSTRUCTIONS, LIVE_READ_ONLY_TOOLS, live_tools
 
 JsonObject = dict[str, Any]
 
@@ -76,6 +77,13 @@ async def evaluate_live_case(
 
     borrowed = _Borrowed(adapter)
     records: list[JsonObject] = []
+    vbot = ScriptedVbot()
+
+    async def run_tool(name: Any, arguments: Any, *, rejection: JsonObject | None = None) -> Any:
+        return await run_live_call(
+            name, arguments, execute=vbot, rejection=rejection, record=records.append
+        )
+
     brain = LiveBrain(
         SimpleNamespace(get_adapter=lambda _ref: borrowed, models=models),
         BrainTarget(
@@ -84,7 +92,9 @@ async def evaluate_live_case(
             model_id=args.model,
             thinking_effort=args.thinking_effort,
         ),
-        ScriptedVbot(),
+        instructions=DELEGATION_INSTRUCTIONS,
+        tools=live_tools(),
+        run_tool=run_tool,
         conversation_id=f"live-probe-{case.id}-{repetition}",
         record=records.append,
         max_steps=MAX_TRIAL_STEPS,

@@ -1,28 +1,36 @@
-"""Live Tool calls as Models write them: names, argument spellings, and old Tools.
+"""Live Tool calls as Models write them: names and argument spellings.
 
 Voice models call Live Tools by other names (``status``, ``delegate``), send
 arguments as JSON text, and use other harnesses' field names (``prompt``,
 ``session_id``). ``prepare_live_call`` turns a call whose intent is clear into
 one canonical Live Tool call through the shared Tool contract machinery, or
 returns a failure result that says what was wrong and names the next valid call.
-The delegation loop and direct Tools mode both prepare every call here before
-the host runs it.
+Every Tool call of a call, delegated or direct, goes through
+:func:`run_live_call`: prepared here, run once, and recorded.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
-from collections.abc import Callable
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
-from core.model_tasks._live_programs import CODING_PROGRAM_ALIASES
-from core.model_tasks._live_tools import (
+from core.model_tasks.live import LiveToolRun, live_failure, live_result_text
+from core.tools import called_tool_name
+from core.tools._argument_repair import normalize_call_arguments
+from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
+from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from server.live._brief import (
     LIVE_KEYS,
+    LIVE_READ_ONLY_TOOLS,
     LIVE_TOOL_NAMES,
     LIVE_VIEWS,
+    TOOL_END_CALL,
     TOOL_OPEN,
     TOOL_OVERVIEW,
     TOOL_READ,
@@ -31,18 +39,16 @@ from core.model_tasks._live_tools import (
     TOOL_START_CODING_TERMINAL,
     TOOL_STOP,
     TOOL_TERMINAL,
-    live_failure,
     live_tools,
 )
-from core.tools import called_tool_name
-from core.tools._argument_repair import normalize_call_arguments
-from core.tools._call_vocabulary import SpellingAliases, is_placeholder, spelling
-from core.tools.contracts import ToolContract, ToolContractError, compile_tool_contract
+from server.live._programs import CODING_PROGRAM_ALIASES
 
 JsonObject = dict[str, Any]
+Executor = Callable[[str, JsonObject], Awaitable[JsonObject]]
+Recorder = Callable[[JsonObject], None]
 
-_OLD_APP_TOOL = "vbot_app"
-_OLD_TERMINAL_TOOL = "vbot_terminal"
+_LOGGER = logging.getLogger("vbot.server.live")
+
 _WRAPPER_PREFIX = re.compile(r"^(?:functions?|default_api|tools?)[.:]", re.IGNORECASE)
 
 # Other names for Live Tools, by spelling; the pair's arguments are implied
@@ -60,6 +66,7 @@ _NAME_ALIASES: dict[str, tuple[str, JsonObject]] = {
     **dict.fromkeys(("get", "showsession", "readsession", "readterminal"), (TOOL_READ, {})),
     **dict.fromkeys(("cancel", "abort", "interrupt"), (TOOL_STOP, {})),
     **dict.fromkeys(("navigate", "show", "goto"), (TOOL_OPEN, {})),
+    **dict.fromkeys(("hangup", "endvoicecall", "goodbye"), (TOOL_END_CALL, {})),
 }
 
 _TASK = ("prompt", "message", "instruction", "request", "text", "goal")
@@ -96,6 +103,7 @@ _FIELD_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "name": ("new_name",),
         "order": ("terminals", "terminal_ids", "refs"),
     },
+    TOOL_END_CALL: {},
 }
 
 _KEY_ALIASES = {
@@ -123,23 +131,7 @@ _EXAMPLES = {
     TOOL_STOP: '{"target": "s2"}',
     TOOL_OPEN: '{"target": "s2"} or {"view": "terminals"}',
     TOOL_TERMINAL: '{"action": "maximize", "target": "t1"}',
-}
-
-_OLD_APP_ACTIONS = {"context", "sessions", "read", "open", "send"}
-_OLD_TERMINAL_ACTIONS = {
-    "start",
-    "list",
-    "read",
-    "input",
-    "show",
-    "show_group",
-    "maximize",
-    "restore",
-    "reorder",
-    "close",
-    "create_group",
-    "rename_group",
-    "delete_group",
+    TOOL_END_CALL: "{}",
 }
 
 
@@ -150,6 +142,78 @@ class PreparedLiveCall:
     called: str
     name: str
     arguments: JsonObject
+
+
+async def run_live_call(
+    name: Any,
+    arguments: Any,
+    *,
+    execute: Executor,
+    rejection: JsonObject | None = None,
+    record: Recorder | None = None,
+    mode: str = "",
+    clock: Callable[[], float] = time.monotonic,
+) -> LiveToolRun:
+    """Prepare one Tool call as a Model made it, run it once, and record it.
+
+    *execute* runs a canonical call and reports operation failures in its
+    result. *rejection* is a failure the Provider Adapter reported for unusable
+    arguments; it becomes the result and nothing runs. *record* receives one
+    record labeled with *mode*, also when the call is stopped before it
+    returns (a timeout or the call's end); such a record has no result.
+    """
+    started = clock()
+    prepared: PreparedLiveCall | JsonObject = (
+        live_failure(str(rejection.get("code")), str(rejection.get("message")))
+        if isinstance(rejection, dict)
+        else prepare_live_call(name, arguments)
+    )
+    result: JsonObject | None = None
+    try:
+        if isinstance(prepared, PreparedLiveCall):
+            result = await execute(prepared.name, dict(prepared.arguments))
+        else:
+            result = prepared
+    finally:
+        _record_call(record, mode, name, arguments, prepared, result, clock() - started)
+    changed = (
+        prepared.name
+        if isinstance(prepared, PreparedLiveCall) and prepared.name not in LIVE_READ_ONLY_TOOLS
+        else ""
+    )
+    return LiveToolRun(result=result, changed=changed)
+
+
+def _record_call(
+    record: Recorder | None,
+    mode: str,
+    called: Any,
+    arguments: Any,
+    prepared: PreparedLiveCall | JsonObject,
+    result: JsonObject | None,
+    duration: float,
+) -> None:
+    """Record one Tool call: as called, as run, its result text, and its duration."""
+    if record is None:
+        return
+    run = prepared if isinstance(prepared, PreparedLiveCall) else None
+    try:
+        record(
+            {
+                "type": "tool",
+                "mode": mode,
+                "called": called,
+                "tool": run.name if run is not None else None,
+                "arguments": arguments,
+                "run_arguments": run.arguments if run is not None else None,
+                "ok": result is not None and result.get("ok") is True,
+                "result": live_result_text(result) if result is not None else None,
+                "stopped": result is None,
+                "duration_ms": max(0, round(duration * 1000)),
+            }
+        )
+    except Exception as exc:
+        _LOGGER.warning("Live call record failed (error_type=%s)", type(exc).__name__)
 
 
 def prepare_live_call(name: Any, arguments: Any) -> PreparedLiveCall | JsonObject:
@@ -165,24 +229,13 @@ def prepare_live_call(name: Any, arguments: Any) -> PreparedLiveCall | JsonObjec
             f"{tool or 'the Tool'} again with an object such as "
             f"{_EXAMPLES.get(tool or '', '{}')}.",
         )
-    if called in {_OLD_APP_TOOL, _OLD_TERMINAL_TOOL}:
-        converted = _old_call(called, parsed)
-        if converted is None:
-            return live_failure(
-                "unknown_tool",
-                f"{called} is no longer available. Call one of: {', '.join(LIVE_TOOL_NAMES)}.",
-            )
-        if isinstance(converted, dict):
-            return converted
-        tool, parsed = converted
-        implied: JsonObject = {}
-    else:
-        tool, implied = _tool_name(called)
-        if tool is None:
-            return live_failure(
-                "unknown_tool",
-                f'There is no Tool called "{called}". Call one of: {", ".join(LIVE_TOOL_NAMES)}.',
-            )
+    tool, implied = _tool_name(called)
+    if tool is None:
+        return live_failure(
+            "unknown_tool",
+            f'There is no Tool called "{called}". Call one of: {", ".join(LIVE_TOOL_NAMES)}.',
+        )
+
     try:
         prepared = {**implied, **_normalized(tool, parsed)}
         _contract(tool).validate_arguments(prepared)
@@ -302,10 +355,22 @@ def _key(value: Any) -> Any:
     return value
 
 
+_VIEW_ALIASES = {
+    "session": "chat",
+    "sessions": "chat",
+    "crons": "cron",
+    "cronjobs": "cron",
+    "stats": "statistics",
+    "usage": "statistics",
+}
+
+
 def _view(value: Any) -> Any:
     value = _single_text(value)
     if isinstance(value, str):
         key = spelling(value)
+        if key in _VIEW_ALIASES:
+            return _VIEW_ALIASES[key]
         for view in LIVE_VIEWS:
             if key in {spelling(view), spelling(view).removesuffix("s")}:
                 return view
@@ -320,91 +385,6 @@ _FIELD_NORMALIZERS: dict[str, Callable[[Any], Any]] = {
 }
 
 
-def _old_call(name: str, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject | None:
-    """Map a call of the former ``vbot_app`` / ``vbot_terminal`` Tools, when exact.
-
-    Returns a failure result for a call no Live Tool can do with the same effect.
-    """
-
-    action = arguments.get("action")
-    if name == _OLD_APP_TOOL and action in _OLD_APP_ACTIONS:
-        return _old_app_call(str(action), arguments)
-    if name == _OLD_TERMINAL_TOOL and action in _OLD_TERMINAL_ACTIONS:
-        return _old_terminal_call(str(action), arguments)
-    return None
-
-
-def _old_app_call(action: str, arguments: JsonObject) -> tuple[str, JsonObject]:
-    session = arguments.get("session_id") or arguments.get("agent_id")
-    if action == "context":
-        return TOOL_OVERVIEW, {}
-    if action == "sessions":
-        return TOOL_OVERVIEW, _present(agent=arguments.get("agent_id"))
-    if action == "read":
-        return TOOL_READ, _present(target=session)
-    if action == "open":
-        if arguments.get("session_id"):
-            return TOOL_OPEN, _present(target=arguments.get("session_id"))
-        return TOOL_OPEN, _present(view=arguments.get("view"))
-    return TOOL_SEND_MESSAGE, _present(target=session, text=arguments.get("text"))
-
-
-def _old_terminal_call(action: str, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject:
-    terminal = arguments.get("terminal_id")
-    group = arguments.get("group_id")
-    if action == "start":
-        return TOOL_START_CODING_TERMINAL, _present(
-            program=arguments.get("program"),
-            count=arguments.get("count"),
-            folder=arguments.get("workdir"),
-            name=arguments.get("name"),
-        )
-    if action == "list":
-        return TOOL_OVERVIEW, {}
-    if action == "read":
-        return TOOL_READ, _present(target=terminal)
-    if action == "input":
-        return _old_input_call(terminal, arguments)
-    if action in {"show", "show_group"}:
-        return TOOL_OPEN, _present(target=terminal or group)
-    if action in {"maximize", "close"}:
-        return TOOL_TERMINAL, _present(action=action, target=terminal)
-    if action == "restore":
-        return TOOL_TERMINAL, {"action": "restore"}
-    if action == "reorder":
-        return TOOL_TERMINAL, _present(action="reorder", target=group, order=arguments.get("order"))
-    return TOOL_TERMINAL, _present(action=action, target=group, name=arguments.get("name"))
-
-
-def _old_input_call(terminal: Any, arguments: JsonObject) -> tuple[str, JsonObject] | JsonObject:
-    """Map ``input``: one key, or text followed by Enter (``submit`` defaulted to true)."""
-
-    target = json.dumps(terminal if isinstance(terminal, str) and terminal else "<Terminal ref>")
-    if "key" in arguments and ("text" in arguments or "submit" in arguments):
-        return live_failure(
-            "invalid_arguments",
-            "vbot_terminal is no longer available, and one call cannot both press a key and send "
-            f'text. Call terminal with {{"action": "key", "target": {target}, "key": "<key>"}} '
-            f'for the key, or send_message with {{"target": {target}, "text": "<the text>"}} for '
-            "the text.",
-        )
-    if "key" in arguments:
-        return TOOL_TERMINAL, _present(action="key", target=terminal, key=arguments.get("key"))
-    if arguments.get("submit", True) is not True:
-        return live_failure(
-            "invalid_arguments",
-            "vbot_terminal is no longer available, and no Tool types text without pressing "
-            "Enter, so nothing was typed. send_message types the text and presses Enter: call it "
-            f'with {{"target": {target}, "text": "<the text>"}} only if the text should be sent; '
-            "otherwise tell the user it cannot be typed without sending it.",
-        )
-    return TOOL_SEND_MESSAGE, _present(target=terminal, text=arguments.get("text"))
-
-
-def _present(**fields: Any) -> JsonObject:
-    return {key: value for key, value in fields.items() if value is not None}
-
-
 @cache
 def _contract(tool: str) -> ToolContract:
     definition = next(item for item in live_tools() if item["name"] == tool)
@@ -413,4 +393,4 @@ def _contract(tool: str) -> ToolContract:
     )
 
 
-__all__ = ["PreparedLiveCall", "prepare_live_call"]
+__all__ = ["PreparedLiveCall", "prepare_live_call", "run_live_call"]

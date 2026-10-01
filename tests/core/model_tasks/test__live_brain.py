@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from core.model_tasks._live_brain import BrainTarget, DelegationInput, LiveBrain
-from core.model_tasks._live_tools import DELEGATION_INSTRUCTIONS, LIVE_TOOL_NAMES
+from core.model_tasks.live import LiveToolRun
 from core.providers.accounts import ConnectionRef
 from core.providers.errors import ProviderError
 from core.providers.github_copilot_responses import normalize_responses_response
@@ -23,6 +23,13 @@ TARGET = BrainTarget(
     model_id="gpt-5.6-terra",
     thinking_effort="low",
 )
+INSTRUCTIONS = "You operate the app."
+TOOLS = (
+    {"name": "overview", "description": "Look.", "parameters": {"type": "object"}},
+    {"name": "send_message", "description": "Send.", "parameters": {"type": "object"}},
+)
+# Tools the fake host reports as possibly changing something.
+CHANGING = {"send_message", "start_coding_terminal"}
 
 
 class FakeAdapter:
@@ -59,7 +66,7 @@ class Harness:
     ) -> None:
         self.adapter = FakeAdapter(responses)
         self.connections: list[ConnectionRef] = []
-        self.executed: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[Any, Any, Any]] = []
         self.sleeps: list[float] = []
         self.tool_results: list[dict[str, Any]] = []
         self.records: list[dict[str, Any]] = []
@@ -68,7 +75,9 @@ class Harness:
         self.brain = LiveBrain(
             runtime,
             target,
-            self._execute,
+            instructions=INSTRUCTIONS,
+            tools=TOOLS,
+            run_tool=self._run_tool,
             conversation_id="live:rtc_1",
             max_steps=max_steps,
             sleep=self._sleep,
@@ -81,9 +90,12 @@ class Harness:
         self.connections.append(connection)
         return self.adapter
 
-    async def _execute(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        self.executed.append((name, arguments))
-        return self.tool_results.pop(0) if self.tool_results else {"ok": True}
+    async def _run_tool(
+        self, name: Any, arguments: Any, *, rejection: dict[str, Any] | None = None
+    ) -> LiveToolRun:
+        self.calls.append((name, arguments, rejection))
+        result = self.tool_results.pop(0) if self.tool_results else {"ok": True}
+        return LiveToolRun(result=result, changed=name if name in CHANGING else "")
 
     async def _sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
@@ -93,7 +105,7 @@ class Harness:
         return self.time
 
 
-def _tool_turn(*calls: tuple[str, dict[str, Any]], meta: Any = None) -> dict[str, Any]:
+def _tool_turn(*calls: tuple[str, Any], meta: Any = None) -> dict[str, Any]:
     return {
         "content": None,
         "tool_calls": [
@@ -121,7 +133,7 @@ async def test_backend_usage_counts_each_retry_and_model_step(recorder: UsageRec
         [
             ProviderError("test temporary failure", retryable=True),
             {
-                **_tool_turn(("vbot_app", {"action": "context"})),
+                **_tool_turn(("overview", {})),
                 "usage": {"input_tokens": 4, "output_tokens": 2},
             },
             {**_answer("Done"), "usage": {"input_tokens": 8, "output_tokens": 3}},
@@ -138,10 +150,10 @@ async def test_backend_usage_counts_each_retry_and_model_step(recorder: UsageRec
 
 
 @pytest.mark.asyncio
-async def test_tool_loop_executes_calls_and_replays_reasoning_to_the_same_connection():
+async def test_tool_loop_runs_host_tools_and_replays_reasoning_to_the_same_connection():
     harness = Harness(
         [
-            _tool_turn(("start_coding_terminal", {"program": "codex"}), meta={"r": 1}),
+            _tool_turn(("start_coding_terminal", '{"program": "codex"}'), meta={"r": 1}),
             _answer("One Codex terminal is running."),
         ]
     )
@@ -152,13 +164,14 @@ async def test_tool_loop_executes_calls_and_replays_reasoning_to_the_same_connec
 
     assert answer == "One Codex terminal is running."
     assert harness.connections == [ConnectionRef("openai", "subscription")]
-    assert harness.executed == [("start_coding_terminal", {"program": "codex"})]
+    # The host gets the call as the Model made it.
+    assert harness.calls == [("start_coding_terminal", '{"program": "codex"}', None)]
     first_messages, model_id, kwargs = harness.adapter.requests[0]
     assert model_id == "gpt-5.6-terra"
-    assert first_messages[0] == {"role": "system", "content": DELEGATION_INSTRUCTIONS}
+    assert first_messages[0] == {"role": "system", "content": INSTRUCTIONS}
     assert "Start a Codex terminal please" in first_messages[-1]["content"]
     assert first_messages[-1]["content"].endswith("Delegated request: Start a Codex terminal")
-    assert [tool["name"] for tool in kwargs["tools"]] == list(LIVE_TOOL_NAMES)
+    assert kwargs["tools"] == [dict(tool) for tool in TOOLS]
     assert kwargs["thinking_effort"] == "low"
     assert kwargs["conversation_id"] == "live-voice:live:rtc_1"
     second_messages = harness.adapter.requests[1][0]
@@ -169,7 +182,22 @@ async def test_tool_loop_executes_calls_and_replays_reasoning_to_the_same_connec
         # The Provider Adapter renders the envelope to text at its wire boundary.
         "content": json.dumps(result),
     }
+
+
+@pytest.mark.asyncio
+async def test_one_adapter_serves_every_delegation_until_the_call_ends():
+    harness = Harness([_answer("First."), _answer("Second.")])
+
+    await harness.brain.answer(DELEGATION)
+    await harness.brain.answer(DELEGATION)
+    assert len(harness.connections) == 1
+    assert not harness.adapter.closed
+
+    await harness.brain.aclose()
     assert harness.adapter.closed
+    # A delegation after the end opens no further Adapter.
+    assert (await harness.brain.answer(DELEGATION)).startswith("The request could not be completed")
+    assert len(harness.connections) == 1
 
 
 @pytest.mark.asyncio
@@ -229,7 +257,7 @@ async def test_retryable_model_failures_are_retried_but_tools_never_replayed():
 
     assert await harness.brain.answer(DELEGATION) == "Sent."
     assert harness.sleeps == [0.5]
-    assert len(harness.executed) == 1
+    assert len(harness.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -248,7 +276,6 @@ async def test_failure_note_lists_only_actions_that_may_have_changed_something()
         "The request could not be completed: the backend model request failed. Actions already "
         "performed, possibly with uncertain results: send_message. Nothing was retried."
     )
-    assert harness.adapter.closed
 
 
 @pytest.mark.asyncio
@@ -274,32 +301,7 @@ async def test_step_limit_stops_the_loop():
     answer = await harness.brain.answer(DELEGATION)
 
     assert answer.startswith("The request could not be completed: the request needed more than 2")
-    assert len(harness.executed) == 2
-
-
-@pytest.mark.asyncio
-async def test_unknown_tools_and_malformed_arguments_are_refused_without_execution():
-    harness = Harness(
-        [
-            {
-                "content": None,
-                "tool_calls": [
-                    {"id": "a", "name": "shell", "arguments": {"action": "run"}},
-                    {"id": "b", "name": "overview", "arguments": "{bad"},
-                ],
-            },
-            _answer("I could not do that."),
-        ]
-    )
-
-    await harness.brain.answer(DELEGATION)
-
-    assert harness.executed == []
-    tool_messages = [m for m in harness.adapter.requests[1][0] if m["role"] == "tool"]
-    assert [json.loads(m["content"])["error"]["code"] for m in tool_messages] == [
-        "unknown_tool",
-        "invalid_arguments",
-    ]
+    assert len(harness.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -310,7 +312,7 @@ async def test_unknown_tools_and_malformed_arguments_are_refused_without_executi
         ("overview", '["explicit-agent"]'),
     ],
 )
-async def test_adapter_rejections_survive_live_argument_repair(
+async def test_adapter_rejections_reach_the_host_with_the_call(
     name: str, arguments: str, monkeypatch: pytest.MonkeyPatch
 ):
     harness = Harness(
@@ -343,72 +345,27 @@ async def test_adapter_rejections_survive_live_argument_repair(
 
     assert await harness.brain.answer(DELEGATION) == "Done"
 
-    assert harness.executed == [("overview", {})]
-    tool_messages = [m for m in harness.adapter.requests[1][0] if m["role"] == "tool"]
-    rejected = json.loads(tool_messages[0]["content"])
-    assert tool_messages[0]["tool_call_id"] == "rejected-call"
-    assert rejected["error"]["code"] == "malformed_tool_arguments"
-    assert json.loads(tool_messages[1]["content"])["ok"] is True
-    rejected_record = next(record for record in harness.records if record["type"] == "tool")
-    assert rejected_record["tool"] is None
-    assert rejected_record["run_arguments"] is None
-    assert rejected_record["ok"] is False
+    (rejected_name, _, rejection), (valid_name, _, no_rejection) = harness.calls
+    assert (rejected_name, valid_name) == (name, "overview")
+    assert rejection is not None and rejection["code"] == "malformed_tool_arguments"
+    assert no_rejection is None
 
 
 @pytest.mark.asyncio
-async def test_calls_in_other_spellings_run_as_the_live_tool_they_mean():
-    harness = Harness(
-        [
-            _tool_turn(
-                ("functions.send", '{"session": "s2", "message": "yes"}'),
-                ("vbot_terminal", {"action": "start", "program": "Claude Code"}),
-            ),
-            _answer("Done."),
-        ]
-    )
+async def test_records_the_delegation_with_its_step_timings():
+    harness = Harness([_tool_turn(("overview", {}), ("send_message", {})), _answer("Done.")])
 
     await harness.brain.answer(DELEGATION)
 
-    assert harness.executed == [
-        ("send_message", {"target": "s2", "text": "yes"}),
-        ("start_coding_terminal", {"program": "claude"}),
-    ]
-
-
-@pytest.mark.asyncio
-async def test_records_every_tool_call_and_the_delegation():
-    harness = Harness(
-        [
-            _tool_turn(("status", {}), ("send_message", {"target": "s1"})),
-            _answer("Nothing runs."),
-        ]
-    )
-    harness.tool_results.append(
-        {"ok": True, "error": None, "data": {"content": "Agents: Coder."}, "artifacts": []}
-    )
-
-    await harness.brain.answer(DELEGATION)
-
-    tool, refused, delegation = harness.records
-    assert tool == {
-        "type": "tool",
-        "mode": "delegated",
-        "called": "status",
-        "tool": "overview",
-        "arguments": {},
-        "run_arguments": {},
-        "ok": True,
-        "result": "Agents: Coder.",
-        "duration_ms": 250,
-    }
-    assert (refused["called"], refused["tool"], refused["ok"]) == ("send_message", None, False)
-    assert refused["result"].startswith("Error (invalid_arguments): ")
+    (delegation,) = harness.records
     assert delegation == {
         "type": "delegation",
         "request": "Start a Codex terminal",
-        "answer": "Nothing runs.",
+        "answer": "Done.",
         "steps": 2,
         "tool_calls": 2,
+        "model_ms": [250, 250],
+        "tool_ms": [250, 250],
         "failure": None,
         "duration_ms": delegation["duration_ms"],
     }

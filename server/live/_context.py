@@ -2,8 +2,9 @@
 
 Data operations dispatch the registered RPC handlers in-process, so validation,
 Queue admission and ``/ws`` event publication match every other accessor.
-Display operations (app context, navigation, Terminal layout) become UI
-requests to the call's owning accessor.
+Display operations (navigation, Terminal layout) become UI requests to the
+call's owning accessor; what the app shows arrives without asking, pushed by
+that accessor.
 """
 
 from __future__ import annotations
@@ -18,8 +19,8 @@ from typing import Any
 JsonObject = dict[str, Any]
 RpcInvoker = Callable[[str, JsonObject], Awaitable[JsonObject]]
 UiRequester = Callable[[str, JsonObject], Awaitable[JsonObject]]
+AppContext = Callable[[], JsonObject | None]
 
-UI_ACTION_CONTEXT = "context"
 UI_ACTION_OPEN = "open"
 UI_ACTION_TERMINAL_VIEW = "terminal_view"
 
@@ -96,16 +97,26 @@ class _Hold:
 class LiveContext:
     """RPC and UI access for one Live call's Tool executions.
 
-    ``is_active`` turns false once the call stops or is replaced; multi-step
-    operations check it before each further effect. Executions run one at a
-    time (:meth:`exclusive`); a long wait may let the others run first
+    ``app_context`` returns what the app window last reported it shows, or
+    ``None``. ``is_active`` turns false once the call stops or is replaced;
+    multi-step operations check it before each further effect. Executions run
+    one at a time (:meth:`exclusive`); a long wait may let the others run first
     (:meth:`let_others_run`).
     """
 
-    def __init__(self, *, rpc: RpcInvoker, ui: UiRequester, is_active: Callable[[], bool]) -> None:
+    def __init__(
+        self,
+        *,
+        rpc: RpcInvoker,
+        ui: UiRequester,
+        app_context: AppContext,
+        is_active: Callable[[], bool],
+    ) -> None:
         self._rpc = rpc
         self._ui = ui
+        self.app_context = app_context
         self._is_active = is_active
+
         self._lock = asyncio.Lock()
         self._hold: ContextVar[_Hold | None] = ContextVar("live_tool_hold", default=None)
 

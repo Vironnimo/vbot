@@ -211,12 +211,13 @@ describe('Live voice generation guards', () => {
     previous.handlers.onEvent({
       type: 'ui_request',
       request_id: 'old',
-      action: 'context',
+      action: 'open',
+      args: { view: 'chat' },
     });
     previous.handlers.onEvent({ type: 'closed', reason: 'replaced' });
     previous.handlers.onClose();
     await flush();
-    expect(f.uiActions.context).not.toHaveBeenCalled();
+    expect(f.uiActions.open).not.toHaveBeenCalled();
     expect(f.state).toMatchObject({ phase: 'connecting', callId: 'call-2' });
     expect(f.onNotice).not.toHaveBeenCalled();
   });

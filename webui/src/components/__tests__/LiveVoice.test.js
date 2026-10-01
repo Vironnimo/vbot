@@ -79,6 +79,7 @@ function simulateController() {
           state.held = holds.size > 0;
         }),
         held: (reason) => holds.has(reason),
+        reportContext: vi.fn(),
         active: () => state.phase === 'live',
         destroy: vi.fn(),
         handleFrame: vi.fn(),
@@ -173,15 +174,17 @@ describe('sidebar Live control', () => {
     expect(caption().dataset.role).toBe('status');
   });
 
-  it('passes the App UI actions to the controller', () => {
+  it('passes the App UI actions and what the app shows to the controller', () => {
     simulateController();
+    const shown = { view: 'chat', selected_agent_id: 'main' };
     const uiActions = {
-      context: vi.fn(),
+      context: vi.fn(() => shown),
       open: vi.fn(),
       terminalView: vi.fn(),
     };
     render({ uiActions });
     expect(fake.uiActions).toBe(uiActions);
+    expect(fake.reportContext).toHaveBeenCalledWith(shown);
   });
 
   it('turns each controller notice into a shared toast with its message and severity', () => {

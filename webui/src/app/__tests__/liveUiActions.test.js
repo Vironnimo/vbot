@@ -10,7 +10,6 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
   const selection = {
     selectedAgentId: 'main',
     selectedProjectId: 'vbot',
-    selectedProjectAgentId: '',
     agents: [
       { id: 'main', name: 'Main' },
       { id: 'coder', name: 'Coder' },
@@ -28,9 +27,7 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
     }),
   };
   const navigateToSession = vi.fn(() => true);
-  const loadProject = vi.fn(async () => ({
-    scan: { team: [{ agent_id: 'reviewer', display_name: 'Reviewer' }] },
-  }));
+  let shown = { agentId: 'main', sessionId: 's1', subAgent: false };
   const actions = createLiveUiActions({
     selection,
     navigator,
@@ -42,8 +39,7 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
       state.transitions.push(action);
       return false;
     },
-    chatSelection: () => ({ agent_id: 'main', session_id: 's1' }),
-    loadProject,
+    chatSelection: () => shown,
     terminalsView: () => state.terminalsView,
     afterRender: async () => {},
   });
@@ -53,29 +49,32 @@ function fixture({ view = 'chat', pendingTransition = false } = {}) {
     selection,
     navigator,
     navigateToSession,
-    loadProject,
     actions,
     guard,
+    showSession: (session) => {
+      shown = session;
+    },
   };
 }
 
 describe('Live voice UI actions', () => {
-  it('reports the visible app with the selected Project team', async () => {
+  it('reports what the app shows', () => {
     const f = fixture();
-    expect(await f.actions.context()).toEqual({
+    expect(f.actions.context()).toEqual({
       view: 'chat',
       selected_agent_id: 'main',
       selected_project_id: 'vbot',
-      selected_project_agent_id: '',
-      chat_selection: { agent_id: 'main', session_id: 's1' },
-      agents: [
-        { agent_id: 'main', name: 'Main' },
-        { agent_id: 'coder', name: 'Coder' },
-      ],
-      projects: [{ project_id: 'vbot', name: 'vBot', cwd: 'C:\\work' }],
-      selected_project_team: [{ agent_id: 'reviewer@vbot', name: 'Reviewer' }],
+      chat_session: { agent_id: 'main', session_id: 's1' },
     });
-    expect(f.loadProject).toHaveBeenCalledWith('vbot');
+    f.selection.selectedProjectId = '';
+    f.showSession(null);
+    f.state.view = 'terminals';
+    expect(f.actions.context()).toEqual({
+      view: 'terminals',
+      selected_agent_id: 'main',
+      selected_project_id: null,
+      chat_session: null,
+    });
   });
 
   it('opens a Chat Session or a view', () => {
