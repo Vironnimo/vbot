@@ -304,9 +304,7 @@ def _restore_payload(outcome: RestoreOutcome) -> JsonObject:
         "restored": restored,
         "session_count": len(outcome.addresses),
         "grant_agent_ids": list(outcome.grant_agent_ids),
-        "warnings": [
-            {"code": warning.code, "message": warning.message} for warning in outcome.warnings
-        ],
+        "warnings": [restore_problem_payload(warning) for warning in outcome.warnings],
     }
 
 

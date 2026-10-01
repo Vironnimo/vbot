@@ -206,6 +206,25 @@ async def test_restore_refuses_a_taken_id_and_restores_under_a_new_one(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_restore_warnings_carry_their_facts(tmp_path: Path) -> None:
+    state, entries = await _archived(tmp_path)
+    await state.runtime.archive.archive_agent("manager")
+
+    restored = await rpc_result(state, "archive.restore", entry_id=entries["agent"])
+
+    assert (restored["grant_agent_ids"], restored["warnings"]) == (
+        [],
+        [
+            {
+                "code": "grant_target_missing",
+                "message": "Agent manager no longer exists; its delegation grant is not restored",
+                "agent_id": "manager",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
 async def test_restore_of_a_session_entry_reports_its_address(tmp_path: Path) -> None:
     state, entries = await _archived(tmp_path)
 
