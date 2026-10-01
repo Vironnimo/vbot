@@ -405,6 +405,23 @@ class ProviderAdapter(ABC):
         return estimated
 
     # ------------------------------------------------------------------
+    # Task endpoints
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        """Return the base of this Provider's OpenAI-compatible HTTP API.
+
+        Task wire clients (embeddings, images, speech, video, music) append
+        OpenAI-compatible endpoint paths such as ``/embeddings`` to this base.
+        Most Providers configure that base directly and return it unchanged;
+        Adapters whose configured base addresses a native API map it to their
+        OpenAI-compatible prefix.
+        """
+
+        return base_url
+
+    # ------------------------------------------------------------------
     # Catalog normalization policy
     # ------------------------------------------------------------------
 

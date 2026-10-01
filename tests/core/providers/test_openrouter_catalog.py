@@ -161,6 +161,33 @@ def test_output_modalities_derive_task_types(
 
 
 @pytest.mark.parametrize(
+    ("output_modalities", "prompt", "expected_input"),
+    [
+        pytest.param(["embeddings"], "0.00000002", 0.02, id="per-token-to-per-million"),
+        pytest.param(["embeddings"], "0", 0.0, id="free-is-a-real-zero"),
+        pytest.param(["embeddings"], "-1", None, id="variable-price-router"),
+        pytest.param(["embeddings"], "n/a", None, id="malformed"),
+        # Chat Models keep the models.dev price the refresh projects.
+        pytest.param(["text"], "0.000003", None, id="chat-model"),
+    ],
+)
+def test_embedding_models_carry_their_catalog_input_price(
+    output_modalities: list[str], prompt: str, expected_input: float | None
+) -> None:
+    raw = raw_openrouter_model(output_modalities=output_modalities)
+    raw["pricing"] = {"prompt": prompt, "completion": "0"}
+
+    model = OpenRouterAdapter.normalize_catalog_entry(raw, {})
+
+    if expected_input is None:
+        assert model.pricing is None
+    else:
+        assert model.pricing is not None
+        assert model.pricing.source == "openrouter:anthropic/claude-sonnet-4"
+        assert (model.pricing.rates.input, model.pricing.rates.output) == (expected_input, None)
+
+
+@pytest.mark.parametrize(
     ("supported_voices", "expected"),
     [
         (["af_alloy", "af_aoede", "af_sky"], ("af_alloy", "af_aoede", "af_sky")),

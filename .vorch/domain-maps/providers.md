@@ -67,6 +67,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Compatible Chat Completions transport and overridable policy: `openai_compatible.py`; internal `_chat_completions_wire.py`, `_chat_completions_stream.py`, `_chat_completions_catalog.py` and `_chat_completions_constants.py` hold complete serialization, decoder and catalog functions. Compatible Messages transport and policy: `anthropic_compatible.py`; `_messages_stream.py` holds the complete stateful decoder, `_messages_wire.py` owns message/cache serialization and response projection, and `_messages_constants.py` holds the wire constants. Concrete Adapters still extend the same base classes.
 - Shared reasoning decision policy: `core/providers/reasoning.py`
 - Shared non-strict Tool-schema rendering: `core/providers/tool_schema.py`
+- Adapter selector map (`ADAPTER_TYPES`, re-exported by `runtime.py`) and the OpenAI-compatible task base URL lookup: `core/providers/adapter_types.py`
 - Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates
 - Model discovery integration: `core/models/discovery.py`; Model data semantics remain in `models.md`
 

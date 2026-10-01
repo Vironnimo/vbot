@@ -68,6 +68,10 @@ MODELS_DEV_CATALOG_URL = "https://models.dev/catalog.json"
 # wanted field is a projection edit, not a re-fetch.
 RAW_CATALOG_FILE_NAME = "models.dev.catalog.raw.json"
 
+# Source prefix of a price projected from models.dev; any other source names a
+# Provider's own catalog price, which refresh never overwrites.
+_MODELS_DEV_PRICE_SOURCE_PREFIX = "models.dev:"
+
 # Discovery HTTP timeout mirrors the catalog GET timeout in ``discovery.py``;
 # catalog refresh shares the chat path's transient-failure handling.
 _CATALOG_HTTP_TIMEOUT_SECONDS = 60.0
@@ -385,12 +389,15 @@ def _refresh_provider_prices(
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         for wire_id, record in payload.get("models", {}).items():
+            if _provider_catalog_price(record.get("pricing")):
+                # The Provider's own catalog price wins; its discovery refreshes it.
+                continue
             pricing = provider_pricing(catalog, models_dev_id=catalog_id, wire_id=wire_id)
             if pricing is not None:
                 record["pricing"] = pricing
             elif isinstance(record.get("pricing"), dict) and str(
                 record["pricing"].get("source", "")
-            ).startswith("models.dev:"):
+            ).startswith(_MODELS_DEV_PRICE_SOURCE_PREFIX):
                 record.pop("pricing")
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -716,9 +723,20 @@ def provider_pricing(
     entry = catalog.provider_model(models_dev_id, wire_id)
     pricing = TokenPricing.from_cost(
         entry.get("cost") if entry is not None else None,
-        source=f"models.dev:{models_dev_id}/{wire_id}",
+        source=f"{_MODELS_DEV_PRICE_SOURCE_PREFIX}{models_dev_id}/{wire_id}",
     )
     return pricing.to_dict() if pricing is not None else None
+
+
+def _provider_catalog_price(pricing: Any) -> bool:
+    """Return whether a stored price came from the Provider's own catalog."""
+
+    source = pricing.get("source") if isinstance(pricing, Mapping) else None
+    return (
+        isinstance(source, str)
+        and bool(source)
+        and not source.startswith(_MODELS_DEV_PRICE_SOURCE_PREFIX)
+    )
 
 
 # ---------------------------------------------------------------------------

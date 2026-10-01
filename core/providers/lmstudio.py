@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
-from core.models.models import REASONING_CONTROL_ON_OFF, Capabilities, Model, ReasoningCapabilities
+from core.models.models import (
+    REASONING_CONTROL_ON_OFF,
+    Capabilities,
+    Model,
+    ReasoningCapabilities,
+    text_embedding_capabilities,
+)
 from core.providers._http_shared import (
     classify_http_status,
     decode_response_json,
@@ -29,6 +35,9 @@ if TYPE_CHECKING:
 NATIVE_MODELS_ENDPOINT = "/api/v1/models"
 NATIVE_MODEL_LOAD_ENDPOINT = "/api/v1/models/load"
 LMSTUDIO_METADATA_KEY = "lmstudio"
+# Native ``GET /api/v1/models`` entry types: chat Models and embedding Models.
+_LLM_TYPE = "llm"
+_EMBEDDING_TYPE = "embedding"
 
 
 class LMStudioAdapter(OpenAICompatibleAdapter):
@@ -61,20 +70,44 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         )
 
     @classmethod
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        """LM Studio serves its OpenAI-compatible API under ``/v1``."""
+
+        return _chat_base_url(base_url)
+
+    @classmethod
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one native ``GET /api/v1/models`` LLM entry."""
+        """Normalize one native ``GET /api/v1/models`` LLM or embedding entry."""
 
         del defaults
-        if raw.get("type") != "llm":
-            raise CatalogEntrySkipped("LM Studio entry is not a chat model")
+        model_type = raw.get("type")
+        if model_type not in {_LLM_TYPE, _EMBEDDING_TYPE}:
+            raise CatalogEntrySkipped("LM Studio entry is neither a chat nor an embedding model")
 
         model_id = raw.get("key")
         if not isinstance(model_id, str) or not model_id:
             raise ProviderError("LM Studio model entry has no key", retryable=False)
+
+        display_name = raw.get("display_name")
+        name = display_name if isinstance(display_name, str) and display_name else model_id
+        architecture = raw.get("architecture")
+        family = architecture if isinstance(architecture, str) else ""
+        context_window = _positive_int(raw.get("max_context_length"))
+        metadata = {LMSTUDIO_METADATA_KEY: {"local": True}}
+        if model_type == _EMBEDDING_TYPE:
+            return Model(
+                model_id=model_id,
+                name=name,
+                capabilities=text_embedding_capabilities(),
+                context_window=context_window,
+                max_output_tokens=None,
+                family=family,
+                metadata=metadata,
+            )
 
         raw_capabilities = raw.get("capabilities")
         capabilities = raw_capabilities if isinstance(raw_capabilities, Mapping) else {}
@@ -89,11 +122,9 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         supports_reasoning = "on" in reasoning_options
         supports_vision = capabilities.get("vision") is True
 
-        display_name = raw.get("display_name")
-        architecture = raw.get("architecture")
         return Model(
             model_id=model_id,
-            name=(display_name if isinstance(display_name, str) and display_name else model_id),
+            name=name,
             capabilities=Capabilities(
                 vision=supports_vision,
                 tools=capabilities.get("trained_for_tool_use") is True,
@@ -105,10 +136,10 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
                 input_modalities=("text", "image") if supports_vision else ("text",),
                 output_modalities=("text",),
             ),
-            context_window=_positive_int(raw.get("max_context_length")),
+            context_window=context_window,
             max_output_tokens=None,
-            family=architecture if isinstance(architecture, str) else "",
-            metadata={LMSTUDIO_METADATA_KEY: {"local": True}},
+            family=family,
+            metadata=metadata,
         )
 
     async def send(

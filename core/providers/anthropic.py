@@ -20,7 +20,7 @@ from core.providers.anthropic_compatible import (
     ANTHROPIC_VERSION,
     AnthropicCompatibleAdapter,
 )
-from core.providers.providers import AuthConfig, ProviderConfig
+from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import TokenGetter
 
 if TYPE_CHECKING:
@@ -69,16 +69,19 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
         _provider_config: ProviderConfig,
         credential_value: str,
         headers: Mapping[str, str],
+        *,
+        connection: ConnectionConfig | None = None,
     ) -> dict[str, str]:
         """Add the native version header required by Anthropic discovery."""
 
-        del credential_value
+        del credential_value, connection
         return {**headers, "anthropic-version": ANTHROPIC_VERSION}
 
     @classmethod
-    def discovery_params(cls) -> dict[str, str]:
+    def discovery_params(cls, *, connection: ConnectionConfig | None = None) -> dict[str, str]:
         """Request the full native Anthropic model lineup."""
 
+        del connection
         return {"limit": MODELS_DISCOVERY_PAGE_SIZE}
 
     @classmethod

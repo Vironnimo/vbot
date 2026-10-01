@@ -398,6 +398,58 @@ async def test_xai_subscription_uses_plain_oauth_discovery(tmp_path: Path) -> No
     assert "client_version" not in request.url.params
 
 
+@respx.mock
+@pytest.mark.asyncio
+async def test_openai_platform_discovers_only_its_embedding_models(tmp_path: Path) -> None:
+    """The Platform listing carries bare ids; chat, speech and image Models stay
+    curated, so only ``text-embedding-*`` ids become text embedding Models."""
+
+    resources_dir = tmp_path / "resources"
+    models_dir = resources_dir / "models"
+    models_dir.mkdir(parents=True)
+    (models_dir / "openai.json").write_text(
+        json.dumps(
+            {
+                "provider_id": "openai",
+                "models": {"gpt-5-codex": model_data() | {"connections": ["subscription"]}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    platform = api_key_connection("OPENAI_API_KEY", models_endpoint="/models")
+    config = ProviderConfig(
+        id="openai",
+        name="OpenAI",
+        adapter="openai",
+        base_url="https://api.openai.com/v1",
+        connections=[platform],
+    )
+    live_ids = ["gpt-5.2", "whisper-1", "text-embedding-3-small", "text-embedding-ada-002"]
+    route = respx.get("https://api.openai.com/v1/models").mock(
+        return_value=httpx.Response(
+            200, json={"data": [{"id": item, "object": "model"} for item in live_ids]}
+        )
+    )
+
+    await refresh_models(config, API_KEY, resources_dir, credential_connection=platform)
+
+    written = read_models_file(resources_dir, "openai.json")["models"]
+    assert {model_id: data["connections"] for model_id, data in written.items()} == {
+        "gpt-5-codex": ["subscription"],
+        "text-embedding-3-small": ["api-key"],
+        "text-embedding-ada-002": ["api-key"],
+    }
+    registry = ModelRegistry.load(resources_dir, custom_providers={})
+    small = registry.get("openai", "text-embedding-3-small")
+    assert small.capabilities.task_types == ("text_embedding",)
+    assert small.capabilities.supported_parameters == ("dimensions",)
+    assert registry.get("openai", "text-embedding-ada-002").capabilities.supported_parameters == ()
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == f"Bearer {API_KEY}"
+    assert "chatgpt-account-id" not in request.headers
+    assert "client_version" not in request.url.params
+
+
 def _ollama_config(connection: ConnectionConfig, **changes: Any) -> ProviderConfig:
     return ProviderConfig(
         **{

@@ -180,11 +180,33 @@ def test_catalog_entry_reads_capability_flags(
     [
         pytest.param(_raw_model(completion_chat=False), id="non-chat"),
         pytest.param(_raw_model(archived=True), id="archived"),
+        pytest.param(
+            _raw_model(model_id="mistral-embed", completion_chat=False, archived=True),
+            id="archived-embedding",
+        ),
     ],
 )
 def test_catalog_skips_non_chat_and_archived_models(raw: dict[str, Any]) -> None:
     with pytest.raises(CatalogEntrySkipped):
         MistralAdapter.normalize_catalog_entry(raw, {"max_tokens": 8192})
+
+
+@pytest.mark.parametrize("model_id", ["mistral-embed", "codestral-embed-2505"])
+def test_non_chat_embed_ids_become_embedding_models(model_id: str) -> None:
+    # The live catalog flags nothing but ``completion_chat: false`` for these ids.
+    raw = _raw_model(
+        model_id=model_id,
+        completion_chat=False,
+        function_calling=False,
+        vision=False,
+        max_context_length=8192,
+    )
+
+    model = MistralAdapter.normalize_catalog_entry(raw, {"max_tokens": 8192})
+
+    assert (model.model_id, model.context_window) == (model_id, 8192)
+    assert model.capabilities.task_types == ("text_embedding",)
+    assert (model.capabilities.tools, model.capabilities.supported_parameters) == (False, ())
 
 
 # ---------------------------------------------------------------------------

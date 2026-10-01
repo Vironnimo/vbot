@@ -14,12 +14,12 @@ from core.providers._chat_completions_wire import (
     _first_choice_message,
 )
 from core.providers._ollama_constants import (
-    _OLLAMA_CLOUD_OPENAI_PATH,
     _OLLAMA_CLOUD_REASONING_FIELD_DEFAULT,
     _OLLAMA_CLOUD_REASONING_FIELDS,
     _OLLAMA_CLOUD_REASONING_PARAMETERS,
     OLLAMA_CLOUD_REASONING_EFFORTS,
 )
+from core.providers._ollama_wire import _ollama_openai_base_url
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
@@ -50,6 +50,12 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     owns only the Cloud chat wire and its verified response quirks.
     """
 
+    @classmethod
+    def openai_compatible_base_url(cls, base_url: str) -> str:
+        """The configured Cloud base is native; its OpenAI-compatible API is ``/v1``."""
+
+        return _ollama_openai_base_url(base_url)
+
     def request_body_limit(self, model_id: str) -> int | None:
         """Direct Cloud Chat rejects bodies above 16 MiB (verified 2026-09-11)."""
         del model_id
@@ -67,7 +73,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         connection_mode: str | None = None,
     ) -> None:
         native_base_url = base_url or config.base_url
-        self._cloud_base_url = _ollama_cloud_openai_base_url(native_base_url)
+        self._cloud_base_url = _ollama_openai_base_url(native_base_url)
         # Run-local carrier observation: the first real response of an
         # unprofiled Model decides which reasoning field replay uses.
         self._scanned_reasoning_field: str | None = None
@@ -288,17 +294,6 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             if isinstance(raw_delta, dict):
                 self._scan_reasoning_field(raw_delta)
         return deltas
-
-
-def _ollama_cloud_openai_base_url(native_base_url: str) -> str:
-    """Return the direct Cloud OpenAI base without disturbing native endpoints."""
-
-    normalized = native_base_url.rstrip("/")
-    return (
-        normalized
-        if normalized.endswith(_OLLAMA_CLOUD_OPENAI_PATH)
-        else (f"{normalized}{_OLLAMA_CLOUD_OPENAI_PATH}")
-    )
 
 
 def _drop_ollama_cloud_zero_prompt_tokens(normalized_usage: Any, raw_usage: Any) -> None:

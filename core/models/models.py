@@ -208,6 +208,25 @@ class Capabilities:
         object.__setattr__(self, "task_options", _freeze_metadata_value(self.task_options))
 
 
+def text_embedding_capabilities(supported_parameters: tuple[str, ...] = ()) -> Capabilities:
+    """Return the capabilities of a text-in, vectors-out embedding Model.
+
+    The ``embeddings`` output derives only the ``text_embedding`` task, so such
+    a Model is never offered as a chat Model. Provider catalogs that identify
+    embedding Models use this one shape.
+    """
+
+    return Capabilities(
+        vision=False,
+        tools=False,
+        json_mode=False,
+        reasoning=ReasoningCapabilities(supported=False),
+        input_modalities=("text",),
+        output_modalities=("embeddings",),
+        supported_parameters=supported_parameters,
+    )
+
+
 def derive_model_task_types(
     input_modalities: Iterable[str],
     output_modalities: Iterable[str],

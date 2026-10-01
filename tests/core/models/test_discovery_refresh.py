@@ -30,6 +30,7 @@ from .discovery_test_support import (
     API_KEY,
     OPENAI_SUBSCRIPTION_MODELS_URL,
     SIMPLE_MODELS_URL,
+    api_key_connection,
     jwt_with_openai_account,
     keyless_connection,
     mock_openai_codex_package,
@@ -408,6 +409,12 @@ def _codex_subscription() -> tuple[ProviderConfig, ConnectionConfig]:
     return config, config.connections[0]
 
 
+def _openai_platform() -> tuple[ProviderConfig, ConnectionConfig]:
+    platform = api_key_connection("OPENAI_API_KEY", models_endpoint="/models")
+    config = openai_subscription_config()
+    return replace(config, connections=[platform, *config.connections]), platform
+
+
 _CODEX_TOKEN = jwt_with_openai_account("acct_openai")
 _CODEX_HEADERS = {
     "Authorization": f"Bearer {_CODEX_TOKEN}",
@@ -437,6 +444,14 @@ _CODEX_HEADERS = {
             f"{OPENAI_SUBSCRIPTION_MODELS_URL}?client_version=0.144.0",
             _CODEX_HEADERS,
             id="bad-package-metadata-falls-back",
+        ),
+        pytest.param(
+            _openai_platform,
+            None,
+            API_KEY,
+            "https://api.openai.com/v1/models",
+            {"Authorization": f"Bearer {API_KEY}"},
+            id="openai-platform-without-codex-routing",
         ),
         pytest.param(
             _secondary_openrouter,
@@ -494,7 +509,6 @@ async def test_every_chat_adapter_has_a_discovery_normalizer() -> None:
     chats over OpenAI compatibility but discovers through the Ollama-native API."""
 
     connection = keyless_connection()
-    mock_openai_codex_package()
 
     bound = {
         adapter: (

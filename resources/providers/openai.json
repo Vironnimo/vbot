@@ -12,7 +12,8 @@
         "header": "Authorization",
         "prefix": "Bearer ",
         "credential_key": "OPENAI_API_KEY"
-      }
+      },
+      "models_endpoint": "/models"
     },
     {
       "id": "subscription",

@@ -139,7 +139,7 @@ async def build_discovery_request(
 
     base_url, models_endpoint = _require_discovery_target(provider_config, connection)
     adapter_class = _adapter_class_for_discovery(provider_config.adapter)
-    discovery_params = await _resolve_discovery_params(adapter_class)
+    discovery_params = await _resolve_discovery_params(adapter_class, connection)
     return DiscoveryRequest(
         provider_config=provider_config,
         connection=connection,
@@ -496,8 +496,9 @@ def _enrich_provider_model(
     if pointer is not None:
         data["canonical"] = pointer
 
+    # A price from the Provider's own catalog wins over its models.dev mirror.
     pricing = provider_pricing(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
-    if pricing is not None:
+    if pricing is not None and "pricing" not in data:
         data["pricing"] = pricing
 
     # Fill the limits the endpoint did not report from the provider's models.dev
@@ -724,7 +725,9 @@ def _build_headers(
             headers[auth.header] = f"{auth.prefix}{credential_value}"
     discovery_headers = getattr(adapter_class, "discovery_headers", None)
     if callable(discovery_headers):
-        return dict(discovery_headers(provider_config, credential_value, headers))
+        return dict(
+            discovery_headers(provider_config, credential_value, headers, connection=connection)
+        )
     return headers
 
 
@@ -959,20 +962,24 @@ def _get_supplementary_params(adapter_class: Any) -> list[dict[str, str]]:
     return []
 
 
-def _get_discovery_params(adapter_class: Any) -> dict[str, str]:
+def _get_discovery_params(
+    adapter_class: Any, connection: ConnectionConfig | None
+) -> dict[str, str]:
     """Return query parameters for the primary model-discovery request."""
 
     method = getattr(adapter_class, "discovery_params", None)
     if callable(method):
-        result: dict[str, str] = method()
+        result: dict[str, str] = method(connection=connection)
         return result
     return {}
 
 
-async def _resolve_discovery_params(adapter_class: Any) -> dict[str, str]:
+async def _resolve_discovery_params(
+    adapter_class: Any, connection: ConnectionConfig | None
+) -> dict[str, str]:
     """Let an adapter refresh time-sensitive catalog parameters, fail-soft."""
 
-    params = _get_discovery_params(adapter_class)
+    params = _get_discovery_params(adapter_class, connection)
     method = getattr(adapter_class, "resolve_discovery_params", None)
     if not callable(method):
         return params
@@ -981,7 +988,7 @@ async def _resolve_discovery_params(adapter_class: Any) -> dict[str, str]:
         return await _fetch_json_payload(url, {})
 
     try:
-        resolved = await method(_fetch_public_json)
+        resolved = await method(_fetch_public_json, connection=connection)
         if not isinstance(resolved, Mapping):
             raise ValueError("resolved discovery parameters must be an object")
         dynamic_params = {

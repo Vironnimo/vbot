@@ -24,6 +24,7 @@ import httpx
 
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.accounts import ConnectionRef
+from core.providers.adapter_types import openai_compatible_base_url
 from core.providers.errors import (
     ProviderError,
     ProviderOutcomeUnknownError,
@@ -198,7 +199,12 @@ class ProviderTaskClient:
         self._connection = connection
         self._token_getter = token_getter
         self._model_id = model_id
-        self._base_url = connection.base_url or provider.base_url
+        # Task endpoints are OpenAI-compatible paths below the Adapter's
+        # OpenAI-compatible base, which can differ from a native chat base.
+        self._base_url = openai_compatible_base_url(
+            str(getattr(provider, "adapter", "") or ""),
+            connection.base_url or provider.base_url,
+        )
         self._usage_observer = usage_observer
 
     @classmethod

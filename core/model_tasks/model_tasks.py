@@ -11,6 +11,7 @@ from core.model_tasks.constants import (
     TASK_IMAGE_UNDERSTANDING,
     TASK_TEXT_EMBEDDING,
 )
+from core.model_tasks.embedding_profiles import embedding_profile
 from core.model_tasks.local_targets import (
     DEFAULT_LOCAL_TASK_TARGET_REGISTRY,
     LocalTaskTargetDescriptor,
@@ -26,6 +27,7 @@ from core.model_tasks.options import (
 )
 from core.models import ModelQuery
 from core.providers.accounts import compose_connection_id, validate_account_id
+from core.providers.providers import model_is_local
 from core.utils.errors import ConfigError, VBotError
 
 JsonObject = dict[str, Any]
@@ -83,6 +85,7 @@ class TaskModelTarget:
     connection_id: str = ""
     connection_label: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    facts: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> JsonObject:
         return {
@@ -96,6 +99,7 @@ class TaskModelTarget:
             "task_types": list(self.task_types),
             "usable": self.usable,
             "metadata": dict(self.metadata),
+            "facts": dict(self.facts),
         }
 
 
@@ -590,6 +594,7 @@ class TaskModelService:
                                 dict.fromkeys((*model.capabilities.task_types, task_type))
                             ),
                             usable=True,
+                            facts=_target_facts(task_type, model.model_id, model=model),
                         )
                     )
         return targets
@@ -603,6 +608,30 @@ class TaskModelService:
                 task_types=descriptor.task_types,
                 usable=descriptor.can_execute(),
                 metadata=descriptor.metadata or {},
+                facts=_target_facts(task_type, descriptor.id),
             )
             for descriptor in self._local_targets.list_for_task(task_type)
         ]
+
+
+def _target_facts(task_type: str, model_id: str, *, model: Any | None = None) -> JsonObject:
+    """Return the selection facts accessors show for one target of *task_type*.
+
+    *model* is the Provider Model behind a provider target; a local target has
+    none. Only ``text_embedding`` targets carry facts today: whether the Model
+    runs on this machine, its curated embedding profile facts, its input limit
+    per text, and its input price in USD per million tokens when known.
+    """
+
+    if task_type != TASK_TEXT_EMBEDDING:
+        return {}
+    profile = embedding_profile(model_id)
+    pricing = getattr(model, "pricing", None)
+    return {
+        "local": model is None or model_is_local(getattr(model, "metadata", None)),
+        "multilingual": profile.multilingual,
+        "recommended_rank": profile.recommended_rank,
+        "note": profile.note,
+        "max_input_tokens": profile.max_input_tokens or getattr(model, "context_window", None),
+        "input_price_per_million": pricing.rates.input if pricing is not None else None,
+    }

@@ -36,7 +36,8 @@ OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
 
 OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
 
-_OLLAMA_CLOUD_OPENAI_PATH = "/v1"
+# Local Ollama and Ollama Cloud serve their OpenAI-compatible API under /v1.
+_OLLAMA_OPENAI_PATH = "/v1"
 
 _OLLAMA_CLOUD_REASONING_PARAMETERS = (
     "thinking_effort",
