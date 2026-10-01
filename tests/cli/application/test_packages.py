@@ -351,9 +351,9 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
         stage_package(install, changed, local=True)
 
 
-@pytest.mark.parametrize("published", ["rel_active", "rel_newer"])
+@pytest.mark.parametrize("published", ["rel_active", "rel_newer", None])
 def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active(
-    tmp_path: Path, published: str
+    tmp_path: Path, published: str | None
 ) -> None:
     respx = pytest.importorskip("respx")
     install = _install(tmp_path / "install", public_key="key")
@@ -361,10 +361,9 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
     (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
     archive = package_name("server")
     base = "https://downloads.example"
-    assets = [
-        {"name": name, "browser_download_url": f"{base}/{name}"}
-        for name in (archive, archive + ".sig", RELEASE_IDENTITY_ASSET)
-    ]
+    # A release without the identity asset names no version and is never downloaded.
+    names = (archive, archive + ".sig") + ((RELEASE_IDENTITY_ASSET,) if published else ())
+    assets = [{"name": name, "browser_download_url": f"{base}/{name}"} for name in names]
     identity = {"schema_version": 1, "version_id": published, "version": "1.0.0"}
     with respx.mock(assert_all_called=False) as router:
         router.get(install.release_url).respond(json={"tag_name": "main-build", "assets": assets})
@@ -373,6 +372,11 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
         router.get(f"{base}/{archive}.sig").respond(content=b"sig")
         labels: list[str | None] = []
 
+        if published is None:
+            with pytest.raises(ApplicationError):
+                download_release(install, "upd_test")
+            assert not package.called
+            return
         result = download_release(
             install, "upd_test", progress=lambda _message, label: labels.append(label)
         )
