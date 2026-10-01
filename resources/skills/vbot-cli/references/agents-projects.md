@@ -108,7 +108,7 @@ vbot archive purge --all [--kind ...] [--agent <agent-id>] [--project <project-i
 ```
 
 - Deleting an Agent, Project or Session creates an archive entry (`arc_...`). Each entry is restored or deleted as a unit; archiving the same id again creates another entry.
-- Entries are deleted permanently after the retention period (`archive.retention_days`, default 30; `null` keeps them until deleted). `list` shows each entry's `purge_at`.
+- Entries are deleted permanently after the retention period (`archive.retention_days`, default 30; `null` keeps them until deleted). `list` shows each entry's `purge_at`; an entry with `purge_at=-` stays until it is purged, for example a `files` entry or one that holds folders of the user.
 - `show` lists the entry's Sessions and files and whether a restore is possible. Run it before restoring.
 - `restore` brings back the Agent, Project or Session with its Sessions, delegation grants and Project roots. If the id is in use, it refuses and names the conflict; re-run with `--as <new-id>` to restore under a new id. Entries of kind `owner_group` (Sessions of an Extension) and `files` cannot be restored.
 - `purge` deletes entries permanently and cannot be undone. Recorded usage stays in Statistics; uploaded attachments are not deleted.
