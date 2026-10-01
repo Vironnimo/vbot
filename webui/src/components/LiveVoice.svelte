@@ -110,8 +110,10 @@
     return true;
   }
 
+  // A lost app connection does not end the call: the call has its own
+  // socket, which reattaches or fails the call by itself.
   $effect(() => {
-    if (serverUnavailable || !configured)
+    if (!configured)
       untrack(() => {
         if (voice.phase !== 'off') controller?.stop();
       });

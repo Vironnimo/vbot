@@ -126,7 +126,7 @@ class FakeHost:
         self.tool_result: Any = {"ok": True}
         self.tool_release = asyncio.Event()
         self.tool_release.set()
-        self.refs = ""
+        self.refs: str | Exception = ""
 
     async def execute_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         self.executed.append((name, arguments))
@@ -136,6 +136,8 @@ class FakeHost:
         return dict(self.tool_result)
 
     def known_refs(self) -> str:
+        if isinstance(self.refs, Exception):
+            raise self.refs
         return self.refs
 
     def publish(self, update: dict[str, Any]) -> None:
@@ -257,6 +259,52 @@ async def test_live_usage_failure_still_publishes_closed(caplog: Any) -> None:
     assert host.of_type("state")[-1]["phase"] == "closed"
     assert len(host.of_type("closed")) == 1
     assert any(record.exc_info for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_usage_update_keeps_the_call_live(caplog: Any) -> None:
+    from unittest.mock import AsyncMock
+
+    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    accounting = SimpleNamespace(
+        update=AsyncMock(side_effect=RuntimeError("test disk failure")), finish=AsyncMock()
+    )
+    call = _call(wire, brain, host, usage_accounting=accounting, usage_call_id="test-call")
+    wire.push(WireStarted(None), WireUsage({"input_tokens": 4}), WireDelegation("i", "x"))
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    assert host.of_type("closed") == []
+    # A confirmed close that names no reason is an ordinary close.
+    wire.push(WireClosed(reason=None, usage=None, confirmed=True))
+    await call.wait_closed()
+    assert host.of_type("closed") == [
+        {"type": "closed", "reason": "closed", "usage": {"input_tokens": 4}}
+    ]
+    assert accounting.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_close_still_ends_the_call_and_stays_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    wire, host = FakeWire(confirm_close=False), FakeHost()
+    cleanup_started = asyncio.Event()
+
+    async def close_transport() -> None:
+        cleanup_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(wire, "aclose", close_transport)
+    monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 5)
+    call = _call(wire, None, host, close_timeout=0.01)
+    wire.push(WireStarted(None))
+    closing = asyncio.create_task(call.close())
+    await asyncio.wait_for(cleanup_started.wait(), 1)
+    monkeypatch.setattr(live_call_module, "_TEARDOWN_TIMEOUT_SECONDS", 0.01)
+    closing.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(closing, 1)
+    assert host.of_type("closed") == [{"type": "closed", "reason": "closed", "usage": None}]
 
 
 @pytest.mark.asyncio
@@ -396,7 +444,7 @@ async def test_delegation_with_request_text_starts_immediately():
 
 
 @pytest.mark.asyncio
-async def test_run_notices_are_spoken_once_while_live_and_reach_later_delegations():
+async def test_run_notices_are_spoken_once_live_and_reach_later_delegations():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
     call = _call(wire, brain, host)
 
@@ -405,16 +453,21 @@ async def test_run_notices_are_spoken_once_while_live_and_reach_later_delegation
     await _until(lambda: any(u.get("phase") == "live" for u in host.updates))
     call.announce_run(_notice("run-1"))
     call.announce_run(_notice("run-1"))
-    await _until(lambda: any(s[0] == "announce" for s in wire.sent))
+    await _until(lambda: sum(s[0] == "announce" for s in wire.sent) == 2)
     wire.push(WireDelegation("i", "What did coder say?"))
     await _until(lambda: len(brain.inputs) == 1)
     await call.close()
 
+    # The notice from before the call was live is spoken once it is.
     announcements = [s[1] for s in wire.sent if s[0] == "announce"]
-    assert announcements == [
-        'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3", '
-        '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
-    ]
+    assert (
+        announcements
+        == [
+            'vBot update: {"run": "completed", "agent": "coder@web", "session": "s3", '
+            '"result_excerpt": "All tests pass.", "excerpt_truncated": false}'
+        ]
+        * 2
+    )
     assert brain.inputs[0].updates.count("vBot update") == 2
 
 
@@ -509,6 +562,18 @@ async def test_unconfirmed_close_tears_down_after_timeout():
 
     assert wire.closed
     assert host.of_type("closed") == [{"type": "closed", "reason": "closed", "usage": None}]
+
+
+@pytest.mark.asyncio
+async def test_a_delegation_that_fails_inside_vbot_is_still_answered():
+    wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
+    host.refs = RuntimeError("test failure")
+    call = _call(wire, brain, host)
+    wire.push(WireStarted(None), WireDelegation("i", "Open the terminals"))
+    await _until(lambda: any(s[0] == "result" for s in wire.sent))
+    await call.close()
+    assert brain.inputs == []
+    assert next(s for s in wire.sent if s[0] == "result")[1] == "i"
 
 
 @pytest.mark.asyncio
@@ -900,10 +965,7 @@ async def test_failing_or_slow_direct_tool_calls_answer_with_an_error_and_never_
     await call.close()
 
     results = {s[1]: s[2] for s in wire.sent if s[0] == "result"}
-    assert results["fail"] == (
-        "Error (tool_failed): The Tool call failed. It may have partly completed; do not repeat "
-        "it. Call overview to see what happened."
-    )
+    assert results["fail"].startswith("Error (tool_failed):")
     assert results["slow"].startswith("Error (timeout): The Tool call took too long")
     assert [name for name, _arguments in host.executed] == ["start_coding_terminal", "overview"]
 

@@ -19,7 +19,14 @@ Owner socket frames, server to accessor:
 * JSON text: ``{"type": "heartbeat", "timestamp"}`` while otherwise idle;
 * binary, relay calls only: assistant audio as raw PCM in the call's
   ``media.audio`` format. Audio is never buffered: it is dropped while no
-  owner is attached.
+  owner is attached, and beyond ``owner_audio_limit_bytes`` waiting for a
+  slow socket.
+
+Updates wait for an owner: before it attaches and while it reconnects, they
+are kept in a bounded buffer that drops the oldest caption, activity, or
+heartbeat frames first, never a ``state``, ``ui_request``, ``error``, or
+``closed`` frame. Updates a lost socket had not yet taken return to that
+buffer, so a reconnecting owner still receives a pending UI request.
 
 Accessor to server: binary frames of a relay call are microphone PCM in the
 same format (even length, at most 64 KiB each); malformed binary frames and
@@ -74,8 +81,10 @@ class LiveCallLimits:
     ui_request_timeout_seconds: float = 20.0
     update_buffer_limit: int = 200
     owner_queue_limit: int = 1_000
-    shutdown_close_timeout_seconds: float = 5.0
-    abort_timeout_seconds: float = 5.0
+    # One minute of PCM16 mono 24 kHz audio.
+    owner_audio_limit_bytes: int = 60 * 48_000
+    shutdown_close_timeout_seconds: float = 3.0
+    abort_timeout_seconds: float = 4.0
 
     def __post_init__(self) -> None:
         if self.owner_queue_limit < self.update_buffer_limit:
@@ -105,17 +114,27 @@ def _utc_now() -> datetime:
 
 OwnerFrame = JsonObject | bytes
 
+# Updates that may be dropped first when a buffer is full; the rest carry
+# state an owner must see.
+_DISPOSABLE_UPDATES = frozenset({"caption", "activity", "heartbeat"})
+
 
 class LiveOwnerStream:
     """Frames for one attached owner socket, in delivery order.
 
     JSON objects go out as text frames and ``bytes`` as binary audio frames.
+    Updates and audio have separate bounds: too many waiting updates end the
+    stream as lagging, while audio beyond its bound is dropped.
     """
 
-    def __init__(self, entry: _LiveCallEntry, limit: int) -> None:
+    def __init__(self, entry: _LiveCallEntry, limit: int, audio_limit_bytes: int) -> None:
         self._entry = entry
         self._limit = limit
+        self._audio_limit = audio_limit_bytes
         self._frames: deque[OwnerFrame] = deque()
+        self._updates = 0
+        self._audio_bytes = 0
+        self._audio_dropped = False
         self._wakeup = asyncio.Event()
         self._close_code: int | None = None
         self._finished = False
@@ -131,12 +150,35 @@ class LiveOwnerStream:
         return self._finished
 
     def send(self, frame: OwnerFrame) -> bool:
-        """Queue one frame; ``False`` when the stream ended or fell behind."""
-        if self._close_code is not None or len(self._frames) >= self._limit:
+        """Queue one frame; ``False`` when the stream ended or its updates fell behind."""
+        if self._close_code is not None:
             return False
+        if isinstance(frame, bytes):
+            if self._audio_bytes + len(frame) > self._audio_limit:
+                # Late speech is worthless; keep the socket and drop the audio.
+                if not self._audio_dropped:
+                    self._audio_dropped = True
+                    _LOGGER.warning(
+                        "Live owner socket is slow; dropping assistant audio (call=%s)",
+                        self._entry.log_id,
+                    )
+                return True
+            self._audio_bytes += len(frame)
+        else:
+            if self._updates >= self._limit:
+                return False
+            self._updates += 1
         self._frames.append(frame)
         self._wakeup.set()
         return True
+
+    def take_undelivered(self) -> list[JsonObject]:
+        """Remove and return the updates the socket has not taken yet; audio is dropped."""
+        updates = [frame for frame in self._frames if not isinstance(frame, bytes)]
+        self._frames.clear()
+        self._updates = 0
+        self._audio_bytes = 0
+        return updates
 
     def end(self, code: int) -> None:
         """End the stream after the queued frames; the first code wins."""
@@ -148,7 +190,12 @@ class LiveOwnerStream:
         """Yield queued frames until the stream ends."""
         while True:
             while self._frames:
-                yield self._frames.popleft()
+                frame = self._frames.popleft()
+                if isinstance(frame, bytes):
+                    self._audio_bytes -= len(frame)
+                else:
+                    self._updates -= 1
+                yield frame
             if self._close_code is not None:
                 self._finished = True
                 return
@@ -192,8 +239,9 @@ class _LiveCallEntry:
         self._closing = False
         self._closed_published = False
         self._finalized = False
-        self._buffer: deque[JsonObject] = deque(maxlen=limits.update_buffer_limit)
+        self._buffer: deque[JsonObject] = deque()
         self._owner: LiveOwnerStream | None = None
+        self._owner_attached = False
         self._malformed_audio_logged = False
         self._ui_requests: dict[str, asyncio.Future[JsonObject]] = {}
         self._executor = LiveToolExecutor(
@@ -370,20 +418,28 @@ class _LiveCallEntry:
         previous = self._owner
         if previous is not None:
             previous.end(LIVE_SOCKET_CLOSE_REPLACED)
-        owner = LiveOwnerStream(self, self._limits.owner_queue_limit)
+            self._requeue(previous.take_undelivered())
+        owner = LiveOwnerStream(
+            self, self._limits.owner_queue_limit, self._limits.owner_audio_limit_bytes
+        )
         while self._buffer:
             owner.send(self._buffer.popleft())
         self._owner = owner
+        self._owner_attached = True
         self._cancel_timer()
         if self.ended or self._closed_published:
             owner.end(LIVE_SOCKET_CLOSE_ENDED)
         return owner
 
     def detach(self, owner: LiveOwnerStream) -> None:
-        """Forget a closed owner socket and allow a bounded reconnect."""
+        """Forget a closed owner socket and allow a bounded reconnect.
+
+        Updates it had not taken wait for the next owner socket.
+        """
         if self._owner is not owner:
             return
         self._owner = None
+        self._requeue(owner.take_undelivered())
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def receive_audio(self, owner: LiveOwnerStream, pcm: bytes) -> None:
@@ -409,11 +465,32 @@ class _LiveCallEntry:
                 return
             self._owner_lagged(owner)
         self._buffer.append(frame)
+        self._trim_buffer()
+
+    def _requeue(self, updates: list[JsonObject]) -> None:
+        """Put updates a socket did not take before those buffered since."""
+        if updates:
+            self._buffer.extendleft(reversed(updates))
+            self._trim_buffer()
+
+    def _trim_buffer(self) -> None:
+        """Bound the buffer, dropping the oldest disposable updates first."""
+        excess = len(self._buffer) - self._limits.update_buffer_limit
+        if excess <= 0:
+            return
+        kept: deque[JsonObject] = deque()
+        for update in self._buffer:
+            if excess and update.get("type") in _DISPOSABLE_UPDATES:
+                excess -= 1
+                continue
+            kept.append(update)
+        self._buffer = kept
 
     def _owner_lagged(self, owner: LiveOwnerStream) -> None:
         _LOGGER.warning("Live owner socket fell behind (call=%s)", self.log_id)
         self._owner = None
         owner.end(LIVE_SOCKET_CLOSE_LAGGED)
+        self._requeue(owner.take_undelivered())
         self._arm_timer(self._limits.reattach_grace_seconds, "did not return")
 
     def _arm_timer(self, seconds: float, reason: str) -> None:
@@ -438,8 +515,12 @@ class _LiveCallEntry:
     # -- UI requests ------------------------------------------------------
 
     async def ui_request(self, action: str, args: JsonObject) -> JsonObject:
-        """Ask the owning accessor to read or change its display."""
-        if self._owner is None:
+        """Ask the owning accessor to read or change its display.
+
+        While the owner reconnects, the request waits for it within the UI
+        request timeout; before any owner attached, there is nobody to ask.
+        """
+        if self.ended or self._closed_published or not self._owner_attached:
             raise LiveUiError(UI_UNAVAILABLE)
         request_id = new_id("ui", claim=lambda candidate: candidate not in self._ui_requests)
         future: asyncio.Future[JsonObject] = asyncio.get_running_loop().create_future()
@@ -586,17 +667,23 @@ class LiveCallRegistry:
         return entry.resolve_ui_request(request_id, result=result, error=error)
 
     async def aclose(self) -> None:
-        """End every call at server shutdown; starts are refused afterwards."""
+        """End every call at server shutdown; starts are refused afterwards.
+
+        Records handed off so far are written even when the caller's bound
+        cancels the shutdown.
+        """
         self._closed = True
         self._active = None
         entries = list(self._entries.values())
-        await asyncio.gather(*(entry.shutdown() for entry in entries))
-        for handle in self._linger.values():
-            handle.cancel()
-        self._linger.clear()
-        self._entries.clear()
-        if self._recorder is not None:
-            await self._recorder.drain()
+        try:
+            await asyncio.gather(*(entry.shutdown() for entry in entries))
+        finally:
+            for handle in self._linger.values():
+                handle.cancel()
+            self._linger.clear()
+            self._entries.clear()
+            if self._recorder is not None:
+                await self._recorder.drain()
 
     def _entry_finalized(self, entry: _LiveCallEntry) -> None:
         if self._active is entry:

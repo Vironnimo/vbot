@@ -353,7 +353,7 @@ async def test_a_newer_owner_socket_replaces_the_previous_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_lagging_owner_is_disconnected_and_keeps_the_newest_updates() -> None:
+async def test_a_lagging_owner_is_disconnected_and_its_updates_wait_for_the_next() -> None:
     harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
     try:
         call = await harness.start()
@@ -365,10 +365,11 @@ async def test_a_lagging_owner_is_disconnected_and_keeps_the_newest_updates() ->
         stale = OwnerReader(owner)
         harness.readers.append(stale)
         await settle(lambda: stale.done)
-        assert [frame["label"] for frame in stale.frames] == ["0", "1"]
+        assert stale.frames == []
+        # The buffer keeps the newest updates within its bound.
         fresh = harness.attach(call)
-        await settle(lambda: len(fresh.frames) == 1)
-        assert fresh.frames[0]["label"] == "2"
+        await settle(lambda: len(fresh.frames) == 2)
+        assert [frame["label"] for frame in fresh.frames] == ["1", "2"]
     finally:
         await harness.close()
 
@@ -402,20 +403,20 @@ async def test_relay_audio_reaches_only_an_attached_owner(live: Harness) -> None
 
 
 @pytest.mark.asyncio
-async def test_relay_audio_counts_against_the_owner_queue_limit() -> None:
-    harness = Harness(LiveCallLimits(update_buffer_limit=2, owner_queue_limit=2))
+async def test_relay_audio_beyond_its_bound_is_dropped_and_keeps_the_owner() -> None:
+    harness = Harness(LiveCallLimits(owner_audio_limit_bytes=4))
     try:
         call = await harness.start_relay()
         owner = harness.registry.attach(call.id)
         assert owner is not None
         for index in range(3):
             call.host.publish_audio(bytes([index, 0]))
-        assert owner.close_code == LIVE_SOCKET_CLOSE_LAGGED
-        call.host.publish_audio(b"\x09\x00")
         call.host.publish({"type": "state", "phase": "live"})
-        fresh = harness.attach(call)
-        await settle(lambda: len(fresh.frames) == 1)
-        assert fresh.frames == [{"type": "state", "phase": "live"}]
+        assert owner.close_code is None
+        reader = OwnerReader(owner)
+        harness.readers.append(reader)
+        await settle(lambda: len(reader.frames) == 3)
+        assert reader.frames == [b"\x00\x00", b"\x01\x00", {"type": "state", "phase": "live"}]
     finally:
         await harness.close()
 
@@ -547,13 +548,21 @@ async def test_an_unanswered_ui_request_times_out_as_uncertain() -> None:
 
 
 @pytest.mark.asyncio
-async def test_ui_requests_fail_without_an_owner_or_once_the_call_ended(live: Harness) -> None:
+async def test_ui_requests_wait_for_a_returning_owner_and_fail_without_one(
+    live: Harness,
+) -> None:
     call = await live.start()
     unattached = await call.host.execute_tool("open", {"view": "terminals"})
     assert unattached["error"]["code"] == "ui_unavailable"
-    reader = live.attach(call)
+    lost = live.attach(call)
+    await lost.stop()
+    lost.owner.detach()
+    # A request made while the owner reconnects reaches it once it is back.
     task = asyncio.create_task(call.host.execute_tool("open", {"view": "terminals"}))
+    await drain()
+    reader = live.attach(call)
     await settle(lambda: len(reader.frames) == 1)
+    assert reader.frames[0]["type"] == "ui_request"
     await call.abort()
     ended = await task
     assert ended["error"]["code"] == "ui_unavailable"

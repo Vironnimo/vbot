@@ -421,12 +421,12 @@ describe('stopping Live voice', () => {
     expect(f.onNotice).not.toHaveBeenCalled();
   });
 
-  it('closes after a short timeout when no closed frame arrives', async () => {
+  it('closes after a timeout when no closed frame arrives', async () => {
     vi.useFakeTimers();
     const f = liveFixture();
     await f.goLive();
     f.controller.stop();
-    await vi.advanceTimersByTimeAsync(4999);
+    await vi.advanceTimersByTimeAsync(11999);
     expect(f.socket().close).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(f.socket().close).toHaveBeenCalledOnce();
@@ -681,6 +681,34 @@ describe('Live voice media and connection failures', () => {
       expect(f.onNotice).not.toHaveBeenCalled();
     },
   );
+
+  it('gives a reopened socket a fresh reattach window', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    f.socket().handlers.onClose({}, 'lost');
+    await vi.advanceTimersByTimeAsync(500);
+    f.socket().handlers.onOpen();
+    await vi.advanceTimersByTimeAsync(9000);
+    f.socket().handlers.onClose({}, 'lost');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledTimes(3);
+    expect(f.onNotice).not.toHaveBeenCalled();
+    expect(f.state.phase).toBe('live');
+  });
+
+  it('replaces a socket that stays silent past the heartbeat', async () => {
+    vi.useFakeTimers();
+    const f = liveFixture();
+    await f.goLive();
+    const silent = f.socket();
+    await vi.advanceTimersByTimeAsync(59000);
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(11000);
+    expect(silent.close).toHaveBeenCalledOnce();
+    expect(f.api.openLiveCallSocket).toHaveBeenCalledTimes(2);
+    expect(f.onNotice).not.toHaveBeenCalled();
+  });
 
   it.each([
     // A socket closed as ended is a call that ended.

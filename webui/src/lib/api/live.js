@@ -14,6 +14,9 @@ import { isPlainObject } from '../values.js';
 // receives call updates there and answers UI requests.
 const LIVE_WEBSOCKET_ENDPOINT = '/ws/live';
 const LIVE_MEDIA_KINDS = new Set(['webrtc', 'relay']);
+// Microphone audio waiting in the socket beyond this (2 s of PCM16 mono
+// 24 kHz) is dropped: late speech only confuses the voice model.
+const LIVE_AUDIO_BUFFER_LIMIT_BYTES = 96000;
 // `live.start` accepts at most this many wake phrases.
 const LIVE_WAKE_PHRASES_MAX = 8;
 // Server close codes of the owner socket, named by what the caller should do:
@@ -201,6 +204,7 @@ export function openLiveCallSocket(callId, handlers = {}, options = {}) {
   // Audio is live data: nothing is queued while the socket is not open.
   const sendAudio = (data) => {
     if (closed || socket.readyState !== openState) return false;
+    if (socket.bufferedAmount > LIVE_AUDIO_BUFFER_LIMIT_BYTES) return false;
     socket.send(data);
     return true;
   };

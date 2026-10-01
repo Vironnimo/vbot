@@ -14,12 +14,17 @@ const STARTUP_TIMEOUT_MS = 45000;
 // exist. The provider answers with its own reachable candidates, so a slow
 // local interface must not block the call.
 const ICE_GATHERING_TIMEOUT_MS = 5000;
-// Stop keeps the socket and peer only to receive the final `closed` frame.
-const CLOSE_TIMEOUT_MS = 5000;
+// Stop keeps the socket and peer only to receive the final `closed` frame;
+// the server waits up to 8 s for the provider to confirm the close.
+const CLOSE_TIMEOUT_MS = 12000;
 const PEER_DISCONNECT_GRACE_MS = 5000;
 // The server keeps a call through a short owner-socket loss; reattach within it.
 const SOCKET_REATTACH_WINDOW_MS = 8000;
 const SOCKET_REATTACH_DELAY_MS = 500;
+// The server sends a heartbeat at least every 25 s; a socket silent for
+// longer than this is half-open and gets replaced.
+const SOCKET_SILENCE_LIMIT_MS = 60000;
+const SOCKET_WATCHDOG_INTERVAL_MS = 10000;
 const CAPTION_LIMIT = 20;
 const CAPTION_TEXT_LIMIT = 2000;
 const OPEN_VIEWS = new Set(['chat', 'terminals', 'agents', 'projects']);
@@ -347,13 +352,20 @@ export function createLiveVoice({
     const owns = () => isCurrent(call) && call.socket === connection;
     try {
       connection = api.openLiveCallSocket(call.callId, {
-        onEvent: (frame) => {
+        onOpen: () => {
           if (!owns()) return;
           call.socketLostAt = null;
+          call.socketHeardAt = now();
+        },
+        onEvent: (frame) => {
+          if (!owns()) return;
+          call.socketHeardAt = now();
           handleFrame(frame, call);
         },
         onAudio: (pcm) => {
-          if (owns() && !call.closing && !isHeld(call)) call.relay?.play(pcm);
+          if (!owns()) return;
+          call.socketHeardAt = now();
+          if (!call.closing && !isHeld(call)) call.relay?.play(pcm);
         },
         onClose: (_event, outcome) => {
           if (owns()) socketLost(call, outcome);
@@ -364,6 +376,29 @@ export function createLiveVoice({
       return;
     }
     call.socket = connection;
+    call.socketHeardAt = now();
+    if (!call.socketWatchdog) watchSocket(call);
+  }
+
+  // A half-open socket delivers nothing, not even heartbeats: replace it.
+  function watchSocket(call) {
+    call.socketWatchdog = schedule(
+      call,
+      () => {
+        const connection = call.socket;
+        if (
+          connection &&
+          !call.closing &&
+          now() - call.socketHeardAt >= SOCKET_SILENCE_LIMIT_MS
+        ) {
+          call.socket = null;
+          connection.close();
+          socketLost(call);
+        }
+        watchSocket(call);
+      },
+      SOCKET_WATCHDOG_INTERVAL_MS,
+    );
   }
 
   // Only a lagging or dropped socket may reattach. The server closes it for
@@ -550,7 +585,9 @@ export function createLiveVoice({
         (error) => {
           if (!isCurrent(call)) return;
           answer({ error: uiErrorCode(error) });
-          if (!call.closing) notify('ui_action_failed', 'warn');
+          // Reading the app's state changes nothing the user would miss.
+          if (!call.closing && frame.action !== 'context')
+            notify('ui_action_failed', 'warn');
         },
       );
   }
@@ -709,6 +746,9 @@ export function createLiveVoice({
       startupTimer: null,
       disconnectTimer: null,
       socketLostAt: null,
+      socketHeardAt: 0,
+      socketWatchdog: null,
+
       closing: false,
       stopRequested: false,
       errorReported: false,

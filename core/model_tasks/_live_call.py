@@ -51,7 +51,7 @@ _LOGGER = get_logger(__name__)
 
 MAX_CONCURRENT_DELEGATIONS = 4
 START_TIMEOUT_SECONDS = 45.0
-CLOSE_TIMEOUT_SECONDS = 15.0
+CLOSE_TIMEOUT_SECONDS = 8.0
 DELEGATION_TIMEOUT_SECONDS = 240.0
 # Public-dialect delegations carry no text; wait until the user's speech settles.
 USER_QUIET_SECONDS = 0.4
@@ -62,8 +62,19 @@ _RECENT_UPDATES = 5
 _ANNOUNCED_RUN_IDS = 500
 _ANNOUNCEMENT_EXCERPT_CHARS = 600
 _CAPTION_MAX_CHARS = 1000
-_TEARDOWN_TIMEOUT_SECONDS = 5.0
+_TEARDOWN_TIMEOUT_SECONDS = 3.0
 _ABORT_CLOSE_TIMEOUT_SECONDS = 1.0
+# Run notices that arrive before the call is live; spoken once it is.
+_PENDING_NOTICES = 5
+# Agent-facing: the voice model reads these when vBot could not answer.
+_DELEGATION_FAILED = (
+    "vBot could not process this request because of an internal error. Actions it already "
+    "started may have completed; nothing was retried."
+)
+_TOOL_FAILED = (
+    "The Tool call failed because of an internal error. It may have partly completed; do not "
+    "repeat it. Call overview to see what happened."
+)
 # Microphone audio waiting for the provider socket; older audio is dropped.
 _AUDIO_BACKLOG_BYTES = 2000 * RELAY_BYTES_PER_MS
 _ROLE_LABELS = {"user": "User", "assistant": "Assistant"}
@@ -124,6 +135,10 @@ class LiveCallSession:
         self._updates: deque[str] = deque(maxlen=_RECENT_UPDATES)
         self._announced: deque[str] = deque(maxlen=_ANNOUNCED_RUN_IDS)
         self._usage: JsonObject | None = None
+        self._usage_dirty = False
+        self._usage_writer: asyncio.Task[None] | None = None
+        self._usage_failure_logged = False
+        self._unspoken: deque[LiveRunNotice] = deque(maxlen=_PENDING_NOTICES)
         self._started_at = clock()
         self._relay = wire.media.get("type") == MEDIA_RELAY
         self._audio_backlog: deque[bytes] = deque()
@@ -195,8 +210,12 @@ class LiveCallSession:
             return
         self._announced.append(notice.run_id)
         self._updates.append(_render_notice(notice))
-        if self._phase != "live":
-            return
+        if self._phase == "live":
+            self._speak(notice)
+        else:
+            self._unspoken.append(notice)
+
+    def _speak(self, notice: LiveRunNotice) -> None:
         # An excerpt is untrusted Agent output; where announcements count as
         # user input, the voice model would follow instructions quoted in it.
         text = _render_notice(notice, excerpt=not self._wire.announces_as_user_input)
@@ -220,8 +239,6 @@ class LiveCallSession:
                 if isinstance(event, WireClosed):
                     closed = event
                     break
-                if isinstance(event, WireUsage) and self._usage_accounting is not None:
-                    await self._usage_accounting.update(self._usage_call_id, event.usage)
                 self._handle(event)
         except Exception as exc:
             _LOGGER.warning(
@@ -239,6 +256,8 @@ class LiveCallSession:
                 _LOGGER.debug("Live call media connected (call=%s)", self._log_id)
                 if self._relay:
                     self._spawn(self._pump_audio(), name=f"live-call-audio:{self._log_id}")
+                while self._unspoken:
+                    self._speak(self._unspoken.popleft())
         elif isinstance(event, WireAudio):
             if self._phase == "live" and not self._closing:
                 self._publish_audio(event.pcm)
@@ -254,6 +273,7 @@ class LiveCallSession:
                 self._spawn(self._run_tool(event), name=f"live-call-tool:{self._log_id}")
         elif isinstance(event, WireUsage):
             self._usage = event.usage
+            self._save_usage()
         elif isinstance(event, WireProblem):
             _LOGGER.warning(
                 "Live provider reported an error (call=%s code=%s)", self._log_id, event.code
@@ -278,11 +298,22 @@ class LiveCallSession:
         )
 
     async def _delegate(self, event: WireDelegation) -> None:
+        """Answer one delegation; the voice model always gets a result."""
+        try:
+            answer = await self._delegation_answer(event)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live delegation failed unexpectedly (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
+            answer = _DELEGATION_FAILED
+        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+
+    async def _delegation_answer(self, event: WireDelegation) -> str:
         if self._brain is None:
             _LOGGER.warning("Live delegation without a backend model (call=%s)", self._log_id)
-            answer = "No backend model is configured, so the request was not started."
-            await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
-            return
+            return "No backend model is configured, so the request was not started."
         brain = self._brain
         async with self._delegation_slots:
             self._set_busy(1)
@@ -306,9 +337,22 @@ class LiveCallSession:
                     )
             finally:
                 self._set_busy(-1)
-        await self._send_command(lambda: self._wire.deliver_result(event.delegation_id, answer))
+        return answer
 
     async def _run_tool(self, event: WireToolCall) -> None:
+        """Run one direct Tool call; the voice model always gets a result."""
+        try:
+            text = await self._tool_result_text(event)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live Tool call failed unexpectedly (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
+            text = live_result_text(live_failure("tool_failed", _TOOL_FAILED))
+        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
+
+    async def _tool_result_text(self, event: WireToolCall) -> str:
         async with self._delegation_slots:
             self._set_busy(1)
             started = self._clock()
@@ -330,8 +374,7 @@ class LiveCallSession:
             result=result,
             duration=self._clock() - started,
         )
-        text = live_result_text(result)
-        await self._send_command(lambda: self._wire.deliver_result(event.call_id, text))
+        return live_result_text(result)
 
     async def _execute_tool_call(self, call: PreparedLiveCall) -> JsonObject:
         """Run one prepared direct Tool call once; failures become an error result."""
@@ -353,11 +396,7 @@ class LiveCallSession:
                 call.name,
                 type(exc).__name__,
             )
-            return live_failure(
-                "tool_failed",
-                "The Tool call failed. It may have partly completed; do not repeat it. Call "
-                "overview to see what happened.",
-            )
+            return live_failure("tool_failed", _TOOL_FAILED)
 
     async def _pump_audio(self) -> None:
         """Forward microphone audio in arrival order until the call ends."""
@@ -416,6 +455,7 @@ class LiveCallSession:
     async def _teardown(self) -> None:
         for task in list(self._tasks):
             task.cancel()
+        cancelled = False
         try:
             async with asyncio.timeout(_TEARDOWN_TIMEOUT_SECONDS):
                 await self._wire.aclose()
@@ -424,13 +464,19 @@ class LiveCallSession:
         except (TimeoutError, asyncio.CancelledError):
             if self._reader is not None and self._reader is not asyncio.current_task():
                 self._reader.cancel()
+            # Only a cancellation of this task propagates, not the shielded reader's.
+            current = asyncio.current_task()
+            cancelled = current is not None and current.cancelling() > 0
         except Exception as exc:
             _LOGGER.warning(
                 "Live call teardown failed (call=%s error_type=%s)",
                 self._log_id,
                 type(exc).__name__,
             )
+        # A cancelled closer still ends the call and publishes its final state.
         await self._finish(None)
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _finish(self, closed: WireClosed | None) -> None:
         if self._done.is_set() or self._finishing:
@@ -445,7 +491,7 @@ class LiveCallSession:
         if self._abort_reason is not None:
             reason = self._abort_reason
         elif closed is not None and closed.confirmed:
-            reason = closed.reason
+            reason = closed.reason or "closed"
         elif self._closing:
             reason = "closed"
         else:
@@ -493,7 +539,36 @@ class LiveCallSession:
                 )
                 self._done.set()
 
+    def _save_usage(self) -> None:
+        """Save the latest cumulative Usage in the background; the reader never waits."""
+        if self._usage_accounting is None:
+            return
+        self._usage_dirty = True
+        if self._usage_writer is None or self._usage_writer.done():
+            self._usage_writer = asyncio.ensure_future(self._write_usage())
+            self._usage_writer.set_name(f"live-call-usage:{self._log_id}")
+            self._tasks.add(self._usage_writer)
+            self._usage_writer.add_done_callback(self._tasks.discard)
+
+    async def _write_usage(self) -> None:
+        accounting = self._usage_accounting
+        assert accounting is not None
+        while self._usage_dirty:
+            self._usage_dirty = False
+            try:
+                await accounting.update(self._usage_call_id, self._usage)
+            except Exception as exc:
+                # The close settles Usage again; a failed update never ends the call.
+                if not self._usage_failure_logged:
+                    self._usage_failure_logged = True
+                    _LOGGER.warning(
+                        "Live call Usage update failed (call=%s error_type=%s)",
+                        self._log_id,
+                        type(exc).__name__,
+                    )
+
     async def _send_command(self, send: Callable[[], Awaitable[None]]) -> bool:
+
         if self._done.is_set():
             return False
         try:

@@ -58,8 +58,11 @@ export function createLiveUiActions({
   // autosave transition never navigates for an old call. `false` means the
   // app did not switch.
   function navigate(view, target = {}, isCurrent = () => true) {
-    return requestTransition(() => {
-      if (!isCurrent()) return false;
+    // A transition deferred behind a running save answers `false` at once;
+    // the voice model then hears it did not switch, so it never runs later.
+    let abandoned = false;
+    const outcome = requestTransition(() => {
+      if (abandoned || !isCurrent()) return false;
       if (view === 'chat' && target.session_id) {
         return navigateToSession(target.agent_id, target.session_id);
       }
@@ -85,6 +88,8 @@ export function createLiveUiActions({
       if (activeView() !== view) navigator.open(view);
       return true;
     });
+    if (outcome === false) abandoned = true;
+    return outcome;
   }
 
   async function terminalView(action, args, isCurrent) {

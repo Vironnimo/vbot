@@ -446,23 +446,27 @@ describe('Live voice with Desktop Voice', () => {
 
 describe('Live control conflicts', () => {
   it.each([
-    ['the server becomes unavailable', 'serverUnavailable', true],
-    ['Live voice is no longer configured', 'configured', false],
-  ])('stops a running call when %s', async (_label, prop, value) => {
-    simulateController();
-    const onToast = vi.fn();
-    const props = renderReactive({
-      configured: true,
-      serverUnavailable: false,
-      onToast,
-    });
-    toggle().click();
-    await settle();
-    props[prop] = value;
-    flushSync();
-    expect(fake.stop).toHaveBeenCalledOnce();
-    expect(onToast).not.toHaveBeenCalled();
-  });
+    ['the app connection drops', 'serverUnavailable', true, false],
+    ['Live voice is no longer configured', 'configured', false, true],
+  ])(
+    'when %s, stops a running call: %s',
+    async (_label, prop, value, stops) => {
+      simulateController();
+      const onToast = vi.fn();
+      const props = renderReactive({
+        configured: true,
+        serverUnavailable: false,
+        onToast,
+      });
+      toggle().click();
+      await settle();
+      props[prop] = value;
+      flushSync();
+      // The call has its own socket; only its own loss ends it.
+      expect(fake.stop).toHaveBeenCalledTimes(stops ? 1 : 0);
+      expect(onToast).not.toHaveBeenCalled();
+    },
+  );
 
   it('cannot start while the server is unavailable', async () => {
     simulateController();

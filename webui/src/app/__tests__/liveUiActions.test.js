@@ -115,14 +115,20 @@ describe('Live voice UI actions', () => {
     ).toBe(false);
   });
 
-  it('never navigates for a call that ended during a deferred transition', () => {
+  it.each([
+    ['the call ended meanwhile', false],
+    ['the call still runs', true],
+  ])('never runs a deferred transition later when %s', (_label, still) => {
+    // The deferred request already answered that the app did not switch.
     const f = fixture({ pendingTransition: true });
     let current = true;
-    f.actions.open(
-      { view: 'agents', agent_id: 'coder' },
-      { isCurrent: () => current },
-    );
-    current = false;
+    expect(
+      f.actions.open(
+        { view: 'agents', agent_id: 'coder' },
+        { isCurrent: () => current },
+      ),
+    ).toBe(false);
+    current = still;
     expect(f.state.transitions[0]()).toBe(false);
     expect(f.selection.selectAgent).not.toHaveBeenCalled();
     expect(f.navigator.navigate).not.toHaveBeenCalled();
