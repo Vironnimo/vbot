@@ -83,6 +83,7 @@ def listing(
         reason is None,
         reason,
         _retention.purge_at(entry, retention_days),
+        _retention.may_hold_user_folders(entry),
     )
 
 

@@ -4,7 +4,7 @@ An entry's ``purge_at`` is computed on read from its ``retention_start`` and the
 current period (``archive.retention_days``), so a changed period applies to
 existing entries at once. Retention never deletes ``files`` entries or entries
 whose ``user_folders`` fact names folders the user may own rather than copies
-vBot made; only a manual purge deletes those.
+vBot made; only a purge that names them deletes those.
 
 The retention sweep deletes due entries in the background, on the ``archive``
 worker and never on the Event Loop. The first sweep runs a minute after start,
@@ -65,6 +65,16 @@ def default_retention_days() -> int | None:
     return days
 
 
+def may_hold_user_folders(entry: ArchiveEntry) -> bool:
+    """Whether ``entry`` may hold folders the user owns rather than copies vBot made.
+
+    True for ``files`` entries (older archived content) and for entries whose
+    ``user_folders`` fact names such folders. Neither retention nor a purge of
+    every matching entry deletes one; only a purge that names it does.
+    """
+    return entry.kind == ARCHIVE_KIND_FILES or bool(entry.facts.get("user_folders"))
+
+
 def purge_at(entry: ArchiveEntry, retention_days: int | None) -> str | None:
     """When the retention period of ``entry`` ends, or ``None`` when retention never deletes it.
 
@@ -73,7 +83,7 @@ def purge_at(entry: ArchiveEntry, retention_days: int | None) -> str | None:
     """
     if retention_days is None or entry.state != ARCHIVE_STATE_ARCHIVED:
         return None
-    if entry.kind == ARCHIVE_KIND_FILES or entry.facts.get("user_folders"):
+    if may_hold_user_folders(entry):
         return None
     try:
         start = parse_canonical_timestamp(entry.retention_start)
@@ -239,5 +249,6 @@ __all__ = [
     "SWEEP_INTERVAL_SECONDS",
     "RetentionSweeper",
     "default_retention_days",
+    "may_hold_user_folders",
     "purge_at",
 ]

@@ -138,17 +138,32 @@ class SkippedPurge:
 
 
 @dataclass(frozen=True)
+class KeptEntry:
+    """An entry a purge of every matching entry keeps: it may hold the user's folders.
+
+    ``reason`` is ``files`` (older archived content) or ``user_folders`` (the
+    entry names folders the user may own). Only a purge that names the entry
+    deletes it.
+    """
+
+    entry_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class PurgeOutcome:
     """What a purge did with each entry it was given.
 
     ``gone`` names the entries no longer in the archive when the purge reached
-    them: another operation deleted or restored them in the meantime.
+    them: another operation deleted or restored them in the meantime. ``kept``
+    lists the matching entries a purge of every matching entry left alone.
     """
 
     purged: tuple[PurgedEntry, ...] = ()
     pending: tuple[PendingPurge, ...] = ()
     skipped: tuple[SkippedPurge, ...] = ()
     gone: tuple[str, ...] = ()
+    kept: tuple[KeptEntry, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -159,6 +174,8 @@ class ArchiveListing:
     format and whether its payload trees exist; a restore still runs the full
     check (:meth:`ArchiveService.restore_check`). ``purge_at`` is when the
     retention period ends for the entry, ``None`` when retention never deletes it.
+    ``may_hold_user_folders`` marks an entry that may hold folders the user owns:
+    neither retention nor a purge of every matching entry deletes it.
     """
 
     entry: ArchiveEntry
@@ -166,6 +183,7 @@ class ArchiveListing:
     restorable: bool
     not_restorable_reason: str | None
     purge_at: str | None = None
+    may_hold_user_folders: bool = False
 
 
 @dataclass(frozen=True)
@@ -200,6 +218,7 @@ __all__ = [
     "ArchiveEntryDetail",
     "ArchiveListing",
     "ArchivePage",
+    "KeptEntry",
     "PendingPurge",
     "ProjectArchiveOutcome",
     "PurgeOutcome",

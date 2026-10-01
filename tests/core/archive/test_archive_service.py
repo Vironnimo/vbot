@@ -19,13 +19,21 @@ from core.archive import (
     ArchiveNotRestorableError,
     ArchiveRestoreConflictError,
     ArchiveService,
+    KeptEntry,
     PendingPurge,
     SkippedPurge,
     _purge,
 )
 from core.chat import ChatSessionError
-from core.sessions import ArchiveEntry, ArchiveEntryFilter, ArchiveTree, SessionAddress
-from core.utils.timestamps import format_canonical_timestamp
+from core.sessions import (
+    ARCHIVE_KIND_FILES,
+    ARCHIVE_TREE_FILES,
+    ArchiveEntry,
+    ArchiveEntryFilter,
+    ArchiveTree,
+    SessionAddress,
+)
+from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
 from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
 
@@ -542,3 +550,37 @@ async def test_purge_at_ends_the_retention_period_of_entries_retention_deletes(
     }
     assert kept.retention_days is None
     assert {item.purge_at for item in kept.entries} == {None}
+    assert {item.entry.entry_id for item in page.entries if item.may_hold_user_folders} == {legacy}
+
+
+@pytest.mark.asyncio
+async def test_a_purge_of_every_matching_entry_keeps_entries_that_may_hold_user_folders(
+    world: ArchiveWorld, tmp_path: Path
+) -> None:
+    world.agents.create("manager")
+    world.agents.create("writer")
+    archived = await world.service.archive_agent("writer")
+    legacy = legacy_agent_entry(world, tmp_path / "notes")
+    older = world.data_dir / "archive" / "old-files"
+    older.mkdir()
+    (older / "notes.md").write_text("mine", encoding="utf-8")
+    files = world.sessions.archive_ledger.adopt_payload(
+        "arc_files",
+        ARCHIVE_KIND_FILES,
+        subject_id="old-files",
+        archived_at=utc_now_timestamp(),
+        trees=(ArchiveTree("archive/old-files", ARCHIVE_TREE_FILES, None),),
+    ).entry_id
+
+    every = await world.service.purge(all_matching=ArchiveEntryFilter())
+
+    assert [item.entry_id for item in every.purged] == [archived.entry_id]
+    assert set(every.kept) == {KeptEntry(legacy, "user_folders"), KeptEntry(files, "files")}
+    assert (world.data_dir / "archive" / "coder" / "workspace" / "notes.md").is_file()
+    assert (older / "notes.md").is_file()
+    # Only naming an entry deletes it, folders included.
+    named = await world.service.purge([legacy, files])
+    assert {item.entry_id for item in named.purged} == {legacy, files}
+    assert named.kept == ()
+    assert not (world.data_dir / "archive" / "coder").exists()
+    assert not older.exists()

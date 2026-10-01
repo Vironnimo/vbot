@@ -38,6 +38,7 @@ GROUP_ENTRY = {
     "session_count": 6,
     "restorable": False,
     "not_restorable_reason": "kind_not_restorable",
+    "may_hold_user_folders": True,
 }
 CURSOR = {"archived_at": "2026-09-29T08:00:00.000000Z", "entry_id": "arc_h2q9c4m7r1sd"}
 
@@ -59,7 +60,7 @@ def test_archive_list_prints_each_entry_and_the_next_page(rpc: FakeRpc, run_cli:
         "restorable=yes",
         "- id=arc_h2q9c4m7r1sd kind=owner_group subject=swm_k2 agent=builder project=vbot "
         'owner=swarm label="Docs swarm" sessions=6 state=purging '
-        "archived_at=2026-09-29T08:00:00.000000Z purge_at=- restorable=no "
+        "archived_at=2026-09-29T08:00:00.000000Z purge_at=- user_folders=yes restorable=no "
         "reason=kind_not_restorable",
         "next page: vbot archive list --project vbot --cursor "
         '\'{"archived_at":"2026-09-29T08:00:00.000000Z","entry_id":"arc_h2q9c4m7r1sd"}\'',
@@ -311,26 +312,33 @@ def test_a_refused_restore_names_the_corrected_call(
 
 
 @pytest.mark.parametrize(
-    ("selection", "params"),
+    ("selection", "params", "kept"),
     [
         pytest.param(
             ("arc_7k2m9q4xw1ab", "arc_3d8n0v6tz2kc"),
             {"entry_ids": ["arc_7k2m9q4xw1ab", "arc_3d8n0v6tz2kc"]},
+            [],
             id="ids",
         ),
         pytest.param(
-            ("--all", "--kind", "session", "--agent", "builder@vbot"),
-            {"all": True, "kind": "session", "agent_id": "builder@vbot"},
+            ("--all", "--kind", "agent", "--agent", "coder"),
+            {"all": True, "kind": "agent", "agent_id": "coder"},
+            [{"entry_id": "arc_legacy01", "reason": "user_folders"}],
             id="all",
         ),
     ],
 )
 def test_archive_purge_deletes_the_selected_entries(
-    rpc: FakeRpc, run_cli: RunCli, selection: tuple[str, ...], params: dict[str, Any]
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    selection: tuple[str, ...],
+    params: dict[str, Any],
+    kept: list[dict[str, str]],
 ) -> None:
     rpc.reply(
         "archive.purge",
         {
+            "kept": kept,
             "purged": [
                 {
                     "entry_id": "arc_7k2m9q4xw1ab",
@@ -349,7 +357,7 @@ def test_archive_purge_deletes_the_selected_entries(
         },
     )
 
-    code, out, _err = run_cli("archive", "purge", *selection, "--yes")
+    code, out, err = run_cli("archive", "purge", *selection, "--yes")
 
     assert code == 0
     assert rpc.calls == [("archive.purge", params)]
@@ -359,7 +367,15 @@ def test_archive_purge_deletes_the_selected_entries(
         "purged 2 archive entries (13 sessions)",
         "- id=arc_7k2m9q4xw1ab kind=agent subject=coder sessions=12",
         "- id=arc_3d8n0v6tz2kc kind=session subject=ses_x4m2 sessions=1",
+        *(f"- id={entry['entry_id']} kept reason={entry['reason']}" for entry in kept),
     ]
+    if kept:
+        # --all never deletes folders the user may own; only naming the entry does.
+        assert (
+            "kept archive entry arc_legacy01, which may hold the user's own folders: purge --all "
+            "never deletes such entries; to delete it as well, run "
+            "'vbot archive purge arc_legacy01 --yes'"
+        ) in err
 
 
 def test_a_pending_purge_fails_and_names_the_call_that_continues_it(

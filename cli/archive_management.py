@@ -187,13 +187,14 @@ def archive_purge(
     pending = _records(payload.data.get("pending"))
     skipped = _records(payload.data.get("skipped"))
     gone = _strings(payload.data.get("gone"))
+    kept = _records(payload.data.get("kept"))
     session_total = sum(
         count for entry in purged if isinstance(count := entry.get("session_count"), int)
     )
     if purged:
         noun = "archive entry" if len(purged) == 1 else "archive entries"
         first = f"purged {len(purged)} {noun} ({sessions_text(session_total)})"
-    elif pending or skipped or gone:
+    elif pending or skipped or gone or kept:
         first = "purged no archive entries"
     else:
         first = "no archive entries matched; nothing was purged"
@@ -228,6 +229,10 @@ def archive_purge(
         )
         for entry in skipped
     )
+    lines.extend(
+        record_fields([f"- id={entry.get('entry_id')}", "kept", f"reason={entry.get('reason')}"])
+        for entry in kept
+    )
     attention: list[str] = []
     if pending:
         pending_ids = [str(entry.get("entry_id")) for entry in pending]
@@ -246,8 +251,20 @@ def archive_purge(
         )
         for entry in skipped
     )
+    if kept:
+        kept_ids = [str(entry.get("entry_id")) for entry in kept]
+        command = format_command(("vbot", "archive", "purge", *kept_ids, "--yes"))
+        what = (
+            f"archive entry {kept_ids[0]}, which may hold"
+            if len(kept_ids) == 1
+            else f"{len(kept_ids)} archive entries that may hold"
+        )
+        attention.append(
+            f"kept {what} the user's own folders: purge --all never deletes such entries; "
+            f"to delete {'it' if len(kept_ids) == 1 else 'them'} as well, run '{command}'"
+        )
     return CommandResult(
-        ok=not attention,
+        ok=not (pending or skipped),
         message="\n".join(lines),
         instance=instance,
         attention=tuple(attention),
@@ -382,6 +399,8 @@ def _format_entry_row(entry: object) -> str:
         fields.append(f"state={entry.get('state')}")
     fields.append(f"archived_at={entry.get('archived_at')}")
     fields.append(f"purge_at={entry.get('purge_at') or '-'}")
+    if entry.get("may_hold_user_folders") is True:
+        fields.append("user_folders=yes")
     fields.append(f"restorable={'yes' if entry.get('restorable') is True else 'no'}")
     if entry.get("not_restorable_reason"):
         fields.append(f"reason={entry['not_restorable_reason']}")

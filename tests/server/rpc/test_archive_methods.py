@@ -82,6 +82,7 @@ async def test_list_pages_entries_newest_first_with_their_retention(tmp_path: Pa
         "session_count": 1,
         "restorable": True,
         "not_restorable_reason": None,
+        "may_hold_user_folders": False,
     }
     assert first["entries"][1]["label"] == "Notes"
 
@@ -345,6 +346,7 @@ async def test_purge_deletes_named_entries_or_all_matching_ones(tmp_path: Path) 
         "pending": [],
         "skipped": [],
         "gone": [],
+        "kept": [],
     }
     assert [entry["entry_id"] for entry in matching["purged"]] == [entries["project"]]
     assert ledger.entry(entries["agent"]) is None
@@ -373,6 +375,7 @@ async def test_a_purge_whose_usage_import_fails_leaves_every_entry_restorable(
         "pending": [],
         "skipped": [{"entry_id": entry_id, "reason": "usage_import_failed", "state": "archived"}],
         "gone": [],
+        "kept": [],
     }
     shown = await rpc_result(state, "archive.show", entry_id=entry_id)
     assert (shown["entry"]["state"], shown["restore"]["possible"]) == ("archived", True)

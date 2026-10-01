@@ -22,17 +22,22 @@ import builtins
 import threading
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.archive import _operations, _purge, _read_model, _recovery, _restore
-from core.archive._retention import RetentionSweeper, default_retention_days
+from core.archive._retention import (
+    RetentionSweeper,
+    default_retention_days,
+    may_hold_user_folders,
+)
 from core.archive._types import (
     AgentArchiveOutcome,
     ArchiveEntryDetail,
     ArchivePage,
+    KeptEntry,
     ProjectArchiveOutcome,
     PurgeOutcome,
     RestoreCheck,
@@ -42,6 +47,7 @@ from core.archive._types import (
 from core.archive.errors import ArchiveSubjectInUseError
 from core.sessions import (
     ARCHIVE_KIND_AGENT,
+    ARCHIVE_KIND_FILES,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_KIND_SESSION,
     ARCHIVE_STATE_ARCHIVED,
@@ -363,7 +369,10 @@ class ArchiveService:
         Give ``entry_ids`` or ``all_matching``. With ``entry_ids``, an unknown id
         refuses the whole call with ``ArchiveEntryNotFoundError`` and an entry
         that is neither ``archived`` nor ``purging`` with ``ArchiveEntryBusyError``,
-        before anything is deleted; ``all_matching`` skips such entries. Recorded
+        before anything is deleted; ``all_matching`` skips such entries and keeps
+        ``archived`` entries that may hold the user's folders (``files`` entries and
+        entries naming ``user_folders``), reported as kept: only naming one deletes
+        it. Recorded
         usage first reaches the usage ledger, so usage totals stay; when that
         fails, nothing is deleted or claimed: an ``archived`` entry is reported
         skipped and stays restorable. An entry whose deletion does not finish,
@@ -374,9 +383,11 @@ class ArchiveService:
         deleted) or gone (no longer in the archive).
         """
         services = self._services
-        entries = await services.sessions.run_async(self._purge_targets, entry_ids, all_matching)
+        entries, kept = await services.sessions.run_async(
+            self._purge_targets, entry_ids, all_matching
+        )
         if not entries:
-            return PurgeOutcome()
+            return PurgeOutcome(kept=kept)
         try:
             outcome = await _purge.PURGE_WORKERS.run(
                 _purge.purge_entries,
@@ -390,24 +401,27 @@ class ArchiveService:
             self._notify()
         if outcome.pending:
             self._retention.wake()
-        return outcome
+        return replace(outcome, kept=kept)
 
     def _purge_targets(
         self, entry_ids: Sequence[str], all_matching: ArchiveEntryFilter | None
-    ) -> builtins.list[ArchiveEntry]:
+    ) -> tuple[builtins.list[ArchiveEntry], tuple[KeptEntry, ...]]:
+        """The entries to purge, and those a purge of every matching entry keeps."""
         ledger = self._services.sessions.archive_ledger
         if all_matching is not None:
             entries: builtins.list[ArchiveEntry] = []
+            kept: builtins.list[KeptEntry] = []
             cursor: ArchiveEntryCursor | None = None
             while True:
                 found = ledger.page(all_matching, cursor=cursor, limit=_PURGE_PAGE)
-                entries.extend(
-                    entry
-                    for entry in found.entries
-                    if entry.state in (ARCHIVE_STATE_ARCHIVED, ARCHIVE_STATE_PURGING)
-                )
+                for entry in found.entries:
+                    if entry.state == ARCHIVE_STATE_ARCHIVED and may_hold_user_folders(entry):
+                        reason = "files" if entry.kind == ARCHIVE_KIND_FILES else "user_folders"
+                        kept.append(KeptEntry(entry.entry_id, reason))
+                    elif entry.state in (ARCHIVE_STATE_ARCHIVED, ARCHIVE_STATE_PURGING):
+                        entries.append(entry)
                 if found.next_cursor is None:
-                    return entries
+                    return entries, tuple(kept)
                 cursor = found.next_cursor
         found_entries = {entry_id: ledger.entry(entry_id) for entry_id in dict.fromkeys(entry_ids)}
         missing = [entry_id for entry_id, entry in found_entries.items() if entry is None]
@@ -417,7 +431,7 @@ class ArchiveService:
         for entry in resolved:
             if entry.state not in (ARCHIVE_STATE_ARCHIVED, ARCHIVE_STATE_PURGING):
                 raise ArchiveEntryBusyError(entry.entry_id, entry.state)
-        return resolved
+        return resolved, ()
 
     # -- Reads -------------------------------------------------------------------
 

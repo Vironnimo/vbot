@@ -245,6 +245,7 @@ def _entry_payload(listing: ArchiveListing) -> JsonObject:
         "session_count": entry.session_count,
         "restorable": listing.restorable,
         "not_restorable_reason": listing.not_restorable_reason,
+        "may_hold_user_folders": listing.may_hold_user_folders,
     }
 
 
@@ -360,6 +361,7 @@ def _purge_payload(outcome: PurgeOutcome) -> JsonObject:
             for entry in outcome.skipped
         ],
         "gone": list(outcome.gone),
+        "kept": [{"entry_id": entry.entry_id, "reason": entry.reason} for entry in outcome.kept],
     }
 
 
