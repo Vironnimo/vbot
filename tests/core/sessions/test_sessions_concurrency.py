@@ -35,9 +35,6 @@ async def test_concurrent_run_admissions_keep_every_run_kind(manager) -> None:
 def test_two_managers_append_concurrently_without_losing_messages(tmp_path) -> None:
     first = ChatSessionManager(tmp_path)
     second = ChatSessionManager(tmp_path)
-    # Lost writes are under test, not durability: skip the per-commit sync.
-    for manager in (first, second):
-        manager._store.database.writer.execute("PRAGMA synchronous=OFF")
     address = _address("coder", "session-one")
     first.create("coder", session_id=address.session_id)
     barrier = threading.Barrier(2)

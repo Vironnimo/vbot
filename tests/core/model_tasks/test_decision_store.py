@@ -54,8 +54,6 @@ def test_revision_conflict_snapshot_retention_and_restart(store):
 
 def test_pagination_and_completed_records_are_immutable(store):
     exp = store.save({"title": "Paging", "state": {}, "questions": []})
-    # Paging is under test, not durability: skip the per-commit sync for 100 writes.
-    store.database.writer.execute("PRAGMA synchronous=OFF")
     records = []
     for n in range(51):  # One more than a page.
         record = store.begin(exp["id"], 1, str(n), {})

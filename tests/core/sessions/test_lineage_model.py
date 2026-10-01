@@ -229,8 +229,6 @@ class _Scenario:
 # every store branch that the first 24 seeds reach. Each costs about 90 writes.
 @pytest.mark.parametrize("seed", [0, 7])
 def test_lineage_views_match_a_reference_model(manager: ChatSessionManager, seed: int) -> None:
-    # The views are under test, not durability: skip the per-commit sync of every write.
-    manager._store.database.writer.execute("PRAGMA synchronous=OFF")
     rng = random.Random(seed)
     scenario = _Scenario(manager, rng)
     trail: list[str] = []
