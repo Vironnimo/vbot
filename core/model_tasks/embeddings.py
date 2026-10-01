@@ -1,26 +1,24 @@
 """Provider-neutral embedding execution service.
 
-``EmbeddingService`` is the public surface used by the recall backend
-(M4) and any other domain that needs vectors. It resolves the
-configured ``text_embedding`` binding through
-:class:`core.model_tasks.TaskModelService`, merges stored options over
-the backend schema defaults, parses the target into a provider
-reference, and routes to :class:`ProviderEmbeddingClient`.
+``EmbeddingService`` is the public surface used by Recall and any other
+domain that needs vectors. It resolves the configured ``text_embedding``
+binding through :class:`core.model_tasks.TaskModelService`, merges stored
+options over the backend schema defaults, shapes the texts for their purpose
+with the Model family's profile, and routes provider targets to
+:class:`ProviderEmbeddingClient` and ``local/...`` targets to the
+:class:`~core.model_tasks.embeddings_local.LocalEmbeddingExecutor`.
 
-Embedding execution is provider-agnostic: the binding is the only
-input the service takes. Local targets are out of scope for this
-iteration (the spec keeps the local-target hook dependency-free, the
-same way local speech/image engines stay optional). A configured
-local target raises :class:`EmbeddingUnsupportedTargetError` so
-callers (the Recall backend in particular) can fall back to canonical scan
-with a logged warning — mirroring the recall backend's pattern for
-missing bindings.
+Without a local executor (or for an unknown local Model) a local target
+raises :class:`EmbeddingUnsupportedTargetError`; a local Model that is not
+installed raises :class:`EmbeddingConfigurationError`.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +27,13 @@ from core.model_tasks.embedding_profiles import (
     EMBEDDING_PURPOSES,
     EmbeddingPurpose,
     embedding_profile,
+)
+from core.model_tasks.embeddings_local import (
+    LocalEmbeddingError,
+    LocalEmbeddingExecutor,
+    LocalEmbeddingInputTooLongError,
+    LocalEmbeddingSetup,
+    LocalEmbeddingUnavailableError,
 )
 from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
 from core.model_tasks.task_execution import TaskBindingResolver, TaskUsage
@@ -59,13 +64,22 @@ class EmbeddingExecutionError(EmbeddingError):
     """Raised when a provider embedding request fails."""
 
 
+class EmbeddingInputTooLongError(EmbeddingExecutionError):
+    """One text exceeds the configured Model's input limit; nothing was embedded."""
+
+
 @dataclass(frozen=True)
 class EmbeddingSpaceIdentity:
-    """Stable identity for one configured embedding execution space."""
+    """Stable identity for one configured embedding execution space.
+
+    ``local`` marks a Model that runs on this machine (``provider_id`` is then
+    ``"local"`` and ``model_id`` the local Model id); it costs nothing.
+    """
 
     provider_id: str
     model_id: str
     fingerprint: str
+    local: bool = False
 
 
 @dataclass(frozen=True)
@@ -115,9 +129,11 @@ class EmbeddingService:
         runtime: TaskClientRuntime,
         *,
         usage_recorder: UsageRecorder | None = None,
+        local_executor: LocalEmbeddingExecutor | None = None,
     ) -> None:
         self._runtime = runtime
         self._usage_recorder = usage_recorder
+        self._local = local_executor
         self._resolver = TaskBindingResolver(
             model_tasks, configuration_error=EmbeddingConfigurationError
         )
@@ -137,13 +153,14 @@ class EmbeddingService:
 
         Raises:
             EmbeddingConfigurationError: No ``text_embedding`` binding
-                is configured, the target is malformed, or the input
-                list is empty.
-            EmbeddingUnsupportedTargetError: The configured binding
-                targets a local engine. Local embedding engines are
-                deliberately out of scope for this iteration.
-            EmbeddingExecutionError: The provider request failed for
-                any other reason (network, auth, schema).
+                is configured, the target is malformed, the input
+                list is empty, or the local Model is not installed.
+            EmbeddingUnsupportedTargetError: The configured local target
+                has no local engine.
+            EmbeddingInputTooLongError: A text exceeds the local Model's
+                input limit; no text was embedded.
+            EmbeddingExecutionError: The request failed for any other
+                reason (network, auth, schema, local engine failure).
         """
 
         if not isinstance(texts, list) or not texts:
@@ -159,9 +176,7 @@ class EmbeddingService:
         _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
 
         if target_ref.kind == "local":
-            raise EmbeddingUnsupportedTargetError(
-                f"Embedding does not support local targets: {target_ref.target}"
-            )
+            return await self._embed_local(texts, purpose, options, target_ref)
 
         identity = self._space_identity(target_ref, options)
         request = embedding_profile(target_ref.model_id).request(texts, purpose)
@@ -226,10 +241,132 @@ class EmbeddingService:
 
         _binding, options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
         if target_ref.kind == "local":
-            raise EmbeddingUnsupportedTargetError(
-                f"Embedding does not support local targets: {target_ref.target}"
-            )
+            return self._local_space_identity(target_ref)
         return self._space_identity(target_ref, options)
+
+    def document_batch_size(self) -> int | None:
+        """Texts per document request the configured target handles well.
+
+        A local engine computes on this machine and yields to queries between
+        texts, so callers keep its batches small; ``None`` means no preference.
+        """
+
+        with suppress(EmbeddingError):
+            _binding, _options, target_ref = self._resolver.resolve(TASK_TEXT_EMBEDDING)
+            if target_ref.kind == "local" and self._local is not None:
+                with suppress(LocalEmbeddingError):
+                    return self._local.document_batch_size(target_ref.local_id)
+        return None
+
+    async def _embed_local(
+        self,
+        texts: list[str],
+        purpose: EmbeddingPurpose | None,
+        options: JsonObject,
+        target_ref: Any,
+    ) -> EmbeddingResult:
+        local = self._local_engine(target_ref)
+        identity = self._local_space_identity(target_ref)
+        # The prefix is part of the embedded text and of the space identity;
+        # the engine embeds exactly what it receives.
+        request = embedding_profile(target_ref.local_id).request(texts, purpose)
+        try:
+            local.check_available(target_ref.local_id)
+            usage = TaskUsage(self._usage_recorder, TASK_TEXT_EMBEDDING, target_ref)
+            async with usage.attempt() as call_id:
+                output = await local.embed(
+                    target_ref.local_id, request.inputs, query=purpose == "query", options=options
+                )
+                tokens = sum(output.tokens)
+                reported = EmbeddingUsage(
+                    requests=1,
+                    token_reports=1,
+                    cost_reports=1,
+                    input_tokens=tokens,
+                    total_tokens=tokens,
+                    cost=0.0,
+                    input_token_reports=1,
+                )
+                await usage.update(
+                    call_id, {"input_tokens": tokens, "output_tokens": 0, "reported_cost_usd": 0.0}
+                )
+        except LocalEmbeddingUnavailableError as exc:
+            raise EmbeddingConfigurationError(str(exc)) from exc
+        except LocalEmbeddingInputTooLongError as exc:
+            raise EmbeddingInputTooLongError(str(exc)) from exc
+        except LocalEmbeddingError as exc:
+            raise EmbeddingExecutionError(str(exc)) from exc
+        return EmbeddingResult(
+            vectors=output.vectors,
+            model_id=target_ref.local_id,
+            provider_id="local",
+            dimension=len(output.vectors[0]),
+            space_fingerprint=identity.fingerprint,
+            response_model_id=target_ref.local_id,
+            usage=reported,
+        )
+
+    def _local_engine(self, target_ref: Any) -> LocalEmbeddingExecutor:
+        local = self._local
+        if local is None:
+            raise EmbeddingUnsupportedTargetError(
+                f"No local embedding engine is available for {target_ref.target}"
+            )
+        try:
+            local.model(target_ref.local_id)
+        except LocalEmbeddingError as exc:
+            raise EmbeddingUnsupportedTargetError(str(exc)) from exc
+        return local
+
+    def _local_space_identity(self, target_ref: Any) -> EmbeddingSpaceIdentity:
+        """Pinned repository, revision, graph and prompt contract; never runtime options."""
+        model = self._local_engine(target_ref).model(target_ref.local_id)
+        encoded = json.dumps(
+            {
+                "contract_version": _EMBEDDING_SPACE_CONTRACT_VERSION,
+                "target": target_ref.target,
+                "engine": model.identity(),
+                "profile": embedding_profile(target_ref.local_id).space_identity(),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return EmbeddingSpaceIdentity(
+            provider_id="local",
+            model_id=target_ref.local_id,
+            fingerprint=hashlib.sha256(encoded).hexdigest(),
+            local=True,
+        )
+
+    # -- Local engine management (installation, memory) ---------------------------
+
+    def local_setup_for(self, target: str) -> LocalEmbeddingSetup:
+        """The installation of one local embedding target; ``ValueError`` when unknown."""
+        if self._local is None:
+            raise ValueError("Unknown local embedding target")
+        return self._local.setup_for(target)
+
+    def local_memory_status(self) -> dict[str, Any]:
+        return self._local.memory_status() if self._local is not None else {"models": []}
+
+    async def unload_local(self, target: str) -> dict[str, Any]:
+        if self._local is None:
+            raise ValueError("Unknown local embedding target")
+        return await self._local.release_memory(target)
+
+    def add_local_ready_listener(self, listener: Callable[[str], None]) -> None:
+        """Call *listener* with the target id whenever a local Model finishes installing."""
+        if self._local is not None:
+            self._local.add_ready_listener(listener)
+
+    def close(self) -> None:
+        if self._local is not None:
+            self._local.close()
+
+    async def aclose(self) -> None:
+        if self._local is not None:
+            await self._local.aclose()
 
     @staticmethod
     def _space_identity(target_ref: Any, options: JsonObject) -> EmbeddingSpaceIdentity:

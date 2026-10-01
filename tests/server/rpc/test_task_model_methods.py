@@ -107,6 +107,86 @@ async def test_speech_setup_routes_exact_tts_target_and_rejects_unknown_targets(
     assert result["error"]["code"] == "invalid_request"
 
 
+def _local_owner(target: str, label: str) -> SimpleNamespace:
+    """A service running one local target, as the generic local RPCs see it."""
+    setup = MagicMock()
+    setup.status.return_value = {"state": "missing", "phase": "checking", "error": "python_missing"}
+    setup.install.return_value = {"state": "installing", "phase": "queued", "error": ""}
+    models = [{"target": target, "label": label, "loaded": True, "busy": False}]
+
+    def setup_for(requested: str) -> Any:
+        if requested != target:
+            raise ValueError("Unknown local target")
+        return setup
+
+    async def unload(requested: str) -> dict[str, Any]:
+        setup_for(requested)
+        models[0]["loaded"] = False
+        return {"models": models, "released": True}
+
+    return SimpleNamespace(
+        setup=setup,
+        local_setup_for=setup_for,
+        local_memory_status=lambda: {"models": models},
+        unload_local=unload,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it() -> None:
+    speech = _local_owner("local/qwen3-tts", "Qwen3-TTS")
+    embeddings = _local_owner("local/granite-embedding-r2", "Granite")
+    state = SimpleNamespace(
+        runtime=SimpleNamespace(
+            speech=speech,
+            embeddings=embeddings,
+            model_tasks=SimpleNamespace(
+                binding_for=lambda _: TaskModelBinding(
+                    task_type="text_embedding", target="local/granite-embedding-r2"
+                ),
+                binding_is_usable=lambda _: False,
+            ),
+        ),
+        request_restart=None,
+    )
+
+    async def call(method: str, **params: Any) -> dict[str, Any]:
+        return await dispatch_rpc(state, {"method": f"task_model.{method}", "params": params})
+
+    status = await call("local_setup_status", target="local/granite-embedding-r2")
+    assert status["result"] == {
+        "state": "missing",
+        "phase": "checking",
+        "error": "python_missing",
+        "restart_available": False,
+    }
+    install = await call("local_setup_install", target="local/granite-embedding-r2")
+    assert install["result"]["state"] == "installing"
+    embeddings.setup.install.assert_called_once_with()
+    speech.setup.install.assert_not_called()
+    assert [
+        model["target"] for model in (await call("local_memory_status"))["result"]["models"]
+    ] == [
+        "local/qwen3-tts",
+        "local/granite-embedding-r2",
+    ]
+    unloaded = (await call("local_unload", target="local/granite-embedding-r2"))["result"]
+    assert unloaded["released"] is True
+    assert [model["loaded"] for model in unloaded["models"]] == [True, False]
+    # The selected local engine's readiness is checked (and logged) by its owner.
+    await call("status", task_type="text_embedding")
+    embeddings.setup.status.assert_called_with(log_unavailable=True)
+    for method, params in (
+        ("local_setup_status", {"target": "local/unknown"}),
+        ("local_setup_install", {"target": "openrouter/x/y::api-key"}),
+        ("local_setup_install", {"target": "local/qwen3-tts", "packages": ["untrusted"]}),
+        ("local_unload", {"target": "local/unknown"}),
+        ("local_memory_status", {"force": True}),
+    ):
+        assert (await call(method, **params))["error"]["code"] == "invalid_request"
+    speech.setup.install.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_task_model_list_targets_rpc_returns_targets() -> None:
     state = SimpleNamespace(runtime=SimpleNamespace(model_tasks=_ModelTasks()))

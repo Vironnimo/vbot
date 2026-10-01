@@ -171,8 +171,9 @@ def _environment_versions(install: Installation) -> set[str]:
     if install.server_data_directory is not None:
         from core.storage.layout import DataDirectoryLayout
 
-        speech = DataDirectoryLayout(Path(install.server_data_directory)).speech_engines
-        configurations += speech.glob("*/pyvenv.cfg")
+        layout = DataDirectoryLayout(Path(install.server_data_directory))
+        configurations += layout.speech_engines.glob("*/pyvenv.cfg")
+        configurations += layout.embedding_engines.glob("*/pyvenv.cfg")
     versions = contained(install.root, "versions").resolve()
     needed: set[str] = set()
     for configuration in configurations:

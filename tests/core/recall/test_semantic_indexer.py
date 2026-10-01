@@ -12,7 +12,12 @@ from typing import Any
 import pytest
 
 from core.chat import ChatMessage
-from core.model_tasks import EmbeddingExecutionError, EmbeddingResult, EmbeddingUsage
+from core.model_tasks import (
+    EmbeddingExecutionError,
+    EmbeddingInputTooLongError,
+    EmbeddingResult,
+    EmbeddingUsage,
+)
 from core.models.pricing import TokenPricing, TokenRates
 from core.providers.errors import ProviderAuthError
 from core.recall import IndexStatus, PassageIndex, SemanticIndexer
@@ -128,13 +133,25 @@ def _conversation(sessions: ChatSessionManager, session_id: str, text: str, day:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("batch_size", "target_batch_size"),
+    [
+        pytest.param(2, None, id="indexer-batch"),
+        # A local engine asks for smaller batches than the indexer's own.
+        pytest.param(64, 2, id="target-batch"),
+    ],
+)
 async def test_pass_embeds_waiting_texts_newest_first_one_call_at_a_time(
-    index: PassageIndex, sessions: ChatSessionManager
+    index: PassageIndex,
+    sessions: ChatSessionManager,
+    batch_size: int,
+    target_batch_size: int | None,
 ) -> None:
     for day in (1, 2, 3):
         _conversation(sessions, f"day-{day}", f"banana fruit {day}", day)
     embeddings = _Embeddings()
-    indexer = _indexer(index, sessions, embeddings, batch_size=2)
+    embeddings.batch_size_hint = target_batch_size
+    indexer = _indexer(index, sessions, embeddings, batch_size=batch_size)
 
     await indexer.run_pass()
     after = await indexer.status()
@@ -199,6 +216,21 @@ async def test_status_estimates_waiting_texts_and_keeps_spent_usage_per_space(
     assert moved.spent_cost is None
 
 
+async def test_local_embedding_space_costs_nothing(
+    index: PassageIndex, sessions: ChatSessionManager
+) -> None:
+    _conversation(sessions, "one", "banana fruit 1", 1)
+    embeddings = _Embeddings(reject=lambda _texts: _provider_failure(503, retryable=True))
+    embeddings.provider_id, embeddings.model_id, embeddings.local = "local", "granite", True
+    indexer = _indexer(index, sessions, embeddings)
+    await indexer.run_pass()
+
+    status = await indexer.status()
+
+    # No Model DB price exists for a local Model; it is free, not unknown.
+    assert (status.provider, status.waiting, status.estimate_cost) == ("local", 1, 0.0)
+
+
 async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
     index: PassageIndex, sessions: ChatSessionManager
 ) -> None:
@@ -234,13 +266,28 @@ async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "rejection",
+    [
+        pytest.param(_overflow, id="provider-context-overflow"),
+        pytest.param(
+            lambda: EmbeddingInputTooLongError(
+                "Text 0 has 3000 tokens; the local embedding model accepts at most 2048 tokens "
+                "per text."
+            ),
+            id="local-input-too-long",
+        ),
+    ],
+)
 async def test_rejected_text_is_isolated_by_bisection_and_skipped_until_rebuild(
-    index: PassageIndex, sessions: ChatSessionManager
+    index: PassageIndex,
+    sessions: ChatSessionManager,
+    rejection: Callable[[], EmbeddingExecutionError],
 ) -> None:
     for day, text in enumerate(("fruit a", "poison text", "fruit c", "fruit d"), start=1):
         _conversation(sessions, f"day-{day}", text, day)
     embeddings = _Embeddings(
-        reject=lambda texts: _overflow() if any("poison" in text for text in texts) else None
+        reject=lambda texts: rejection() if any("poison" in text for text in texts) else None
     )
     indexer = _indexer(index, sessions, embeddings, batch_size=4)
 

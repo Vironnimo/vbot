@@ -84,6 +84,8 @@ class RecallIntegration:
             pricing=models.pricing_for if models is not None else None,
             logger=logger,
         )
+        # A local Model that just finished installing may be the bound one.
+        embeddings.add_local_ready_listener(lambda _target: self.indexer.settings_changed())
         self._unobserve_runs: Callable[[], None] | None = None
         # The configured backend name last reported as unknown: every reload of an
         # unchanged setting would otherwise warn again.

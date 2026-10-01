@@ -67,6 +67,9 @@ class StubEmbeddings:
         self.model_id = "stub-embed"
         self.response_model_id = ""
         self.space_fingerprint = "stub-space-a"
+        self.local = False
+        # Texts per document request the target prefers; ``None`` means no preference.
+        self.batch_size_hint: int | None = None
         self.embed_calls: list[list[str]] = []
         self.embed_purposes: list[str | None] = []
 
@@ -89,7 +92,11 @@ class StubEmbeddings:
             provider_id=self.provider_id,
             model_id=self.model_id,
             fingerprint=self.space_fingerprint,
+            local=self.local,
         )
+
+    def document_batch_size(self) -> int | None:
+        return self.batch_size_hint
 
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         self.embed_calls.append(list(texts))

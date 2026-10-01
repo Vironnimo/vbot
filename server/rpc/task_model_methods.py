@@ -95,17 +95,13 @@ def _task_model_status(state: Any, params: JsonObject) -> JsonObject:
             configured = False
         else:
             configured = True
-            if normalized_task_type in {
-                "speech_to_text",
-                "text_to_speech",
-            } and binding.target.startswith("local/"):
+            if binding.target.startswith("local/") and (
+                setup := _owned_local_setup(state, binding.target)
+            ):
                 # Only report the selected engine, never unused optional engines
                 # encountered during catalog enumeration. The owner deduplicates
                 # repeated readiness checks and reports recovery.
-                with suppress(ValueError):
-                    state.runtime.speech.local_setup_for(binding.target).status(
-                        log_unavailable=True
-                    )
+                setup.status(log_unavailable=True)
         usable = (
             state.runtime.model_tasks.binding_is_usable(normalized_task_type)
             if configured
@@ -247,6 +243,68 @@ async def _local_speech_unload(state: Any, params: JsonObject) -> JsonObject:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
 
 
+# Services that run local targets, each owning its targets' installations.
+_LOCAL_OWNERS = ("speech", "embeddings")
+
+
+def _owned_local_setup(state: Any, target: str) -> Any | None:
+    """The installation behind one local target, from whichever service runs it."""
+    for owner in _LOCAL_OWNERS:
+        with suppress(ValueError):
+            return getattr(state.runtime, owner).local_setup_for(target)
+    return None
+
+
+def _local_target(params: JsonObject, method: str) -> str:
+    _reject_unsupported(params, {"target"}, method)
+    target = params.get("target")
+    if not isinstance(target, str) or not target.startswith("local/"):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a local target id")
+    return target
+
+
+def _local_setup(state: Any, params: JsonObject, method: str) -> Any:
+    setup = _owned_local_setup(state, _local_target(params, method))
+    if setup is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Unknown local target")
+    return setup
+
+
+def _local_setup_status(state: Any, params: JsonObject) -> JsonObject:
+    """Installation state of one local target's engine, for any local task."""
+    setup = _local_setup(state, params, "task_model.local_setup_status")
+    return {**setup.status(), "restart_available": state.request_restart is not None}
+
+
+def _local_setup_install(state: Any, params: JsonObject) -> JsonObject:
+    """Start (or join) the fixed installation of one local target's engine."""
+    setup = _local_setup(state, params, "task_model.local_setup_install")
+    return {**setup.install(), "restart_available": state.request_restart is not None}
+
+
+def _local_memory_status(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unsupported(params, set(), "task_model.local_memory_status")
+    return {
+        "models": [
+            model
+            for owner in _LOCAL_OWNERS
+            for model in getattr(state.runtime, owner).local_memory_status()["models"]
+        ]
+    }
+
+
+async def _local_unload(state: Any, params: JsonObject) -> JsonObject:
+    target = _local_target(params, "task_model.local_unload")
+    for owner in _LOCAL_OWNERS:
+        with suppress(ValueError):
+            result = dict(await getattr(state.runtime, owner).unload_local(target))
+            break
+    else:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "Unknown local target")
+    # One combined view, the same as task_model.local_memory_status.
+    return {**_local_memory_status(state, {}), "released": result["released"]}
+
+
 def _speech_setup(state: Any, params: JsonObject) -> Any:
     _reject_unsupported(params, {"target"}, "speech.local_setup")
     target = params.get("target", "")
@@ -279,4 +337,8 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "task_model.patch_options": serialized_mutation(
             _task_model_patch_options, lock_attribute="_settings_mutation_lock"
         ),
+        "task_model.local_setup_status": _local_setup_status,
+        "task_model.local_setup_install": _local_setup_install,
+        "task_model.local_memory_status": _local_memory_status,
+        "task_model.local_unload": _local_unload,
     }

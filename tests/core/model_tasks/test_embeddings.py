@@ -1,23 +1,25 @@
 """Tests for the provider-neutral ``EmbeddingService``.
 
-The Provider client is replaced by a recording fake; its wire behavior is
-covered in ``test_embeddings_providers.py``.
+The Provider client and the local embedding engine are replaced by recording
+fakes; their own behavior is covered in ``test_embeddings_providers.py`` and
+``test_embeddings_local.py``.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import MagicMock, patch
+from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from core.model_tasks import (
     EmbeddingConfigurationError,
     EmbeddingExecutionError,
+    EmbeddingInputTooLongError,
     EmbeddingService,
     EmbeddingUnsupportedTargetError,
     TaskModelError,
@@ -25,6 +27,14 @@ from core.model_tasks import (
 from core.model_tasks.embedding_profiles import (
     EMBEDDING_PROFILE_CONTRACT_VERSION,
     embedding_profile,
+)
+from core.model_tasks.embeddings_local import (
+    LocalEmbeddingError,
+    LocalEmbeddingInputTooLongError,
+    LocalEmbeddingModel,
+    LocalEmbeddingOutput,
+    LocalEmbeddingUnavailableError,
+    builtin_local_embedding_models,
 )
 from core.model_tasks.embeddings_providers import (
     EmbeddingUsage,
@@ -84,8 +94,53 @@ class _FakeProviderClient:
         )
 
 
-def _service(target: str | None = OPENROUTER_TARGET, **options: Any) -> EmbeddingService:
-    return EmbeddingService(_ModelTasks(target, options), MagicMock(name="runtime"))
+class _LocalEngine:
+    """Stand-in for the local embedding engine; a text's vector is ``[len(text), 1.0]``."""
+
+    def __init__(self, *, installed: bool = True, error: Exception | None = None) -> None:
+        self.models = {model.id: model for model in builtin_local_embedding_models()}
+        self.installed = installed
+        self.error = error
+        self.calls: list[tuple[str, list[str], bool, dict[str, Any]]] = []
+
+    def model(self, local_id: str) -> LocalEmbeddingModel:
+        try:
+            return self.models[local_id]
+        except KeyError:
+            raise LocalEmbeddingUnavailableError("Unknown local embedding model") from None
+
+    def check_available(self, local_id: str) -> None:
+        if not self.installed:
+            raise LocalEmbeddingUnavailableError("Install it in Settings, then retry.")
+
+    async def embed(
+        self, local_id: str, texts: Sequence[str], *, query: bool, options: Mapping[str, Any]
+    ) -> LocalEmbeddingOutput:
+        self.calls.append((local_id, list(texts), query, dict(options)))
+        if self.error is not None:
+            raise self.error
+        return LocalEmbeddingOutput(
+            vectors=tuple([float(len(text)), 1.0] for text in texts),
+            tokens=tuple(len(text) for text in texts),
+        )
+
+    def document_batch_size(self, local_id: str) -> int:
+        return self.model(local_id).document_batch_size
+
+
+def _service(
+    target: str | None = OPENROUTER_TARGET,
+    *,
+    local: _LocalEngine | None = None,
+    recorder: Any = None,
+    **options: Any,
+) -> EmbeddingService:
+    return EmbeddingService(
+        _ModelTasks(target, options),
+        MagicMock(name="runtime"),
+        usage_recorder=recorder,
+        local_executor=cast(Any, local),
+    )
 
 
 @pytest.fixture
@@ -168,6 +223,7 @@ async def test_embed_returns_ordered_vectors_with_the_resolved_identity(
     assert result.actual_model_id == actual_model_id
     assert result.usage == usage
     assert result.space_fingerprint == service.resolve_space().fingerprint
+    assert service.document_batch_size() is None
     # Inputs travel with the binding's effective options and the family's query mode.
     assert client.embed_calls == [(["alpha", "beta"], {"dimensions": 3}, "search_query")]
     _runtime, target_ref = provider_factory.call_args.args
@@ -322,3 +378,125 @@ def test_space_fingerprint_covers_target_options_and_family_handling(
         )
         changed_version = space(api_key, dimensions=768, extra_options={"user": "recall"})
     assert baseline.fingerprint not in {changed_handling.fingerprint, changed_version.fingerprint}
+
+
+_HARRIER_QUERY = (
+    "Instruct: Given a web search query, retrieve relevant passages that answer the query\n"
+    "Query: alpha"
+)
+
+
+@pytest.mark.parametrize(
+    ("target", "purpose", "sent", "query"),
+    [
+        pytest.param("local/harrier-0.6b", "query", _HARRIER_QUERY, True, id="query-prefix"),
+        pytest.param("local/harrier-0.6b", "document", "alpha", False, id="plain-document"),
+        pytest.param("local/granite-embedding-r2", "query", "alpha", True, id="symmetric"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_local_target_embeds_on_this_machine_at_no_cost(
+    provider_factory: MagicMock, target: str, purpose: Any, sent: str, query: bool
+) -> None:
+    local = _LocalEngine()
+    recorder = AsyncMock()
+    recorder.start.return_value = "call-1"
+    service = _service(target, local=local, recorder=recorder, threads=3)
+
+    result = await service.embed(["alpha"], purpose=purpose)
+
+    local_id = target.removeprefix("local/")
+    # The engine embeds exactly the profile-shaped text, with the binding's options.
+    assert local.calls == [(local_id, [sent], query, {"dimensions": None, "threads": 3})]
+    assert provider_factory.return_value.embed_calls == []
+    assert (result.provider_id, result.model_id, result.dimension) == ("local", local_id, 2)
+    assert result.vectors == ([float(len(sent)), 1.0],)
+    assert result.space_fingerprint == service.resolve_space().fingerprint
+    assert result.usage.input_tokens == len(sent) and result.usage.cost == 0.0
+    assert service.resolve_space().local
+    assert service.document_batch_size() == 8
+    # Every local call is accounted under its target with its tokens and zero cost.
+    assert recorder.start.await_args.kwargs["model"] == target
+    assert recorder.start.await_args.kwargs["kind"] == "text_embedding"
+    recorder.update.assert_awaited_once_with(
+        "call-1", {"input_tokens": len(sent), "output_tokens": 0, "reported_cost_usd": 0.0}
+    )
+    assert recorder.finish.await_args.kwargs["status"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("target", "local", "error_type", "accounted"),
+    [
+        pytest.param(
+            "local/granite-embedding-r2",
+            _LocalEngine(installed=False),
+            EmbeddingConfigurationError,
+            False,
+            id="not-installed",
+        ),
+        pytest.param(
+            "local/granite-embedding-r2",
+            _LocalEngine(error=LocalEmbeddingInputTooLongError(0, 3000, 2048)),
+            EmbeddingInputTooLongError,
+            True,
+            id="input-too-long",
+        ),
+        pytest.param(
+            "local/granite-embedding-r2",
+            _LocalEngine(error=LocalEmbeddingError("The local embedding model failed")),
+            EmbeddingExecutionError,
+            True,
+            id="engine-failure",
+        ),
+        pytest.param(
+            "local/unknown-model",
+            _LocalEngine(),
+            EmbeddingUnsupportedTargetError,
+            False,
+            id="unknown-model",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_failed_local_execution_is_an_embedding_error(
+    target: str, local: _LocalEngine, error_type: type[Exception], accounted: bool
+) -> None:
+    recorder = AsyncMock()
+    recorder.start.return_value = "call-1"
+
+    with pytest.raises(error_type):
+        await _service(target, local=local, recorder=recorder).embed(["alpha"])
+
+    assert recorder.start.await_count == int(accounted)
+    if accounted:
+        assert recorder.finish.await_args.kwargs["status"] == "failed"
+
+
+def test_local_space_fingerprint_covers_the_pinned_model_and_profile_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def space(
+        target: str = "local/harrier-0.6b", local: _LocalEngine | None = None, **options: Any
+    ) -> Any:
+        return _service(target, local=local or _LocalEngine(), **options).resolve_space()
+
+    baseline = space(threads=2)
+
+    assert (baseline.provider_id, baseline.model_id, baseline.local) == (
+        "local",
+        "harrier-0.6b",
+        True,
+    )
+    # Runtime options such as the thread count never change the vectors.
+    assert space(threads=7) == baseline
+    assert space("local/granite-embedding-r2").fingerprint != baseline.fingerprint
+    moved = _LocalEngine()
+    moved.models["harrier-0.6b"] = replace(moved.models["harrier-0.6b"], revision="0" * 40)
+    assert space(local=moved).fingerprint != baseline.fingerprint
+    profile = embedding_profile("harrier-0.6b")
+    with monkeypatch.context() as patched:
+        patched.setattr(
+            "core.model_tasks.embeddings.embedding_profile",
+            lambda _model_id: replace(profile, query="Query: "),
+        )
+        assert space().fingerprint != baseline.fingerprint

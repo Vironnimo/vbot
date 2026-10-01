@@ -109,6 +109,9 @@ microphone Sessions.
 
 `LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
 and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
+It extends `LocalSetup` (`local_setup.py`), which local embeddings share: status,
+job lifecycle, receipts and the uv recipe installer (`_install_recipe`) live there;
+the server-interpreter STT path and the TTS verification stay in `speech_setup.py`.
 The shared STT job and individual TTS jobs serialize package operations. In a packaged release,
 STT and TTS use managed data-directory environments and child processes; the immutable release
 runtime is not changed. Managed verification and execution workers use `-I -B`:
@@ -216,6 +219,8 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
   still waits for active inference. Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
 - `speech.local_setup_status/install/restart` in `server/rpc/task_model_methods.py`
+  (the generic `task_model.local_setup_status/install`, `local_memory_status` and
+  `local_unload` serve speech targets too; `model_tasks.md` -> Contracts)
   accept an optional exact local `target`, never client commands, package names or paths. Restart requires verified
   setup and the server startup callback; its detached CLI lifecycle helper
   targets the exact running bind/data directory; a scheduled restart logs one INFO

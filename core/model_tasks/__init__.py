@@ -21,11 +21,13 @@ if TYPE_CHECKING:
         EmbeddingConfigurationError,
         EmbeddingError,
         EmbeddingExecutionError,
+        EmbeddingInputTooLongError,
         EmbeddingResult,
         EmbeddingService,
         EmbeddingSpaceIdentity,
         EmbeddingUnsupportedTargetError,
     )
+    from core.model_tasks.embeddings_local import LocalEmbeddingExecutor
     from core.model_tasks.embeddings_providers import EmbeddingUsage, ProviderEmbeddingClient
     from core.model_tasks.image import (
         ImageConfigurationError,
@@ -122,11 +124,13 @@ _EXPORT_MODULES = {
     "EmbeddingConfigurationError": "core.model_tasks.embeddings",
     "EmbeddingError": "core.model_tasks.embeddings",
     "EmbeddingExecutionError": "core.model_tasks.embeddings",
+    "EmbeddingInputTooLongError": "core.model_tasks.embeddings",
     "EmbeddingPurpose": "core.model_tasks.embedding_profiles",
     "EmbeddingResult": "core.model_tasks.embeddings",
     "EmbeddingService": "core.model_tasks.embeddings",
     "EmbeddingSpaceIdentity": "core.model_tasks.embeddings",
     "EmbeddingUnsupportedTargetError": "core.model_tasks.embeddings",
+    "LocalEmbeddingExecutor": "core.model_tasks.embeddings_local",
     "EmbeddingUsage": "core.model_tasks.embeddings_providers",
     "ProviderEmbeddingClient": "core.model_tasks.embeddings_providers",
     "ImageConfigurationError": "core.model_tasks.image",
@@ -211,6 +215,7 @@ __all__ = [
     "EmbeddingConfigurationError",
     "EmbeddingError",
     "EmbeddingExecutionError",
+    "EmbeddingInputTooLongError",
     "EmbeddingPurpose",
     "EmbeddingResult",
     "EmbeddingService",
@@ -233,6 +238,7 @@ __all__ = [
     "ImageUnderstandingUnavailableError",
     "ImageUnsupportedMediaTypeError",
     "ImageUnsupportedTargetError",
+    "LocalEmbeddingExecutor",
     "LocalSpeechError",
     "LocalSpeechExecutor",
     "LocalTaskTargetDescriptor",

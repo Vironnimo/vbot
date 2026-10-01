@@ -60,3 +60,7 @@ Local speech owns managed SDK environments and setup-completion receipts under
 `DataDirectoryLayout.speech_engines` (`<data-dir>/speech-engines/`), created only
 by explicit speech setup. These are durable installation data, not temporary
 artifacts; formats/lifecycle belong to `speech_setup.py` (`model_tasks/speech.md`).
+Local embeddings likewise own `DataDirectoryLayout.embedding_engines`
+(`<data-dir>/embedding-engines/`: the shared `onnx/` environment and pinned Model
+files under `models/<id>/<revision>/`, each with a receipt), created only by an
+explicit local embedding install (`model_tasks/embeddings.md` -> Local Engine).

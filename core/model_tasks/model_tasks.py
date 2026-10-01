@@ -608,30 +608,45 @@ class TaskModelService:
                 task_types=descriptor.task_types,
                 usable=descriptor.can_execute(),
                 metadata=descriptor.metadata or {},
-                facts=_target_facts(task_type, descriptor.id),
+                facts=_target_facts(
+                    task_type,
+                    descriptor.id,
+                    engine_limit=(descriptor.metadata or {}).get("max_input_tokens"),
+                ),
             )
             for descriptor in self._local_targets.list_for_task(task_type)
         ]
 
 
-def _target_facts(task_type: str, model_id: str, *, model: Any | None = None) -> JsonObject:
+def _target_facts(
+    task_type: str,
+    model_id: str,
+    *,
+    model: Any | None = None,
+    engine_limit: int | None = None,
+) -> JsonObject:
     """Return the selection facts accessors show for one target of *task_type*.
 
     *model* is the Provider Model behind a provider target; a local target has
-    none. Only ``text_embedding`` targets carry facts today: whether the Model
-    runs on this machine, its curated embedding profile facts, its input limit
-    per text, and its input price in USD per million tokens when known.
+    none, costs nothing, and may declare its engine's own input limit
+    (*engine_limit*), which then replaces the Model family's. Only
+    ``text_embedding`` targets carry facts today: whether the Model runs on
+    this machine, its curated embedding profile facts, its input limit per
+    text, and its input price in USD per million tokens when known.
     """
 
     if task_type != TASK_TEXT_EMBEDDING:
         return {}
     profile = embedding_profile(model_id)
     pricing = getattr(model, "pricing", None)
+    price = pricing.rates.input if pricing is not None else None
     return {
         "local": model is None or model_is_local(getattr(model, "metadata", None)),
         "multilingual": profile.multilingual,
         "recommended_rank": profile.recommended_rank,
         "note": profile.note,
-        "max_input_tokens": profile.max_input_tokens or getattr(model, "context_window", None),
-        "input_price_per_million": pricing.rates.input if pricing is not None else None,
+        "max_input_tokens": engine_limit
+        or profile.max_input_tokens
+        or getattr(model, "context_window", None),
+        "input_price_per_million": 0.0 if model is None else price,
     }

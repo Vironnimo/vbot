@@ -2,7 +2,8 @@
 
 Local targets bypass Provider catalogs and credentials. Each execution owner
 supplies descriptors with option schemas and a live availability check. Runtime
-registers the speech executor's catalog; catalog entries alone cannot execute.
+registers the speech and embedding executors' catalogs; catalog entries alone
+cannot execute.
 """
 
 from __future__ import annotations
@@ -74,6 +75,11 @@ class LocalTaskTargetRegistry:
         """Register or replace one local target descriptor."""
 
         self._descriptors[descriptor.id] = descriptor
+
+    def descriptors(self) -> list[LocalTaskTargetDescriptor]:
+        """Return every registered descriptor, ordered by local id."""
+
+        return sorted(self._descriptors.values(), key=lambda descriptor: descriptor.id)
 
     def list_for_task(self, task_type: str) -> list[LocalTaskTargetDescriptor]:
         """Return local targets that advertise *task_type*."""
