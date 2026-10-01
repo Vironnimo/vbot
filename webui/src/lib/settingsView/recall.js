@@ -283,7 +283,8 @@ function waitingText(status, waiting) {
   }
   const tokens = tokenText(countOf(status.estimate?.tokens));
   const cost = finiteOrNull(status.estimate?.cost);
-  return cost === null
+  // A free Model (one on this computer) has no cost to name.
+  return cost === null || cost === 0
     ? t('settings.recall.status.waiting', { tokens })
     : t('settings.recall.status.waitingCost', {
         tokens,
@@ -296,6 +297,9 @@ function spentText(spent) {
     return '';
   }
   const cost = finiteOrNull(spent.cost);
+  if (cost === 0) {
+    return '';
+  }
   return cost === null
     ? t('settings.recall.status.spentTokens', {
         tokens: tokenText(countOf(spent.input_tokens)),

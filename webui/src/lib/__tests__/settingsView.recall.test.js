@@ -277,6 +277,23 @@ describe('recall index status line', () => {
       },
     ],
     [
+      'a free local Model: no cost while waiting or spent',
+      status({
+        state: 'indexing',
+        indexed: 56,
+        waiting: 938,
+        estimate: { tokens: 264_300, cost: 0 },
+        spent: { requests: 7, input_tokens: 18_000, cost: 0 },
+        eta_seconds: 170,
+      }),
+      {
+        state: 'indexing',
+        summary:
+          'Indexing: 56 of 994 passages · about 3 min left · about 264.3K tokens waiting',
+        problem: '',
+      },
+    ],
+    [
       'waiting without a known price',
       status({ indexed: 10, waiting: 5, estimate: { tokens: 1200 } }),
       {
