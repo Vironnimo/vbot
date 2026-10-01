@@ -24,7 +24,6 @@ from core.database._connections import (
 from core.database.database import Database, open_database, open_offline_database
 from core.database.disposable import DisposableDatabase, ProjectionFailure, projection_failure
 from core.database.errors import (
-    GENERATION_1_CONVERTER_COMMAND,
     DatabaseConversionRequiredError,
     DatabaseCorruptError,
     DatabaseError,
@@ -34,7 +33,7 @@ from core.database.errors import (
     IncidentConflictError,
     MemberFrozenError,
     UpdateRollbackRefusedError,
-    generation_1_conversion_hint,
+    older_format_hint,
 )
 from core.database.marker import (
     MAINTENANCE_GUARD_FILE_NAME,
@@ -101,7 +100,6 @@ __all__ = [
     "CANONICAL",
     "DISPOSABLE",
     "HELD_CAPTURE",
-    "GENERATION_1_CONVERTER_COMMAND",
     "JOURNAL_MODE_DELETE",
     "JOURNAL_MODE_WAL",
     "MAINTENANCE_GUARD_FILE_NAME",
@@ -143,12 +141,12 @@ __all__ = [
     "describe_missing_databases",
     "find_update_snapshot",
     "finish_maintenance",
-    "generation_1_conversion_hint",
     "has_live_connection",
     "is_extension_database_name",
     "is_wal_reset_vulnerable",
     "list_data_snapshots",
     "maintenance",
+    "older_format_hint",
     "open_database",
     "open_offline_database",
     "projection_failure",

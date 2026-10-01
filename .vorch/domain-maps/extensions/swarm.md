@@ -636,15 +636,7 @@ it never substitutes cumulative Session usage.
 and reconciles later additive changes on open. Keep changes additive (new tables,
 indexes, nullable or defaulted columns); state and kind values are validated in
 code, never by CHECK enums. New timestamps use the canonical UTC form
-`YYYY-MM-DDTHH:MM:SS.ffffffZ` (`_store_values._now`). A database from before
-Persistence Generation 1 is converted by
-`scripts/converters/persistence_generation_1/swarm.py` (every table with its keys
-and the cursor key, canonical timestamps; refused rows are dropped and reported;
-round trip through the current Store in `tests/scripts/converters/persistence_generation_1/test_swarm.py`).
-The converter also replaces retired Tool names in the `tool_access` of saved profiles
-and Swarm snapshots (`database/generation-1-conversion.md` -> Retired Tool names) and
-drops the retired `inactive_recipients` from stored Board request outcomes (same file ->
-Retired fields and values).
+`YYYY-MM-DDTHH:MM:SS.ffffffZ` (`_store_values._now`).
 The Store has no upgrade code. Saved profiles and Swarm snapshots are consumed as stored;
 input defaults are resolved when a profile is saved or previewed.
 
@@ -734,8 +726,7 @@ their tooltip names the latest revision and its author. It owns free page drafts
 
 The Decisions Tool, management operation, tab, and linked-question enrichment are
 removed. Board discussion and Wiki pages cover shared deliberation and retained
-results. The generation 1 schema has no decision tables; the converter drops
-their retained rows and the `decisions:` request receipts.
+results. The generation 1 schema has no decision tables.
 No saved profile instructions, Swarm snapshots, or Session history are rewritten.
 
 Wiki search uses explicit button callbacks and an input Enter handler because the

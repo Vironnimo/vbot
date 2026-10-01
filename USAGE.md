@@ -369,37 +369,15 @@ Other entries appear at the data root when first needed:
 - the canonical databases `sessions.db`, `channels.db`, `provider-usage.db` and `decisions.db`, and Extension databases next to other Extension state under `extension-data/<extension>/`; every database is registered in `data-store.json` (see Data-store maintenance below);
 - `snapshots/`, `incidents/` and `quarantine/` for data snapshots and recovery, `data-store.lock`, and `data-maintenance.json` while an offline data operation is incomplete;
 - `runtime/` with the control records of a running server, `speech-engines/` after local speech setup, and `embedding-engines/` after a local embedding Model is installed;
-- `pre-generation-1/` after converting an older data directory (see below).
+- `pre-generation-1/` only in a data directory converted from vBot 0.4.4 or earlier (see below).
 
-The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates a `settings.json` holding only `format_version` 1 when Settings is absent. It never rewrites either existing file; The installer adds the fresh-install Agent defaults to that new `settings.json` only when it creates the data directory; the server port stays in the installation record. The initializer writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Converting an existing data directory).
+The initializer copies `resources/data-dir/.env.example` only when `.env` is absent and creates a `settings.json` holding only `format_version` 1 when Settings is absent. It never rewrites either existing file; The installer adds the fresh-install Agent defaults to that new `settings.json` only when it creates the data directory; the server port stays in the installation record. The initializer writes `data-store.json` only into a data directory it has just created; an existing directory without it is refused (see Data directories from older versions).
 
-### Converting an existing data directory
+### Data directories from older versions
 
-Current vBot reads only persistence Generation 1: the canonical paths, databases registered in `data-store.json`, and JSON documents with a `format_version`. Setup and Runtime never convert or dual-read older data. A data directory written by a vBot release before Generation 1 (0.4.x) is converted once, offline, from a vBot checkout that includes Generation 1:
+vBot reads only its current data format: the canonical paths, databases registered in `data-store.json`, and JSON documents with a `format_version`. Setup and Runtime never convert or dual-read older data. vBot 0.4.4 and earlier wrote data directories in an older format, which this version cannot use: it refuses such a directory at startup, as it refuses every existing directory without `data-store.json`. To start fresh, move the old directory aside or choose a data directory path that does not exist yet; vBot creates a new data directory there. To keep old data, open it with the vBot version that wrote it and copy out what you still need.
 
-1. Stop vBot completely, including the desktop and tray application. The converter refuses while a server uses the data directory.
-2. Back up the complete data directory with your normal filesystem backup mechanism.
-3. Run a dry run and read its summary: counts per area, verification, and every skipped or approximated item. The data directory keeps its content.
-
-   ```bash
-   python -m scripts.converters.persistence_generation_1 <data-dir> --dry-run --report <file-outside-the-data-dir>
-   ```
-
-4. Install the conversion:
-
-   ```bash
-   python -m scripts.converters.persistence_generation_1 <data-dir> --report <file-outside-the-data-dir>
-   ```
-
-5. Start a vBot that includes Generation 1 (the old release refuses the converted directory), check Agents, Projects, Sessions and Channels, then create the first data snapshot:
-
-   ```bash
-   vbot data-store snapshot create --reason manual
-   ```
-
-The install moves every file it replaces or retires, including the old `sessions.db`, `session-store.json` and `session-snapshots/`, to `<data-dir>/pre-generation-1/` at the same relative path, together with `conversion-report.json`; nothing is deleted. vBot never reads that folder. It also holds old copies of credential files such as OAuth tokens, so treat it like the data directory. Delete it once the converted instance has worked for a while and a data snapshot exists. To go back before that, stop vBot, delete the files the report lists under `install.installed` and `data-store.json`, and move the content of `pre-generation-1/` back.
-
-The converter refuses, changing nothing, while a server runs, when the directory is already converted, when `pre-generation-1/` already exists, when a source has an unsupported shape, or when the volume lacks the free space for staging. A failure before the install leaves the data directory unchanged. An interrupted install keeps vBot from starting on the directory; running the same command again finishes it.
+A data directory converted from such a version can still hold `pre-generation-1/`: the files the conversion replaced, including old copies of credential files such as OAuth tokens. vBot never reads it. Treat it like the data directory, and delete it once the converted data has worked for a while and a data snapshot exists.
 
 ### Data-store maintenance
 

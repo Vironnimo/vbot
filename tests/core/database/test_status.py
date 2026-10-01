@@ -6,12 +6,13 @@ import sqlite3
 from pathlib import Path
 
 from core.database import (
-    GENERATION_1_CONVERTER_COMMAND,
     DatabaseHealth,
     begin_maintenance,
     data_store_status,
+    older_format_hint,
     open_database,
 )
+from core.database.marker import missing_marker_error
 from tests.core.database.database_test_support import (
     notes_spec,
     snapshot_with_notes,
@@ -90,9 +91,9 @@ def test_a_data_directory_without_a_marker_is_unavailable(tmp_path: Path) -> Non
     for status in (unconverted, absent):
         assert status["state"] == "unavailable"
         assert status["databases"] == {}
-    # Only an existing directory can hold older data that needs the converter.
-    assert f"`{GENERATION_1_CONVERTER_COMMAND} {tmp_path}`" in unconverted["reason"]
-    assert GENERATION_1_CONVERTER_COMMAND not in absent["reason"]
+    # An existing directory gets the startup refusal; a missing one is created on start.
+    assert unconverted["reason"] == str(missing_marker_error(tmp_path))
+    assert older_format_hint() not in absent["reason"]
 
 
 def test_incomplete_maintenance_outranks_every_other_state(data_dir: Path) -> None:

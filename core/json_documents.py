@@ -213,9 +213,9 @@ def validate_format_version(
     field_path = child_path(path, FORMAT_VERSION_FIELD)
     if FORMAT_VERSION_FIELD not in data:
         # Imported at call time: the database kernel imports this module.
-        from core.database.errors import generation_1_conversion_hint
+        from core.database.errors import older_format_hint
 
-        add_error(diagnostics, field_path, f"is required. {generation_1_conversion_hint()}")
+        add_error(diagnostics, field_path, f"is required. {older_format_hint()}")
         return False
     value = data[FORMAT_VERSION_FIELD]
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:

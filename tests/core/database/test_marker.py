@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 from dataclasses import replace
@@ -12,7 +11,6 @@ from typing import Any
 import pytest
 
 from core.database import (
-    GENERATION_1_CONVERTER_COMMAND,
     MAINTENANCE_GUARD_FILE_NAME,
     MARKER_FILE_NAME,
     DatabaseConversionRequiredError,
@@ -24,6 +22,7 @@ from core.database import (
     create_data_snapshot,
     finish_maintenance,
     maintenance,
+    older_format_hint,
     open_database,
     open_offline_database,
     read_maintenance,
@@ -136,19 +135,15 @@ def test_an_older_vbot_keeps_the_fields_a_newer_one_added_to_the_marker(
     assert set(rewritten["databases"]["tasks"]) == {"database_id", "format_generation"}
 
 
-def test_an_existing_root_without_a_marker_names_the_generation_1_converter(
-    tmp_path: Path,
-) -> None:
+def test_an_existing_root_without_a_marker_is_refused_untouched(tmp_path: Path) -> None:
     root = tmp_path / "uninitialized"
     root.mkdir()
 
     with pytest.raises(DatabaseConversionRequiredError) as refused:
         open_database(notes_spec(root))
     assert refused.value.data_dir == root.resolve()
-    assert refused.value.converter_command == f"{GENERATION_1_CONVERTER_COMMAND} {root.resolve()}"
-    assert not notes_spec(root).path.exists()
-    module = GENERATION_1_CONVERTER_COMMAND.removeprefix("python -m ")
-    assert importlib.util.find_spec(f"{module}.__main__") is not None
+    assert str(refused.value).endswith(older_format_hint())
+    assert list(root.iterdir()) == []
 
 
 def test_a_canonical_database_must_sit_at_its_canonical_path(data_dir: Path) -> None:

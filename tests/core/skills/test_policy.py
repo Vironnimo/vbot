@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.database import older_format_hint
 from core.skills.policy import (
     POLICY_FORMAT_VERSION,
     SkillPolicy,
@@ -74,9 +75,7 @@ class TestLoad:
         ("document", "message"),
         [
             pytest.param(b"{not json", "Cannot read skill policy", id="malformed-json"),
-            pytest.param(
-                {"version": 2, "disabled": []}, "persistence Generation 1", id="generation-1"
-            ),
+            pytest.param({"version": 2, "disabled": []}, older_format_hint(), id="generation-1"),
             pytest.param(
                 {"format_version": 2, "disabled": []}, "written by a newer vBot", id="newer"
             ),

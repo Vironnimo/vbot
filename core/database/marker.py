@@ -140,11 +140,13 @@ def missing_marker_error(data_dir: Path) -> DatabaseConversionRequiredError:
     """The refusal of an existing data directory without a data-store marker.
 
     Every data directory from before persistence Generation 1 looks like this,
-    so the error names the offline converter.
+    and so does an existing directory vBot did not create, because only the
+    initializer that creates a data directory writes its bootstrap marker.
     """
     return DatabaseConversionRequiredError(
         f"the data directory {data_dir} has no data-store marker ({MARKER_FILE_NAME}), so it "
-        "holds no current-format data store",
+        "holds no current-format data store; vBot writes the marker into every data "
+        "directory it creates and never adopts an existing directory without one",
         data_dir=data_dir,
     )
 
