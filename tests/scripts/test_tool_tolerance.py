@@ -1,4 +1,10 @@
-"""Cross-Tool normalization inventory and real Skill probe regression tests."""
+"""Cross-Tool normalization inventory and provider probe smoke tests.
+
+Each workflow probe runs one representative case to prove that it checks real effects
+rather than the model's claims. The owner tests recover every argument encoding:
+tests/core/tools/*_call_tolerance.py, test_channel_send_delivery.py and
+tests/resources/extensions/homeassistant/.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +38,10 @@ def _cases():
 
 
 CASES = list(_cases())
+
+
+def _case(cases: list[dict[str, Any]], case_id: str) -> dict[str, Any]:
+    return next(case for case in cases if case["id"] == case_id)
 
 
 def _mistakes(value: Any, schema: dict[str, Any]) -> Any:
@@ -90,11 +100,10 @@ class _Adapter:
 
 def test_skill_probe_checks_real_files_and_not_just_model_claims() -> None:
     args = PROBE._parser().parse_args([])
-    for case in skill_tolerance_cases():
-        if "arguments" in case:
-            row = asyncio.run(_skill_case(_Adapter(case["arguments"]), args, case))
-            assert row["passed"], row
-    case = next(case for case in skill_tolerance_cases() if case["id"] == "natural_empty")
+    case = _case(skill_tolerance_cases(), "action_wrapper")
+    row = asyncio.run(_skill_case(_Adapter(case["arguments"]), args, case))
+    assert row["passed"], row
+    case = _case(skill_tolerance_cases(), "natural_empty")
     row = asyncio.run(
         _skill_case(
             _Adapter(
@@ -112,7 +121,7 @@ def test_skill_probe_checks_real_files_and_not_just_model_claims() -> None:
     assert not row["passed"]
 
 
-def test_cron_probe_verifies_persisted_effects_for_every_case() -> None:
+def test_cron_probe_verifies_persisted_effects() -> None:
     from scripts.provider_probe.workflow_cron_tolerance import cron_case, cron_tolerance_cases
 
     class Adapter:
@@ -128,9 +137,8 @@ def test_cron_probe_verifies_persisted_effects_for_every_case() -> None:
             return raw
 
     args = PROBE._parser().parse_args([])
-    for case in cron_tolerance_cases():
-        row = asyncio.run(cron_case(Adapter(), args, case))
-        assert row["passed"], row
+    row = asyncio.run(cron_case(Adapter(), args, _case(cron_tolerance_cases(), "alias")))
+    assert row["passed"], row
 
 
 def test_channel_probe_checks_actual_receiver_and_saved_notes() -> None:
@@ -150,9 +158,9 @@ def test_channel_probe_checks_actual_receiver_and_saved_notes() -> None:
             return raw
 
     args = PROBE._parser().parse_args([])
-    for case in channel_tolerance_cases():
-        row = asyncio.run(channel_case(Adapter(), args, case))
-        assert row["passed"], row
+    case = _case(channel_tolerance_cases(), "scalar_file")
+    row = asyncio.run(channel_case(Adapter(), args, case))
+    assert row["passed"], row
 
 
 def test_web_probe_checks_fetched_content_and_no_fetch_on_conflicts() -> None:
@@ -188,11 +196,11 @@ def test_ha_probe_checks_actual_service_target_and_payload() -> None:
             return raw
 
     args = PROBE._parser().parse_args([])
-    for name in ("ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services"):
-        args.tolerance_tool = name
-        for case in ha_tolerance_cases(name):
-            row = asyncio.run(ha_case(Adapter(), args, case))
-            assert row["passed"], row
+    args.tolerance_tool = "ha_call_service"
+    row = asyncio.run(
+        ha_case(Adapter(), args, _case(ha_tolerance_cases("ha_call_service"), "nested"))
+    )
+    assert row["passed"], row
 
 
 def test_status_probe_verifies_resolved_session_targets() -> None:
@@ -207,8 +215,9 @@ def test_status_probe_verifies_resolved_session_targets() -> None:
             return raw
 
     args = PROBE._parser().parse_args([])
-    for case in status_tolerance_cases():
-        row = asyncio.run(status_case(Adapter(), args, case))
+    # unknown_action also holds the status Tool's refusal of an action other than current.
+    for case_id in ("agent_session", "unknown_action"):
+        row = asyncio.run(status_case(Adapter(), args, _case(status_tolerance_cases(), case_id)))
         assert row["passed"], row
 
 

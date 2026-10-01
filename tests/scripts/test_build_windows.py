@@ -552,10 +552,12 @@ def test_compile_host_constructs_msvc_abi_commands(
     sys.platform != "win32" or not shutil.which("clang-cl") or not shutil.which("llvm-rc"),
     reason="Windows native compiler required",
 )
-@pytest.mark.parametrize("filename,role", native_hosts.HOSTS.items())
-def test_source_update_compiles_host_without_application_dependencies(tmp_path, filename, role):
-    # Keep each native build independent instead of fitting all six compilers
-    # into one normal per-test timeout on slower Windows runners.
+def test_source_update_compiles_host_without_application_dependencies(tmp_path):
+    # The stdlib-only import path does not depend on the role. The Desktop host is the
+    # one build with its own manifest; the runtime test below compiles the host,
+    # update, GUI and server builds, and test_compile_host_constructs_msvc_abi_commands
+    # checks the per-role compiler commands.
+    filename, role = "vBot.Desktop.exe", native_hosts.HOSTS["vBot.Desktop.exe"]
     source = Path(build_windows.__file__).parent.parent
     result = subprocess.run(
         [

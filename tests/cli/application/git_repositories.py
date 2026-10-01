@@ -1,7 +1,8 @@
 """Real Git repositories for source-update, customization and installation tests.
 
-Creating the repositories takes about fifteen Git processes. ``conftest.py`` builds
-them once per test session; each test copies them instead.
+Creating the repositories takes eight Git processes; configuration is written to the
+config files directly. ``conftest.py`` builds them once per test session; each test copies
+them instead.
 """
 
 from __future__ import annotations
@@ -27,11 +28,22 @@ def git(directory: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
-def _disable_background_maintenance(repository: Path) -> None:
-    # Automatic maintenance after commit, push or fetch runs detached and creates and
-    # removes ``objects/maintenance.lock`` while the templates are being copied.
-    git(repository, "config", "maintenance.auto", "false")
-    git(repository, "config", "gc.auto", "0")
+# Automatic maintenance after commit, push or fetch runs detached and creates and
+# removes ``objects/maintenance.lock`` while the templates are being copied.
+_NO_BACKGROUND_MAINTENANCE = {"maintenance.auto": "false", "gc.auto": "0"}
+
+
+def _append_config(config_file: Path, values: dict[str, str]) -> None:
+    """Append ``section[.subsection].key`` values to a Git config file."""
+    sections: dict[str, list[str]] = {}
+    for name, value in values.items():
+        section, _, key = name.rpartition(".")
+        head, dot, subsection = section.partition(".")
+        header = f'[{head} "{subsection}"]' if dot else f"[{head}]"
+        sections.setdefault(header, []).append(f"\t{key} = {value}")
+    with config_file.open("a", encoding="utf-8", newline="\n") as handle:
+        for header, lines in sections.items():
+            handle.write("\n".join([header, *lines]) + "\n")
 
 
 @dataclass(frozen=True)
@@ -54,10 +66,15 @@ def build_templates(root: Path) -> Templates:
     remote, checkout, publisher = root / "remote.git", root / "checkout", root / "publisher"
     git(root, "init", "--quiet", "--bare", "--initial-branch=main", "--template=", remote.name)
     git(root, "init", "--quiet", "--initial-branch=main", "--template=", checkout.name)
-    _disable_background_maintenance(remote)
-    _disable_background_maintenance(checkout)
-    git(checkout, "config", "user.name", "Source Test")
-    git(checkout, "config", "user.email", "source@example.invalid")
+    _append_config(remote / "config", _NO_BACKGROUND_MAINTENANCE)
+    _append_config(
+        checkout / ".git" / "config",
+        {
+            **_NO_BACKGROUND_MAINTENANCE,
+            "user.name": "Source Test",
+            "user.email": "source@example.invalid",
+        },
+    )
     for name, content in TEMPLATE_FILES.items():
         (checkout / name).parent.mkdir(parents=True, exist_ok=True)
         (checkout / name).write_text(content, encoding="utf-8")
@@ -65,13 +82,30 @@ def build_templates(root: Path) -> Templates:
     git(checkout, "commit", "--quiet", "-m", "base")
     shutil.copytree(checkout, root / "plain")
     # Relative remote paths keep every copy of the three repositories self-contained.
-    git(checkout, "remote", "add", "origin", f"../{remote.name}")
+    _append_config(
+        checkout / ".git" / "config",
+        {
+            "remote.origin.url": f"../{remote.name}",
+            "remote.origin.fetch": "+refs/heads/*:refs/remotes/origin/*",
+        },
+    )
     git(checkout, "push", "--quiet", "-u", "origin", "main")
-    git(root, "clone", "--quiet", "--template=", remote.name, publisher.name)
-    _disable_background_maintenance(publisher)
+    publisher_config = {
+        **_NO_BACKGROUND_MAINTENANCE,
+        "user.name": "Publisher",
+        "user.email": "publisher@example.invalid",
+    }
+    git(
+        root,
+        "clone",
+        "--quiet",
+        "--template=",
+        *(f"--config={name}={value}" for name, value in publisher_config.items()),
+        remote.name,
+        publisher.name,
+    )
+    # Clone records the remote's absolute path.
     git(publisher, "remote", "set-url", "origin", f"../{remote.name}")
-    git(publisher, "config", "user.name", "Publisher")
-    git(publisher, "config", "user.email", "publisher@example.invalid")
     return Templates(root, git(checkout, "rev-parse", "HEAD"))
 
 

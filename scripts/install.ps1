@@ -103,7 +103,13 @@ function Invoke-CapturedNative {
 }
 
 function Invoke-SetupWithProgress {
-    param([string]$Executable, [string]$Setup, [string[]]$SetupArguments)
+    param(
+        [string]$Executable,
+        [string]$Setup,
+        [string[]]$SetupArguments,
+        # Seconds without a new phase before an elapsed-time update.
+        [int]$ReportSeconds = 10
+    )
     $job = Start-Job -ScriptBlock {
         param($Executable, $Setup, $SetupArguments, $WorkingDirectory)
         Set-Location -LiteralPath $WorkingDirectory
@@ -135,7 +141,7 @@ function Invoke-SetupWithProgress {
                 elseif ($line.StartsWith("Warning:")) { Write-Status "WARN" $line }
             }
             $now = [DateTime]::UtcNow
-            if (($now - $lastReport).TotalSeconds -ge 10 -and $job.State -eq "Running") {
+            if (($now - $lastReport).TotalSeconds -ge $ReportSeconds -and $job.State -eq "Running") {
                 Write-Step ("{0} ({1}s elapsed)" -f $phase, [int]($now - $started).TotalSeconds)
                 $lastReport = $now
             }
