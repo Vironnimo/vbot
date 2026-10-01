@@ -378,8 +378,8 @@ def test_a_pending_purge_fails_and_names_the_call_that_continues_it(
         "- id=arc_7k2m9q4xw1ab pending reason=PermissionError",
     ]
     assert (
-        "deletion of arc_7k2m9q4xw1ab is pending (PermissionError); re-run "
-        "'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it"
+        "deletion of arc_7k2m9q4xw1ab is pending (PermissionError); vBot retries it "
+        "automatically, or run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it now"
     ) in err
 
 
@@ -466,7 +466,10 @@ def test_a_permanent_deletion_left_pending_fails_and_names_the_purge_that_finish
     assert code == 1
     assert rpc.params(method)["permanent"] is True
     assert out.splitlines()[0] == shown
-    assert "re-run 'vbot archive purge arc_7k2m9q4xw1ab --yes' to continue it" in err
+    assert (
+        "vBot retries it automatically, or run 'vbot archive purge arc_7k2m9q4xw1ab --yes' "
+        "to continue it now"
+    ) in err
 
 
 @pytest.mark.parametrize(

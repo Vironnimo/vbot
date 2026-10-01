@@ -220,8 +220,8 @@ def archive_purge(
         retry = selection if all_matching else tuple(pending_ids)
         command = format_command(("vbot", "archive", "purge", *retry, "--yes"))
         attention = (
-            f"deletion of {len(pending)} archive entries is pending; re-run '{command}' "
-            "to continue them"
+            f"deletion of {len(pending)} archive entries is pending; vBot retries them "
+            f"automatically, or run '{command}' to continue them now"
         )
     return CommandResult(
         ok=False, message="\n".join(lines), instance=instance, attention=(attention,)
@@ -242,8 +242,8 @@ def pending_purge_attention(entry_id: str, reason: str | None = None) -> str:
     """The attention line for an entry whose permanent deletion did not finish."""
     detail = f" ({reason})" if reason else ""
     return (
-        f"deletion of {entry_id} is pending{detail}; re-run "
-        f"'vbot archive purge {entry_id} --yes' to continue it"
+        f"deletion of {entry_id} is pending{detail}; vBot retries it automatically, "
+        f"or run 'vbot archive purge {entry_id} --yes' to continue it now"
     )
 
 
