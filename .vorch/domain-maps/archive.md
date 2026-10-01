@@ -94,7 +94,7 @@ How long an `archived` entry rests before the retention sweep purges it: the set
 
 ## Migration of earlier archives
 
-The Session database migration `sessions.0001_archive_entries` (and the Generation 1 converter, which calls the same adoption) turned archives written before entries existed into `backfill` entries: legacy trees under `archive/` keep their paths, pair with their archived Sessions by time, and pre-Generation-1 payloads record `payload_format: "older"` (listed and purgeable, never restored). Detail: `archive/legacy-adoption.md`.
+The Session database migration `sessions.0001_archive_entries` turned archives written before entries existed into `backfill` entries: legacy trees under `archive/` keep their paths, pair with their archived Sessions by time, and pre-Generation-1 payloads record `payload_format: "older"` (listed and purgeable, never restored). Detail: `archive/legacy-adoption.md`.
 
 ## Constraints & Gotchas
 
@@ -104,10 +104,10 @@ The Session database migration `sessions.0001_archive_entries` (and the Generati
 - Restore validates the payload document through its owner before moving it into a contract location; never move an archived `agent.json`/`project.json` back unread.
 - Do not take the automation reference lock inside the service, and do not start a purge inside a compound mutation: a long purge would starve data snapshot captures.
 
-Tests: `tests/core/archive/test_archive_service.py` (archive, restore, purge, reads through the Python API), `test_archive_retention.py` (the sweep, with the timer `_retention._wait` replaced and a fixed clock), `test_archive_recovery.py`, `tests/core/sessions/test_archive_ledger.py`, `test_archive_backfill.py`, `test_store_query_plans.py`, `tests/core/agents/test_agents_archive.py`, `tests/core/projects/test_store.py`, `tests/core/utils/test_tree_move.py`, `tests/server/rpc/test_archive_methods.py` (the four archive RPCs, their error `data`, permanent deletes), the delete tests of `tests/server/rpc/`, `tests/cli/test_cli_archive.py`, and `tests/scripts/converters/persistence_generation_1/test_sessions.py`.
+Tests: `tests/core/archive/test_archive_service.py` (archive, restore, purge, reads through the Python API), `test_archive_retention.py` (the sweep, with the timer `_retention._wait` replaced and a fixed clock), `test_archive_recovery.py`, `tests/core/sessions/test_archive_ledger.py`, `test_archive_backfill.py`, `test_store_query_plans.py`, `tests/core/agents/test_agents_archive.py`, `tests/core/projects/test_store.py`, `tests/core/utils/test_tree_move.py`, `tests/server/rpc/test_archive_methods.py` (the four archive RPCs, their error `data`, permanent deletes), the delete tests of `tests/server/rpc/`, and `tests/cli/test_cli_archive.py`.
 
 ## References
 
 Read these only when your task matches - not by default.
 
-- Changing the archive migration, the converter's archive step or the startup adoption of archived Sessions without an entry, or reasoning about `backfill` entries and legacy archive layouts -> `archive/legacy-adoption.md`
+- Changing the archive migration or the startup adoption of archived Sessions without an entry, or reasoning about `backfill` entries and legacy archive layouts -> `archive/legacy-adoption.md`

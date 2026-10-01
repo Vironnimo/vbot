@@ -4,9 +4,8 @@ Two sources exist. Older vBot versions moved deleted Agents and Projects into
 legacy trees under ``archive/`` (``archive/agents/<id>/``,
 ``archive/projects/<id>/``, flat ``archive/<name>/``, and leftovers such as
 staging directories) and archived Sessions without any entry. The Session
-database migration ``sessions.0001_archive_entries`` and the Generation-1
-converter adopt both; startup repair adopts only archived Sessions an older
-vBot wrote after a downgrade. Only this module knows the legacy layouts: an
+database migration ``sessions.0001_archive_entries`` adopts both; startup
+repair adopts only archived Sessions an older vBot wrote after a downgrade. Only this module knows the legacy layouts: an
 adopted tree is recorded by its path, so no other code branches on them.
 
 Every step skips what an entry already records, so adoption is idempotent.
