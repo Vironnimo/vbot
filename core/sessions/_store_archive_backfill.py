@@ -80,7 +80,11 @@ class _Batch:
 
 @dataclass
 class _LegacyTree:
-    """One legacy archive container and the trees an entry for it records."""
+    """One legacy archive container and the trees an entry for it records.
+
+    ``extras`` are other trees in an Agent's container; a restore of the Agent
+    leaves them, so a ``files`` entry of their own records them.
+    """
 
     kind: str
     subject_id: str
@@ -88,6 +92,7 @@ class _LegacyTree:
     trees: list[ArchiveTree]
     mtime: datetime
     facts: dict[str, Any]
+    extras: list[ArchiveTree] = field(default_factory=list)
 
 
 def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> ArchiveAdoption:
@@ -95,9 +100,10 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
 
     An Agent tree takes the Sessions its archive left when their archive time
     lies within the pairing window after the tree's modification time; a Project
-    tree takes the latest of its Project's archives at or after that time. A
-    directory that cannot be read is skipped with a warning and stays where it
-    is, outside any entry.
+    tree takes the latest of its Project's archives at or after that time.
+    Other trees beside an Agent's ``agent/`` and moved ``workspace/`` get a
+    ``files`` entry of their own. A directory that cannot be read is skipped with
+    a warning and stays where it is, outside any entry.
     """
     now = utc_now_timestamp()
     batches = _unrecorded_batches(connection)
@@ -114,6 +120,7 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
             ARCHIVE_KIND_AGENT: ("", tree.subject_id),
             ARCHIVE_KIND_PROJECT: (tree.subject_id, ""),
         }.get(tree.kind, ("", ""))
+        archived_at = claimed[0].archived_at if claimed else format_canonical_timestamp(tree.mtime)
         ref = _store_archive.insert_entry(
             connection,
             kind=tree.kind,
@@ -121,9 +128,7 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
             subject_id=tree.subject_id,
             project_id=project_id,
             agent_id=agent_id,
-            archived_at=claimed[0].archived_at
-            if claimed
-            else format_canonical_timestamp(tree.mtime),
+            archived_at=archived_at,
             retention_start=now,
             origin=ARCHIVE_ORIGIN_BACKFILL,
             facts=facts,
@@ -133,6 +138,19 @@ def adopt_legacy_archives(connection: sqlite3.Connection, data_dir: Path) -> Arc
         _add_members(connection, ref.entry_key, keys)
         sessions += len(keys)
         counts[tree.kind] += 1
+        if tree.extras:
+            _store_archive.insert_entry(
+                connection,
+                kind=ARCHIVE_KIND_FILES,
+                state=ARCHIVE_STATE_ARCHIVED,
+                subject_id=tree.container,
+                archived_at=archived_at,
+                retention_start=now,
+                origin=ARCHIVE_ORIGIN_BACKFILL,
+                facts={"backfill": {**facts["backfill"], "match": "none"}},
+                trees=_fixed(tree.extras),
+            )
+            counts[ARCHIVE_KIND_FILES] += 1
     adopted = _adopt_batches(connection, batches, retention_start=now)
     counts.update(adopted.counts)
     result = ArchiveAdoption(sessions + adopted.sessions, dict(counts))
@@ -396,6 +414,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     root_project_id = None if document is None else document.get("root_project_id")
     facts["root_project_id"] = root_project_id if isinstance(root_project_id, str) else None
     moved = False
+    extras: list[ArchiveTree] = []
     for child in sorted(container.iterdir(), key=lambda entry: entry.name):
         if child.name == "agent":
             continue
@@ -409,7 +428,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
                 )
             )
         else:
-            trees.append(ArchiveTree(_relative(child, data_dir), ARCHIVE_TREE_FILES, None))
+            extras.append(ArchiveTree(_relative(child, data_dir), ARCHIVE_TREE_FILES, None))
     if isinstance(workspace, str) and workspace:
         facts["workspace"] = {
             "path": workspace,
@@ -417,7 +436,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
             "moved": moved,
         }
     return _LegacyTree(
-        ARCHIVE_KIND_AGENT, subject, _relative(container, data_dir), trees, mtime, facts
+        ARCHIVE_KIND_AGENT, subject, _relative(container, data_dir), trees, mtime, facts, extras
     )
 
 

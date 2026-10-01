@@ -131,6 +131,9 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
         {"format_version": 2, "workspace": "C:/repo/coder", "root_project_id": "team"},
     )
     _write(archive / "coder/workspace/notes.md", "kept")
+    # Other trees beside an Agent's files outlive its restore in an entry of their own.
+    _write(archive / "coder/exports/report.md", "kept")
+    _write(archive / "coder/log.txt", "kept")
     _write(archive / "agents/.coder-archive-x1/previous/agent/agent.json", {})
     _write(archive / "sessions/old.jsonl", "{}")
     _write(archive / "readme.txt", "a user's note")
@@ -160,6 +163,7 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
         (ARCHIVE_KIND_SESSION, "e-1"),
         (ARCHIVE_KIND_OWNER_GROUP, "docs"),
         (ARCHIVE_KIND_FILES, "archive/agents/.coder-archive-x1"),
+        (ARCHIVE_KIND_FILES, "archive/coder"),
         (ARCHIVE_KIND_FILES, "archive/sessions"),
     }
     assert {entry.origin for entry in entries.values()} == {"backfill"}
@@ -210,6 +214,12 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     assert coder.trees == (
         ArchiveTree("archive/coder/agent", "agent", "agents/coder"),
         ArchiveTree("archive/coder/workspace", "workspace", "C:/repo/coder"),
+    )
+    extras = entries[(ARCHIVE_KIND_FILES, "archive/coder")]
+    assert (extras.archived_at, extras.session_count) == (coder.archived_at, 0)
+    assert extras.trees == (
+        ArchiveTree("archive/coder/exports", "files", None),
+        ArchiveTree("archive/coder/log.txt", "files", None),
     )
 
     # Adopting again finds everything recorded.
