@@ -18,6 +18,7 @@ from core.projects.paths import (
     slugify_project_id,
 )
 from core.projects.projects import (
+    PROJECT_FORMAT_VERSION,
     InvalidProjectIdError,
     Project,
     ProjectAlreadyExistsError,
@@ -48,13 +49,15 @@ from core.projects.resolver import (
     resolve_working_project_id,
     runtime_agent_body,
 )
-from core.projects.store import ProjectStore
+from core.projects.store import ArchivedProjectPayload, ProjectStore
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
+    "PROJECT_FORMAT_VERSION",
     "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
+    "ArchivedProjectPayload",
     "ConfigAgent",
     "InvalidAgentAddressError",
     "InvalidProjectIdError",

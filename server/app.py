@@ -48,6 +48,7 @@ from server._app_lifecycle import (
     _shutdown_statistics_warmup,
     _start_speech_preload,
     _start_statistics_warmup,
+    _unregister_archive_change_bridge,
     _unregister_bash_process_change_bridge,
     _unregister_calendar_change_bridge,
     _unregister_cron_change_bridge,
@@ -322,6 +323,7 @@ def create_app(
                 _unregister_session_completion_read_bridge(app.state)
                 _unregister_cron_change_bridge(app.state)
                 _unregister_calendar_change_bridge(app.state)
+                _unregister_archive_change_bridge(app.state)
                 _unregister_skill_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
                 _unregister_bash_process_change_bridge(app.state)

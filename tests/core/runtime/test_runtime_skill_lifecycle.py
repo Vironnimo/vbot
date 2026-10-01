@@ -27,6 +27,12 @@ async def _change_owner(state: Any, operation: str) -> Any:
     return await call_rpc(handlers, "agent.rename", state, {"id": "main", "new_id": "renamed"})
 
 
+def _archived_agent_tree(runtime: Runtime) -> Path:
+    """The payload tree of the one archived Agent."""
+    (tree,) = (runtime.agents.data_dir / "archive" / "entries").glob("*/agent")
+    return tree
+
+
 @pytest.mark.asyncio
 # A write that is already running serializes with each lifecycle path; a write
 # after either lifecycle change finds no shared Skill, so one case covers it.
@@ -139,7 +145,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
 
         assert not (runtime.agents.data_dir / "agents" / "main").exists()
         destination = (
-            runtime.agents.data_dir / "archive" / "agents" / "main" / "agent" / "skills"
+            _archived_agent_tree(runtime) / "skills"
             if operation == "delete"
             else runtime.agent_skills_dir("renamed")
         )
@@ -187,7 +193,9 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
         )
         loop = asyncio.get_running_loop()
         committed = asyncio.Event()
-        original = getattr(runtime.agents, operation)
+        # The archive commits before the archived id leaves the delegation lists.
+        method_name = "remove_delegation_grants" if operation == "delete" else operation
+        original = getattr(runtime.agents, method_name)
 
         def paused_after_commit(*args: Any, **kwargs: Any) -> Any:
             result = original(*args, **kwargs)
@@ -195,7 +203,7 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
             assert release.wait(10)
             return result
 
-        monkeypatch.setattr(runtime.agents, operation, paused_after_commit)
+        monkeypatch.setattr(runtime.agents, method_name, paused_after_commit)
         if not admitted:
             await reference_lock.acquire()
 

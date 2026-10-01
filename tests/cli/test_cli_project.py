@@ -308,15 +308,15 @@ def test_project_override_set_coerces_the_value(
         pytest.param(
             (),
             {"project_id": "vbot"},
-            {"archived": True, "archive_path": "/data/projects/_archive/vbot-2026.zip"},
-            ["removed project vbot (archived to /data/projects/_archive/vbot-2026.zip)"],
+            {"archive_entry_id": "arc_7k2m9q4xw1ab"},
+            ["removed project vbot (archived as archive entry arc_7k2m9q4xw1ab)"],
             id="archived",
         ),
         pytest.param(
             ("--copy-rooted-agent-files",),
             {"project_id": "vbot", "copy_rooted_agent_identity_files": True},
             {
-                "archive_path": "C:/data/projects/.archive/vbot",
+                "archive_entry_id": "arc_7k2m9q4xw1ab",
                 "affected_agent_ids": ["librarian"],
                 "copied_files": {"librarian": ["SOUL.md", "MEMORY.md"]},
                 "backed_up_files": {"librarian": ["SOUL.md"]},

@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
+from core.archive import ArchiveService, ArchiveServices
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -597,6 +598,7 @@ def bootstrap(runtime: Runtime) -> None:
             cron=runtime._cron_service,
             calendar=runtime._calendar_service,
         )
+        runtime._archive = ArchiveService(_archive_services(runtime))
         runtime._command_dispatcher = CommandDispatcher(
             runtime._chat_run_manager,
             agent_resolver=runtime._agent_resolver,
@@ -635,6 +637,9 @@ def bootstrap(runtime: Runtime) -> None:
         )
         if pending_rename is not None:
             complete_pending_rename(runtime._agent_rename_services(), pending_rename)
+        # After a settled rename, before Channels, Cron and Runs: finish or undo
+        # interrupted archive operations.
+        runtime._archive.recover()
         if runtime.safe_startup_mode is None:
             runtime._start_channel_service()
         runtime._sync_channel_tool_registration()
@@ -722,6 +727,58 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _archive_services(runtime: Runtime) -> ArchiveServices:
+    """The owners archive operations compose; startup builds them before this."""
+    storage = runtime._storage
+    sessions = runtime._chat_sessions
+    agents = runtime._agents
+    projects = runtime._projects
+    resolver = runtime._agent_resolver
+    runs = runtime._chat_run_manager
+    automation = runtime._automation_references
+    terminals = runtime._terminal_manager
+    if (
+        storage is None
+        or sessions is None
+        or agents is None
+        or projects is None
+        or resolver is None
+        or runs is None
+        or automation is None
+        or terminals is None
+    ):
+        raise RuntimeError("Archive services are not available")
+
+    def import_usage() -> None:
+        if runtime._usage_recorder is not None:
+            runtime._usage_recorder.import_session_history(sessions)
+
+    async def remove_agent_from_recall(agent_id: str) -> None:
+        await runtime.recall.remove_agent_from_recall(agent_id)
+
+    def invalidate_project(project_id: str) -> None:
+        resolver.invalidate_team_cache(project_id)
+        runtime.invalidate_project_skills(project_id)
+
+    return ArchiveServices(
+        data_dir=storage.data_dir,
+        sessions=sessions,
+        agents=agents,
+        projects=projects,
+        agent_resolver=resolver,
+        runs=runs,
+        automation=automation,
+        terminals=terminals,
+        snapshot_barrier=runtime._snapshot_barrier,
+        agent_references=runtime.agent_references,
+        import_usage=import_usage,
+        remove_agent_from_recall=remove_agent_from_recall,
+        remove_session_from_recall=runtime.remove_session_from_recall,
+        invalidate_agent_skills=runtime.invalidate_agent_skills,
+        invalidate_project=invalidate_project,
+    )
 
 
 def _build_performance_service(

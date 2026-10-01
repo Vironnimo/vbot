@@ -12,7 +12,7 @@ import pytest
 from core.projects.resolver import AgentResolutionError
 from core.projects.scanners.opencode import OPENCODE_AGENTS_SUBPATH
 from core.runs import Run, RunAdmission
-from core.sessions import SessionAddress
+from core.sessions import ArchiveEntryFilter, SessionAddress
 from server.rpc.errors import RPC_ERROR_PROJECT_BUSY
 from tests.server.rpc.project_methods_test_support import _make_repo, _make_state
 from tests.server.rpc_test_support import call, rpc_error, rpc_result
@@ -33,7 +33,9 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
-    assert result["archived"] is True
+    entry = state.runtime.sessions.archive_ledger.entry(result["archive_entry_id"])
+    assert entry is not None and (entry.kind, entry.subject_id) == ("project", "vbot")
+    assert "archive_path" not in result
     assert not state.runtime.projects.exists("vbot")
     assert state.runtime.terminal_manager.closed_projects == ["vbot"]
     # The repo (cwd) is never touched by removal.
@@ -75,10 +77,10 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     default_workspace.joinpath("USER.md").write_text("destination", encoding="utf-8")
     state.runtime.agents.update("coder", root_project_id="vbot")
 
-    def fail_archive(_project_id: str) -> Path:
+    def fail_archive(_project_id: str, _tree: Path) -> Any:
         raise OSError("archive failed")
 
-    monkeypatch.setattr(state.runtime.projects, "delete", fail_archive)
+    monkeypatch.setattr(state.runtime.projects, "archive_files", fail_archive)
 
     with pytest.raises(OSError):
         await call(state, "project.rm", project_id="vbot", copy_rooted_agent_identity_files=True)
@@ -89,6 +91,8 @@ async def test_rm_rolls_back_agent_reset_when_project_archive_fails(
     assert restored.workspace == agent.workspace
     assert Path(agent.workspace, "USER.md").read_text(encoding="utf-8") == "source"
     assert default_workspace.joinpath("USER.md").read_text(encoding="utf-8") == "destination"
+    # The failed archive leaves no entry behind.
+    assert not state.runtime.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
 
 
 @pytest.mark.asyncio
@@ -237,4 +241,4 @@ async def test_rm_ignores_automations_that_never_start_a_run_for_the_project(
 
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
-    assert result["archived"] is True
+    assert result["archive_entry_id"].startswith("arc_")

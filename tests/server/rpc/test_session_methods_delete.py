@@ -34,7 +34,12 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
 
     result = await rpc_result(state, "session.delete", agent_id="builder", session_id="s1")
 
-    assert result == {"agent_id": "builder", "session_id": "s1", "next_session_id": "landing"}
+    assert result == {
+        "agent_id": "builder",
+        "session_id": "s1",
+        "next_session_id": "landing",
+        "archive_entry_id": "arc_s1",
+    }
     assert resolver.resolved == [(None, "builder")]
     # Archived (not hard-deleted) under the identity scope.
     assert sessions.archived == [("builder", "s1", None)]

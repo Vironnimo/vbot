@@ -218,9 +218,6 @@ class SessionStore:
             )
         )
 
-    def restore(self, address: SessionAddress) -> None:
-        return self._execute_write(lambda connection: _store_mutations.restore(connection, address))
-
     def delete(self, address: SessionAddress) -> None:
         return self._execute_write(lambda connection: _store_mutations.delete(connection, address))
 
@@ -238,18 +235,6 @@ class SessionStore:
             lambda connection: _store_mutations.retarget_identity_agent_references(
                 connection, old_agent_id, new_agent_id
             )
-        )
-
-    def archive_identity_agent_sessions(self, agent_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.archive_identity_agent_sessions(
-                connection, agent_id
-            )
-        )
-
-    def archive_project_sessions(self, project_id: str) -> None:
-        return self._execute_write(
-            lambda connection: _store_mutations.archive_project_sessions(connection, project_id)
         )
 
     # -- Metadata facade ---------------------------------------------------------

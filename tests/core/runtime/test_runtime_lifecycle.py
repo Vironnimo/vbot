@@ -202,7 +202,7 @@ def test_runtime_start_is_idempotent_and_restart_rebuilds_services(config: Confi
     # Started outside an Event Loop, the performance monitor stays off.
     assert not runtime.performance.monitoring
     runtime.agents.create("coder", "Coder Agent")
-    runtime.agents.delete("main")
+    asyncio.run(runtime.archive.archive_agent("main"))
 
     runtime.stop()
     _assert_not_started(runtime)

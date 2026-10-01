@@ -480,6 +480,53 @@ def _strip_channel_routing(connection: sqlite3.Connection, session_key: int) -> 
     _store_values._write_metadata_storage(connection, session_key, storage)
 
 
+def _restore_targets(
+    connection: sqlite3.Connection,
+    entry_key: int,
+    *,
+    project_id: str | None,
+    agent_id: str | None,
+    session_id: str | None,
+) -> tuple[list[tuple[int, SessionAddress]], tuple[SessionAddress, ...]]:
+    """Each member's key with its restored address, and the addresses a live Session holds."""
+    members = _member_rows(connection, entry_key)
+    if session_id is not None and len(members) != 1:
+        raise ChatSessionError(
+            "only an entry of one Session can be restored under a new Session id"
+        )
+    targets: list[tuple[int, SessionAddress]] = []
+    for member in members:
+        target = SessionAddress(
+            project_id=(str(member["project_id"]) or None)
+            if project_id is None
+            else project_id or None,
+            agent_id=str(member["agent_id"]) if agent_id is None else agent_id,
+            session_id=str(member["session_id"]) if session_id is None else session_id,
+        )
+        targets.append((int(member["session_key"]), target))
+    seen: set[SessionAddress] = set()
+    taken: list[SessionAddress] = []
+    for _key, target in targets:
+        if target in seen or _store_values._find_live(connection, target) is not None:
+            taken.append(target)
+        seen.add(target)
+    return targets, tuple(taken)
+
+
+def taken_addresses(
+    connection: sqlite3.Connection,
+    entry_key: int,
+    *,
+    project_id: str | None = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
+) -> tuple[SessionAddress, ...]:
+    """The addresses a restore with these replacements finds held by a live Session."""
+    return _restore_targets(
+        connection, entry_key, project_id=project_id, agent_id=agent_id, session_id=session_id
+    )[1]
+
+
 def commit_restore(
     connection: sqlite3.Connection,
     entry_key: int,
@@ -499,11 +546,6 @@ def commit_restore(
     ``restored``.
     """
     row = _require_state(connection, entry_key, ARCHIVE_STATE_RESTORING)
-    members = _member_rows(connection, entry_key)
-    if session_id is not None and len(members) != 1:
-        raise ChatSessionError(
-            "only an entry of one Session can be restored under a new Session id"
-        )
     owned = connection.execute(
         "SELECT 1 FROM temporary_session_bindings WHERE session_key IN "
         "(SELECT session_key FROM archive_entry_sessions WHERE entry_key = ?) LIMIT 1",
@@ -511,24 +553,11 @@ def commit_restore(
     ).fetchone()
     if owned is not None:
         raise ChatSessionError(_store_values._OWNER_MANAGED_ERROR)
-    targets: list[tuple[int, SessionAddress]] = []
-    for member in members:
-        target = SessionAddress(
-            project_id=(str(member["project_id"]) or None)
-            if project_id is None
-            else project_id or None,
-            agent_id=str(member["agent_id"]) if agent_id is None else agent_id,
-            session_id=str(member["session_id"]) if session_id is None else session_id,
-        )
-        targets.append((int(member["session_key"]), target))
-    seen: set[SessionAddress] = set()
-    taken: list[SessionAddress] = []
-    for _key, target in targets:
-        if target in seen or _store_values._find_live(connection, target) is not None:
-            taken.append(target)
-        seen.add(target)
+    targets, taken = _restore_targets(
+        connection, entry_key, project_id=project_id, agent_id=agent_id, session_id=session_id
+    )
     if taken:
-        raise ArchiveAddressTakenError(str(row["entry_id"]), tuple(taken))
+        raise ArchiveAddressTakenError(str(row["entry_id"]), taken)
     for session_key, target in targets:
         connection.execute(
             "UPDATE sessions SET state = 'live', archived_at = NULL, project_id = ?, agent_id = ?, "

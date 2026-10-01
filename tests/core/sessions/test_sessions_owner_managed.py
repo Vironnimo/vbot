@@ -200,8 +200,6 @@ async def test_owner_managed_session_rejects_lifecycle_mutations_at_storage_boun
     with pytest.raises(ChatSessionError, match="managed by an Extension"):
         manager.get(address).delete()
     with pytest.raises(ChatSessionError, match="managed by an Extension"):
-        manager.archive_identity_agent_sessions("temporary")
-    with pytest.raises(ChatSessionError, match="managed by an Extension"):
         manager.retarget_identity_agent_sessions("temporary", "ordinary")
     assert manager.temporary_binding(address) == binding
     # Ordinary metadata never makes it listable.

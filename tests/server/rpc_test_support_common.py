@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import builtins
 import json
-from collections.abc import Callable, Iterable, Mapping
-from contextlib import suppress
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,11 +16,11 @@ import pytest
 
 from core.agents import (
     AgentAlreadyExistsError,
-    AgentDeleteResult,
     AgentOrderConflictError,
     AgentReferencedError,
     AgentRename,
     AgentRenameResult,
+    ArchivedAgent,
     InvalidAgentOrderError,
     default_workspace_dir,
 )
@@ -271,12 +271,30 @@ class StubAgents:
         ]
         self._order_revision += 1
 
-    def delete(self, agent_id: str) -> AgentDeleteResult:
-        self._get_raw(agent_id)
+    @contextmanager
+    def archive_files(self, agent_id: str, _tree: Path) -> Iterator[ArchivedAgent]:
+        agent = self._get_raw(agent_id)
+        index = self._order.index(agent_id)
         del self._agents[agent_id]
         self._order.remove(agent_id)
+        try:
+            yield ArchivedAgent(
+                agent=cast(Any, agent),
+                roster_index=index,
+                workspace=self.default_workspace(agent_id),
+                workspace_external=False,
+            )
+        except BaseException:
+            self._agents[agent_id] = agent
+            self._order.insert(index, agent_id)
+            raise
         self._order_revision += 1
-        return AgentDeleteResult(archive_dir=Path("archive") / agent_id)
+
+    def remove_delegation_grants(
+        self, _agent_id: str, _record: Callable[[builtins.list[Mapping[str, Any]]], None]
+    ) -> tuple[str, ...]:
+        # The doubles keep no delegation lists; AgentStore tests own that behavior.
+        return ()
 
 
 @dataclass(frozen=True)

@@ -16,6 +16,7 @@ from typing import Any, Literal, cast
 
 from core.agents.agents import AgentStore
 from core.agents.temporary import TemporaryAgentRegistry
+from core.archive import ArchiveService
 from core.attachments import AttachmentStore
 from core.automation import (
     AutomationReferences,
@@ -212,6 +213,7 @@ class Runtime:
         self._calendar_service: CalendarService | None = None
         self._bootstrap_service: BootstrapService | None = None
         self._automation_references: AutomationReferences | None = None
+        self._archive: ArchiveService | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._session_title_service: SessionTitleService | None = None
@@ -1171,6 +1173,10 @@ class Runtime:
 
     automation_references: _StartedService[AutomationReferences] = _StartedService(
         lambda runtime: runtime._automation_references, "Automation references not available"
+    )
+
+    archive: _StartedService[ArchiveService] = _StartedService(
+        lambda runtime: runtime._archive, "Archive is not available"
     )
 
     provider_usage: _StartedService[ProviderUsageService] = _StartedService(

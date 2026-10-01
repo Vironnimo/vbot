@@ -13,6 +13,7 @@ from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, TypeVar, cast
 
+from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
 from core.prompts import load_bundled_default_layout
 from core.runs import RunAdmissionBlockedError
@@ -328,35 +329,28 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
             raise RpcError(RPC_ERROR_LAST_AGENT, "cannot delete the last agent")
         try:
             # Identity scope only: a same-named Project Team agent remains
-            # independent. The guard makes the idle check and the following
-            # archive one atomic boundary against every Run ingress path.
-            async with _state_chat_runs(state).agent_admission_guard(agent_id, project_id=None):
-                references = await state.runtime.agent_references(agent_id)
-                if references:
-                    raise RpcError(
-                        RPC_ERROR_AGENT_IN_USE,
-                        (f"cannot delete agent referenced by {', '.join(references)}: {agent_id}"),
-                    )
-                await state.runtime.terminal_manager.close_agent_scope(agent_id, None)
-                deleted = await chat_sessions.run_async(state.runtime.agents.delete, agent_id)
-                state.runtime.invalidate_agent_skills(agent_id)
+            # independent. The archive owns the Run guard and the reference check.
+            outcome = await state.runtime.archive.archive_agent(agent_id)
+        except ArchiveSubjectInUseError as exc:
+            raise RpcError(
+                RPC_ERROR_AGENT_IN_USE,
+                f"cannot delete agent referenced by {', '.join(exc.references)}: {agent_id}",
+            ) from exc
         except RunAdmissionBlockedError as exc:
             raise RpcError(
                 RPC_ERROR_AGENT_BUSY,
                 f"cannot delete agent with active or queued runs: {agent_id}",
             ) from exc
-        # Read after the delete: it removed the Agent from their delegation lists.
+        # Read after the archive: it removed the Agent from their delegation lists.
         remaining_agents = await chat_sessions.run_async(state.runtime.agents.list)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    # The archived Sessions leave Recall; the index cleanup itself is best-effort.
-    await state.runtime.recall.remove_agent_from_recall(agent_id)
     result = {
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
+        "archive_entry_id": outcome.entry_id,
     }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
-    _LOGGER.info("Agent archived (agent=%s policies=%s)", agent_id, len(deleted.policy_agent_ids))
     return result
 
 

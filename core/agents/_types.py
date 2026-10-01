@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from core.memory import (
@@ -169,12 +168,29 @@ class AgentRenameResult:
 
 
 @dataclass(frozen=True)
-class AgentDeleteResult:
-    """One archived Identity Agent.
+class ArchivedAgent:
+    """An Identity Agent whose files just moved into an archive payload.
 
-    ``policy_agent_ids`` are the Agents whose delegation allow-list no longer
-    names it.
+    ``roster_index`` is its position in the roster, ``workspace`` its stored
+    Workspace path (data-dir relative when inside the data directory) and
+    ``workspace_external`` whether that Workspace lies outside the Agent's own
+    directory, where an archive leaves it in place.
     """
 
-    archive_dir: Path
-    policy_agent_ids: tuple[str, ...] = ()
+    agent: Agent
+    roster_index: int | None
+    workspace: str
+    workspace_external: bool
+
+
+@dataclass(frozen=True)
+class ArchivedAgentPayload:
+    """What an archived Agent payload holds, read without side effects.
+
+    ``problem`` names why it cannot be restored: ``payload_missing``,
+    ``payload_invalid``, ``older_format`` or ``newer_format``; ``agent`` is then
+    ``None``.
+    """
+
+    agent: Agent | None
+    problem: str | None = None

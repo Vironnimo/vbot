@@ -1,4 +1,7 @@
-"""Identity Agent rename and delete RPCs: the rename mapping, delegation lists, refusals."""
+"""Identity Agent rename and delete RPCs: the rename mapping, delegation lists, refusals.
+
+A delete moves the Agent into an archive entry through the real archive service.
+"""
 
 from __future__ import annotations
 
@@ -317,6 +320,10 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     # A delegation grant never blocks the delete, and the response shows it removed.
     [manager] = result["remaining_agents"]
     assert manager["tools"]["subagent"]["allowed_agents"] == ["coder@vbot"]
+    # The delete created one archive entry that remembers the grant for a restore.
+    entry = state.runtime.chat_sessions.archive_ledger.entry(result["archive_entry_id"])
+    assert entry is not None and (entry.kind, entry.subject_id) == ("agent", "coder")
+    assert entry.facts["grants"] == [{"agent_id": "manager", "index": 0}]
     # The archived Sessions leave Recall.
     assert state.runtime.recall.removed_agents == ["coder"]
 

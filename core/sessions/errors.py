@@ -34,11 +34,14 @@ class ArchiveEntryError(Exception):
 
 
 class ArchiveEntryNotFoundError(ArchiveEntryError):
-    """Raised when no archive entry has the given id."""
+    """Raised when no archive entry has the given id (or ids)."""
 
-    def __init__(self, entry_id: str) -> None:
-        super().__init__(f"archive entry not found: {entry_id}")
+    def __init__(self, entry_id: str, *more_entry_ids: str) -> None:
+        entry_ids = (entry_id, *more_entry_ids)
+        noun = "archive entry" if len(entry_ids) == 1 else "archive entries"
+        super().__init__(f"{noun} not found: {', '.join(entry_ids)}")
         self.entry_id = entry_id
+        self.entry_ids = entry_ids
 
 
 class ArchiveEntryBusyError(ArchiveEntryError):

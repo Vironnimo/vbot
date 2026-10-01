@@ -239,6 +239,20 @@ def validate_format_version(
     return True
 
 
+def document_version_state(data: Any, version: int) -> Literal["current", "older", "newer"]:
+    """Classify a decoded document's ``format_version`` against the version this vBot reads.
+
+    A document without a valid version predates the contract and counts as
+    older. Used where a document outside its contract location, such as an
+    archived payload, must be judged before it is validated in full.
+    """
+
+    value = data.get(FORMAT_VERSION_FIELD) if isinstance(data, Mapping) else None
+    if isinstance(value, bool) or not isinstance(value, int) or value < version:
+        return "older"
+    return "newer" if value > version else "current"
+
+
 def validate_collection_root(
     diagnostics: list[JsonDiagnostic],
     data: Any,

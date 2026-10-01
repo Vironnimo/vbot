@@ -19,10 +19,11 @@ name, or a persisted Tool Whitelist entry unavailable in the live registry).
 is the source of truth, no copy drift). An empty folder yields an empty team and
 a clean report — that is a valid Project, not an error.
 
-**Remove lock.** ``project.rm`` archives the anchor (never the repo) unless a
-Project is in use: an atomic Run Admission Guard covers Project-anchored and
-Rooted-Agent work (``RPC_ERROR_PROJECT_BUSY``), while the Agent-reference lock
-covers cron references and rooted-Agent updates (``RPC_ERROR_PROJECT_IN_USE``).
+**Remove lock.** ``project.rm`` moves the anchor and the Project's Sessions into
+an archive entry (never the repo) unless the Project is in use: an atomic Run
+Admission Guard covers Project-anchored and Rooted-Agent work
+(``RPC_ERROR_PROJECT_BUSY``), while the Agent-reference lock covers automation
+references and rooted-Agent updates (``RPC_ERROR_PROJECT_IN_USE``).
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from core.archive import ArchiveSubjectInUseError
 from core.projects import (
     Project,
     cwd_exists,
@@ -64,7 +66,6 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _optional_bool,
     _optional_string,
@@ -484,23 +485,19 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
 
     project_id = _required_string(params, "project_id")
     copy_identity_files = _optional_bool(params, "copy_rooted_agent_identity_files", default=False)
-    projects = _projects(state)
     try:
-        # Serialize the check-then-archive against any concurrent remove using the
-        # same lock the Agent delete lock uses, so a busy check cannot race the
-        # archive.
+        # The Agent delete lock serializes the reference check and the archive it
+        # admits against every other Agent and Project lifecycle change.
         async with _agent_reference_lock(state):
-            projects.get(project_id)
             try:
-                async with _state_chat_runs(state).project_admission_guard(project_id):
-                    _ensure_no_automation_reference(state, project_id)
-                    await state.runtime.terminal_manager.close_project_scope(project_id)
-                    removal = await state.runtime.chat_sessions.run_async(
-                        _unroot_agents_and_archive_project,
-                        state,
-                        project_id,
-                        copy_identity_files,
-                    )
+                outcome = await state.runtime.archive.archive_project(
+                    project_id, copy_identity_files=copy_identity_files
+                )
+            except ArchiveSubjectInUseError as exc:
+                raise RpcError(
+                    RPC_ERROR_PROJECT_IN_USE,
+                    f"cannot remove project referenced by {', '.join(exc.references)}",
+                ) from exc
             except RunAdmissionBlockedError as exc:
                 raise RpcError(
                     RPC_ERROR_PROJECT_BUSY,
@@ -508,72 +505,17 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
                 ) from exc
     except Exception as exc:
         raise _map_expected_error(exc) from exc
-    # Removal drops this repo from resolution; clear both per-project caches so a
-    # later project that reuses this slug against a different repo resolves fresh
-    # instead of inheriting the removed project's stale Team or skills. Safe after
-    # the lock: a deleted project can no longer repopulate either cache (every
-    # load raises), so nothing can race a stale entry back in.
-    _invalidate_project_caches(state, project_id)
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
-    _LOGGER.info(
-        "Project archived (project=%s affected_agents=%s)",
-        project_id,
-        len(removal["affected_agent_ids"]),
-    )
-    return {"project_id": project_id, "archived": True, **removal}
-
-
-def _unroot_agents_and_archive_project(
-    state: Any, project_id: str, copy_identity_files: bool
-) -> JsonObject:
-    """Unroot the Project's Identity Agents and archive it, restoring the Agents on failure.
-
-    Runs on the Session database's pool: both stores write files and Session rows.
-    Unrooting and archiving is one compound mutation for data snapshots, so a snapshot
-    sees the Project live with its Agents rooted or archived with them unrooted.
-    """
-    agents = state.runtime.agents
-    affected_agents: list[str] = []
-    copied_files: dict[str, list[str]] = {}
-    backed_up_files: dict[str, list[str]] = {}
-    with state.runtime.snapshot_barrier.compound_mutation():
-        completed_updates: list[tuple[Any, Any]] = []
-        try:
-            for agent in agents.agents_rooted_in(project_id):
-                default_workspace = agents.default_workspace(agent.id)
-                changes: JsonObject = {"root_project_id": None}
-                workspace_changes = agent.workspace != default_workspace
-                if workspace_changes:
-                    changes["workspace"] = default_workspace
-                result = agents.update_with_metadata(
-                    agent.id,
-                    copy_workspace_identity_files=copy_identity_files and workspace_changes,
-                    **changes,
-                )
-                completed_updates.append((agent, result))
-                affected_agents.append(agent.id)
-                copied_files[agent.id] = list(result.copied_files)
-                backed_up_files[agent.id] = list(result.backed_up_files)
-            archive_path = _projects(state).delete(project_id)
-        except Exception:
-            for previous_agent, result in reversed(completed_updates):
-                agents.restore_update(previous_agent, result)
-            raise
     return {
-        "archive_path": str(archive_path),
-        "affected_agent_ids": affected_agents,
-        "copied_files": copied_files,
-        "backed_up_files": backed_up_files,
+        "project_id": project_id,
+        "archive_entry_id": outcome.entry_id,
+        "affected_agent_ids": list(outcome.affected_agent_ids),
+        "copied_files": {agent_id: list(files) for agent_id, files in outcome.copied_files.items()},
+        "backed_up_files": {
+            agent_id: list(files) for agent_id, files in outcome.backed_up_files.items()
+        },
     }
-
-
-def _ensure_no_automation_reference(state: Any, project_id: str) -> None:
-    """Reject removal while a live automation starts Runs of an Agent of the Project."""
-    references = state.runtime.automation_references.project_references(project_id)
-    if references:
-        labels = ", ".join(reference.label for reference in references)
-        raise RpcError(RPC_ERROR_PROJECT_IN_USE, f"cannot remove project referenced by {labels}")
 
 
 def _scan_preview(state: Any, project: Project) -> JsonObject:

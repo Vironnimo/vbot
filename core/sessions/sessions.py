@@ -571,12 +571,17 @@ class ChatSessionManager:
             )
         )
 
-    async def temporary_group_titles_async(
+    def temporary_group_titles(
         self, *, owner_name: str, group_ids: Sequence[str]
     ) -> dict[str, str]:
         """Return stored display titles for this owner's groups, keyed by group id."""
+        return self._store.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
+
+    async def temporary_group_titles_async(
+        self, *, owner_name: str, group_ids: Sequence[str]
+    ) -> dict[str, str]:
         return await self._store.run_async(
-            lambda: self._store.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
+            lambda: self.temporary_group_titles(owner_name=owner_name, group_ids=group_ids)
         )
 
     def list_owned_session_summaries(
@@ -818,9 +823,6 @@ class ChatSessionManager:
         self._archive_ledger.notify_changed()
         return entry
 
-    def restore(self, address: SessionAddress) -> None:
-        self._store.restore(address)
-
     def retarget_identity_agent_sessions(self, old_agent_id: str, new_agent_id: str) -> None:
         """Move every live global Session of an Identity Agent to its new id.
 
@@ -828,12 +830,6 @@ class ChatSessionManager:
         interruption finishes the move.
         """
         self._store.retarget_identity_agent(old_agent_id, new_agent_id)
-
-    def archive_identity_agent_sessions(self, agent_id: str) -> None:
-        self._store.archive_identity_agent_sessions(agent_id)
-
-    def archive_project_sessions(self, project_id: str) -> None:
-        self._store.archive_project_sessions(project_id)
 
     def is_fts_available(self) -> bool:
         return self._store.is_fts_available()

@@ -276,6 +276,28 @@ class SessionArchiveLedger:
         """``archived`` entries whose retention clock started at or before ``before``."""
         return self._store._read(lambda connection: _store_archive.due(connection, before, limit))
 
+    def taken_addresses(
+        self,
+        entry_key: int,
+        *,
+        project_id: str | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+    ) -> tuple[SessionAddress, ...]:
+        """The addresses a restore with these replacements would find held by a live Session.
+
+        The replacements mean what they mean for :meth:`commit_restore`.
+        """
+        return self._store._read(
+            lambda connection: _store_archive.taken_addresses(
+                connection,
+                entry_key,
+                project_id=project_id,
+                agent_id=agent_id,
+                session_id=session_id,
+            )
+        )
+
     def newest_entry_id(self, kind: str, subject_id: str) -> str | None:
         return self._store._read(
             lambda connection: _store_archive.newest_entry_id(connection, kind, subject_id)

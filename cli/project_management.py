@@ -170,7 +170,7 @@ def project_remove(
     project_id: str,
     copy_rooted_agent_files: bool = False,
 ) -> CommandResult:
-    """Archive a project via ``project.rm`` RPC, or surface the block reason."""
+    """Archive a project as an archive entry via ``project.rm`` RPC, or surface the block reason."""
 
     params: dict[str, object] = {"project_id": project_id}
     if copy_rooted_agent_files:
@@ -179,8 +179,8 @@ def project_remove(
     if not payload.ok:
         return payload.to_command_result()
     removed_id = _string_or_default(payload.data.get("project_id"), project_id)
-    archive_path = _string_or_default(payload.data.get("archive_path"), "-")
-    lines = [f"removed project {removed_id} (archived to {archive_path})"]
+    entry_id = _string_or_default(payload.data.get("archive_entry_id"), "-")
+    lines = [f"removed project {removed_id} (archived as archive entry {entry_id})"]
     if "affected_agent_ids" in payload.data:
         lines.append(
             f"affected_rooted_agents: {_format_string_list(payload.data.get('affected_agent_ids'))}"
