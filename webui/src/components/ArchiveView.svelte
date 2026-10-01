@@ -609,6 +609,7 @@
     {:else if entries.length > 0}
       <div class="archive-list-head">
         <Checkbox
+          class="archive-list-head__select"
           checked={allSelected}
           indeterminate={selectedIds.size > 0 && !allSelected}
           disabled={purgeableIds.length === 0 || busy}
@@ -759,6 +760,10 @@
     padding: 0 18px;
     color: var(--text-med);
     font-size: var(--fs-body-sm);
+  }
+
+  .archive-list-head :global(.archive-list-head__select) {
+    width: auto;
   }
 
   .archive-list-head__actions {
