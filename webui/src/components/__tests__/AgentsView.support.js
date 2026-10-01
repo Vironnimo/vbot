@@ -392,7 +392,13 @@ export function createAgentsRpcMock(options = {}) {
       }
       const index = agents.findIndex((agent) => agent.id === params.id);
       if (index >= 0) agents.splice(index, 1);
-      return { id: params.id };
+      return {
+        agent_id: params.id,
+        archive_entry_id: `arc_${params.id}`,
+        purged: params.permanent === true,
+        purge_pending: false,
+        purge_reason: null,
+      };
     }
 
     if (method === 'agent.rename') {

@@ -1,3 +1,4 @@
+import { permanentDeleteNotice } from '../archiveView.js';
 import { t } from '../i18n.js';
 import {
   emptyScanSkills,
@@ -189,9 +190,8 @@ export function createProjectDialogs({
         : t('projects.remove.filesNotCopied');
       const removed = !state.removePermanently
         ? t('projects.remove.archived')
-        : result?.purge_pending
-          ? t('archive.deletePending')
-          : t('projects.remove.deletedPermanently');
+        : permanentDeleteNotice(result, t('projects.remove.deletedPermanently'))
+            .text;
       const reset =
         affectedCount === 0
           ? ''

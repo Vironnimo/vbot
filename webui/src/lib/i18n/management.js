@@ -837,6 +837,12 @@ export default Object.freeze({
     'Settings › System sets how long the Archive keeps it.',
   'archive.deletePending':
     'Deleted. vBot finishes removing its data in the background.',
+  'archive.deleteGone':
+    'Moved to the Archive, but another action deleted or restored it there before vBot could delete it permanently.',
+  'archive.deleteBusy':
+    'Moved to the Archive, but another action, such as a restore, is using it there, so it was not deleted permanently.',
+  'archive.deleteKept':
+    'Moved to the Archive, but it could not be deleted permanently. Delete it in the Archive later.',
   'archive.title': 'Archive',
   'archive.description':
     'Deleted Agents, Projects and Sessions rest here until they are deleted permanently. Restore them or delete them for good.',
@@ -957,6 +963,19 @@ export default Object.freeze({
     '1 item could not be deleted completely yet. vBot retries automatically.',
   'archive.purge.pendingMany':
     '{count} items could not be deleted completely yet. vBot retries automatically.',
+  'archive.purge.goneOne':
+    '1 item was no longer in the Archive: another action deleted or restored it.',
+  'archive.purge.goneMany':
+    '{count} items were no longer in the Archive: another action deleted or restored them.',
+  'archive.purge.busyOne':
+    '1 item was not deleted because another action, such as a restore, is using it.',
+  'archive.purge.busyMany':
+    '{count} items were not deleted because another action, such as a restore, is using them.',
+  'archive.purge.failedOne':
+    '1 item could not be deleted and stays in the Archive unchanged. Try again later.',
+  'archive.purge.failedMany':
+    '{count} items could not be deleted and stay in the Archive unchanged. Try again later.',
+  'archive.purge.nothing': 'Nothing was deleted.',
   'archive.purge.error': 'Could not delete',
   'archive.purgeAll.everything': 'Empty Archive…',
   'archive.purgeAll.everythingTitle': 'Empty the Archive?',

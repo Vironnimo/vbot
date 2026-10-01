@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   archiveRow,
   canRestoreAs,
+  permanentDeleteNotice,
+  purgeResultToast,
   restoreProblemText,
 } from '../archiveView.js';
 import { init, t } from '../i18n.js';
@@ -98,4 +100,61 @@ describe('archive view rules', () => {
       restoreProblemText({ code: 'future_problem', message: 'Server says no' }),
     ).toBe('Server says no');
   });
+
+  it.each([
+    [
+      'what was deleted and what vBot finishes later',
+      { purged: [{}, {}], pending: [{ reason: 'stopped' }] },
+      () => ({
+        title: t('archive.purge.successMany', { count: 2 }),
+        message: t('archive.purge.pendingOne'),
+        variant: 'warn',
+      }),
+    ],
+    [
+      'entries another action already removed as done',
+      { purged: [], gone: ['e1', 'e2'] },
+      () => ({
+        title: t('archive.purge.goneMany', { count: 2 }),
+        variant: 'info',
+      }),
+    ],
+    [
+      'entries kept because another action holds them or the delete failed',
+      {
+        skipped: [
+          { entry_id: 'e1', reason: 'busy', state: 'restoring' },
+          { entry_id: 'e2', reason: 'OSError', state: 'archived' },
+        ],
+      },
+      () => ({
+        title: t('archive.purge.busyOne'),
+        message: t('archive.purge.failedOne'),
+        variant: 'warn',
+      }),
+    ],
+    [
+      'that nothing was deleted',
+      {},
+      () => ({ title: t('archive.purge.nothing'), variant: 'info' }),
+    ],
+  ])('words a purge result: %s', (_name, result, expected) => {
+    expect(purgeResultToast(result)).toEqual(expected());
+  });
+
+  it.each([
+    [{ purged: true }, 'Gone for good', 'success'],
+    [{ purge_pending: true, purge_reason: 'stopped' }, 'archive.deletePending'],
+    [{ purge_reason: 'gone' }, 'archive.deleteGone'],
+    [{ purge_reason: 'busy' }, 'archive.deleteBusy'],
+    [{ purge_reason: 'usage_import_failed' }, 'archive.deleteKept'],
+  ])(
+    'says what a permanent delete did for %o',
+    (result, text, variant = 'warn') => {
+      expect(permanentDeleteNotice(result, 'Gone for good')).toEqual({
+        text: text === 'Gone for good' ? text : t(text),
+        variant,
+      });
+    },
+  );
 });

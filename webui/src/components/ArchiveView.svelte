@@ -475,13 +475,14 @@
   }
 
   async function purgeInBatches(entryIds) {
-    const result = { purged: [], pending: [] };
+    const result = { purged: [], pending: [], skipped: [], gone: [] };
     for (let start = 0; start < entryIds.length; start += ARCHIVE_PURGE_BATCH) {
       const batch = await purgeArchiveEntries({
         entryIds: entryIds.slice(start, start + ARCHIVE_PURGE_BATCH),
       });
-      result.purged.push(...(batch?.purged ?? []));
-      result.pending.push(...(batch?.pending ?? []));
+      for (const key of Object.keys(result)) {
+        result[key].push(...(batch?.[key] ?? []));
+      }
     }
     return result;
   }

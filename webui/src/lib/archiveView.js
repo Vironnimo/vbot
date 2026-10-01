@@ -451,29 +451,83 @@ export function purgeConfirmText({ count, name = '', holdsOwnFolders }) {
     : t('archive.purgeMany.confirm', { count });
 }
 
-// The toast after a purge: what was deleted and what vBot finishes later.
+function listLength(value) {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+// One translated sentence for `count` items, or '' when there are none.
+function countText(count, one, many) {
+  if (count === 0) return '';
+  return count === 1 ? one() : many(count);
+}
+
+// The toast after a purge: what was deleted, what vBot finishes later, and
+// what stays in the Archive and why. Entries no longer in the Archive (another
+// action deleted or restored them) count as done.
 export function purgeResultToast(result, { name = '' } = {}) {
-  const purged = Array.isArray(result?.purged) ? result.purged.length : 0;
-  const pending = Array.isArray(result?.pending) ? result.pending.length : 0;
-  if (pending > 0) {
-    return {
-      title:
-        pending === 1
-          ? t('archive.purge.pendingOne')
-          : t('archive.purge.pendingMany', { count: pending }),
-      variant: 'warn',
-    };
-  }
+  const purged = listLength(result?.purged);
+  const gone = listLength(result?.gone);
+  const pending = listLength(result?.pending);
+  const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
+  const busy = skipped.filter((entry) => entry?.reason === 'busy').length;
+  const notes = [
+    countText(
+      pending,
+      () => t('archive.purge.pendingOne'),
+      (count) => t('archive.purge.pendingMany', { count }),
+    ),
+    countText(
+      busy,
+      () => t('archive.purge.busyOne'),
+      (count) => t('archive.purge.busyMany', { count }),
+    ),
+    countText(
+      skipped.length - busy,
+      () => t('archive.purge.failedOne'),
+      (count) => t('archive.purge.failedMany', { count }),
+    ),
+  ].filter(Boolean);
+  const unfinished = notes.length > 0;
+  let title;
   if (name && purged === 1) {
-    return { title: t('archive.purge.success', { name }), variant: 'success' };
+    title = t('archive.purge.success', { name });
+  } else if (purged > 0) {
+    title = countText(
+      purged,
+      () => t('archive.purge.successOne'),
+      (count) => t('archive.purge.successMany', { count }),
+    );
+  } else if (gone > 0) {
+    title = countText(
+      gone,
+      () => t('archive.purge.goneOne'),
+      (count) => t('archive.purge.goneMany', { count }),
+    );
+  } else {
+    title = notes.shift() ?? t('archive.purge.nothing');
   }
   return {
-    title:
-      purged === 1
-        ? t('archive.purge.successOne')
-        : t('archive.purge.successMany', { count: purged }),
-    variant: 'success',
+    title,
+    ...(notes.length > 0 ? { message: notes.join(' ') } : {}),
+    variant: unfinished ? 'warn' : purged > 0 ? 'success' : 'info',
   };
+}
+
+// What a permanent delete did beyond moving the item to the Archive:
+// `deletedText` when it is gone for good, otherwise why it is not.
+export function permanentDeleteNotice(result, deletedText) {
+  if (result?.purged === true) return { text: deletedText, variant: 'success' };
+  if (result?.purge_pending === true) {
+    return { text: t('archive.deletePending'), variant: 'warn' };
+  }
+  switch (result?.purge_reason) {
+    case 'gone':
+      return { text: t('archive.deleteGone'), variant: 'warn' };
+    case 'busy':
+      return { text: t('archive.deleteBusy'), variant: 'warn' };
+    default:
+      return { text: t('archive.deleteKept'), variant: 'warn' };
+  }
 }
 
 export function treeRoleLabel(role) {

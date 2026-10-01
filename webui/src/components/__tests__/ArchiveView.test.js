@@ -405,7 +405,8 @@ describe('ArchiveView', () => {
     await waitForCondition(() => onToast.mock.calls.length === 2);
     expect(purgeMock).toHaveBeenLastCalledWith({ all: true, ...NO_FILTERS });
     expect(onToast).toHaveBeenLastCalledWith({
-      title: t('archive.purge.pendingOne'),
+      title: t('archive.purge.successMany', { count: 2 }),
+      message: t('archive.purge.pendingOne'),
       variant: 'warn',
     });
   });

@@ -14,6 +14,7 @@
     skillInventory,
   } from '$lib/api.js';
   import { buildAgentTargetCatalog } from '$lib/agentForm.js';
+  import { permanentDeleteNotice } from '$lib/archiveView.js';
   import { useAutosaveContext } from '$lib/autosave.js';
   import { writeClipboardText } from '$lib/clipboard.js';
   import { createAgentTargetCatalogLoader } from '$lib/agentTargetOptions.js';
@@ -568,13 +569,15 @@
     deletingAgentId = agent.id;
     try {
       const result = await deleteAgent(agent.id, { permanent });
-      onToast(
-        !permanent
-          ? { title: t('agents.deleted'), variant: 'success' }
-          : result?.purge_pending
-            ? { title: t('archive.deletePending'), variant: 'warn' }
-            : { title: t('agents.deletedPermanently'), variant: 'success' },
-      );
+      if (permanent) {
+        const notice = permanentDeleteNotice(
+          result,
+          t('agents.deletedPermanently'),
+        );
+        onToast({ title: notice.text, variant: notice.variant });
+      } else {
+        onToast({ title: t('agents.deleted'), variant: 'success' });
+      }
       await loadAgents({ showLoading: false });
     } catch (error) {
       onToast({

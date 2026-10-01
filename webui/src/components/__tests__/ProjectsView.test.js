@@ -375,7 +375,7 @@ describe('ProjectsView list and selection', () => {
     serveProject();
     removeProjectMock.mockResolvedValue({
       project_id: 'demo',
-      archive_entry_id: null,
+      archive_entry_id: 'arc_demo',
       purged: true,
       purge_pending: false,
       affected_agent_ids: ['alpha', 'beta'],
