@@ -5,7 +5,9 @@ Blocking steps for the Session database's pool. A restore claims the entry
 transaction (``restored``); a failure before that commit moves the files back
 and returns the entry to ``archived``. The follow-up (roster, grants, roots,
 Sub-Agent links, empty payload directories) is idempotent, runs again from
-startup recovery after a crash, and deletes the entry last.
+startup recovery after a crash, and deletes the entry last. Startup recovery
+never moves files that are live again back into the archive: it finishes such a
+restore or leaves them in place (:func:`settle_interrupted`).
 """
 
 from __future__ import annotations
@@ -31,7 +33,9 @@ from core.sessions import (
     ARCHIVE_KIND_AGENT,
     ARCHIVE_KIND_PROJECT,
     ARCHIVE_KIND_SESSION,
+    ARCHIVE_ROOT,
     ARCHIVE_STATE_ARCHIVED,
+    ARCHIVE_STATE_RESTORING,
     ARCHIVE_TREE_AGENT,
     ARCHIVE_TREE_PROJECT,
     ARCHIVE_TREE_WORKSPACE,
@@ -39,6 +43,7 @@ from core.sessions import (
     ArchiveAddressTakenError,
     ArchiveEntry,
     ArchiveEntryBusyError,
+    ArchiveEntryError,
     ArchiveEntryNotFoundError,
     ArchiveMembersManagedError,
     ArchiveTree,
@@ -178,33 +183,79 @@ def follow_up(services: ArchiveServices, entry: ArchiveEntry) -> None:
     ledger.finish_restore(entry.entry_key)
 
 
-def roll_back(services: ArchiveServices, entry: ArchiveEntry) -> bool:
-    """Return the files of an interrupted restore to the payload and the entry to ``archived``.
+def settle_interrupted(services: ArchiveServices, entry: ArchiveEntry) -> str:
+    """Settle a ``restoring`` entry an interrupted restore left; return what happened.
 
-    ``False`` when a payload tree could not be returned; the entry then stays
-    ``restoring``.
+    ``rolled_back``: the files are still, or again, in the payload, or nowhere;
+    the entry is ``archived`` again. ``completed``: the files are live as a valid
+    Agent or Project of the target id, so the restore finishes from there.
+    ``stuck``: the files are live but the restore cannot finish. Live files may
+    hold new data, so they are never moved back into the payload: they stay in
+    place and the entry stays ``restoring`` with the reason, which its restore
+    check shows; once the reason is resolved or the folder moved away, the next
+    start settles the entry again.
     """
+    ledger = services.sessions.archive_ledger
+    if entry.kind not in (ARCHIVE_KIND_AGENT, ARCHIVE_KIND_PROJECT):
+        ledger.abort_restore(entry.entry_key)
+        return "rolled_back"
+    agent = entry.kind == ARCHIVE_KIND_AGENT
     target = _restore_target(entry)
-    live = {
-        ARCHIVE_KIND_AGENT: services.data_dir / "agents" / target,
-        ARCHIVE_KIND_PROJECT: services.data_dir / "projects" / target,
-    }.get(entry.kind)
-    tree = _tree(
-        entry, ARCHIVE_TREE_AGENT if entry.kind == ARCHIVE_KIND_AGENT else ARCHIVE_TREE_PROJECT
-    )
+    tree = _tree(entry, ARCHIVE_TREE_AGENT if agent else ARCHIVE_TREE_PROJECT)
     payload = None if tree is None else stored_path(services, tree.path)
-    if payload is not None and live is not None and not payload.exists() and live.is_dir():
-        move_tree(live, payload)
+    live = services.data_dir / ("agents" if agent else "projects") / target
+    if (payload is not None and payload.is_dir()) or not os.path.lexists(live):
+        _return_moved_workspace(services, entry)
+        ledger.abort_restore(entry.entry_key)
+        return "rolled_back"
+    if not (services.agents.exists(target) if agent else services.projects.exists(target)):
+        problem = f"it holds no valid {'Agent' if agent else 'Project'} {target}"
+    else:
+        renamed = target != entry.subject_id
+        new_id = target if renamed else None
+        try:
+            ledger.commit_restore(
+                entry.entry_key,
+                **({"agent_id": new_id} if agent else {"project_id": new_id}),
+                strip_channel_keys=renamed,
+            )
+        except ArchiveEntryError as error:
+            problem = str(error)
+        else:
+            restored = ledger.entry_by_key(entry.entry_key)
+            if restored is not None:
+                follow_up(services, restored)
+            return "completed"
+    plan = entry.facts.get("restore_plan")
+    ledger.update_facts(
+        entry.entry_key,
+        {
+            "restore_plan": {
+                **(plan if isinstance(plan, Mapping) else {}),
+                "live_path": str(live),
+                "problem": problem,
+            }
+        },
+    )
+    return "stuck"
+
+
+def _return_moved_workspace(services: ArchiveServices, entry: ArchiveEntry) -> None:
+    """Return a moved Workspace an interrupted restore placed inside the archive.
+
+    A Workspace already back in its own folder outside the archive stays there:
+    the user may use that folder again, and a later restore attaches it in place.
+    """
     workspace_tree = _tree(entry, ARCHIVE_TREE_WORKSPACE)
-    destination = entry.facts.get("restore_plan", {}).get("workspace_destination")
-    if workspace_tree is not None and isinstance(destination, str):
-        moved = stored_path(services, workspace_tree.path)
-        if not moved.exists() and Path(destination).is_dir():
-            move_tree(Path(destination), moved)
-    if payload is not None and not payload.exists():
-        return False
-    services.sessions.archive_ledger.abort_restore(entry.entry_key)
-    return True
+    plan = entry.facts.get("restore_plan")
+    destination = plan.get("workspace_destination") if isinstance(plan, Mapping) else None
+    if workspace_tree is None or not isinstance(destination, str):
+        return
+    moved = stored_path(services, workspace_tree.path)
+    placed = Path(destination)
+    archive_root = (services.data_dir / ARCHIVE_ROOT).resolve()
+    if not moved.exists() and placed.is_dir() and placed.resolve().is_relative_to(archive_root):
+        move_tree(placed, moved)
 
 
 # -- Check -------------------------------------------------------------------------
@@ -226,13 +277,34 @@ def _plan(services: ArchiveServices, entry: ArchiveEntry, target_id: str | None)
         )
         return _Plan(_checked(entry, target, findings), entry)
     if entry.state != ARCHIVE_STATE_ARCHIVED:
-        findings.block("entry_busy", f"the entry is {entry.state}", state=entry.state)
+        # Whatever else the check finds belongs to the operation that holds the entry.
+        _block_busy(entry, findings)
+        return _Plan(_checked(entry, target, findings), entry)
     if entry.kind == ARCHIVE_KIND_AGENT:
         return _plan_agent(services, entry, target, findings)
     if entry.kind == ARCHIVE_KIND_PROJECT:
         return _plan_project(services, entry, target, findings)
     _check_session(services, entry, target, findings)
     return _Plan(_checked(entry, target, findings), entry)
+
+
+def _block_busy(entry: ArchiveEntry, findings: _Findings) -> None:
+    plan = entry.facts.get("restore_plan")
+    problem = plan.get("problem") if isinstance(plan, Mapping) else None
+    if entry.state != ARCHIVE_STATE_RESTORING or not isinstance(problem, str):
+        findings.block("entry_busy", f"the entry is {entry.state}", state=entry.state)
+        return
+    assert isinstance(plan, Mapping)
+    live_path = plan.get("live_path")
+    findings.block(
+        "entry_busy",
+        f"an interrupted restore left the files live at {live_path} and cannot finish: "
+        f"{problem}. Once that is resolved, or the folder is moved out of the data "
+        "directory, the next start of vBot finishes or undoes the restore",
+        state=entry.state,
+        path=live_path,
+        problem=problem,
+    )
 
 
 def _checked(entry: ArchiveEntry, target: str, findings: _Findings) -> RestoreCheck:

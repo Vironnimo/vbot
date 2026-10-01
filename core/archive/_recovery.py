@@ -90,22 +90,28 @@ def _settle(services: ArchiveServices, entry: ArchiveEntry) -> bool:
         _LOGGER.info("Interrupted archive completed (entry=%s kind=%s)", entry.entry_id, entry.kind)
         return True
     if entry.state == ARCHIVE_STATE_RESTORING:
-        if _restore.roll_back(services, entry):
+        outcome = _restore.settle_interrupted(services, entry)
+        if outcome == "stuck":
+            settled = services.sessions.archive_ledger.entry_by_key(entry.entry_key)
+            plan = (settled or entry).facts.get("restore_plan") or {}
             _LOGGER.warning(
-                "Interrupted restore rolled back (entry=%s kind=%s subject=%s)",
+                "Interrupted restore cannot finish; its files stay live "
+                "(entry=%s kind=%s subject=%s path=%s): %s",
+                entry.entry_id,
+                entry.kind,
+                entry.subject_id,
+                plan.get("live_path"),
+                plan.get("problem"),
+            )
+        else:
+            _LOGGER.warning(
+                "Interrupted restore %s (entry=%s kind=%s subject=%s)",
+                "completed" if outcome == "completed" else "rolled back",
                 entry.entry_id,
                 entry.kind,
                 entry.subject_id,
             )
-            return True
-        _LOGGER.warning(
-            "Interrupted restore could not be rolled back; its files are not in the archive "
-            "(entry=%s kind=%s subject=%s)",
-            entry.entry_id,
-            entry.kind,
-            entry.subject_id,
-        )
-        return False
+        return True
     if entry.state == ARCHIVE_STATE_RESTORED:
         _restore.follow_up(services, entry)
         _LOGGER.info("Interrupted restore completed (entry=%s kind=%s)", entry.entry_id, entry.kind)

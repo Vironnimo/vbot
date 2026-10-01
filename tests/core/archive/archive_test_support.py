@@ -6,6 +6,7 @@ Project Team resolution, Terminals, Recall and the usage import.
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 from collections.abc import Iterator
@@ -16,13 +17,21 @@ from typing import Any, cast
 
 import pytest
 
-from core.agents import AgentStore
+from core.agents import AGENT_FORMAT_VERSION, AgentStore
 from core.archive import ArchiveService, ArchiveServices
 from core.automation import AutomationReferences
 from core.database import SnapshotBarrier
 from core.projects import ProjectStore
 from core.runs import ChatRunManager
-from core.sessions import ArchiveEntry, ChatSessionManager
+from core.sessions import (
+    ARCHIVE_KIND_AGENT,
+    ARCHIVE_TREE_AGENT,
+    ARCHIVE_TREE_WORKSPACE,
+    ArchiveEntry,
+    ArchiveTree,
+    ChatSessionManager,
+)
+from core.utils.timestamps import utc_now_timestamp
 
 
 class _Team:
@@ -82,6 +91,35 @@ class ArchiveWorld:
                     "SELECT session_id, state FROM sessions WHERE agent_id = ?", (agent_id,)
                 )
             )
+
+
+def legacy_agent_entry(world: ArchiveWorld, folder: Path) -> str:
+    """An Agent an older vBot archived with its Workspace moved into ``archive/coder/``.
+
+    ``folder``, the Workspace, held ``notes.md`` and is gone afterwards. Returns the entry id.
+    """
+    folder.mkdir(parents=True)
+    (folder / "notes.md").write_text("mine", encoding="utf-8")
+    world.agents.create("coder", "Coder", workspace=folder)
+    container = world.data_dir / "archive" / "coder"
+    with world.agents.archive_files("coder", container / "agent"):
+        pass
+    os.replace(folder, container / "workspace")
+    return world.sessions.archive_ledger.adopt_payload(
+        "arc_legacy",
+        ARCHIVE_KIND_AGENT,
+        subject_id="coder",
+        archived_at=utc_now_timestamp(),
+        trees=(
+            ArchiveTree("archive/coder/agent", ARCHIVE_TREE_AGENT, "agents/coder"),
+            ArchiveTree("archive/coder/workspace", ARCHIVE_TREE_WORKSPACE, str(folder)),
+        ),
+        facts={
+            "name": "Coder",
+            "payload_format": AGENT_FORMAT_VERSION,
+            "workspace": {"path": str(folder), "external": True, "moved": True},
+        },
+    ).entry_id
 
 
 @pytest.fixture

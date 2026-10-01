@@ -20,7 +20,7 @@ from core.archive import (
 )
 from core.chat import ChatSessionError
 from core.sessions import ArchiveEntryFilter, SessionAddress
-from tests.core.archive.archive_test_support import ArchiveWorld
+from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
 
 
@@ -124,6 +124,41 @@ async def test_an_external_workspace_stays_in_place_and_returns_with_the_agent(
         assert [warning.code for warning in restored.warnings] == ["external_workspace_missing"]
         assert agent.workspace == world.agents.default_workspace("coder")
         assert Path(agent.workspace).is_dir()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_use", ["nothing", "its-folder", "its-folder-and-the-default"])
+async def test_a_moved_legacy_workspace_returns_to_its_folder_or_the_default_one(
+    world: ArchiveWorld, tmp_path: Path, in_use: str
+) -> None:
+    folder = (tmp_path / "repo").resolve()
+    entry_id = legacy_agent_entry(world, folder)
+    moved = world.data_dir / "archive" / "coder" / "workspace"
+    if in_use != "nothing":
+        folder.mkdir()
+        (folder / "other.txt").write_text("other", encoding="utf-8")
+    if in_use == "its-folder-and-the-default":
+        (world.data_dir / "archive" / "coder" / "agent" / "workspace").mkdir(exist_ok=True)
+        with pytest.raises(ArchiveNotRestorableError) as refused:
+            await world.service.restore(entry_id)
+        [blocker] = refused.value.blockers
+        assert blocker.code == "workspace_path_taken"
+        assert f"move or rename {folder}, then restore again" in blocker.message
+        assert world.entry(entry_id).state == "archived"
+        assert (moved / "notes.md").is_file()
+        return
+
+    restored = await world.service.restore(entry_id)
+
+    workspace = Path(world.agents.get("coder").workspace)
+    if in_use == "nothing":
+        assert (workspace, restored.warnings) == (folder, ())
+    else:  # the user's folder stays as it is; the archived Workspace becomes the default one
+        assert [warning.code for warning in restored.warnings] == ["workspace_path_taken"]
+        assert str(workspace) == world.agents.default_workspace("coder")
+        assert (folder / "other.txt").is_file()
+    assert (workspace / "notes.md").read_text(encoding="utf-8") == "mine"
+    assert not moved.exists()
 
 
 @pytest.mark.asyncio

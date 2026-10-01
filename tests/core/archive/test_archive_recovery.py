@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ from core.sessions import (
     ArchiveTree,
     SessionAddress,
 )
-from tests.core.archive.archive_test_support import ArchiveWorld
+from tests.core.archive.archive_test_support import ArchiveWorld, legacy_agent_entry
 from tests.core.archive.archive_test_support import world as world
 
 
@@ -139,34 +140,98 @@ async def test_a_failed_agent_cleanup_keeps_the_archive_and_completes_at_the_nex
 
 
 @pytest.mark.asyncio
-async def test_an_interrupted_restore_is_rolled_back_or_completed(
-    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("left", ["payload", "live-files", "invalid-live-files", "committed"])
+async def test_an_interrupted_restore_finishes_from_live_files_and_never_moves_them_back(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, left: str
 ) -> None:
     agents, ledger = world.agents, world.sessions.archive_ledger
-    agents.create("coder")
+    coder = agents.create("coder")
     agents.create("manager", tools={"subagent": {"allowed_agents": ["coder"]}})
     entry_id = (await world.service.archive_agent("coder")).entry_id
-    # Stopped after the files moved back and before the Sessions were committed.
-    ledger.begin_restore(entry_id, {"target_id": None, "strip_channel_keys": False})
-    os.replace(world.payload(entry_id, "agent"), world.data_dir / "agents" / "coder")
+    payload, home = world.payload(entry_id, "agent"), world.data_dir / "agents" / "coder"
+    if left == "committed":
+        # Stopped after the commit, before the follow-up re-added the grants.
+        monkeypatch.setattr(agents, "restore_delegation_grants", _fail)
+        with pytest.raises(OSError, match="stopped here"):
+            await world.service.restore(entry_id)
+        monkeypatch.undo()
+        assert world.entry(entry_id).state == "restored"
+    else:
+        # Stopped before the files moved, or after they did and before the commit.
+        ledger.begin_restore(entry_id, {"target_id": None, "strip_channel_keys": False})
+        if left != "payload":
+            os.replace(payload, home)
+        if left == "invalid-live-files":
+            (home / "agent.json").write_text("{ not json", encoding="utf-8")
 
     world.service.recover()
 
-    assert world.entry(entry_id).state == "archived"
-    assert not agents.exists("coder")
-    assert (world.payload(entry_id, "agent") / "agent.json").is_file()
-
-    # Stopped after the commit, before the follow-up re-added the grants.
-    monkeypatch.setattr(agents, "restore_delegation_grants", _fail)
-    with pytest.raises(OSError, match="stopped here"):
-        await world.service.restore(entry_id)
-    monkeypatch.undo()
-    assert world.entry(entry_id).state == "restored"
-
-    world.service.recover()
-
+    if left == "payload":
+        assert world.entry(entry_id).state == "archived"
+        assert not agents.exists("coder")
+        assert (payload / "agent.json").is_file()
+        return
+    if left == "invalid-live-files":
+        # The files may hold new data: they stay live, and the entry says why it is stuck.
+        assert world.entry(entry_id).state == "restoring"
+        assert (home / "agent.json").is_file() and not payload.exists()
+        [busy] = (await world.service.show(entry_id)).restore.blockers
+        assert (busy.code, busy.details["path"]) == ("entry_busy", str(home))
+        assert "holds no valid Agent coder" in busy.message
+        # Once the folder is moved away, the next start undoes the restore.
+        shutil.move(home, tmp_path / "rescued")
+        world.service.recover()
+        assert world.entry(entry_id).state == "archived"
+        assert [item.entry_id for item in (await world.service.purge([entry_id])).purged] == [
+            entry_id
+        ]
+        return
     assert ledger.entry(entry_id) is None
+    assert agents.get("coder").current_session_id == coder.current_session_id
+    assert world.session_rows("coder") == [(coder.current_session_id, "live")]
     assert agents.get("manager").tools["subagent"]["allowed_agents"] == ["coder"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["commit-fails", "crash-in-its-folder", "crash-in-the-archive"])
+async def test_a_moved_legacy_workspace_survives_a_failed_or_interrupted_restore(
+    world: ArchiveWorld, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stop: str
+) -> None:
+    folder = (tmp_path / "repo").resolve()
+    entry_id = legacy_agent_entry(world, folder)
+    container = world.data_dir / "archive" / "coder"
+    moved = container / "workspace"
+    if stop == "commit-fails":
+        monkeypatch.setattr(world.sessions.archive_ledger, "commit_restore", _fail)
+        with pytest.raises(OSError, match="stopped here"):
+            await world.service.restore(entry_id)
+        monkeypatch.undo()
+        # The failed restore returned the Workspace to the archive.
+        assert (moved / "notes.md").is_file() and not folder.exists()
+    else:
+        # Stopped after the Workspace moved and before the Agent's files did.
+        destination = folder if stop == "crash-in-its-folder" else container / "agent" / "workspace"
+        world.sessions.archive_ledger.begin_restore(
+            entry_id,
+            {
+                "target_id": None,
+                "strip_channel_keys": False,
+                "workspace_destination": str(destination),
+            },
+        )
+        os.replace(moved, destination)
+
+        world.service.recover()
+
+        assert world.entry(entry_id).state == "archived"
+        # The user's own folder stays where it is; a copy inside the archive goes back.
+        kept = folder if stop == "crash-in-its-folder" else moved
+        assert (kept / "notes.md").is_file()
+
+    await world.service.restore(entry_id)
+
+    assert world.agents.get("coder").workspace == str(folder)
+    assert (folder / "notes.md").read_text(encoding="utf-8") == "mine"
 
 
 @pytest.mark.asyncio
