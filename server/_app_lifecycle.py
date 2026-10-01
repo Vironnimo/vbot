@@ -29,6 +29,7 @@ from server.rpc.dispatcher import dispatch_method
 from server.rpc.event_bridge import (
     bridge_run_to_event_bus,
     publish_bash_process_status_changed,
+    publish_recall_index_status,
     publish_resource_changed,
     publish_session_changed,
 )
@@ -76,6 +77,9 @@ def _initialize_app_state(
     app.state.skill_change_bridge_unsubscribe = _register_skill_change_bridge(app.state)
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
+        app.state
+    )
+    app.state.recall_index_status_bridge_unsubscribe = _register_recall_index_status_bridge(
         app.state
     )
     app.state.chat_loop = runtime.chat_loop
@@ -245,6 +249,19 @@ def _unregister_bash_process_change_bridge(state: Any) -> None:
     if unsubscribe is not None:
         unsubscribe()
     state.bash_process_change_bridge_unsubscribe = None
+
+
+def _register_recall_index_status_bridge(state: Any) -> Any:
+    return state.runtime.recall.add_index_status_listener(
+        lambda status: publish_recall_index_status(state, status)
+    )
+
+
+def _unregister_recall_index_status_bridge(state: Any) -> None:
+    unsubscribe = state.recall_index_status_bridge_unsubscribe
+    if unsubscribe is not None:
+        unsubscribe()
+    state.recall_index_status_bridge_unsubscribe = None
 
 
 def _app_chat_runs(state: Any) -> ChatRunManager:

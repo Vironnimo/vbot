@@ -21,6 +21,7 @@ from core.recall.hybrid import HybridRecallBackend
 from core.sessions import ChatSessionManager
 from tests.core.recall.recall_test_support import (
     StubEmbeddings,
+    embed_documents,
     forbid_database_calls_on_loop,
     forbid_event_loop_calls,
     request,
@@ -47,7 +48,9 @@ async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
     sessions.create("coder", session_id="semantic").append(
         ChatMessage.user("vehicle maintenance", timestamp=timestamp(2))
     )
-    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    embeddings = StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("driving"))
 
@@ -80,7 +83,9 @@ async def test_typed_hybrid_keeps_multiple_passages_from_one_session(
     sessions.create("coder", session_id="repeated").append(
         ChatMessage.user("needle context " * 400, timestamp=timestamp(1))
     )
-    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    embeddings = StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("needle"))
 
@@ -103,26 +108,22 @@ class _WaitingArm:
         return RecallSearchPage((), "passage", self._ranking, f"{self._ranking}-snapshot", False, 0)
 
 
-async def test_hybrid_arms_run_concurrently(
+async def test_hybrid_arms_rank_concurrently(
     tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recall = backend(tmp_path, sessions)
-    literal_prepared = asyncio.Event()
-    semantic_prepared = asyncio.Event()
     literal_ranked = asyncio.Event()
     semantic_ranked = asyncio.Event()
 
-    async def literal(request: RecallSearchRequest, scope: RecallScope) -> _WaitingArm:
-        literal_prepared.set()
-        await semantic_prepared.wait()
+    def literal(request: RecallSearchRequest, scope: RecallScope) -> _WaitingArm:
         return _WaitingArm("literal", literal_ranked, semantic_ranked)
 
-    async def semantic(request: RecallSearchRequest, scope: RecallScope) -> _WaitingArm:
-        semantic_prepared.set()
-        await literal_prepared.wait()
+    async def semantic(
+        request: RecallSearchRequest, scope: RecallScope, *, refreshed: bool = False
+    ) -> _WaitingArm:
         return _WaitingArm("semantic", semantic_ranked, literal_ranked)
 
-    monkeypatch.setattr(recall._fts, "prepare_passage_search", literal)
+    monkeypatch.setattr(recall, "_prepare_literal", literal)
     monkeypatch.setattr(recall._vector, "prepare_search", semantic)
     page = await asyncio.wait_for(recall.search_page(request("query")), timeout=2)
     assert page.degraded is False
@@ -140,6 +141,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
         )
     embeddings = StubEmbeddings()
     recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     stability_checks = 0
 
     def unstable_once(*args: Any) -> bool:
@@ -156,7 +158,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
         return list_history_revisions(agent_id, project_id)
 
     syncs = 0
-    refresh_passage_index = recall._fts._catalog.refresh
+    refresh_passage_index = recall.index.refresh
 
     async def counting_sync(*args: Any) -> None:
         nonlocal syncs
@@ -170,7 +172,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
     monkeypatch.setattr(sessions, "list_history_revisions", counting_revisions)
     monkeypatch.setattr(sessions, "list_summaries", reject_listing)
     monkeypatch.setattr(sessions, "list_history_versions", reject_listing)
-    monkeypatch.setattr(recall._fts._catalog, "refresh", counting_sync)
+    monkeypatch.setattr(recall.index, "refresh", counting_sync)
 
     page = await recall.search_page(request("driving"))
 
@@ -188,7 +190,9 @@ async def test_hybrid_search_keeps_session_and_index_work_off_the_event_loop(
     sessions.create("coder", session_id="both").append(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
     )
-    recall = backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    embeddings = StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
     calls = forbid_event_loop_calls(monkeypatch, sessions._store)
     database_calls = forbid_database_calls_on_loop(monkeypatch)
 
@@ -198,13 +202,9 @@ async def test_hybrid_search_keeps_session_and_index_work_off_the_event_loop(
     assert page.degraded is False
     assert page.hits[0].sources == ("literal", "semantic")
     assert "list_history_revisions" in calls
-    # Both arms refreshed and read their Passage indexes on the database worker pools.
-    assert {
-        "recall_index.read",
-        "recall_index.write",
-        "recall_vectors.read",
-        "recall_vectors.write",
-    } <= set(database_calls)
+    # Both arms read the one Passage index on its database worker pool; a
+    # current catalog needs no write.
+    assert {call for call in database_calls if call.startswith("recall")} == {"recall_index.read"}
 
 
 async def test_hybrid_short_query_retains_literal_and_semantic_sources(
@@ -213,9 +213,51 @@ async def test_hybrid_short_query_retains_literal_and_semantic_sources(
     sessions.create("coder", session_id="short").append(
         ChatMessage.user("Go fast", timestamp=timestamp(1))
     )
-    page = await backend(tmp_path, sessions, embeddings=StubEmbeddings()).search_page(request("go"))
+    embeddings = StubEmbeddings()
+    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
+    page = await recall.search_page(request("go"))
     assert page.hits[0].session_id == "short"
     assert page.hits[0].sources == ("literal", "semantic")
+
+
+class _Ranking:
+    """A fixed ranking that records the depth of every page it is asked for."""
+
+    def __init__(self, names: list[str]) -> None:
+        self.names = names
+        self.depths: list[int] = []
+
+    async def page(self, start: int, count: int) -> RecallSearchPage:
+        self.depths.append(start + count)
+        return RecallSearchPage(
+            hits=tuple(
+                RecallSearchHit("passage", "session", name, "user", "", name, 0, passage_id=name)
+                for name in self.names[start : start + count]
+            ),
+            result_type="passage",
+            ranking="fixture",
+            snapshot_id="fixed",
+            has_more=start + count < len(self.names),
+            total_candidate_sessions=1,
+        )
+
+
+def _fixed_arms(
+    tmp_path: Path,
+    sessions: ChatSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+    literal: _Ranking,
+    semantic: _Ranking,
+) -> HybridRecallBackend:
+    recall = backend(tmp_path, sessions)
+
+    async def prepare_semantic(*_args: Any, **_kwargs: Any) -> _Ranking:
+        return semantic
+
+    monkeypatch.setattr(recall, "_prepare_literal", lambda *_args: literal)
+    monkeypatch.setattr(recall._vector, "prepare_search", prepare_semantic)
+    return recall
 
 
 @pytest.mark.parametrize(("offset", "limit"), [(0, 10), (8, 2), (9, 1)])
@@ -235,31 +277,7 @@ async def test_hybrid_resolves_late_contributions_before_returning_selected_hits
         "a",
     ]
 
-    class Ranking:
-        def __init__(self, names: list[str]) -> None:
-            self.names = names
-
-        async def prepare(self, *_args: Any) -> Ranking:
-            return self
-
-        async def page(self, start: int, count: int) -> RecallSearchPage:
-            return RecallSearchPage(
-                hits=tuple(
-                    RecallSearchHit(
-                        "passage", "session", name, "user", "", name, 0, passage_id=name
-                    )
-                    for name in self.names[start : start + count]
-                ),
-                result_type="passage",
-                ranking="fixture",
-                snapshot_id="fixed",
-                has_more=start + count < len(self.names),
-                total_candidate_sessions=1,
-            )
-
-    recall = backend(tmp_path, sessions)
-    monkeypatch.setattr(recall._fts, "prepare_passage_search", Ranking(literal).prepare)
-    monkeypatch.setattr(recall._vector, "prepare_search", Ranking(semantic).prepare)
+    recall = _fixed_arms(tmp_path, sessions, monkeypatch, _Ranking(literal), _Ranking(semantic))
     try:
         page = await recall.search_page(request("query", limit=limit, offset=offset))
     finally:
@@ -274,3 +292,33 @@ async def test_hybrid_resolves_late_contributions_before_returning_selected_hits
         assert hit.score == pytest.approx(
             1 / (61 + literal.index(hit.message_id)) + 1 / (61 + semantic.index(hit.message_id))
         )
+
+
+@pytest.mark.parametrize(("offset", "expected_hits"), [(0, 10), (35, 5), (40, 0)])
+async def test_hybrid_depth_stops_at_its_limit(
+    tmp_path: Path,
+    sessions: ChatSessionManager,
+    monkeypatch: pytest.MonkeyPatch,
+    offset: int,
+    expected_hits: int,
+) -> None:
+    """A ranking that never stabilizes stops growing at the depth limit.
+
+    Unbounded growth once asked the vector index for more rows than its KNN
+    limit allows, which failed the search and discarded the index.
+    """
+
+    monkeypatch.setattr(hybrid, "_RRF_MAX_DEPTH", 40)
+    monkeypatch.setattr(hybrid, "_rrf_page_is_stable", lambda *_args: False)
+    # Both arms rank the same Passages, so the fused ranking is as deep as the limit.
+    literal = _Ranking([f"passage-{index}" for index in range(100)])
+    semantic = _Ranking([f"passage-{index}" for index in range(100)])
+    recall = _fixed_arms(tmp_path, sessions, monkeypatch, literal, semantic)
+
+    page = await recall.search_page(request("query", offset=offset, limit=10))
+
+    assert max(literal.depths + semantic.depths) == 40
+    assert len(page.hits) == expected_hits
+    # Matches beyond the limit exist, so a page that reaches it still has more;
+    # a page past it is empty and ends the search.
+    assert page.has_more is (expected_hits > 0)

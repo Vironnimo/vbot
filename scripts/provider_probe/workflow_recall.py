@@ -13,7 +13,12 @@ from typing import Any
 
 from core.prompts.prompts import _format_skill_catalog
 from core.providers.tool_schema import render_tool_definitions
-from core.recall import RecallBackendContext, RecallBackendRegistry
+from core.recall import (
+    PassageIndex,
+    RecallBackendContext,
+    RecallBackendRegistry,
+    SemanticIndexer,
+)
 from core.skills import SkillRegistry
 from core.tools.bash import register_bash_tool
 from core.tools.contracts import ToolContractError
@@ -44,13 +49,22 @@ async def _evaluate_case(
         manager = ProcessManager()
         registry = ToolRegistry()
         skills = SkillRegistry.load(PROJECT_ROOT / "resources/skills")
-        backend = RecallBackendRegistry.with_builtins().create(
+        embeddings = FixtureEmbeddings() if case.get("embeddings") else None
+        index = PassageIndex(data_root)
+        if embeddings is not None:
+            # Searches embed only their query: index the documents first.
+            indexer = SemanticIndexer(
+                index=index,
+                sessions=sessions,
+                embeddings=embeddings,
+                binding_configured=lambda: True,
+            )
+            indexer.set_enabled(True)
+            await indexer.run_pass()
+            await indexer.aclose()
+        backend = RecallBackendRegistry.with_builtins(passage_index=index).create(
             case.get("backend", "sqlite_fts"),
-            RecallBackendContext(
-                data_root,
-                sessions,
-                embeddings=FixtureEmbeddings() if case.get("embeddings") else None,
-            ),
+            RecallBackendContext(data_root, sessions, embeddings=embeddings),
         )
         register_session_search_tool(registry, backend, sessions)
         if "exact_arguments" not in case:
@@ -288,6 +302,7 @@ async def _evaluate_case(
             }
         finally:
             await manager.aclose()
+            index.close()
             sessions.close()
 
 

@@ -1,4 +1,4 @@
-"""Shared requests, fake embeddings, store readers and loop guards for Recall tests."""
+"""Shared requests, fake embeddings, index readers and loop guards for Recall tests."""
 
 from __future__ import annotations
 
@@ -17,7 +17,13 @@ import sqlite_vec  # type: ignore[import-untyped]
 
 from core.database import Database
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
-from core.recall import RecallBackendContext, RecallSearchRequest, VectorRecallBackend
+from core.recall import (
+    PassageIndex,
+    RecallBackendContext,
+    RecallSearchRequest,
+    SemanticIndexer,
+    VectorRecallBackend,
+)
 from core.sessions import ChatSessionManager
 
 CONVERSATION_ROLES = ("user", "assistant", "error", "compaction_checkpoint")
@@ -118,16 +124,33 @@ def vector_backend(
     *,
     embeddings: Any | None = None,
     logger: Any | None = None,
+    on_waiting: Callable[[], None] | None = None,
 ) -> VectorRecallBackend:
     return VectorRecallBackend(
         RecallBackendContext(
             data_dir=tmp_path, sessions=sessions, embeddings=embeddings, logger=logger
-        )
+        ),
+        on_waiting=on_waiting,
     )
 
 
+async def embed_documents(
+    index: PassageIndex, sessions: ChatSessionManager, embeddings: Any
+) -> None:
+    """Run one indexing pass: refresh every live scope and embed every waiting text."""
+
+    indexer = SemanticIndexer(
+        index=index, sessions=sessions, embeddings=embeddings, binding_configured=lambda: True
+    )
+    indexer.set_enabled(True)
+    try:
+        await indexer.run_pass()
+    finally:
+        await indexer.aclose()
+
+
 def connect_store(store_path: Path) -> sqlite3.Connection:
-    """Open the vector store directly, with sqlite-vec loaded."""
+    """Open the Passage index directly, with sqlite-vec loaded."""
 
     connection = sqlite3.connect(store_path)
     connection.row_factory = sqlite3.Row

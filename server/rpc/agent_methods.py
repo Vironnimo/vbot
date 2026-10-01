@@ -349,6 +349,8 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         remaining_agents = await chat_sessions.run_async(state.runtime.agents.list)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
+    # The archived Sessions leave Recall; the index cleanup itself is best-effort.
+    await state.runtime.recall.remove_agent_from_recall(agent_id)
     result = {
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],

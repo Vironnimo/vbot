@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +21,8 @@ RECALL_BACKEND_SQLITE_FTS = "sqlite_fts"
 RECALL_BACKEND_VECTOR = "vector"
 RECALL_BACKEND_HYBRID = "hybrid"
 DEFAULT_RECALL_BACKEND = RECALL_BACKEND_SQLITE_FTS
+# First-party backends that rank by embeddings and need the Passage vectors.
+SEMANTIC_RECALL_BACKENDS = frozenset({RECALL_BACKEND_VECTOR, RECALL_BACKEND_HYBRID})
 FIRST_PARTY_RECALL_BACKENDS = frozenset(
     {
         RECALL_BACKEND_SQLITE_FTS,
@@ -137,16 +140,15 @@ class RecallBackend(Protocol):
 
 @runtime_checkable
 class SupportsSessionRemoval(Protocol):
-    """Optional backend capability: drop one session from a derived index.
+    """Optional backend capability: drop one session from an index the backend keeps.
 
-    Recall is otherwise read-only (:class:`RecallBackend`). Backends that keep a
-    derived index (SQLite FTS, vector) implement this so session deletion can
-    evict a removed session immediately instead of waiting for the next
-    self-healing reconcile on search. The canonical live-scan backend has no derived
-    index and deliberately does not implement it — an archived session is already
-    absent from the live directory it scans. The runtime checks ``isinstance``
-    before calling, so a backend without removal simply falls back to
-    self-healing rather than erroring.
+    Recall is otherwise read-only (:class:`RecallBackend`). The Runtime evicts a
+    deleted session from its shared Passage index itself; a backend that keeps
+    a derived index of its own (an Extension backend) implements this so session
+    deletion evicts the session there immediately instead of waiting for the
+    backend's own reconcile. The runtime checks ``isinstance`` before calling,
+    so a backend without removal simply falls back to self-healing rather than
+    erroring.
     """
 
     async def remove_session(
@@ -181,15 +183,33 @@ class RecallBackendRegistry:
         self._factories: dict[str, RecallBackendFactory] = {}
 
     @classmethod
-    def with_builtins(cls) -> RecallBackendRegistry:
+    def with_builtins(
+        cls,
+        *,
+        passage_index: Any | None = None,
+        on_waiting: Callable[[], None] | None = None,
+    ) -> RecallBackendRegistry:
+        """A registry of the first-party backends.
+
+        ``passage_index`` is the one shared :class:`~core.recall.passage_index.PassageIndex`
+        the ``vector`` and ``hybrid`` backends search, and ``on_waiting`` nudges
+        document embedding when a search finds Passages without a vector.
+        Without an index each such backend opens and owns its own.
+        """
         from core.recall.hybrid import HybridRecallBackend
         from core.recall.sqlite_fts import SqliteFtsRecallBackend
         from core.recall.vector import VectorRecallBackend
 
         registry = cls()
         registry.register(RECALL_BACKEND_SQLITE_FTS, SqliteFtsRecallBackend)
-        registry.register(RECALL_BACKEND_VECTOR, VectorRecallBackend)
-        registry.register(RECALL_BACKEND_HYBRID, HybridRecallBackend)
+        registry.register(
+            RECALL_BACKEND_VECTOR,
+            functools.partial(VectorRecallBackend, index=passage_index, on_waiting=on_waiting),
+        )
+        registry.register(
+            RECALL_BACKEND_HYBRID,
+            functools.partial(HybridRecallBackend, index=passage_index, on_waiting=on_waiting),
+        )
         return registry
 
     def register(self, name: str, factory: RecallBackendFactory) -> None:

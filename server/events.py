@@ -29,6 +29,7 @@ RUN_INTERRUPTED_SERVER_EVENT = "run_interrupted"
 PROVIDER_AUTH_COMPLETED_EVENT = "provider_auth_completed"
 RESOURCE_CHANGED_EVENT = "resource_changed"
 BASH_PROCESS_STATUS_CHANGED_EVENT = "bash_process_status_changed"
+RECALL_INDEX_STATUS_EVENT = "recall_index_status"
 
 ALLOWED_SERVER_EVENT_TYPES = frozenset(
     {
@@ -42,6 +43,7 @@ ALLOWED_SERVER_EVENT_TYPES = frozenset(
         PROVIDER_AUTH_COMPLETED_EVENT,
         RESOURCE_CHANGED_EVENT,
         BASH_PROCESS_STATUS_CHANGED_EVENT,
+        RECALL_INDEX_STATUS_EVENT,
     }
 )
 

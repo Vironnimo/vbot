@@ -473,6 +473,7 @@ def bootstrap(runtime: Runtime) -> None:
             admission_validator=runtime._validate_temporary_admission,
         )
         runtime.chat_runs = runtime._chat_run_manager
+        runtime._recall.observe_runs(runtime._chat_run_manager)
         runtime._performance = _build_performance_service(
             runtime._storage, runtime._chat_run_manager
         )
@@ -700,6 +701,7 @@ def bootstrap(runtime: Runtime) -> None:
         runtime._start_performance_service()
         if runtime.safe_startup_mode is None:
             runtime._start_provider_usage_service()
+            runtime._start_recall_indexing()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
     except Exception as error:
         _log_startup_failure(runtime)

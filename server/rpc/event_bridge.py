@@ -46,6 +46,7 @@ from server.events import (
     ALLOWED_RESOURCE_KINDS,
     BASH_PROCESS_STATUS_CHANGED_EVENT,
     PROVIDER_AUTH_COMPLETED_EVENT,
+    RECALL_INDEX_STATUS_EVENT,
     RESOURCE_CHANGED_EVENT,
     RESOURCE_KIND_DEBUG_TRACES,
     RESOURCE_KIND_SESSIONS,
@@ -164,6 +165,15 @@ def publish_bash_process_status_changed(state: Any, notification: Any) -> None:
         BASH_PROCESS_STATUS_CHANGED_EVENT,
         dict(notification),
     )
+
+
+def publish_recall_index_status(state: Any, status: Any) -> None:
+    """Forward one semantic Recall index status to accessors.
+
+    The payload is the ``recall.status`` result; it is accessor-only state and
+    never reaches the Model.
+    """
+    state.event_bus.publish(RECALL_INDEX_STATUS_EVENT, dict(status.to_dict()))
 
 
 def publish_resource_changed(

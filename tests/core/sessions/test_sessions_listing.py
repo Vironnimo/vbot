@@ -433,6 +433,15 @@ def test_history_versions_report_live_sessions_across_scopes(manager) -> None:
     assert revision >= 1
 
 
+def test_live_scopes_name_each_scope_that_still_has_a_live_session(manager) -> None:
+    manager.create("coder", session_id="one")
+    manager.create("coder", session_id="two")
+    manager.create("coder", session_id="project-one", project_id="alpha")
+    manager.create("writer", session_id="draft").delete()
+
+    assert manager.list_live_scopes() == [(None, "coder"), ("alpha", "coder")]
+
+
 @pytest.mark.parametrize("include_channels", [False, True])
 def test_channel_filter_counts_pages_and_preserves_required_session(manager, include_channels):
     for index, session_id in enumerate(["old", "telegram", "new", "discord"]):

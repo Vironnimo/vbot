@@ -1,8 +1,8 @@
-"""The Passage catalog both disposable Recall indexes share.
+"""The Passage catalog of the disposable Passage index.
 
-The Passage FTS index and the vector index each hold this catalog in their own
-kernel disposable database. It records which Passages every indexed Session's
-current view contains, with a freshness stamp ``(generation_id,
+The Passage index (:mod:`core.recall.passage_index`) holds this catalog beside
+its literal FTS tables and vectors. It records which Passages every indexed
+Session's current view contains, with a freshness stamp ``(generation_id,
 history_revision)`` per Session.
 
 A Passage is stored once per Recall scope (project and Agent), identified by
@@ -556,11 +556,11 @@ def time_bounds(
 
 
 class PassageCatalog:
-    """One disposable Recall database that holds the Passage catalog.
+    """A disposable Recall database that holds the Passage catalog.
 
     Operations run through the kernel's asynchronous variants, so no SQLite
-    work blocks the Event Loop. Subclasses add their own tables and keep them in
-    step through :meth:`_after_add` and triggers on ``passages``.
+    work blocks the Event Loop. The subclass adds its own tables and keeps them
+    in step through :meth:`_after_add` and triggers on ``passages``.
     """
 
     def __init__(self, spec: DatabaseSpec) -> None:

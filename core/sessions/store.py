@@ -927,6 +927,9 @@ class SessionStore:
             )
         )
 
+    def list_live_scopes(self) -> list[tuple[str | None, str]]:
+        return self._read(_store_queries.list_live_scopes)
+
     def list_agent_ids(
         self, project_id: str | None, *, exclude_owner_managed: bool = False
     ) -> list[str]:

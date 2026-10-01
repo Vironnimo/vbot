@@ -16,10 +16,10 @@ from core.recall import (
     RECALL_BACKEND_VECTOR,
     CanonicalSessionRecallBackend,
     HybridRecallBackend,
+    PassageIndex,
     RecallBackendContext,
     RecallBackendRegistry,
     SqliteFtsRecallBackend,
-    SupportsSessionRemoval,
     VectorRecallBackend,
 )
 from core.sessions import ChatSessionManager
@@ -34,7 +34,7 @@ def _canonical(context: RecallBackendContext) -> CanonicalSessionRecallBackend:
     return CanonicalSessionRecallBackend(context.sessions)
 
 
-def test_builtins_create_the_first_party_backends_with_session_removal(
+def test_builtins_create_the_first_party_backends_over_one_passage_index(
     context: RecallBackendContext,
 ) -> None:
     expected = {
@@ -42,20 +42,23 @@ def test_builtins_create_the_first_party_backends_with_session_removal(
         RECALL_BACKEND_VECTOR: VectorRecallBackend,
         RECALL_BACKEND_HYBRID: HybridRecallBackend,
     }
-    registry = RecallBackendRegistry.with_builtins()
+    index = PassageIndex(context.data_dir)
+    registry = RecallBackendRegistry.with_builtins(passage_index=index)
 
     assert frozenset(expected) == FIRST_PARTY_RECALL_BACKENDS
     assert registry.names() == sorted(expected)
     for name, backend_type in expected.items():
-        backend = registry.create(name, context)
-        assert isinstance(backend, backend_type)
-        # Runtime Recall cleanup evicts deleted Sessions from every derived index.
-        assert isinstance(backend, SupportsSessionRemoval)
-    # The internal live scan has no index to clean and is not selectable.
-    assert not isinstance(_canonical(context), SupportsSessionRemoval)
+        assert isinstance(registry.create(name, context), backend_type)
+    # The semantic backends share the Runtime's index instead of opening their own.
+    vector = registry.create(RECALL_BACKEND_VECTOR, context)
+    hybrid = registry.create(RECALL_BACKEND_HYBRID, context)
+    assert isinstance(vector, VectorRecallBackend) and vector.index is index
+    assert isinstance(hybrid, HybridRecallBackend) and hybrid.index is index
+    # The internal live scan is not selectable.
     for name in (RECALL_BACKEND_CANONICAL_SCAN, "missing"):
         with pytest.raises(KeyError):
             registry.create(name, context)
+    index.close()
 
 
 @pytest.mark.parametrize(

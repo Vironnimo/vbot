@@ -1,8 +1,11 @@
-"""Hybrid Recall backend combining Passage FTS and Vector rankings.
+"""Hybrid Recall backend combining literal and semantic Passage rankings.
 
-Search prepares both arms concurrently once, then applies Reciprocal Rank Fusion
-with adaptive candidate depth over their rankings. It preserves multiple Passages
-per Session and reports one-arm degradation explicitly.
+Both arms rank Passages of the one Passage index. A search refreshes the
+catalog for its candidates once, embeds its query once, then applies Reciprocal
+Rank Fusion with adaptive candidate depth over both rankings. The depth stops
+at ``_RRF_MAX_DEPTH``, where the fused prefix is accepted as it stands. It
+preserves multiple Passages per Session and reports one-arm degradation
+explicitly.
 """
 
 from __future__ import annotations
@@ -10,10 +13,21 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import hashlib
+from collections.abc import Callable
 from typing import Protocol
 
+from core.recall._passage_catalog import Candidates, StoredPassage
 from core.recall.canonical import (
     CanonicalSessionRecallBackend,
+    RecallScope,
+    first_match_span,
+)
+from core.recall.passage_index import (
+    KNN_MAX_K,
+    TRIGRAM_RANKING,
+    LiteralQuery,
+    PassageIndex,
+    literal_query,
 )
 from core.recall.recall import (
     RecallBackendContext,
@@ -23,11 +37,14 @@ from core.recall.recall import (
     RecallSearchPage,
     RecallSearchRequest,
 )
-from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.recall.vector import VectorRecallBackend
 
 _RRF_RANK_CONSTANT = 60
 _RRF_INITIAL_DEPTH = 20
+# The deepest ranking either arm is asked for. A semantic page of this depth
+# asks the vector index for one row more, which must stay within its KNN limit.
+_RRF_MAX_DEPTH = 2048
+assert _RRF_MAX_DEPTH < KNN_MAX_K
 
 # Agent-facing query guidance for session_search when this backend is active.
 # Static capability text — actual semantic availability is surfaced per-call via
@@ -64,14 +81,25 @@ _SEMANTIC_PARTIAL_REASON = (
 
 
 class HybridRecallBackend(CanonicalSessionRecallBackend):
-    """Recall backend that fuses FTS literal matches with vector semantic matches."""
+    """Recall backend that fuses literal Passage matches with semantic matches.
 
-    def __init__(self, context: RecallBackendContext) -> None:
+    The Runtime passes its one shared Passage ``index`` and the indexer's
+    ``on_waiting`` nudge. Without an index the backend opens and owns its own.
+    """
+
+    def __init__(
+        self,
+        context: RecallBackendContext,
+        *,
+        index: PassageIndex | None = None,
+        on_waiting: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(context.sessions)
         self.data_dir = context.data_dir
         self.logger = context.logger
-        self._fts = SqliteFtsRecallBackend(context)
-        self._vector = VectorRecallBackend(context)
+        self._owns_index = index is None
+        self.index = index if index is not None else PassageIndex(context.data_dir)
+        self._vector = VectorRecallBackend(context, index=self.index, on_waiting=on_waiting)
 
     def search_capabilities(self) -> RecallSearchCapabilities:
         return RecallSearchCapabilities(
@@ -86,21 +114,21 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         )
 
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
-        depth = max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1)
-        # Each arm reconciles its index, and the semantic arm embeds the query,
-        # once per search; adaptive depth growth reruns only the rankings.
+        depth = min(max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1), _RRF_MAX_DEPTH)
+        # The catalog is refreshed and the query embedded once per search;
+        # adaptive depth growth reruns only the rankings.
         arm_request = dataclasses.replace(request, offset=0, limit=depth, snapshot_id=None)
         # Both arms search the same candidates, read once from the Session store.
         scope = await self.sessions.run_async(self._read_scope, arm_request)
-        literal_prepared, semantic_prepared = await asyncio.gather(
-            self._fts.prepare_passage_search(arm_request, scope),
-            self._vector.prepare_search(arm_request, scope),
-            return_exceptions=True,
-        )
-        literal_arm = None if isinstance(literal_prepared, BaseException) else literal_prepared
-        semantic_arm = None if isinstance(semantic_prepared, BaseException) else semantic_prepared
-        if literal_arm is None and semantic_arm is None:
-            raise _hybrid_unavailable()
+        if scope.candidates:
+            await self._refresh(arm_request, scope)
+        literal_arm: _PreparedArm | None = self._prepare_literal(arm_request, scope)
+        semantic_arm: _PreparedArm | None
+        try:
+            semantic_arm = await self._vector.prepare_search(arm_request, scope, refreshed=True)
+        except Exception:
+            # The vector backend logged the failure; keyword results remain.
+            semantic_arm = None
         literal_page: RecallSearchPage | None = None
         semantic_page: RecallSearchPage | None = None
         fused: list[RecallSearchHit] = []
@@ -123,7 +151,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             if semantic_page is None:
                 semantic_arm = None
             fused = _fuse_rrf(literal_page, semantic_page)
-            if _rrf_page_is_stable(
+            if depth >= _RRF_MAX_DEPTH or _rrf_page_is_stable(
                 fused,
                 literal_page,
                 semantic_page,
@@ -131,7 +159,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
                 depth,
             ):
                 break
-            depth *= 2
+            depth = min(depth * 2, _RRF_MAX_DEPTH)
 
         snapshot_id = _hybrid_snapshot(literal_page, semantic_page)
         if request.snapshot_id is not None and request.snapshot_id != snapshot_id:
@@ -144,37 +172,133 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             literal_page.total_candidate_sessions if literal_page is not None else 0,
             semantic_page.total_candidate_sessions if semantic_page is not None else 0,
         )
+        arms_have_more = (literal_page is not None and literal_page.has_more) or (
+            semantic_page is not None and semantic_page.has_more
+        )
+        if depth >= _RRF_MAX_DEPTH:
+            # At the depth limit the fused ranking is all a search can page
+            # through; a page that reaches its end still has unranked matches.
+            has_more = request.offset + len(selected) < len(fused) or (
+                arms_have_more and bool(selected)
+            )
+        else:
+            has_more = request.offset + len(selected) < len(fused) or arms_have_more
         return RecallSearchPage(
             hits=tuple(selected),
             result_type="passage",
             ranking="reciprocal_rank_fusion",
             snapshot_id=snapshot_id,
-            has_more=(
-                request.offset + len(selected) < len(fused)
-                or (literal_page is not None and literal_page.has_more)
-                or (semantic_page is not None and semantic_page.has_more)
-            ),
+            has_more=has_more,
             total_candidate_sessions=total_sessions,
             degraded=reason is not None,
             degradation_reason=reason,
         )
 
-    async def remove_session(
-        self, agent_id: str, session_id: str, project_id: str | None = None
-    ) -> None:
-        """Evict one session from both fused arms' derived indexes."""
-        await asyncio.gather(
-            self._fts.remove_session(agent_id, session_id, project_id),
-            self._vector.remove_session(agent_id, session_id, project_id),
-        )
+    def _prepare_literal(self, request: RecallSearchRequest, scope: RecallScope) -> _PreparedArm:
+        """The literal arm over the catalog this search refreshed."""
+        return _PreparedLiteralSearch(self.index, request, scope, literal_query(request))
+
+    async def _refresh(self, request: RecallSearchRequest, scope: RecallScope) -> None:
+        """Bring the candidates' Passages up to date for both arms.
+
+        A damaged index is discarded and refreshed once. Any other failure
+        leaves neither arm usable.
+        """
+        try:
+            await self.index.recovering(
+                lambda: self.index.refresh(
+                    self.sessions, request.agent_id, request.project_id, scope
+                ),
+                warning=lambda error: self._warning(
+                    "Passage index failed; rebuilding once: %s", error
+                ),
+            )
+        except Exception as error:
+            self._warning("Hybrid recall could not refresh the Passage index: %s", error)
+            raise _hybrid_unavailable() from error
 
     async def aclose(self) -> None:
-        """Stop background indexing and release both arms' index databases."""
-        await asyncio.gather(self._fts.aclose(), self._vector.aclose())
+        """Release the index database when this backend owns it."""
+        self.close()
 
     def close(self) -> None:
-        self._fts.close()
-        self._vector.close()
+        if self._owns_index:
+            self.index.close()
+
+    def _warning(self, message: str, *args: object) -> None:
+        if self.logger is not None and hasattr(self.logger, "warning"):
+            self.logger.warning(message, *args)
+
+
+class _PreparedLiteralSearch:
+    """Literal Passage ranking over a catalog refreshed once for one search."""
+
+    def __init__(
+        self,
+        index: PassageIndex,
+        request: RecallSearchRequest,
+        scope: RecallScope,
+        query: LiteralQuery | None,
+    ) -> None:
+        self._index = index
+        self._request = request
+        self._scope = scope
+        self._query = query
+
+    async def page(self, offset: int, limit: int) -> RecallSearchPage:
+        query = self._query
+        if query is None or not self._scope.candidates:
+            return RecallSearchPage(
+                hits=(),
+                result_type="passage",
+                ranking=TRIGRAM_RANKING if query is None else query.ranking,
+                snapshot_id=self._scope.snapshot_id,
+                has_more=False,
+                total_candidate_sessions=len(self._scope.candidates),
+            )
+        request = self._request
+        candidates = Candidates.of(request.agent_id, request.project_id, self._scope)
+        try:
+            matches = await self._index.literal_search(
+                request, candidates, query, offset + limit + 1
+            )
+        except Exception as error:
+            await self._index.discard_if_damaged(error)
+            raise
+        hits = tuple(
+            _literal_hit(passage, session_id, rank, request)
+            for passage, session_id, rank in matches[offset : offset + limit]
+        )
+        return RecallSearchPage(
+            hits=hits,
+            result_type="passage",
+            ranking=query.ranking,
+            snapshot_id=self._scope.snapshot_id,
+            has_more=len(matches) > offset + limit,
+            total_candidate_sessions=len(self._scope.candidates),
+        )
+
+
+def _literal_hit(
+    passage: StoredPassage, session_id: str, rank: float, request: RecallSearchRequest
+) -> RecallSearchHit:
+    start, end = first_match_span(passage.text, request.query, request.match_mode)
+    return RecallSearchHit(
+        result_type="passage",
+        session_id=session_id,
+        message_id=passage.start_message_id,
+        role=passage.start_role,
+        timestamp=passage.start_timestamp,
+        text=passage.text,
+        score=rank,
+        passage_id=passage.passage_id,
+        start_message_id=passage.start_message_id,
+        end_message_id=passage.end_message_id,
+        end_timestamp=passage.end_timestamp,
+        match_start=start,
+        match_end=end,
+        sources=("literal",),
+    )
 
 
 class _PreparedArm(Protocol):

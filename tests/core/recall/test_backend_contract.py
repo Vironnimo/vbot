@@ -10,24 +10,36 @@ import pytest
 from core.chat import ChatMessage
 from core.recall import (
     CanonicalSessionRecallBackend,
+    HybridRecallBackend,
     RecallBackend,
     RecallBackendContext,
     RecallBackendRegistry,
     RecallSearchError,
+    VectorRecallBackend,
 )
 from core.sessions import ChatSessionManager
-from tests.core.recall.recall_test_support import StubEmbeddings, request, timestamp
+from tests.core.recall.recall_test_support import (
+    StubEmbeddings,
+    embed_documents,
+    request,
+    timestamp,
+)
 
 pytestmark = pytest.mark.asyncio
 
 BACKENDS = ["canonical_scan", "sqlite_fts", "vector", "hybrid"]
 
 
-def _backend(name: str, tmp_path: Path, sessions: ChatSessionManager) -> RecallBackend:
+async def _backend(name: str, tmp_path: Path, sessions: ChatSessionManager) -> RecallBackend:
+    """Create *name* over the existing Sessions, their documents already embedded."""
     if name == "canonical_scan":
         return CanonicalSessionRecallBackend(sessions)
-    context = RecallBackendContext(tmp_path, sessions, embeddings=StubEmbeddings())
-    return RecallBackendRegistry.with_builtins().create(name, context)
+    embeddings = StubEmbeddings()
+    context = RecallBackendContext(tmp_path, sessions, embeddings=embeddings)
+    backend = RecallBackendRegistry.with_builtins().create(name, context)
+    if isinstance(backend, VectorRecallBackend | HybridRecallBackend):
+        await embed_documents(backend.index, sessions, embeddings)
+    return backend
 
 
 # Every backend binds its continuation through the shared scope read, so the
@@ -63,7 +75,7 @@ async def test_changed_selection_rejects_continuation(
     session = sessions.create("coder", session_id="one")
     for day in (1, 2):
         session.append(ChatMessage.user("needle", timestamp=datetime(2026, 5, day, tzinfo=UTC)))
-    recall = _backend(backend_name, tmp_path, sessions)
+    recall = await _backend(backend_name, tmp_path, sessions)
     original = request("needle", limit=1)
     first = await recall.search_page(original)
     continuation = replace(original, offset=1, limit=2, snapshot_id=first.snapshot_id)
@@ -87,7 +99,7 @@ async def test_project_scope_isolates_sessions_that_share_an_id(
     sessions.create("coder", session_id=shared_id, project_id="alpha").append(
         ChatMessage.user("project bananas", timestamp=timestamp(2))
     )
-    recall = _backend(backend_name, tmp_path, sessions)
+    recall = await _backend(backend_name, tmp_path, sessions)
 
     for project_id, text in ((None, "global carrots"), ("alpha", "project bananas")):
         page = await recall.search_page(

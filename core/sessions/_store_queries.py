@@ -141,6 +141,15 @@ def list_addresses(
     return [_store_values._address(row) for row in rows]
 
 
+def list_live_scopes(connection: sqlite3.Connection) -> list[tuple[str | None, str]]:
+    """Return every ``(project_id, agent_id)`` scope with a live Session, sorted."""
+    rows = connection.execute(
+        "SELECT DISTINCT s.project_id, s.agent_id FROM sessions AS s "
+        "WHERE s.state = 'live' ORDER BY s.project_id, s.agent_id"
+    ).fetchall()
+    return [(str(row["project_id"]) or None, str(row["agent_id"])) for row in rows]
+
+
 def list_agent_ids(
     connection: sqlite3.Connection, project_id: str | None, *, exclude_owner_managed: bool
 ) -> list[str]:

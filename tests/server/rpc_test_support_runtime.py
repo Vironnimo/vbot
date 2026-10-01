@@ -29,6 +29,7 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
+from core.recall import IndexStatus
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
 from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
@@ -398,6 +399,36 @@ class StubStatisticsIndex:
         return None
 
 
+class StubRecall:
+    """Recall integration double: a fixed index status and recorded calls."""
+
+    def __init__(self) -> None:
+        self.status = IndexStatus(semantic_enabled=False, state="disabled")
+        self.listeners: list[Callable[[IndexStatus], None]] = []
+        self.rebuilds = 0
+        self.binding_changes = 0
+        self.removed_agents: list[str] = []
+
+    async def index_status(self) -> IndexStatus:
+        return self.status
+
+    async def rebuild_index(self) -> IndexStatus:
+        self.rebuilds += 1
+        return self.status
+
+    def add_index_status_listener(
+        self, listener: Callable[[IndexStatus], None]
+    ) -> Callable[[], None]:
+        self.listeners.append(listener)
+        return lambda: self.listeners.remove(listener)
+
+    def embedding_binding_changed(self) -> None:
+        self.binding_changes += 1
+
+    async def remove_agent_from_recall(self, agent_id: str, project_id: str | None = None) -> None:
+        self.removed_agents.append(agent_id)
+
+
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
@@ -444,6 +475,7 @@ class StubRuntime:
         self.usage_recorder: Any = None
         self.trigger_service: Any = None
         self.recall_reload_count = 0
+        self.recall: Any = StubRecall()
         self.extension_reload_count = 0
         self.skill_changed_callbacks: list[Callable[[], None]] = []
         self.extension_disabled_changes: list[set[str]] = []

@@ -71,6 +71,7 @@ _NO_EFFECTS: dict[str, Any] = {
     "keep_awake_reloads": 0,
     "timezone_reloads": 0,
     "speech_preloads": 0,
+    "embedding_binding_changes": 0,
     "commands_changed": False,
     "skills_changed": False,
 }
@@ -166,6 +167,14 @@ def _extensions(*disabled: str, config: dict[str, Any] | None = None) -> dict[st
             {"speech_preloads": 1},
             id="speech-to-text-binding",
         ),
+        # A new embedding binding is indexed for without waiting for the backoff.
+        pytest.param(
+            {},
+            {"model_tasks": {"text_embedding": {"target": "openrouter/embed"}}},
+            (),
+            {"embedding_binding_changes": 1},
+            id="text-embedding-binding",
+        ),
     ],
 )
 def test_settings_changes_refresh_only_their_live_services(
@@ -183,6 +192,7 @@ def test_settings_changes_refresh_only_their_live_services(
     keep_awake_reload = Mock()
     timezone_reload = Mock()
     speech_preload = Mock()
+    binding_change = Mock()
     monkeypatch.setattr(shared_runtime, "reload_extensions", extension_reload)
     monkeypatch.setattr(shared_runtime, "apply_extension_disabled_change", disabled_change)
     monkeypatch.setattr(shared_runtime, "reload_skills_async", skills_reload)
@@ -190,6 +200,7 @@ def test_settings_changes_refresh_only_their_live_services(
     monkeypatch.setattr(shared_runtime, "reload_keep_awake", keep_awake_reload)
     monkeypatch.setattr(shared_runtime, "reload_timezone", timezone_reload)
     monkeypatch.setattr(shared_runtime.speech, "preload_configured", speech_preload)
+    monkeypatch.setattr(shared_runtime.recall, "embedding_binding_changed", binding_change)
 
     effects = asyncio.run(
         shared_runtime.apply_settings_change(previous, current, refresh_sections=refresh_sections)
@@ -203,6 +214,7 @@ def test_settings_changes_refresh_only_their_live_services(
         "keep_awake_reloads": keep_awake_reload.call_count,
         "timezone_reloads": timezone_reload.call_count,
         "speech_preloads": speech_preload.call_count,
+        "embedding_binding_changes": binding_change.call_count,
         "commands_changed": effects.commands_changed,
         "skills_changed": effects.skills_changed,
     } == {**_NO_EFFECTS, **expected}

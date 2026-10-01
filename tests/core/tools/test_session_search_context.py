@@ -16,6 +16,7 @@ from core.recall import (
 from core.runs import RunKind
 from core.sessions import ChatSession, ChatSessionManager
 from scripts.provider_probe.recall_cases import FixtureEmbeddings
+from tests.core.recall.recall_test_support import embed_documents
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture
 from tests.core.tools.session_search_test_support import search, success
 
@@ -146,9 +147,9 @@ async def test_multi_message_passage_does_not_attribute_all_text_to_first_speake
     question = ChatMessage.user("Aurora Aufbewahrung?")
     answer = ChatMessage.assistant(model="fixture", content="30 Tage.")
     session.append_many([question, answer])
-    backend = VectorRecallBackend(
-        RecallBackendContext(tmp_path, sessions, embeddings=FixtureEmbeddings())
-    )
+    embeddings = FixtureEmbeddings()
+    backend = VectorRecallBackend(RecallBackendContext(tmp_path, sessions, embeddings=embeddings))
+    await embed_documents(backend.index, sessions, embeddings)
     data = success(await search(tmp_path, {"query": "Aurora Aufbewahrung"}, backend))
     hit = data["items"][0]
     assert hit["content_kind"] == "conversation_excerpt"

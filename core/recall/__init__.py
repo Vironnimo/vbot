@@ -2,6 +2,7 @@
 
 from core.recall.canonical import CanonicalSessionRecallBackend
 from core.recall.hybrid import HybridRecallBackend
+from core.recall.passage_index import PassageIndex, PassageIndexError, VectorHeader
 from core.recall.recall import (
     DEFAULT_RECALL_BACKEND,
     FIRST_PARTY_RECALL_BACKENDS,
@@ -9,6 +10,7 @@ from core.recall.recall import (
     RECALL_BACKEND_HYBRID,
     RECALL_BACKEND_SQLITE_FTS,
     RECALL_BACKEND_VECTOR,
+    SEMANTIC_RECALL_BACKENDS,
     JsonObject,
     RecallBackend,
     RecallBackendContext,
@@ -25,20 +27,20 @@ from core.recall.recall import (
     SupportsClose,
     SupportsSessionRemoval,
 )
+from core.recall.semantic_indexer import IndexFailure, IndexStatus, SemanticIndexer
 from core.recall.sqlite_fts import SqliteFtsRecallBackend
 from core.recall.vector import VectorRecallBackend
-from core.recall.vector_store import (
-    VectorHeader,
-    VectorStore,
-    VectorStoreError,
-)
 
 __all__ = [
     "DEFAULT_RECALL_BACKEND",
     "FIRST_PARTY_RECALL_BACKENDS",
     "HybridRecallBackend",
+    "IndexFailure",
+    "IndexStatus",
     "JsonObject",
     "CanonicalSessionRecallBackend",
+    "PassageIndex",
+    "PassageIndexError",
     "RECALL_BACKEND_HYBRID",
     "RECALL_BACKEND_CANONICAL_SCAN",
     "RECALL_BACKEND_SQLITE_FTS",
@@ -55,11 +57,11 @@ __all__ = [
     "RecallSearchHit",
     "RecallSearchPage",
     "RecallSearchRequest",
+    "SEMANTIC_RECALL_BACKENDS",
+    "SemanticIndexer",
     "SupportsClose",
     "SupportsSessionRemoval",
     "SqliteFtsRecallBackend",
     "VectorHeader",
     "VectorRecallBackend",
-    "VectorStore",
-    "VectorStoreError",
 ]
