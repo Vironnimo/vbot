@@ -318,6 +318,46 @@ export default Object.freeze({
   'settings.recall.backends.vector': 'Meaning only',
   'settings.recall.backends.hybrid': 'Keywords and meaning',
   'settings.recall.modelOptions': 'Embedding model options',
+  'settings.localModel.state.checking': 'Checking whether it is installed…',
+  'settings.localModel.state.missing': 'Not set up on this computer yet.',
+  'settings.localModel.state.ready': 'Installed.',
+  'settings.localModel.state.restart_required':
+    'Installed. Restart the vBot server to use it.',
+  'settings.localModel.downloadSize': '{size} download',
+  'settings.localModel.license': '{license} license',
+  'settings.localModel.progress': '{completed} of {total}',
+  'settings.localModel.progressLabel': 'Download progress',
+  'settings.localModel.install': 'Install',
+  'settings.localModel.installing': 'Installing…',
+  'settings.localModel.retry': 'Try again',
+  'settings.localModel.checkAgain': 'Check again',
+  'settings.localModel.phase.checking': 'Checking this computer…',
+  'settings.localModel.phase.queued':
+    'Waiting for another installation to finish…',
+  'settings.localModel.phase.python': 'Preparing the local model runtime…',
+  'settings.localModel.phase.gpu': 'Preparing GPU support…',
+  'settings.localModel.phase.downloading':
+    'Downloading the local model runtime…',
+  'settings.localModel.phase.installing': 'Installing the local model runtime…',
+  'settings.localModel.phase.verifying': 'Checking the installation…',
+  'settings.localModel.downloadingModel':
+    'Downloading the model. You can leave this page.',
+  'settings.localModel.error.connection':
+    'The server could not be reached. Check again to see the installation status.',
+  'settings.localModel.error.install_failed':
+    'Installation failed. Check the server’s internet connection, free disk space and write permissions, then try again.',
+  'settings.localModel.error.download_failed':
+    'The model download failed. Check the server’s internet connection, then try again.',
+  'settings.localModel.error.checksum_mismatch':
+    'The downloaded model files were damaged. Try again.',
+  'settings.localModel.error.verification_failed':
+    'The installed model could not start. Try the installation again.',
+  'settings.localModel.error.setup_unavailable':
+    'Setup could not access the vBot installation. Check its files and write permissions, then try again.',
+  'settings.localModel.error.timeout':
+    'Installation took too long. Check the server’s internet connection, then try again.',
+  'settings.localModel.error.interrupted':
+    'Installation was interrupted. Try again to finish it.',
   'settings.webFetch.direct': 'Direct (no service)',
   'settings.webFetch.fallback': 'Only when direct reading fails',
   'settings.webFetch.prefer': 'Prefer this service',

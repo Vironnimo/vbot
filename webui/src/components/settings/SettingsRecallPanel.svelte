@@ -1,12 +1,14 @@
 <script>
   // The "Conversation search" section: the switch that adds search by
-  // meaning, the embedding Model it needs, the semantic index status with
+  // meaning, the embedding Model it needs (a local one not set up yet offers
+  // its installation in place), the semantic index status with
   // its rebuild action, and an Advanced part with the full backend list and
   // the embedding Model's options. Two drafts save here: the Recall backend
   // (`settings.update`) and the `text_embedding` binding (the shared Task
   // Model editor); one save state covers both.
   import { onDestroy, onMount, untrack } from 'svelte';
 
+  import LocalModelInstall from './LocalModelInstall.svelte';
   import TaskModelOptions from './TaskModelOptions.svelte';
   import { createTaskModelEditor } from './taskModelEditor.svelte.js';
   import Dropdown from '../Dropdown.svelte';
@@ -358,36 +360,51 @@
               {group.title}
             </div>
             {#each group.choices as choice (choice.id)}
-              <label
+              <div
                 class="recall-model__choice"
                 class:recall-model__choice--unavailable={!choice.usable}
                 data-embedding-choice={choice.id}
               >
-                <input
-                  type="radio"
-                  name="settings-recall-embedding-model"
-                  value={choice.id}
-                  checked={binding.target === choice.id}
-                  disabled={!choice.usable || editor.loading}
-                  onchange={() =>
-                    editor.setTarget(TASK_TEXT_EMBEDDING, choice.id)}
-                />
-                <span class="recall-model__text">
-                  <span class="recall-model__head">
-                    <span class="recall-model__name">{choice.label}</span>
-                    <span class="recall-model__facts">
-                      {choice.facts.join(' · ')}
+                <!-- The label is a layout-free wrapper, so the radio and its
+                     text share the grid with the install row below. -->
+                <label class="recall-model__label">
+                  <input
+                    type="radio"
+                    name="settings-recall-embedding-model"
+                    value={choice.id}
+                    checked={binding.target === choice.id}
+                    disabled={!choice.usable || editor.loading}
+                    onchange={() =>
+                      editor.setTarget(TASK_TEXT_EMBEDDING, choice.id)}
+                  />
+                  <span class="recall-model__text">
+                    <span class="recall-model__head">
+                      <span class="recall-model__name">{choice.label}</span>
+                      <span class="recall-model__facts">
+                        {choice.facts.join(' · ')}
+                      </span>
                     </span>
+                    <!-- An installable Model's install row says it is not set
+                         up yet. -->
+                    {#if !choice.usable && !choice.installable}
+                      <span class="s-row-desc">
+                        {t('settings.recall.model.notInstalled')}
+                      </span>
+                    {:else if choice.usable && choice.note}
+                      <span class="s-row-desc">{choice.note}</span>
+                    {/if}
                   </span>
-                  {#if !choice.usable}
-                    <span class="s-row-desc">
-                      {t('settings.recall.model.notInstalled')}
-                    </span>
-                  {:else if choice.note}
-                    <span class="s-row-desc">{choice.note}</span>
-                  {/if}
-                </span>
-              </label>
+                </label>
+                {#if choice.installable}
+                  <div class="recall-model__install">
+                    <LocalModelInstall
+                      target={choice.id}
+                      download={choice.download}
+                      onReady={() => editor.refreshTargets(TASK_TEXT_EMBEDDING)}
+                    />
+                  </div>
+                {/if}
+              </div>
             {/each}
           </div>
         {/each}
@@ -603,22 +620,32 @@
     text-transform: uppercase;
   }
 
+  /* Radio | text, with a local Model's install row under the text. */
   .recall-model__choice {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    column-gap: 10px;
+    row-gap: 6px;
     max-width: 72ch;
+  }
+
+  .recall-model__label {
+    display: contents;
     cursor: pointer;
   }
 
   .recall-model__choice input {
-    flex-shrink: 0;
     margin: 3px 0 0;
     accent-color: var(--accent);
   }
 
-  .recall-model__choice--unavailable {
+  .recall-model__choice--unavailable .recall-model__label {
     cursor: default;
+  }
+
+  .recall-model__install {
+    grid-column: 2;
   }
 
   .recall-model__choice--unavailable .recall-model__name {

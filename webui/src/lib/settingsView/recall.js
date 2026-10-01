@@ -5,6 +5,7 @@
 import { activeLocaleTag, t, tOr } from '../i18n.js';
 import { formatCost } from '../statisticsView.js';
 import { formatRelativeTime } from '../timeText.js';
+import { describeLocalModelDownload } from './localModels.js';
 import { textOrEmpty } from './values.js';
 
 const RECALL_BACKEND_KEYWORD = 'sqlite_fts';
@@ -149,12 +150,18 @@ function embeddingChoice(target) {
       }),
     );
   }
+  const usable = target.usable !== false;
+  // A Model vBot runs itself is installed on request; `download` names what
+  // installing it fetches.
+  const installable = target.kind === 'local' && !usable;
   return {
     id: target.id,
     label: target.label,
     providerId: target.providerId ?? '',
     local,
-    usable: target.usable !== false,
+    usable,
+    installable,
+    download: installable ? describeLocalModelDownload(target.metadata) : '',
     facts,
     note: textOrEmpty(target.facts?.note),
   };

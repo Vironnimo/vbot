@@ -937,6 +937,7 @@ describe('SettingsView', () => {
         task_types: ['text_embedding'],
         usable: false,
         facts: { local: true, multilingual: true, recommended_rank: 1 },
+        metadata: { license: 'Apache-2.0', download_bytes: 346_806_730 },
       },
       {
         id: 'openrouter/unranked-embed',
@@ -1014,9 +1015,6 @@ describe('SettingsView', () => {
       ]);
       const local = embeddingChoice('local/granite-embedding-r2');
       expect(local.querySelector('input').disabled).toBe(true);
-      expect(local.textContent).toContain(
-        t('settings.recall.model.notInstalled'),
-      );
       const cloud = embeddingChoice('openai/text-embedding-3-small');
       expect(cloud.textContent).toContain('Multilingual · $0.02 per 1M tokens');
       expect(cloud.textContent).toContain(
@@ -1078,6 +1076,64 @@ describe('SettingsView', () => {
       flushSync();
       expect(modelRow.hidden).toBe(true);
       expect(indexRow.hidden).toBe(true);
+    });
+
+    it('installs a local embedding model in place and offers it once ready', async () => {
+      const settings = settingsPayload();
+      settings.recall = {
+        backend: 'hybrid',
+        available_backends: ['sqlite_fts', 'vector', 'hybrid'],
+      };
+      const localSetups = new Map();
+      await mountSettings({
+        settings,
+        taskModelTargets: embeddingTargets,
+        taskModelOptions: embeddingOptions,
+        localSetups,
+        localSetupInstall: {
+          phase: 'downloading',
+          progress: { completed: 120_000_000, total: 346_806_730 },
+        },
+      });
+      await openRecallPanel();
+      const granite = () => embeddingChoice('local/granite-embedding-r2');
+      await waitForCondition(() =>
+        granite()?.querySelector('[data-local-install="missing"]'),
+      );
+      expect(granite().querySelector('input').disabled).toBe(true);
+      expect(granite().textContent).toContain(
+        'Not set up on this computer yet.',
+      );
+      expect(granite().textContent).toContain(
+        '347 MB download · Apache-2.0 license',
+      );
+
+      vi.useFakeTimers();
+      [...granite().querySelectorAll('button')]
+        .find((button) => button.textContent.trim() === 'Install')
+        .click();
+      await flushAsyncUpdates();
+      expect(rpcMock).toHaveBeenCalledWith('task_model.local_setup_install', {
+        target: 'local/granite-embedding-r2',
+      });
+      expect(
+        granite()
+          .querySelector('[role="progressbar"]')
+          .getAttribute('aria-valuenow'),
+      ).toBe('34');
+      expect(granite().textContent).toContain('120 MB of 347 MB');
+
+      // The finished installation makes the Model selectable.
+      localSetups.set('local/granite-embedding-r2', {
+        state: 'ready',
+        phase: 'verifying',
+        error: '',
+        restart_available: true,
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      await flushAsyncUpdates(20);
+      expect(granite().querySelector('input').disabled).toBe(false);
+      expect(granite().querySelector('[data-local-install]')).toBeNull();
     });
 
     it('opens Advanced for a meaning-only backend and rebuilds a failed index after confirmation', async () => {

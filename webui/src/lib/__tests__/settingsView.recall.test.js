@@ -15,7 +15,10 @@ import {
 
 const NOW_MS = Date.parse('2026-10-01T12:00:00Z');
 
-function target(id, { kind = 'provider', usable = true, facts = {} } = {}) {
+function target(
+  id,
+  { kind = 'provider', usable = true, facts = {}, metadata = {} } = {},
+) {
   return {
     id,
     label: id,
@@ -23,6 +26,7 @@ function target(id, { kind = 'provider', usable = true, facts = {} } = {}) {
     usable,
     providerId: kind === 'local' ? '' : id.split('/')[0],
     facts,
+    metadata,
   };
 }
 
@@ -116,6 +120,7 @@ describe('embedding model choices', () => {
         kind: 'local',
         usable: false,
         facts: { local: true, multilingual: true, recommended_rank: 2 },
+        metadata: { license: 'MIT', download_bytes: 715_629_047 },
       }),
       target('ollama/nomic-embed-text', {
         facts: {
@@ -147,12 +152,18 @@ describe('embedding model choices', () => {
         providerId: '',
         local: true,
         usable: false,
+        // vBot installs it on request.
+        installable: true,
+        download: '716 MB download · MIT license',
         facts: ['Multilingual', 'Free, runs locally'],
         note: '',
       },
-      // Unranked, but selected: it stays visible.
+      // Unranked, but selected: it stays visible. A local runtime's Model is
+      // never installed by vBot.
       expect.objectContaining({
         id: 'ollama/nomic-embed-text',
+        installable: false,
+        download: '',
         facts: ['English only', 'Free, runs locally'],
       }),
     ]);
