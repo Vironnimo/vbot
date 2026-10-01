@@ -119,7 +119,12 @@ describe('embedding model choices', () => {
       target('local/harrier-0.6b', {
         kind: 'local',
         usable: false,
-        facts: { local: true, multilingual: true, recommended_rank: 2 },
+        facts: {
+          local: true,
+          multilingual: true,
+          recommended_rank: 2,
+          input_price_per_million: 0,
+        },
         metadata: { license: 'MIT', download_bytes: 715_629_047 },
       }),
       target('ollama/nomic-embed-text', {

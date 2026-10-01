@@ -139,7 +139,8 @@ function embeddingChoice(target) {
   } else if (multilingual === false) {
     facts.push(t('settings.recall.model.factEnglish'));
   }
-  if (local && price === null) {
+  // A Model on this computer reports no price or a zero price.
+  if (local && (price === null || price === 0)) {
     facts.push(t('settings.recall.model.factLocal'));
   } else if (price === null) {
     facts.push(t('settings.recall.model.factPriceUnknown'));
