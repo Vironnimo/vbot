@@ -13,7 +13,6 @@
 .tmp/
 .worktrees/
 .vbot-worktree
-.vbot-bootstrap
 .playwright-cli/
 /tmp/browser-use/
 /tmp/computer-use/
@@ -26,9 +25,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .coverage
-# Test-impact data that earlier commit checks kept in each checkout
-.testmondata*
-.testfiledeps
 
 # Environment / secrets
 .env
