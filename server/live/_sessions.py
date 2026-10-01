@@ -92,8 +92,11 @@ class LiveSessions:
         ]
         shown = (running + finished)[:LIST_CAP]
         if not shown:
-            return "Sessions: none running or finished since the call started."
-        lines = ["Sessions (running, then recently finished):"]
+            return (
+                "Sessions: none running or finished since the call started. Older Sessions are "
+                "not listed: read or open an Agent by name for its latest Session."
+            )
+        lines = ["Sessions (running, then recently finished; older ones are not listed):"]
         lines += await asyncio.gather(*(self._session_line(item, catalog) for item in shown))
         hidden = len(running) + len(finished) - len(shown)
         if hidden:

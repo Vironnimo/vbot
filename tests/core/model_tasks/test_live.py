@@ -134,6 +134,7 @@ class FakeHost:
         self.tool_release = asyncio.Event()
         self.tool_release.set()
         self.refs: str | Exception = ""
+        self.state = ""
 
     def brief(self, *, direct_tools: bool) -> LiveBrief:
         return LiveBrief(
@@ -156,6 +157,9 @@ class FakeHost:
         if isinstance(self.refs, Exception):
             raise self.refs
         return self.refs
+
+    async def current_state(self) -> str:
+        return self.state
 
     def publish(self, update: dict[str, Any]) -> None:
         self.updates.append(update)
@@ -200,6 +204,7 @@ def _notice(run_id: str = "run-1") -> LiveRunNotice:
 async def test_call_goes_live_relays_captions_and_answers_delegations():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
     host.refs = "- s1: Session at Coder"
+    host.state = "Terminals: none"
     call = _call(wire, brain, host)
 
     wire.push(
@@ -229,6 +234,7 @@ async def test_call_goes_live_relays_captions_and_answers_delegations():
             conversation="User: Start a terminal\nAssistant (still speaking): On it",
             updates="",
             refs="- s1: Session at Coder",
+            state="Terminals: none",
         )
     ]
     assert host.of_type("activity") == [
@@ -409,23 +415,29 @@ async def test_cancellation_during_transport_cleanup_preserves_terminal_usage(
 
 
 @pytest.mark.asyncio
-async def test_conversation_continues_while_delegations_run_concurrently():
+async def test_delegations_run_one_after_another_while_the_conversation_continues():
     wire, brain, host = FakeWire(), FakeBrain(), FakeHost()
     brain.release.clear()
     call = _call(wire, brain, host)
 
     wire.push(WireStarted(None), WireDelegation("item_1", "Read the chat"))
     await _until(lambda: len(brain.inputs) == 1)
+    host.state = "Terminals: t1"
     wire.push(
         WireCaption("user", "Also, what time is it?", final=True),
         WireDelegation("item_2", "Start Codex"),
     )
-    await _until(lambda: len(brain.inputs) == 2)
+    await _until(lambda: host.of_type("caption")[-1:] != [])
+    await asyncio.sleep(0.02)
 
+    # The second request waits for the first and then starts from the state it left.
+    assert len(brain.inputs) == 1
     assert host.of_type("caption")[-1]["text"] == "Also, what time is it?"
     assert host.of_type("activity") == [{"type": "activity", "busy": True, "label": "working"}]
     brain.release.set()
     await _until(lambda: len([s for s in wire.sent if s[0] == "result"]) == 2)
+    assert [d.request for d in brain.inputs] == ["Read the chat", "Start Codex"]
+    assert brain.inputs[1].state == "Terminals: t1"
     assert host.of_type("activity")[-1] == {"type": "activity", "busy": False, "label": None}
     await call.close()
 

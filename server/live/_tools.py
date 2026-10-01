@@ -178,6 +178,14 @@ class LiveToolExecutor:
             clock=self._clock,
         )
 
+    async def current_state(self) -> str:
+        """The full overview as text; it is not reported or noted as an assignment."""
+        result = await self._execute(TOOL_OVERVIEW, {})
+        data = result.get("data")
+        if result.get("ok") is not True or not isinstance(data, dict):
+            return ""
+        return str(data.get("content") or "")
+
     async def execute(self, name: str, arguments: JsonObject) -> JsonObject:
         """Run one canonical Live Tool call and return its Tool Result envelope."""
         result = await self._execute(name, arguments)

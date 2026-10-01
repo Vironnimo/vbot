@@ -183,6 +183,10 @@ class LiveCallEntry:
         """The refs Tool results named so far, one labeled line each."""
         return self._executor.known_refs()
 
+    async def current_state(self) -> str:
+        """The full overview right now, for a delegation's input."""
+        return await self._executor.current_state()
+
     def publish(self, update: JsonObject) -> None:
         """Deliver one call update to the owner, or buffer it until one attaches."""
         if self._closed_published:

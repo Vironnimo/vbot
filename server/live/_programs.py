@@ -51,6 +51,8 @@ _WRAPPED_PROMPT_LINES = 2
 # A menu answer: ``1. Yes``.
 _NUMBERED = re.compile(r"\d+\.\s")
 _OTHER_ANSWER = re.compile(r"^[ \t]+\d+\.\s", re.MULTILINE)
+# How much of the shell's output a start failure quotes.
+_START_FAILURE_CHARS = 200
 # How much of the typed text must show on the input line before Enter.
 _PENDING_PREFIX_CHARS = 12
 # Both programs collapse a large paste into a placeholder such as
@@ -221,6 +223,28 @@ def shell_prompt_visible(screen: str) -> bool:
     )
 
 
+def program_start_failure(program: CodingProgram, screen: str) -> str | None:
+    """What the shell shows after it started *program*, once the program ended or never ran.
+
+    ``None`` while the program runs or has not been started yet: the shell's
+    prompt must be the last line, below the line where it started the program.
+    The text between them (such as "command not found") is returned, flattened.
+    """
+    if not shell_prompt_visible(screen):
+        return None
+    command = re.compile(rf"[>$#%]\s*{re.escape(program.command)}(?:\s|$)")
+    for start in reversed(list(_PROMPT_START.finditer(screen))):
+        line_end = screen.find("\n", start.start())
+        if line_end < 0 or command.search(screen[start.start() : line_end]) is None:
+            continue
+        lines = [line.strip() for line in screen[line_end + 1 :].splitlines() if line.strip()]
+        if not lines:
+            return None
+        shown = " ".join(lines[:-1]) or "(no output)"
+        return shown if len(shown) <= _START_FAILURE_CHARS else shown[:_START_FAILURE_CHARS] + "..."
+    return None
+
+
 def _last_marker_line(program: CodingProgram, area: str) -> re.Match[str] | None:
     """The last line starting with the program's arrow: its input line or a menu's selection."""
     pattern = re.compile(rf"^[ \t]*{re.escape(program.marker)}(?:[ \xa0](.*))?$", re.MULTILINE)
@@ -253,6 +277,7 @@ __all__ = [
     "program_input_visible",
     "program_prompt",
     "program_ready",
+    "program_start_failure",
     "program_text_pending",
     "selected_answer",
     "shell_prompt_visible",

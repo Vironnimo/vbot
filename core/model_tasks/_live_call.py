@@ -139,6 +139,9 @@ class LiveCallSession:
         self._tasks: set[asyncio.Task[Any]] = set()
         self._send_lock = asyncio.Lock()
         self._delegation_slots = asyncio.Semaphore(MAX_CONCURRENT_DELEGATIONS)
+        # Delegations run one at a time, so each one starts from the state the
+        # previous one left and two never act on the same things at once.
+        self._delegation_turn = asyncio.Lock()
         self._busy = 0
         self._turns: deque[tuple[str, str]] = deque(maxlen=_CONVERSATION_TURNS)
         self._partial: dict[str, str] = {}
@@ -330,9 +333,9 @@ class LiveCallSession:
             _LOGGER.warning("Live delegation without a backend model (call=%s)", self._log_id)
             return "No backend model is configured, so the request was not started."
         brain = self._brain
-        async with self._delegation_slots:
-            self._set_busy(1)
-            try:
+        self._set_busy(1)
+        try:
+            async with self._delegation_turn:
                 if event.request is None:
                     await self._await_user_quiet()
                 delegation = DelegationInput(
@@ -340,6 +343,7 @@ class LiveCallSession:
                     conversation=self._conversation_text(),
                     updates="\n".join(self._updates),
                     refs=self._host.known_refs(),
+                    state=await self._current_state(),
                 )
                 try:
                     async with asyncio.timeout(self._delegation_timeout):
@@ -350,9 +354,21 @@ class LiveCallSession:
                         "The request took too long and was stopped. Actions it already started "
                         "may have completed; nothing was retried."
                     )
-            finally:
-                self._set_busy(-1)
+        finally:
+            self._set_busy(-1)
         return answer
+
+    async def _current_state(self) -> str:
+        """What vBot shows now, for a delegation; empty when the host cannot tell."""
+        try:
+            return await self._host.current_state()
+        except Exception as exc:
+            _LOGGER.warning(
+                "Live state for a delegation failed (call=%s error_type=%s)",
+                self._log_id,
+                type(exc).__name__,
+            )
+            return ""
 
     async def _run_tool(self, event: WireToolCall) -> None:
         """Run one direct Tool call; the voice model always gets a result."""
