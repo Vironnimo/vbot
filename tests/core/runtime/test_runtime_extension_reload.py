@@ -122,6 +122,8 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
     try:
         agent = runtime.agents.get("main")
         dispatcher = runtime.command_dispatcher
+        # Startup handlers wait for the serving lifespan, not for Runtime start.
+        assert marker_lines(marker) == []
         asyncio.run(runtime.fire_extension_startup())
         assert dispatch_tool(runtime, "swap_echo", data_dir)["data"] == {"version": "v1"}
         assert dispatch_tool(runtime, "pkg_echo", data_dir)["data"] == {"value": "v1"}
@@ -180,8 +182,11 @@ def test_reload_rebuilds_the_extension_layer_like_a_restart(config: Config, tmp_
         assert type(runtime.recall_backend).__name__ != "ExtBackend"
         assert "ext_recall" not in runtime.available_recall_backends()
         assert runtime.storage.load_recall_settings()["backend"] == "ext_recall"
+        assert marker_lines(marker) == ["startup", "shutdown"] * 2 + ["startup"]
     finally:
         runtime.stop()
+    # Shutdown handlers follow Runtime stop.
+    assert marker_lines(marker) == ["startup", "shutdown"] * 3
 
 
 def test_removed_extensions_leave_their_owner_managed_sessions_archived(
@@ -229,8 +234,7 @@ def test_removed_extensions_leave_their_owner_managed_sessions_archived(
         runtime.stop()
 
 
-@pytest.mark.parametrize("cancel_disable", [False, True])
-def test_reload_and_disable_never_interleave(config: Config, cancel_disable: bool) -> None:
+def test_reload_and_disable_never_interleave(config: Config) -> None:
     # A live disable queued behind a reload runs entirely after the reload's swap
     # and re-apply, so it deactivates the rebuilt Extension. Were the two to
     # interleave, the reload would re-add the Tool the disable removed.
@@ -238,7 +242,7 @@ def test_reload_and_disable_never_interleave(config: Config, cancel_disable: boo
     runtime = Runtime(config)
     runtime.start()
 
-    async def race() -> None:
+    async def race(*, cancel_disable: bool) -> None:
         entered = asyncio.Event()
         release = asyncio.Event()
 
@@ -262,25 +266,30 @@ def test_reload_and_disable_never_interleave(config: Config, cancel_disable: boo
             release.set()
             await asyncio.gather(reload_task, disable_task)
 
+    async def exercise() -> None:
+        # A cancelled queued disable changes nothing; the reloaded Extension stays.
+        await race(cancel_disable=True)
+        assert "target_echo" in tool_names(runtime)
+        assert extension_record(runtime, "target").status == "loaded"
+        await race(cancel_disable=False)
+        assert "target_echo" not in tool_names(runtime)
+        assert extension_record(runtime, "target").status == "disabled"
+
     try:
-        asyncio.run(race())
-        assert ("target_echo" in tool_names(runtime)) is cancel_disable
-        assert extension_record(runtime, "target").status == (
-            "loaded" if cancel_disable else "disabled"
-        )
+        asyncio.run(exercise())
     finally:
         runtime.stop()
 
 
-@pytest.mark.parametrize("operation", ["reload", "disable", "startup", "close"])
-def test_cancelled_extension_lifecycle_finishes_admitted_cleanup(
-    config: Config, operation: str
-) -> None:
+def test_cancelled_extension_lifecycle_finishes_admitted_cleanup(config: Config) -> None:
+    # One Runtime goes through every lifecycle operation in turn; each caller is
+    # cancelled while an Extension handler it admitted is still running.
     write_extension(config.data_dir, "target", tool_extension_source("target_echo"))
+    write_extension(config.data_dir, "closing", tool_extension_source("closing_echo"))
     runtime = Runtime(config)
     runtime.start()
 
-    async def exercise() -> None:
+    async def cancel_while_admitted(operation: str) -> None:
         entered = asyncio.Event()
         release = asyncio.Event()
         finished = False
@@ -293,7 +302,8 @@ def test_cancelled_extension_lifecycle_finishes_admitted_cleanup(
             await release.wait()
             finished = True
 
-        declarations = extension_record(runtime, "target").declarations
+        owner = "closing" if operation == "close" else "target"
+        declarations = extension_record(runtime, owner).declarations
         (declarations.startup if operation == "startup" else declarations.shutdown).append(handler)
         action = {
             "reload": runtime.reload_extensions,
@@ -313,17 +323,21 @@ def test_cancelled_extension_lifecycle_finishes_admitted_cleanup(
         if another_close is not None:
             await another_close
 
-        assert finished
-        assert calls == 1
-        if operation in {"reload", "startup"}:
-            assert "target_echo" in tool_names(runtime)
-        elif operation == "disable":
-            assert "target_echo" not in tool_names(runtime)
-            assert extension_record(runtime, "target").status == "disabled"
-        else:
-            assert runtime.extensions is None
-            with pytest.raises(RuntimeError, match="Runtime not started"):
-                runtime.chat_sessions  # noqa: B018 - the close completed.
+        assert finished, operation
+        assert calls == 1, operation
+
+    async def exercise() -> None:
+        await cancel_while_admitted("startup")
+        assert "target_echo" in tool_names(runtime)
+        await cancel_while_admitted("reload")
+        assert "target_echo" in tool_names(runtime)
+        await cancel_while_admitted("disable")
+        assert "target_echo" not in tool_names(runtime)
+        assert extension_record(runtime, "target").status == "disabled"
+        await cancel_while_admitted("close")
+        assert runtime.extensions is None
+        with pytest.raises(RuntimeError, match="Runtime not started"):
+            runtime.chat_sessions  # noqa: B018 - the close completed.
 
     try:
         asyncio.run(exercise())
