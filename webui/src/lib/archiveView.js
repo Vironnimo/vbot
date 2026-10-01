@@ -262,7 +262,13 @@ export function archiveRow(entry, { retentionDays, agentNames, projectNames }) {
   return row;
 }
 
+// What the Archive view passes as `retentionDays` while vBot cannot read the
+// period: it then deletes nothing automatically, and no entry has a date.
+export const RETENTION_UNKNOWN = 'unknown';
+
 export function retentionNotice(retentionDays) {
+  if (retentionDays === RETENTION_UNKNOWN)
+    return t('archive.retention.unknown');
   if (retentionDays === null) return t('archive.retention.off');
   if (!Number.isInteger(retentionDays)) return '';
   return retentionDays === 1
@@ -275,6 +281,9 @@ export function archiveDeletionText(entry, retentionDays, userFolders = []) {
   if (entry?.state === ARCHIVE_STATE_PURGING) return t('archive.row.purging');
   if (entry?.purge_at) {
     return t('archive.detail.purgeAt', { date: formatDay(entry.purge_at) });
+  }
+  if (retentionDays === RETENTION_UNKNOWN) {
+    return t('archive.detail.retentionUnknown');
   }
   if (retentionDays === null) return t('archive.retention.off');
   if (!isKeptFromRetention(entry, retentionDays)) return '';

@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
 import { init, t } from '../../lib/i18n.js';
-import { archiveRetention } from '../../lib/archiveRetention.svelte.js';
+import {
+  archiveDeletionNotice,
+  archiveRetention,
+} from '../../lib/archiveRetention.svelte.js';
 import { createStandaloneNavigation } from '../../lib/navigation.svelte.js';
 import { reactiveProps } from './reactiveProps.support.svelte.js';
 
@@ -91,8 +94,11 @@ function dialogAwareNavigation() {
   };
 }
 
-function page(entries, { next_cursor = null, retention_days = 30 } = {}) {
-  return { entries, next_cursor, retention_days };
+function page(
+  entries,
+  { next_cursor = null, retention_days = 30, retention_unknown = false } = {},
+) {
+  return { entries, next_cursor, retention_days, retention_unknown };
 }
 
 function detailOf(item, restore = {}) {
@@ -202,6 +208,7 @@ describe('ArchiveView', () => {
     document.body.innerHTML = '';
     init('en');
     archiveRetention.days = undefined;
+    archiveRetention.unknown = false;
     mounted = null;
     for (const mock of [listMock, showMock, restoreMock, purgeMock]) {
       mock.mockReset();
@@ -269,6 +276,40 @@ describe('ArchiveView', () => {
       projectId: '',
       limit: 50,
     });
+  });
+
+  it('says automatic deletion is paused while vBot cannot read the period', async () => {
+    // Settings still report the default period; only the list knows vBot cannot read it.
+    archiveRetention.days = 30;
+    const kept = entry({ ...CODER, purge_at: null });
+    listMock
+      .mockResolvedValueOnce(
+        page([kept], { retention_days: null, retention_unknown: true }),
+      )
+      .mockResolvedValue(page([CODER]));
+    const props = reactiveProps({ archiveRefreshToken: 0 });
+    mountView(props);
+
+    await waitForCondition(() => rowIds().length === 1);
+    expect(document.body.textContent).toContain(t('archive.retention.unknown'));
+    // Neither "never deleted" nor "automatic deletion off".
+    expect(row('e-coder').textContent).not.toContain(
+      t('archive.row.neverDeleted'),
+    );
+    expect(document.body.textContent).not.toContain(t('archive.retention.off'));
+    expect(archiveDeletionNotice()).toBe(t('archive.deleteNotice.unknown'));
+
+    // A later answer with a readable period ends the pause.
+    props.archiveRefreshToken += 1;
+    flushSync();
+    await waitForCondition(() =>
+      document.body.textContent.includes(
+        t('archive.retention.days', { days: 30 }),
+      ),
+    );
+    expect(archiveDeletionNotice()).toBe(
+      t('archive.deleteNotice.days', { days: 30 }),
+    );
   });
 
   it('opens Restore as when a restore meets a taken ID and restores under the new ID', async () => {

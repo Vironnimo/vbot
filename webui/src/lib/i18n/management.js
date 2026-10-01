@@ -833,6 +833,8 @@ export default Object.freeze({
   'archive.deleteNotice.oneDay':
     'The Archive deletes it automatically after one day.',
   'archive.deleteNotice.off': 'The Archive keeps it until you delete it there.',
+  'archive.deleteNotice.unknown':
+    'The Archive keeps it for now: vBot cannot read the retention period from its settings file, so automatic deletion is paused.',
   'archive.deleteNotice.kept':
     'Settings › System sets how long the Archive keeps it.',
   'archive.deletePending':
@@ -874,6 +876,8 @@ export default Object.freeze({
   'archive.retention.oneDay':
     'Archived items are deleted automatically one day after they were archived, except files from older vBot versions and items that may hold folders of your own.',
   'archive.retention.off': 'Archived items are never deleted automatically.',
+  'archive.retention.unknown':
+    'Automatic deletion is paused: vBot cannot read the retention period from its settings file, so it deletes nothing automatically until it can.',
   'archive.retention.change': 'Change in Settings',
   'archive.count.one': '1 item',
   'archive.count.many': '{count} items',
@@ -1007,6 +1011,8 @@ export default Object.freeze({
   'archive.detail.facts': 'Details',
   'archive.detail.deletion': 'Deletion',
   'archive.detail.purgeAt': 'Deleted automatically on {date}.',
+  'archive.detail.retentionUnknown':
+    'Not deleted automatically for now: vBot cannot read the retention period from its settings file.',
   'archive.detail.neverDeletedFiles':
     'Never deleted automatically: files from an older vBot version may be folders of your own.',
   'archive.detail.neverDeletedFolders':

@@ -45,6 +45,7 @@
     restoreConflictText,
     restoreWarningsText,
     retentionNotice,
+    RETENTION_UNKNOWN,
   } from '$lib/archiveView.js';
   import { t } from '$lib/i18n.js';
   import { createStandaloneNavigation } from '$lib/navigation.svelte.js';
@@ -99,7 +100,9 @@
   let lastScopeTokens = null;
 
   let shownEntryId = $derived(navigation.place[0] ?? '');
-  let retentionDays = $derived(archiveRetention.days);
+  let retentionDays = $derived(
+    archiveRetention.unknown ? RETENTION_UNKNOWN : archiveRetention.days,
+  );
   let names = $derived(archiveNames({ agents, projects, entries }));
   let kindOptions = $derived(archiveKindOptions());
   let scopeOptions = $derived(
@@ -178,8 +181,10 @@
     return typeof error?.message === 'string' ? error.message.trim() : '';
   }
 
-  function adoptRetention(days) {
-    applyArchiveRetention(days);
+  function adoptRetention(result) {
+    applyArchiveRetention(result?.retention_days, {
+      unknown: result?.retention_unknown === true,
+    });
   }
 
   async function loadList({ keepCount = false } = {}) {
@@ -196,7 +201,7 @@
       if (disposed || request !== listRequest) return;
       entries = Array.isArray(result?.entries) ? result.entries : [];
       nextCursor = result?.next_cursor ?? null;
-      adoptRetention(result?.retention_days);
+      adoptRetention(result);
       listError = '';
       listLoaded = true;
       const listed = new Set(
@@ -234,7 +239,7 @@
         ),
       ];
       nextCursor = result?.next_cursor ?? null;
-      adoptRetention(result?.retention_days);
+      adoptRetention(result);
     } catch (error) {
       if (disposed || request !== listRequest) return;
       listError = [t('archive.loadError'), errorText(error)]

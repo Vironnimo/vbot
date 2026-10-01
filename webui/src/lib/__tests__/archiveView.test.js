@@ -7,6 +7,8 @@ import {
   permanentDeleteNotice,
   purgeResultToast,
   restoreProblemText,
+  retentionNotice,
+  RETENTION_UNKNOWN,
 } from '../archiveView.js';
 import { init, t } from '../i18n.js';
 
@@ -54,6 +56,8 @@ describe('archive view rules', () => {
     ],
     ['an entry kept from deletion', {}, 30, 'archive.row.neverDeleted', true],
     ['any entry while deletion is off', {}, null, '', true],
+    // Not "never deleted": the period is unknown, so nothing is deleted for now.
+    ['any entry while the period is unknown', {}, RETENTION_UNKNOWN, '', true],
   ])(
     'states what happens next to %s',
     (_name, fields, days, key, purgeable) => {
@@ -89,6 +93,21 @@ describe('archive view rules', () => {
       const row = archiveRow(kept, { retentionDays: 30, ...NAMES });
       expect(row.statusHint).toBe(t(rowKey));
       expect(archiveDeletionText(kept, 30)).toBe(t(detailKey));
+    },
+  );
+
+  it.each([
+    [null, 'archive.retention.off', 'archive.retention.off'],
+    [
+      RETENTION_UNKNOWN,
+      'archive.retention.unknown',
+      'archive.detail.retentionUnknown',
+    ],
+  ])(
+    'says what retention does while the period is %s',
+    (days, noticeKey, detailKey) => {
+      expect(retentionNotice(days)).toBe(t(noticeKey));
+      expect(archiveDeletionText(entry({}), days)).toBe(t(detailKey));
     },
   );
 
