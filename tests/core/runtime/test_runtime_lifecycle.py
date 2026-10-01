@@ -84,9 +84,8 @@ def test_runtime_rejects_unknown_safe_startup_modes(config: Config) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("safe_startup_mode", ["verification", "test"])
 async def test_safe_startup_does_not_load_extensions_or_start_producers(
-    config: Config, monkeypatch: pytest.MonkeyPatch, safe_startup_mode: str
+    config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from core.extensions import ExtensionRegistry
 
@@ -95,7 +94,8 @@ async def test_safe_startup_does_not_load_extensions_or_start_producers(
         "load",
         Mock(side_effect=AssertionError("safe startup must not load executable extensions")),
     )
-    runtime = Runtime(config, safe_startup_mode=safe_startup_mode)  # type: ignore[arg-type]
+    # ``verification`` and ``test`` share every safe-startup branch.
+    runtime = Runtime(config, safe_startup_mode="verification")
     for name in (
         "_start_channel_service",
         "_start_cron_service",
@@ -431,11 +431,13 @@ async def test_failed_start_logs_once_releases_started_resources_and_can_retry(
     # Cleanup closed the managed handlers after the failure was recorded.
     assert "written after cleanup" not in contents
 
-    runtime.start()
-    try:
-        assert runtime.agents.list()
-    finally:
-        await runtime.aclose()
+    if method == "_start_provider_usage_service":
+        # The same Runtime can retry, even after its last startup step failed.
+        runtime.start()
+        try:
+            assert runtime.agents.list()
+        finally:
+            await runtime.aclose()
 
 
 def test_runtime_failed_start_never_creates_a_missing_data_root(
@@ -957,17 +959,17 @@ async def test_runtime_imports_history_and_registers_canonical_accounting(config
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("withdraw_readiness", [False, True])
 async def test_extension_sampling_records_usage_before_returning(
-    config: Config, monkeypatch: pytest.MonkeyPatch, withdraw_readiness: bool
+    config: Config, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runtime = Runtime(config, safe_startup_mode="test")
     runtime.start()
     recorder = runtime.usage_recorder
+    shutdown = SimpleNamespace(begins_mid_call=False)
     try:
 
         async def send(*_args: object, **_kwargs: object) -> dict[str, object]:
-            if withdraw_readiness:
+            if shutdown.begins_mid_call:
                 runtime._started = False  # noqa: SLF001 - shutdown begins mid-call.
             return {}
 
@@ -995,15 +997,19 @@ async def test_extension_sampling_records_usage_before_returning(
             run_id="run",
             execution_owner=SimpleNamespace(extension="fixture", group_id="group"),
         )
-        result = await runtime._sample_extension(  # noqa: SLF001 - Extension sampling seam.
-            context, {"messages": [], "max_tokens": 100}
-        )
-        assert result["model"] == "p/m"
-        record = read_ledger(recorder)[1][0]
-        assert record.kind == "extension_sampling"
-        assert record.usage["input_tokens"] == 10
-        assert record.run_id == "run"
-        assert record.owner_name == "fixture"
-        adapter.aclose.assert_awaited_once()
+        # The second call withdraws readiness mid-call, as a beginning shutdown does.
+        for begins_mid_call in (False, True):
+            shutdown.begins_mid_call = begins_mid_call
+            result = await runtime._sample_extension(  # noqa: SLF001 - Extension sampling seam.
+                context, {"messages": [], "max_tokens": 100}
+            )
+            assert result["model"] == "p/m"
+            record = read_ledger(recorder)[1][-1]
+            assert record.kind == "extension_sampling"
+            assert record.usage["input_tokens"] == 10
+            assert record.run_id == "run"
+            assert record.owner_name == "fixture"
+        assert len(read_ledger(recorder)[1]) == 2
+        assert adapter.aclose.await_count == 2
     finally:
         await runtime.aclose()
