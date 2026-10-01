@@ -39,7 +39,7 @@ git commit -m "<type>(<scope>): <what this phase accomplished>"
 
 ## Finalize
 
-Commit every change through the commit hook; in a worktree it runs the static checks. The merge runs the tests (`AGENTS.md` -> Testing), unless the branch conflicts with `main`, which it reports first: first the tests the branch's changes affect, in the worktree, then the commit check of the merge commit against the merged result, so a failing test or a semantic conflict with newer `main` work blocks the merge instead of landing.
+Run the tests covering your change and commit every change through the commit hook, which runs the static checks. The merge runs no tests: it reports a conflict with `main` first, then the commit hook checks the merge commit against the merged result. The complete suites run when `main` is pushed (`.vorch/workflows/push-workflow.md`).
 
 Write the Step 7 summary. Then merge yourself — no user confirmation is needed:
 
@@ -47,7 +47,7 @@ Write the Step 7 summary. Then merge yourself — no user confirmation is needed
 python scripts/worktree.py merge <task-name>
 ```
 
-Use a generous shell timeout: the command runs the branch's tests, blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit. A merge that is killed, for example by a shell timeout, leaves `main` as it was; run it again.
+Use a generous shell timeout: the command blocks while other sessions' merges or repair windows finish, then merges the task branch into `main` (`--no-ff`), removes the worktree, its data dir, and the managed branch, and prints the merge commit. A merge that is killed, for example by a shell timeout, leaves `main` as it was; run it again.
 
 ## Conflicts: the protected repair window
 
@@ -78,7 +78,6 @@ If the task is cancelled or aborted, use the project-specific `delete` command (
 - **Untracked files in worktree** — plan files (`.vorch/plans/`) and other untracked files exist only in the worktree; they are not visible in the main repo directory.
 - **Commands are project-specific** — use the worktree command names and paths documented in `.vorch/PROJECT.md`; do not assume a fixed script path.
 - **Never hand-merge into `main`** while sessions are running — all merges go through the merge command so the lock serializes them; a hand merge can collide with an automated one.
-- **A failed branch check** stops before the merge; fix the reported problems in the worktree, commit, and retry the merge.
 - **A merge rejected by the commit check** leaves `main` unchanged; its report names the problems. Bring `main` into your branch (`git rebase main`), fix them, commit, and retry the merge.
 - **A leading `cd <primary checkout> && ` may be dropped** — Claude Code's Bash tool removes a leading `cd <session directory> && ` as redundant. It compares against the session's recorded directory, which can lag behind the shell's actual directory right after a `cd` into or out of a worktree; the rest of the command then runs where the shell already is, for example still inside the worktree. Do not rely on that prefix to switch checkouts: use absolute paths and `git -C <path>`, or spell the path with a drive letter and forward slashes (`cd C:/…`), which is never dropped; check with `pwd` when it matters.
 - **Cleanup after a landed merge** — a merge started from inside the worktree removes the emptied worktree directory in the background once the merge command ends, and says so in a `note:` line; the shell's working directory is gone afterwards. If cleanup failed, the output says so; finish with the project-specific `delete` command manually.
