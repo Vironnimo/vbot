@@ -19,17 +19,6 @@ from cli.formatting import output_mode
 def add_parsers(subparsers) -> None:
     app = subparsers.add_parser("application", help="Manage the packaged local vBot application")
     commands = app.add_subparsers(dest="command", required=True)
-    install = commands.add_parser("install", help="Install a prepared application payload")
-    install.add_argument("--root", type=Path, required=True)
-    install.add_argument("--payload", type=Path, required=True)
-    install.add_argument(
-        "--shape", choices=("server", "server-desktop", "desktop-client"), required=True
-    )
-    install.add_argument("--host", default="127.0.0.1")
-    install.add_argument("--port", type=int, default=8420)
-    install.add_argument("--data-dir", type=Path)
-    install.add_argument("--public-key", default="")
-    install.add_argument("--channel", choices=("release", "main"), default="release")
     commands.add_parser("status", help="Show the installed version and latest update")
     channel = commands.add_parser(
         "channel", help="Select whether updates install releases or the newest main build"
@@ -114,24 +103,6 @@ def _wait_update(install: Installation, operation: Operation) -> Operation:
 
 
 def dispatch(args: argparse.Namespace) -> int | None:
-    if args.area == "application" and args.command == "install":
-        from cli.application.install import install_payload
-
-        installed = install_payload(
-            args.root,
-            args.payload,
-            shape=args.shape,
-            host=args.host,
-            port=args.port,
-            data_dir=args.data_dir,
-            public_key=args.public_key,
-            channel=args.channel,
-        )
-        _print(
-            {"installed": True, "root": str(installed.root), "version": installed.version().name},
-            lines=[f"vBot installed at {installed.root}."],
-        )
-        return 0
     install = discover()
     if install is None:
         if args.area in _INSTALLATION_AREAS:

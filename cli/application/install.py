@@ -12,6 +12,7 @@ from pathlib import Path
 from cli.application.packages import validate_release
 from cli.application.state import (
     CHANNEL_URLS,
+    SHAPES,
     ApplicationError,
     Installation,
     contained,
@@ -61,7 +62,7 @@ def install_payload(
             "Choose a dedicated application directory outside the supplied payload"
         )
     if (
-        shape not in {"server", "server-desktop", "desktop-client"}
+        shape not in SHAPES
         or type(port) is not int
         or not 1 <= port <= 65535
         or channel not in CHANNEL_URLS
@@ -139,10 +140,15 @@ def _initialize_data(data_dir: Path, resources: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """The only installation command line.
+
+    Windows bootstraps route ``vBot.exe application install ...`` here, running the
+    payload's own runtime; ``install.sh`` runs this module with that runtime directly.
+    """
     parser = argparse.ArgumentParser(description="Install a prepared vBot payload")
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--payload", type=Path, required=True)
-    parser.add_argument("--shape", required=True)
+    parser.add_argument("--shape", choices=sorted(SHAPES), required=True)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8420)
     parser.add_argument("--data-dir", type=Path)
