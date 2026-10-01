@@ -14,6 +14,8 @@ set -u
 checkout=$1
 cache=$HOME/.cache/vbot-push
 cd "$checkout" || exit 2
+# WSL appends the Windows PATH; a Linux machine has no Windows shells to find.
+PATH=$(printf %s "$PATH" | tr : '\n' | grep -v '^/mnt/' | paste -sd: -)
 
 fail() {
     echo "linux tests: $*"
