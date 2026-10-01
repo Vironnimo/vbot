@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from core.chat import ChatSessionError
 from core.runs import RunAdmissionBlockedError
-from core.sessions import SessionAddress
+from core.sessions import ArchiveEntryFilter, SessionAddress
 from core.tools.terminal_manager import TerminalOwner
+from tests.server.rpc.project_methods_test_support import _make_state
 from tests.server.rpc.session_methods_test_support import FakeSessions, stub_session_state
 from tests.server.rpc_test_support import JsonObject, resource_changes, rpc_error, rpc_result
 
@@ -39,6 +42,8 @@ async def test_delete_identity_session_archives_and_lands_on_the_reaimed_current
         "session_id": "s1",
         "next_session_id": "landing",
         "archive_entry_id": "arc_s1",
+        "purged": False,
+        "purge_pending": False,
     }
     assert resolver.resolved == [(None, "builder")]
     # Archived (not hard-deleted) under the identity scope.
@@ -209,3 +214,28 @@ async def test_a_refused_delete_is_a_domain_error_without_a_refresh(
     assert error == {"code": "domain_error", "message": message}
     assert sessions.archived == archived
     assert resource_changes(state) == []
+
+
+@pytest.mark.asyncio
+async def test_delete_permanent_leaves_no_session_or_entry(tmp_path: Path) -> None:
+    # The real stores: the permanent delete archives the Session, then purges its entry.
+    state = _make_state(tmp_path)
+    current = state.runtime.agents.create("builder").current_session_id
+    state.runtime.sessions.create("builder", session_id="s1")
+
+    result = await rpc_result(
+        state, "session.delete", agent_id="builder", session_id="s1", permanent=True
+    )
+
+    assert result == {
+        "agent_id": "builder",
+        "session_id": "s1",
+        "next_session_id": current,
+        "archive_entry_id": None,
+        "purged": True,
+        "purge_pending": False,
+    }
+    assert not state.runtime.sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    with sqlite3.connect(tmp_path / "data" / "sessions.db") as connection:
+        rows = connection.execute("SELECT 1 FROM sessions WHERE session_id = 's1'").fetchall()
+    assert rows == []

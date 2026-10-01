@@ -6,6 +6,7 @@ A delete moves the Agent into an archive entry through the real archive service.
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,7 +17,7 @@ import pytest
 from core.agents import AgentStore
 from core.database import DatabaseUnavailableError, SnapshotBarrier
 from core.runs import Run
-from core.sessions import SessionAddress
+from core.sessions import ArchiveEntryFilter, SessionAddress
 from tests.server.rpc_test_support import (
     InstrumentedAgentDeleteLock,
     JsonObject,
@@ -323,6 +324,7 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     # The delete created one archive entry that remembers the grant for a restore.
     entry = state.runtime.chat_sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("agent", "coder")
+    assert (result["session_count"], result["purged"], result["purge_pending"]) == (1, False, False)
     assert entry.facts["grants"] == [{"agent_id": "manager", "index": 0}]
     # The archived Sessions leave Recall.
     assert state.runtime.recall.removed_agents == ["coder"]
@@ -384,3 +386,35 @@ async def test_agent_delete_serializes_minimum_one_check_and_delete(tmp_path: Pa
     assert len(state.runtime.agents.list()) == 1
     assert len(successes[0]["result"]["remaining_agents"]) == 1
     assert agent_delete_lock.max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_agent_delete_permanent_leaves_no_agent_session_entry_or_payload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    agents = AgentStore(tmp_path, sessions=state.runtime.chat_sessions)
+    state.runtime.agents = agents
+    monkeypatch.setattr(state.runtime.agent_resolver, "_agents", agents)
+    agents.create("coder")
+    agents.create("writer", "Writer")
+    state.runtime.chat_sessions.create("coder", session_id="work")
+
+    try:
+        result = await rpc_result(state, "agent.delete", id="coder", permanent=True)
+        assert not agents.exists("coder")
+    finally:
+        agents.close()
+
+    assert result["agent_id"] == "coder"
+    assert (result["archive_entry_id"], result["purged"], result["purge_pending"]) == (
+        None,
+        True,
+        False,
+    )
+    assert result["session_count"] == 2
+    assert not state.runtime.chat_sessions.archive_ledger.page(ArchiveEntryFilter()).entries
+    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+        rows = connection.execute("SELECT 1 FROM sessions WHERE agent_id = 'coder'").fetchall()
+    assert rows == []
+    assert not any((tmp_path / "archive").rglob("*"))

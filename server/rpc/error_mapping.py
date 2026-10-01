@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from core.agents import (
     AgentError,
     AgentNotFoundError,
     AgentOrderConflictError,
     AgentReferencedError,
     InvalidAgentOrderError,
+)
+from core.archive import (
+    ArchiveEntryBusyError,
+    ArchiveEntryError,
+    ArchiveEntryNotFoundError,
+    ArchiveNotRestorableError,
+    ArchiveRestoreConflictError,
+    RestoreProblem,
 )
 from core.channels import ChannelConfigError, ChannelNotFoundError
 from core.chat import ChatError, ChatSessionError
@@ -41,6 +51,10 @@ from server.rpc.errors import (
     RPC_ERROR_AGENT_IN_USE,
     RPC_ERROR_AGENT_NOT_FOUND,
     RPC_ERROR_AGENT_ORDER_CONFLICT,
+    RPC_ERROR_ARCHIVE_ENTRY_BUSY,
+    RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND,
+    RPC_ERROR_ARCHIVE_NOT_RESTORABLE,
+    RPC_ERROR_ARCHIVE_RESTORE_CONFLICT,
     RPC_ERROR_CANCELLED,
     RPC_ERROR_CHANNEL_ALREADY_EXISTS,
     RPC_ERROR_CHANNEL_CONFIG,
@@ -58,10 +72,68 @@ from server.rpc.errors import (
     RpcError,
 )
 
+_PROBLEM_KEYS = frozenset({"code", "message", "id"})
+
+
+def restore_problem_payload(problem: RestoreProblem) -> dict[str, Any]:
+    """One restore blocker or warning as ``{code, message, ...details}``."""
+    details = {key: value for key, value in problem.details.items() if key not in _PROBLEM_KEYS}
+    return {"code": problem.code, "message": problem.message, **details}
+
+
+def _restore_conflict_payload(problem: RestoreProblem) -> dict[str, Any]:
+    """A taken id or Session address, with ``id`` naming what is taken when it is one id."""
+    details = problem.details
+    taken = details.get("agent_id") or details.get("project_id")
+    if taken is None:
+        session_ids = {
+            address.get("session_id")
+            for address in details.get("addresses") or ()
+            if isinstance(address, dict)
+        }
+        taken = next(iter(session_ids)) if len(session_ids) == 1 else None
+    payload = restore_problem_payload(problem)
+    return {"code": payload.pop("code"), "id": taken, **payload}
+
+
+def _map_archive_error(error: ArchiveEntryError) -> RpcError:
+    if isinstance(error, ArchiveEntryNotFoundError):
+        return RpcError(
+            RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND, str(error), data={"entry_ids": list(error.entry_ids)}
+        )
+    if isinstance(error, ArchiveEntryBusyError):
+        return RpcError(
+            RPC_ERROR_ARCHIVE_ENTRY_BUSY,
+            str(error),
+            data={"entry_id": error.entry_id, "state": error.state},
+        )
+    if isinstance(error, ArchiveRestoreConflictError):
+        return RpcError(
+            RPC_ERROR_ARCHIVE_RESTORE_CONFLICT,
+            str(error),
+            data={
+                "entry_id": error.entry_id,
+                "conflicts": [_restore_conflict_payload(conflict) for conflict in error.conflicts],
+                "fix": "target_id",
+            },
+        )
+    if isinstance(error, ArchiveNotRestorableError):
+        return RpcError(
+            RPC_ERROR_ARCHIVE_NOT_RESTORABLE,
+            str(error),
+            data={
+                "entry_id": error.entry_id,
+                "blockers": [restore_problem_payload(blocker) for blocker in error.blockers],
+            },
+        )
+    return RpcError(RPC_ERROR_DOMAIN, str(error))
+
 
 def _map_expected_error(error: Exception) -> RpcError:
     if isinstance(error, RpcError):
         return error
+    if isinstance(error, ArchiveEntryError):
+        return _map_archive_error(error)
     if isinstance(error, SessionCapabilityExpiredError):
         return RpcError(
             RPC_ERROR_SESSION_CAPABILITY_EXPIRED,

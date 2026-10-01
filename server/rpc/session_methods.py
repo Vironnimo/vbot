@@ -35,6 +35,7 @@ from server.events import (
     RESOURCE_KIND_SESSIONS,
 )
 from server.rpc.agent_refs import _agent_reference_lock
+from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -192,7 +193,8 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     """Archive one session and report where the viewing accessor should land.
 
     Decisions baked in: the session moves into an archive entry, not hard-deleted
-    (#1, recoverable); deletion is refused while a run is active or queued on it
+    (#1, recoverable), unless ``permanent`` purges that entry right after the
+    archive; deletion is refused while a run is active or queued on it
     (#4) and while a Bootstrap job, Cron job or Calendar action pins it; the
     response carries ``next_session_id`` for #2 navigation; and the removed
     session is dropped from the active recall index immediately (#6). Channel-
@@ -200,11 +202,12 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     simply resumes empty on the next inbound message, and an active sub-agent
     child is already covered by the per-session busy guard.
     """
-    supported_fields = {"agent_id", "session_id"}
+    supported_fields = {"agent_id", "session_id", "permanent"}
     _reject_unsupported(params, supported_fields, "session.delete")
 
     agent_id, project_id = _required_agent_address(params, "agent_id")
     session_id = _required_string(params, "session_id")
+    permanent = _optional_bool(params, "permanent", default=False)
     address = _session_address(agent_id, session_id, project_id)
     try:
         # One resolver seam validates both agent sources, exactly like
@@ -249,11 +252,17 @@ async def _delete_session(state: Any, params: JsonObject) -> JsonObject:
     # agent state in other windows (the current marking + return-to-current path).
     if outcome.was_current:
         publish_resource_changed(state, RESOURCE_KIND_AGENTS)
+    # The purge runs after the reference lock is released; it needs none.
+    purge = (
+        await purge_permanently(state, outcome.entry_id)
+        if permanent
+        else {"archive_entry_id": outcome.entry_id, **not_purged()}
+    )
     return {
         "agent_id": agent_id,
         "session_id": session_id,
         "next_session_id": next_session_id,
-        "archive_entry_id": outcome.entry_id,
+        **purge,
     }
 
 

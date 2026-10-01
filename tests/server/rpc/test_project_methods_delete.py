@@ -35,6 +35,7 @@ async def test_rm_archives_project(tmp_path: Path) -> None:
 
     entry = state.runtime.sessions.archive_ledger.entry(result["archive_entry_id"])
     assert entry is not None and (entry.kind, entry.subject_id) == ("project", "vbot")
+    assert (result["session_count"], result["purged"], result["purge_pending"]) == (0, False, False)
     assert "archive_path" not in result
     assert not state.runtime.projects.exists("vbot")
     assert state.runtime.terminal_manager.closed_projects == ["vbot"]
@@ -242,3 +243,39 @@ async def test_rm_ignores_automations_that_never_start_a_run_for_the_project(
     result = await rpc_result(state, "project.rm", project_id="vbot")
 
     assert result["archive_entry_id"].startswith("arc_")
+
+
+def _usage_import_fails() -> None:
+    raise OSError("usage ledger unavailable")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usage_import", ["works", "fails"])
+async def test_rm_permanent_deletes_the_anchor_and_sessions_or_reports_it_pending(
+    tmp_path: Path, usage_import: str
+) -> None:
+    state = _make_state(tmp_path)
+    if usage_import == "fails":
+        state.runtime.import_usage = _usage_import_fails
+    repo = _make_repo(tmp_path, "vbot", "builder.md")
+    await rpc_result(state, "project.add", cwd=str(repo), display_name="vBot")
+    state.runtime.sessions.create("builder", session_id="s1", project_id="vbot")
+
+    result = await rpc_result(state, "project.rm", project_id="vbot", permanent=True)
+
+    ledger = state.runtime.sessions.archive_ledger
+    assert not state.runtime.projects.exists("vbot")
+    assert result["session_count"] == 1
+    if usage_import == "works":
+        assert (result["archive_entry_id"], result["purged"], result["purge_pending"]) == (
+            None,
+            True,
+            False,
+        )
+        assert not ledger.page(ArchiveEntryFilter()).entries
+        assert not any((tmp_path / "data" / "archive").rglob("*"))
+    else:
+        # The Project is archived; its permanent deletion waits for another purge.
+        assert (result["purged"], result["purge_pending"]) == (False, True)
+        assert ledger.entry(result["archive_entry_id"]) is not None
+    assert repo.exists()

@@ -57,6 +57,7 @@ from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import _agent_reference_lock
+from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -477,14 +478,20 @@ def _validate_override_value(
 
 
 async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
+    """Archive a Project, or with ``permanent`` delete it right away.
+
+    A permanent removal archives first, then purges that entry after the
+    reference lock is released, so a long purge never holds it.
+    """
     _reject_unsupported(
         params,
-        {"project_id", "copy_rooted_agent_identity_files"},
+        {"project_id", "copy_rooted_agent_identity_files", "permanent"},
         "project.rm",
     )
 
     project_id = _required_string(params, "project_id")
     copy_identity_files = _optional_bool(params, "copy_rooted_agent_identity_files", default=False)
+    permanent = _optional_bool(params, "permanent", default=False)
     try:
         # The Agent delete lock serializes the reference check and the archive it
         # admits against every other Agent and Project lifecycle change.
@@ -507,9 +514,15 @@ async def _remove_project(state: Any, params: JsonObject) -> JsonObject:
         raise _map_expected_error(exc) from exc
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     publish_resource_changed(state, RESOURCE_KIND_PROJECTS)
+    purge = (
+        await purge_permanently(state, outcome.entry_id)
+        if permanent
+        else {"archive_entry_id": outcome.entry_id, **not_purged()}
+    )
     return {
         "project_id": project_id,
-        "archive_entry_id": outcome.entry_id,
+        **purge,
+        "session_count": outcome.session_count,
         "affected_agent_ids": list(outcome.affected_agent_ids),
         "copied_files": {agent_id: list(files) for agent_id, files in outcome.copied_files.items()},
         "backed_up_files": {

@@ -109,6 +109,12 @@ class _FakeTerminalManager:
     async def close_project_scope(self, project_id: str) -> None:
         self.closed_projects.append(project_id)
 
+    async def close_agent_scope(self, _agent_id: str, _project_id: str | None) -> None:
+        return None
+
+    async def close_scope(self, _owner: object) -> None:
+        return None
+
 
 def _openai_configured() -> ModelConfigurationChecker:
     return ModelConfigurationChecker(
@@ -207,6 +213,7 @@ def _make_state(
             }
         ),
     )
+    runtime.import_usage = lambda: None
     runtime.archive = ArchiveService(
         ArchiveServices(
             data_dir=data_dir,
@@ -219,7 +226,8 @@ def _make_state(
             terminals=cast(Any, runtime.terminal_manager),
             snapshot_barrier=barrier,
             agent_references=_no_agent_references,
-            import_usage=lambda: None,
+            # A test makes the usage import fail by replacing ``runtime.import_usage``.
+            import_usage=lambda: runtime.import_usage(),
             remove_agent_from_recall=_forget_agent,
             remove_session_from_recall=_forget_session,
             invalidate_agent_skills=lambda _agent_id: None,

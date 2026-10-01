@@ -38,11 +38,12 @@ from server.events import (
     RESOURCE_KIND_CRON,
     RESOURCE_KIND_SESSIONS,
 )
-from server.rpc._mutations import MutationHandler, serialized_mutation
 from server.rpc.agent_refs import (
     _agent_reference_lock,
+    _guard_agent_lifecycle,
     _subagents_reference_identity_agent,
 )
+from server.rpc.archive_methods import not_purged, purge_permanently
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
@@ -57,6 +58,7 @@ from server.rpc.payloads import _agent_response
 from server.rpc.runtime_access import _state_chat_runs
 from server.rpc.validation import (
     _ensure_model_connection_supported,
+    _optional_bool,
     _reject_unsupported,
     _required_string,
     _validate_string_list,
@@ -195,18 +197,6 @@ async def _run_agent_operation(
     return result
 
 
-def _guard_agent_lifecycle(handler: MutationHandler) -> MutationHandler:
-    mutate = serialized_mutation(handler, lock_attribute="_agent_lifecycle_mutation_lock")
-
-    async def guarded(state: Any, params: JsonObject) -> JsonObject:
-        # Waiting for the shared reference lock admits no mutation. Once admitted,
-        # keep Run guards, worker persistence and publication together on cancel.
-        async with _agent_reference_lock(state):
-            return await mutate(state, params)
-
-    return guarded
-
-
 @_guard_agent_lifecycle
 async def _create_agent(state: Any, params: JsonObject) -> JsonObject:
     # Agent and Session files are written on a worker; publication stays on the loop.
@@ -317,8 +307,24 @@ def _seed_agent_custom_prompt(state: Any, agent_id: str) -> None:
     storage.seed_agent_block_layout(agent_id, default_layout)
 
 
-@_guard_agent_lifecycle
 async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
+    """Archive an Identity Agent, or with ``permanent`` delete it right away.
+
+    A permanent delete archives first, so one transactional path removes the
+    live Agent, then purges that entry outside the lifecycle guard: a long purge
+    must not hold the reference lock other mutations wait for.
+    """
+    _reject_unsupported(params, {"id", "permanent"}, "agent.delete")
+    _required_string(params, "id")
+    permanent = _optional_bool(params, "permanent", default=False)
+    result = await _archive_agent(state, params)
+    if not permanent:
+        return {**result, **not_purged()}
+    return {**result, **await purge_permanently(state, result["archive_entry_id"])}
+
+
+@_guard_agent_lifecycle
+async def _archive_agent(state: Any, params: JsonObject) -> JsonObject:
     agent_id = _required_string(params, "id")
     try:
         chat_sessions = state.runtime.chat_sessions
@@ -349,6 +355,8 @@ async def _delete_agent(state: Any, params: JsonObject) -> JsonObject:
         "agent_id": agent_id,
         "remaining_agents": [_agent_response(state, agent) for agent in remaining_agents],
         "archive_entry_id": outcome.entry_id,
+        "session_count": outcome.session_count,
+        "external_workspace": outcome.external_workspace,
     }
     publish_resource_changed(state, RESOURCE_KIND_AGENTS)
     return result
