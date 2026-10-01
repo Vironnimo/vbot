@@ -50,17 +50,17 @@ def test_home_prints_app_and_data_directories_without_a_server(
     [["update"], ["uninstall", "--all", "--yes"], ["autostart", "enable"]],
     ids=lambda argv: argv[0],
 )
-def test_a_source_checkout_refuses_installation_lifecycle_commands(
+def test_a_development_checkout_refuses_installation_lifecycle_commands(
     argv: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     def fail_resolve(**kwargs: object) -> ServerInstance:
-        raise AssertionError(f"a source checkout has no installation to manage: {kwargs}")
+        raise AssertionError(f"a development checkout has no installation: {kwargs}")
 
     exit_code = cli_main.run(argv, resolve=fail_resolve)
 
     assert exit_code == 1
     captured = capsys.readouterr()
-    assert "This is a source checkout" in captured.out + captured.err
+    assert "development checkout" in captured.out + captured.err
 
 
 @pytest.mark.parametrize(

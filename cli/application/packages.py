@@ -46,7 +46,7 @@ _Result = TypeVar("_Result")
 
 
 def version_label(manifest: dict[str, Any]) -> str:
-    """Distinguish source builds sharing a release version without internal IDs."""
+    """Distinguish builds sharing a release version, such as main builds, by revision."""
     version = manifest.get("version")
     label = version if isinstance(version, str) and version else "unknown version"
     label = "".join(character for character in label[:100] if character.isprintable())

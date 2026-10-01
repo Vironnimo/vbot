@@ -226,7 +226,7 @@ def loaded_version_id(source: Path) -> str | None:
     """Return the installed version whose payload holds one loaded ``cli/application`` module.
 
     ``None`` when the module does not run from a recorded installation's payload,
-    for example from a source checkout.
+    for example from a development checkout.
     """
 
     if _module_install_root(source) is None:
@@ -249,8 +249,9 @@ def discover(root: Path | None = None) -> Installation | None:
     if root is not None:
         return load_installation(root)
     # Loaded packaged code and its native host are stronger provenance than an
-    # inherited environment. In particular, a source CLI spawned by a packaged
-    # server must remain a source CLI even though Bash preserves server context.
+    # inherited environment. In particular, the CLI of a development checkout
+    # spawned by a packaged server must not adopt that installation even though
+    # Bash preserves server context.
     module_root = _module_install_root(Path(__file__))
     if module_root is not None:
         return load_installation(module_root)
@@ -361,7 +362,7 @@ class Operation:
         self.phase, self.message = phase, message
         self.save(install)
         if phase == previous_phase:
-            # Progress within one phase (download, build, snapshot steps).
+            # Progress within one phase (download, unpack, snapshot steps).
             _UPDATE_LOGGER.debug(
                 "Application update progressed (operation=%s phase=%s step=%s)",
                 self.id,

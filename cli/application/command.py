@@ -46,21 +46,21 @@ def add_parsers(subparsers) -> None:
     )
 
 
-# Commands that manage an installed application, and what a source checkout,
+# Commands that manage an installed application, and what a development checkout,
 # which is no installation, does instead.
 _INSTALLATION_AREAS = {
     "application": "This command requires a packaged vBot installation",
     "update": (
         "vbot update updates a packaged vBot installation. "
-        "This is a source checkout: update it with git"
+        "This is a development checkout: update it with git"
     ),
     "uninstall": (
         "vbot uninstall removes a packaged vBot installation. "
-        "This is a source checkout: stop its server and delete the checkout yourself"
+        "This is a development checkout: stop its server and delete the checkout yourself"
     ),
     "autostart": (
         "vbot autostart registers a packaged vBot installation. "
-        "This is a source checkout: start its server with: vbot server start"
+        "This is a development checkout: start its server with: vbot server start"
     ),
 }
 
