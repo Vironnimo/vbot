@@ -39,7 +39,7 @@ Model-card evidence lives in comments beside non-obvious entries (for example, Q
 
 ### Target facts
 
-`task_model.list_targets` descriptors (`TaskModelTarget.facts`) for `text_embedding` carry the selection facts a settings UI shows per target, for Provider and local targets alike: `local` (the Model runs on this machine: every local target, and Provider Models whose metadata flags locality, such as Ollama and LM Studio installs; proxied Ollama Cloud Models are not local), `multilingual`, `recommended_rank`, and `note` from the profile, `max_input_tokens` (profile limit, else the Model's catalog `context_window`, else `null`), and `input_price_per_million` (USD from the Model DB's base input rate, `null` when unknown). Coverage: `tests/core/model_tasks/test_model_task_targets.py`.
+`task_model.list_targets` descriptors (`TaskModelTarget.facts`) for `text_embedding` carry the selection facts a settings UI shows per target, for Provider and local targets alike: `local` (the Model runs on this machine: every local target, and Provider Models whose metadata flags locality, such as Ollama and LM Studio installs; proxied Ollama Cloud Models are not local), `multilingual`, `recommended_rank`, and `note` from the profile, `max_input_tokens` (profile limit, else the Model's catalog `context_window`, else `null`), and `input_price_per_million` (USD from the Model DB's base input rate, `null` when unknown; OpenRouter embedding Models get it from OpenRouter's own catalog, other Provider Models from models.dev when it lists them). Coverage: `tests/core/model_tasks/test_model_task_targets.py`.
 
 ## Provider Wire Behavior
 

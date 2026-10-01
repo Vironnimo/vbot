@@ -496,8 +496,9 @@ def _enrich_provider_model(
     if pointer is not None:
         data["canonical"] = pointer
 
+    # A price from the Provider's own catalog wins over its models.dev mirror.
     pricing = provider_pricing(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
-    if pricing is not None:
+    if pricing is not None and "pricing" not in data:
         data["pricing"] = pricing
 
     # Fill the limits the endpoint did not report from the provider's models.dev

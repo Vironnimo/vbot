@@ -7,6 +7,7 @@ layer holds the lab ladder ``[high, max]``; OpenRouter deviates to
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import httpx
@@ -15,11 +16,12 @@ import respx
 
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
-from core.models.models_dev import refresh_canonical_layer
+from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.models.query import ModelQuery
 
 from .discovery_test_support import (
     API_KEY,
+    FIXTURES_DIR,
     OPENROUTER_MODELS_URL,
     fixture_models_dev_catalog,
     mock_openrouter_image_catalog,
@@ -109,6 +111,39 @@ async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_field
         ("high", "xhigh"),
     )
     assert deepseek.metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_the_provider_catalog_price_wins_over_models_dev(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    raw_catalog = json.loads((FIXTURES_DIR / "models_dev_catalog.json").read_text("utf-8"))
+    raw_catalog["providers"]["openrouter"]["models"]["qwen/qwen3-embedding-8b"] = {
+        "cost": {"input": 0.5}
+    }
+    embedding = raw_openrouter_model(
+        model_id="qwen/qwen3-embedding-8b",
+        name="Qwen3 Embedding 8B",
+        output_modalities=["embeddings"],
+    )
+    embedding["pricing"] = {"prompt": "0.00000001", "completion": "0"}
+    mock_openrouter_image_catalog()
+    respx.get(OPENROUTER_MODELS_URL).mock(
+        return_value=httpx.Response(200, json={"data": [embedding]})
+    )
+
+    await refresh_models(
+        openrouter_config(),
+        API_KEY,
+        resources_dir,
+        models_dev_catalog=ModelsDevCatalog(raw_catalog),
+    )
+
+    written = read_models_file(resources_dir, "openrouter.json")["models"]
+    assert written["qwen/qwen3-embedding-8b"]["pricing"] == {
+        "source": "openrouter:qwen/qwen3-embedding-8b",
+        "rates": {"input": 0.01},
+    }
 
 
 @respx.mock

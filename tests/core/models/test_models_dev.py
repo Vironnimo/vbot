@@ -262,6 +262,7 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
         "output": 8,
         "cache_read": 0.2,
     }
+    raw["providers"]["openai"]["models"]["text-embedding-3-small"] = {"cost": {"input": 0.02}}
     models_dir = tmp_path / "models"
     models_dir.mkdir()
     path = models_dir / "gateway.json"
@@ -279,6 +280,13 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
                             "rates": {"input": 99},
                         }
                     },
+                    # The Provider's own catalog price wins over models.dev.
+                    "text-embedding-3-small": {
+                        "pricing": {
+                            "source": "gateway:text-embedding-3-small",
+                            "rates": {"input": 0.03},
+                        }
+                    },
                 },
             }
         ),
@@ -292,6 +300,7 @@ async def test_canonical_refresh_prices_provider_files_without_credentials(
     models = json.loads(path.read_text(encoding="utf-8"))["models"]
     assert models["gpt-5.5"]["pricing"]["rates"] == {"input": 2, "output": 8, "cache_read": 0.2}
     assert "pricing" not in models["gpt-5.5-guess"]
+    assert models["text-embedding-3-small"]["pricing"]["rates"] == {"input": 0.03}
     canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
     assert canonical["models"]["openai/gpt-5.5"]["pricing"]["rates"]["input"] == 2
 

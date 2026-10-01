@@ -33,6 +33,7 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers._openrouter_catalog import (
+    _embedding_catalog_pricing,
     _image_catalog_model,
     _normalize_image_parameters,
     _normalize_video_options,
@@ -656,9 +657,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         # every model entry — providers omit it, not raise, when irrelevant.
         supported_voices = _read_optional_string_list(raw, "supported_voices")
         task_types = _openrouter_task_types(raw, input_modalities, output_modalities)
+        model_id = _read_string(raw, "id")
 
         return Model(
-            model_id=_read_string(raw, "id"),
+            model_id=model_id,
             name=_read_string(raw, "name"),
             capabilities=Capabilities(
                 vision="image" in input_modalities,
@@ -686,6 +688,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
             metadata=_openrouter_runtime_metadata(architecture, raw.get("reasoning")),
+            pricing=_embedding_catalog_pricing(model_id, raw, output_modalities),
         )
 
     def _build_payload(
