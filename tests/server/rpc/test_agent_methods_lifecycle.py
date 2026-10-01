@@ -317,6 +317,8 @@ async def test_agent_delete_takes_the_agent_out_of_every_delegation_list(
     # A delegation grant never blocks the delete, and the response shows it removed.
     [manager] = result["remaining_agents"]
     assert manager["tools"]["subagent"]["allowed_agents"] == ["coder@vbot"]
+    # The archived Sessions leave Recall.
+    assert state.runtime.recall.removed_agents == ["coder"]
 
 
 @pytest.mark.asyncio
@@ -327,6 +329,7 @@ async def test_agent_delete_refuses_the_last_agent(tmp_path: Path) -> None:
 
     assert error["code"] == "last_agent"
     assert list(_agent_names(state)) == ["coder"]
+    assert state.runtime.recall.removed_agents == []
 
 
 @pytest.mark.asyncio

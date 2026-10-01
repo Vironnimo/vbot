@@ -12,6 +12,7 @@ from typing import Any, cast
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
 from core.automation.cron import CronService
+from core.recall import IndexStatus
 from core.sessions import SessionAddress
 from server.app import create_app
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
@@ -99,6 +100,8 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         )
         # An Agent's Skill authoring Tool reports its package changes.
         skill_events = publishes(lambda: runtime.skill_changed_callbacks[0]())
+        index_status = IndexStatus(semantic_enabled=True, state="indexing", waiting=4)
+        index_events = publishes(lambda: runtime.recall.listeners[0](index_status))
 
     # Runs started outside RPC reach /ws too, and invalidate their exact Session.
     assert [event_type for event_type, _payload in run_events] == [
@@ -121,6 +124,8 @@ def test_core_change_callbacks_publish_server_events(tmp_path: Path) -> None:
         ("bash_process_status_changed", {"process_id": "process-one", "status": "completed"})
     ]
     assert skill_events == [("resource_changed", {"kind": "skills"})]
+    assert index_events == [("recall.index_status", index_status.to_dict())]
     # App shutdown releases the bridges.
     assert process_manager.terminal_callbacks == []
     assert runtime.skill_changed_callbacks == []
+    assert runtime.recall.listeners == []
