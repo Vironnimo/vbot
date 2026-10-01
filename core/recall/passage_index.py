@@ -28,7 +28,7 @@ import json
 import sqlite3
 from collections.abc import Mapping, Sequence
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -174,7 +174,10 @@ class VectorHeader:
     dimension: int
     space_fingerprint: str = ""
     index_policy: str = ""
-    response_model_id: str = ""
+    # The model the provider reported serving when the space was pinned. It is
+    # informational, not identity: a router such as OpenRouter may answer one
+    # configured model from several hosts that report different names.
+    response_model_id: str = field(default="", compare=False)
 
     @classmethod
     def for_space(cls, identity: EmbeddingSpaceIdentity) -> VectorHeader:
@@ -200,7 +203,7 @@ class VectorHeader:
         )
 
     def same_space(self, other: VectorHeader) -> bool:
-        """Same configured space and policy; dimension and response model aside."""
+        """Same configured space and policy; dimension aside."""
         return (
             self.provider_id == other.provider_id
             and self.model_id == other.model_id
@@ -215,8 +218,6 @@ def space_change_reason(stored: VectorHeader | None, header: VectorHeader) -> st
         return "first"
     if not stored.same_space(header):
         return "binding"
-    if stored.response_model_id != header.response_model_id:
-        return "response_model"
     return "dimension"
 
 

@@ -343,15 +343,40 @@ async def test_search_cancellation_reaches_the_embedding_call(
 # ---------------------------------------------------------------------------
 
 
+async def test_served_model_name_change_keeps_the_index(
+    tmp_path: Path, sessions: ChatSessionManager
+) -> None:
+    # A router such as OpenRouter answers one configured model from several
+    # hosts that report different model names; the vectors stay usable.
+    sessions.create("coder", session_id="one").append(
+        ChatMessage.user("banana fruit one", timestamp=timestamp(1))
+    )
+    embeddings = StubEmbeddings()
+    embeddings.response_model_id = "served/embed-a"
+    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    await embed_documents(recall.index, sessions, embeddings)
+    first = await recall.search_page(request("fruit", limit=1))
+    documents_before = len(embeddings.document_inputs)
+
+    embeddings.response_model_id = "served/embed-b"
+    page = await recall.search_page(
+        request("fruit", limit=1, offset=0, snapshot_id=first.snapshot_id)
+    )
+    await embed_documents(recall.index, sessions, embeddings)
+
+    assert [hit.session_id for hit in page.hits] == ["one"]
+    assert not page.degraded
+    assert len(embeddings.document_inputs) == documents_before
+
+
 @pytest.mark.parametrize(
     ("field", "value", "reason"),
     [
         ("model_id", "model-b", "binding"),
         ("space_fingerprint", "stub-space-b", "binding"),
         ("dimension", 6, "dimension"),
-        ("response_model_id", "served/embed-b", "response_model"),
     ],
-    ids=["model", "fingerprint", "dimension", "served-model"],
+    ids=["model", "fingerprint", "dimension"],
 )
 async def test_embedding_space_change_invalidates_continuations_and_requeues_everything(
     tmp_path: Path, sessions: ChatSessionManager, field: str, value: Any, reason: str

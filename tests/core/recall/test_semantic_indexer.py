@@ -463,7 +463,7 @@ async def test_rejected_credentials_stop_indexing_until_the_settings_change(
     assert retrying.next_attempt_at == _at(0)
 
 
-async def test_served_model_that_keeps_changing_stops_the_pass(
+async def test_embedding_space_that_keeps_changing_stops_the_pass(
     index: PassageIndex, sessions: ChatSessionManager
 ) -> None:
     for day in range(1, 7):
@@ -471,7 +471,7 @@ async def test_served_model_that_keeps_changing_stops_the_pass(
 
     class _Drifting(_Embeddings):
         async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
-            self.response_model_id = f"served/embed-{len(self.embed_calls)}"
+            self.dimension = 4 + len(self.embed_calls)
             return await super().embed(texts, purpose=purpose)
 
     embeddings = _Drifting()
