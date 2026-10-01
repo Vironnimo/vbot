@@ -175,7 +175,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
     }
 
     function setupState(state, restartAvailable = true, extra = {}) {
-      api.getLocalSpeechSetup.mockResolvedValue({
+      api.getLocalSetupStatus.mockResolvedValue({
         state,
         restart_available: restartAvailable,
         ...extra,
@@ -271,7 +271,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       button('Install').click();
       button('Install')?.click();
       await waitForCondition(() => button('Installing…'));
-      expect(api.installLocalSpeechSupport).toHaveBeenCalledTimes(1);
+      expect(api.installLocalSetup).toHaveBeenCalledTimes(1);
       expect(button('Installing…').disabled).toBe(true);
       expect(button('Restart server')).toBeUndefined();
 
@@ -282,7 +282,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       await waitForCondition(
         () => button('Restart server') && !button('Restart server').disabled,
       );
-      expect(api.installLocalSpeechSupport).toHaveBeenCalledTimes(1);
+      expect(api.installLocalSetup).toHaveBeenCalledTimes(1);
       button('Restart server').click();
       await waitForCondition(() => button('Restarting…'));
       expect(api.restartAfterLocalSpeechSetup).toHaveBeenCalledTimes(1);
@@ -298,7 +298,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       setupState('failed', false, { error: 'install_failed' });
       await mountLocalPanel();
       await waitForCondition(() => button('Try again'));
-      api.installLocalSpeechSupport.mockResolvedValue({
+      api.installLocalSetup.mockResolvedValue({
         state: 'restart_required',
         restart_available: false,
       });
@@ -307,7 +307,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       await waitForCondition(() => button('Restart server'));
       expect(button('Restart server').disabled).toBe(true);
       expect(api.restartAfterLocalSpeechSetup).not.toHaveBeenCalled();
-      expect(api.installLocalSpeechSupport).toHaveBeenCalledTimes(1);
+      expect(api.installLocalSetup).toHaveBeenCalledTimes(1);
     });
 
     it('checks status after a lost restart response without replaying the restart', async () => {

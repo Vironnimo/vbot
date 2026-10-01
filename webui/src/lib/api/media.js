@@ -216,20 +216,30 @@ export function unloadLocalSpeech(target, options = {}) {
   return rpc('speech.local_unload', { target }, options);
 }
 
-export function getLocalSpeechSetup(options = {}) {
-  return rpc(
-    'speech.local_setup_status',
-    options.target ? { target: options.target } : {},
-    options,
+/**
+ * Installation state of the engine behind one local target (`local/...`) of
+ * any task: `{ state, phase, error, progress?, restart_available }`.
+ */
+export function getLocalSetupStatus(target, options = {}) {
+  requireNonEmptyString(
+    target,
+    'Target must not be empty',
+    'task_model.local_setup_status',
   );
+  return rpc('task_model.local_setup_status', { target }, options);
 }
 
-export function installLocalSpeechSupport(options = {}) {
-  return rpc(
-    'speech.local_setup_install',
-    options.target ? { target: options.target } : {},
-    options,
+/**
+ * Start, or join, the installation of one local target's engine. Resolves at
+ * once with the same shape as `getLocalSetupStatus`; poll that for progress.
+ */
+export function installLocalSetup(target, options = {}) {
+  requireNonEmptyString(
+    target,
+    'Target must not be empty',
+    'task_model.local_setup_install',
   );
+  return rpc('task_model.local_setup_install', { target }, options);
 }
 
 export function restartAfterLocalSpeechSetup(options = {}) {

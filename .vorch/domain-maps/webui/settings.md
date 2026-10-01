@@ -139,7 +139,11 @@ Credential values go only to the dedicated operation and are never added to conn
 Server-projected inventory ids distinguish same-name packages; `editable_scope` alone enables human editing/deletion. The inspection request is versioned independently of inventory refresh, and stale responses cannot replace a newer selection. The view reloads on Skills, Agents and Projects refresh tokens; open drafts survive those refreshes. The add menu offers "Install from link or file...", "Create skill..." (defaulting to the selected Agent's private home, else global) and "Manage skill folders...", a page with Back whose folder editor stays mounted after first visit so its autosave participant survives collection changes. Creation separates name, description, and instructions and serializes quoted YAML metadata; original-text editing preserves the full authored document. Mounted regression coverage (drill-in and return, tooltip-only descriptions, own toggles, row context menus) lives in `components/skills/__tests__/skillsView.test.js`; the rules in `skillAccess.test.js`.
 
 Local STT/TTS setup and TTS previews are owned by `LocalSpeechSupport.svelte`,
-keyed by the selected target in the Voice speech Model editor. Setup polling survives
+keyed by the selected target in the Voice speech Model editor. Its setup runs on
+`settings/localSetupJob.svelte.js`, the installation job controller for one local target: `task_model.local_setup_status`/`local_setup_install`
+for one target, 1.5 s polling while installing or restarting, a request-id guard, and
+an optional restart callback (speech passes `speech.local_setup_restart`; a restart that
+does not reconnect within 90 s reports `restart_timeout`). Setup polling survives
 navigation through server-owned jobs; TTS installs only its selected engine and
 refreshes availability immediately. The preview waits for saved options, streams
 phases/elapsed time, offers cancellation and displays the server-owned artifact

@@ -11,8 +11,8 @@ vi.mock(
   async () => import('../../../node_modules/svelte/src/index-client.js'),
 );
 vi.mock('$lib/api.js', () => ({
-  getLocalSpeechSetup: (...args) => status(...args),
-  installLocalSpeechSupport: (...args) => install(...args),
+  getLocalSetupStatus: (...args) => status(...args),
+  installLocalSetup: (...args) => install(...args),
   restartAfterLocalSpeechSetup: vi.fn(),
   previewSpeech: (...args) => preview(...args),
 }));
@@ -124,12 +124,10 @@ it('installs only the selected engine and refreshes availability without restart
   const onReady = vi.fn();
   render('local/chatterbox', { onReady });
   await flush();
-  expect(status).toHaveBeenCalledWith({ target: 'local/chatterbox' });
+  expect(status).toHaveBeenCalledWith('local/chatterbox');
   button('settings.localSpeech.installButton').click();
   await flush();
-  expect(install).toHaveBeenCalledExactlyOnceWith({
-    target: 'local/chatterbox',
-  });
+  expect(install).toHaveBeenCalledExactlyOnceWith('local/chatterbox');
   expect(button('settings.localSpeech.installingButton').disabled).toBe(true);
   status.mockResolvedValue({ state: 'ready' });
   await vi.advanceTimersByTimeAsync(1500);

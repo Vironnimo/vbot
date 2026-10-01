@@ -498,6 +498,16 @@ describe('RPC wrappers', () => {
         ),
       { source: 'https://example.test/demo.skill', scope: 'global' },
     ],
+    [
+      'task_model.local_setup_status',
+      (o) => api.getLocalSetupStatus('local/granite-embedding-r2', o),
+      { target: 'local/granite-embedding-r2' },
+    ],
+    [
+      'task_model.local_setup_install',
+      (o) => api.installLocalSetup('local/granite-embedding-r2', o),
+      { target: 'local/granite-embedding-r2' },
+    ],
     ['speech.local_memory_status', (o) => api.getLocalSpeechMemory(o), {}],
     [
       'speech.local_unload',
