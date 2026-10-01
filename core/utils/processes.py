@@ -193,14 +193,29 @@ def subprocess_creation_flags(
     return flags
 
 
-def _service_cgroup() -> bool:
-    """Whether this process runs inside a systemd service, such as the server's unit."""
+def _read_cgroup() -> str:
     try:
         with open("/proc/self/cgroup", encoding="utf-8") as handle:
-            groups = handle.read().splitlines()
+            return handle.read()
     except OSError:
-        return False
-    return any(line.rsplit(":", 1)[-1].endswith(".service") for line in groups)
+        return ""
+
+
+def _service_cgroup() -> bool:
+    """Whether this process runs inside a service of the user's systemd manager.
+
+    The server's unit is such a service. A system service, such as cron or a CI
+    runner, is not: ``systemd-run --user`` cannot move a process out of it.
+    """
+    for line in _read_cgroup().splitlines():
+        *manager, unit = line.rsplit(":", 1)[-1].split("/")
+        if (
+            unit.endswith(".service")
+            and not unit.startswith("user@")
+            and any(part.startswith("user@") and part.endswith(".service") for part in manager)
+        ):
+            return True
+    return False
 
 
 def outside_service_unit(arguments: list[str], *, platform_name: str = os.name) -> list[str]:

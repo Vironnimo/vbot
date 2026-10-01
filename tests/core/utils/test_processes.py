@@ -134,3 +134,26 @@ def test_names_that_do_not_run_a_program(
     name: str, exe: str, cmdline: list[str], program: str
 ) -> None:
     assert not _names_program(name, exe, cmdline, program)
+
+
+@pytest.mark.parametrize(
+    ("cgroup", "scoped"),
+    [
+        ("0::/user.slice/user-1000.slice/user@1000.service/app.slice/vbot.service\n", True),
+        ("1:name=systemd:/user.slice/user-1000.slice/user@1000.service/vbot.service\n", True),
+        ("0::/user.slice/user-1000.slice/session-3.scope\n", False),
+        ("0::/user.slice/user-1000.slice/user@1000.service/init.scope\n", False),
+        ("0::/system.slice/cron.service\n", False),
+        ("", False),
+    ],
+    ids=["user-unit", "cgroup-v1", "login-shell", "user-manager", "system-service", "none"],
+)
+def test_only_a_user_service_starts_its_detached_processes_in_a_scope(
+    monkeypatch: pytest.MonkeyPatch, cgroup: str, scoped: bool
+) -> None:
+    from core.utils import processes
+
+    monkeypatch.setattr(processes, "_read_cgroup", lambda: cgroup)
+    arguments = processes.outside_service_unit(["worker"], platform_name="posix")
+    assert arguments[0] == ("systemd-run" if scoped else "worker")
+    assert arguments[-1] == "worker"
