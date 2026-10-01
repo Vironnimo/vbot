@@ -1102,12 +1102,14 @@ summary:not([class])::-webkit-details-marker {
 
 /* A labelled run of options (for example the sections of a sidebar shown as
    one Dropdown on narrow screens). */
-.dropdown-primitive__group + .dropdown-primitive__group {
+.dropdown-primitive__group + .dropdown-primitive__group,
+.searchable-dropdown__group + .searchable-dropdown__group {
   margin-top: 4px;
   border-top: 1px solid var(--border);
 }
 
-.dropdown-primitive__group-label {
+.dropdown-primitive__group-label,
+.searchable-dropdown__group-label {
   padding: 8px 12px 4px;
   color: var(--text-lo);
   font: 600 var(--fs-label-sm) / 1.4 var(--font-ui);

@@ -58,6 +58,8 @@
 
   let normalizedOptions = $derived(normalizeOptions(options));
   let filteredOptions = $derived(filterOptions(normalizedOptions, searchQuery));
+  // Consecutive options that name the same `group` render under its label.
+  let optionSections = $derived(groupOptions(filteredOptions));
   let selectedOption = $derived(
     normalizedOptions.find((option) => option.value === value) ?? null,
   );
@@ -111,10 +113,24 @@
         // Code-like values (Model ids) render in the mono face.
         code: option?.code === true,
         secondaryLabel,
+        group: option?.group ?? '',
         searchText: option?.searchText ?? `${label} ${secondaryLabel}`.trim(),
         ...optionDecorations(option),
       };
     });
+  }
+
+  function groupOptions(items) {
+    const sections = [];
+    items.forEach((option, index) => {
+      const last = sections.at(-1);
+      if (last && last.label === option.group) {
+        last.items.push({ option, index });
+      } else {
+        sections.push({ label: option.group, items: [{ option, index }] });
+      }
+    });
+    return sections;
   }
 
   function filterOptions(items, query) {
@@ -344,6 +360,42 @@
   });
 </script>
 
+{#snippet optionButton(option, optionIndex)}
+  <button
+    class="s-dropdown-opt searchable-dropdown__option"
+    class:selected={option.value === value}
+    type="button"
+    role="option"
+    id={`${listboxId}-option-${optionIndex}`}
+    tabindex="-1"
+    disabled={option.disabled}
+    aria-label={option.ariaLabel || undefined}
+    aria-selected={option.value === value}
+    use:tooltip={option.tooltip || clippedLabelHint(option, 'right')}
+    class:active={option.value === activeOptionValue}
+    onclick={() => selectOption(option)}
+  >
+    {#if option.statusDot}
+      <span
+        class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
+        aria-hidden="true"
+      ></span>
+    {/if}
+    <span
+      class="searchable-dropdown__option-label"
+      class:searchable-dropdown__label--code={option.code}>{option.label}</span
+    >
+    {#if option.secondaryLabel}
+      <span class="searchable-dropdown__option-meta">
+        {option.secondaryLabel}
+      </span>
+    {/if}
+    {#if option.badge}
+      <span class="count-badge">{option.badge}</span>
+    {/if}
+  </button>
+{/snippet}
+
 <svelte:document
   onmousedown={handleDocumentMouseDown}
   onkeydown={handleDocumentKeyDown}
@@ -438,41 +490,28 @@
         aria-label={ariaLabel || placeholder}
       >
         {#if filteredOptions.length > 0}
-          {#each filteredOptions as option (option.value)}
-            <button
-              class="s-dropdown-opt searchable-dropdown__option"
-              class:selected={option.value === value}
-              type="button"
-              role="option"
-              id={`${listboxId}-option-${filteredOptions.indexOf(option)}`}
-              tabindex="-1"
-              disabled={option.disabled}
-              aria-label={option.ariaLabel || undefined}
-              aria-selected={option.value === value}
-              use:tooltip={option.tooltip || clippedLabelHint(option, 'right')}
-              class:active={option.value === activeOptionValue}
-              onclick={() => selectOption(option)}
-            >
-              {#if option.statusDot}
-                <span
-                  class="dropdown-status-dot tab-indicator tab-indicator--{option.statusDot}"
-                  aria-hidden="true"
-                ></span>
-              {/if}
-              <span
-                class="searchable-dropdown__option-label"
-                class:searchable-dropdown__label--code={option.code}
-                >{option.label}</span
+          {#each optionSections as section, sectionIndex (sectionIndex)}
+            {#if section.label}
+              <div
+                class="searchable-dropdown__group"
+                role="group"
+                aria-labelledby={`${listboxId}-group-${sectionIndex}`}
               >
-              {#if option.secondaryLabel}
-                <span class="searchable-dropdown__option-meta">
-                  {option.secondaryLabel}
-                </span>
-              {/if}
-              {#if option.badge}
-                <span class="count-badge">{option.badge}</span>
-              {/if}
-            </button>
+                <div
+                  class="searchable-dropdown__group-label"
+                  id={`${listboxId}-group-${sectionIndex}`}
+                >
+                  {section.label}
+                </div>
+                {#each section.items as item (item.option.value)}
+                  {@render optionButton(item.option, item.index)}
+                {/each}
+              </div>
+            {:else}
+              {#each section.items as item (item.option.value)}
+                {@render optionButton(item.option, item.index)}
+              {/each}
+            {/if}
           {/each}
         {:else}
           <div class="s-dropdown-empty searchable-dropdown__empty">
