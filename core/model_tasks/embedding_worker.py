@@ -231,17 +231,26 @@ def install(spec: dict[str, Any]) -> int:
 def download(spec: dict[str, Any], item: dict[str, Any], target: Path, report: Any) -> None:
     hub = importlib.import_module("huggingface_hub")
     tqdm = importlib.import_module("huggingface_hub.utils.tqdm").tqdm
+    size = int(item["size"])
+    # Xet downloads count network bytes and written bytes on separate bars;
+    # the furthest of them is this file's progress.
+    furthest = 0
 
     class Progress(tqdm):  # type: ignore[valid-type,misc]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._bytes = kwargs.get("unit") == "B"
             kwargs["file"] = io.StringIO()
+            # The hub leaves `disable` to TTY detection, which turns off a bar
+            # writing to a string, and a bar that is off never counts.
+            kwargs["disable"] = False
             super().__init__(*args, **kwargs)
 
         def update(self, n: float | None = 1) -> bool | None:
+            nonlocal furthest
             result: bool | None = super().update(n)
             if self._bytes:
-                report(int(self.n))
+                furthest = min(size, max(furthest, int(self.n)))
+                report(furthest)
             return result
 
     try:

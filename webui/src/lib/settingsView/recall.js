@@ -5,6 +5,7 @@
 import { activeLocaleTag, t, tOr } from '../i18n.js';
 import { formatCost } from '../statisticsView.js';
 import { formatRelativeTime } from '../timeText.js';
+import { describeLocalModelDownload } from './localModels.js';
 import { textOrEmpty } from './values.js';
 
 const RECALL_BACKEND_KEYWORD = 'sqlite_fts';
@@ -138,7 +139,8 @@ function embeddingChoice(target) {
   } else if (multilingual === false) {
     facts.push(t('settings.recall.model.factEnglish'));
   }
-  if (local && price === null) {
+  // A Model on this computer reports no price or a zero price.
+  if (local && (price === null || price === 0)) {
     facts.push(t('settings.recall.model.factLocal'));
   } else if (price === null) {
     facts.push(t('settings.recall.model.factPriceUnknown'));
@@ -149,12 +151,18 @@ function embeddingChoice(target) {
       }),
     );
   }
+  const usable = target.usable !== false;
+  // A Model vBot runs itself is installed on request; `download` names what
+  // installing it fetches.
+  const installable = target.kind === 'local' && !usable;
   return {
     id: target.id,
     label: target.label,
     providerId: target.providerId ?? '',
     local,
-    usable: target.usable !== false,
+    usable,
+    installable,
+    download: installable ? describeLocalModelDownload(target.metadata) : '',
     facts,
     note: textOrEmpty(target.facts?.note),
   };
@@ -247,13 +255,36 @@ function coverageText(state, indexed, total, waiting) {
   });
 }
 
+// The time left while indexing, from the pass's measured rate: "about 12 min
+// left", "about 2.5 hr left"; nothing until the server has measured it.
+function etaText(state, etaSeconds) {
+  const seconds = finiteOrNull(etaSeconds);
+  if (state !== 'indexing' || seconds === null || seconds <= 0) {
+    return '';
+  }
+  if (seconds < 60) {
+    return t('settings.recall.status.etaSoon');
+  }
+  const minutes = Math.round(seconds / 60);
+  const [unit, value] =
+    minutes < 90 ? ['minute', minutes] : ['hour', seconds / 3600];
+  const duration = new Intl.NumberFormat(activeLocaleTag(), {
+    style: 'unit',
+    unit,
+    unitDisplay: 'short',
+    maximumFractionDigits: unit === 'hour' && value < 10 ? 1 : 0,
+  }).format(value);
+  return t('settings.recall.status.eta', { duration });
+}
+
 function waitingText(status, waiting) {
   if (waiting === 0) {
     return '';
   }
   const tokens = tokenText(countOf(status.estimate?.tokens));
   const cost = finiteOrNull(status.estimate?.cost);
-  return cost === null
+  // A free Model (one on this computer) has no cost to name.
+  return cost === null || cost === 0
     ? t('settings.recall.status.waiting', { tokens })
     : t('settings.recall.status.waitingCost', {
         tokens,
@@ -266,6 +297,9 @@ function spentText(spent) {
     return '';
   }
   const cost = finiteOrNull(spent.cost);
+  if (cost === 0) {
+    return '';
+  }
   return cost === null
     ? t('settings.recall.status.spentTokens', {
         tokens: tokenText(countOf(spent.input_tokens)),
@@ -294,7 +328,8 @@ function problemText(status, state, nowMs) {
 }
 
 // The status line of the semantic index, or null while semantic search is
-// off or has no embedding Model. `summary` describes coverage and costs;
+// off or has no embedding Model. `summary` describes coverage, the time left
+// while indexing, and costs;
 // `problem` is the translated failure with its next attempt while the index
 // is retrying or failed.
 export function describeRecallIndexStatus(status, nowMs = Date.now()) {
@@ -307,6 +342,7 @@ export function describeRecallIndexStatus(status, nowMs = Date.now()) {
   const skipped = countOf(status.skipped);
   const parts = [
     coverageText(state, indexed, indexed + waiting, waiting),
+    etaText(state, status.eta_seconds),
     waitingText(status, waiting),
     skipped > 0
       ? t('settings.recall.status.skipped', { count: countText(skipped) })

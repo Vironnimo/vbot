@@ -13,6 +13,7 @@ import pytest
 
 from core.chat import ChatMessage
 from core.model_tasks import (
+    EmbeddingConfigurationError,
     EmbeddingExecutionError,
     EmbeddingInputTooLongError,
     EmbeddingResult,
@@ -38,18 +39,41 @@ def _at(seconds: float) -> str:
     return format_canonical_timestamp(NOW + timedelta(seconds=seconds))
 
 
-class _Embeddings(StubEmbeddings):
-    """Stub embeddings that report usage, reject chosen calls and track overlap."""
+class _Monotonic:
+    """Monotonic time that only moves when a test advances it."""
 
-    def __init__(self, reject: Callable[[list[str]], BaseException | None] | None = None) -> None:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _Embeddings(StubEmbeddings):
+    """Stub embeddings that report usage, reject chosen calls and track overlap.
+
+    Each call lasts ``call_seconds`` on *monotonic* when one is given.
+    """
+
+    def __init__(
+        self,
+        reject: Callable[[list[str]], BaseException | None] | None = None,
+        *,
+        monotonic: _Monotonic | None = None,
+        call_seconds: float = 0.0,
+    ) -> None:
         super().__init__()
         self.reject = reject
+        self.monotonic = monotonic
+        self.call_seconds = call_seconds
         self.in_flight = 0
         self.max_in_flight = 0
 
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        if self.monotonic is not None:
+            self.monotonic.now += self.call_seconds
         try:
             await asyncio.sleep(0)
             failure = self.reject(texts) if self.reject is not None else None
@@ -108,6 +132,7 @@ def _indexer(
     configured: bool = True,
     **options: Any,
 ) -> SemanticIndexer:
+    options.setdefault("monotonic", lambda: 1000.0)
     indexer = SemanticIndexer(
         index=index,
         sessions=sessions,
@@ -115,7 +140,6 @@ def _indexer(
         binding_configured=lambda: configured,
         pricing=_pricing,
         clock=lambda: NOW,
-        monotonic=lambda: 1000.0,
         **options,
     )
     indexer.set_enabled(enabled)
@@ -149,9 +173,14 @@ async def test_pass_embeds_waiting_texts_newest_first_one_call_at_a_time(
 ) -> None:
     for day in (1, 2, 3):
         _conversation(sessions, f"day-{day}", f"banana fruit {day}", day)
-    embeddings = _Embeddings()
+    monotonic = _Monotonic()
+    embeddings = _Embeddings(monotonic=monotonic, call_seconds=5.0)
     embeddings.batch_size_hint = target_batch_size
-    indexer = _indexer(index, sessions, embeddings, batch_size=batch_size)
+    indexer = _indexer(index, sessions, embeddings, batch_size=batch_size, monotonic=monotonic)
+    published: list[tuple[str, float | None, int | None]] = []
+    indexer.add_listener(
+        lambda status: published.append((status.state, status.rate, status.eta_seconds))
+    )
 
     await indexer.run_pass()
     after = await indexer.status()
@@ -159,6 +188,14 @@ async def test_pass_embeds_waiting_texts_newest_first_one_call_at_a_time(
     assert embeddings.embed_calls == [["banana fruit 3", "banana fruit 2"], ["banana fruit 1"]]
     assert set(embeddings.embed_purposes) == {"document"}
     assert embeddings.max_in_flight == 1
+    # While indexing, the rate is the texts per second this pass measured and
+    # the time left is the waiting texts at that rate.
+    assert published == [
+        ("indexing", None, None),
+        ("indexing", 2 / 5, 3),
+        ("indexing", 3 / 10, 0),
+        ("idle", None, None),
+    ]
     assert after.spent_cost == pytest.approx(42 * PRICE_PER_MILLION / 1_000_000)
     assert dataclasses.replace(after, spent_cost=None) == IndexStatus(
         semantic_enabled=True,
@@ -206,21 +243,48 @@ async def test_status_estimates_waiting_texts_and_keeps_spent_usage_per_space(
     finally:
         reopened.close()
 
-    # Another embedding model starts a new space: every text waits again, spent restarts.
+    # Another embedding model starts a new space even when nothing waits: every
+    # text is embedded again and spent restarts.
+    await indexer.run_pass()
+    embedded = len(embeddings.embed_calls)
     embeddings.model_id = "other-embed"
     await indexer.run_pass()
     moved = await indexer.status()
 
+    header = await index.read_header()
+    assert header is not None and header.model_id == "other-embed"
+    assert sorted(text for call in embeddings.embed_calls[embedded:] for text in call) == [
+        "banana fruit 1",
+        "banana fruit 22",
+    ]
     assert (moved.model, moved.indexed, moved.waiting) == ("other-embed", 2, 0)
     assert moved.spent_input_tokens == 29
     assert moved.spent_cost is None
 
 
-async def test_local_embedding_space_costs_nothing(
-    index: PassageIndex, sessions: ChatSessionManager
+@pytest.mark.parametrize(
+    ("failure", "code"),
+    [
+        pytest.param(
+            lambda: EmbeddingConfigurationError("model not installed"),
+            "local_model_missing",
+            id="model-missing",
+        ),
+        pytest.param(
+            lambda: EmbeddingExecutionError("engine crashed"),
+            "local_engine_failed",
+            id="engine-failed",
+        ),
+    ],
+)
+async def test_local_embedding_space_costs_nothing_and_names_local_failures(
+    index: PassageIndex,
+    sessions: ChatSessionManager,
+    failure: Callable[[], BaseException],
+    code: str,
 ) -> None:
     _conversation(sessions, "one", "banana fruit 1", 1)
-    embeddings = _Embeddings(reject=lambda _texts: _provider_failure(503, retryable=True))
+    embeddings = _Embeddings(reject=lambda _texts: failure())
     embeddings.provider_id, embeddings.model_id, embeddings.local = "local", "granite", True
     indexer = _indexer(index, sessions, embeddings)
     await indexer.run_pass()
@@ -229,6 +293,8 @@ async def test_local_embedding_space_costs_nothing(
 
     # No Model DB price exists for a local Model; it is free, not unknown.
     assert (status.provider, status.waiting, status.estimate_cost) == ("local", 1, 0.0)
+    assert status.state == "error"
+    assert status.last_error is not None and status.last_error.code == code
 
 
 async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
@@ -267,14 +333,15 @@ async def test_pass_indexes_recall_visible_sessions_and_evicts_scopes_that_left(
 
 
 @pytest.mark.parametrize(
-    "rejection",
+    ("rejection", "local"),
     [
-        pytest.param(_overflow, id="provider-context-overflow"),
+        pytest.param(_overflow, False, id="provider-context-overflow"),
         pytest.param(
             lambda: EmbeddingInputTooLongError(
                 "Text 0 has 3000 tokens; the local embedding model accepts at most 2048 tokens "
                 "per text."
             ),
+            True,
             id="local-input-too-long",
         ),
     ],
@@ -283,12 +350,14 @@ async def test_rejected_text_is_isolated_by_bisection_and_skipped_until_rebuild(
     index: PassageIndex,
     sessions: ChatSessionManager,
     rejection: Callable[[], EmbeddingExecutionError],
+    local: bool,
 ) -> None:
     for day, text in enumerate(("fruit a", "poison text", "fruit c", "fruit d"), start=1):
         _conversation(sessions, f"day-{day}", text, day)
     embeddings = _Embeddings(
         reject=lambda texts: rejection() if any("poison" in text for text in texts) else None
     )
+    embeddings.local = local
     indexer = _indexer(index, sessions, embeddings, batch_size=4)
 
     await indexer.run_pass()
@@ -394,7 +463,7 @@ async def test_rejected_credentials_stop_indexing_until_the_settings_change(
     assert retrying.next_attempt_at == _at(0)
 
 
-async def test_served_model_that_keeps_changing_stops_the_pass(
+async def test_embedding_space_that_keeps_changing_stops_the_pass(
     index: PassageIndex, sessions: ChatSessionManager
 ) -> None:
     for day in range(1, 7):
@@ -402,7 +471,7 @@ async def test_served_model_that_keeps_changing_stops_the_pass(
 
     class _Drifting(_Embeddings):
         async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
-            self.response_model_id = f"served/embed-{len(self.embed_calls)}"
+            self.dimension = 4 + len(self.embed_calls)
             return await super().embed(texts, purpose=purpose)
 
     embeddings = _Drifting()

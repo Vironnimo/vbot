@@ -71,6 +71,13 @@ describe('task model bindings', () => {
             provider_id: 'openai',
             facts: { local: false, recommended_rank: 3 },
           },
+          {
+            id: 'local/granite-embedding-r2',
+            label: 'Granite',
+            kind: 'local',
+            usable: false,
+            metadata: { license: 'Apache-2.0', download_bytes: 346806730 },
+          },
           { label: 'No id' },
         ],
       }),
@@ -82,6 +89,7 @@ describe('task model bindings', () => {
         kind: 'provider',
         providerId: '',
         facts: {},
+        metadata: {},
       },
       {
         id: 'openai/text-embedding-3-small',
@@ -90,6 +98,16 @@ describe('task model bindings', () => {
         kind: 'provider',
         providerId: 'openai',
         facts: { local: false, recommended_rank: 3 },
+        metadata: {},
+      },
+      {
+        id: 'local/granite-embedding-r2',
+        label: 'Granite',
+        usable: false,
+        kind: 'local',
+        providerId: '',
+        facts: {},
+        metadata: { license: 'Apache-2.0', download_bytes: 346806730 },
       },
     ]);
 

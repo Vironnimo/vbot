@@ -1,16 +1,12 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { createLocalSetupJob } from './localSetupJob.svelte.js';
   import Banner from '../ui/Banner.svelte';
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import TextArea from '../ui/TextArea.svelte';
-  import {
-    getLocalSpeechSetup,
-    installLocalSpeechSupport,
-    restartAfterLocalSpeechSetup,
-    previewSpeech,
-  } from '$lib/api.js';
+  import { restartAfterLocalSpeechSetup, previewSpeech } from '$lib/api.js';
   import { t, tOr } from '$lib/i18n.js';
 
   const componentId = $props.id();
@@ -27,7 +23,15 @@
   let previewAudio = $state(null);
   let previewProgress = $state({ phase: 'preparing', elapsed_seconds: 0 });
   let previewController = null;
-  let setupState = $derived(localSetup?.state ?? 'checking');
+  const job = createLocalSetupJob({
+    getTarget: () => target,
+    onReady: () => onReady(),
+    restart: (setupTarget) =>
+      restartAfterLocalSpeechSetup({ target: setupTarget }),
+  });
+  let localSetup = $derived(job.status);
+  let localSetupError = $derived(job.error);
+  let setupState = $derived(job.state);
 
   async function playPreview() {
     if (previewBusy || taskSurfaceBusy || !previewText.trim()) return;
@@ -52,102 +56,13 @@
       if (!destroyed) previewBusy = false;
     }
   }
-  let localSetup = $state(null);
-  let localSetupError = $state('');
-  let localSetupAction = $state(false);
-  let restartStartedAt = 0;
-  let setupTimer = null;
-  let setupRequestId = 0;
-  onMount(() => {
-    void refreshLocalSetup();
-  });
   onDestroy(() => {
     destroyed = true;
-    clearTimeout(setupTimer);
-    setupRequestId += 1;
     previewController?.abort();
   });
 
-  function scheduleSetupRefresh() {
-    clearTimeout(setupTimer);
-    if (!destroyed) {
-      setupTimer = setTimeout(() => void refreshLocalSetup(), 1500);
-    }
-  }
-
-  async function refreshLocalSetup() {
-    const requestId = ++setupRequestId;
-    try {
-      const next = await getLocalSpeechSetup({ target });
-      if (destroyed || requestId !== setupRequestId) return;
-      localSetupError = '';
-      if (restartStartedAt && next.state !== 'ready') {
-        localSetup = { ...next, state: 'restarting' };
-      } else {
-        localSetup = next;
-      }
-      if (next.state === 'ready') {
-        restartStartedAt = 0;
-        await onReady();
-      }
-    } catch {
-      if (destroyed || requestId !== setupRequestId) return;
-      if (!restartStartedAt) localSetupError = 'connection';
-    }
-    if (restartStartedAt && Date.now() - restartStartedAt > 90_000) {
-      localSetupError = 'restart_timeout';
-      return;
-    }
-    if (restartStartedAt || localSetup?.state === 'installing')
-      scheduleSetupRefresh();
-  }
-
-  async function installLocalSpeech() {
-    if (localSetupAction || localSetup?.state === 'installing') return;
-    localSetupAction = true;
-    localSetupError = '';
-    clearTimeout(setupTimer);
-    setupRequestId += 1;
-    try {
-      const next = await installLocalSpeechSupport({ target });
-      if (destroyed) return;
-      localSetup = next;
-      scheduleSetupRefresh();
-    } catch {
-      if (!destroyed) {
-        localSetupError = 'connection';
-        scheduleSetupRefresh();
-      }
-    } finally {
-      if (!destroyed) localSetupAction = false;
-    }
-  }
-
-  async function restartLocalSpeechServer() {
-    if (localSetupAction || taskSurfaceBusy) return;
-    localSetupAction = true;
-    localSetupError = '';
-    setupRequestId += 1;
-    restartStartedAt = Date.now();
-    try {
-      const result = await restartAfterLocalSpeechSetup({ target });
-      if (destroyed) return;
-      if (result.state !== 'restarting') {
-        restartStartedAt = 0;
-        localSetupError = result.error || 'restart_unavailable';
-      } else {
-        localSetup = { ...localSetup, state: 'restarting' };
-      }
-    } catch {
-      // The response may have been interrupted by the requested restart.
-      // Inspect status, never automatically repeat the restart mutation.
-      if (!destroyed) localSetup = { ...localSetup, state: 'restarting' };
-    } finally {
-      if (!destroyed) {
-        localSetupAction = false;
-        scheduleSetupRefresh();
-      }
-    }
+  function restartLocalSpeechServer() {
+    if (!taskSurfaceBusy) void job.restartServer();
   }
 </script>
 
@@ -183,15 +98,10 @@
     {/if}
   </div>
   {#if localSetupError === 'connection' || localSetupError === 'restart_timeout'}
-    <Button onClick={refreshLocalSetup}
-      >{t('settings.localSpeech.checkAgain')}</Button
+    <Button onClick={job.refresh}>{t('settings.localSpeech.checkAgain')}</Button
     >
   {:else if setupState === 'missing' || setupState === 'failed'}
-    <Button
-      variant="primary"
-      loading={localSetupAction}
-      onClick={installLocalSpeech}
-    >
+    <Button variant="primary" loading={job.acting} onClick={job.install}>
       {setupState === 'failed'
         ? t('settings.localSpeech.retry')
         : t('settings.localSpeech.installButton')}
@@ -199,7 +109,7 @@
   {:else if setupState === 'restart_required'}
     <Button
       variant="primary"
-      loading={localSetupAction}
+      loading={job.acting}
       disabled={taskSurfaceBusy || !localSetup.restart_available}
       onClick={restartLocalSpeechServer}
     >

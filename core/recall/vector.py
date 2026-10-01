@@ -327,7 +327,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
     def _vector_snapshot(scope: RecallScope, header: VectorHeader) -> str:
         payload = (
             f"{scope.snapshot_id}\0{header.provider_id}\0{header.model_id}\0"
-            f"{header.response_model_id}\0{header.space_fingerprint}\0{header.index_policy}"
+            f"{header.space_fingerprint}\0{header.index_policy}"
             f"\0{header.dimension}"
         ).encode()
         return hashlib.sha256(payload).hexdigest()

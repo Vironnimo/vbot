@@ -15,7 +15,10 @@ import {
 
 const NOW_MS = Date.parse('2026-10-01T12:00:00Z');
 
-function target(id, { kind = 'provider', usable = true, facts = {} } = {}) {
+function target(
+  id,
+  { kind = 'provider', usable = true, facts = {}, metadata = {} } = {},
+) {
   return {
     id,
     label: id,
@@ -23,6 +26,7 @@ function target(id, { kind = 'provider', usable = true, facts = {} } = {}) {
     usable,
     providerId: kind === 'local' ? '' : id.split('/')[0],
     facts,
+    metadata,
   };
 }
 
@@ -115,7 +119,13 @@ describe('embedding model choices', () => {
       target('local/harrier-0.6b', {
         kind: 'local',
         usable: false,
-        facts: { local: true, multilingual: true, recommended_rank: 2 },
+        facts: {
+          local: true,
+          multilingual: true,
+          recommended_rank: 2,
+          input_price_per_million: 0,
+        },
+        metadata: { license: 'MIT', download_bytes: 715_629_047 },
       }),
       target('ollama/nomic-embed-text', {
         facts: {
@@ -147,12 +157,18 @@ describe('embedding model choices', () => {
         providerId: '',
         local: true,
         usable: false,
+        // vBot installs it on request.
+        installable: true,
+        download: '716 MB download · MIT license',
         facts: ['Multilingual', 'Free, runs locally'],
         note: '',
       },
-      // Unranked, but selected: it stays visible.
+      // Unranked, but selected: it stays visible. A local runtime's Model is
+      // never installed by vBot.
       expect.objectContaining({
         id: 'ollama/nomic-embed-text',
+        installable: false,
+        download: '',
         facts: ['English only', 'Free, runs locally'],
       }),
     ]);
@@ -212,6 +228,68 @@ describe('recall index status line', () => {
         state: 'indexing',
         summary:
           'Indexing: 812 of 995 passages · about 400K tokens waiting (~$0.004)',
+        problem: '',
+      },
+    ],
+    [
+      'the time left while indexing',
+      status({
+        state: 'indexing',
+        indexed: 300,
+        waiting: 700,
+        estimate: { tokens: 70_000 },
+        eta_seconds: 754,
+      }),
+      {
+        state: 'indexing',
+        summary:
+          'Indexing: 300 of 1,000 passages · about 13 min left · about 70K tokens waiting',
+        problem: '',
+      },
+    ],
+    [
+      'hours left while indexing',
+      status({ state: 'indexing', waiting: 9000, eta_seconds: 9000 }),
+      expect.objectContaining({
+        summary: expect.stringContaining('about 2.5 hr left'),
+      }),
+    ],
+    [
+      'less than a minute left while indexing',
+      status({ state: 'indexing', indexed: 990, waiting: 10, eta_seconds: 12 }),
+      expect.objectContaining({
+        summary: expect.stringContaining(' · less than a minute left · '),
+      }),
+    ],
+    [
+      'a local Model that is not installed',
+      status({
+        state: 'error',
+        waiting: 2,
+        estimate: { tokens: 10 },
+        last_error: { code: 'local_model_missing', message: 'English' },
+      }),
+      {
+        state: 'error',
+        summary: 'Indexed 0 of 2 passages · about 10 tokens waiting',
+        problem:
+          'The local embedding model is not installed yet. Install it under On this computer, or choose another model.',
+      },
+    ],
+    [
+      'a free local Model: no cost while waiting or spent',
+      status({
+        state: 'indexing',
+        indexed: 56,
+        waiting: 938,
+        estimate: { tokens: 264_300, cost: 0 },
+        spent: { requests: 7, input_tokens: 18_000, cost: 0 },
+        eta_seconds: 170,
+      }),
+      {
+        state: 'indexing',
+        summary:
+          'Indexing: 56 of 994 passages · about 3 min left · about 264.3K tokens waiting',
         problem: '',
       },
     ],

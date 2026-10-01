@@ -59,6 +59,11 @@ export {
   describeRecallIndexStatus,
 } from './settingsView/recall.js';
 export {
+  formatDownloadSize,
+  describeLocalModelDownload,
+  describeLocalModelSetup,
+} from './settingsView/localModels.js';
+export {
   getWebSearchSettings,
   getWebServiceKeys,
   webServiceKeyHint,

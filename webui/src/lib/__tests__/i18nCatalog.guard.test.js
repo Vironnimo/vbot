@@ -99,6 +99,8 @@ const COMPOSED_KEYS = {
   'logs.level.*': 'tOr', // log record level
   'projects.report.group.*': 'tOr', // Project scan finding type
   'settings.language.*': 'tOr', // server language id
+  'settings.localModel.error.*': 'tOr', // local setup error code
+  'settings.localModel.phase.*': 'tOr', // local setup phase
   'settings.localSpeech.choices.*': 'tOr', // Local Speech option value
   'settings.localSpeech.error.*': 'tOr', // Local Speech setup error
   'settings.localSpeech.options.*.help': 'tOr', // Local Speech option name

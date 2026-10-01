@@ -137,7 +137,8 @@ export function normalizeTaskModelSettings(settings) {
 
 // `facts` are the task type's selection facts for one target (for
 // `text_embedding`: local, multilingual, recommended_rank, note,
-// input_price_per_million); other task types carry none.
+// input_price_per_million); other task types carry none. `metadata` describes
+// the target itself (a local target: license, download_bytes, ...).
 export function normalizeTargets(result) {
   return result.targets
     .map((target) => ({
@@ -146,12 +147,16 @@ export function normalizeTargets(result) {
       usable: target?.usable !== false,
       kind: textOrFallback(target?.kind, 'provider'),
       providerId: textOrEmpty(target?.provider_id),
-      facts:
-        target?.facts && typeof target.facts === 'object'
-          ? { ...target.facts }
-          : {},
+      facts: plainCopy(target?.facts),
+      metadata: plainCopy(target?.metadata),
     }))
     .filter((target) => target.id.length > 0);
+}
+
+function plainCopy(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? { ...value }
+    : {};
 }
 
 export function normalizeOptionSchema(result) {

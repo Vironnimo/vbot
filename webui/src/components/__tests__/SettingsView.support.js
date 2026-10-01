@@ -26,6 +26,10 @@ vi.mock('$lib/api.js', () =>
       rpcMock('task_model.list_targets', { task_type: taskType }),
     updateTaskModelSettings: (modelTasks) =>
       rpcMock('task_model.update', { model_tasks: modelTasks }),
+    getLocalSetupStatus: (target) =>
+      rpcMock('task_model.local_setup_status', { target }),
+    installLocalSetup: (target) =>
+      rpcMock('task_model.local_setup_install', { target }),
   }),
 );
 
@@ -379,6 +383,21 @@ export function createSettingsRpcMock(options = {}) {
       deepClone(schema),
     ]),
   );
+  // Installation status per local target; a test may pass its own Map to
+  // change a status later. A target whose installation is ready is usable.
+  const localSetups =
+    options.localSetups instanceof Map
+      ? options.localSetups
+      : new Map(Object.entries(options.localSetups ?? {}));
+  const localSetupStatus = (target) =>
+    deepClone(
+      localSetups.get(target) ?? {
+        state: 'missing',
+        phase: 'checking',
+        error: 'environment_missing',
+        restart_available: true,
+      },
+    );
 
   // The Recall index status follows the stored backend and embedding
   // binding unless the test fixes one.
@@ -634,8 +653,28 @@ export function createSettingsRpcMock(options = {}) {
               ? target.task_types.includes(params.task_type)
               : target.task_type === params.task_type,
           )
-          .map((target) => ({ ...target })),
+          .map((target) => ({
+            ...target,
+            usable:
+              target.usable !== false ||
+              localSetups.get(target.id)?.state === 'ready',
+          })),
       };
+    }
+
+    if (method === 'task_model.local_setup_status') {
+      return localSetupStatus(params.target);
+    }
+
+    if (method === 'task_model.local_setup_install') {
+      localSetups.set(params.target, {
+        state: 'installing',
+        phase: 'checking',
+        error: '',
+        restart_available: true,
+        ...options.localSetupInstall,
+      });
+      return localSetupStatus(params.target);
     }
 
     if (method === 'task_model.options') {

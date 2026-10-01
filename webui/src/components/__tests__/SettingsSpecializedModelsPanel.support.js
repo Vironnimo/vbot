@@ -12,10 +12,10 @@ export const api = {
   listTaskModelTargets: vi.fn(),
   getTaskModelOptions: vi.fn(),
   updateTaskModelSettings: vi.fn(),
-  getLocalSpeechSetup: vi.fn(),
+  getLocalSetupStatus: vi.fn(),
   getLocalSpeechMemory: vi.fn(),
   unloadLocalSpeech: vi.fn(),
-  installLocalSpeechSupport: vi.fn(),
+  installLocalSetup: vi.fn(),
   restartAfterLocalSpeechSetup: vi.fn(),
 };
 
@@ -55,10 +55,10 @@ export function resetSpecializedModelsHarness() {
     ],
     released: true,
   });
-  api.getLocalSpeechSetup
+  api.getLocalSetupStatus
     .mockReset()
     .mockResolvedValue({ state: 'ready', restart_available: true });
-  api.installLocalSpeechSupport.mockReset().mockResolvedValue({
+  api.installLocalSetup.mockReset().mockResolvedValue({
     state: 'installing',
     phase: 'downloading',
     restart_available: true,
