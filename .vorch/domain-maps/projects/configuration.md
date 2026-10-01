@@ -18,9 +18,7 @@ Read this reference when changing the persisted Project shape, Project Anchor li
 The default Tool ceiling uses `apply_patch` instead of the archived `edit`, and
 `search_files` as its search capability. The application never rewrites explicit
 persisted ceilings; an unavailable retired entry remains removable and grants
-nothing. The Generation 1 converter replaces retired Tool names in ceilings and
-override policies with their successors without widening access
-(`database/generation-1-conversion.md` -> Retired Tool names).
+nothing.
 
 Project defaults are fallback inputs shared by its Agents. Overrides target one current Team member and take precedence during resolution; they are not edits to the repository Agent file.
 

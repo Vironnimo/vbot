@@ -260,10 +260,7 @@ def _remove_directory_tree(tree_path: Path) -> str | None:
         if attempt:
             time.sleep(0.5)
         try:
-            if sys.version_info >= (3, 12):
-                shutil.rmtree(tree_path, onexc=_clear_readonly_and_retry)
-            else:
-                shutil.rmtree(tree_path, onerror=_clear_readonly_and_retry)
+            shutil.rmtree(tree_path, onexc=_clear_readonly_and_retry)
             return None
         except OSError as exc:
             last_error = str(exc)

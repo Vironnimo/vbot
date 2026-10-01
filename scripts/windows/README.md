@@ -2,7 +2,7 @@
 
 `scripts/build_windows.py` builds three x86-64 application shapes: `server`,
 `server-desktop`, and `desktop-client`. The application uses readable Python
-sources and a private CPython 3.13 runtime. Native hosts load CPython in-process;
+sources and a private CPython 3.14 runtime. Native hosts load CPython in-process;
 the stable root `vBot.exe` starts the tray with no arguments and the CLI with
 arguments. Its stable `vBot.GUI.exe` companion uses the Windows GUI subsystem;
 the Desktop shortcut invokes it with `desktop` and follows `active-version`.
@@ -12,22 +12,21 @@ No Windows service is installed.
 
 ## Build inputs and outputs
 
-Use a clean source checkout, a full CPython 3.13 x86-64 runtime with `venv` and
+Use a clean source checkout, a full CPython 3.14 x86-64 runtime with `venv` and
 `ensurepip`, LLVM's `clang-cl` and `llvm-rc` with the Windows SDK/linker libraries,
 Node.js/npm for server WebUI assets, and Inno Setup 6 for the installer. The
 [Windows package workflow](../../.github/workflows/windows-package.yml) records
 the CI build sequence for all shapes. Runtime requirements are pinned and hashed
 per shape; see [requirements.md](requirements.md) for regeneration. All shapes
-use Python 3.13 because the existing
-[webrtcvad-wheels audio dependency](https://pypi.org/project/webrtcvad-wheels/2.0.14/#files)
-has Windows wheels through Python 3.13. The builder rejects a runtime from another
-Python minor version.
+bundle vBot's one supported Python version (`scripts/package_build.PYTHON_VERSION`,
+see `.vorch/PROJECT.md` -> Development -> Python version); the builder rejects a
+runtime from another Python minor version.
 
 For example, from the repository root after building the WebUI:
 
 ```powershell
 $revision = git rev-parse HEAD
-python scripts/build_windows.py --source . --runtime C:\Python313 --output build/windows --shape server --version 0.1.0 --revision $revision
+python scripts/build_windows.py --source . --runtime C:\Python314 --output build/windows --shape server --version 0.1.0 --revision $revision
 ```
 
 The runtime argument is an input directory: the builder copies it and provisions

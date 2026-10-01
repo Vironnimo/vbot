@@ -18,7 +18,7 @@ from desktop.wakeword.capture import AudioBlock, CaptureGap
 from desktop.wakeword.engine import WakewordMatch
 
 SPEECH_AMPLITUDE = 3000
-"""Samples at or above this level count as speech for :class:`AmplitudeVad`."""
+"""Audio peaking at half this level or above is speech for :class:`AmplitudeDetector`."""
 
 
 def wait_until(condition: Callable[[], bool], timeout: float = 5.0, message: str = "") -> None:
@@ -31,7 +31,7 @@ def wait_until(condition: Callable[[], bool], timeout: float = 5.0, message: str
 
 
 def tone(seconds: float, rate: int, *, amplitude: int = SPEECH_AMPLITUDE) -> np.ndarray:
-    """A 440 Hz int16 tone the amplitude VAD judges as speech."""
+    """A 440 Hz int16 tone the amplitude detector judges as speech."""
     samples = np.arange(round(seconds * rate))
     return (amplitude * np.sin(2 * np.pi * 440 * samples / rate)).astype(np.int16)
 
@@ -314,14 +314,21 @@ class FakeEchoStage:
 # -- Speech decisions ------------------------------------------------------------------
 
 
-class AmplitudeVad:
-    """WebRTC VAD double: a 10 ms slice is speech when it is loud."""
+class AmplitudeDetector:
+    """Neural speech detector double: loud audio is speech; counts resets."""
 
-    def is_speech(self, frame: bytes, sample_rate: int) -> bool:
-        samples = np.frombuffer(frame, dtype=np.int16)
-        return bool(samples.size) and int(np.abs(samples.astype(np.int32)).max()) >= (
-            SPEECH_AMPLITUDE // 2
-        )
+    def __init__(self) -> None:
+        self.resets = 0
+
+    def reset(self) -> None:
+        self.resets += 1
+
+    def is_speech(self, pcm16: bytes) -> bool:
+        samples = np.frombuffer(pcm16, dtype=np.int16).astype(np.int32)
+        return bool(samples.size) and int(np.abs(samples).max()) >= SPEECH_AMPLITUDE // 2
+
+    def speech_probability(self, detection_pcm16: bytes) -> float:
+        return 1.0 if self.is_speech(detection_pcm16) else 0.0
 
 
 # -- Wakeword engine -------------------------------------------------------------------

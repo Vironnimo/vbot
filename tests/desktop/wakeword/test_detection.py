@@ -18,7 +18,7 @@ from desktop.wakeword.config import DEFAULT_MODEL_IDS, PhraseConfig
 from desktop.wakeword.detection import PRE_ROLL_SECONDS, Detection, DetectionLoop
 from desktop.wakeword.engine import MultiWakewordEngine, WakewordModelCatalog
 from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeVad,
+    AmplitudeDetector,
     FakeSubscription,
     ScriptedEngine,
     silence,
@@ -86,6 +86,7 @@ def start_loop() -> Iterator[Callable[..., Loop]]:
     ) -> Loop:
         subscription = FakeSubscription()
         stop = threading.Event()
+        speech_detector: Any = detector or AmplitudeDetector()
         state = Loop(
             loop=cast(DetectionLoop, None),
             subscription=subscription,
@@ -100,8 +101,7 @@ def start_loop() -> Iterator[Callable[..., Loop]]:
             on_started=state.started.set,
             on_failed=state.failures.append,
             calibrating=lambda: state.calibrating[0],
-            speech_detector_factory=lambda: detector,
-            fallback_vad_factory=AmplitudeVad,
+            speech_detector_factory=lambda: speech_detector,
         )
         loops.append(state)
         state.loop.start()

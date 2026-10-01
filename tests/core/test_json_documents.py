@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from core.config_validation import JsonDiagnostic, add_error
-from core.database import GENERATION_1_CONVERTER_COMMAND
+from core.database import older_format_hint
 from core.json_documents import (
     DOCUMENTS_OUTSIDE_SNAPSHOTS,
     DURABLE_DOCUMENTS,
@@ -166,7 +166,7 @@ def test_json_object_rejects_nested_shapes_for_undeclared_fields() -> None:
 @pytest.mark.parametrize(
     ("data", "supported", "fragments"),
     [
-        ({}, 1, ("is required", f"`{GENERATION_1_CONVERTER_COMMAND} <data-dir>`")),
+        ({}, 1, ("is required", older_format_hint())),
         ({"format_version": True}, 1, ("must be a positive integer",)),
         ({"format_version": "1"}, 1, ("must be a positive integer",)),
         ({"format_version": 0}, 1, ("must be a positive integer",)),

@@ -29,6 +29,11 @@ from core.utils.processes import subprocess_creation_flags
 
 BuildError = PayloadError
 
+#: The one CPython minor version vBot supports. Every package bundles it, the
+#: runtime dependency locks resolve for it, and ``pyproject.toml``, the CI
+#: workflows and ``scripts/linux/python.lock.json`` name it as well
+#: (``tests/scripts/test_package_build.py``).
+PYTHON_VERSION = "3.14"
 CHANNELS = ("release", "main")
 INVENTORY_NAME = "vbot-runtime-inventory.json"
 RELEASE_IDENTITY_NAME = "vbot-release.json"

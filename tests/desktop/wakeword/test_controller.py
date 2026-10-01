@@ -2,7 +2,7 @@
 
 The listener runs on its real threads over doubles for the microphone
 (:class:`FakeSoundDevice`), the wakeword engine (:class:`ScriptedEngine`, fired
-by the test), the speech decision (:class:`AmplitudeVad`) and the vBot server
+by the test), the speech decision (:class:`AmplitudeDetector`) and the vBot server
 (:class:`FakeVoiceServer`). The fake microphone delivers silence at about four
 times real time unless a test feeds audio.
 """
@@ -27,7 +27,7 @@ from desktop import settings as desktop_settings
 from desktop.wakeword.config import PhraseConfig, VoiceConfigError
 from desktop.wakeword.controller import VoiceControlError, VoiceController, VoiceRuntime
 from tests.desktop.wakeword.voice_test_support import (
-    AmplitudeVad,
+    AmplitudeDetector,
     FakeEchoStage,
     FakeSoundDevice,
     FakeVoiceServer,
@@ -234,8 +234,7 @@ def voice_rig(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> Iterator[Call
         runtime = VoiceRuntime(
             audio_backend=sd,
             engine_factory=engine_factory,
-            speech_detector_factory=lambda: None,
-            fallback_vad_factory=AmplitudeVad,
+            speech_detector_factory=AmplitudeDetector,
             transport=server.transport(),
             echo_stage_factory=echo_factory or (lambda: None),
             reconnect_interval=0.05,

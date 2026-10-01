@@ -10,7 +10,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from core.database import Database, DatabaseError, open_database, open_offline_database
+from core.database import Database, DatabaseError, open_database
 from core.sessions import (
     _store_continuation,
     _store_fts,
@@ -83,10 +83,9 @@ class SessionStore:
     one complete domain step.
     """
 
-    def __init__(self, path: Path, *, _offline: bool = False) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        spec = session_database_spec(self.path)
-        self._database = open_offline_database(spec) if _offline else open_database(spec)
+        self._database = open_database(session_database_spec(self.path))
 
     @property
     def database(self) -> Database:

@@ -6,7 +6,7 @@ Agent's private Skills as shared with specific other Identity Agents. A missing
 file means an empty policy. A malformed file yields diagnostics plus an empty
 effective policy instead of breaking startup; the manager surfaces the
 diagnostics, and mutations refuse to overwrite it. Another ``format_version`` is
-invalid; data from before persistence Generation 1 is converted, not migrated.
+invalid; data from before persistence Generation 1 is refused, not migrated.
 
 Entries this vBot cannot use (a Skill name that is not trigger-safe, a receiver
 that is not an Identity Agent id) are warnings: the effective policy leaves them

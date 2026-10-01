@@ -109,7 +109,7 @@ def _runtime(tmp_path: Path) -> Path:
     (runtime / "Lib" / "ensurepip").mkdir()
     (runtime / "Lib" / "ensurepip" / "__init__.py").write_text("", encoding="utf-8")
     (runtime / "python.exe").write_bytes(b"python")
-    (runtime / "python313.dll").write_bytes(b"dll")
+    (runtime / build_windows.RUNTIME_DLL).write_bytes(b"dll")
     (runtime / "DLLs").mkdir()
     (runtime / "DLLs" / "sqlite3.dll").write_bytes(_PINNED_SQLITE)
     return runtime
@@ -197,9 +197,9 @@ def test_runtime_ships_only_locked_packages(tmp_path: Path) -> None:
 
 def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
-    (runtime / "python313.dll").rename(runtime / "python314.dll")
+    (runtime / build_windows.RUNTIME_DLL).rename(runtime / "python313.dll")
 
-    with pytest.raises(build_windows.BuildError, match="CPython 3.13 x64"):
+    with pytest.raises(build_windows.BuildError, match=f"CPython {build_windows.PYTHON_VERSION}"):
         build_windows.copy_runtime(
             runtime,
             tmp_path / "copy",
@@ -210,7 +210,8 @@ def test_runtime_rejects_a_different_cpython_minor(tmp_path: Path) -> None:
 
 def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
-    for alias in ("python3.exe", "python3.13.exe"):
+    aliases = ("python3.exe", f"python{build_windows.PYTHON_VERSION}.exe")
+    for alias in aliases:
         try:
             (runtime / alias).symlink_to(runtime / "python.exe")
         except OSError:
@@ -225,9 +226,8 @@ def test_runtime_omits_root_python_alias_links(tmp_path: Path) -> None:
     )
 
     assert (destination / "python.exe").read_bytes() == b"python"
-    assert not (destination / "python3.exe").exists()
-    assert not (destination / "python3.13.exe").exists()
-    assert all((runtime / alias).is_symlink() for alias in ("python3.exe", "python3.13.exe"))
+    assert not any((destination / alias).exists() for alias in aliases)
+    assert all((runtime / alias).is_symlink() for alias in aliases)
 
 
 def test_runtime_copy_installs_the_pinned_sqlite_without_touching_the_input(

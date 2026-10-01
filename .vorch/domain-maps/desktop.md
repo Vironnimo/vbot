@@ -83,7 +83,7 @@ Ownership (all under `desktop/wakeword/`):
 - `config.py` - the stored `wakeword` section: tolerant parsing, strict change validation, server profiles, effective phrase actions, the config part of the status. Pure, no I/O.
 - `capture.py` - `AudioCapture` (one microphone stream fanned out to bounded subscriptions, recovery), the `EchoStage` protocol, and the process-wide `EchoStagePool`.
 - `echo.py` - the WebRTC echo stage and its Windows playback loopback reference.
-- `detection.py` - `DetectionLoop` over one capture subscription; `_speech_detection.py` - Silero/WebRTC speech decisions and the `SpeechGate`.
+- `detection.py` - `DetectionLoop` over one capture subscription; `_speech_detection.py` - Silero speech decisions (fail-open without a working detector) and the `SpeechGate`.
 - `commands.py` - `CommandRecorder` (endpointing, WAV) and `CommandPipeline` (transcribe, resolve Session, send).
 - `server_client.py` - `VoiceServerClient`, every HTTP call Voice makes.
 - `engine.py` - model catalog, imports, and `MultiWakewordEngine`; `_openwakeword.py` - openWakeWord feature stream and phrase heads on the TensorFlow Lite library; `calibration.py` - `PhraseCalibration`; `_microphones.py` - device identity, capture formats, `AUDIO_BACKEND_LOCK`.
@@ -118,12 +118,11 @@ All ship in the `[desktop]` optional group (`soxr` also in `[dev]` for tests); t
 - **pyopen-wakeword** (`pyopen_wakeword`) - platform-specific TensorFlow Lite C library and the packaged openWakeWord models (melspectrogram, embedding, built-in phrase heads). vBot runs the streaming itself (`desktop/wakeword/_openwakeword.py`, `desktop/voice.md` -> Detection) and never uses the package's detector classes. vBot additionally bundles MIT-licensed `hey_nabu_v2.tflite` (pinned source + SHA-256 in `THIRD_PARTY_NOTICES.md`).
 - **sounddevice** - PortAudio access for microphone enumeration and capture, preferring the device's default rate (minimum 16 kHz).
 - **soxr** - stateful anti-aliasing resampling to the 16 kHz detection projection (linear interpolation aliased device noise straight into the detector spectrum). LGPL-2.1+; see `THIRD_PARTY_NOTICES.md`.
-- **webrtcvad-wheels** - WebRTC VAD, the fail-open fallback for speech decisions when the neural detector cannot load.
-- **onnxruntime** - runs the bundled Silero VAD v5 ONNX model (2.2 MB, vendored at `desktop/wakeword/models/silero_vad.onnx`, MIT, SHA-256 pinned in `THIRD_PARTY_NOTICES.md`) for noise-robust detection gating and endpointing on one CPU thread (~0.1 ms per 32 ms window). Optional: an absent or broken onnxruntime selects the WebRTC fallback and never fails Voice startup. Wheels exist for Windows x64/arm64, macOS arm64, and Linux x64/aarch64.
+- **onnxruntime** - runs the bundled Silero VAD v5 ONNX model (2.2 MB, vendored at `desktop/wakeword/models/silero_vad.onnx`, MIT, SHA-256 pinned in `THIRD_PARTY_NOTICES.md`) for noise-robust detection gating and endpointing on one CPU thread (~0.1 ms per 32 ms window). Optional: an absent or broken onnxruntime never fails Voice startup; speech decisions then fail open (every frame counts as speech: the speech gate stays open and silence no longer ends a command recording). Wheels exist for Windows x64/arm64, macOS arm64, and Linux x64/aarch64.
 - **livekit** - only its local WebRTC audio processing module (AEC3 echo canceller, high-pass filter) through the bundled native FFI library; vBot contacts no LiveKit server. Apache 2.0, WebRTC BSD; see `THIRD_PARTY_NOTICES.md` -> Echo cancellation dependencies. Missing or failing -> echo cancellation `unavailable`, Voice keeps listening.
 - **PyAudioWPatch** (Windows only) - WASAPI loopback capture of the default playback device as the echo reference; ships its own PortAudio copy, independent of sounddevice's. Missing -> echo state `no_reference`.
 
-The stack probe that selects the unavailable mode (`_real_wakeword_available` in `desktop/main.py`) imports `pyopen_wakeword`, `sounddevice`, `soxr`, and `webrtcvad`; onnxruntime and livekit are optional within a working listener.
+The stack probe that selects the unavailable mode (`_real_wakeword_available` in `desktop/main.py`) imports `pyopen_wakeword`, `sounddevice`, and `soxr`; onnxruntime and livekit are optional within a working listener.
 
 ## Constraints & Gotchas
 

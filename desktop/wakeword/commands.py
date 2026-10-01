@@ -132,8 +132,8 @@ class CommandRecorder:
     """Records one spoken command at a time.
 
     ``budget_bytes`` returns the current upload budget for the recorded audio
-    payload without blocking. The speech detector and fallback VAD are created
-    on the first recording and reused.
+    payload without blocking. The speech detector is created on the first
+    recording and reused; without one every frame counts as speech.
     """
 
     def __init__(
@@ -141,19 +141,16 @@ class CommandRecorder:
         *,
         stop_event: threading.Event,
         speech_detector_factory: Callable[[], SpeechDetector | None],
-        fallback_vad_factory: Callable[[], Any | None],
         budget_bytes: Callable[[], int],
     ) -> None:
         self._stop = stop_event
         self._speech_detector_factory = speech_detector_factory
-        self._fallback_vad_factory = fallback_vad_factory
         self._budget_bytes = budget_bytes
         self._lock = threading.Lock()
         self._busy = False
         self._threads: list[threading.Thread] = []
         self._user_stop = threading.Event()
         self._detector: Any = _NOT_CREATED
-        self._fallback_vad: Any = _NOT_CREATED
 
     def start(
         self,
@@ -225,7 +222,7 @@ class CommandRecorder:
         subscription: CaptureSubscription,
         user_stop: threading.Event,
     ) -> RecordingResult:
-        detector, fallback_vad = self._speech_deciders()
+        detector = self._speech_detector()
         if detector is not None:
             detector.reset()
         budget = self._budget_bytes()
@@ -280,7 +277,7 @@ class CommandRecorder:
             while len(pending) >= _HOP_BYTES:
                 hop = bytes(pending[:_HOP_BYTES])
                 del pending[:_HOP_BYTES]
-                decisions.append(frame_is_speech(hop, detector, fallback_vad))
+                decisions.append(frame_is_speech(hop, detector))
             trailing_silence = _trailing_silence(decisions)
 
             if has_speech:
@@ -323,12 +320,11 @@ class CommandRecorder:
             return RecordingResult(OUTCOME_NO_SPEECH)
         return RecordingResult(OUTCOME_AUDIO, wav=encode_wav(b"".join(kept), rate))
 
-    def _speech_deciders(self) -> tuple[SpeechDetector | None, Any | None]:
+    def _speech_detector(self) -> SpeechDetector | None:
         if self._detector is _NOT_CREATED:
             self._detector = self._speech_detector_factory()
-        if self._fallback_vad is _NOT_CREATED:
-            self._fallback_vad = self._fallback_vad_factory()
-        return self._detector, self._fallback_vad
+        detector: SpeechDetector | None = self._detector
+        return detector
 
 
 def _trailing_silence(decisions: list[bool]) -> int:

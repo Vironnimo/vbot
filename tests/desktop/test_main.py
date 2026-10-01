@@ -504,13 +504,11 @@ assert VoiceController.__module__ == 'desktop.wakeword.controller'
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-@pytest.mark.parametrize(
-    "missing_module", [None, "pyopen_wakeword", "sounddevice", "soxr", "webrtcvad"]
-)
+@pytest.mark.parametrize("missing_module", [None, "pyopen_wakeword", "sounddevice", "soxr"])
 def test_real_wakeword_availability_requires_the_complete_voice_stack(
     monkeypatch: pytest.MonkeyPatch, missing_module: str | None
 ) -> None:
-    for module_name in ("pyopen_wakeword", "sounddevice", "soxr", "webrtcvad"):
+    for module_name in ("pyopen_wakeword", "sounddevice", "soxr"):
         monkeypatch.setitem(sys.modules, module_name, types.ModuleType(module_name))
     if missing_module is not None:
         monkeypatch.setitem(sys.modules, missing_module, None)

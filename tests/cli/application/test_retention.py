@@ -20,7 +20,7 @@ def _install(root: Path, versions: list[str], *, active: str) -> Installation:
         version = root / "versions" / version_id
         (version / "runtime").mkdir(parents=True)
         (version / "release.json").write_text("{}", encoding="utf-8")
-        (version / "runtime" / "python313.dll").write_bytes(b"dll")
+        (version / "runtime" / "python314.dll").write_bytes(b"dll")
     (root / "active-version").write_text(f"{active}\n", encoding="ascii")
     return install
 
@@ -113,7 +113,7 @@ def test_cleanup_retires_only_versions_nothing_can_still_use(
         monkeypatch,
         _Process(10, versions / "rel_fallback" / "runtime" / "vBot.Update.exe"),
         _Process(11, versions / _other_case("rel_server") / "runtime" / "vBot.Server.exe"),
-        _Process(12, root / "vBot.exe", maps=[versions / "rel_tray" / "runtime" / "python313.dll"]),
+        _Process(12, root / "vBot.exe", maps=[versions / "rel_tray" / "runtime" / "python314.dll"]),
         _Process(13, tmp_path / "elsewhere" / "python.exe", maps=psutil.AccessDenied()),
         _Process(14, None, name="System"),
     )

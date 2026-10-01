@@ -11,28 +11,20 @@ from pathlib import Path
 
 from core.utils.errors import VBotError
 
-#: The offline converter that brings a data directory from before persistence
-#: Generation 1 to the current format. It ships only with a vBot source checkout.
-GENERATION_1_CONVERTER_COMMAND = "python -m scripts.converters.persistence_generation_1"
 
+def older_format_hint() -> str:
+    """Return the next step for data older than persistence Generation 1.
 
-def generation_1_conversion_hint(data_dir: Path | None = None) -> str:
-    """Return the one next step for data from before persistence Generation 1.
-
-    Every refusal of such data ends with this text. Without ``data_dir`` the
-    converter command names a ``<data-dir>`` placeholder.
+    Every refusal of such data ends with this text: vBot 0.4.4 and earlier
+    wrote it, and this vBot reads only the current format.
     """
     return (
-        "Data written by a vBot before persistence Generation 1 (0.4.x) must be converted "
-        "once, offline, with vBot stopped: in a vBot source checkout (installed builds do "
-        f"not include the converter), run `{_converter_command(data_dir)}`. Follow the "
-        'procedure in USAGE.md of the vBot repository, section "Converting an existing data '
-        'directory", which starts with a backup and a dry run'
+        "Data written by vBot 0.4.4 or earlier predates the current data format, and this "
+        "version cannot use it. To start fresh, move the old data directory aside or choose "
+        "a path that does not exist yet; vBot creates a new data directory there. To keep "
+        "old data, open it with the vBot version that wrote it and copy out what you still "
+        "need"
     )
-
-
-def _converter_command(data_dir: Path | None) -> str:
-    return f"{GENERATION_1_CONVERTER_COMMAND} {data_dir if data_dir is not None else '<data-dir>'}"
 
 
 class DatabaseError(VBotError):
@@ -83,19 +75,18 @@ class DatabaseFormatError(DatabaseError):
 
 
 class DatabaseConversionRequiredError(DatabaseFormatError):
-    """Data from an older vBot that only the offline converter can make current.
+    """Data in a format older than the one this vBot reads.
 
     Raised for a database of an older format generation and for an existing
     data directory without a data-store marker, which is what every data
-    directory from before persistence Generation 1 looks like. The message
-    names the converter command for ``data_dir`` and where it is documented.
+    directory from before persistence Generation 1 looks like. This vBot has
+    no converter for either; the message ends with :func:`older_format_hint`.
     """
 
     def __init__(self, problem: str, *, data_dir: Path | None, database: str | None = None) -> None:
         self.database = database
         self.data_dir = data_dir
-        self.converter_command = _converter_command(data_dir)
-        super().__init__(f"{problem}. {generation_1_conversion_hint(data_dir)}")
+        super().__init__(f"{problem}. {older_format_hint()}")
 
 
 class DatabaseSchemaMismatchError(DatabaseFormatError):
