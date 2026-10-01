@@ -117,13 +117,35 @@ describe('message presentation', () => {
   });
 
   it.each([
-    ['the sender display name', { id: '50', display_name: 'Alice' }, 'ALICE'],
-    ['You without a sender', undefined, null],
-    ['You for a blank sender name', { id: '50', display_name: '   ' }, null],
+    [
+      'the sender display name',
+      { id: '50', display_name: 'Alice' },
+      {},
+      'ALICE',
+    ],
+    ['You without a sender', undefined, {}, null],
+    [
+      'You for a blank sender name',
+      { id: '50', display_name: '   ' },
+      {},
+      null,
+    ],
+    [
+      'the Live voice origin',
+      undefined,
+      { input_origin: 'live_voice' },
+      t('chat.role.userViaLive', { name: t('chat.role.user') }).toUpperCase(),
+    ],
+    [
+      'You for a dictation',
+      undefined,
+      { input_origin: 'speech_transcription' },
+      null,
+    ],
   ])(
     'labels persisted and live User messages with %s',
-    (_label, sender, label) => {
-      const message = { role: 'user', content: 'hello', sender };
+    (_label, sender, extra, label) => {
+      const message = { role: 'user', content: 'hello', sender, ...extra };
       const expected = label ?? t('chat.role.user').toUpperCase();
 
       expect(labelForMessage(message)).toBe(expected);

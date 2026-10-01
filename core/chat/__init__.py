@@ -53,6 +53,7 @@ if TYPE_CHECKING:
         ToolIterationLimitError,
     )
     from core.chat.messages import (
+        INPUT_ORIGIN_LIVE_VOICE,
         INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
         ChatMessage,
         InputOrigin,
@@ -105,6 +106,7 @@ _EXPORT_MODULES = {
     "ExtensionCommandContext": "core.chat.commands",
     "ContinuationState": "core.chat.continuation",
     "HandoffArgument": "core.chat.commands",
+    "INPUT_ORIGIN_LIVE_VOICE": "core.chat.messages",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION": "core.chat.messages",
     "InputOrigin": "core.chat.messages",
     "MAX_TOOL_ITERATIONS": "core.chat._step_outcomes",
@@ -153,6 +155,7 @@ __all__ = [
     "ExtensionCommandContext",
     "ContinuationState",
     "HandoffArgument",
+    "INPUT_ORIGIN_LIVE_VOICE",
     "INPUT_ORIGIN_SPEECH_TRANSCRIPTION",
     "InputOrigin",
     "MAX_TOOL_ITERATIONS",

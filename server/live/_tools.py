@@ -82,7 +82,7 @@ from server.live._targets import (
 )
 from server.live._terminals import LiveTerminals, TerminalTimings, terminal_line
 from server.rpc.errors import RpcError
-from server.rpc.validation import CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION
+from server.rpc.validation import CHAT_INPUT_ORIGIN_LIVE_VOICE
 
 _LOGGER = logging.getLogger("vbot.server.live")
 
@@ -682,7 +682,7 @@ class LiveToolExecutor:
                 "agent_id": key.address,
                 "session_id": key.session_id,
                 "content": text,
-                "input_origin": CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+                "input_origin": CHAT_INPUT_ORIGIN_LIVE_VOICE,
             },
         )
 

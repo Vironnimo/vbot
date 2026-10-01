@@ -122,6 +122,7 @@ export default Object.freeze({
   'chat.noModel.title': 'Pick a model to start',
   'chat.noModel.action': 'Choose a model',
   'chat.role.user': 'You',
+  'chat.role.userViaLive': '{name} · via Live',
   'chat.role.assistant': 'Assistant',
   'chat.role.system': 'System',
   'chat.role.userAvatar': 'Y',

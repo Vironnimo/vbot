@@ -14,8 +14,11 @@ from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 
 JsonObject = dict[str, Any]
 CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION = "speech_transcription"
-CHAT_INPUT_ORIGINS = frozenset((CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION,))
-ChatInputOrigin = Literal["speech_transcription"]
+CHAT_INPUT_ORIGIN_LIVE_VOICE = "live_voice"
+CHAT_INPUT_ORIGINS = frozenset(
+    (CHAT_INPUT_ORIGIN_SPEECH_TRANSCRIPTION, CHAT_INPUT_ORIGIN_LIVE_VOICE)
+)
+ChatInputOrigin = Literal["speech_transcription", "live_voice"]
 
 
 def _parse_chat_content(params: JsonObject, key: str) -> str | list[ContentBlock]:

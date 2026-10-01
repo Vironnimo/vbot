@@ -211,12 +211,8 @@ def insert_entry(
     match message.role:
         case "assistant":
             _insert_assistant(connection, entry_key, message)
-        case "user" if message.sender is not None:
-            connection.execute(
-                "INSERT INTO user_entry_senders (entry_key, sender_id, display_name, sender_role) "
-                "VALUES (?, ?, ?, ?)",
-                (entry_key, message.sender.id, message.sender.display_name, message.sender.role),
-            )
+        case "user":
+            _insert_user(connection, entry_key, message)
         case "error":
             connection.execute(
                 "INSERT INTO error_entries (entry_key, error_kind) VALUES (?, ?)",
@@ -236,6 +232,20 @@ def insert_entry(
         case "compaction_checkpoint":
             _insert_checkpoint(connection, entry_key, message)
     return entry_key
+
+
+def _insert_user(connection: sqlite3.Connection, entry_key: int, message: ChatMessage) -> None:
+    if message.sender is not None:
+        connection.execute(
+            "INSERT INTO user_entry_senders (entry_key, sender_id, display_name, sender_role) "
+            "VALUES (?, ?, ?, ?)",
+            (entry_key, message.sender.id, message.sender.display_name, message.sender.role),
+        )
+    if message.input_origin is not None:
+        connection.execute(
+            "INSERT INTO user_entry_origins (entry_key, input_origin) VALUES (?, ?)",
+            (entry_key, message.input_origin),
+        )
 
 
 def _insert_assistant(connection: sqlite3.Connection, entry_key: int, message: ChatMessage) -> None:
@@ -439,6 +449,7 @@ class EntryBatch:
     tool_calls: dict[int, list[sqlite3.Row]] = field(default_factory=dict)
     tool_results: dict[int, sqlite3.Row] = field(default_factory=dict)
     senders: dict[int, sqlite3.Row] = field(default_factory=dict)
+    origins: dict[int, sqlite3.Row] = field(default_factory=dict)
     errors: dict[int, sqlite3.Row] = field(default_factory=dict)
     edits: dict[int, sqlite3.Row] = field(default_factory=dict)
     model_fallbacks: dict[int, sqlite3.Row] = field(default_factory=dict)
@@ -490,6 +501,9 @@ class EntryBatch:
                             "display_name": sender["display_name"],
                             "role": sender["sender_role"],
                         }
+                    origin = self.origins.get(key)
+                    if origin is not None:
+                        data["input_origin"] = str(origin["input_origin"])
                 case "error":
                     data["error_kind"] = str(self.errors[key]["error_kind"])
                 case "history_edit":
@@ -759,6 +773,11 @@ def select_batch(connection: sqlite3.Connection, rows: Sequence[sqlite3.Row]) ->
         f"WHERE entry_key {_KEYS}",
         by_role.get("user", []),
     )
+    batch.origins = _rows_by_key(
+        connection,
+        f"SELECT entry_key, input_origin FROM user_entry_origins WHERE entry_key {_KEYS}",
+        by_role.get("user", []),
+    )
     batch.errors = _rows_by_key(
         connection,
         f"SELECT entry_key, error_kind FROM error_entries WHERE entry_key {_KEYS}",
@@ -837,6 +856,7 @@ _ENTRY_SIDE_TABLES = (
     "assistant_reasoning",
     "assistant_output_files",
     "user_entry_senders",
+    "user_entry_origins",
     "error_entries",
     "history_edit_entries",
     "note_model_fallbacks",

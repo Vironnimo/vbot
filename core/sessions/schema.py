@@ -345,6 +345,12 @@ CREATE TABLE user_entry_senders (
   sender_role TEXT NOT NULL
 ) STRICT;
 
+-- How a User entry was entered (dictated, or passed on by Live voice).
+CREATE TABLE user_entry_origins (
+  entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
+  input_origin TEXT NOT NULL
+) STRICT;
+
 CREATE TABLE error_entries (
   entry_key INTEGER PRIMARY KEY REFERENCES entries (entry_key) ON DELETE CASCADE,
   error_kind TEXT NOT NULL

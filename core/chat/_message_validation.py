@@ -234,6 +234,7 @@ def _validate_system_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 
@@ -301,6 +302,7 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
     if message.reasoning_meta is not None and not isinstance(message.reasoning_meta, dict):
         raise ChatMessageValidationError("reasoning_meta must be an object")
@@ -391,6 +393,7 @@ def _validate_tool_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
     _validate_timing_payload(message.timing)
 
@@ -416,6 +419,7 @@ def _validate_note_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 
@@ -441,6 +445,7 @@ def _validate_error_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 
@@ -502,6 +507,7 @@ def _validate_compaction_checkpoint_message(message: _records.ChatMessage) -> No
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 
@@ -537,6 +543,7 @@ def _validate_run_summary_message(message: _records.ChatMessage) -> None:
         "name",
         "error_kind",
         "sender",
+        "input_origin",
     )
 
 
@@ -602,6 +609,7 @@ def _validate_agent_takeover_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 
@@ -625,6 +633,7 @@ def _validate_history_edit_message(message: _records.ChatMessage) -> None:
         "work_id",
         "status",
         "sender",
+        "input_origin",
     )
 
 

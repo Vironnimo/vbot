@@ -46,7 +46,7 @@ MessageRole = Literal[
     "agent_takeover",
     "history_edit",
 ]
-InputOrigin = Literal["speech_transcription"]
+InputOrigin = Literal["speech_transcription", "live_voice"]
 ReplySurfaceKind = Literal["webui", "channel"]
 ConversationKind = Literal["direct", "group"]
 GroupRole = Literal["admin", "member"]
@@ -76,10 +76,20 @@ WEBUI_REPLY_SURFACE_REMINDER = (
     "file:<filesystem-path> in your reply; vBot renders it automatically."
 )
 INPUT_ORIGIN_SPEECH_TRANSCRIPTION: InputOrigin = "speech_transcription"
+INPUT_ORIGIN_LIVE_VOICE: InputOrigin = "live_voice"
+INPUT_ORIGINS: frozenset[str] = frozenset(
+    (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, INPUT_ORIGIN_LIVE_VOICE)
+)
 SPEECH_TRANSCRIPTION_SYSTEM_REMINDER = (
     "The following user message was produced by speech-to-text transcription. "
     "It may contain transcription errors, missing punctuation, or misheard words. "
     "Infer the user's likely intent when appropriate, but do not mention this unless it matters."
+)
+LIVE_VOICE_SYSTEM_REMINDER = (
+    "The following user message was passed on by vBot's voice assistant from a spoken "
+    "conversation with the user. It may contain speech recognition errors or the assistant's "
+    "rewording of what the user said. Infer the user's likely intent when appropriate, but do "
+    "not mention this unless it matters."
 )
 ERROR_KIND_RATE_LIMIT = "rate_limit"
 ERROR_KIND_TIMEOUT = "timeout"
@@ -378,6 +388,8 @@ class ChatMessage:
     change_stats: JsonObject | None = None
     target_message_id: str | None = None
     sender: MessageSender | None = None
+    # How a user message was entered: dictated, or passed on by Live voice.
+    input_origin: InputOrigin | None = None
     interrupted: bool = False
     interruption_cause: str | None = None
     output_files: list[AssistantFileReference] | None = None
@@ -400,6 +412,7 @@ class ChatMessage:
         content: str | list[ContentBlock],
         *,
         sender: MessageSender | None = None,
+        input_origin: InputOrigin | None = None,
         timestamp: datetime | None = None,
     ) -> ChatMessage:
         """Create a user message."""
@@ -409,6 +422,7 @@ class ChatMessage:
             role="user",
             content=content,
             sender=sender,
+            input_origin=input_origin,
         )
 
     @classmethod
@@ -723,6 +737,7 @@ class ChatMessage:
         _add_if_not_none(message, "target_message_id", self.target_message_id)
         if self.sender is not None:
             message["sender"] = self.sender.to_dict()
+        _add_if_not_none(message, "input_origin", self.input_origin)
         if self.interrupted:
             message["interrupted"] = True
         _add_if_not_none(message, "interruption_cause", self.interruption_cause)
@@ -759,6 +774,11 @@ class ChatMessage:
         if not isinstance(interrupted, bool):
             raise ChatMessageValidationError("interrupted must be a boolean")
         interruption_cause = _message_validation._optional_string(data, "interruption_cause")
+        input_origin = _message_validation._optional_string(data, "input_origin")
+        if input_origin is not None and input_origin not in INPUT_ORIGINS:
+            raise ChatMessageValidationError(
+                f"input_origin must be one of: {', '.join(sorted(INPUT_ORIGINS))}"
+            )
         iteration_count = data.get("iteration_count")
         if "iteration_count" in data and (
             isinstance(iteration_count, bool)
@@ -823,6 +843,7 @@ class ChatMessage:
             change_stats=dict(change_stats) if change_stats is not None else None,
             target_message_id=_message_validation._optional_string(data, "target_message_id"),
             sender=MessageSender.from_dict(sender_data) if sender_data is not None else None,
+            input_origin=cast(InputOrigin | None, input_origin),
             interrupted=interrupted,
             interruption_cause=interruption_cause,
             output_files=output_files,

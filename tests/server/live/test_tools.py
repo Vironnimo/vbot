@@ -135,7 +135,7 @@ async def test_starts_several_sessions_at_an_agent_as_speech(fx: Fixture) -> Non
             "agent_id": "coder",
             "session_id": f"ses_new{index}",
             "content": "Fix the tests",
-            "input_origin": "speech_transcription",
+            "input_origin": "live_voice",
         }
         for index in (1, 2, 3)
     ]
@@ -211,7 +211,7 @@ async def test_sends_to_a_session_by_ref_in_tolerant_spellings(fx: Fixture) -> N
         text = await fx.ok("send_message", target=spelling, text="yes, go on")
         assert text == "Sent to s1 (Coder). An update follows when it finishes."
     assert {params["session_id"] for params in fx.app.params("chat.stream")} == {"ses_1"}
-    assert fx.app.params("chat.stream")[0]["input_origin"] == "speech_transcription"
+    assert fx.app.params("chat.stream")[0]["input_origin"] == "live_voice"
 
 
 @pytest.mark.asyncio

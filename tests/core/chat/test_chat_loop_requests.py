@@ -13,6 +13,7 @@ import pytest
 
 from core.automation import TriggerService
 from core.chat import (
+    INPUT_ORIGIN_LIVE_VOICE,
     INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
     ChatMessage,
     ChatSessionError,
@@ -240,29 +241,39 @@ async def test_pending_notes_join_one_reminder_turn_before_the_user_input(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_input_origin_and_reply_surface_notes_precede_the_user_turn(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("origin", "note"),
+    [
+        (INPUT_ORIGIN_SPEECH_TRANSCRIPTION, "speech-to-text transcription"),
+        (INPUT_ORIGIN_LIVE_VOICE, "passed on by vBot's voice assistant"),
+    ],
+)
+async def test_input_origin_and_reply_surface_notes_precede_the_user_turn(
+    tmp_path: Path, origin: str, note: str
+) -> None:
     runtime = _runtime(tmp_path, _answers(1))
 
     run = await build_chat_loop(runtime).start_run(
         "coder",
         "helo wrld",
         session_id="session-one",
-        input_origin=INPUT_ORIGIN_SPEECH_TRANSCRIPTION,
+        input_origin=origin,  # type: ignore[arg-type]
         reply_surface=ReplySurface.webui(),
     )
     await run.wait()
 
     messages = history(runtime)
     assert persisted_roles(messages) == ["note", "note", "user", "assistant"]
-    assert "speech-to-text transcription" in str(messages[0].content)
+    assert note in str(messages[0].content)
     assert _surface_notes(messages) == [messages[1]]
     assert messages[2].content == "helo wrld"
+    # The user message keeps how it was entered, so the app can show it.
+    assert messages[2].input_origin == origin
+    assert messages[2].to_dict()["input_origin"] == origin
     request_messages = runtime.adapter.requests[0]["messages"]
     assert [message["role"] for message in request_messages] == ["system", "user", "user"]
     reminder_text = request_messages[1]["content"]
-    assert reminder_text.index("speech-to-text transcription") < reminder_text.index(
-        "file:<filesystem-path>"
-    )
+    assert reminder_text.index(note) < reminder_text.index("file:<filesystem-path>")
     assert request_messages[2]["content"] == "helo wrld"
 
 

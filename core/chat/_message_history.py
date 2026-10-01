@@ -133,6 +133,9 @@ def _append_input_origin_note(
     if input_origin == _records.INPUT_ORIGIN_SPEECH_TRANSCRIPTION:
         session.add_note(_records.SPEECH_TRANSCRIPTION_SYSTEM_REMINDER)
         return
+    if input_origin == _records.INPUT_ORIGIN_LIVE_VOICE:
+        session.add_note(_records.LIVE_VOICE_SYSTEM_REMINDER)
+        return
     raise ChatError(f"unsupported input origin: {input_origin}")
 
 
