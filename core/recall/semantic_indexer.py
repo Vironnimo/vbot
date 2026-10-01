@@ -23,8 +23,9 @@ still wait. Failures are isolated:
   bisected: accepted halves are stored, and a single text that still fails is
   recorded as skipped until the embedding space changes or the index is reset;
 - a configuration failure (unusable binding, rejected credentials, unknown
-  model) puts the indexer into ``error`` until a Settings change, a rebuild or
-  the next attempt after the same backoff.
+  model, a local model that is not installed or whose engine fails) puts the
+  indexer into ``error`` until a Settings change, a finished local
+  installation, a rebuild or the next attempt after the same backoff.
 """
 
 from __future__ import annotations
@@ -73,6 +74,9 @@ BATCH_SIZE = 64
 STATUS_INTERVAL_S = 2.0
 # The estimate assumes this many characters per token.
 CHARS_PER_TOKEN = 4
+# A pass reports its rate, and with it the time left, once it has measured
+# its finished batches over at least this many seconds.
+RATE_MIN_SECONDS = 5.0
 # Space changes one pass follows before it gives up as unstable.
 _MAX_SPACE_MOVES = 3
 _TOKENS_PER_PRICE_UNIT = 1_000_000
@@ -91,6 +95,8 @@ _MESSAGES = {
     "context_overflow": "The embedding model rejected texts longer than its input limit.",
     "index_unavailable": "The Passage index could not be read or written.",
     "space_unstable": "The embedding space kept changing during indexing.",
+    "local_model_missing": "The local embedding model is not installed or not ready.",
+    "local_engine_failed": "The local embedding engine failed.",
 }
 
 
@@ -113,7 +119,12 @@ class IndexStatus:
     Counts are distinct stored Passages of the Sessions Recall may return.
     ``spent`` is the document embedding usage since the current space was
     pinned; ``estimate_*`` describe the texts still waiting. Costs are USD and
-    ``None`` when unknown.
+    ``None`` when unknown. While a pass embeds, ``rate`` is the texts it
+    embedded or skipped per second so far and ``eta_seconds`` the time the
+    texts still waiting take at that rate; both are ``None`` outside a pass
+    and until the pass has finished a batch and run ``RATE_MIN_SECONDS``.
+    Passages that share a text share its vector, so a text is the unit the
+    embedding model works through.
     """
 
     semantic_enabled: bool
@@ -133,6 +144,8 @@ class IndexStatus:
     estimate_characters: int = 0
     estimate_tokens: int = 0
     estimate_cost: float | None = None
+    rate: float | None = None
+    eta_seconds: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,6 +174,8 @@ class IndexStatus:
                 "tokens": self.estimate_tokens,
                 "cost": self.estimate_cost,
             },
+            "rate": self.rate,
+            "eta_seconds": self.eta_seconds,
         }
 
 
@@ -203,6 +218,8 @@ class _PassTotals:
     usage: EmbeddingUsage = field(default_factory=EmbeddingUsage)
     # Pinned spaces this pass left: a re-pin or a space another writer pinned.
     space_moves: int = 0
+    # The embedding Model runs on this computer, so failures name its engine.
+    local: bool = False
 
     def moved_space(self) -> None:
         self.space_moves += 1
@@ -266,6 +283,10 @@ class SemanticIndexer:
         self._published: tuple[bool, IndexState] | None = None
         self._last_publish = -math.inf
         self._conditions = LoggedConditions(limit=8)
+        # The pass in progress: when its first batch started, and the texts
+        # its finished batches embedded or skipped.
+        self._pace_started: float | None = None
+        self._pace_texts = 0
 
     # -- Control -------------------------------------------------------------------
 
@@ -365,9 +386,13 @@ class SemanticIndexer:
                 self._debug("Recall index status unavailable (error=%s)", type(error).__name__)
         price = self._input_price(identity)
         tokens = math.ceil(counts.waiting_characters / CHARS_PER_TOKEN)
+        state = self._visible_state(configured)
+        rate, eta_seconds = (
+            self._pace(counts.waiting_texts) if state == "indexing" else (None, None)
+        )
         return IndexStatus(
             semantic_enabled=self._enabled,
-            state=self._visible_state(configured),
+            state=state,
             provider=identity.provider_id if identity is not None else None,
             model=identity.model_id if identity is not None else None,
             indexed=counts.indexed,
@@ -383,7 +408,19 @@ class SemanticIndexer:
             estimate_characters=counts.waiting_characters,
             estimate_tokens=tokens,
             estimate_cost=None if price is None else tokens * price / _TOKENS_PER_PRICE_UNIT,
+            rate=rate,
+            eta_seconds=eta_seconds,
         )
+
+    def _pace(self, waiting_texts: int) -> tuple[float | None, int | None]:
+        """Texts per second of the pass in progress and the seconds *waiting_texts* take."""
+        started, texts = self._pace_started, self._pace_texts
+        if started is None or texts == 0:
+            return None, None
+        elapsed = self._monotonic() - started
+        if elapsed < RATE_MIN_SECONDS:
+            return None, None
+        return texts / elapsed, math.ceil(waiting_texts * elapsed / texts)
 
     def _visible_state(self, configured: bool) -> IndexState:
         if not self._enabled:
@@ -523,7 +560,11 @@ class SemanticIndexer:
         binding = VectorHeader.for_space(identity)
         batch_size = await asyncio.to_thread(self._document_batch_size)
         await self._refresh_catalog()
-        await self._drain(binding, batch_size)
+        try:
+            await self._drain(binding, batch_size, _PassTotals(local=identity.local))
+        finally:
+            self._pace_started = None
+            self._pace_texts = 0
 
     def _document_batch_size(self) -> int:
         """This indexer's batch size, or the embedding target's smaller one. Blocking."""
@@ -545,8 +586,7 @@ class SemanticIndexer:
         for project_id, agent_id in await self._index.indexed_scopes() - set(live):
             await self._index.remove_scope(agent_id, project_id)
 
-    async def _drain(self, binding: VectorHeader, batch_size: int) -> None:
-        totals = _PassTotals()
+    async def _drain(self, binding: VectorHeader, batch_size: int, totals: _PassTotals) -> None:
         started_at = self._monotonic()
         started = False
         header = await self._pinned(binding)
@@ -565,6 +605,7 @@ class SemanticIndexer:
                     binding.model_id,
                 )
                 await self._publish(force=True)
+                self._pace_started = self._monotonic()
             outcome = _BatchOutcome()
             try:
                 header = await self._embed(binding, header, batch, outcome, totals)
@@ -583,6 +624,7 @@ class SemanticIndexer:
                     raise _HaltError(_Classified("configuration", rejection.failure))
                 await self._index.record_skipped(header, outcome.rejected, at=self._clock())
                 totals.skipped += len(outcome.rejected)
+            self._pace_texts += outcome.embedded + len(outcome.rejected)
             self._recovered()
             self._debug(
                 "Embedded Recall Passage batch (texts=%d embedded=%d skipped=%d requests=%d)",
@@ -636,7 +678,7 @@ class SemanticIndexer:
                 [text for _text_hash, text in items], purpose="document"
             )
         except EmbeddingError as error:
-            classified = _classify(error)
+            classified = _classify(error, local=totals.local)
             if classified.kind != "permanent":
                 raise _HaltError(classified) from error
             if len(items) == 1:
@@ -738,10 +780,20 @@ def _index_scope(
     )
 
 
-def _classify(error: BaseException) -> _Classified:
-    """Sort an embedding failure into transient, permanent or configuration."""
+def _classify(error: BaseException, *, local: bool = False) -> _Classified:
+    """Sort an embedding failure into transient, permanent or configuration.
+
+    A *local* embedding Model fails as not installed, as a text over its input
+    limit, or as its engine failing; it has no provider to retry.
+    """
+    if local and isinstance(error, EmbeddingConfigurationError):
+        return _Classified("configuration", IndexFailure.of("local_model_missing"))
     if isinstance(error, EmbeddingConfigurationError | EmbeddingUnsupportedTargetError):
         return _Classified("configuration", IndexFailure.of("embedding_unusable"))
+    if local:
+        if isinstance(error, EmbeddingInputTooLongError):
+            return _Classified("permanent", IndexFailure.of("context_overflow"))
+        return _Classified("configuration", IndexFailure.of("local_engine_failed"))
     cause = error.__cause__ if error.__cause__ is not None else error
     status = getattr(cause, "status_code", None)
     if isinstance(cause, ProviderAuthError) or status in (401, 403):
