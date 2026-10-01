@@ -25,7 +25,7 @@ Read this reference only for work on the Configure -> Archive view, the Archive 
 
 ## Settings
 
-- The System page's Archive section (`settings.pages` in `SettingsView.svelte`: Server, optional Desktop connection, Archive, Debug) has a Toggle "Delete archived items automatically" (off saves `null`) and, while on, a number field "Days in the Archive" (1-3650; an out-of-range value marks the field and saves nothing; turning the Toggle back on restores the last period, default 30). It autosaves through `createSettingsDraft` with `settings.update {archive: {retention_days}}` plus `base`; a refusal (`invalid_request`) reaches the shared Settings error line. The descriptions say that a lower value deletes older items at the next hourly check and that files from older vBot versions and items that may hold the user's own folders are never deleted automatically.
+- The System page's Archive section (`settings.pages` in `SettingsView.svelte`: Server, optional Desktop connection, Archive, Debug) has a Toggle "Delete archived items automatically" (off saves `null`) and, while on, a number field "Days in the Archive" (1-3650; an out-of-range value marks the field and saves nothing; turning the Toggle back on restores the last period, default 30). It autosaves through `createSettingsDraft` with `settings.update {archive: {retention_days}}` plus `base`; a refusal (`invalid_request`) reaches the shared Settings error line. The descriptions say that a lower value deletes older items at the next hourly check and that files from older vBot versions, items that may hold the user's own folders and items found without a record (`origin: recovered`) are never deleted automatically.
 
 ## Tests
 

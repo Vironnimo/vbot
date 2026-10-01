@@ -40,7 +40,7 @@ export default Object.freeze({
   'settings.archive.title': 'Archive',
   'settings.archive.automatic': 'Delete archived items automatically',
   'settings.archive.automaticDescription':
-    'Deleted Agents, Projects and Sessions wait in the Archive, where you can restore them. When this is off, they stay until you delete them there. Files from older vBot versions and items that may hold folders of your own are never deleted automatically.',
+    'Deleted Agents, Projects and Sessions wait in the Archive, where you can restore them. When this is off, they stay until you delete them there. Files from older vBot versions, items that may hold folders of your own and items vBot found without a record of when they were archived are never deleted automatically.',
   'settings.archive.days': 'Days in the Archive',
   'settings.archive.daysDescription':
     '1 to 3650 days, counted from when an item was archived. A lower value deletes older items at the next hourly check.',

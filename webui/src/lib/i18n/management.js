@@ -872,9 +872,9 @@ export default Object.freeze({
   'archive.kind.ownerGroup': 'Extension Sessions',
   'archive.kind.files': 'Files',
   'archive.retention.days':
-    'Archived items are deleted automatically {days} days after they were archived, except files from older vBot versions and items that may hold folders of your own.',
+    'Archived items are deleted automatically {days} days after they were archived, except files from older vBot versions, items that may hold folders of your own and items vBot found without a record of when they were archived.',
   'archive.retention.oneDay':
-    'Archived items are deleted automatically one day after they were archived, except files from older vBot versions and items that may hold folders of your own.',
+    'Archived items are deleted automatically one day after they were archived, except files from older vBot versions, items that may hold folders of your own and items vBot found without a record of when they were archived.',
   'archive.retention.off': 'Archived items are never deleted automatically.',
   'archive.retention.unknown':
     'Automatic deletion is paused: vBot cannot read the retention period from its settings file, so it deletes nothing automatically until it can.',
