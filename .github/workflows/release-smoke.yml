@@ -1,9 +1,9 @@
 name: Release Smoke
 
-# Canaries the public distribution path after publication. Candidate install,
-# runtime, WebUI, and uninstall behavior already gate publication in CI; this
-# workflow proves that the public tag and asset can be acquired by both public
-# Installer implementations. Maintainers can dispatch it again for any release.
+# Canaries the public distribution path after publication. The package builds
+# already smoke install, update, lifecycle and uninstall before publication; this
+# workflow proves that both public installers acquire and install the published
+# packages. Maintainers can dispatch it again for any release.
 on:
   workflow_call:
     inputs:
@@ -28,45 +28,31 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
+      - uses: actions/checkout@v7
       - name: Validate released tag and distribution assets
         run: |
-          python - <<'PY'
-          import os
-          import re
-
-          tag = os.environ["RELEASE_TAG"]
-          if re.fullmatch(r"v\d+\.\d+\.\d+", tag) is None:
-              raise SystemExit(f"Release tag must be vX.Y.Z, got {tag!r}")
-          PY
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be vX.Y.Z, got $RELEASE_TAG" >&2
+            exit 1
+          fi
           gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name' > assets.txt
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          tag = os.environ["RELEASE_TAG"]
-          version = tag.removeprefix("v")
-          expected = {"webui-dist.tar.gz"}
-          for shape in ("server", "server-desktop", "desktop-client"):
-              expected.add(f"vBot-{version}-windows-x86_64-{shape}.exe")
-              archive = f"vbot-windows-x86_64-{shape}.zip"
-              expected.update({archive, f"{archive}.sig"})
-          actual = set(Path("assets.txt").read_text(encoding="utf-8").splitlines())
-          missing = sorted(expected - actual)
-          if missing:
-              raise SystemExit(f"Release {tag} is missing required assets: {', '.join(missing)}")
-          PY
+          python scripts/release_assets.py --names assets.txt --version "${RELEASE_TAG#v}"
 
   linux:
-    name: linux (x64)
+    name: linux (${{ matrix.architecture }})
     needs: validate
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: arm64
+            runner: ubuntu-24.04-arm
+          - architecture: x64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     env:
       RELEASE_TAG: ${{ inputs.tag }}
     steps:
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-
       - name: Install, start, probe, and uninstall the public release
         run: |
           install_dir="${RUNNER_TEMP}/vbot-release"
@@ -75,25 +61,29 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}/scripts/install.sh" -o "$installer"
           bash "$installer" --dir "$install_dir" --version "$RELEASE_TAG" --no-autostart
 
-          test "$(git -C "$install_dir" describe --tags --exact-match)" = "$RELEASE_TAG"
-          "$install_dir/.venv/bin/python" - "$install_dir/pyproject.toml" "$RELEASE_TAG" <<'PY'
-          import sys
-          import tomllib
+          active="$(cat "$install_dir/active-version")"
+          python3 - "$install_dir" "$active" "$RELEASE_TAG" <<'PY'
+          import json, sys
           from pathlib import Path
 
-          version = tomllib.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["project"]["version"]
-          if f"v{version}" != sys.argv[2]:
-              raise SystemExit(f"Installed version {version!r} does not match tag {sys.argv[2]!r}")
+          root, active, tag = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+          state = json.loads((root / "application.json").read_text(encoding="utf-8"))
+          release = json.loads((root / "versions" / active / "release.json").read_text(encoding="utf-8"))
+          if state["install_shape"] != "server" or f"v{release['version']}" != tag:
+              raise SystemExit(f"The installation does not hold the server of {tag}: {state}, {release}")
           PY
+          test -L "$HOME/.local/bin/vbot"
 
-          "$install_dir/.venv/bin/vbot" server start
-          curl -fsSL "http://127.0.0.1:8420/health" | python -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
-          test -s "$install_dir/webui/dist/index.html"
+          vbot="$HOME/.local/bin/vbot"
+          "$vbot" server start
+          curl -fsSL "http://127.0.0.1:8420/health" | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
           curl -fsSL "http://127.0.0.1:8420/" -o "${RUNNER_TEMP}/webui-index.html"
           test -s "${RUNNER_TEMP}/webui-index.html"
+          "$vbot" server stop
 
-          bash "$install_dir/scripts/uninstall.sh"
+          "$vbot" uninstall --app-only --yes
           test ! -e "$install_dir"
+          test ! -L "$HOME/.local/bin/vbot"
           test -d "$data_dir"
 
   windows:

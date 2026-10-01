@@ -1,9 +1,9 @@
 name: Release
 
-# Runs the complete CI workflow against one release-candidate WebUI artifact
-# before creating the tag and published release. The exact gated artifact is
-# attached during creation, so an installable release is never publicly visible
-# without its tested frontend and signed Windows packages. Built files stay untracked.
+# Runs the complete CI workflow and builds and smokes the signed packages of every
+# platform before creating the tag and published release. The release is created
+# with all of them attached, so it is never publicly visible without a package an
+# installation needs. Built files stay untracked.
 on:
   workflow_dispatch:
     inputs:
@@ -29,8 +29,14 @@ jobs:
       release_mode: true
     secrets: inherit
 
+  linux:
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      release_mode: true
+    secrets: inherit
+
   publish:
-    needs: [quality, windows]
+    needs: [quality, windows, linux]
     runs-on: ubuntu-latest
     env:
       RELEASE_VERSION: ${{ inputs.version }}
@@ -62,43 +68,17 @@ jobs:
             exit 1
           fi
 
-      - name: Download gated release candidate WebUI
+      - name: Download signed packages
         uses: actions/download-artifact@v8
         with:
-          name: webui-release-candidate
-          path: .
-
-      - name: Validate gated release candidate WebUI
-        run: |
-          test -s webui-dist.tar.gz
-          tar -tzf webui-dist.tar.gz | grep -Fx 'webui/dist/index.html'
-
-      - name: Download signed Windows packages
-        uses: actions/download-artifact@v8
-        with:
-          pattern: vbot-windows-*
-          path: windows-artifacts
+          pattern: vbot-*
+          path: assets
           merge-multiple: true
 
-      - name: Validate complete Windows release assets
-        run: |
-          python - <<'PY'
-          import os
-          from pathlib import Path
-
-          root = Path("windows-artifacts")
-          version = os.environ["RELEASE_VERSION"]
-          for shape in ("server", "server-desktop", "desktop-client"):
-              names = (
-                  f"vBot-{version}-windows-x86_64-{shape}.exe",
-                  f"vbot-windows-x86_64-{shape}.zip",
-                  f"vbot-windows-x86_64-{shape}.zip.sig",
-              )
-              for name in names:
-                  path = root / name
-                  if not path.is_file() or not path.stat().st_size:
-                      raise SystemExit(f"Required Windows release asset is missing: {name}")
-          PY
+      - name: Validate complete release assets
+        run: >-
+          python scripts/release_assets.py --dir assets --version "${RELEASE_VERSION}"
+          --revision "${GITHUB_SHA}" --channel release
 
       - name: Publish release with all verified installation assets
         env:
@@ -108,11 +88,7 @@ jobs:
           --target "${GITHUB_SHA}"
           --title "${RELEASE_TAG}"
           --generate-notes
-          webui-dist.tar.gz
-          windows-artifacts/*.exe
-          windows-artifacts/*.zip
-          windows-artifacts/*.sig
-          windows-artifacts/*-runtime-inventory.json
+          assets/*
 
   smoke:
     needs: publish
