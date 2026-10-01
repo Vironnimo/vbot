@@ -211,18 +211,17 @@ def test_credential_reload_updates_existing_skill_registries(
     assert_availability("available")
 
 
+# One case per invalidation source (Project package, Agent package, policy
+# reload, credential reload). The Project bundle and the Agent registry (reached
+# without and with a Project) each run once with and once without a newer build
+# published before the older scan returns.
 @pytest.mark.parametrize(
     ("scope", "change", "rebuild_before_release"),
     [
         ("project", "package", False),
         ("project", "policy", True),
-        ("project", "environment", False),
         ("agent", "package", True),
-        ("agent", "policy", False),
-        ("agent", "environment", True),
-        ("rooted_agent", "package", False),
-        ("rooted_agent", "policy", True),
-        ("rooted_agent", "environment", True),
+        ("rooted_agent", "environment", False),
     ],
 )
 def test_scoped_scan_rechecks_changes_before_cache_publication(

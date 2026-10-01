@@ -57,9 +57,7 @@ def _note_count(database) -> int:
         return int(connection.execute("SELECT COUNT(*) FROM notes").fetchone()[0])
 
 
-def test_extension_database_follows_startup_reload_and_disable(
-    config: Config, tmp_path: Path
-) -> None:
+def test_extension_database_follows_startup_reload_and_stop(config: Config, tmp_path: Path) -> None:
     data_dir = config.data_dir
     marker = tmp_path / "lifecycle.txt"
     write_extension(data_dir, "notes_ext", _notes_extension(marker))
@@ -91,37 +89,20 @@ def test_extension_database_follows_startup_reload_and_disable(
         assert second is not None and second is not first
         assert _note_count(second) == 2
         assert marker_lines(marker) == ["shutdown-open=True"]
-
-        asyncio.run(runtime.apply_extension_disabled_change({"notes_ext"}))
-
-        assert second.is_closed()
-        assert _extension_database(runtime) is None
-        assert marker_lines(marker) == ["shutdown-open=True", "shutdown-open=True"]
     finally:
         runtime.stop()
 
-
-def test_runtime_stop_closes_extension_databases(config: Config, tmp_path: Path) -> None:
-    write_extension(config.data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
-
-    runtime = Runtime(config)
-    runtime.start()
-    try:
-        asyncio.run(runtime.fire_extension_startup())
-        database = _extension_database(runtime)
-        assert database is not None
-    finally:
-        runtime.stop()
-
-    assert database.is_closed()
+    # Runtime stop closes the handles of the reloaded registration.
+    assert second.is_closed()
     assert runtime.canonical_databases() == ()
 
 
-def test_a_removed_extensions_database_is_unregistered_through_the_runtime(
+def test_a_disabled_then_removed_extensions_database_is_unregistered_through_the_runtime(
     config: Config, tmp_path: Path
 ) -> None:
     data_dir = config.data_dir
-    write_extension(data_dir, "notes_ext", _notes_extension(tmp_path / "lifecycle.txt"))
+    lifecycle = tmp_path / "lifecycle.txt"
+    write_extension(data_dir, "notes_ext", _notes_extension(lifecycle))
 
     runtime = Runtime(config)
     runtime.start()
@@ -134,10 +115,15 @@ def test_a_removed_extensions_database_is_unregistered_through_the_runtime(
         with pytest.raises(ValueError, match="core vBot database"):
             asyncio.run(runtime.unregister_extension_database("sessions"))
 
+        # A live disable closes the database after the owner's shutdown handlers.
+        asyncio.run(runtime.apply_extension_disabled_change({"notes_ext"}))
+        assert database.is_closed()
+        assert _extension_database(runtime) is None
+        assert marker_lines(lifecycle) == ["shutdown-open=True"]
+
         # Removing an Extension deletes its file; its database stays registered.
         (data_dir / "extensions" / "notes_ext.py").unlink()
         asyncio.run(runtime.reload_extensions())
-        assert database.is_closed()
         marker = read_marker(data_dir)
         assert marker is not None and DATABASE_NAME in marker.databases
 

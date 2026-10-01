@@ -33,8 +33,8 @@ def package(body: bytes = b"Read this guide.", *, unsafe: bool = False) -> bytes
 def test_skill_archive_upload_previews_installs_and_replaces_in_each_scope(
     tmp_path: Path,
 ) -> None:
-    # Real Runtime (about a second): the installed package must reach the live inventory.
-    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data")))
+    # Real test-mode Runtime: the installed package must reach the live inventory.
+    app = create_app(runtime=Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test"))
 
     with TestClient(app) as client:
         app.state.runtime.agents.create("reader", "Reader")

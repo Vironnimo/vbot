@@ -121,6 +121,9 @@ JSON_MEDIA_TYPE = "application/json"
 
 JSON_REQUEST_BODY_MAX_BYTES = 1_048_576
 
+# How often a speech progress stream reports while the operation still runs.
+SPEECH_PROGRESS_HEARTBEAT_SECONDS = 0.5
+
 
 class _UploadTooLargeMultipartError(MultiPartException):  # type: ignore[misc]
     """Abort multipart parsing before an oversized file part is spooled."""
@@ -934,7 +937,7 @@ async def _stream_speech(
     try:
         while not task.done():
             yield json.dumps({"type": "progress", **progress.snapshot()}) + "\n"
-            await asyncio.wait({task}, timeout=0.5)
+            await asyncio.wait({task}, timeout=SPEECH_PROGRESS_HEARTBEAT_SECONDS)
         try:
             result = task.result()
         except SpeechError as exc:

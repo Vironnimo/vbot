@@ -20,45 +20,49 @@ from tests.core.runtime.runtime_test_support import (
 )
 
 
-@pytest.mark.parametrize("enable", [False, True])
 def test_extension_change_also_applies_recall_and_skill_changes(
-    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, enable: bool
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_extension(config.data_dir, "capabilities_ext", CAPABILITY_EXT_SOURCE)
     write_settings(
         config.data_dir,
-        {
-            "extensions": {"disabled": ["capabilities_ext"] if enable else []},
-            "recall": {"backend": "sqlite_fts" if enable else "ext_recall"},
-        },
+        {"extensions": {"disabled": []}, "recall": {"backend": "ext_recall"}},
     )
     runtime = Runtime(config)
     runtime.start()
     try:
-        previous = runtime.storage.load_settings()
-        skill_root = tmp_path / "new-skills"
-        write_skill(skill_root, "new-skill", "Test newly configured directory.")
-        runtime.storage.update_settings_sections(
-            {
-                "extensions": {"disabled": [] if enable else ["capabilities_ext"]},
-                "recall": {"backend": "ext_recall" if enable else "sqlite_fts"},
-                "skills": {"directories": [str(skill_root)]},
-            }
-        )
         recall_reload = Mock(wraps=runtime.reload_recall_backend)
         monkeypatch.setattr(runtime, "reload_recall_backend", recall_reload)
 
-        effects = asyncio.run(
-            runtime.apply_settings_change(previous, runtime.storage.load_settings())
-        )
+        def change(*, enable: bool) -> None:
+            """Disable (surgical path) or re-enable (full reload) the Extension."""
+            previous = runtime.storage.load_settings()
+            skill_root = tmp_path / f"skills-enable-{enable}"
+            write_skill(skill_root, f"new-skill-{enable}", "Test newly configured directory.")
+            runtime.storage.update_settings_sections(
+                {
+                    "extensions": {"disabled": [] if enable else ["capabilities_ext"]},
+                    "recall": {"backend": "ext_recall" if enable else "sqlite_fts"},
+                    "skills": {"directories": [str(skill_root)]},
+                }
+            )
+            recall_reload.reset_mock()
 
-        assert effects == SettingsChangeEffects(commands_changed=True, skills_changed=True)
-        assert (runtime.recall_backend.__class__.__name__ == "ExtBackend") is enable
-        assert ("ext_echo" in {tool.name for tool in runtime.tools.list_tools()}) is enable
-        assert "new-skill" in {skill.name for skill in runtime.skills_for(None).list_all()}
-        # The full Extension reload uses its injected Recall callback; only
-        # surgical disable needs the independent Settings-driven refresh.
-        assert recall_reload.call_count == (0 if enable else 1)
+            effects = asyncio.run(
+                runtime.apply_settings_change(previous, runtime.storage.load_settings())
+            )
+
+            assert effects == SettingsChangeEffects(commands_changed=True, skills_changed=True)
+            assert (runtime.recall_backend.__class__.__name__ == "ExtBackend") is enable
+            assert ("ext_echo" in {tool.name for tool in runtime.tools.list_tools()}) is enable
+            skills = {skill.name for skill in runtime.skills_for(None).list_all()}
+            assert f"new-skill-{enable}" in skills
+            # The full Extension reload uses its injected Recall callback; only
+            # surgical disable needs the independent Settings-driven refresh.
+            assert recall_reload.call_count == (0 if enable else 1)
+
+        change(enable=False)
+        change(enable=True)
     finally:
         runtime.stop()
 

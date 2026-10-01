@@ -11,6 +11,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
+import server.app as server_app
 from core.model_tasks import (
     SpeechConfigurationError,
     SpeechSynthesisResult,
@@ -87,10 +88,13 @@ def test_speech_endpoints_reject_bad_bodies_before_calling_speech(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_transcription_stream_reports_the_live_phase_and_reaps_disconnect() -> None:
+async def test_transcription_stream_reports_the_live_phase_and_reaps_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # TestClient reads whole responses, so the heartbeat and disconnect reaping
-    # are observed on the endpoint's progress stream directly. The stream's
-    # fixed 0.5 s heartbeat is the one real wait here.
+    # are observed on the endpoint's progress stream directly. The shortened
+    # heartbeat is the one real wait here.
+    monkeypatch.setattr(server_app, "SPEECH_PROGRESS_HEARTBEAT_SECONDS", 0.01)
     cancelled = asyncio.Event()
 
     async def transcribe(progress: Any) -> Any:

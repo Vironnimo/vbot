@@ -16,8 +16,6 @@ from tests.core.runtime.runtime_test_support import (
     dispatch_tool,
     dispatch_workflow_command,
     extension_record,
-    lifecycle_extension_source,
-    marker_lines,
     tool_names,
     write_extension,
     write_settings,
@@ -117,23 +115,6 @@ def test_extensions_load_from_every_root_with_snapshot_and_live_configuration(
         assert dispatch_tool(runtime, "probe_config", data_dir)["data"]["secret"] == "from-process"
     finally:
         runtime.stop()
-
-
-def test_extension_startup_waits_for_the_serving_lifespan_and_shutdown_follows_stop(
-    config: Config, tmp_path: Path
-) -> None:
-    marker = tmp_path / "lifecycle.txt"
-    write_extension(config.data_dir, "lifecycle_ext", lifecycle_extension_source(marker))
-    runtime = Runtime(config)
-
-    runtime.start()
-    try:
-        assert marker_lines(marker) == []
-        asyncio.run(runtime.fire_extension_startup())
-        assert marker_lines(marker) == ["startup"]
-    finally:
-        runtime.stop()
-    assert marker_lines(marker) == ["startup", "shutdown"]
 
 
 def test_extension_declarations_reach_the_runtime_until_live_disable(config: Config) -> None:

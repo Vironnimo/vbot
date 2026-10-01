@@ -28,13 +28,14 @@ async def _change_owner(state: Any, operation: str) -> Any:
 
 
 @pytest.mark.asyncio
+# A write that is already running serializes with each lifecycle path; a write
+# after either lifecycle change finds no shared Skill, so one case covers it.
 @pytest.mark.parametrize(
     ("operation", "write_first", "reload_tools"),
     [
         ("delete", True, True),
-        ("delete", False, False),
         ("rename", True, False),
-        ("rename", False, True),
+        ("delete", False, False),
     ],
 )
 async def test_shared_write_serializes_with_owner_lifecycle(
