@@ -332,7 +332,7 @@
     busy = true;
     try {
       const result = await restoreArchiveEntry(entry.entry_id);
-      finishRestore(entry, result);
+      await finishRestore(entry, result);
     } catch (error) {
       if (
         error?.code === 'archive_restore_conflict' &&
@@ -369,7 +369,7 @@
     restoreAs = { ...restoreAs, error: '' };
     try {
       const result = await restoreArchiveEntry(entry.entry_id, { targetId });
-      finishRestore(entry, result);
+      await finishRestore(entry, result);
     } catch (error) {
       if (!restoreAs) return;
       restoreAs = {
@@ -385,7 +385,7 @@
     }
   }
 
-  function finishRestore(entry, result) {
+  async function finishRestore(entry, result) {
     const warnings = restoreWarningsText(result);
     onToast({
       title: t('archive.restore.success', {
@@ -396,8 +396,12 @@
     });
     restoreAs = null;
     selectedIds.delete(entry.entry_id);
-    if (shownEntryId === entry.entry_id) navigation.up([]);
     void loadList({ keepCount: true });
+    // Going up is a Back step when the list is the previous entry, and Back
+    // closes an open dialog instead of navigating: let "Restore as" close
+    // first.
+    await tick();
+    if (shownEntryId === entry.entry_id) navigation.up([]);
   }
 
   function requestPurgeShown() {

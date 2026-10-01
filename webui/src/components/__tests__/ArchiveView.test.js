@@ -73,6 +73,22 @@ const LEGACY = entry({
   not_restorable_reason: 'kind_not_restorable',
 });
 
+// The App navigator goes up with Back when the list is the previous entry,
+// and Back only closes an open dialog: going up while one is open stays.
+function dialogAwareNavigation() {
+  const base = createStandaloneNavigation();
+  return {
+    active: true,
+    get place() {
+      return base.place;
+    },
+    navigate: base.navigate,
+    replace: base.replace,
+    up: (...args) =>
+      document.querySelector('[role="dialog"]') ? false : base.up(...args),
+  };
+}
+
 function page(entries, { next_cursor = null, retention_days = 30 } = {}) {
   return { entries, next_cursor, retention_days };
 }
@@ -254,7 +270,7 @@ describe('ArchiveView', () => {
   });
 
   it('opens Restore as when a restore meets a taken ID and restores under the new ID', async () => {
-    const navigation = createStandaloneNavigation();
+    const navigation = dialogAwareNavigation();
     listMock.mockResolvedValue(page([CODER]));
     showMock.mockResolvedValue(detailOf(CODER));
     restoreMock
