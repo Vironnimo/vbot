@@ -872,10 +872,24 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     tools = _REVIEWS[scope][0]
     assert review["tool_restriction"] == tools
     # The production brief names exactly the Tools its Run can call: backticked
-    # identifiers are Tool names unless they are parameters of those Tools.
-    parameters = {name for tool in tools for name in _TOOL_PARAMETERS[tool]["properties"]}
+    # identifiers are Tool names unless they are parameters of those Tools or
+    # values those parameters take.
+    properties = [
+        (name, schema)
+        for tool in tools
+        for name, schema in _TOOL_PARAMETERS[tool]["properties"].items()
+    ]
+    parameters = {name for name, _schema in properties}
+    values = {value for _name, schema in properties for value in schema.get("enum", ())}
     identifiers = {token for token in review["message"].split("`")[1::2] if token.isidentifier()}
-    assert identifiers - parameters == set(tools)
+    assert identifiers - parameters - values == set(tools)
+    # The brief states the limits the Run enforces: its Tool-call limit and, when
+    # it can write Skills, that the list marks the Skills it cannot change.
+    assert review["max_tool_iterations"] == REFLECTION_TOOL_ITERATION_LIMIT
+    assert f"at most {REFLECTION_TOOL_ITERATION_LIMIT} calls" in review["message"]
+    assert ("marks Skills you cannot change here as read-only" in review["message"]) == (
+        "skill_manage" in tools
+    )
     # Any other Tool is refused before it runs, naming what the review can call.
     deny = review["tool_denial_resolver"]
     assert [deny(tool) for tool in tools] == [None] * len(tools)
@@ -932,8 +946,8 @@ def test_real_skill_authoring_prompts_do_not_teach_removed_fields(
         else reflection_brief(bundled, cast("Any", prompt))
     )
 
-    # Private authoring uses the compact contract, without edit or file fields.
-    for removed in ("old_string", "new_string", "file_content", "`match`"):
+    # Retired authoring fields are not taught.
+    for removed in ("file_content", "`match`"):
         assert removed not in text
     # The catalog shows origin headings, not origin tags.
     assert "origin `agent`" not in text

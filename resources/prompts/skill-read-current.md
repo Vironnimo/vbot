@@ -1,0 +1,1 @@
+Before changing a Skill file, read its current text with `skill`: `name`, plus `file_path` "SKILL.md" for the whole document or the support file's path. Text earlier in the conversation can be outdated. Prefer action `patch` with a short unique `old_string`. Leave equivalent guidance alone.

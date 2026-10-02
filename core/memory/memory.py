@@ -95,26 +95,27 @@ _PROMPT_CUT_LIST_HINT = (
 # and the block is gated on "memory tool enabled" (not "memory files non-empty"),
 # it now appears whenever ``memory_prompt_mode != off`` — including before the first
 # entry, when the agent needs it most (this is the empty-memory fix from D5).
-# Complements the memory tool's WHEN/SKIP description with the writing-quality half:
-# what makes an entry worth its permanent prompt cost (it spares the user future
-# steering) and the one non-obvious rule (declarative facts round-trip safely,
-# imperative self-instructions do not). Two examples — a user fact and a project
-# fact — cover both scopes.
+# Complements the memory tool's description with routing and writing quality. It
+# states the same routing rule as the Skill guidance and the review briefs
+# (``learning-routing.md``): task lessons and task-specific preferences live in
+# the task's Skill, Memory keeps only what matters in every Session. The one
+# non-obvious writing rule (declarative facts round-trip safely, imperative
+# self-instructions do not) gets a user and a project example.
 _MEMORY_GUIDANCE = (
-    "Memory is shown in future Sessions, so keep only durable facts that reduce repeated "
-    "user steering or materially improve future decisions. General communication "
-    "preferences belong in user Memory when they express standing expectations; a one-off "
-    "request does not establish one. Stable environment or project facts belong in agent "
-    "Memory; name the project when needed to avoid applying them elsewhere. Procedures "
-    "belong in Skills. Skip routine knowledge, easily rediscovered facts, task progress, "
-    "completed-work logs, transient failures, guesses, and secrets. Leave equivalent facts "
-    "alone, replace superseded facts, and consolidate overlap; the entries below may be "
-    "older than the stored ones. Write declarative facts, not "
-    'instructions to yourself: "User prefers concise answers", not "Always answer '
-    'concisely"; "Project uses pytest with xdist", not "Run tests with pytest -n 4". Save '
-    "worthwhile changes in the same turn and check the Tool result before saying they were "
-    "saved. No change is needed when nothing qualifies; unavailable Memory is not a reason "
-    "to put the fact in a Skill."
+    "Memory holds facts that matter in every future Session, whatever the task. Lessons "
+    "about how to do one kind of task, including the user's preferences and corrections for "
+    "that work, belong in that task's Skill, not in Memory, even when you cannot change "
+    "Skills. User Memory holds who the user is and preferences that apply to all of their "
+    "work, such as the language to reply in. Agent Memory holds stable facts about the "
+    "environment and projects; name the project when a fact applies only there. Leave out "
+    "task progress, completed-work logs, facts that are easy to look up again, transient "
+    "failures, guesses and secrets. Write declarative facts, not instructions to yourself: "
+    '"User prefers concise answers", not "Always answer concisely"; "Project uses pytest '
+    'with xdist", not "Run tests with pytest -n 4". Leave an equivalent entry alone, replace '
+    "a superseded one and merge overlapping ones; the entries below can be older than the "
+    "stored ones. When you can change Memory, save a worthwhile fact in the same turn, and "
+    "say it was saved only after the Tool result confirms it. A fact that belongs in Memory "
+    "never goes into a Skill, even when you cannot change Memory."
 )
 # The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
 # input: the block renders only when the memory tool is enabled for the agent
