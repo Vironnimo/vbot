@@ -537,8 +537,7 @@ def _resolve_timezone(value: str | ZoneInfo | None) -> ZoneInfo:
                 f"timezone is not a known IANA timezone: {value}"
             ) from error
     try:
-        local = get_localzone()
-        return local if isinstance(local, ZoneInfo) else ZoneInfo(str(local))
+        return get_localzone()
     except Exception as error:
         get_logger("automation.cron").warning("Could not resolve system timezone: %s", error)
         return ZoneInfo("UTC")

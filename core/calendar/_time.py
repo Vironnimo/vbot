@@ -19,8 +19,7 @@ _LOGGER = get_logger("calendar.service")
 def _default_timezone() -> ZoneInfo:
     """Resolve the server's local zone, falling back to UTC when undetectable."""
     try:
-        zone = get_localzone()
-        return zone if isinstance(zone, ZoneInfo) else ZoneInfo(str(zone))
+        return get_localzone()
     except Exception as error:
         _LOGGER.warning("Could not resolve system timezone: %s", error)
         return ZoneInfo("UTC")
