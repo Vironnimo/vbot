@@ -18,6 +18,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     reportClientMetrics: (report) => call('performance.client_report', report),
     updateSettings: (params) => call('settings.update', params),
     getRecallIndexStatus: () => call('recall.status'),
+    dismissBackgroundActivity: (id) => call('activity.dismiss', { id }),
+    cancelLocalSetup: (target) =>
+      call('task_model.local_setup_cancel', { target }),
     rebuildRecallIndex: () => call('recall.rebuild_index'),
     setServiceKey: (params) => call('settings.set_service_key', params),
     listAgents: () => call('agent.list'),

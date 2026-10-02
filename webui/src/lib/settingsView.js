@@ -65,6 +65,7 @@ export {
   describeLocalModelSetup,
   describeDownloadProgress,
 } from './settingsView/localModels.js';
+export { describeBackgroundActivity } from './settingsView/activity.js';
 export {
   getWebSearchSettings,
   getWebServiceKeys,

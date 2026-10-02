@@ -133,6 +133,9 @@ export function createAppControllerState() {
     // The latest pushed `recall_index_status` payload; Settings reads the
     // full status on open and applies later pushes.
     recallIndexStatus: null,
+    // The server's background activity list: loaded on every connection,
+    // then replaced by each `activity_status` push.
+    backgroundActivity: [],
     backgroundBashStatusEvents: [],
     runServerEvents: [],
     serverNoticeState: '',
@@ -165,6 +168,7 @@ export function createAppController({
   onReloadExtensionPages = async () => {},
   onExtensionChange = () => {},
   onLoadDataStoreStatus = async () => {},
+  onLoadBackgroundActivity = async () => {},
   onCheckWebuiBuild = async () => {},
   unavailableNoticeDelayMs = SERVER_UNAVAILABLE_NOTICE_DELAY_MS,
   restoredNoticeDurationMs = SERVER_RESTORED_NOTICE_DURATION_MS,
@@ -271,6 +275,7 @@ export function createAppController({
         : [];
       const refreshOwners = [
         onLoadDataStoreStatus,
+        onLoadBackgroundActivity,
         onReloadExtensionPages,
         onCheckWebuiBuild,
       ];
@@ -316,6 +321,11 @@ export function createAppController({
     }
     if (event.type === 'recall_index_status') {
       state.recallIndexStatus = event.payload ?? null;
+      return;
+    }
+    if (event.type === 'activity_status') {
+      const activities = event.payload?.activities;
+      state.backgroundActivity = Array.isArray(activities) ? activities : [];
       return;
     }
     if (event.type !== 'resource_changed') {

@@ -242,6 +242,20 @@ export function installLocalSetup(target, options = {}) {
   return rpc('task_model.local_setup_install', { target }, options);
 }
 
+/**
+ * Stop the running installation of one local target's engine and wait until
+ * it has stopped; finished downloads are kept. Resolves with the same shape as
+ * `getLocalSetupStatus`.
+ */
+export function cancelLocalSetup(target, options = {}) {
+  requireNonEmptyString(
+    target,
+    'Target must not be empty',
+    'task_model.local_setup_cancel',
+  );
+  return rpc('task_model.local_setup_cancel', { target }, options);
+}
+
 export function restartAfterLocalSpeechSetup(options = {}) {
   return rpc(
     'speech.local_setup_restart',

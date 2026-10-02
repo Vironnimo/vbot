@@ -111,6 +111,7 @@
     acknowledgeDataStoreIncident,
     getDataStoreStatus,
     getServedWebuiBuild,
+    listBackgroundActivity,
     reportClientMetrics,
   } from '$lib/api.js';
   import { startClientMetrics } from '$lib/clientMetrics.js';
@@ -206,6 +207,7 @@
 
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
   let recallIndexStatus = $derived(appControllerState.recallIndexStatus);
+  let backgroundActivity = $derived(appControllerState.backgroundActivity);
   let memoriesRefreshToken = $derived(appControllerState.memoriesRefreshToken);
   let projectsRefreshToken = $derived(appControllerState.projectsRefreshToken);
   let sessionsRefreshToken = $derived(appControllerState.sessionsRefreshToken);
@@ -604,6 +606,17 @@
     }
   };
 
+  const loadBackgroundActivity = async () => {
+    try {
+      const result = await listBackgroundActivity();
+      appControllerState.backgroundActivity = Array.isArray(result?.activities)
+        ? result.activities
+        : [];
+    } catch {
+      // The next `activity_status` push or connection brings the list.
+    }
+  };
+
   const acknowledgeDataStoreRecovery = async () => {
     const incidentId = dataStoreIncident?.incident_id;
     if (!incidentId) {
@@ -703,6 +716,7 @@
     onReloadExtensionPages: extensions.loadExtensionPages,
     onExtensionChange: extensions.publishChange,
     onLoadDataStoreStatus: loadDataStoreStatus,
+    onLoadBackgroundActivity: loadBackgroundActivity,
     onCheckWebuiBuild: checkWebuiBuild,
   });
   navigator.start();
@@ -1030,6 +1044,7 @@
           onOpenSetupGuide={setup.reopenOnboarding}
           {modelsRefreshToken}
           {recallIndexStatus}
+          {backgroundActivity}
           {clientsRefreshToken}
           {channelsRefreshToken}
           {archiveRefreshToken}

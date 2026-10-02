@@ -236,6 +236,33 @@ describe('App controller', () => {
     });
   });
 
+  it('loads background activity on every connection and applies its pushes', async () => {
+    const onLoadBackgroundActivity = vi.fn().mockResolvedValue(undefined);
+    const { controller, state } = setup({ onLoadBackgroundActivity });
+    expect(state.backgroundActivity).toEqual([]);
+
+    for (const replayStatus of ['resumed', 'epoch_changed']) {
+      await controller.handleServerEvent({
+        type: 'connection_ready',
+        replay_status: replayStatus,
+        active_runs: [],
+      });
+    }
+    expect(onLoadBackgroundActivity).toHaveBeenCalledTimes(2);
+
+    const activities = [{ id: 'recall_index', state: 'running' }];
+    await controller.handleServerEvent({
+      type: 'activity_status',
+      payload: { activities },
+    });
+    expect(state.backgroundActivity).toEqual(activities);
+    await controller.handleServerEvent({
+      type: 'activity_status',
+      payload: {},
+    });
+    expect(state.backgroundActivity).toEqual([]);
+  });
+
   it('reloads the data-store projection on connect and invalidation', async () => {
     const onLoadDataStoreStatus = vi.fn().mockResolvedValue(undefined);
     const { controller, state } = setup({ onLoadDataStoreStatus });

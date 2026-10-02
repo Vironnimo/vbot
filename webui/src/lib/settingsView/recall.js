@@ -285,7 +285,7 @@ export function describeEmbeddingInstall(target) {
   };
 }
 
-function countText(value) {
+export function countText(value) {
   return new Intl.NumberFormat(activeLocaleTag()).format(value);
 }
 
@@ -300,7 +300,7 @@ function countOf(value) {
   return Math.max(0, finiteOrNull(value) ?? 0);
 }
 
-function indexErrorText(error) {
+export function indexErrorText(error) {
   const code = textOrEmpty(error?.code);
   const generic = t('settings.recall.indexError.generic');
   return code ? tOr(`settings.recall.indexError.${code}`, generic) : generic;
@@ -327,7 +327,7 @@ function coverageText(state, indexed, total, waiting) {
 
 // The time left while indexing, from the pass's measured rate: "about 12 min
 // left", "about 2.5 hr left"; nothing until the server has measured it.
-function etaText(state, etaSeconds) {
+export function etaText(state, etaSeconds) {
   const seconds = finiteOrNull(etaSeconds);
   if (state !== 'indexing' || seconds === null || seconds <= 0) {
     return '';
