@@ -18,6 +18,11 @@ on:
         required: false
         default: ""
         type: string
+      release_smoke:
+        description: Also provision managed speech in the server smoke and smoke the compiled installer
+        required: false
+        default: true
+        type: boolean
     secrets:
       VBOT_RELEASE_SIGNING_KEY:
         required: false
@@ -27,6 +32,11 @@ on:
         description: Sign update archives with the configured release key
         required: false
         default: false
+        type: boolean
+      release_smoke:
+        description: Also provision managed speech in the server smoke and smoke the compiled installer
+        required: false
+        default: true
         type: boolean
 
 permissions:
@@ -87,7 +97,7 @@ jobs:
           $arguments = @(
             "--package", "build/windows/windows-x86_64/${{ matrix.shape }}"
           )
-          if ("${{ matrix.shape }}" -eq "server") {
+          if ("${{ matrix.shape }}" -eq "server" -and "${{ inputs.release_smoke }}" -eq "true") {
             $arguments += "--speech"
           }
           python scripts/windows/smoke.py @arguments
@@ -118,6 +128,7 @@ jobs:
             "/DUpdateChannel=${{ inputs.channel || 'release' }}" `
             scripts/windows/vbot.iss
       - name: Smoke native installer and uninstall
+        if: inputs.release_smoke
         shell: pwsh
         run: |
           $version = python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])"

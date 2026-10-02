@@ -95,13 +95,15 @@ managed STT and both TTS recipes, including repeated Chatterbox setup, through
 inference), compiles the per-user installer, and runs it through silent
 installation and native uninstall in a disposable runner with
 `smoke_installer.ps1`, checking the recorded target, startup selection, server
-shutdown and preserved user data. It uploads the installer, archive, signature,
+shutdown and preserved user data; `release_smoke: false` skips the speech
+provisioning and the installer smoke. It uploads the installer, archive, signature,
 runtime inventory and `vbot-release.json` as workflow artifacts and publishes
 nothing by itself. Two workflows call it in signed mode:
 
 - [`main-build.yml`](../../.github/workflows/main-build.yml) builds the commit of
-  every push to `main` that passed CI with `--channel main` and replaces the assets
-  of the rolling `main-build` prerelease, which `install.ps1 -Main` installs and
+  every push to `main` with `--channel main` and without the release-only smokes,
+  alongside the complete CI, and once both passed replaces the assets of the
+  rolling `main-build` prerelease, which `install.ps1 -Main` installs and
   main-channel installations update from. It is not a release.
 - [`release.yml`](../../.github/workflows/release.yml) builds with `--channel release`
   alongside the Linux packages and the complete CI, checks the complete asset set

@@ -1,24 +1,16 @@
 name: CI
 
 # Complete verification on every supported platform, with the one Python version
-# vBot supports (the one its packages bundle): on every push to main, as the
-# release gate (release.yml), and by hand. Before it pushes
-# main, scripts/push.py runs its static checks, test suites and WebUI build locally.
-# A green push to main publishes its signed packages (main-build.yml).
+# vBot supports (the one its packages bundle). main-build.yml calls it on every
+# push to main, release.yml as the release gate, and it can be started by hand.
+# Before it pushes main, scripts/push.py runs its static checks, test suites and
+# WebUI build locally.
 on:
-  push:
-    branches: [main]
   workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
-
-# A newer push supersedes the run of an older one that is still in progress;
-# runs started by hand or by a release always run to the end.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   static:

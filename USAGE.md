@@ -92,7 +92,7 @@ Windows offers three shapes; Linux installs the Server shape.
 Every installation follows one update channel, which `vbot update` installs from:
 
 - `release` (default): the latest published GitHub release.
-- `main`: the newest main build. After every push to `main` that passes CI, the signed packages of that commit replace the previous ones on the rolling GitHub prerelease `main-build`. A main build is not a release: it carries unreleased changes, and `releases/latest` never points to it.
+- `main`: the newest main build. After every push to `main` whose CI and package builds pass, the signed packages of that commit replace the previous ones on the rolling GitHub prerelease `main-build`. A main build is not a release: it carries unreleased changes, and `releases/latest` never points to it.
 
 Install the newest main build with `-Main` on Windows or `--main` on Linux; that installation then updates from main. An existing installation can switch channels (see [Updating](#updating)).
 
@@ -1305,7 +1305,8 @@ npx vitest run src/lib
 Maintainers push `main` with `python scripts/push.py`, which runs every check,
 the complete suites included, on the commit it pushes. CI
 (`.github/workflows/ci.yml`) runs the complete suites on Linux and Windows on
-every push to `main` and before every release.
+every push to `main`, alongside the main package builds (`main-build.yml`), and
+before every release.
 
 The Playwright E2E suite under `tests/e2e/` is separate from the regular test runs because it controls a real server and browser environment. Local runs remain explicit opt-in and follow the repository workflow instructions; Release CI calls the same reusable Chromium job as a required pre-publish gate.
 
