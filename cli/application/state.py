@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import logging
 import os
@@ -325,12 +324,13 @@ def exclusive(
         while True:
             handle.seek(0)
             try:
-                if os.name == "nt":
-                    msvcrt = importlib.import_module("msvcrt")
+                if sys.platform == "win32":
+                    import msvcrt
 
                     msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
                 else:
-                    fcntl = importlib.import_module("fcntl")
+                    import fcntl
+
                     fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except OSError as exc:
@@ -343,12 +343,13 @@ def exclusive(
             yield
         finally:
             handle.seek(0)
-            if os.name == "nt":
-                msvcrt = importlib.import_module("msvcrt")
+            if sys.platform == "win32":
+                import msvcrt
 
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
-                fcntl = importlib.import_module("fcntl")
+                import fcntl
+
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 

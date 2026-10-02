@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import math
 import os
@@ -61,34 +60,28 @@ def process_started(process: psutil.Process) -> float:
 
 def _lock_claim(handle: IO[bytes]) -> None:
     """Take the non-blocking lifetime lock on byte 0; ``OSError`` while another holds it."""
-    if os.name == "nt":
-        msvcrt = importlib.import_module("msvcrt")
+    if sys.platform == "win32":
+        import msvcrt
 
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
     else:
         import fcntl
 
-        fcntl.flock(  # type: ignore[attr-defined]
-            handle.fileno(),
-            fcntl.LOCK_EX | fcntl.LOCK_NB,  # type: ignore[attr-defined]
-        )
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 def _unlock_claim(handle: IO[bytes]) -> None:
     with suppress(OSError):
         handle.seek(0)
-        if os.name == "nt":
-            msvcrt = importlib.import_module("msvcrt")
+        if sys.platform == "win32":
+            import msvcrt
 
             msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         else:
             import fcntl
 
-            fcntl.flock(  # type: ignore[attr-defined]
-                handle.fileno(),
-                fcntl.LOCK_UN,  # type: ignore[attr-defined]
-            )
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 @contextmanager

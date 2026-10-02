@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import re
@@ -470,7 +469,7 @@ def _port_allocation_lock() -> Iterator[None]:
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
             return
 
-        fcntl = importlib.import_module("fcntl")
+        import fcntl
 
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
