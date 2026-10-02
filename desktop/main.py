@@ -20,6 +20,7 @@ both.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import importlib
 import logging
 import os
@@ -27,6 +28,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -80,6 +82,11 @@ DESKTOP_LOG_FILE_SUFFIX = ".log"
 _DESKTOP_LOG_HANDLER_FLAG = "_vbot_desktop_log_handler"
 _DESKTOP_LOG_FORMAT = "%(asctime)s [%(vbot_level)s] %(name)s - %(message)s"
 _DESKTOP_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+# Fatal errors (a native crash, a fatal interpreter error) bypass logging; the
+# fault handler writes them to this file beside the daily logs instead.
+DESKTOP_CRASH_LOG_NAME = "desktop-crash.log"
+# Checked at each start: a larger crash log moves to its single previous generation.
+_DESKTOP_CRASH_LOG_ROTATE_BYTES = 1024 * 1024
 
 
 class HttpResponse(Protocol):
@@ -251,6 +258,43 @@ def close_desktop_logging(handler: logging.Handler | None) -> None:
     original_propagate = getattr(handler, "original_logger_propagate", True)
     vbot_logger.setLevel(original_level)
     vbot_logger.propagate = original_propagate
+
+
+def enable_desktop_crash_log(desktop_config_directory: Path | None = None) -> None:
+    """Record this process's fatal errors in the crash log beside its daily logs.
+
+    Native libraries (WebView2 through .NET, PortAudio, the wake word and speech
+    models) can end the process without a Python traceback. Each start appends
+    one line in the log format, so a crashed process's dump (every thread's
+    Python stack, and the C stack where the platform provides one) follows the
+    line of its own start. The fault handler keeps the file object referenced,
+    so it stays open until the interpreter has finalized.
+    """
+
+    path = (
+        (desktop_config_directory or config_dir())
+        / DESKTOP_LOG_DIRECTORY_NAME
+        / DESKTOP_CRASH_LOG_NAME
+    )
+    started = time.strftime(_DESKTOP_LOG_DATE_FORMAT)
+    header = f"{started} [INFO] vbot.desktop - Desktop process started (pid={os.getpid()})\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A missing file needs nothing; a file another Desktop process holds open
+        # cannot move and keeps growing until a later start.
+        with suppress(OSError):
+            if path.stat().st_size > _DESKTOP_CRASH_LOG_ROTATE_BYTES:
+                os.replace(path, path.with_name(f"{path.name}.1"))
+        crash_log = path.open("ab", buffering=0)
+        try:
+            crash_log.write(header.encode("utf-8"))
+        except OSError:
+            crash_log.close()
+            raise
+    except OSError as exc:
+        logger.warning("Opening the crash log failed (path=%s error=%s)", path, exc)
+        return
+    faulthandler.enable(file=crash_log, all_threads=True, c_stack=True)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -1096,6 +1140,7 @@ def main(argv: list[str] | None = None) -> None:
     """Open the vBot Desktop shell, routing target selection through the window."""
 
     log_handler = configure_desktop_logging()
+    enable_desktop_crash_log()
     try:
         opened = launch_desktop(argv)
     except Exception:
