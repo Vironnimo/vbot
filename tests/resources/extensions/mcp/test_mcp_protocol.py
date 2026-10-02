@@ -12,6 +12,7 @@ from dataclasses import replace
 import mcp.types as types
 import pytest
 import uvicorn
+from mcp.client.auth import OAuthFlowError
 from mcp.server import Server
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
@@ -150,7 +151,13 @@ async def _stop_sse_shutdown_watcher() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_failing_connection_logs_once_until_it_recovers(host, server, monkeypatch, caplog):
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("server unreachable"), OAuthFlowError("Protected resource metadata request failed")],
+)
+async def test_a_failing_connection_logs_once_until_it_recovers(
+    host, server, monkeypatch, caplog, failure
+):
     runner = runner_for(host, server, monkeypatch)
     attempts = 0
 
@@ -158,7 +165,7 @@ async def test_a_failing_connection_logs_once_until_it_recovers(host, server, mo
         nonlocal attempts
         attempts += 1
         if attempts <= 3:
-            raise OSError("server unreachable")
+            raise failure
         return server
 
     monkeypatch.setattr(runner, "_transport", flaky_transport)

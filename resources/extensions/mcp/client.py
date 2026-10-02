@@ -22,7 +22,7 @@ import httpx2
 import mcp.types as types
 from jsonschema import Draft202012Validator
 from mcp import Client
-from mcp.client.auth import OAuthClientProvider
+from mcp.client.auth import OAuthClientProvider, OAuthFlowError
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
@@ -64,11 +64,14 @@ STDERR_CHUNK_SIZE = 4096
 _LOGGER = logging.getLogger("vbot.extensions.mcp")
 # Tests patch this seam instead of the process-wide ``asyncio.sleep``.
 _sleep = asyncio.sleep
+# A failed sign-in (``OAuthFlowError``) is expected too: SDK 2.2 also raises it when the
+# server's OAuth metadata answers with 5xx/429 or names another issuer.
 EXPECTED_FAILURES = (
     ValueError,
     OSError,
     TimeoutError,
     MCPError,
+    OAuthFlowError,
     httpx2.HTTPError,
     anyio.EndOfStream,
     anyio.BrokenResourceError,
@@ -688,8 +691,8 @@ class ConnectionRunner:
         return await self._task_send(operation, arguments)
 
     async def _task_send(self, method: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        # SDK 2.1.1's typed send_request validates historical task handles as
-        # CallToolResult and rejects them. Its pinned dispatcher retains the same
+        # The pinned SDK's (2.2.0) typed send_request validates historical task handles
+        # as CallToolResult and rejects them. Its pinned dispatcher retains the same
         # transport, cancellation and progress semantics without that wrong schema.
         # Keep this one compatibility seam covered by the real stdio task test.
         session = self._client().session
