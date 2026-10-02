@@ -20,6 +20,7 @@ import pytest
 from core.skills import SkillPolicyError
 from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
+from core.statistics import SkillUse
 from server.events import ServerEventBus
 from server.rpc.skill_methods import install_skill_upload
 from tests.server.rpc_test_support import call, resource_changes, rpc_error, rpc_result
@@ -87,11 +88,25 @@ class _SkillRuntime:
         self.policy_calls.append(("set_shared", agent_id, name, shared, receivers))
 
 
+class _Statistics:
+    """The Statistics answer the inventory reads Skill use from."""
+
+    def __init__(self) -> None:
+        self.usage: dict[tuple[str, str], SkillUse] = {}
+        self.error: Exception | None = None
+
+    async def skill_usage_async(self) -> dict[tuple[str, str], SkillUse]:
+        if self.error is not None:
+            raise self.error
+        return self.usage
+
+
 def _state(tmp_path: Path) -> Any:
     return SimpleNamespace(
         runtime=_SkillRuntime(tmp_path),
         event_bus=ServerEventBus(),
         agent_delete_lock=asyncio.Lock(),
+        statistics_service=_Statistics(),
     )
 
 
@@ -196,6 +211,73 @@ async def test_install_publishes_the_complete_package_and_refreshes_the_scope(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["global", "agent:builder"])
+async def test_history_pins_archive_and_revert_go_through_the_scope(
+    tmp_path: Path, scope: str
+) -> None:
+    state = _state(tmp_path)
+    document = _scope_root(state, scope) / "demo" / "SKILL.md"
+    await rpc_result(state, "skill.create", scope=scope, name="demo", content=_skill_md())
+    created_text = document.read_text(encoding="utf-8")
+    edited = await rpc_result(
+        state, "skill.update", scope=scope, name="demo", content=_skill_md(body="# Changed\n")
+    )
+    pinned = await rpc_result(state, "skill.set_pinned", scope=scope, name="demo", pinned=True)
+    history = await rpc_result(state, "skill.history", scope=scope, name="demo", limit=2)
+    reverted = await rpc_result(state, "skill.revert", scope=scope, revisions=[edited["revision"]])
+    reverted_text = document.read_text(encoding="utf-8")
+    deleted = await rpc_result(state, "skill.delete", scope=scope, name="demo")
+    archived = await rpc_result(state, "skill.archived", scope=scope)
+    restored = await rpc_result(
+        state, "skill.restore", scope=scope, archive_id=deleted["archive_id"]
+    )
+    restored_text = document.read_text(encoding="utf-8")
+    second = await rpc_result(state, "skill.delete", scope=scope, name="demo")
+    purged = await rpc_result(state, "skill.purge", scope=scope, archive_id=second["archive_id"])
+
+    assert pinned["operation"] == "pin"
+    assert [(entry["kind"], entry["actor"]) for entry in history["revisions"]] == [
+        ("pin", "human"),
+        ("change", "human"),
+    ]
+    [revert] = reverted["revisions"]
+    assert (revert["kind"], revert["reverts"]) == ("revert", [edited["revision"]])
+    assert reverted_text == restored_text == created_text
+    [entry] = archived["archived"]
+    assert (entry["name"], entry["reason"], entry["archived_by"]) == ("demo", "deleted", "human")
+    assert entry["archive_id"] == deleted["archive_id"]
+    assert restored["operation"] == "restore"
+    assert purged["purged"]["archive_id"] == second["archive_id"]
+    assert (await rpc_result(state, "skill.archived", scope=scope))["archived"] == []
+    runtime = state.runtime
+    # Pins and purges change no registry; every write publishes one Skills change.
+    assert (runtime.reload_calls, runtime.invalidated) == _expected_refresh(scope, 6)
+    assert resource_changes(state) == [{"kind": "skills"}] * 8
+
+
+@pytest.mark.asyncio
+async def test_revert_conflict_names_the_later_revision(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    await rpc_result(state, "skill.create", scope="global", name="demo", content=_skill_md())
+    first = await rpc_result(
+        state, "skill.update", scope="global", name="demo", content=_skill_md(body="# One\n")
+    )
+    later = await rpc_result(
+        state, "skill.update", scope="global", name="demo", content=_skill_md(body="# Two\n")
+    )
+
+    error = await rpc_error(state, "skill.revert", scope="global", revisions=[first["revision"]])
+
+    assert error["code"] == "domain_error"
+    assert error["data"] == {
+        "revision": first["revision"],
+        "later": later["revision"],
+        "skill": "demo",
+    }
+    assert "# Two" in (tmp_path / "skills" / "demo" / "SKILL.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_install_preview_writes_and_refreshes_nothing(tmp_path: Path) -> None:
     state = _state(tmp_path)
     source = _package(tmp_path)
@@ -289,6 +371,39 @@ async def test_install_preview_writes_and_refreshes_nothing(tmp_path: Path) -> N
             False,
         ),
         ("skill.inventory", {"scope": "global"}, "invalid_request", "", False),
+        ("skill.history", {"scope": "global", "limit": 0}, "invalid_request", "limit", False),
+        ("skill.history", {"scope": "global", "since": 1}, "invalid_request", "since", False),
+        (
+            "skill.revert",
+            {"scope": "global", "revisions": []},
+            "invalid_request",
+            "revisions",
+            False,
+        ),
+        ("skill.revert", {"scope": "global", "revisions": [9]}, "invalid_request", "9", False),
+        (
+            "skill.set_pinned",
+            {"scope": "global", "name": "demo", "pinned": "yes"},
+            "invalid_request",
+            "pinned",
+            False,
+        ),
+        (
+            "skill.set_pinned",
+            {"scope": "global", "name": "demo", "pinned": True},
+            "invalid_request",
+            "demo",
+            False,
+        ),
+        ("skill.archived", {"scope": "agent:ghost"}, "agent_not_found", "ghost", False),
+        (
+            "skill.restore",
+            {"scope": "global", "archive_id": "gone"},
+            "invalid_request",
+            "gone",
+            False,
+        ),
+        ("skill.purge", {"scope": "global", "archive_id": "../gone"}, "invalid_request", "", False),
         ("skill.inspect", {"id": "missing-id"}, "invalid_request", "missing-id", False),
         (
             "skill.set_disabled",
@@ -498,6 +613,7 @@ async def test_private_install_waits_for_lifecycle_before_scope_validation(
 @pytest.mark.asyncio
 async def test_manager_reads_return_runtime_answers_from_a_worker(tmp_path: Path) -> None:
     state = _state(tmp_path)
+    state.statistics_service.error = RuntimeError("Statistics are busy; retry shortly")
     runtime = state.runtime
     loop_thread = threading.get_ident()
     threads: list[int] = []
@@ -516,10 +632,37 @@ async def test_manager_reads_return_runtime_answers_from_a_worker(tmp_path: Path
     listed = await rpc_result(state, "skill.inventory")
     inspected = await rpc_result(state, "skill.inspect", id="opaque-id")
 
+    # Without Statistics the entries carry no use.
     assert listed == {"skills": [{"name": "deploy"}], "stale_shared": []}
     assert inspected == {"id": "opaque-id", "content": "inspection-sentinel"}
     assert len(threads) == 2
     assert loop_thread not in threads
+
+
+@pytest.mark.asyncio
+async def test_inventory_adds_each_packages_skill_use(tmp_path: Path) -> None:
+    state = _state(tmp_path)
+    state.runtime.inventory = {
+        "skills": [
+            {"name": "deploy", "owner_id": "builder", "shared_with": ["reviewer"]},
+            {"name": "deploy", "owner_id": None, "shared_with": []},
+            {"name": "teach", "owner_id": None, "shared_with": []},
+        ]
+    }
+    state.statistics_service.usage = {
+        ("builder", "deploy"): SkillUse("2026-09-01T10:00:00.000000Z", 2),
+        ("reviewer", "deploy"): SkillUse("2026-09-03T10:00:00.000000Z", 1),
+        ("main", "deploy"): SkillUse("2026-09-02T10:00:00.000000Z", 4),
+    }
+
+    listed = await rpc_result(state, "skill.inventory")
+
+    # The private package counts its owner and receivers; the global one the rest.
+    assert [(entry["uses"], entry["last_used_at"]) for entry in listed["skills"]] == [
+        (3, "2026-09-03T10:00:00.000000Z"),
+        (4, "2026-09-02T10:00:00.000000Z"),
+        (0, None),
+    ]
 
 
 @pytest.mark.asyncio
