@@ -157,7 +157,7 @@ describe('SearchableDropdown', () => {
             value: 'beta',
             label: 'Beta',
             statusDot: 'running',
-            marker: { label: 'Not verified', tooltip: 'Beta is not verified.' },
+            marker: { label: 'Verified' },
           },
           {
             value: 'gamma',
@@ -189,7 +189,7 @@ describe('SearchableDropdown', () => {
     const beta = document.querySelector('[role="option"]');
     expect(beta?.textContent).toContain('Beta');
     expect(
-      beta?.querySelector('[role="img"][aria-label="Not verified"]'),
+      beta?.querySelector('[role="img"][aria-label="Verified"]'),
     ).toBeTruthy();
     expect(trigger.querySelector('.option-marker')).toBeNull();
   });

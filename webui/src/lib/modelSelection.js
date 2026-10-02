@@ -125,29 +125,36 @@ function suitabilityBadgeLabel(reasons) {
 }
 
 // Option fields every catalog Model option carries: its suitability and, when
-// none of its usable Connections has a verified or configured wire profile
-// (model.list `wire_profiles`), a quiet "not verified" marker.
+// at least one of its usable Connections has a verified wire profile
+// (model.list `wire_profiles`), a quiet "verified" check naming the latest
+// verification date. Inferred and configured Models carry no marker.
 function modelOptionFields(model) {
   return { ...suitabilityFields(model), ...wireProfileFields(model) };
 }
 
 function wireProfileFields(model) {
   const profiles = model?.wire_profiles;
-  const statuses =
+  const verified =
     profiles !== null && typeof profiles === 'object'
-      ? Object.values(profiles).map((profile) => profile?.wire_status)
+      ? Object.values(profiles).filter(
+          (profile) => profile?.wire_status === 'verified',
+        )
       : [];
-  if (
-    statuses.length === 0 ||
-    statuses.some((status) => status === 'verified' || status === 'configured')
-  ) {
+  if (verified.length === 0) {
     return {};
   }
 
+  // Dates are ISO (YYYY-MM-DD), so the greatest string is the latest.
+  const latest = verified
+    .map((profile) => profile.verified_at)
+    .filter((date) => typeof date === 'string' && date)
+    .sort()
+    .at(-1);
   return {
     marker: {
-      label: t('models.wire.unverified'),
-      tooltip: t('models.wire.unverifiedHint'),
+      label: latest
+        ? t('models.wire.verifiedOn', { date: latest })
+        : t('models.wire.verified'),
     },
   };
 }

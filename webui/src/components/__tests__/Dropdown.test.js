@@ -262,10 +262,7 @@ describe('Dropdown', () => {
             statusDot: 'unread',
             badge: 2,
             ariaLabel: 'Gamma: 2 unread results',
-            marker: {
-              label: 'Not verified',
-              tooltip: 'Gamma is not verified.',
-            },
+            marker: { label: 'Verified' },
           },
           { value: 'delta', label: 'Delta', statusDot: 'bogus' },
         ],
@@ -286,7 +283,7 @@ describe('Dropdown', () => {
     expect(gamma.querySelector('.tab-indicator--unread')).toBeTruthy();
     expect(gamma.querySelector('.count-badge')?.textContent).toBe('2');
     expect(
-      gamma.querySelector('[role="img"][aria-label="Not verified"]'),
+      gamma.querySelector('[role="img"][aria-label="Verified"]'),
     ).toBeTruthy();
     expect(delta.querySelector('.option-marker')).toBeNull();
     expect(delta.hasAttribute('aria-label')).toBe(false);

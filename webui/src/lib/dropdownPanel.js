@@ -20,10 +20,10 @@ const STATUS_DOTS = new Set(['idle', 'running', 'unread']);
  * compact count pill after it, `ariaLabel` replaces the option's
  * accessible name when the visible label alone omits that status, and
  * `tooltip` (quick-tooltip content, lib/tooltip.js) describes the option on
- * hover. `marker` ({ label, tooltip }) renders a small muted icon right after
- * the label (OptionMarker.svelte): `label` is its accessible name, part of the
- * option's own name, and `tooltip` its hover help. Option tooltips open beside
- * the list so they never cover the neighbouring options.
+ * hover. `marker` ({ label }) renders a small muted check right after the
+ * label (OptionMarker.svelte): `label` is its accessible name, part of the
+ * option's own name, and its hover tooltip. Option tooltips open beside the
+ * list so they never cover the neighbouring options.
  */
 export function optionDecorations(option) {
   const statusDot = option?.statusDot;
@@ -47,7 +47,7 @@ function optionMarker(marker) {
   if (typeof label !== 'string' || !label) {
     return null;
   }
-  return { label, tooltip: sideTooltip(marker.tooltip || label) };
+  return { label, tooltip: sideTooltip(label) };
 }
 
 function sideTooltip(content) {

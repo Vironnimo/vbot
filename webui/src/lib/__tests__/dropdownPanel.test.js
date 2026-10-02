@@ -89,7 +89,7 @@ describe('optionDecorations', () => {
         badge: 3,
         ariaLabel: 'Gamma: 3 unread results',
         tooltip: { title: 'Gamma', rows: [] },
-        marker: { label: 'Not verified', tooltip: 'Gamma is not verified.' },
+        marker: { label: 'Verified' },
       }),
     ).toEqual({
       statusDot: 'unread',
@@ -97,8 +97,8 @@ describe('optionDecorations', () => {
       ariaLabel: 'Gamma: 3 unread results',
       tooltip: { title: 'Gamma', rows: [], placement: 'right' },
       marker: {
-        label: 'Not verified',
-        tooltip: { text: 'Gamma is not verified.', placement: 'right' },
+        label: 'Verified',
+        tooltip: { text: 'Verified', placement: 'right' },
       },
     });
     expect(
@@ -107,7 +107,7 @@ describe('optionDecorations', () => {
         badge: '',
         ariaLabel: 7,
         tooltip: 'Gamma',
-        marker: { tooltip: 'A marker needs an accessible name.' },
+        marker: { label: '' },
       }),
     ).toEqual({
       statusDot: '',

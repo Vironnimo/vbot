@@ -70,20 +70,17 @@ describe('model autocomplete', () => {
       target: document.body,
       props: {
         options: [
-          {
-            value: 'demo/inferred',
-            marker: { label: 'Not verified', tooltip: 'Not verified yet.' },
-          },
-          { value: 'demo/verified' },
+          { value: 'demo/verified', marker: { label: 'Verified' } },
+          { value: 'demo/inferred' },
         ],
       },
     });
     flushSync();
 
-    const [inferred, verified] = document.querySelectorAll('[role="option"]');
+    const [verified, inferred] = document.querySelectorAll('[role="option"]');
     expect(
-      inferred.querySelector('[role="img"][aria-label="Not verified"]'),
+      verified.querySelector('[role="img"][aria-label="Verified"]'),
     ).toBeTruthy();
-    expect(verified.querySelector('.option-marker')).toBeNull();
+    expect(inferred.querySelector('.option-marker')).toBeNull();
   });
 });
