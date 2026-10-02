@@ -17,6 +17,7 @@ from core.skills.authoring import (
 )
 from core.skills.requirements import REQUIREMENTS_METADATA_KEY
 from core.skills.skills import SkillRegistry
+from tests.directory_links import link_directory
 
 
 def skill_document(
@@ -257,10 +258,21 @@ def test_changes_to_missing_or_binary_targets_fail(
 
 def test_delete_removes_the_skill_directory(service: SkillAuthoringService, tmp_path: Path) -> None:
     service.create(tmp_path, "demo", skill_document(), author="agent")
+    service.write_file(tmp_path, "demo", "references/notes.md", "notes\n")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.md").write_text("private", encoding="utf-8")
+    link_directory(tmp_path / "demo" / "assets", outside)
 
-    service.delete(tmp_path, "demo")
+    result = service.delete(tmp_path, "demo")
 
+    # A linked folder is removed as a link: what it points at is neither read nor deleted.
+    assert [(change.path, change.change) for change in result.changes] == [
+        ("SKILL.md", "deleted"),
+        ("references/notes.md", "deleted"),
+    ]
     assert not (tmp_path / "demo").exists()
+    assert (outside / "private.md").read_text(encoding="utf-8") == "private"
 
 
 @pytest.mark.parametrize("action", ["delete", "write_file", "remove_file", "patch"])

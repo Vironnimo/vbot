@@ -741,7 +741,9 @@ def _support_file_hint(authoring: SkillAuthoringService, target_root: Path, call
     old = _lf(call.old_string or "")
     matches: list[str] = []
     for directory in RESOURCE_DIRECTORIES:
-        for path in sorted((package / directory).rglob("*")):
+        # Path.walk never enters a link, Windows junctions included.
+        walk = (package / directory).walk()
+        for path in sorted(base / name for base, _, names in walk for name in names):
             if not path.is_file():
                 continue
             relative = path.relative_to(package).as_posix()
