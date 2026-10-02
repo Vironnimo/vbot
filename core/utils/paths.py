@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from pathlib import Path, PurePath
 from urllib.error import URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import url2pathname
 
 
@@ -36,8 +37,13 @@ def file_url_path(url: str) -> str | None:
     ``file://server/share/a.txt`` is the UNC path to ``a.txt`` on that share, and
     ``file:///C:/a.txt`` keeps its drive. Elsewhere a URL whose host is neither
     empty, ``localhost`` nor this computer's name names a file on another
-    computer: ``None``.
+    computer: ``None``. Host names compare case-insensitively, so
+    ``file://LOCALHOST/...`` is local as well.
     """
+    parts = urlsplit(url)
+    if parts.netloc.lower() == "localhost":
+        # url2pathname only recognises the lowercase spelling.
+        url = urlunsplit(parts._replace(netloc="localhost"))
     try:
         return url2pathname(url, require_scheme=True)
     except URLError:

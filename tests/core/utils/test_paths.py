@@ -26,10 +26,11 @@ def test_model_path_renders_forward_slash_paths(path: PurePath, rendered: str) -
     [
         ("file:///C:/Users/a%20b.png", "C:/Users/a b.png", "/C:/Users/a b.png"),
         ("file://localhost/srv/x.txt?raw#top", "/srv/x.txt", "/srv/x.txt"),
+        ("file://LocalHost/srv/x.txt", "/srv/x.txt", "/srv/x.txt"),
         # A host names another computer: a UNC path on Windows, no path elsewhere.
         ("file://fileserver.example/share/x.txt", "//fileserver.example/share/x.txt", None),
     ],
-    ids=["drive", "localhost", "other-computer"],
+    ids=["drive", "localhost", "localhost-any-case", "other-computer"],
 )
 def test_file_url_path_names_the_path_on_this_computer(
     url: str, windows: str, posix: str | None
