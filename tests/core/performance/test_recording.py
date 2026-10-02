@@ -222,26 +222,32 @@ def test_large_traces_are_streamed_in_valid_chunks(tmp_path: Path) -> None:
     assert len(document["traceEvents"]) == recording.event_count
 
 
+def _write_summary(directory: Path, recording_id: str, day: int) -> Path:
+    path = directory / f"{recording_id}{SUMMARY_SUFFIX}"
+    path.write_text(
+        json.dumps(
+            {
+                "recording_id": recording_id,
+                "label": None,
+                "started_at": f"2026-09-{day:02d}T00:00:00+00:00",
+                "stopped_at": f"2026-09-{day:02d}T00:01:00+00:00",
+                "duration_seconds": 60.0,
+                "event_count": 4,
+                "truncated": False,
+                "stopped_reason": "requested",
+                "summary": {"metrics": {}, "gauges_max": {}, "stalls": []},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def test_listing_returns_newest_first_and_skips_invalid_summaries(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    for recording_id, started in (("perf_000000000001", "01"), ("perf_000000000002", "02")):
-        (tmp_path / f"{recording_id}{SUMMARY_SUFFIX}").write_text(
-            json.dumps(
-                {
-                    "recording_id": recording_id,
-                    "label": None,
-                    "started_at": f"2026-09-{started}T00:00:00+00:00",
-                    "stopped_at": f"2026-09-{started}T00:01:00+00:00",
-                    "duration_seconds": 60.0,
-                    "event_count": 4,
-                    "truncated": False,
-                    "stopped_reason": "requested",
-                    "summary": {"metrics": {}, "gauges_max": {}, "stalls": []},
-                }
-            ),
-            encoding="utf-8",
-        )
+    _write_summary(tmp_path, "perf_000000000001", 1)
+    _write_summary(tmp_path, "perf_000000000002", 2)
     (tmp_path / f"perf_000000000003{SUMMARY_SUFFIX}").write_text("{broken", encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="vbot.performance"):
@@ -268,16 +274,26 @@ def test_listing_returns_newest_first_and_skips_invalid_summaries(
     assert list_recordings(tmp_path / "missing", limit=10) == []
 
 
-def test_pruning_keeps_the_newest_recording_pairs(tmp_path: Path) -> None:
+def test_pruning_keeps_the_newest_recordings_by_start_and_spares_unfinished_writes(
+    tmp_path: Path,
+) -> None:
     for index in range(4):
-        for suffix in (TRACE_SUFFIX, SUMMARY_SUFFIX):
-            path = tmp_path / f"perf_00000000000{index}{suffix}"
-            path.write_text("{}", encoding="utf-8")
-            os.utime(path, ns=(index * 1_000_000_000, index * 1_000_000_000))
-    unrelated = tmp_path / "notes.txt"
-    unrelated.write_text("keep", encoding="utf-8")
+        recording_id = f"perf_00000000000{index}"
+        trace = tmp_path / f"{recording_id}{TRACE_SUFFIX}"
+        trace.write_text("{}", encoding="utf-8")
+        # File times run against the starts: coarse or late file times never decide.
+        mtime = int(datetime(2026, 9, 20 - index, tzinfo=UTC).timestamp()) * 1_000_000_000
+        for path in (trace, _write_summary(tmp_path, recording_id, index + 1)):
+            os.utime(path, ns=(mtime, mtime))
+    # Traces without a summary: one left by a crash, one whose write is still running.
+    for recording_id, written in (("perf_00000000000a", 8), ("perf_00000000000b", 10)):
+        trace = tmp_path / f"{recording_id}{TRACE_SUFFIX}"
+        trace.write_text("{}", encoding="utf-8")
+        mtime = int(datetime(2026, written, 1, tzinfo=UTC).timestamp()) * 1_000_000_000
+        os.utime(trace, ns=(mtime, mtime))
+    (tmp_path / "notes.txt").write_text("keep", encoding="utf-8")
 
-    prune_recordings(tmp_path, keep=2)
+    prune_recordings(tmp_path, keep=3)
 
     assert sorted(path.name for path in tmp_path.iterdir()) == [
         "notes.txt",
@@ -285,6 +301,11 @@ def test_pruning_keeps_the_newest_recording_pairs(tmp_path: Path) -> None:
         "perf_000000000002.trace.json",
         "perf_000000000003.summary.json",
         "perf_000000000003.trace.json",
+        "perf_00000000000b.trace.json",
+    ]
+    assert [entry["recording_id"] for entry in list_recordings(tmp_path, limit=10)] == [
+        "perf_000000000003",
+        "perf_000000000002",
     ]
 
 

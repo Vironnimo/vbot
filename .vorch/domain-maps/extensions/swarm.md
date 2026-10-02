@@ -179,7 +179,10 @@ same edit without shared blank boundary lines, then already-applied detection.
 `_wiki_emphasis.py` additionally recognizes a unique complete line of at least 12
 words whose only copy differences are paired Markdown emphasis delimiters. Code,
 links, escapes, block syntax, short fragments and changed targets are not emphasis
-repairs; ambiguous candidates and literal marker differences are terminal. The
+repairs; ambiguous candidates and literal marker differences are terminal. Inline
+code spans follow CommonMark's backtick-string rule (an unclosed backtick string
+stays literal) in one linear scan (`_code_spans`): the former backtracking regex took
+18 s on a line of 2,000 backticks. The
 page's emphasis survives in unchanged portions of the requested edit, and the
 result names the original line with a bounded excerpt. Possible fenced code in
 Markdown containers remains protected; a closing fence needs a whitespace-only

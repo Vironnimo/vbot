@@ -433,11 +433,14 @@ def make_engine(
 
 
 async def drain(engine: ChannelConversationEngine, platform_target: int | str) -> None:
-    queue = engine._chat_queues.get(str(platform_target))
-    if queue is None:
+    """Wait until the conversation's worker processed its queue and retired."""
+
+    async def retired() -> None:
+        while (worker := engine._chat_workers.get(str(platform_target))) is not None:
+            await asyncio.wait({worker})
         await asyncio.sleep(0)
-        return
-    await asyncio.wait_for(queue.join(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
+
+    await asyncio.wait_for(retired(), timeout=QUEUE_DRAIN_TIMEOUT_SECONDS)
 
 
 class HeldRuns:

@@ -55,9 +55,12 @@ def is_link_entry(path: Path) -> bool:
 
 ToolEmitHook = Callable[[str, JsonObject], None | Awaitable[None]]
 ToolCancellationHook = Callable[[], bool]
-ToolCancelRegistrationHook = Callable[[Callable[[], None]], None]
+# A cancel callback may return an awaitable; the Run awaits it within its
+# cancellation cleanup budget before it ends (``core.runs.Run.request_cancel``).
+ToolCancelCallback = Callable[[], Awaitable[object] | None]
+ToolCancelRegistrationHook = Callable[[ToolCancelCallback], None]
 ToolCancelCheckHook = Callable[[], bool]
-ToolCallCancelRegistrar = Callable[[str, Callable[[], None]], None]
+ToolCallCancelRegistrar = Callable[[str, ToolCancelCallback], None]
 ToolCallCancelCheck = Callable[[str], bool]
 ToolNoteHook = Callable[[str], None]
 
@@ -357,8 +360,12 @@ class ToolContext:
 
         return self.cancellation_hook()
 
-    def on_cancel(self, callback: Callable[[], None]) -> None:
-        """Register a cancel callback for this call when the runtime exposes a hook."""
+    def on_cancel(self, callback: ToolCancelCallback) -> None:
+        """Register a cancel callback for this call when the runtime exposes a hook.
+
+        An awaitable the callback returns is awaited within the Run's cancellation
+        cleanup budget, so the Run ends only after that cleanup (or the budget).
+        """
         if self.cancel_registration_hook is None:
             return
 

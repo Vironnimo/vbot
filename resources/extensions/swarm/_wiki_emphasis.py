@@ -15,7 +15,7 @@ _EMPHASIS = re.compile(
     r"(?<![\w\\*_])(?P<mark>\*\*|__|\*|_)"
     r"(?P<body>[^\s*_](?:[^*_\r\n]*?[^\s*_])?)(?P=mark)(?![\w*_])"
 )
-_CODE = re.compile(r"(`+)(.*?)(?<!`)\1(?!`)")
+_BACKTICKS = re.compile(r"`+")
 # Recognize possible container fences conservatively. Exact edits remain
 # available inside them; emphasis-copy recovery must never change code literals.
 # Prefix tokens cannot start a backtick/tilde fence. Commit each token so failed
@@ -29,14 +29,42 @@ def _fold(line: str) -> str | None:
 
     parts: list[str] = []
     offset = 0
-    for match in _CODE.finditer(line):
-        prose = _fold_prose(line[offset : match.start()])
+    for start, end in _code_spans(line):
+        prose = _fold_prose(line[offset:start])
         if prose is None:
             return None
-        parts.extend((prose, match.group()))
-        offset = match.end()
+        parts.extend((prose, line[start:end]))
+        offset = end
     prose = _fold_prose(line[offset:])
     return None if prose is None else "".join((*parts, prose))
+
+
+def _code_spans(line: str) -> list[tuple[int, int]]:
+    """Return the CommonMark code spans of one line in linear time.
+
+    A backtick string (a maximal run of backticks) opens a span that the next
+    backtick string of the same length closes; an opener without one is
+    literal. A backtracking regex for this rule costs quadratic or worse time
+    on long runs of unclosed backticks.
+    """
+
+    runs = [match.span() for match in _BACKTICKS.finditer(line)]
+    closers: list[int | None] = [None] * len(runs)
+    following: dict[int, int] = {}
+    for index in range(len(runs) - 1, -1, -1):
+        start, end = runs[index]
+        closers[index] = following.get(end - start)
+        following[end - start] = index
+    spans = []
+    index = 0
+    while index < len(runs):
+        closer = closers[index]
+        if closer is None:
+            index += 1
+            continue
+        spans.append((runs[index][0], runs[closer][1]))
+        index = closer + 1
+    return spans
 
 
 def _fold_prose(text: str) -> str | None:
@@ -54,11 +82,9 @@ def matching_lines(content: str, old: str) -> list[tuple[int, int, str, bool]]:
     matcher must not reinterpret code or link syntax as harmless emphasis.
     """
 
-    if "\n" in old or "\r" in old:
+    if "\n" in old or "\r" in old or len(re.findall(r"\w+", old)) < _MIN_WORDS:
         return []
     folded = _fold(old)
-    if len(re.findall(r"\w+", old)) < _MIN_WORDS:
-        return []
     without_markers = old.translate(str.maketrans("", "", "*_"))
     candidates = []
     offset = 0
