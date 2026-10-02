@@ -70,7 +70,7 @@ def control(install: Installation, method: str, operation: Operation, **extra):
         {"control_token": record.token, "operation_id": operation.id, **extra},
     )
     if not result.ok:
-        raise ApplicationError(f"Server maintenance failed: {result.message}")
+        raise ApplicationError(f"Server update control failed: {result.message}")
     return result.data
 
 
@@ -82,7 +82,7 @@ def wait_for_handoff(install: Installation, operation: Operation) -> str | None:
     assert install.server_data_directory is not None
     from core.tools._bash_update_handoff import read_handoff_ticket, ticket_id_from_path
 
-    # The server validates the same capability before permitting any exemption.
+    # The server validates the same capability before it arms the continuation.
     ticket_path = Path(operation.handoff_ticket)
     ticket_id = ticket_id_from_path(Path(install.server_data_directory), ticket_path)
     deadline = time.monotonic() + 300
@@ -97,21 +97,20 @@ def wait_for_handoff(install: Installation, operation: Operation) -> str | None:
         time.sleep(0.25)
 
 
-def quiesce(install: Installation, operation: Operation) -> None:
-    operation.transition(install, "waiting_for_idle", "Waiting for accepted work to finish")
+def arm_continuation(install: Installation, operation: Operation) -> None:
+    """Arm the originating Session's continuation of an Agent-started update.
+
+    Armed before the server stops: the stop cancels the originating Run with every
+    other active Run, and the once-Bootstrap resumes its Session on the next normal
+    startup, so a later failure is still reported there.
+    """
+    if operation.handoff_ticket is None:
+        return
+    operation.transition(
+        install, "preparing", "Waiting for the originating Tool result to be saved"
+    )
     ticket = wait_for_handoff(install, operation)
-    extra = {"handoff_ticket_id": ticket} if ticket else {}
-    if ticket:
-        # Arm the exact Session continuation before requesting cancellation of
-        # its originating Run. A failure after cancellation can then still be
-        # reported on the next process start.
-        control(install, "update_continuation", operation, handoff_ticket_id=ticket)
-    control(install, "maintenance_begin", operation, **extra)
-    while True:
-        result = control(install, "maintenance_status", operation)
-        if result.get("safe_to_stop") is True:
-            break
-        time.sleep(1)
+    control(install, "update_continuation", operation, handoff_ticket_id=ticket)
 
 
 def require_ok(result) -> None:
@@ -297,8 +296,8 @@ def _restore_previous_server(install: Installation, operation: Operation) -> boo
 
     A candidate verification server that answers is stopped. The previous server is
     started again only when none of it is alive, so a busy one is never duplicated; a
-    living one leaves this operation's maintenance. A verification server that does
-    not answer is left alone and the operation needs attention instead.
+    living one keeps running. A verification server that does not answer is left
+    alone and the operation needs attention instead.
     """
     candidate = processes.server_state(
         install, version_id=operation.candidate_version, verification=True
@@ -323,11 +322,6 @@ def _restore_previous_server(install: Installation, operation: Operation) -> boo
         )
     if previous == "absent":
         require_ok(processes.start(install, version_id=operation.previous_version, breakaway=False))
-    else:
-        # A crash between recording ``stopping`` and stop() leaves the old server
-        # alive in maintenance, possibly still busy. Release the exact operation
-        # before making this rollback terminal so normal admission resumes.
-        control(install, "maintenance_end", operation)
     return True
 
 
@@ -434,7 +428,7 @@ def execute(install: Installation, operation: Operation) -> None:
         return
     update_snapshot: UpdateSnapshot | None = None
     if install.owns_server:
-        # One classification decides the server's part: only a drained server is
+        # One classification decides the server's part: only a running server is
         # stopped, and only a server that ran is started again.
         state = processes.server_state(install, version_id=operation.previous_version)
         if state == "foreign":
@@ -444,8 +438,9 @@ def execute(install: Installation, operation: Operation) -> None:
         operation.server_was_running = state != "absent"
         operation.save(install)
         if state == "unresponsive":
-            # A server that does not answer cannot be drained, and stopping it would
-            # end its accepted work: fail before anything changed, leaving it running.
+            # A server that does not answer may not honor a normal shutdown, and no
+            # continuation can be armed through it: fail before anything changed,
+            # leaving it running.
             keep_previous(
                 install,
                 operation,
@@ -455,10 +450,10 @@ def execute(install: Installation, operation: Operation) -> None:
             )
             return
         if state == "running":
-            quiesce(install, operation)
-            operation.transition(
-                install, "stopping", "Stopping the current server after draining accepted work"
-            )
+            arm_continuation(install, operation)
+            # The update takes effect at once: a normal server shutdown, which
+            # cancels active Runs and queued work instead of waiting for them.
+            operation.transition(install, "stopping", "Stopping the current server")
             require_ok(processes.stop(install, initiator="update"))
         # Taken only now: no server can write between this snapshot and a rollback.
         # With no server running, its claim check also proves that none started since.
@@ -557,11 +552,6 @@ def run(install: Installation, operation_id: str) -> None:
             "needs_attention" if attention else "failed",
             "Update did not complete; inspect the saved error and preserved versions",
         )
-        if install.owns_server:
-            try:
-                control(install, "maintenance_end", operation)
-            except Exception:
-                _LOGGER.warning("Server maintenance release failed (operation=%s)", operation.id)
     # Deleting takes a while and needs no lock: nothing can use a retired tree.
     remove_retired(retired)
 

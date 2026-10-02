@@ -1,7 +1,6 @@
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -49,15 +48,8 @@ def make_server(tmp_path: Path):
         bootstrap_service=bootstrap,
         update_handoffs=handoffs,
     )
-    runs = SimpleNamespace(
-        maintenance_begin=AsyncMock(return_value={"safe_to_stop": True}),
-        maintenance_status=AsyncMock(return_value={"safe_to_stop": True}),
-        maintenance_end=AsyncMock(return_value={"active": False}),
-        active_run=lambda **_kwargs: None,
-        cancel=AsyncMock(),
-    )
     state = SimpleNamespace(
-        runtime=runtime, chat_runs=runs, control_token="secret", agent_delete_lock=asyncio.Lock()
+        runtime=runtime, control_token="secret", agent_delete_lock=asyncio.Lock()
     )
     return state, grant, bootstrap
 
@@ -133,7 +125,7 @@ def _route_cli_rpc_to(state, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("cli.application.processes.target", lambda _install: SimpleNamespace())
 
 
-def test_claimed_update_handoff_reaches_origin_maintenance_after_acknowledgement(
+def test_claimed_update_handoff_arms_the_continuation_after_acknowledgement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     data_dir = tmp_path / "data"
@@ -154,17 +146,23 @@ def test_claimed_update_handoff_reaches_origin_maintenance_after_acknowledgement
     assert repeated.id == operation.id
     assert operation.handoff_ticket is not None
     ticket_id = Path(operation.handoff_ticket).stem
+    # Nothing is armed before the Tool result is durably acknowledged.
     with pytest.raises(RpcError, match="durably acknowledged"):
-        server("maintenance_begin", handoff_ticket_id=ticket_id)
+        server("update_continuation", handoff_ticket_id=ticket_id)
+    assert bootstrap.jobs == []
 
     grant.acknowledge()
 
     assert worker.wait_for_handoff(install, operation) == ticket_id
     assert server("update_continuation", handoff_ticket_id=ticket_id)["created"] is True
-    assert server("maintenance_begin", handoff_ticket_id=ticket_id) == {"safe_to_stop": True}
-    origin = state.chat_runs.maintenance_begin.await_args.kwargs["origin"]
-    assert (origin[0].session_id, origin[1]) == ("session-one", "run-one")
-    assert len(bootstrap.jobs) == 1
+    [job] = bootstrap.jobs
+    assert (job.agent_id, job.project_id, job.session_id, job.mode) == (
+        "main",
+        None,
+        "session-one",
+        "once",
+    )
+    assert f"vbot update status {operation.id}" in job.prompt
 
 
 def test_update_request_with_an_unclaimable_token_starts_nothing(
@@ -190,47 +188,10 @@ def test_update_request_with_an_unclaimable_token_starts_nothing(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("active_run_id", "acknowledged", "cancelled"),
-    [
-        pytest.param("run-one", True, True, id="exact-origin"),
-        pytest.param("run-later", True, False, id="different-run"),
-        # Nothing is cancelled before the handoff is durably acknowledged.
-        pytest.param("run-one", False, False, id="unacknowledged"),
-    ],
-)
-async def test_private_maintenance_cancels_only_the_exact_acknowledged_origin(
-    tmp_path: Path, active_run_id: str, acknowledged: bool, cancelled: bool
-) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path, acknowledged=acknowledged)
-    state.chat_runs.active_run = lambda **_kwargs: SimpleNamespace(id=active_run_id)
-    params = {
-        "control_token": "secret",
-        "operation_id": "operation-one",
-        "handoff_ticket_id": ticket.ticket_id,
-    }
-
-    if not acknowledged:
-        with pytest.raises(RpcError, match="durably acknowledged"):
-            await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
-        state.chat_runs.maintenance_begin.assert_not_awaited()
-    else:
-        await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
-
-    if cancelled:
-        state.chat_runs.cancel.assert_awaited_once_with(
-            "run-one", reason="application_update", initiator="update_maintenance"
-        )
-        state.chat_runs.maintenance_status.assert_awaited_once_with("operation-one")
-    else:
-        state.chat_runs.cancel.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_private_maintenance_requires_the_durable_tool_call_and_its_session(
+async def test_update_continuation_requires_the_durable_tool_call_and_its_session(
     tmp_path: Path,
 ) -> None:
-    state, ticket, _bootstrap = make_state(tmp_path)
+    state, ticket, bootstrap = make_state(tmp_path)
     params = {
         "control_token": "secret",
         "operation_id": "operation-one",
@@ -242,7 +203,7 @@ async def test_private_maintenance_requires_the_durable_tool_call_and_its_sessio
 
     state.runtime.chat_sessions.tool_result_persisted_async = not_persisted
     with pytest.raises(RpcError, match="does not match a durable Tool call"):
-        await dispatch_method(state, "application.maintenance_begin", params, method_handlers())
+        await dispatch_method(state, "application.update_continuation", params, method_handlers())
 
     async def session_gone(_address, _tool_call_id):
         raise SessionNotFoundError("session-one")
@@ -250,19 +211,24 @@ async def test_private_maintenance_requires_the_durable_tool_call_and_its_sessio
     state.runtime.chat_sessions.tool_result_persisted_async = session_gone
     with pytest.raises(RpcError, match="Session is unavailable"):
         await dispatch_method(state, "application.update_continuation", params, method_handlers())
-    state.chat_runs.maintenance_begin.assert_not_awaited()
+    assert bootstrap.jobs == []
 
 
 @pytest.mark.asyncio
 async def test_private_application_rpc_rejects_wrong_control_token(tmp_path: Path) -> None:
-    state, _ticket, _bootstrap = make_state(tmp_path)
+    state, ticket, bootstrap = make_state(tmp_path)
     with pytest.raises(RpcError):
         await dispatch_method(
             state,
-            "application.maintenance_status",
-            {"control_token": "wrong", "operation_id": "operation-one"},
+            "application.update_continuation",
+            {
+                "control_token": "wrong",
+                "operation_id": "operation-one",
+                "handoff_ticket_id": ticket.ticket_id,
+            },
             method_handlers(),
         )
+    assert bootstrap.jobs == []
 
 
 @pytest.mark.asyncio

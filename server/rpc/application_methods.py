@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from core.sessions import SessionAddress
 from core.tools._bash_update_handoff import (
@@ -17,12 +17,7 @@ from core.utils.logging import get_logger
 from core.utils.server_control import is_authorized_control_token
 from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
-from server.rpc.errors import (
-    RPC_ERROR_ACTIVE_RUN,
-    RPC_ERROR_DOMAIN,
-    RPC_ERROR_INVALID_REQUEST,
-    RpcError,
-)
+from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
@@ -92,60 +87,6 @@ async def _update_handoff_mint(state: Any, params: JsonObject) -> JsonObject:
         _LOGGER.warning("Update handoff ticket could not be saved (%s)", type(exc).__name__)
         raise RpcError(RPC_ERROR_DOMAIN, "update handoff ticket could not be saved") from exc
     return {"handoff_ticket": str(ticket.path)}
-
-
-async def _maintenance_begin(state: Any, params: JsonObject) -> JsonObject:
-    operation_id = _authorize(
-        state,
-        params,
-        {"operation_id", "handoff_ticket_id"},
-        "application.maintenance_begin",
-    )
-    origin = None
-    ticket_id = params.get("handoff_ticket_id")
-    if ticket_id is not None:
-        if not isinstance(ticket_id, str) or not ticket_id:
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                "params.handoff_ticket_id must be a non-empty string",
-            )
-        ticket, address = await _verified_ticket(state, ticket_id)
-        origin = (address, ticket.run_id)
-    try:
-        result = cast(
-            JsonObject, await state.chat_runs.maintenance_begin(operation_id, origin=origin)
-        )
-        if origin is not None:
-            address, run_id = origin
-            active = state.chat_runs.active_run(
-                agent_id=address.agent_id,
-                session_id=address.session_id,
-                project_id=address.project_id,
-            )
-            if active is not None and active.id == run_id:
-                await state.chat_runs.cancel(
-                    run_id, reason="application_update", initiator="update_maintenance"
-                )
-                result = cast(JsonObject, await state.chat_runs.maintenance_status(operation_id))
-        return result
-    except Exception as exc:
-        raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc)) from exc
-
-
-async def _maintenance_status(state: Any, params: JsonObject) -> JsonObject:
-    operation_id = _authorize(state, params, {"operation_id"}, "application.maintenance_status")
-    try:
-        return cast(JsonObject, await state.chat_runs.maintenance_status(operation_id))
-    except Exception as exc:
-        raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc)) from exc
-
-
-async def _maintenance_end(state: Any, params: JsonObject) -> JsonObject:
-    operation_id = _authorize(state, params, {"operation_id"}, "application.maintenance_end")
-    try:
-        return cast(JsonObject, await state.chat_runs.maintenance_end(operation_id))
-    except Exception as exc:
-        raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc)) from exc
 
 
 def _continuation_receipt_path(state: Any, operation_id: str) -> Path:
@@ -241,9 +182,6 @@ async def _update_continuation(state: Any, params: JsonObject) -> JsonObject:
 
 def method_handlers() -> dict[str, RpcMethodHandler]:
     return {
-        "application.maintenance_begin": _maintenance_begin,
-        "application.maintenance_status": _maintenance_status,
-        "application.maintenance_end": _maintenance_end,
         "application.update_continuation": _update_continuation,
         "application.update_handoff_mint": _update_handoff_mint,
     }

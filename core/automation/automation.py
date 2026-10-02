@@ -307,8 +307,8 @@ class _CompletionDeliveryCoordinator:
                         for notice in pending:
                             notice.boundary_run = active_run
                         continue
-                    # Maintenance or a lifecycle guard holds admission and neither
-                    # announces its end, so retry with a bounded backoff.
+                    # A lifecycle guard holds admission and does not announce its
+                    # end, so retry with a bounded backoff.
                     _LOGGER.debug(
                         "Completion Run admission blocked (agent=%s session=%s reason=%s); "
                         "retrying in %.2f seconds",

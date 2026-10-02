@@ -25,6 +25,8 @@ TERMINAL = frozenset({"completed", "failed", "rolled_back", "needs_attention", "
 PHASES = TERMINAL | {
     "queued",
     "preparing",
+    # Stored by earlier versions while the server drained accepted work; still a
+    # valid record, never written now. Recovery runs such an operation again.
     "waiting_for_idle",
     "stopping",
     "activating",

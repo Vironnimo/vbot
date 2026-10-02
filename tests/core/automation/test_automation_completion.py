@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import threading
 from collections.abc import Callable
+from contextlib import AsyncExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -491,12 +492,13 @@ async def test_idle_completion_does_not_send_webui_surface_to_channel_relay(
 async def test_completion_delivery_aclose_persists_pending_results_and_rejects_later_ones(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, waiting_for: str
 ) -> None:
-    # An update drains Runs under maintenance and then restarts: a result still
-    # waiting at shutdown must survive the restart as a System Reminder.
+    # A server stop, an update's included, closes completion delivery: a result
+    # still waiting at shutdown must survive the restart as a System Reminder.
     run_manager = ChatRunManager()
     origin_run: Run | None = None
     origin_release = asyncio.Event()
     backoff_waits: list[float] = []
+    guards = AsyncExitStack()
 
     async def hold_backoff(delay: float) -> None:
         backoff_waits.append(delay)
@@ -506,7 +508,7 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
     if waiting_for == "active_run":
         origin_run, origin_release = await _active_origin(run_manager)
     else:
-        await run_manager.maintenance_begin("update")
+        await guards.enter_async_context(run_manager.session_admission_guard(_ADDRESS))
     sessions = ChatSessionManager(tmp_path)
     session = sessions.create("coder", session_id="session-one")
     completion_loop = _CompletionChatLoop(run_manager)
@@ -547,6 +549,7 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
     late = _submit(trigger_service, "bash:after-shutdown", "late result", origin_id)
     assert late.cancelled()
     origin_release.set()
+    await guards.aclose()
     await run_manager.aclose()
     sessions.close()
 
@@ -554,28 +557,29 @@ async def test_completion_delivery_aclose_persists_pending_results_and_rejects_l
 async def test_blocked_completion_admission_backs_off_until_admission_reopens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Maintenance blocks new Runs until every active Run drains and announces no
-    # end, so a blocked follow-up retries with a bounded backoff instead of spinning.
+    # A Run Admission Guard blocks new Runs and announces no end, so a blocked
+    # follow-up retries with a bounded backoff instead of spinning.
     manager = ChatRunManager()
     service, loop, _session = _completion_service(tmp_path, manager)
     delays: list[float] = []
+    guards = AsyncExitStack()
 
     async def record_wait(delay: float) -> None:
         delays.append(delay)
         if len(delays) == 9:
-            await manager.maintenance_end("update")
+            await guards.aclose()
         await asyncio.sleep(0)
 
     monkeypatch.setattr(automation_module, "_sleep", record_wait)
-    await manager.maintenance_begin("update")
+    await guards.enter_async_context(manager.session_admission_guard(_ADDRESS))
 
-    delivery = _submit(service, "bash:blocked", "finished during maintenance", "origin")
+    delivery = _submit(service, "bash:blocked", "finished while guarded", "origin")
     await asyncio.wait_for(delivery, timeout=1)
 
     assert delays == [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0]
     assert loop.start_attempts == len(delays) + 1
     assert len(loop.messages) == 1
-    assert "finished during maintenance" in loop.messages[0]
+    assert "finished while guarded" in loop.messages[0]
     await service.aclose()
     await manager.aclose()
 
