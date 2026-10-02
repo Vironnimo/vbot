@@ -29,6 +29,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
+from core.utils.tls import shared_ssl_context
 
 from ._callbacks import ServerRequests
 from ._events import ConnectionEvents, dump
@@ -92,6 +93,20 @@ def operation_schema(operation: str) -> dict[str, Any]:
         return dict(model.model_json_schema(by_alias=True))
     properties = {"after": {"type": "integer", "minimum": 0}} if operation == "events" else {}
     return {"type": "object", "properties": properties, "additionalProperties": False}
+
+
+def _sse_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: httpx2.Timeout | None = None,
+    auth: httpx2.Auth | None = None,
+) -> httpx2.AsyncClient:
+    """The legacy SSE transport's client: the SDK default with vBot's shared TLS context.
+
+    ``sse_client`` always passes its own timeouts.
+    """
+    return httpx2.AsyncClient(
+        headers=headers, timeout=timeout, auth=auth, verify=shared_ssl_context()
+    )
 
 
 class InvocationNotSentError(ValueError):
@@ -371,13 +386,19 @@ class ConnectionRunner:
             else None
         )
         if self.config["transport"] == "sse":
-            return sse_client(self.config["url"], headers=headers, auth=auth)
+            return sse_client(
+                self.config["url"],
+                headers=headers,
+                auth=auth,
+                httpx_client_factory=_sse_http_client,
+            )
         http = await stack.enter_async_context(
             httpx2.AsyncClient(
                 headers=headers,
                 auth=auth,
                 trust_env=False,
                 timeout=httpx2.Timeout(self.config["timeout"], connect=15.0),
+                verify=shared_ssl_context(),
             )
         )
         return streamable_http_client(self.config["url"], http_client=http)
