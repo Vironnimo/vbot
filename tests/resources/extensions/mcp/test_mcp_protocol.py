@@ -742,12 +742,23 @@ async def test_legacy_server_sampling_and_roots(host, monkeypatch, caplog, recwa
     assert [f"{item.filename}:{item.lineno}: {item.message}" for item in recwarn] == []
 
 
+def _notified(runner: ConnectionRunner) -> list[str]:
+    """The kinds of the events *runner* recorded for server notifications."""
+    kinds = {"log", "progress", "notification", "resource_changed", "catalog_changed"}
+    return [event["kind"] for event in runner.events()["events"] if event["kind"] in kinds]
+
+
 @pytest.mark.asyncio
 async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatch):
     levels = []
 
     async def call(server_context, params):
         levels.append((params.meta or {}).get(types.LOG_LEVEL_META_KEY))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MCPDeprecationWarning)
+            # Sent only on a request that carries a level.
+            await server_context.session.send_log_message("info", "test-owned-log")
+        await server_context.session.report_progress(1, 2)
         return types.CallToolResult(content=[])
 
     async def list_tools(server_context, params):
@@ -763,11 +774,15 @@ async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatc
             await runner.invoke("tools/call", {"name": "levels"}, context(host))
             await runner.invoke("logging/setLevel", {"level": "debug"})
             await runner.invoke("tools/call", {"name": "levels"}, context(host))
+            while len(_notified(runner)) < 3:
+                await asyncio.sleep(0)
     finally:
         await runner.close()
 
     # Without an explicit level the server applies its own default.
     assert levels == [None, "debug"]
+    # Each notification is recorded once, as its own kind of event.
+    assert sorted(_notified(runner)) == ["log", "progress", "progress"]
 
 
 @pytest.mark.asyncio
@@ -1046,12 +1061,15 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
     try:
         async with asyncio.timeout(10):
             await runner.invoke("tools/call", {"name": "add"})
-            while runner.catalog["tools"][-1]["name"] != "added" or not (
-                runner._subscriptions["catalog-refresh"].done()
+            while (
+                runner.catalog["tools"][-1]["name"] != "added"
+                or not runner._subscriptions["catalog-refresh"].done()
+                or len(_notified(runner)) < 3
             ):
                 await asyncio.sleep(0)
         # Republished once: refreshes that find the same catalog publish nothing.
         assert published == [["add"], ["add", "added"]]
+        assert _notified(runner) == ["catalog_changed"] * 3
     finally:
         await runner.close()
 
@@ -1145,6 +1163,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
                 await asyncio.sleep(0)
             await runner.invoke("resources/subscribe", {"uri": "test://other"})
         assert stream.connections == 3
+        assert _notified(runner) == ["resource_changed"] * 2
         assert requests == [
             ("subscribe", "test://watched"),
             *([] if legacy else [("unsubscribe", "test://watched")]),

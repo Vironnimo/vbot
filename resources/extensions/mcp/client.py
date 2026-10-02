@@ -37,6 +37,7 @@ from mcp.os.win32.utilities import get_windows_executable_command
 from mcp.shared.dispatcher import CallOptions
 from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.shared.message import SessionMessage
+from mcp.shared.subscriptions import SUBSCRIPTION_ID_META_KEY
 
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
@@ -1421,24 +1422,24 @@ class ConnectionRunner:
         return await started
 
     async def _message(self, message: Any) -> None:
-        client = self.client
-        if (
-            isinstance(message, types.ResourceUpdatedNotification)
-            and client is not None
-            and client.protocol_version < DISCOVERY_PROTOCOL_VERSION
-        ):
-            # A legacy subscription's change; a listen stream records its own.
-            uri = str(message.params.uri)
-            self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
-        elif isinstance(message, types.ServerNotification):
-            self._events.record("notification", dump(message))
-            if isinstance(
+        """Record each server notification once, as its own kind of event."""
+        if isinstance(message, types.ServerNotification):
+            if _recorded_elsewhere(message):
+                return
+            if isinstance(message, types.ResourceUpdatedNotification):
+                # A legacy subscription's change.
+                uri = str(message.params.uri)
+                self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
+            elif isinstance(
                 message,
                 types.ToolListChangedNotification
                 | types.ResourceListChangedNotification
                 | types.PromptListChangedNotification,
             ):
+                self._events.record("catalog_changed", dump(message))
                 self._catalog_changed()
+            else:
+                self._events.record("notification", dump(message))
         elif isinstance(message, Exception):
             # A transport error that leaves the connection up, such as a line that
             # is not JSON on stdout; a transport that ends also closes its stream.
@@ -1476,7 +1477,6 @@ class ConnectionRunner:
             self._catalog_stale = False
             # Changes reported meanwhile join this refresh.
             await _sleep(CATALOG_REFRESH_DELAY_SECONDS)
-            self._events.record("catalog_changed", {"source": "notification"})
             try:
                 await self.invoke("catalog", {})
             except ValueError as error:
@@ -1559,6 +1559,19 @@ class ConnectionRunner:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
+
+
+def _recorded_elsewhere(message: types.ServerNotification) -> bool:
+    """Whether another handler records *message*: the SDK also hands it to ``_message``.
+
+    Log messages and the progress of vBot's requests have their callbacks; a
+    ``subscriptions/listen`` stream's events, stamped with its subscription id,
+    their watch (``_watch_catalog``, ``_watch_resource``).
+    """
+    if isinstance(message, types.LoggingMessageNotification | types.ProgressNotification):
+        return True
+    meta = getattr(getattr(message, "params", None), "meta", None)
+    return isinstance(meta, dict) and SUBSCRIPTION_ID_META_KEY in meta
 
 
 def _refusal(status: int, error: Exception) -> str:
