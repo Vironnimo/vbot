@@ -399,3 +399,15 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
     with pytest.raises(ValueError):
         sampling_messages({"messages": [{"role": "user", "content": {"type": "future-data"}}]})
+
+
+@pytest.mark.asyncio
+async def test_unanswered_inputs_expire(host):
+    inputs = InputRequests(ttl=0)
+
+    elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
+    with pytest.raises(ValueError, match="sign-in was not completed in time"):
+        await inputs.request("example", "oauth", {})
+
+    assert elicited == {"action": "cancel"}
+    assert inputs.list() == []
