@@ -1,11 +1,13 @@
 """Cross-area navigation, output preservation, and operation status contracts."""
 
 import argparse
+import io
 import shlex
+import sys
 
 import pytest
 
-from cli import _commands, _output, main, rpc_client
+from cli import _commands, _output, _progress, main, rpc_client
 from cli._parser_common import AREA_HELP, COMMAND_PATHS
 from cli._progress import ProgressPrinter, current_progress
 from cli.formatting import output_mode, record_fields
@@ -37,6 +39,31 @@ def test_every_area_and_command_has_discoverable_help_and_output_mode(capsys):
 
     visit(root)
     assert len(seen) > 150
+
+
+class _Terminal(io.StringIO):
+    encoding = "utf-8"
+
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.mark.parametrize(
+    ("terminal", "term", "colored"),
+    [(True, "xterm", True), (False, "xterm", False), (True, "dumb", False)],
+    ids=["terminal", "pipe", "dumb-terminal"],
+)
+def test_help_is_colored_only_where_status_lines_are(monkeypatch, terminal, term, colored):
+    # Python alone would color help under FORCE_COLOR even in a pipe or a dumb terminal.
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("PYTHON_COLORS", raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("TERM", term)
+    monkeypatch.setattr(_progress, "_windows_color", lambda stream: True)
+    monkeypatch.setattr(sys, "stdout", _Terminal() if terminal else io.StringIO())
+    root = build_parser()
+    for parser in (root, children(children(root)["agent"])["list"]):
+        assert ("\033[" in parser.format_help()) is colored
 
 
 @pytest.mark.parametrize(
