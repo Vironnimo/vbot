@@ -31,6 +31,10 @@ LIBRARIAN_TOOLS = ("skill", "skill_manage")
 # Why the Librarian is unavailable: no Agent has its id yet, a user's Agent (or
 # an unfinished rename) holds the id, or its ``agent.json`` cannot be loaded.
 LibrarianProblem = Literal["missing", "agent_id_taken", "invalid_config"]
+# Session metadata binding a Session of the Librarian to the Agent whose Skills
+# it maintains, its Skill subject. vBot writes it when a pass starts; a Session
+# without it works on the Librarian's own Skills.
+SKILL_AGENT_ID_KEY = "skill_agent_id"
 
 
 class AgentError(ValueError):
@@ -111,11 +115,23 @@ class Agent:
     # Which built-in Agent this is, ``None`` for an Agent of the user. A built-in
     # Agent is left out of the roster and keeps fixed capabilities.
     builtin: BuiltinAgent | None = None
+    # Never persisted: the Agent whose Skills this Agent works on, set only on the
+    # Librarian as one of its bound Sessions runs it (``SKILL_AGENT_ID_KEY``).
+    skill_agent_id: str | None = None
 
 
 def is_librarian(agent: object) -> bool:
     """Whether ``agent`` (any resolved Agent) is the built-in Librarian."""
     return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN
+
+
+def skill_subject_id(agent: Any) -> str:
+    """Return the id of the Agent whose Skills ``agent`` (any resolved Agent) works on.
+
+    That is the subject of a Librarian Session, otherwise the Agent itself.
+    """
+    subject = getattr(agent, "skill_agent_id", None)
+    return subject if isinstance(subject, str) and subject else str(agent.id)
 
 
 @dataclass(frozen=True)

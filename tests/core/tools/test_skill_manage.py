@@ -40,9 +40,15 @@ def _skill_md(
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
-def _context(agent_id: str, root: Path, run_kind: RunKind | None = None) -> ToolContext:
+def _context(
+    agent_id: str,
+    root: Path,
+    run_kind: RunKind | None = None,
+    skill_agent_id: str | None = None,
+) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
+        skill_agent_id=skill_agent_id,
         session_id="session-one",
         run_id="run-one",
         tool_call_id="call-one",
@@ -113,8 +119,10 @@ class _Harness:
         arguments: dict[str, object],
         agent_id: str = "main",
         run_kind: RunKind | None = None,
+        skill_agent_id: str | None = None,
     ) -> dict[str, Any]:
-        context = _context(agent_id, self.root, run_kind)
+        """Call the Tool as ``agent_id``; ``skill_agent_id`` binds a Librarian Session."""
+        context = _context(agent_id, self.root, run_kind, skill_agent_id)
         try:
             result = cast(
                 dict[str, Any],
@@ -377,21 +385,32 @@ def test_background_reviews_refuse_skills_they_may_not_change(
     before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
 
     result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
+    # The Librarian too, also while the user talks with it in its Session.
+    in_librarian_session = harness.run(
+        arguments, agent_id="librarian", run_kind=RunKind.USER, skill_agent_id="main"
+    )
 
-    assert result == tool_failure(code, message, retryable=False)
+    assert result == in_librarian_session == tool_failure(code, message, retryable=False)
     assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
     # An attended Run is not limited by pins.
     if setup == "pinned":
         assert harness.run(arguments)["ok"] is True
 
 
-# A Librarian pass writes under its own actor; every other background kind is a review.
+# A Librarian writes under its own actor, in its passes and in every Session bound
+# to the Agent whose Skills it maintains (the caller ``librarian`` there works on
+# the Skills of ``main``); every other background kind is a review.
 @pytest.mark.parametrize(
-    ("review", "actor"),
-    [(RunKind.REFLECTION, "reflection"), (RunKind.LIBRARIAN, "librarian")],
+    ("caller", "review", "actor"),
+    [
+        pytest.param("main", RunKind.REFLECTION, "reflection", id="reflection"),
+        pytest.param("main", RunKind.LIBRARIAN, "librarian", id="librarian-pass"),
+        pytest.param("librarian", RunKind.LIBRARIAN, "librarian", id="librarian-session-pass"),
+        pytest.param("librarian", RunKind.USER, "librarian", id="librarian-session-user"),
+    ],
 )
 def test_background_reviews_change_and_merge_unpinned_skills(
-    tmp_path: Path, review: RunKind, actor: str
+    tmp_path: Path, caller: str, review: RunKind, actor: str
 ) -> None:
     harness = _Harness(tmp_path)
     harness.create(name="old")
@@ -400,29 +419,29 @@ def test_background_reviews_change_and_merge_unpinned_skills(
         harness.home("main"), "manual", _skill_md("manual"), writer=HUMAN_WRITER
     )
     harness.share()
+    subject = "main" if caller == "librarian" else None
 
-    created = harness.run(
-        {"action": "create", "name": "new", "content": _skill_md("new")}, run_kind=review
+    def run(arguments: dict[str, object]) -> dict[str, Any]:
+        return harness.run(arguments, caller, review, skill_agent_id=subject)
+
+    created = run({"action": "create", "name": "new", "content": _skill_md("new")})
+    patched = run(
+        {"action": "patch", "name": "new", "old_string": "# Demo", "new_string": "# Merged"}
     )
-    patched = harness.run(
-        {"action": "patch", "name": "new", "old_string": "# Demo", "new_string": "# Merged"},
-        run_kind=review,
-    )
-    deleted = harness.run(
-        {"action": "delete", "name": "old", "absorbed_into": "new"}, run_kind=review
-    )
-    user_skill = harness.run(
-        {"action": "patch", "name": "manual", "old_string": "# Demo", "new_string": "# Kept"},
-        run_kind=review,
+    deleted = run({"action": "delete", "name": "old", "absorbed_into": "new"})
+    user_skill = run(
+        {"action": "patch", "name": "manual", "old_string": "# Demo", "new_string": "# Kept"}
     )
     # A Skill another Agent shares with this one is changed in its owner's package.
-    shared_skill = harness.run(
-        {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "# Co"},
-        run_kind=review,
+    shared_skill = run(
+        {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "# Co"}
     )
 
     assert all(result["ok"] for result in (created, patched, deleted, user_skill, shared_skill))
     assert "# Co" in harness.document("deploy", "owner").read_text(encoding="utf-8")
+    assert not harness.home("librarian").exists()
+    assert harness.invalidated[:2] == ["main", "main"]
+    assert harness.merges == [("main", "old", "new", True)]
     home = harness.home("main")
     record = harness.authoring.record(home, "new")
     assert record is not None and record.origin == actor
@@ -433,7 +452,11 @@ def test_background_reviews_change_and_merge_unpinned_skills(
         actor,
     )
     revision = harness.authoring.history(home, "new")[0]
-    assert (revision.actor, revision.run_kind) == (actor, review.value)
+    assert (revision.actor, revision.run_kind, revision.session_id) == (
+        actor,
+        review.value,
+        "session-one",
+    )
 
 
 def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(

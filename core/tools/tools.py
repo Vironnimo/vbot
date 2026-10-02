@@ -937,6 +937,7 @@ class ToolExecutor:
                 cwd=config.cwd,
                 project_id=config.project_id,
                 skill_project_id=config.skill_project_id,
+                skill_agent_id=config.skill_agent_id,
                 run_kind=config.run_kind,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,

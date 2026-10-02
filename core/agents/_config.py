@@ -661,6 +661,7 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("excluded_skills")
     if persisted["builtin"] is None:
         persisted.pop("builtin")
+    persisted.pop("skill_agent_id")
     persisted["workspace"] = workspace
     return persisted
 

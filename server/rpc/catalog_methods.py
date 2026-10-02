@@ -18,7 +18,7 @@ from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.payloads import _invalid_skill_response, _skill_response, _tool_response
 from server.rpc.runtime_access import _state_command_dispatcher
-from server.rpc.validation import _reject_unsupported, _required_agent_address
+from server.rpc.validation import _optional_string, _reject_unsupported, _required_agent_address
 
 JsonObject = dict[str, Any]
 _COMMAND_CATALOG_OUTPUT = {
@@ -97,10 +97,15 @@ def _list_skills(state: Any, params: JsonObject) -> JsonObject:
 async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
     # The optional ``agent_id`` (a bare id or an ``agent@projekt`` address) scopes
     # the skill suggestions to that agent's effective skills; without it the call
-    # returns the global skill list (today's behavior). Validated as a request shape
-    # before the domain work so a malformed address is a clean client error.
-    _reject_unsupported(params, {"agent_id"}, "chat.commands")
+    # returns the global skill list (today's behavior). The optional ``session_id``
+    # names that Agent's Session, whose Skills may be another Agent's (a Librarian
+    # Session). Validated as a request shape before the domain work so a malformed
+    # address is a clean client error.
+    _reject_unsupported(params, {"agent_id", "session_id"}, "chat.commands")
     address = _required_agent_address(params, "agent_id") if "agent_id" in params else None
+    session_id = _optional_string(params, "session_id")
+    if session_id is not None and address is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.session_id needs params.agent_id")
     try:
         command_items = [
             {
@@ -114,7 +119,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
             }
             for spec in _state_command_dispatcher(state).catalog()
         ]
-        skills = await _command_skill_suggestions(state, address)
+        skills = await _command_skill_suggestions(state, address, session_id)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     skill_items = [
@@ -129,7 +134,7 @@ async def _list_commands(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _command_skill_suggestions(
-    state: Any, address: tuple[str, str | None] | None
+    state: Any, address: tuple[str, str | None] | None, session_id: str | None = None
 ) -> list[Any]:
     """Return the skills offered for autocomplete, sorted by name.
 
@@ -141,7 +146,8 @@ async def _command_skill_suggestions(
     address suggests that project's pool, a rooted identity agent additionally sees
     its home project's skills, and the private-skill layer applies to identity
     agents only (a team slug colliding with an identity agent's id must not surface
-    that agent's private skills here).
+    that agent's private skills here). With ``session_id`` the Agent resolves as
+    that Session runs it, so a Librarian Session suggests the Skills it maintains.
 
     A Chat asks whenever its Agent address changes, so nothing here runs on the
     Event Loop: the Agent resolves on its own pools, and the scope and
@@ -151,19 +157,17 @@ async def _command_skill_suggestions(
     if address is None:
         return await _CATALOG_WORKERS.run(_sorted_filtered_skills, state.runtime.skills, ["*"])
     agent_id, project_id = address
-    agent = await state.runtime.agent_resolver.resolve_agent_async(project_id, agent_id)
-    return await _CATALOG_WORKERS.run(
-        _agent_skill_suggestions, state.runtime, agent_id, project_id, agent
+    agent = await state.runtime.agent_resolver.resolve_agent_async(
+        project_id, agent_id, session_id=session_id
     )
+    return await _CATALOG_WORKERS.run(_agent_skill_suggestions, state.runtime, project_id, agent)
 
 
-def _agent_skill_suggestions(
-    runtime: Any, agent_id: str, project_id: str | None, agent: Any
-) -> list[Any]:
+def _agent_skill_suggestions(runtime: Any, project_id: str | None, agent: Any) -> list[Any]:
     allowed_skills = getattr(agent, "allowed_skills", ["*"])
     working_project_id = resolve_working_project_id(project_id, agent)
     prompt_project = resolve_prompt_project(runtime.projects, working_project_id)
-    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent_id)
+    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent)
     return _sorted_filtered_skills(
         runtime.skills_for(skill_project_id, identity_agent_id), allowed_skills
     )

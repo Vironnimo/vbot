@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from core.agents import (
+    SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
@@ -24,6 +25,7 @@ from tests.core.agents.agents_test_support import store as store
 from tests.core.agents.agents_test_support import template_dir as template_dir
 
 _CHILD = SessionAddress(None, "manager", "child")
+_CURATING = SessionAddress(None, "librarian", "curating")
 
 
 class _Killed(BaseException):
@@ -35,7 +37,11 @@ def _record(store: AgentStore) -> Path:
 
 
 def _seed(store: AgentStore) -> Agent:
-    """``coder``, a ``manager`` that delegates to it, and a Sub-Agent link to it."""
+    """``coder``, a ``manager`` that delegates to it, and Sessions that name it.
+
+    A ``manager`` Session links to ``coder`` as its Sub-Agent parent; a Librarian
+    Session maintains the Skills of ``coder``.
+    """
     created = store.create(
         "coder", "Coder Agent", tools={"subagent": {"allowed_agents": ["coder", "coder@project"]}}
     )
@@ -47,6 +53,8 @@ def _seed(store: AgentStore) -> Agent:
         _CHILD,
         {"subagent_parent": {"agent_id": "coder", "session_id": "kept", "project_id": None}},
     )
+    sessions.create("librarian", session_id="curating")
+    sessions.set_metadata(_CURATING, {SKILL_AGENT_ID_KEY: "coder"})
     return created
 
 
@@ -84,6 +92,7 @@ def _assert_agent_is(store: AgentStore, created: Agent, agent_id: str, other_id:
     assert sessions.exists(SessionAddress(None, agent_id, "kept"))
     assert sessions.list_addresses(None, agent_id=other_id) == []
     assert sessions.get_metadata(_CHILD)["subagent_parent"]["agent_id"] == agent_id
+    assert sessions.metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == agent_id
     assert [listed.id for listed in store.list()] == [agent_id, "manager"]
     assert sorted(path.name for path in (store.data_dir / "agents").iterdir()) == sorted(
         [agent_id, "manager", "order.json"]
@@ -142,7 +151,9 @@ def test_rename_preserves_external_workspace(store: AgentStore, tmp_path: Path) 
     assert (workspace / "SOUL.md").is_file()
 
 
-def test_rename_retargets_bare_allowed_agent_ids_and_sub_agent_links(store: AgentStore) -> None:
+def test_rename_retargets_allowed_agent_ids_sub_agent_links_and_librarian_sessions(
+    store: AgentStore,
+) -> None:
     _seed(store)
     # A link follows its parent Session; one to a Session that did not move stays.
     orphan = _link_to(store, "orphan", "coder")
@@ -158,6 +169,8 @@ def test_rename_retargets_bare_allowed_agent_ids_and_sub_agent_links(store: Agen
     ]
     assert _link_agent_id(store, _CHILD) == "researcher"
     assert _link_agent_id(store, orphan) == "coder"
+    # The Librarian Session goes on maintaining the renamed Agent's Skills.
+    assert store._session_manager().metadata_value(_CURATING, SKILL_AGENT_ID_KEY) == "researcher"
 
 
 def test_revert_rename_restores_the_original_agent(store: AgentStore) -> None:

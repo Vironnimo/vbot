@@ -1,6 +1,9 @@
 """Connection-bound Model configuration and Run override tests."""
 
-from core.projects import AgentOverrides, ModelConfigurationError
+import asyncio
+
+from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, skill_subject_id
+from core.projects import AgentOverrides, AgentResolutionError, ModelConfigurationError
 from core.sessions import SessionAddress
 
 from .resolver_test_support import (
@@ -206,6 +209,51 @@ def test_model_defaults_run_the_session_model_without_the_agents_run_settings(
     resolver.update_session_overrides(address, {"thinking_effort": "high"})
     assert resolver.resolve_agent(None, "identity", session_id=session.id).thinking_effort == "high"
     assert agents.get("identity").fallback_models == ["openai/gpt-mini"]
+
+
+def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
+    agents: AgentStore, projects: ProjectStore
+) -> None:
+    agents.create("coder", model="openai/gpt-5.2", allowed_skills=["review"])
+    librarian = agents.ensure_librarian()
+    assert librarian is not None
+    resolver = _resolver(agents, projects, _openai_configured())
+    sessions = agents._session_manager()
+    bound = SessionAddress(None, LIBRARIAN_AGENT_ID, sessions.create(LIBRARIAN_AGENT_ID).id)
+    unbound = sessions.create(LIBRARIAN_AGENT_ID).id
+    sessions.mutate_metadata(bound, lambda metadata: metadata.update({SKILL_AGENT_ID_KEY: "coder"}))
+
+    for view in (
+        resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id),
+        asyncio.run(
+            resolver.resolve_agent_async(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
+        ),
+    ):
+        # The subject's Skills and Skill selection; everything else stays the Librarian's.
+        assert (view.id, skill_subject_id(view), view.allowed_skills) == (
+            LIBRARIAN_AGENT_ID,
+            "coder",
+            ["review"],
+        )
+        assert view.tool_access == librarian.tool_access
+    # Outside a bound Session the Librarian works on its own Skills, and only the
+    # Librarian's Sessions bind: another Agent's Session ignores the key.
+    coder_session = sessions.create("coder").address
+    sessions.mutate_metadata(
+        coder_session, lambda metadata: metadata.update({SKILL_AGENT_ID_KEY: LIBRARIAN_AGENT_ID})
+    )
+    for view, owner in (
+        (resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=unbound), "librarian"),
+        (resolver.resolve_agent(None, LIBRARIAN_AGENT_ID), "librarian"),
+        (resolver.resolve_agent(None, "coder", session_id=coder_session.session_id), "coder"),
+    ):
+        assert skill_subject_id(view) == owner
+        assert getattr(view, "skill_agent_id", None) is None
+    # A Session whose Agent is gone, or names the Librarian itself, cannot run.
+    for subject in ("ghost", LIBRARIAN_AGENT_ID):
+        sessions.set_metadata(bound, {SKILL_AGENT_ID_KEY: subject})
+        with pytest.raises(AgentResolutionError, match=f"Agent {subject}, which no longer"):
+            resolver.resolve_agent(None, LIBRARIAN_AGENT_ID, session_id=bound.session_id)
 
 
 def test_session_overrides_reject_invalid_values_before_writing(

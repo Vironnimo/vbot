@@ -14,9 +14,8 @@ from typing import Any
 
 import yaml
 
-from core.runs import RunKind, is_unattended_run_kind
+from core.runs import RunKind
 from core.skills.authoring import (
-    SkillActor,
     SkillAuthoringError,
     SkillAuthoringService,
     SkillProtectedError,
@@ -47,7 +46,12 @@ from core.tools.fuzzy_match import (
     preserve_typography,
     replace_fuzzy,
 )
-from core.tools.skill import clean_skill_file_path, similar_skill_names
+from core.tools.skill import (
+    LIBRARIAN_SKILL_ACTOR,
+    clean_skill_file_path,
+    similar_skill_names,
+    skill_writer,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -135,10 +139,6 @@ SkillMergeFollower = Callable[
 # ``delete`` stays owner/human-only so a receiver cannot remove someone else's
 # playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
-# The Skill history actor of a Run without the user: a Librarian pass writes as
-# ``librarian``; every other unattended kind is a reflection review.
-_BACKGROUND_ACTOR: SkillActor = "reflection"
-_LIBRARIAN_ACTOR: SkillActor = "librarian"
 _PROTECTED_MESSAGES = {
     "pinned": SKILL_MANAGE_PINNED_REFUSAL,
     "unknown": SKILL_MANAGE_HISTORY_UNREADABLE_REFUSAL,
@@ -356,17 +356,19 @@ def make_skill_manage_handler(
         run_started_at: str | None = None,
         followed: tuple[SkillReference, ...] = (),
     ) -> JsonObject:
-        writer = _writer(context)
+        writer = skill_writer(context)
+        # The Skills of the calling Agent, or of the Agent a Librarian Session maintains.
+        owner_id = context.skill_subject_id
         try:
             call = _read_call(arguments)
-            own_root = resolve_agent_skills_dir(context.agent_id)
+            own_root = resolve_agent_skills_dir(owner_id)
             target_root = own_root
             shared_target = False
             if call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
             ):
                 shared_root = (
-                    resolve_shared_skills_dir(context.agent_id, call.name)
+                    resolve_shared_skills_dir(owner_id, call.name)
                     if resolve_shared_skills_dir is not None
                     else None
                 )
@@ -380,9 +382,7 @@ def make_skill_manage_handler(
             # name, which is the established override path.
             if call.action != "create" and find_skill_package_dir(target_root, call.name) is None:
                 scope = (
-                    resolve_external_skill_scope(
-                        context.agent_id, call.name, context.skill_project_id
-                    )
+                    resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
                     if resolve_external_skill_scope is not None
                     else None
                 )
@@ -396,7 +396,7 @@ def make_skill_manage_handler(
             if writer.background and call.action != "create":
                 authoring.check_writable(target_root, call.name, writer=writer)
             if (
-                writer.actor == _LIBRARIAN_ACTOR
+                writer.actor == LIBRARIAN_SKILL_ACTOR
                 and run_started_at is not None
                 and call.action != "create"
             ):
@@ -423,14 +423,14 @@ def make_skill_manage_handler(
 
         # An own-home invalidation also reaches its shared receivers. Receiver
         # edits conservatively invalidate all Agent scopes through the same owner.
-        invalidate_agent_skills(None if shared_target else context.agent_id)
+        invalidate_agent_skills(None if shared_target else owner_id)
         if on_changed is not None:
             on_changed()
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
             "shared" if shared_target else "own",
-            target_root.parent.name if shared_target else context.agent_id,
+            target_root.parent.name if shared_target else owner_id,
             call.action,
             context.agent_id,
         )
@@ -443,22 +443,6 @@ def make_skill_manage_handler(
         return tool_success({"content": "\n".join(lines)})
 
     return skill_manage_handler
-
-
-def _writer(context: ToolContext) -> SkillWriter:
-    """Name the call's writer: an attended Agent, a Librarian pass or a review."""
-    kind = context.run_kind
-    actor: SkillActor = "agent"
-    if kind is RunKind.LIBRARIAN:
-        actor = _LIBRARIAN_ACTOR
-    elif is_unattended_run_kind(kind):
-        actor = _BACKGROUND_ACTOR
-    return SkillWriter(
-        actor=actor,
-        session_id=context.session_id or None,
-        run_id=context.run_id or None,
-        run_kind=None if kind is None else kind.value,
-    )
 
 
 def _after(timestamp: str, moment: datetime) -> bool:
@@ -1155,7 +1139,7 @@ def register_skill_manage_tool(
             planned.extend(followed)
             return result.get("ok") is True
 
-        failed = await follow_merge(context.agent_id, name, target, delete)
+        failed = await follow_merge(context.skill_subject_id, name, target, delete)
         result = results[0]
         if result.get("ok") is True and planned:
             _note_followed(result, name, target, planned, failed)

@@ -14,8 +14,10 @@ from typing import Any, cast
 
 import pytest
 
+from core.agents import LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY
 from core.prompts import SkillPromptRegistry
 from core.runs import MODEL_STEP_USAGE_EVENT, RUN_CHANGE_STATS_EVENT
+from core.skills.authoring import SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import tool_success
 from core.tools.memory import MEMORY_TOOL_DESCRIPTION, MEMORY_TOOL_PARAMETERS
@@ -200,6 +202,56 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
         ]
         assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
         assert messages[-1].change_stats == live_stats[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_librarian_session_works_on_the_skills_of_its_agent(
+    start_runtime: StartRuntime,
+) -> None:
+    release = "---\nname: release\ndescription: Ship a release.\n---\n\n# Release\n"
+    adapter = FakeAdapter(
+        [
+            {
+                "content": None,
+                "reasoning": None,
+                "tool_calls": [
+                    {
+                        "id": "call_create",
+                        "name": "skill_manage",
+                        "arguments": {"action": "create", "name": "release", "content": release},
+                    }
+                ],
+            },
+            {"content": "Done.", "reasoning": None, "tool_calls": None},
+        ]
+    )
+
+    with start_runtime(adapter) as runtime:
+        runtime.agents.create("coder", "Coder Agent", model="fake-provider/fake-model-v1")
+        agents_dir = runtime.storage.data_dir / "agents"
+        _write_skill(agents_dir / "coder", "triage", "Sort new bugs")
+        runtime.agents.update(LIBRARIAN_AGENT_ID, model="fake-provider/fake-model-v1")
+        session = runtime.chat_sessions.create(LIBRARIAN_AGENT_ID)
+        runtime.chat_sessions.mutate_metadata(
+            session.address, lambda metadata: metadata.update({SKILL_AGENT_ID_KEY: "coder"})
+        )
+
+        await build_chat_loop(runtime).send(LIBRARIAN_AGENT_ID, "Tidy up", session_id=session.id)
+
+        messages = history(runtime, session.id, LIBRARIAN_AGENT_ID)
+        system_prompt = adapter.requests[0].messages[0]["content"]
+        # The System Prompt lists the subject's own Skills, and the write lands in its home.
+        assert "Your own skills:\n- triage: Sort new bugs" in system_prompt
+        assert json.loads(str(messages[2].content))["ok"] is True
+        home = agents_dir / "coder" / "skills"
+        assert (home / "release" / "SKILL.md").is_file()
+        assert not (agents_dir / LIBRARIAN_AGENT_ID / "skills").exists()
+        revision = SkillAuthoringService().history(home, "release")[0]
+        assert (revision.actor, revision.session_id, revision.run_id) == (
+            "librarian",
+            session.id,
+            messages[-1].run_id,
+        )
 
 
 def test_runtime_prompt_includes_workspace_files_and_filtered_tool_skill_metadata(

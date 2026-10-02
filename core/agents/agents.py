@@ -65,6 +65,7 @@ from core.agents._types import (
     LIBRARIAN_AGENT_NAME,
     LIBRARIAN_BUILTIN,
     LIBRARIAN_TOOLS,
+    SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
@@ -84,6 +85,7 @@ from core.agents._types import (
     LibrarianProblem,
     _AgentOrderDocument,
     is_librarian,
+    skill_subject_id,
 )
 from core.agents._workspace import (
     WORKSPACE_IDENTITY_FILES,
@@ -129,11 +131,13 @@ __all__ = [
     "LIBRARIAN_AGENT_ID",
     "LIBRARIAN_AGENT_NAME",
     "LIBRARIAN_TOOLS",
+    "SKILL_AGENT_ID_KEY",
     "Agent",
     "AgentAlreadyExistsError",
     "BuiltinAgentError",
     "LibrarianProblem",
     "is_librarian",
+    "skill_subject_id",
     "ArchivedAgent",
     "ArchivedAgentPayload",
     "AgentError",
@@ -1023,6 +1027,10 @@ class AgentStore:
         sessions.retarget_identity_agent_sessions(rename.source_id, rename.target_id)
         link_count = len(
             sessions.retarget_identity_agent_references(rename.source_id, rename.target_id)
+        )
+        # The Librarian Sessions that maintain the Agent's Skills keep doing so.
+        sessions.retarget_metadata_value(
+            LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, rename.source_id, rename.target_id
         )
         if workspace_ops._move_renamed_tree(self._data_dir / "agents", rename):
             self._write_renamed_config(rename)

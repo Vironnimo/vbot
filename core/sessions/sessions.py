@@ -765,6 +765,18 @@ class ChatSessionManager:
         """
         return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
 
+    def retarget_metadata_value(
+        self, agent_id: str, key: str, old_value: str, new_value: str
+    ) -> int:
+        """Point one open metadata value of an Identity Agent's live Sessions elsewhere.
+
+        Every live global Session of ``agent_id`` whose metadata ``key`` holds
+        ``old_value`` gets ``new_value``, such as the Librarian Sessions bound to a
+        renamed Agent. Returns how many changed; only values still naming
+        ``old_value`` change, so a repeated call after an interruption finishes it.
+        """
+        return self._store.retarget_metadata_value(agent_id, key, old_value, new_value)
+
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.
 

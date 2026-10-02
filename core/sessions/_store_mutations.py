@@ -444,6 +444,25 @@ def retarget_identity_agent(
     )
 
 
+def retarget_metadata_value(
+    connection: sqlite3.Connection, agent_id: str, key: str, old_value: str, new_value: str
+) -> int:
+    """Give one open metadata value of an Identity Agent's live Sessions a new value.
+
+    Only Sessions whose ``key`` still holds ``old_value`` change; returns their count.
+    """
+    if not key.isidentifier() or _store_values._is_reserved_prompt_key(key):
+        raise ChatSessionError(f"Session metadata {key} cannot be retargeted")
+    path = f"$.{key}"
+    cursor = connection.execute(
+        "UPDATE sessions SET metadata_json = json_set(metadata_json, ?, ?), "
+        "state_revision = state_revision + 1 WHERE project_id = '' AND agent_id = ? "
+        "AND state = 'live' AND json_extract(metadata_json, ?) = ?",
+        (path, new_value, agent_id, path, old_value),
+    )
+    return int(cursor.rowcount)
+
+
 def _write_subagent_parent(
     connection: sqlite3.Connection, session_key: int, parent: JsonObject | None
 ) -> None:

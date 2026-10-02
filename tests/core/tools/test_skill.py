@@ -629,24 +629,33 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
 
 
+_BACKGROUND_LIST = (
+    "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
+    "- pinned: Pinned. (read-only here: pinned by the user)\n- unreadable: "
+    "Unreadable. (read-only here: its history cannot be read)"
+)
+_BACKGROUND_NOTES = {
+    "pinned": "Skill 'pinned' is read-only here: pinned by the user. Do not change "
+    "it; name a needed change in your reply.",
+    "debugging": "Skill 'debugging' is read-only here. Do not change it; name a "
+    "needed change in your reply.",
+}
+
+
+# A Librarian Session (``skill_agent_id``) works on its Agent's Skills like a pass,
+# also in a Run of the user.
 @pytest.mark.parametrize(
-    ("run_kind", "listed", "notes"),
+    ("run_kind", "skill_agent_id", "listed", "notes"),
     [
         pytest.param(
-            RunKind.SKILL_REFLECTION,
-            "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
-            "- pinned: Pinned. (read-only here: pinned by the user)\n- unreadable: "
-            "Unreadable. (read-only here: its history cannot be read)",
-            {
-                "pinned": "Skill 'pinned' is read-only here: pinned by the user. Do not change "
-                "it; name a needed change in your reply.",
-                "debugging": "Skill 'debugging' is read-only here. Do not change it; name a "
-                "needed change in your reply.",
-            },
-            id="background",
+            RunKind.SKILL_REFLECTION, None, _BACKGROUND_LIST, _BACKGROUND_NOTES, id="background"
+        ),
+        pytest.param(
+            RunKind.USER, "subject", _BACKGROUND_LIST, _BACKGROUND_NOTES, id="librarian-session"
         ),
         pytest.param(
             RunKind.USER,
+            None,
             "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
             "- pinned: Pinned.\n- unreadable: Unreadable.",
             {},
@@ -655,7 +664,11 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
     ],
 )
 def test_background_runs_see_which_skills_they_cannot_change(
-    tmp_path: Path, run_kind: RunKind, listed: str, notes: dict[str, str]
+    tmp_path: Path,
+    run_kind: RunKind,
+    skill_agent_id: str | None,
+    listed: str,
+    notes: dict[str, str],
 ) -> None:
     for root, name in (
         ("agent", "mine"),
@@ -674,21 +687,25 @@ def test_background_runs_see_which_skills_they_cannot_change(
         asked.append((agent_id, names))
         return {"pinned": "pinned", "unreadable": "unknown"}
 
-    tool = SkillTool(
-        tmp_path,
-        SkillRegistry.load(
-            tmp_path / "agent", extra_dirs=[tmp_path / "global"], origins=["agent", "global"]
-        ),
-        protection=protection,
+    registry = SkillRegistry.load(
+        tmp_path / "agent", extra_dirs=[tmp_path / "global"], origins=["agent", "global"]
     )
+    owners: set[str | None] = set()
 
-    result = tool.call({}, run_kind=run_kind)
+    def resolve(_project_id: str | None, agent_id: str | None) -> SkillRegistry:
+        owners.add(agent_id)
+        return registry
+
+    tool = SkillTool(tmp_path, resolve, protection=protection)
+
+    result = tool.call({}, run_kind=run_kind, skill_agent_id=skill_agent_id)
     # A load opens with the note, so a Run that skips the list still learns it
     # before writing; a Skill it can change loads without one.
     loads = {
-        name: tool.call({"name": name}, run_kind=run_kind)["data"]
+        name: tool.call({"name": name}, run_kind=run_kind, skill_agent_id=skill_agent_id)["data"]
         for name in ("mine", "pinned", "debugging")
     }
+    owner = skill_agent_id or "coder"
 
     assert result["data"]["content"] == listed
     assert {name: data["note"] for name, data in loads.items() if "note" in data} == notes
@@ -697,7 +714,8 @@ def test_background_runs_see_which_skills_they_cannot_change(
         for data in loads.values()
         if "note" in data
     )
-    assert asked[:1] == ([("coder", ["mine", "pinned", "unreadable"])] if notes else [])
+    assert owners == {owner}
+    assert asked[:1] == ([(owner, ["mine", "pinned", "unreadable"])] if notes else [])
 
 
 def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:

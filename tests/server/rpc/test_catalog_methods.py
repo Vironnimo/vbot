@@ -53,24 +53,36 @@ def _state(
     rooted_project_id: str | None = None,
     project_cwd: str | None = None,
     command_dispatcher: CommandDispatcher | None = None,
+    agent_skills: dict[str, list[str]] | None = None,
+    session_subjects: dict[str, str] | None = None,
 ) -> Any:
+    """``agent_skills`` gives Agents their own registries; ``session_subjects`` binds
+    a Session to the Agent whose Skills it works on (a Librarian Session)."""
     global_registry = _Registry(global_names)
     project_registry = _Registry(project_names or [])
-    agent = SimpleNamespace(
-        allowed_skills=agent_allowed if agent_allowed is not None else ["*"],
-        workspace=agent_workspace,
-        root_project_id=rooted_project_id,
-    )
+    agent_registries = {
+        agent_id: _Registry(names) for agent_id, names in (agent_skills or {}).items()
+    }
 
-    async def resolve_agent_async(project_id: str | None, agent_id: str) -> object:
+    async def resolve_agent_async(
+        project_id: str | None, agent_id: str, *, session_id: str | None = None
+    ) -> object:
         if not resolvable:
             from core.projects import AgentResolutionError
 
             raise AgentResolutionError(f"agent '{agent_id}' not found")
-        return agent
+        return SimpleNamespace(
+            id=agent_id,
+            allowed_skills=agent_allowed if agent_allowed is not None else ["*"],
+            workspace=agent_workspace,
+            root_project_id=rooted_project_id,
+            skill_agent_id=(session_subjects or {}).get(session_id or ""),
+        )
 
     def skills_for(project_id: str | None, agent_id: str | None = None) -> _Registry:
-        return project_registry if project_id is not None else global_registry
+        if project_id is not None:
+            return project_registry
+        return agent_registries.get(agent_id or "", global_registry)
 
     projects = SimpleNamespace(
         get=lambda project_id: SimpleNamespace(
@@ -112,6 +124,23 @@ async def test_identity_agent_address_filters_by_agent_allowed_skills() -> None:
     result = await _list_commands(state, {"agent_id": "main"})
 
     assert _skill_names(result) == ["debugging"]
+
+
+@pytest.mark.asyncio
+async def test_a_librarian_session_suggests_the_skills_it_maintains() -> None:
+    state = _state(
+        global_names=["debugging"],
+        agent_skills={"coder": ["release"]},
+        session_subjects={"curating": "coder"},
+    )
+
+    in_session = await _list_commands(state, {"agent_id": "librarian", "session_id": "curating"})
+    elsewhere = await _list_commands(state, {"agent_id": "librarian"})
+
+    assert (_skill_names(in_session), _skill_names(elsewhere)) == (["release"], ["debugging"])
+    # A Session belongs to an Agent.
+    with pytest.raises(RpcError, match="session_id needs params.agent_id"):
+        await _list_commands(state, {"session_id": "curating"})
 
 
 @pytest.mark.asyncio
@@ -227,7 +256,7 @@ async def test_unsupported_field_is_rejected() -> None:
     state = _state(global_names=[])
 
     with pytest.raises(RpcError):
-        await _list_commands(state, {"session_id": "s1"})
+        await _list_commands(state, {"project_id": "p1"})
 
 
 @pytest.mark.asyncio

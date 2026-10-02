@@ -241,6 +241,15 @@ class SessionStore:
             )
         )
 
+    def retarget_metadata_value(
+        self, agent_id: str, key: str, old_value: str, new_value: str
+    ) -> int:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_metadata_value(
+                connection, agent_id, key, old_value, new_value
+            )
+        )
+
     # -- Metadata facade ---------------------------------------------------------
 
     def metadata(self, address: SessionAddress) -> JsonObject:

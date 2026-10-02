@@ -1,6 +1,7 @@
 """Project scan, Identity-Agent resolution, and working-Project scope tests."""
 
 import threading
+from types import SimpleNamespace
 from typing import Any
 
 from core.database import DatabaseUnavailableError
@@ -312,22 +313,34 @@ def test_resolve_prompt_project_uses_only_the_explicit_project(
 
 
 @pytest.mark.parametrize(
-    ("project_id", "prompt_project", "agent_id", "scope"),
+    ("project_id", "prompt_project", "agent", "scope"),
     [
         # A Project Run never carries an Identity layer: a Team slug colliding with an
         # Identity Agent's id must not pull that Agent's private Skills in.
-        pytest.param("vbot", "vbot", "builder", ("vbot", None), id="project-run"),
+        pytest.param(
+            "vbot", "vbot", SimpleNamespace(id="builder"), ("vbot", None), id="project-run"
+        ),
         # A rooted Identity Run sees its home Project's Skills plus its private layer.
-        pytest.param(None, "vbot", "main", ("vbot", "main"), id="rooted-identity"),
-        pytest.param(None, None, "main", (None, "main"), id="plain-identity"),
+        pytest.param(
+            None, "vbot", SimpleNamespace(id="main"), ("vbot", "main"), id="rooted-identity"
+        ),
+        pytest.param(None, None, SimpleNamespace(id="main"), (None, "main"), id="plain-identity"),
+        # A Librarian Session works on the Skills of the Agent it is bound to.
+        pytest.param(
+            None,
+            None,
+            SimpleNamespace(id="librarian", skill_agent_id="coder"),
+            (None, "coder"),
+            id="librarian-session",
+        ),
     ],
 )
 def test_resolve_skill_scope(
     project_id: str | None,
     prompt_project: str | None,
-    agent_id: str,
+    agent: Any,
     scope: tuple[str | None, str | None],
 ) -> None:
     project = None if prompt_project is None else _stub_project(prompt_project)
 
-    assert resolve_skill_scope(project_id, project, agent_id) == scope
+    assert resolve_skill_scope(project_id, project, agent) == scope
