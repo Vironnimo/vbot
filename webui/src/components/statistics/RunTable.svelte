@@ -162,4 +162,5 @@
   {initialSort}
   filter={rowFilter}
   emptyText={emptyText || t('statistics.empty')}
+  class="stats-run-table"
 />

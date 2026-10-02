@@ -442,6 +442,16 @@
   vertical-align: bottom;
 }
 
+/* A Run table has ten columns; its Run and Model names shorten sooner so
+   the whole table fits a desktop-wide view. */
+.stats-view .stats-run-table .stats-session {
+  max-width: 20ch;
+}
+
+.stats-view .stats-run-table .stats-model {
+  max-width: 16ch;
+}
+
 .stats-view .stats-model__more {
   margin-left: 4px;
   color: var(--text-lo);
