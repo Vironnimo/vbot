@@ -36,6 +36,8 @@ from core.json_documents import (
     write_json_document,
 )
 
+from ._network import is_loopback_host
+
 CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -93,6 +95,11 @@ def validate_connection(value: Any) -> dict[str, Any]:
             raise ValueError("HTTP MCP connections require an http or https URL")
         if parsed.username or parsed.password or parsed.fragment:
             raise ValueError("MCP URL must not contain credentials or fragments")
+        if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+            raise ValueError(
+                "Plain http:// MCP URLs are only allowed for this machine (localhost, "
+                "127.0.0.1 or ::1); use https:// for any other server"
+            )
         if record.get("command") or record.get("args") or record.get("cwd"):
             raise ValueError("HTTP MCP connections cannot specify a local command or directory")
     for field in ("environment", "credential_environment"):

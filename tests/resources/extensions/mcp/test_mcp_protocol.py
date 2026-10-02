@@ -9,7 +9,9 @@ import re
 import socket
 import sys
 from dataclasses import replace
+from typing import override
 
+import httpcore2
 import mcp.types as types
 import pytest
 import uvicorn
@@ -19,6 +21,7 @@ from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
 from resources.extensions.mcp._callbacks import sampling_messages
+from resources.extensions.mcp._network import DestinationGuard
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
@@ -129,6 +132,59 @@ async def test_http_transports(host, server, transport):
         await asyncio.wait_for(serving, 5)
         listener.close()
         await _stop_sse_shutdown_watcher()
+
+
+class _RecordingBackend(httpcore2.AsyncNetworkBackend):
+    def __init__(self) -> None:
+        self.connected: list[str] = []
+
+    @override
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
+        self.connected.append(host)
+        return httpcore2.AsyncMockStream([])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "server, target, connected",
+    [
+        # A public server's metadata cannot point at metadata services or the private network.
+        ("mcp.example", "169.254.169.254", None),
+        ("mcp.example", "::ffff:169.254.169.254", None),
+        ("mcp.example", "auth.internal", None),
+        ("mcp.example", "auth.example", ["93.184.216.35"]),
+        ("mcp.example", "split.example", ["93.184.216.36"]),
+        # A server on this machine or the private network may use private addresses ...
+        ("mcp.internal", "auth.internal", ["10.0.0.5"]),
+        ("127.0.0.1", "localhost", ["127.0.0.1"]),
+        # ... but never metadata services.
+        ("127.0.0.1", "fd00:ec2::254", None),
+        ("mcp.internal", "169.254.169.254", None),
+    ],
+)
+async def test_connections_reach_only_permitted_addresses(server, target, connected):
+    names = {
+        "mcp.example": ["93.184.216.34"],
+        "auth.example": ["93.184.216.35"],
+        "split.example": ["10.0.0.6", "93.184.216.36"],
+        "mcp.internal": ["192.168.1.10"],
+        "auth.internal": ["10.0.0.5"],
+        "localhost": ["127.0.0.1"],
+    }
+
+    async def resolve(host, port):
+        return names[host]
+
+    inner = _RecordingBackend()
+    guard = DestinationGuard(server, resolve=resolve, inner=inner)
+
+    if connected is None:
+        with pytest.raises(httpcore2.ConnectError, match="refused to reach"):
+            await guard.connect_tcp(target, 443)
+        assert inner.connected == []
+    else:
+        await guard.connect_tcp(target, 443)
+        assert inner.connected == connected
 
 
 async def _stop_sse_shutdown_watcher() -> None:
