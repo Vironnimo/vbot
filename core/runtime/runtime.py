@@ -34,6 +34,7 @@ from core.extensions import (
     InteractionEvent,
     InteractionResponder,
 )
+from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -158,6 +159,8 @@ class Runtime:
         # Lives as long as the Runtime: a restart keeps coordinating with a
         # data snapshot that is still copying.
         self._snapshot_barrier = SnapshotBarrier()
+        # Lives as long as the Runtime: the server binds its callback URL once.
+        self.oauth_redirects = OAuthRedirects()
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -259,6 +262,7 @@ class Runtime:
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
                     resolve_cwd=self._extension_cwd,
+                    oauth_redirects=self.oauth_redirects,
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,
