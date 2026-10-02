@@ -141,11 +141,8 @@ def request_input_budget(model_id: str, tokens: int) -> Iterator[None]:
     This local budget never enters request kwargs or a Provider payload. The
     Adapter still adds its independent output-capacity uncertainty reserve.
     """
-    token = _REQUEST_INPUT_BUDGET.set((model_id, max(0, tokens)))
-    try:
+    with _REQUEST_INPUT_BUDGET.set((model_id, max(0, tokens))):
         yield
-    finally:
-        _REQUEST_INPUT_BUDGET.reset(token)
 
 
 def resolve_request_input_budget(model_id: str, local_estimate: int | Callable[[], int]) -> int:

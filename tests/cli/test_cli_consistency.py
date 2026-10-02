@@ -206,19 +206,13 @@ def test_plain_output_preserves_json_and_suppresses_status(tmp_path, monkeypatch
 
 def test_human_records_keep_exact_values_and_plain_layout():
     values = ["- id=one", " name=Two words name=three", " text=  spaces\nnew line"]
-    token = output_mode.set("human")
-    try:
+    with output_mode.set("human"):
         assert (
             record_fields(values, separator="")
             == "- id=one\n  name=Two words name=three\n  text=  spaces\nnew line"
         )
-    finally:
-        output_mode.reset(token)
-    token = output_mode.set("plain")
-    try:
+    with output_mode.set("plain"):
         assert record_fields(values, separator="") == "".join(values)
-    finally:
-        output_mode.reset(token)
 
 
 def test_real_long_rpc_announces_before_response_and_stops_heartbeat(tmp_path, monkeypatch, capsys):
