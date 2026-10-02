@@ -291,6 +291,27 @@ def test_shutdown_ends_the_local_catalog_refresh_without_raising(
     assert warnings[0].exc_info is not None
 
 
+def test_startup_checks_the_runtime_model_db_before_the_local_catalog_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[str] = []
+
+    async def refresh() -> None:
+        calls.append("local sweep")
+
+    monkeypatch.setattr(
+        "server.app.start_installation_catalog_restore",
+        lambda _state: calls.append("restore check"),
+    )
+    app = create_app(runtime=ServerStubRuntime(tmp_path, maybe_refresh_local_catalogs=refresh))
+    with TestClient(app) as client:
+        assert client.portal is not None
+        client.portal.call(asyncio.wait_for, app.state.local_catalog_refresh_task, 5)
+
+    # The check sees the runtime Model DB before the sweep can publish a new one.
+    assert calls == ["restore check", "local sweep"]
+
+
 def test_extension_run_events_streams_only_the_current_owned_page_run(tmp_path: Path) -> None:
     run = Run(run_id="run-a", agent_id="participant", session_id="session-a")
     run.emit("model.response", {"text": "visible"})

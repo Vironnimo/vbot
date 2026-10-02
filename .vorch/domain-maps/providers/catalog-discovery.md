@@ -48,16 +48,21 @@ The RPC catches expected credential-resolution and OAuth-refresh failures at the
 
 ## Local auto-refresh and reachability
 
-`ProviderRuntime.model_database_refresh()` owns one Runtime-local admission guard shared by manual RPC refreshes and automatic local sweeps, exposed through the Runtime facade. It spans staging the effective Model DB, network discovery, runtime-root publication, and in-place registry reload. Acquiring only at publication would let a queued old snapshot erase another completed refresh. Cancellation discards its unpublished staging copy before releasing admission.
+`ProviderRuntime.model_database_refresh()` owns one Runtime-local admission guard shared by manual RPC refreshes, automatic local sweeps, and the startup restore below, exposed through the Runtime facade. It spans staging the effective Model DB, network discovery, runtime-root publication, and in-place registry reload. Acquiring only at publication would let a queued old snapshot erase another completed refresh. Cancellation discards its unpublished staging copy before releasing admission.
 
 Connections with `auto_refresh: true` are refreshed by `Runtime.maybe_refresh_local_catalogs()` only while enabled and usable. Startup triggers a background sweep; `model.list` waits within a short budget; sweeps are throttled, including failures, so an offline local server is not probed on every picker open. The 30 s TTL (`LOCAL_CATALOG_REFRESH_TTL_SECONDS`) runs from the end of the previous sweep, so a sweep slower than the TTL does not start the next one immediately. A sweep stages the effective Model DB, validates it, commits it recording only the local Providers it refreshed (`models.md` -> Complete Model DB snapshots), and discards the copy on the `local-catalog` worker pool and swaps the live registry through `ModelRegistry.reload_async`, so a picker open never blocks the Event Loop on catalog files; the staged copy is discarded even when the sweep is cancelled.
 
 Success reloads the existing `ModelRegistry` in place and records reachable. When that reload changed the loaded catalog, `ProviderRuntime` calls its catalog-changed callbacks (`Runtime.add_model_catalog_changed_callback`; a failing callback is logged and skips none of the others); the server bridge in `server/_app_lifecycle.py` publishes `resource_changed` kind `models`, so open windows reload their Model lists. An unchanged republish and a failed sweep signal nothing. The manual `model.refresh_db` publishes its own `models` change. Failure keeps the previous catalog and records unreachable; the sweep logs a failure at DEBUG and warns only on a reachable->unreachable transition (INFO on recovery). `model.list` exposes `reachable: false` only when every usable serving Connection is an auto-refresh Connection whose last probe failed; remote or unprobed alternatives prevent that claim.
+
+## Startup restore of installation catalogs
+
+Custom Provider discovery has no automatic refresh. When the runtime Model DB is missing or incompatible at startup (a new data directory, or a Model DB schema bump), `start_installation_catalog_restore` (`server/rpc/model_methods.py`, called from the server lifespan outside safe mode before the local sweep) starts one background runtime refresh of every Custom Provider with discovery under the shared admission, through the same staging, validation, commit, and reload as `model.refresh_db`, without a models.dev fetch. Per-Connection failures are counted like a manual refresh; a failure of the whole refresh logs a warning. Success publishes `resource_changed` kind `models` and logs one INFO line. The task is tracked with the background refreshes that Runtime shutdown drains. Behavior and the once-only guarantee: `models.md` -> Constraints & Gotchas.
 
 ## Source and tests
 
 - Provider fetch/normalization: `core/models/discovery.py`
 - Model layers and assembly: `core/models/`, `models.md`
 - Local sweep/reachability: `core/providers/runtime.py`, `server/rpc/model_methods.py`
+- Startup restore: `server/rpc/model_methods.py::start_installation_catalog_restore`, `tests/server/rpc/test_model_methods_refresh.py`
 - Provider-specific normalization: the concrete Adapter modules under `core/providers/`
 - Focused coverage: Provider catalog tests under `tests/core/providers/`, discovery/Models tests, and local-refresh Runtime/RPC tests

@@ -17,6 +17,7 @@ from core.models.database import (
     ModelDatabaseRefresh,
     begin_runtime_model_database_refresh,
     begin_system_model_database_refresh,
+    read_model_database_manifest,
 )
 from core.models.discovery import ModelDiscoveryError, refresh_models
 from core.models.models import ModelRegistry
@@ -308,15 +309,18 @@ async def _await_local_catalog_refresh(runtime: Any) -> None:
         if exception is not None:
             _LOGGER.warning("Local catalog auto-refresh failed: %s", exception)
     if pending:
-        runtime_key = id(runtime)
-        tasks = _BACKGROUND_REFRESH_TASKS.setdefault(runtime_key, set())
-        tasks.add(refresh_task)
-        refresh_task.add_done_callback(
-            lambda completed, key=runtime_key: _discard_background_refresh_task(
-                key,
-                completed,
-            )
-        )
+        _track_background_refresh_task(runtime, refresh_task)
+
+
+def _track_background_refresh_task(runtime: Any, task: asyncio.Task[None]) -> None:
+    """Keep a background refresh until it ends so Runtime shutdown can drain it."""
+    runtime_key = id(runtime)
+    _BACKGROUND_REFRESH_TASKS.setdefault(runtime_key, set()).add(task)
+
+    def discard(completed: asyncio.Task[None]) -> None:
+        _discard_background_refresh_task(runtime_key, completed)
+
+    task.add_done_callback(discard)
 
 
 def _discard_background_refresh_task(runtime_key: int, task: asyncio.Task[None]) -> None:
@@ -329,7 +333,7 @@ def _discard_background_refresh_task(runtime_key: int, task: asyncio.Task[None])
 
 
 async def shutdown_background_refresh_tasks(runtime: Any) -> None:
-    """Cancel and drain model.list refresh sweeps owned by one Runtime."""
+    """Cancel and drain the background Model DB refreshes owned by one Runtime."""
     tasks = tuple(_BACKGROUND_REFRESH_TASKS.pop(id(runtime), ()))
     for task in tasks:
         task.cancel()
@@ -469,6 +473,80 @@ async def _publish_model_db_refresh(
         ModelRegistry.invalidate(database_refresh.resources_dir)
         database_refresh.discard()
     return outcome, invalid_entry_count
+
+
+def start_installation_catalog_restore(state: Any) -> asyncio.Task[None] | None:
+    """Rebuild a missing or incompatible runtime Model DB once, in the background.
+
+    Without a usable runtime Model DB, Load serves every catalog from the bundled
+    Model DB, so the catalogs only this installation produces are gone. Call this
+    once after startup, before any refresh can publish a new runtime root. It
+    refreshes each Custom Provider with a catalog endpoint through the same
+    admission and publication as ``model.refresh_db``; the published root also
+    replaces an incompatible one, so this happens once. Local catalogs return
+    with their automatic refresh; built-in Providers use the bundled catalogs
+    until the next manual refresh. Returns the started background refresh, if
+    any; Runtime shutdown drains it.
+    """
+
+    runtime = state.runtime
+    runtime_models_dir = runtime.storage.layout.models
+    if read_model_database_manifest(runtime_models_dir) is not None:
+        return None
+    condition = "incompatible" if runtime_models_dir.exists() else "missing"
+    provider_ids = [
+        provider_id
+        for provider_id in runtime.providers.list_ids()
+        if _is_custom_provider(provider := runtime.providers.get(provider_id))
+        and _provider_supports_refresh(provider)
+    ]
+    if condition == "missing" and not provider_ids:
+        return None
+    task = asyncio.create_task(
+        _restore_installation_catalogs(state, provider_ids, condition),
+        name="model-db-restore",
+    )
+    _track_background_refresh_task(runtime, task)
+    return task
+
+
+async def _restore_installation_catalogs(
+    state: Any,
+    provider_ids: list[str],
+    condition: str,
+) -> None:
+    runtime = state.runtime
+
+    async def refresh(resources_dir: Path) -> _RefreshOutcome:
+        successes, errors = await _refresh_providers(runtime, provider_ids, resources_dir, None)
+        return _RefreshOutcome(
+            result={"providers": successes, "errors": errors},
+            providers=_refreshed_provider_ids(successes),
+            canonical=False,
+        )
+
+    try:
+        async with runtime.model_database_refresh():
+            outcome, _invalid_entry_count = await _publish_model_db_refresh(
+                runtime,
+                _runtime_refresh_beginner(runtime),
+                refresh,
+            )
+    except Exception as error:
+        _LOGGER.warning("Could not rebuild the %s runtime Model DB: %s", condition, error)
+        return
+    publish_resource_changed(state, RESOURCE_KIND_MODELS)
+    provider_count, model_count = _summarize_refreshed_providers(outcome.result["providers"])
+    _LOGGER.info(
+        "Rebuilt the %s runtime Model DB "
+        "(custom_providers=%s refreshed=%s models=%s errors=%s); built-in Providers use "
+        "the bundled catalogs and local catalogs return with their automatic refresh",
+        condition,
+        len(provider_ids),
+        provider_count,
+        model_count,
+        len(outcome.result["errors"]),
+    )
 
 
 async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:

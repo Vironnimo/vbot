@@ -419,6 +419,82 @@ async def test_runtime_refresh_drops_catalogs_of_providers_that_no_longer_exist(
 
 
 # ---------------------------------------------------------------------------
+# Startup restore of a lost runtime Model DB
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+@pytest.mark.parametrize(
+    ("runtime_root", "custom_provider", "rebuilt"),
+    [
+        pytest.param("incompatible", True, True, id="incompatible-with-custom-provider"),
+        pytest.param("missing", True, True, id="missing-with-custom-provider"),
+        pytest.param("incompatible", False, True, id="incompatible-without-custom-provider"),
+        pytest.param("missing", False, False, id="missing-without-custom-provider"),
+        pytest.param("compatible", True, False, id="compatible"),
+    ],
+)
+async def test_startup_rebuilds_a_lost_runtime_model_db_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    runtime_root: str,
+    custom_provider: bool,
+    rebuilt: bool,
+) -> None:
+    """Only the Custom Provider catalogs no other source provides are refreshed;
+    built-in Providers keep the bundled catalogs and local ones their sweep."""
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setenv("CUSTOM_API_KEY", "custom-key")
+    state = make_state(tmp_path, StubAdapter())
+    _serve_resources_from(state, tmp_path / "system-resources")
+    state.runtime.providers.add(openrouter_provider())
+    if custom_provider:
+        state.runtime.providers.add(_custom_provider("custom", "CUSTOM_API_KEY"))
+    runtime_models_dir = state.runtime.storage.layout.models
+    if runtime_root != "missing":
+        runtime_models_dir.mkdir(parents=True)
+        runtime_models_dir.joinpath("custom.json").write_text(
+            json.dumps({"provider_id": "custom", "models": {}}), encoding="utf-8"
+        )
+        write_model_database_manifest(
+            runtime_models_dir, source="runtime", catalogs={"custom.json": datetime.now(UTC)}
+        )
+    if runtime_root == "incompatible":
+        manifest_path = runtime_models_dir / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest_path.write_text(json.dumps(manifest | {"schema_version": 1}), encoding="utf-8")
+    with caplog.at_level(logging.INFO, logger=model_methods._LOGGER.name):
+        task = model_methods.start_installation_catalog_restore(state)
+        if task is not None:
+            await task
+
+    assert (task is not None) == rebuilt
+    assert (["custom"] if rebuilt and custom_provider else []) == FAKE_REFRESH_MODEL_PROVIDER_IDS
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "runtime Model DB" in record.getMessage()
+    ]
+    if not rebuilt:
+        assert messages == []
+        assert resource_changes(state) == []
+        return
+    assert len(messages) == 1
+    assert messages[0].startswith(f"Rebuilt the {runtime_root} runtime Model DB")
+    assert resource_changes(state) == [{"kind": "models"}]
+    manifest_after = read_model_database_manifest(runtime_models_dir)
+    assert manifest_after is not None
+    assert set(manifest_after.catalogs) == ({"custom.json"} if custom_provider else set())
+    if custom_provider:
+        assert state.runtime.models.get("custom", "fresh-model").name == "Fresh Model"
+    # The rebuilt root is compatible, so the next startup leaves it alone.
+    assert model_methods.start_installation_catalog_restore(state) is None
+
+
+# ---------------------------------------------------------------------------
 # Connection iteration
 # ---------------------------------------------------------------------------
 
