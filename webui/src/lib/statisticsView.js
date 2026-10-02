@@ -712,41 +712,6 @@ export function costTooltip(totals, locale = 'en') {
   return { title: formatCostExact(totals.cost_usd, locale), rows };
 }
 
-/** An Extension activity's costs (`{ reported_usd, estimated_usd, ...calls }`)
- *  in the report's Totals shape, for costTooltip(); `cost_usd` is null while
- *  neither part is known. */
-export function activityCostTotals(costs) {
-  const reported = finite(costs?.reported_usd);
-  const estimated = finite(costs?.estimated_usd);
-  return {
-    cost_usd:
-      reported === null && estimated === null
-        ? null
-        : (reported ?? 0) + (estimated ?? 0),
-    reported_cost_usd: reported,
-    reported_calls: toFiniteNumber(costs?.reported_calls),
-    estimated_cost_usd: estimated,
-    estimated_calls: toFiniteNumber(costs?.estimated_calls),
-    unpriced_calls: toFiniteNumber(costs?.unpriced_calls),
-    retrospective_calls: toFiniteNumber(costs?.retrospective_calls),
-  };
-}
-
-/** Measured plus estimated tokens of an Extension activity, and the
- *  estimated part. */
-export function activityTokens(activity) {
-  const estimated =
-    toFiniteNumber(activity?.estimated_input_tokens) +
-    toFiniteNumber(activity?.estimated_output_tokens);
-  return {
-    total:
-      toFiniteNumber(activity?.measured_input_tokens) +
-      toFiniteNumber(activity?.measured_output_tokens) +
-      estimated,
-    estimated,
-  };
-}
-
 const COST_REASONS = Object.freeze({
   missing_usage: () => t('statistics.cost.reason.usage'),
   missing_price: () => t('statistics.cost.reason.price'),

@@ -431,16 +431,14 @@ export function createSwarmPageModel(host) {
 
   const usageRows = $derived(
     participantUsage.flatMap(({ participant, report }) => {
-      const models = report?.usage?.usage?.models ?? [];
+      const models = report?.usage?.activity?.models ?? [];
       return (models.length ? models : [null]).map((model, index) => ({
         id: `${participant.id}:${index}`,
         participant: participant.display_name,
         model,
-        modelName: model
-          ? `${model.provider}/${model.model}`
-          : participant.model,
+        modelName: model ? model.model : participant.model,
         participantRows: index === 0 ? Math.max(models.length, 1) : 0,
-        toolCalls: report?.usage?.tools?.total_calls,
+        toolCalls: report?.usage?.activity?.tool_calls,
       }));
     }),
   );

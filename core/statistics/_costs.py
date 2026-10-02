@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from core.models.pricing import TokenPricing
@@ -18,30 +17,6 @@ from core.statistics._projection import (
 PricingLookup = Callable[[str], TokenPricing | None]
 
 _PRICING_BATCH = 1000
-
-
-@dataclass
-class CostTotals:
-    """Calls by cost coverage; amounts are ``None`` until a call of their source counts."""
-
-    calls: int = 0
-    reported_calls: int = 0
-    estimated_calls: int = 0
-    unpriced_calls: int = 0
-    retrospective_calls: int = 0
-    reported_usd: float | None = None
-    estimated_usd: float | None = None
-
-    def merge(self, other: CostTotals) -> None:
-        self.calls += other.calls
-        self.reported_calls += other.reported_calls
-        self.estimated_calls += other.estimated_calls
-        self.unpriced_calls += other.unpriced_calls
-        self.retrospective_calls += other.retrospective_calls
-        if other.reported_usd is not None:
-            self.reported_usd = (self.reported_usd or 0) + other.reported_usd
-        if other.estimated_usd is not None:
-            self.estimated_usd = (self.estimated_usd or 0) + other.estimated_usd
 
 
 # Every call table with the records table that carries its calls' Run ids.

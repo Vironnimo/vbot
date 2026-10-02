@@ -7,8 +7,6 @@
   import DataTable from '../ui/DataTable.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import {
-    activityCostTotals,
-    activityTokens,
     costTooltip,
     formatCost,
     formatDateTime,
@@ -17,6 +15,7 @@
     runStatusLabel,
     shortGroupId,
     tokenTooltip,
+    totalTokens,
   } from '$lib/statisticsView.js';
   import {
     costValue,
@@ -31,28 +30,36 @@
   const extensions = $derived(section?.extensions ?? []);
 
   // Groups started before generated titles existed carry none; name them by
-  // start time and a short id so they stay distinguishable.
+  // a short id. Their start time already shows in the group's meta line.
   function groupLabel(group) {
-    if (group.title) return group.title;
-    const id = shortGroupId(group.group_id);
-    if (!group.started_at) {
-      return t('statistics.extensions.groupFallbackId', { id });
-    }
-    return t('statistics.extensions.groupFallback', {
-      date: formatDateTime(group.started_at, locale),
-      id,
-    });
+    return (
+      group.title ||
+      t('statistics.extensions.groupFallbackId', {
+        id: shortGroupId(group.group_id),
+      })
+    );
+  }
+
+  // Input plus output tokens of an activity's Totals, and the estimated part.
+  function activityTokens(activity) {
+    const totals = activity?.totals;
+    return {
+      total: totalTokens(totals),
+      estimated:
+        (totals?.estimated_input_tokens ?? 0) +
+        (totals?.estimated_output_tokens ?? 0),
+    };
   }
 
   function unfinishedRuns(activity) {
-    const status = activity?.run_status ?? {};
+    const status = activity?.runs ?? {};
     return (
       (status.failed ?? 0) + (status.cancelled ?? 0) + (status.interrupted ?? 0)
     );
   }
 
   function unfinishedTooltip(activity) {
-    const status = activity?.run_status ?? {};
+    const status = activity?.runs ?? {};
     const rows = ['failed', 'cancelled', 'interrupted']
       .filter((key) => (status[key] ?? 0) > 0)
       .map((key) => ({
@@ -64,7 +71,7 @@
 
   function activityTiles(activity, groups) {
     const tokens = activityTokens(activity);
-    const costs = activityCostTotals(activity?.costs);
+    const costs = activity?.totals;
     return [
       ...(groups == null
         ? []
@@ -81,7 +88,7 @@
       },
       {
         label: t('statistics.extensions.runs'),
-        value: formatInteger(activity?.runs, locale),
+        value: formatInteger(activity?.runs?.total, locale),
         detail:
           unfinishedRuns(activity) > 0
             ? t('statistics.extensions.unfinishedRuns', {
@@ -97,7 +104,7 @@
       },
       {
         label: t('statistics.overview.cost'),
-        value: formatCost(costs.cost_usd, locale),
+        value: formatCost(costs?.cost_usd, locale),
         valueTooltip: costTooltip(costs, locale),
       },
       {
@@ -124,8 +131,8 @@
       id: 'runs',
       label: t('statistics.col.runs'),
       align: 'end',
-      sortValue: (row) => row.activity?.runs,
-      format: (row) => formatInteger(row.activity?.runs, locale),
+      sortValue: (row) => row.activity?.runs?.total,
+      format: (row) => formatInteger(row.activity?.runs?.total, locale),
     },
     {
       id: 'tokens',
@@ -138,7 +145,7 @@
       id: 'cost',
       label: t('statistics.col.cost'),
       align: 'end',
-      sortValue: (row) => activityCostTotals(row.activity?.costs).cost_usd,
+      sortValue: (row) => row.activity?.totals?.cost_usd,
       cell: participantCost,
     },
     {
@@ -157,8 +164,8 @@
 {/snippet}
 
 {#snippet participantCost(row)}
-  {@const costs = activityCostTotals(row.activity?.costs)}
-  {@render costValue(costs.cost_usd, costTooltip(costs, locale))}
+  {@const costs = row.activity?.totals}
+  {@render costValue(costs?.cost_usd, costTooltip(costs, locale))}
 {/snippet}
 
 <div class="stats-panel">
@@ -194,7 +201,7 @@
       <ul class="stats-groups">
         {#each extension.groups ?? [] as group (group.group_id)}
           {@const tokens = activityTokens(group.activity)}
-          {@const costs = activityCostTotals(group.activity?.costs)}
+          {@const costs = group.activity?.totals}
           <li>
             <details class="stats-group">
               <summary>
@@ -214,7 +221,10 @@
                           group.participants?.length ?? 0,
                           locale,
                         ),
-                        runs: formatInteger(group.activity?.runs, locale),
+                        runs: formatInteger(
+                          group.activity?.runs?.total,
+                          locale,
+                        ),
                       },
                     )}</span
                   >
@@ -235,7 +245,7 @@
                   <span
                     class="stats-number"
                     use:tooltip={costTooltip(costs, locale)}
-                    >{formatCost(costs.cost_usd, locale)}</span
+                    >{formatCost(costs?.cost_usd, locale)}</span
                   >
                 </span>
               </summary>

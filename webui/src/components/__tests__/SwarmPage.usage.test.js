@@ -44,18 +44,17 @@ function editUsage(operation, edit) {
 // A Usage report whose token, tool-call and Run counts all equal `value`.
 function uniformReport(value, participantId = null) {
   const counts = {
-    measured_input_tokens: value / 2,
-    measured_output_tokens: 0,
-    estimated_input_tokens: 0,
+    input_tokens: value / 2,
+    output_tokens: value / 2,
     estimated_output_tokens: value / 2,
   };
   return {
     participant_id: participantId,
-    usage: {
+    activity: {
       totals: counts,
-      models: [{ provider: 'demo', model: 'model', runs: value, ...counts }],
+      models: [{ model: 'demo/model', runs: value, ...counts }],
+      tool_calls: value,
     },
-    tools: { total_calls: value },
   };
 }
 
@@ -80,9 +79,11 @@ describe('Swarm Usage', () => {
     const { bridge, operation } = createBridge();
     editUsage(operation, (usage) => {
       const [first, second] = usage.participants;
-      first.usage.models.push({ ...first.usage.models[0], model: 'second' });
-      second.usage = null;
-      second.tools.total_calls = 7;
+      first.activity.models.push({
+        ...first.activity.models[0],
+        model: 'demo/second',
+      });
+      second.activity = { tool_calls: 7, totals: null, models: [] };
     });
     await openUsage(bridge);
     const rows = tableRows();
@@ -134,10 +135,8 @@ describe('Swarm Usage', () => {
   it('preserves unavailable totals and tool counts', async () => {
     const { bridge, operation } = createBridge();
     editUsage(operation, (usage) => {
-      for (const report of [usage, ...usage.participants]) {
-        report.usage = null;
-        report.tools = null;
-      }
+      for (const report of [usage, ...usage.participants])
+        report.activity = null;
     });
     await openUsage(bridge);
     expect(summary()).toEqual([UNAVAILABLE, UNAVAILABLE]);
@@ -210,8 +209,11 @@ describe('Swarm Usage refresh', () => {
     ).toBeNull();
     finishes[0]({
       usage: {
-        usage: { totals: { input_tokens: 987654 }, models: [] },
-        tools: { total_calls: 42 },
+        activity: {
+          totals: { input_tokens: 987654, output_tokens: 0 },
+          models: [],
+          tool_calls: 42,
+        },
         participants: [],
       },
     });
@@ -233,16 +235,14 @@ describe('Swarm Usage refresh', () => {
     const pending = [];
     const result = (id) => ({
       usage: {
-        usage: {
+        activity: {
           totals: {
-            measured_input_tokens: id === 'swr-a' ? 111 : 222,
-            measured_output_tokens: 0,
-            estimated_input_tokens: 0,
-            estimated_output_tokens: 0,
+            input_tokens: id === 'swr-a' ? 111 : 222,
+            output_tokens: 0,
           },
           models: [],
+          tool_calls: 0,
         },
-        tools: { total_calls: 0 },
       },
     });
     overrideOperations(operation, {

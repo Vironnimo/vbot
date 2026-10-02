@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -11,10 +11,9 @@ from typing import TYPE_CHECKING
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
 from core.sessions import OwnedRunRecord, SessionAddress
-from core.statistics._aggregation import GroupReport, GroupReportBuilder
-from core.statistics._call_scan import account_run_activity
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
-from core.statistics._runs import load_run_activity
+from core.statistics._group_usage import OwnedRun, group_usage
+from core.statistics._run_activity import load_run_activity
 from core.statistics._sections import (
     SECTION_NAMES,
     LiveSession,
@@ -29,7 +28,6 @@ from core.statistics._sources import (
     _owner_scopes,
     extension_session_summary,
 )
-from core.statistics._units import ReportUnit, materialize_run_slices
 from core.statistics.index import (
     IndexedSession,
     IndexView,
@@ -230,30 +228,21 @@ class StatisticsService:
     ) -> RunActivityReport:
         """Return persisted Runs whose execution overlaps the selected interval."""
         self._import_session_usage()
-        scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
+        scopes = self._statistics_scopes()
+        extension_sessions = self._extension_sessions()
 
         def consume(view: IndexView) -> tuple[int, list[RunActivity]]:
-            units = [
-                ReportUnit(
-                    display_key=scope.display_key,
-                    session_key=indexed.session_key,
-                    session_id=session_id,
-                    title=_title(indexed.summary),
-                    address=SessionAddress(scope.project_id, scope.agent_id, session_id),
-                )
-                for scope in scopes
-                for indexed, session_id in _surviving(view, scope)
-            ]
-            total, runs = load_run_activity(
-                view.connection, units, since=since, until=until, limit=MAX_RUN_ACTIVITY
+            sessions = {
+                session.session_key: session
+                for session in _live_sessions(view, scopes, extension_sessions)
+            }
+            return load_run_activity(
+                view.connection, sessions, since=since, until=until, limit=MAX_RUN_ACTIVITY
             )
-            if self._usage_recorder is not None:
-                runs = account_run_activity(view.connection, runs, units)
-            return total, runs
 
         total_runs, runs = self._index.read(
             self._sessions,
-            scopes,
+            _index_scopes(scopes, extension_sessions),
             consume,
             usage_recorder=self._usage_recorder,
             pricing_lookup=self._pricing_lookup,
@@ -329,26 +318,16 @@ class StatisticsService:
         ):
             raise ValueError("participant_id must be a non-empty string")
         records = self._owned_run_page(owner_name, group_id, participant_id)
-        report, participant_reports = self._group_report(owner_name, group_id, records)
-        participants = {record.owner.participant_id for record in records}
+        activity, participants = self._group_report(owner_name, group_id, records)
         return {
             "group_id": group_id,
             "participant_id": participant_id,
-            "participant_count": len(participants),
+            "participant_count": len({record.owner.participant_id for record in records}),
             "owned_run_count": len(records),
-            "usage": asdict(report.usage),
-            "tools": asdict(report.tools),
-            "compactions": asdict(report.compactions),
-            "runs": asdict(report.runs),
+            "activity": activity,
             "participants": [
-                {
-                    "participant_id": peer_id,
-                    "usage": asdict(peer_report.usage),
-                    "tools": asdict(peer_report.tools),
-                    "compactions": asdict(peer_report.compactions),
-                    "runs": asdict(peer_report.runs),
-                }
-                for peer_id, peer_report in participant_reports.items()
+                {"participant_id": peer_id, "activity": peer_activity}
+                for peer_id, peer_activity in participants.items()
             ],
         }
 
@@ -372,7 +351,7 @@ class StatisticsService:
 
     def _group_report(
         self, owner_name: str, group_id: str, records: list[OwnedRunRecord]
-    ) -> tuple[GroupReport, dict[str, GroupReport]]:
+    ) -> tuple[JsonObject, dict[str, JsonObject]]:
         summaries = {
             owned.address: extension_session_summary(owned)
             for owned in self._sessions.list_owned_session_summaries(
@@ -383,43 +362,20 @@ class StatisticsService:
         for record in records:
             by_address.setdefault(record.address, []).append(record)
 
-        def consume(view: IndexView) -> tuple[GroupReport, dict[str, GroupReport]]:
+        def consume(view: IndexView) -> tuple[JsonObject, dict[str, JsonObject]]:
             # Only an owned Run of the Session generation it was recorded in
-            # counts, and only its own records: a reused Session is never
-            # treated as wholly owned.
-            owned: list[OwnedRunRecord] = []
-            slices: list[tuple[int, str]] = []
+            # counts: a reused Session is never treated as wholly owned.
+            owned: list[OwnedRun] = []
             for address, address_records in by_address.items():
                 indexed = view.session(address.project_id, address.agent_id, address.session_id)
                 if indexed is None:
                     continue
-                for record in address_records:
-                    if indexed.generation_id == record.generation_id:
-                        owned.append(record)
-                        slices.append((indexed.session_key, record.run_id))
-            present = materialize_run_slices(view.connection, slices)
-            overall = GroupReportBuilder()
-            participants: dict[str, GroupReportBuilder] = {}
-            for position, record in enumerate(owned):
-                if position not in present and self._usage_recorder is None:
-                    continue
-                display_key = record.owner.participant_id
-                unit = ReportUnit(
-                    display_key=display_key,
-                    session_key=position,
-                    session_id=record.address.session_id,
-                    address=record.address,
-                    run_id=record.run_id,
+                owned.extend(
+                    OwnedRun(indexed.session_key, record.run_id, record.owner.participant_id)
+                    for record in address_records
+                    if indexed.generation_id == record.generation_id
                 )
-                overall.add_unit(unit)
-                participants.setdefault(display_key, GroupReportBuilder()).add_unit(unit)
-            durable_usage = self._usage_recorder is not None
-            overall.aggregate(view.connection, durable_usage=durable_usage)
-            for peer in participants.values():
-                peer.aggregate(view.connection, durable_usage=durable_usage)
-            return overall.build(), {
-                peer_id: peer.build() for peer_id, peer in participants.items()
-            }
+            return group_usage(view.connection, owned)
 
         return self._index.read(
             self._sessions,

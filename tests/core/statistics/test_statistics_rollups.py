@@ -41,6 +41,7 @@ _ADDRESSES = {
     **dict.fromkeys(
         (
             "agg_runs",
+            "agg_run_models",
             "agg_tools",
             "agg_tool_latency",
             "agg_records",

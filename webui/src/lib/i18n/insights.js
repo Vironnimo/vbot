@@ -314,7 +314,6 @@ export default Object.freeze({
     'Showing the {shown} most recently active of {total} groups.',
   'statistics.extensions.groupSummary':
     '{participants} participants · {runs} Runs',
-  'statistics.extensions.groupFallback': 'Started {date} · {id}',
   'statistics.extensions.groupFallbackId': 'Group {id}',
   'statistics.extensions.participants': 'Participants',
   'statistics.extensions.participant': 'Participant',

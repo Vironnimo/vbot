@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import closing
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -279,6 +279,36 @@ async def test_run_activity_counts_unsaved_and_auxiliary_attempts(accounting):
 
 
 @pytest.mark.asyncio
+async def test_run_activity_lists_running_and_extension_runs(accounting):
+    service, manager, _recorder = accounting
+    binding = manager.create_bound_temporary_session(
+        SessionAddress(None, "temporary", "participant"),
+        owner_name="swarm",
+        group_id="group",
+        participant_id="peer",
+        config={},
+    )
+    owner = RunExecutionOwner("swarm", "group", "peer", binding.generation_id, "epoch")
+    await manager.start_run(
+        Run(
+            run_id="open",
+            agent_id=binding.address.agent_id,
+            session_id=binding.address.session_id,
+            execution_owner=owner,
+        )
+    )
+    session = manager.get(binding.address).for_run("open")
+    session.append(_assistant(model="chat/m", at=BASE, usage={"input_tokens": 5}))
+
+    # A running Run has no end, so it overlaps every interval after its start.
+    activity = service.run_activity(since=BASE, until=datetime.now(UTC) + timedelta(hours=1))
+
+    [run] = activity.runs
+    assert (run.agent_id, run.status, run.completed_at) == ("extension:swarm", "running", None)
+    assert run.measured_input_tokens == 5
+
+
+@pytest.mark.asyncio
 async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_work(
     accounting, index: StatisticsIndex
 ):
@@ -307,9 +337,9 @@ async def test_group_usage_includes_tasks_only_in_the_owned_run_with_bounded_wor
 
     report = await service.group_usage(owner_name="swarm", group_id="group")
 
-    assert report["usage"]["totals"]["model_calls"] == 2
-    assert report["usage"]["totals"]["measured_input_tokens"] == 15
-    assert report["participants"][0]["usage"]["totals"]["model_calls"] == 2
+    assert report["activity"]["totals"]["calls"] == 2
+    assert report["activity"]["totals"]["input_tokens"] == 15
+    assert report["participants"][0]["activity"]["totals"]["calls"] == 2
 
     # Count actual SQLite work, rather than timing or planner-specific text.
     # The index is disposable: seed unrelated projected requests directly so
@@ -413,8 +443,8 @@ async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(
     assert activity.runs[0].measured_output_tokens == 1
     assert activity.runs[0].models == ["chat/m"]
     group = await service.group_usage(owner_name="swarm", group_id="group")
-    assert group["usage"]["totals"]["model_calls"] == 1
-    assert group["usage"]["totals"]["measured_input_tokens"] == 5
+    assert group["activity"]["totals"]["calls"] == 1
+    assert group["activity"]["totals"]["input_tokens"] == 5
     usage = _usage(service)
     assert (usage["totals"]["calls"], usage["totals"]["input_tokens"]) == (3, 115)
     chat = next(row for row in usage["recent_calls"] if row["model"] == "chat/m")
@@ -487,7 +517,7 @@ async def test_windowed_extension_activity_includes_requests_without_saved_outpu
     assert _session_records(report) == 0
     assert report["usage"]["totals"]["calls"] == 1
     activity = report["extensions"]["extensions"][0]["activity"]
-    assert (activity["model_calls"], activity["measured_input_tokens"]) == (1, 10)
+    assert (activity["totals"]["calls"], activity["totals"]["input_tokens"]) == (1, 10)
     assert activity["last_activity"] == format_canonical_timestamp(BASE)
 
 
