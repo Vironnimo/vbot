@@ -167,6 +167,27 @@ def _on_fixed_stack(call: Callable[[], Any]) -> Any:
 
 
 @pytest.mark.parametrize(
+    "arguments",
+    [
+        pytest.param('{"zeta":1,"alpha":{"y":[{"b":2,"a":1}],"x":"\\u00e9"}}', id="encoded"),
+        pytest.param({"zeta": 1, "alpha": {"y": [{"b": 2, "a": 1}], "x": "é"}}, id="object"),
+    ],
+)
+def test_valid_arguments_become_recursively_key_sorted_json_values(arguments: Any) -> None:
+    original = copy.deepcopy(arguments)
+
+    [candidate] = normalize_tool_call_candidates(
+        tool_call_id="call_sorted", name="lookup", arguments=arguments, fallback_id="tool_call_0"
+    )
+
+    # Storage persists sorted keys; intake must match so every replay is byte-identical.
+    expected = {"alpha": {"x": "é", "y": [{"a": 1, "b": 2}]}, "zeta": 1}
+    assert json.dumps(candidate["arguments"]) == json.dumps(expected)
+    assert TOOL_CALL_REJECTION_FIELD not in candidate
+    assert json.dumps(arguments) == json.dumps(original)
+
+
+@pytest.mark.parametrize(
     ("tool_call_id", "name", "arguments", "expected", "code"),
     [
         pytest.param(
