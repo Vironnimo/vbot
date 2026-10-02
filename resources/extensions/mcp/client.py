@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -48,6 +48,7 @@ from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
 from ._tasks import (
+    TASKS_EXTENSION,
     ExtensionWire,
     LegacyWire,
     TaskEndedError,
@@ -133,6 +134,35 @@ OPERATION_MODELS: dict[str, Any] = {
 }
 
 
+# The explicit task operations. A 2026-07-28 server's Tasks extension defines only
+# tasks/get and tasks/cancel; a 2025-11-25 server that declares tasks answers
+# tasks/get and tasks/result, and tasks/list and tasks/cancel when it declares them.
+TASK_OPERATIONS = frozenset({"tasks/get", "tasks/result", "tasks/list", "tasks/cancel"})
+
+
+def unsupported_operations(catalog: Mapping[str, Any]) -> frozenset[str]:
+    """The protocol operations the server whose *catalog* this is does not offer.
+
+    The negotiated protocol and the server's capabilities in the catalog decide;
+    a catalog without them (no connection yet) offers no task operation.
+    """
+    capabilities = catalog.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        return TASK_OPERATIONS
+    offered: set[str] = set()
+    if str(catalog.get("protocol_version") or "") >= DISCOVERY_PROTOCOL_VERSION:
+        extensions = capabilities.get("extensions")
+        if isinstance(extensions, Mapping) and TASKS_EXTENSION in extensions:
+            offered = {"tasks/get", "tasks/cancel"}
+    else:
+        tasks = capabilities.get("tasks")
+        if isinstance(tasks, Mapping):
+            offered = {"tasks/get", "tasks/result"} | {
+                f"tasks/{name}" for name in ("list", "cancel") if tasks.get(name) is not None
+            }
+    return TASK_OPERATIONS - offered
+
+
 def operation_schema(operation: str) -> dict[str, Any]:
     model = OPERATION_MODELS.get(operation)
     if model is not None:
@@ -200,6 +230,10 @@ class InvocationNotSentError(ValueError):
         super().__init__(message)
         self.denied = denied
         self.refused = refused
+
+
+class UnsupportedOperationError(InvocationNotSentError):
+    """An operation the server does not offer under the negotiated protocol; never sent."""
 
 
 class InvalidToolResultError(ValueError):
@@ -1062,8 +1096,9 @@ class ConnectionRunner:
         self._events.record("request_failed", {"operation": call.operation, "error": safe})
         if call.result.done():
             return
-        if isinstance(error, InvalidToolResultError | TaskEndedError):
-            # The server's own account of the call, whatever happens to the connection.
+        if isinstance(error, InvalidToolResultError | TaskEndedError | UnsupportedOperationError):
+            # The server's own account of the call, or vBot's refusal to send it,
+            # whatever happens to the connection.
             call.result.set_exception(error)
             return
         owner = call.owner
@@ -1212,6 +1247,10 @@ class ConnectionRunner:
         if errors:
             paths = ["/".join(map(str, error.absolute_path)) or "arguments" for error in errors]
             raise ValueError(f"Invalid MCP operation arguments at: {', '.join(paths)}")
+        if operation in unsupported_operations(self.catalog):
+            raise UnsupportedOperationError(
+                f"{operation} is not supported by this connection's protocol"
+            )
         client = self._client()
         if context is not None:
             await self._notify_roots_changed()

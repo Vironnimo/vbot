@@ -11,6 +11,7 @@ from mcp.server import Server
 
 from resources.extensions.mcp import _tasks
 from resources.extensions.mcp._tasks import TASKS_EXTENSION, TaskEndedError
+from resources.extensions.mcp.client import UnsupportedOperationError
 from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
 
 _TASK = "task-sentinel"
@@ -147,8 +148,11 @@ async def test_a_task_backed_call_returns_its_result_after_answering_the_server(
                 pending["id"], {"action": "accept", "content": {"name": "user-sentinel"}}
             )
             result = await call
-            # An explicit status read reaches the extension's tasks/get.
+            # An explicit status read reaches the extension's tasks/get; tasks/result,
+            # which the extension does not define, is never sent.
             status = await runner.invoke("tasks/get", {"taskId": _TASK})
+            with pytest.raises(UnsupportedOperationError):
+                await runner.invoke("tasks/result", {"taskId": _TASK})
     finally:
         call.cancel()
         await runner.close()

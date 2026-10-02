@@ -231,6 +231,11 @@ MCP_MESSAGES = {
     ),
     "search_limit": "{requested} was reduced to {applied}, the maximum for search",
     "operations": "resource subscriptions, events, logging, tasks and more: {call}",
+    "operations_without_tasks": "resource subscriptions, events, logging and more: {call}",
+    "operation_unsupported": (
+        "{operation} is not supported by the protocol this MCP connection uses, so nothing "
+        "was run. List the operations it offers with {search}."
+    ),
     "operations_matching": "{count} {verb} these words: {call}",
     "guidance_incomplete": (
         "Read the remaining server guidance before relying on it; the preview is incomplete."

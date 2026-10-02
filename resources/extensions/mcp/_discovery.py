@@ -37,7 +37,12 @@ from ._definitions import (
     TOOL_NAME_LABEL_LENGTH,
 )
 from ._views import argument_problem, compact, schema_summary, without_protocol_meta
-from .client import READ_OPERATIONS, operation_schema
+from .client import (
+    READ_OPERATIONS,
+    TASK_OPERATIONS,
+    operation_schema,
+    unsupported_operations,
+)
 from .content import pointer_part
 
 _TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
@@ -115,7 +120,10 @@ def entry_operation(entry: dict[str, Any]) -> str:
 def catalog_entries(
     connection: str, catalog: dict[str, Any], allowed: tuple[str, ...] | None
 ) -> list[dict[str, Any]]:
-    """The connection's items; with *allowed*, only the remote Tools it contains."""
+    """The connection's items; with *allowed*, only the remote Tools it contains.
+
+    Protocol operations the server does not offer under its protocol are left out.
+    """
     entries = []
     for kind, field in _CATALOG_LISTS:
         for definition in catalog.get(field, []):
@@ -135,6 +143,7 @@ def catalog_entries(
                     "definition": definition,
                 }
             )
+    unsupported = unsupported_operations(catalog)
     entries.extend(
         {
             "kind": "operation",
@@ -144,6 +153,7 @@ def catalog_entries(
             "definition": operation_schema(name),
         }
         for name, description in MCP_OPERATION_DESCRIPTIONS.items()
+        if name not in unsupported
     )
     listed = {field for _kind, field in _CATALOG_LISTS} | {"pages"}
     entries.append(
@@ -294,7 +304,10 @@ def _operations_line(entries: list[dict[str, Any]], query: str) -> str | None:
     """Point a search without kind to the protocol operations it leaves out."""
     if not query.strip():
         call = compact({"action": "search", "kind": "operation"})
-        return MCP_MESSAGES["operations"].format(call=call)
+        tasks = any(
+            entry["kind"] == "operation" and entry["name"] in TASK_OPERATIONS for entry in entries
+        )
+        return MCP_MESSAGES["operations" if tasks else "operations_without_tasks"].format(call=call)
     count = len(search_entries(entries, query, "operation"))
     if not count:
         return None
@@ -363,6 +376,9 @@ def resolve(
         )
     kind, name, _ = _parse_target(target)
     shown = name[:80] or target[:80]
+    if not named and kind in {None, "operation"} and name.casefold() in MCP_OPERATION_DESCRIPTIONS:
+        # A protocol operation this connection's server does not offer.
+        return None, None, unsupported_operation(name.casefold())
     if len(named) > 1:
         return (
             None,
@@ -378,6 +394,17 @@ def resolve(
         None,
         None,
         tool_failure("mcp_unknown_target", _unknown(_candidates(entries, kind), kind, shown)),
+    )
+
+
+def unsupported_operation(operation: str) -> dict[str, Any]:
+    """The failure for a protocol operation the connection's server does not offer."""
+    return tool_failure(
+        "mcp_operation_unsupported",
+        MCP_MESSAGES["operation_unsupported"].format(
+            operation=operation, search=compact({"action": "search", "kind": "operation"})
+        ),
+        retryable=False,
     )
 
 
