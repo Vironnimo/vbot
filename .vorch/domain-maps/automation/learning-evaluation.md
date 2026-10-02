@@ -60,3 +60,14 @@ An attempt passes when the Model finished with a final answer, its effect matche
 `--reflection-report PATH` is rewritten after every attempt. Top level: `format`, `kind: learning_evaluation`, `run` (Provider, Model, thinking effort, repetitions, pairs, case notes, commit, `text_pack` with changed text ids and warnings, effective text digests, tool route note), `summary`, `pass_rates` per (case, scope), `attempts`, and the distinct `system_prompts` and `definitions` by digest. Each attempt has case, scope, repetition, `passed`, `effect_passed`, `effect` detail, `violations`, `finished`, `stopped_reason` (`final_answer`, a terminal outcome, or `tool_calls_after_finalization`), `error`, steps, Tool iterations, summed `usage`, final text, Memory/Skill `state` before and after, and the transcript (request messages after the System Prompt plus every call with arguments and result). Stdout gets a compact result without transcripts; stderr a per-attempt line and the pass-rate table.
 
 `compare A B` recomputes pass rates from the attempts, prints per (case, scope) `passed/attempts` and the delta for equal attempt counts, flags other cells as not comparable, lists the texts whose digests differ and the overall delta over comparable cells; `--json` prints the comparison as JSON.
+
+## Results
+
+Skill-first learning texts (`learning-texts`, 2026-10-02) against the texts at `3edacbd2b`, 3 repetitions of all 58 (case, scope) pairs, both arms rescored with the current scorer:
+
+| Model | Baseline | Candidate |
+|---|---|---|
+| `opencode-go/deepseek-v4.1-flash` | 140/174 | 167/174 |
+| `ollama-cloud/glm-5.3-flash` | 137/174 | 153/174 |
+
+Writes without a current Memory list fell from 19 and 27 to 1 and 5, duplicated preferences from 7 to 0. A focused rerun after the last text fix (6 Skill cases) met every expected effect except `human_skill_wrong` on glm-5.3-flash (1 of 6). Known weakness: glm-5.3-flash patches its own Skills from the conversation without reading the current file in about a third of Skill writes (14 of 45 attempts in the focused rerun); the patches had the expected effect, and writes to protected Skills are refused by the handler. If real reviews show collateral loss from such patches, enforce read-before-write for background Runs in `skill_manage`.
