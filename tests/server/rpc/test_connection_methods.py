@@ -632,6 +632,18 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         listed = await rpc_result(state, "provider.custom_list")
         assert [item["id"] for item in listed["providers"]] == ["local-ai"]
 
+        # A save based on an outdated record is refused; the current revision passes.
+        stale = await rpc_error(
+            state,
+            "provider.custom_save",
+            provider=updated,
+            expected_revision=saved["provider"]["revision"],
+        )
+        assert stale["code"] == "settings_conflict"
+        current = listed["providers"][0]["revision"]
+        assert current != saved["provider"]["revision"]
+        await rpc_result(state, "provider.custom_save", provider=updated, expected_revision=current)
+
         # The settings projection keeps configured, enabled and usable distinct: the
         # bundled keyless local Ollama Connection needs no key but is not yet added,
         # and its reachability is unknown until a probe runs.

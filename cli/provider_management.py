@@ -126,6 +126,9 @@ def provider_custom_save(
     elif not clear_wire and isinstance(stored.get("wire"), Mapping):
         provider["wire"] = dict(stored["wire"])
     params: dict[str, Any] = {"provider": provider}
+    if isinstance(stored.get("revision"), str):
+        # Refuse the save if another writer changed the record after the listing.
+        params["expected_revision"] = stored["revision"]
     if api_key is not None:
         params["api_key"] = api_key
 

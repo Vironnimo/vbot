@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -176,6 +178,17 @@ def normalize_custom_provider_id(value: Any) -> str:
             "Custom Provider ids must use lowercase letters and digits in hyphen-separated segments"
         )
     return value
+
+
+def custom_provider_revision(provider: Mapping[str, Any]) -> str:
+    """Return a short fingerprint of one normalized Custom Provider record.
+
+    Writers send the revision they read so a save based on an outdated record
+    is refused instead of silently undoing another writer's change.
+    """
+
+    canonical = json.dumps(provider, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
 def normalize_custom_provider_settings(

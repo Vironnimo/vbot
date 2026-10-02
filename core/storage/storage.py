@@ -34,6 +34,7 @@ from core.settings import (
 )
 from core.settings.normalizers import (
     SUPPORTED_APPEARANCE_LANGUAGES,
+    custom_provider_revision,
     normalize_appearance_settings,
     normalize_archive_settings,
     normalize_compaction_settings,
@@ -501,8 +502,16 @@ class StorageManager:
         self,
         provider_id: str,
         provider: Mapping[str, Any],
+        *,
+        expected_revision: str | None = None,
     ) -> dict[str, Any]:
-        """Create or replace one Custom Provider in a Settings transaction."""
+        """Create or replace one Custom Provider in a Settings transaction.
+
+        With ``expected_revision`` (the ``custom_provider_revision()`` of the
+        record the caller read), the write is refused with
+        :class:`SettingsConflictError` when the stored record has changed or
+        is gone.
+        """
 
         normalized_id = normalize_custom_provider_id(provider_id)
         normalized_provider = normalize_custom_provider_settings(normalized_id, provider)
@@ -510,6 +519,10 @@ class StorageManager:
         def _mutate(settings: dict[str, Any]) -> dict[str, Any]:
             current = normalize_providers_settings(settings.get("providers"))
             custom = dict(current["custom"])
+            if expected_revision is not None:
+                stored = custom.get(normalized_id)
+                if stored is None or custom_provider_revision(stored) != expected_revision:
+                    raise SettingsConflictError((f"providers.custom.{normalized_id}",))
             custom[normalized_id] = normalized_provider
             connections = dict(current["connections"])
             connections.setdefault(f"{normalized_id}:default", True)

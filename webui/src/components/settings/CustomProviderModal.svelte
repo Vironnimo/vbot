@@ -3,6 +3,7 @@
 
   import { saveCustomProvider } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import { isSettingsConflict } from '$lib/settingsSave.js';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
   import Modal from '../ui/Modal.svelte';
@@ -275,6 +276,10 @@
     wireIssues = [];
     try {
       const params = { provider: customProvider };
+      if (provider?.revision) {
+        // The server refuses the save if the record changed after this modal opened.
+        params.expected_revision = provider.revision;
+      }
       if (auth === 'api_key' && apiKey.trim()) {
         params.api_key = apiKey.trim();
       }
@@ -287,7 +292,9 @@
       onClose();
     } catch (error) {
       const issues = error.details?.data?.wire_issues;
-      if (Array.isArray(issues) && issues.length > 0) {
+      if (isSettingsConflict(error)) {
+        errorMessage = t('settings.providers.custom.changedElsewhere');
+      } else if (Array.isArray(issues) && issues.length > 0) {
         wireIssues = issues.map(String);
         wireOpen = true;
         errorMessage = `${t('settings.providers.custom.saveError')} ${t(

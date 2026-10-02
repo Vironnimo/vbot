@@ -97,6 +97,7 @@ describe('CustomProviderModal', () => {
       props: {
         provider: {
           id: 'gateway',
+          revision: 'rev-1',
           name: 'Gateway',
           adapter: 'openai_compatible',
           base_url: 'https://gateway.example/v1',
@@ -129,11 +130,20 @@ describe('CustomProviderModal', () => {
 
     expect(document.getElementById('custom-provider-id').disabled).toBe(true);
     expect(document.getElementById('custom-provider-api-key').value).toBe('');
+    // Another writer changed the record after the modal opened.
+    rpcMock.mockRejectedValueOnce(
+      new ApiClientError('settings_conflict', 'Settings changed', {
+        details: { code: 'settings_conflict', message: 'Settings changed' },
+      }),
+    );
     input('custom-provider-name', 'Renamed Gateway');
     button('Save').click();
 
-    await waitForCondition(() => rpcMock.mock.calls.length === 1);
+    await waitForCondition(() =>
+      document.body.textContent.includes('was changed elsewhere'),
+    );
     const params = rpcMock.mock.calls[0][1];
+    expect(params.expected_revision).toBe('rev-1');
     expect(params.api_key).toBeUndefined();
     expect(params.provider.name).toBe('Renamed Gateway');
     expect(params.provider.defaults).toEqual({ temperature: 0 });

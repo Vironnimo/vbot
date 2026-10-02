@@ -899,6 +899,8 @@ export default Object.freeze({
     'Check the wire profile entries listed under Advanced.',
   'settings.providers.custom.saved': 'Custom Provider saved.',
   'settings.providers.custom.saveError': 'Custom Provider could not be saved.',
+  'settings.providers.custom.changedElsewhere':
+    'This Custom Provider was changed elsewhere after you opened it. Close and reopen it to edit the current version.',
   'settings.providers.custom.deleted': 'Custom Provider deleted.',
   'settings.providers.custom.deleteError':
     'Custom Provider could not be deleted.',
