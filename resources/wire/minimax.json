@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "MiniMax. The API-key Connections speak Chat Completions, the subscription Connection speaks Anthropic Messages. temperature must lie in (0, 1]. M2.x reasons on every request and takes no reasoning control; Chat asks for the trace as reasoning_details (reasoning_split). M3 on Chat toggles adaptive thinking. The Messages wire takes no Claude thinking controls and no media; it replays only signed thinking blocks, but its output allowance is budgeted against the Chat Completions rendering of the history (readable reasoning as reasoning_content), so the Messages replay keeps the Chat Completions declaration.",
+  "_comment": "MiniMax. The API-key Connections speak Chat Completions, the subscription Connection speaks Anthropic Messages. temperature must lie in (0, 1]. M2.x reasons on every request and takes no reasoning control; Chat asks for the trace as reasoning_details (reasoning_split). M3 on Chat toggles adaptive thinking. The Messages wire takes no Claude thinking controls and no media and replays only signed thinking blocks (the Messages default meta_only).",
   "defaults": {
     "request": {
       "parameters": {
@@ -36,7 +36,6 @@
         }
       },
       "reasoning": {"dialect": "none"},
-      "replay": {"fidelity": "meta_preferred", "history_field": "reasoning_content"},
       "media": {"types": []}
     }
   },

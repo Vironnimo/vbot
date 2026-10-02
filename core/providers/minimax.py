@@ -8,7 +8,7 @@ per Connection and owns the reasoning, sampling, prompt-cache and media rules;
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 from core.providers.adapter import ModelLookup
@@ -104,6 +104,22 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             self._apply_model_output_limit(request_kwargs, model_id, messages)
             return self._messages.stream(messages, model_id=model_id, **request_kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
+
+    @override
+    def estimate_request_input_tokens(
+        self,
+        messages: Sequence[Mapping[str, Any]],
+        *,
+        model_id: str,
+        tools: Sequence[Mapping[str, Any]] | None = None,
+    ) -> int:
+        """Estimate the rendered request of the wire the Model's profile selects."""
+
+        if self._uses_messages(model_id):
+            return self._messages.estimate_request_input_tokens(
+                messages, model_id=model_id, tools=tools
+            )
+        return super().estimate_request_input_tokens(messages, model_id=model_id, tools=tools)
 
     @override
     def normalize_response(

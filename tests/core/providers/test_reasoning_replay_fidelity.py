@@ -33,6 +33,8 @@ from core.providers.reasoning import (
 )
 from core.utils.tokens import estimate_structured_tokens
 
+from .adapter_test_support import bind_connection
+
 API_KEY = "test-api-key-12345"
 CHAT_RESPONSE = {
     "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}]
@@ -88,6 +90,18 @@ def _config(provider_id: str) -> ProviderConfig:
             "minimax-m2.5",
             REASONING_REPLAY_FIDELITY_META_PREFERRED,
             id="minimax-key-wire-declares-nothing-narrower",
+        ),
+        # The subscription speaks Messages: only signed thinking blocks replay.
+        pytest.param(
+            lambda: bind_connection(
+                MiniMaxAdapter(_config("minimax"), API_KEY),
+                provider_id="minimax",
+                connection_id="subscription",
+                model_lookup=None,
+            ),
+            "MiniMax-M2.7",
+            REASONING_REPLAY_FIDELITY_META_ONLY,
+            id="minimax-subscription-messages-meta-only",
         ),
         pytest.param(
             lambda: KimiAdapter(_config("kimi"), API_KEY),
