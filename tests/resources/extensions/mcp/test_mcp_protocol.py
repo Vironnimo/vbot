@@ -1177,7 +1177,21 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows runs batch files through cmd.exe")
-async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host, tmp_path):
+@pytest.mark.parametrize(
+    ("args", "refused_argument"),
+    [
+        (["--database", "postgres://host/db?user=a&mode=b"], "argument 2 contains '&'"),
+        # Expanded even inside quotes; two '%' may enclose a name across arguments.
+        (["--data", r"C:\Users\%USERNAME%\my data"], "argument 2 contains '%'"),
+        (["--low", "5%", "--high", "9%"], "argument 2 contains '%'"),
+        # Delayed expansion, where it is on, removes it.
+        (["--greeting", "hello!"], "argument 2 contains '!'"),
+    ],
+    ids=["metacharacter", "variable", "variable-across-arguments", "delayed-expansion"],
+)
+async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(
+    host, tmp_path, args, refused_argument
+):
     marker = tmp_path / "started"
     shim = tmp_path / "server.cmd"
     shim.write_text(f'@echo off\r\necho started> "{marker}"\r\n')
@@ -1187,7 +1201,7 @@ async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host,
                 "id": "shim",
                 "transport": "stdio",
                 "command": str(shim),
-                "args": ["--database", "postgres://host/db?user=a&mode=b"],
+                "args": args,
             }
         ),
         host,
@@ -1201,7 +1215,7 @@ async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host,
         await runner.close()
 
     assert str(refused.value) == (
-        "ValueError: MCP server not started: argument 2 contains '&', which cmd.exe interprets "
+        f"ValueError: MCP server not started: {refused_argument}, which cmd.exe interprets "
         "when Windows runs server.cmd; start the server's program directly or pass the value "
         "through an environment variable"
     )

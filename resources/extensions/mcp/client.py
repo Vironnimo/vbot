@@ -201,24 +201,37 @@ def _batch_argument_problem(command: str, args: list[str]) -> str | None:
     """Why Windows would not pass *args* unchanged to *command*, or ``None``.
 
     Windows runs a ``.cmd`` or ``.bat`` file, such as ``npx.cmd``, through
-    cmd.exe, which interprets ``& | < > ^`` outside quotes and ends the command
-    at a line break; Python quotes arguments only for the program's own parser.
+    cmd.exe, which interprets ``& | < > ^`` outside quotes, ends the command at
+    a line break, and even inside quotes expands ``%NAME%`` (any two ``%``
+    characters may enclose a variable name) and, where delayed expansion is on,
+    ``!NAME!`` (a lone ``!`` disappears). Python quotes arguments only for the
+    program's own parser (BatBadBut, CVE-2024-24576).
     """
     executable = get_windows_executable_command(command)
     if not executable.lower().endswith((".cmd", ".bat")):
         return None
     quoted = False
+    # The argument with a '%' that a later '%' would close into a variable name.
+    opened: int | None = None
     for index, argument in enumerate(args, start=1):
         # The command line is each argument's quoted form joined by spaces.
         for character in subprocess.list2cmdline([argument]):
+            culprit = index
             if character == '"':
                 quoted = not quoted
-            elif character in "\r\n" or (not quoted and character in _BATCH_METACHARACTERS):
-                return (
-                    f"argument {index} contains {character!r}, which cmd.exe interprets "
-                    f"when Windows runs {Path(executable).name}; start the server's program "
-                    "directly or pass the value through an environment variable"
-                )
+                continue
+            if character == "%":
+                if opened is None:
+                    opened = index
+                    continue
+                culprit = opened
+            elif character not in "\r\n!" and (quoted or character not in _BATCH_METACHARACTERS):
+                continue
+            return (
+                f"argument {culprit} contains {character!r}, which cmd.exe interprets "
+                f"when Windows runs {Path(executable).name}; start the server's program "
+                "directly or pass the value through an environment variable"
+            )
     return None
 
 
