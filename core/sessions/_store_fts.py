@@ -15,8 +15,8 @@ from __future__ import annotations
 import sqlite3
 import time
 import uuid
-from collections.abc import Callable, Sequence
-from contextlib import suppress
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager, suppress
 from typing import TYPE_CHECKING, Any
 
 from core.sessions import _store_values
@@ -50,6 +50,33 @@ _FTS_REBUILD_HOOK: Callable[[str, int], None] | None = None
 
 # Both indexes hold the same conversation-text columns.
 _COLUMNS = "content, search_text"
+
+_DROP_FTS_STATEMENTS = (
+    f"DROP TABLE IF EXISTS {FTS_TRIGRAM_TABLE}",
+    f"DROP VIEW IF EXISTS {FTS_TRIGRAM_VIEW}",
+    f"DROP TABLE IF EXISTS {FTS_TABLE}",
+    f"DROP VIEW IF EXISTS {FTS_VIEW}",
+)
+_DROP_FTS_SCRIPT = "".join(f"{statement};\n" for statement in _DROP_FTS_STATEMENTS)
+
+
+@contextmanager
+def _write_transaction(connection: sqlite3.Connection) -> Iterator[None]:
+    """Run the block as one ``BEGIN IMMEDIATE`` transaction on the open hook's writer.
+
+    The kernel hands ``after_open`` its writer outside any transaction, with
+    ``isolation_level=None``: a statement outside an explicit ``BEGIN`` commits
+    on its own, so a step of several statements needs its own transaction.
+    """
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        yield
+        connection.execute("COMMIT")
+    except BaseException:
+        with suppress(BaseException):
+            if connection.in_transaction:
+                connection.execute("ROLLBACK")
+        raise
 
 
 def _fts_meta(connection: sqlite3.Connection, key: str) -> str | None:
@@ -100,10 +127,8 @@ def _fts_writable(connection: sqlite3.Connection) -> bool:
 
 
 def _drop_fts(connection: sqlite3.Connection) -> None:
-    connection.execute(f"DROP TABLE IF EXISTS {FTS_TRIGRAM_TABLE}")
-    connection.execute(f"DROP VIEW IF EXISTS {FTS_TRIGRAM_VIEW}")
-    connection.execute(f"DROP TABLE IF EXISTS {FTS_TABLE}")
-    connection.execute(f"DROP VIEW IF EXISTS {FTS_VIEW}")
+    for statement in _DROP_FTS_STATEMENTS:
+        connection.execute(statement)
 
 
 def _project(
@@ -265,7 +290,13 @@ def _fts_rebuild_boundary(stage: str, high_water: int) -> None:
 
 
 def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
-    """Create or repair the derived FTS projection without weakening canonical storage."""
+    """Create or repair the derived FTS projection without weakening canonical storage.
+
+    Each rebuild step commits whole: replacing the indexes together with the
+    rebuild markers, every backfill window with its progress, and the final
+    coverage check with clearing the markers. An interruption leaves the last
+    committed step, and the next open resumes from it.
+    """
     try:
         health = _fts_health_from_connection(connection, verify_coverage=True)
         if health.available:
@@ -278,15 +309,16 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
             _backfill_fts(connection)
             _finish_fts_rebuild(connection)
             return
-        _drop_fts(connection)
+        # One transaction replaces the indexes and records the rebuild markers.
+        # executescript commits any pending transaction before it runs, so the
+        # transaction opens inside the script and stays open for the markers.
         try:
-            connection.executescript("BEGIN IMMEDIATE;\n" + FTS_SQL)
+            connection.executescript(f"BEGIN IMMEDIATE;\n{_DROP_FTS_SCRIPT}{FTS_SQL}")
         except sqlite3.Error:
             with suppress(sqlite3.Error):
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
-            _drop_fts(connection)
-            connection.executescript("BEGIN IMMEDIATE;\n" + FTS_SQL_FALLBACK)
+            connection.executescript(f"BEGIN IMMEDIATE;\n{_DROP_FTS_SCRIPT}{FTS_SQL_FALLBACK}")
         _set_fts_meta(connection, FTS_STORAGE_VERSION_KEY, str(FTS_STORAGE_VERSION))
         _set_fts_meta(connection, FTS_GENERATION_KEY, uuid.uuid4().hex)
         _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, "0")
@@ -311,40 +343,36 @@ def _ensure_fts_schema(connection: sqlite3.Connection) -> None:
         with suppress(sqlite3.Error):
             if connection.in_transaction:
                 connection.execute("ROLLBACK")
-        try:
-            connection.execute("BEGIN IMMEDIATE")
+        with suppress(sqlite3.Error), _write_transaction(connection):
             _set_fts_meta(connection, FTS_STALE_KEY, "1")
             _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, f"FTS unavailable: {exc}")
-            connection.execute("COMMIT")
-        except sqlite3.Error:
-            with suppress(sqlite3.Error):
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
         _store_values._LOGGER.warning("Session FTS unavailable, using canonical scan: %s", exc)
 
 
 def _backfill_fts(connection: sqlite3.Connection) -> None:
-    """Populate both external-content indexes in committed entry-key windows."""
-    generation = _fts_meta(connection, FTS_GENERATION_KEY) or uuid.uuid4().hex
-    _set_fts_meta(connection, FTS_GENERATION_KEY, generation)
-    previous = _fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY)
-    try:
-        completed = max(0, int(previous)) if previous is not None else 0
-    except ValueError:
-        completed = 0
-    target = _history_high_water(connection)
-    _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
-    _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(completed))
-    connection.commit()
-    while True:
-        target = max(target, _history_high_water(connection))
-        _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
-        connection.commit()
-        if completed >= target:
-            break
-        connection.execute("BEGIN IMMEDIATE")
+    """Populate both external-content indexes in committed entry-key windows.
+
+    Each window commits its index rows together with its progress markers, so
+    an interruption resumes after the last committed window.
+    """
+    with _write_transaction(connection):
+        generation = _fts_meta(connection, FTS_GENERATION_KEY) or uuid.uuid4().hex
+        previous = _fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY)
         try:
-            batch_max = min(completed + _FTS_BATCH_WINDOW, target)
+            completed = max(0, int(previous)) if previous is not None else 0
+        except ValueError:
+            completed = 0
+        target = _history_high_water(connection)
+        _set_fts_meta(connection, FTS_GENERATION_KEY, generation)
+        _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
+        _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(completed))
+    while True:
+        # Entries appended meanwhile extend the rebuild.
+        target = max(target, _history_high_water(connection))
+        if completed >= target:
+            return
+        batch_max = min(completed + _FTS_BATCH_WINDOW, target)
+        with _write_transaction(connection):
             _project(
                 connection,
                 "SELECT entry_key FROM entries WHERE entry_key > ? AND entry_key <= ?",
@@ -352,36 +380,34 @@ def _backfill_fts(connection: sqlite3.Connection) -> None:
                 delete=False,
             )
             _fts_rebuild_boundary("before_batch_commit", batch_max)
+            _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(target))
             _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(batch_max))
-            connection.execute("COMMIT")
-            completed = batch_max
-            _fts_rebuild_boundary("after_batch_commit", batch_max)
-        except BaseException:
-            with suppress(BaseException):
-                if connection.in_transaction:
-                    connection.execute("ROLLBACK")
-            raise
+        completed = batch_max
+        _fts_rebuild_boundary("after_batch_commit", batch_max)
         time.sleep(_FTS_REBUILD_THROTTLE_S)
 
 
 def _finish_fts_rebuild(connection: sqlite3.Connection) -> None:
-    """Clear the rebuild marker only after an explicit coverage check."""
-    coverage_ok, coverage_reason = _fts_coverage_ok(connection)
-    if not coverage_ok:
-        _set_fts_meta(
-            connection,
-            FTS_DEGRADED_REASON_KEY,
-            coverage_reason or "FTS coverage is incomplete",
-        )
-        connection.commit()
-        return
-    final_target = _history_high_water(connection)
-    _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(final_target))
-    _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(final_target))
-    _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "")
-    connection.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
-    _fts_rebuild_boundary("after_final_clear", final_target)
-    connection.commit()
+    """Clear the rebuild markers only after an explicit coverage check.
+
+    The check and the markers it clears share one transaction, so no write lands
+    between them and an interruption leaves the rebuild pending as a whole.
+    """
+    with _write_transaction(connection):
+        coverage_ok, coverage_reason = _fts_coverage_ok(connection)
+        if not coverage_ok:
+            _set_fts_meta(
+                connection,
+                FTS_DEGRADED_REASON_KEY,
+                coverage_reason or "FTS coverage is incomplete",
+            )
+            return
+        final_target = _history_high_water(connection)
+        _set_fts_meta(connection, FTS_TARGET_HIGH_WATER_KEY, str(final_target))
+        _set_fts_meta(connection, FTS_COMPLETED_HIGH_WATER_KEY, str(final_target))
+        _set_fts_meta(connection, FTS_DEGRADED_REASON_KEY, "")
+        _fts_rebuild_boundary("before_stale_clear", final_target)
+        connection.execute("DELETE FROM store_meta WHERE key = ?", (FTS_STALE_KEY,))
 
 
 def _detach_fts(connection: sqlite3.Connection, reason: str = "FTS write failed") -> None:

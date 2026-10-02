@@ -19,11 +19,21 @@ from core.sessions.schema import (
     FTS_COMPLETED_HIGH_WATER_KEY,
     FTS_DEGRADED_REASON_KEY,
     FTS_GENERATION_KEY,
+    FTS_STALE_KEY,
     FTS_STORAGE_VERSION,
     FTS_STORAGE_VERSION_KEY,
     FTS_TARGET_HIGH_WATER_KEY,
 )
 from tests.core.sessions.history_fixtures import admit_run, append_tool_fixture, seed_history
+
+_FTS_REBUILD_MARKERS = (
+    FTS_STORAGE_VERSION_KEY,
+    FTS_GENERATION_KEY,
+    FTS_TARGET_HIGH_WATER_KEY,
+    FTS_COMPLETED_HIGH_WATER_KEY,
+    FTS_DEGRADED_REASON_KEY,
+    FTS_STALE_KEY,
+)
 
 
 def _meta(connection: sqlite3.Connection, key: str) -> str | None:
@@ -622,7 +632,12 @@ def test_fts_rebuild_reads_content_only_inside_current_batch(tmp_path: Path, mon
     assert observed == first_batch
 
 
-def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "interrupted_stage", ["after_batch_commit", "before_stale_clear"], ids=["batch", "finish"]
+)
+def test_fts_rebuild_resumes_after_an_interruption_from_its_last_whole_step(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, interrupted_stage: str
+) -> None:
     from core.sessions import _store_fts as store_module
 
     sessions = ChatSessionManager(tmp_path)
@@ -630,19 +645,35 @@ def test_fts_rebuild_resumes_after_an_interrupted_batch(tmp_path: Path, monkeypa
     session.append_many([ChatMessage.user(f"resume needle {index}") for index in range(105)])
     sessions.close()
 
-    with sqlite3.connect(tmp_path / "sessions.db") as connection:
+    database = tmp_path / "sessions.db"
+    with sqlite3.connect(database) as connection:
         connection.execute("DROP TABLE entries_fts")
         connection.execute("DROP TABLE entries_fts_trigram")
         connection.commit()
 
+    def rebuild_markers() -> dict[str, str | None]:
+        with closing(sqlite3.connect(database)) as connection:
+            return {key: _meta(connection, key) for key in _FTS_REBUILD_MARKERS}
+
+    committed: list[dict[str, str | None]] = []
+
     def interrupt(stage: str, _high_water: int) -> None:
         if stage == "after_batch_commit":
+            committed.append(rebuild_markers())
+        if stage == interrupted_stage:
             raise RuntimeError("simulated FTS interruption")
 
     monkeypatch.setattr(store_module, "_FTS_BATCH_WINDOW", 50)
     monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", interrupt)
     with pytest.raises(RuntimeError, match="simulated FTS interruption"):
         ChatSessionManager(tmp_path)
+
+    # Every rebuild step is one transaction, so the markers stay exactly as the
+    # last backfill window committed them, also when the interruption strikes
+    # inside the final step between clearing the degraded reason and the stale
+    # marker.
+    assert committed[-1][FTS_STALE_KEY] == "rebuilding"
+    assert rebuild_markers() == committed[-1]
 
     monkeypatch.setattr(store_module, "_FTS_REBUILD_HOOK", None)
     reopened = ChatSessionManager(tmp_path)
