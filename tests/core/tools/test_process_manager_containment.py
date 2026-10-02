@@ -314,9 +314,18 @@ def test_guardian_reports_the_child_exit_as_it_happens(
     assert min(delays) < 0.1, delays
 
 
-# Prints the working directory and the environment the process was started with.
+# Prints the working directory and the environment the process was started with,
+# and what its open descriptors refer to.
 _REPORT_START = (
-    "import os, sys; sys.stdout.write(repr((os.getcwd(), open('/proc/self/environ', 'rb').read())))"
+    "import os, sys\n"
+    "def target(fd):\n"
+    "    try:\n"
+    "        return os.readlink('/proc/self/fd/' + fd)\n"
+    "    except OSError:\n"
+    "        return None\n"
+    "opened = [target(fd) for fd in os.listdir('/proc/self/fd')]\n"
+    "environ = open('/proc/self/environ', 'rb').read()\n"
+    "sys.stdout.write(repr((os.getcwd(), environ, opened)))"
 )
 
 
@@ -348,6 +357,7 @@ def test_guardian_is_isolated_from_the_command_it_runs(
     if lc_ctype is not None:
         environment["LC_CTYPE"] = lc_ctype
     read_fd, write_fd = os.pipe()
+    server_pipe = f"pipe:[{os.fstat(read_fd).st_ino}]"
     monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
     launch = guarded_process_launch(
         [sys.executable, "-I", "-S", "-c", _REPORT_START], env=environment
@@ -368,8 +378,10 @@ def test_guardian_is_isolated_from_the_command_it_runs(
         os.close(write_fd)
 
     assert completed.returncode == 0, completed.stderr
-    cwd, started_environment = ast.literal_eval(completed.stdout.decode())
+    cwd, started_environment, opened = ast.literal_eval(completed.stdout.decode())
     assert Path(cwd) == workdir.resolve()
+    # The guardian holds the server pipe; the command must not keep it open.
+    assert server_pipe not in opened
     assert dict(entry.split(b"=", 1) for entry in started_environment.split(b"\0") if entry) == {
         os.fsencode(name): os.fsencode(value) for name, value in environment.items()
     }
