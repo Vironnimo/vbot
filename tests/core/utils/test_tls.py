@@ -41,6 +41,10 @@ def test_shared_context_is_one_verifying_context() -> None:
     assert tls.shared_ssl_context() is context
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+    # The operating system's trusted CAs count as well as the certifi bundle.
+    system = ssl.create_default_context()
+    trusted = context.get_ca_certs(binary_form=True)
+    assert all(ca in trusted for ca in system.get_ca_certs(binary_form=True))
 
 
 def test_concurrent_first_use_builds_the_context_once(monkeypatch: pytest.MonkeyPatch) -> None:
