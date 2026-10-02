@@ -76,7 +76,8 @@
     // The latest pushed Recall index status, applied by the Conversation
     // search panel.
     recallIndexStatus = null,
-    // The server's background activity list, kept current by its pushes.
+    // The server's running downloads, installations and indexing passes,
+    // kept current by its pushes; General shows them at the top.
     backgroundActivity = [],
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
@@ -100,10 +101,6 @@
 
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
-    {
-      id: 'activity',
-      label: () => t('settings.activity.title'),
-    },
     {
       id: 'appearance',
       label: () => t('settings.appearance.title'),
@@ -203,11 +200,9 @@
       id: 'general',
       label: () => t('settings.pages.general'),
       description: () => t('settings.pages.generalDescription'),
-      // Running work first, so opening Settings shows every installation and
-      // large indexing pass at once; then everyday display. The time zone and
-      // the setup guide are rarely revisited.
+      // Everyday display first; the time zone and the setup guide are
+      // rarely revisited.
       sections: [
-        'activity',
         'appearance',
         'session_titles',
         'notifications',
@@ -876,13 +871,7 @@
 </script>
 
 {#snippet panelContent(panelId)}
-  {#if panelId === 'activity'}
-    <SettingsActivityPanel
-      activities={backgroundActivity}
-      onOpen={openDestination}
-      onError={(message) => reportSettingsError(message)}
-    />
-  {:else if panelId === 'preferences'}
+  {#if panelId === 'preferences'}
     <SettingsGeneralPanel
       page="preferences"
       {settings}
@@ -1155,6 +1144,15 @@
                     {t('agents.shared.title')}<span aria-hidden="true">↗</span>
                   </button>
                 </p>
+              {/if}
+              <!-- Only while something runs or needs attention; not a section,
+                   so search and navigation never lead to it. -->
+              {#if page.id === 'general' && backgroundActivity.length > 0}
+                <SettingsActivityPanel
+                  activities={backgroundActivity}
+                  onOpen={openDestination}
+                  onError={(message) => reportSettingsError(message)}
+                />
               {/if}
               {#each page.sections as panelId (panelId)}
                 {@const panel = panelById.get(panelId)}
