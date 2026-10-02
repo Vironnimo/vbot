@@ -281,7 +281,7 @@ export default Object.freeze({
   'settings.librarian.intervalDescription':
     'Days between scheduled passes of one Agent.',
   'settings.librarian.intervalHelp':
-    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. Default: 7.',
+    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. Default: 7.',
   'settings.librarian.archiveAfter': 'Retire unused Skills after',
   'settings.librarian.archiveAfterDescription':
     'Days without use or change before a Skill made in the background is retired.',
