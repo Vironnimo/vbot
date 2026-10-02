@@ -12,6 +12,8 @@ import {
   compactionStrategyTooltip,
   costTooltip,
   durationColumns,
+  errorKindLabel,
+  errorKindTooltip,
   formatCost,
   formatDurationMs,
   formatPercent,
@@ -395,6 +397,19 @@ describe('statisticsView labels and tooltips', () => {
       ],
     });
     expect(toolRejectionTooltip({ rejected: 0, top_codes: [] })).toBe('');
+  });
+
+  it('names recorded error kinds and keeps their ids readable', () => {
+    expect(errorKindLabel('rate_limit')).toBe('Rate limit');
+    expect(errorKindTooltip('provider_fatal')).toEqual({
+      title: 'Request rejected by the Provider',
+      rows: [{ label: 'Recorded kind', value: 'provider_fatal', mono: true }],
+    });
+    // A kind this WebUI does not know reads as its id in words.
+    expect(errorKindLabel('quota_exhausted')).toBe('Quota exhausted');
+    expect(errorKindTooltip('quota_exhausted').rows[0].value).toBe(
+      'quota_exhausted',
+    );
   });
 
   it('names Compaction strategies like Settings and keeps unknown ids raw', () => {

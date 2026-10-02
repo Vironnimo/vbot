@@ -521,6 +521,34 @@ export function modelCallKindLabel(kind) {
     : t('statistics.kind.other');
 }
 
+/** An id in words: `tool_iterations_exceeded` -> `Tool iterations exceeded`. */
+function humanizeId(id) {
+  const words = String(id ?? '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : EM_DASH;
+}
+
+/** A recorded Run error kind (`rate_limit`, `auth_error`, ...), translated;
+ *  a kind without a label reads as its id in words. */
+export function errorKindLabel(kind) {
+  return tOr(`statistics.errorKind.${kind}`, humanizeId(kind));
+}
+
+/** An error kind's name with its stored id as a secondary row. */
+export function errorKindTooltip(kind) {
+  return {
+    title: errorKindLabel(kind),
+    rows: [
+      {
+        label: t('statistics.errors.kindId'),
+        value: String(kind ?? ''),
+        mono: true,
+      },
+    ],
+  };
+}
+
 export function modelCallStatusLabel(status) {
   return MODEL_CALL_STATUSES.has(status)
     ? t(`statistics.requestStatus.${status}`)

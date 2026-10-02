@@ -13,6 +13,8 @@
     agentFilterText,
     barEntries,
     durationColumns,
+    errorKindLabel,
+    errorKindTooltip,
     formatCost,
     formatDecimal,
     formatDurationMs,
@@ -303,8 +305,20 @@
   {/if}
 {/snippet}
 
-<!-- An error kind, Provider or Model; `unknown` when no Model step came
-     before the error. -->
+<!-- A recorded error kind by its name, the stored id on hover; `unknown`
+     for an error recorded without a kind. -->
+{#snippet errorKind(entry)}
+  {#if entry.key === 'unknown'}
+    <span class="stats-muted">{t('common.unknown')}</span>
+  {:else}
+    <span class="stats-name" use:tooltip={errorKindTooltip(entry.key)}
+      >{errorKindLabel(entry.key)}</span
+    >
+  {/if}
+{/snippet}
+
+<!-- A Provider or Model; `unknown` when no Model step came before the
+     error. -->
 {#snippet errorKey(entry)}
   {#if entry.key === 'unknown'}
     <span class="stats-muted">{t('common.unknown')}</span>
@@ -444,7 +458,11 @@
             {:else}
               {@render barList(
                 barEntries(group.entries.slice(0, 8)),
-                group.id === 'agent' ? errorAgent : errorKey,
+                group.id === 'agent'
+                  ? errorAgent
+                  : group.id === 'kind'
+                    ? errorKind
+                    : errorKey,
                 null,
                 group.title,
               )}
