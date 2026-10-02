@@ -200,7 +200,7 @@ export default Object.freeze({
   'settings.skills.createError': 'Skill could not be created.',
   'settings.skills.saved': 'Skill saved.',
   'settings.skills.contentSaveError': 'Skill could not be saved.',
-  'settings.skills.deleted': 'Skill deleted.',
+  'settings.skills.deleted': 'Skill moved to Archived.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
   'settings.skills.deleteConfirmTitle': 'Delete skill',
   'settings.subagents.maxDepth': 'Maximum nesting depth',

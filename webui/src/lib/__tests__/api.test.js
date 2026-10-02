@@ -575,6 +575,31 @@ describe('RPC wrappers', () => {
       { source: 'https://example.test/demo.skill', scope: 'global' },
     ],
     [
+      'skill.set_pinned',
+      (o) => api.setSkillPinned('agent:main', 'deploy', true, o),
+      { scope: 'agent:main', name: 'deploy', pinned: true },
+    ],
+    [
+      'skill.history',
+      (o) => api.skillHistory('global', 'deploy', 50, o),
+      { scope: 'global', name: 'deploy', limit: 50 },
+    ],
+    [
+      'skill.revert',
+      (o) => api.revertSkillRevisions('global', [7, 9], o),
+      { scope: 'global', revisions: [7, 9] },
+    ],
+    [
+      'skill.restore',
+      (o) => api.restoreSkill('global', 'deploy_01', o),
+      { scope: 'global', archive_id: 'deploy_01' },
+    ],
+    [
+      'skill.purge',
+      (o) => api.purgeSkill('global', 'deploy_01', o),
+      { scope: 'global', archive_id: 'deploy_01' },
+    ],
+    [
       'task_model.local_setup_status',
       (o) => api.getLocalSetupStatus('local/granite-embedding-r2', o),
       { target: 'local/granite-embedding-r2' },
@@ -633,6 +658,21 @@ describe('RPC wrappers', () => {
       'a non-boolean Skill shared flag',
       () => api.shareSkill('main', 'review', 'yes'),
       'skill.share',
+    ],
+    [
+      'a non-boolean Skill pinned flag',
+      () => api.setSkillPinned('global', 'review', 'yes'),
+      'skill.set_pinned',
+    ],
+    [
+      'a Skill history without a positive limit',
+      () => api.skillHistory('global', 'review', 0),
+      'skill.history',
+    ],
+    [
+      'a Skill revert naming a non-positive revision',
+      () => api.revertSkillRevisions('global', [3, 0]),
+      'skill.revert',
     ],
     [
       'an unknown Memory scope',
