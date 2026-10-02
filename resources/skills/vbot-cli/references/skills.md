@@ -53,9 +53,22 @@ vbot skill unpin <name> --scope <scope>
 - `create` and `update` validate the full `SKILL.md` through the shared Skill authoring service and apply the change live. Prefer `--file` for multiline content.
 - `file write` and `file remove` manage supporting files such as `references/schema.md`; paths are relative to the named Skill and traversal is rejected server-side.
 - `delete` moves the Skill into its scope's Skill archive; `archived` lists that archive and `restore <archive-id>` puts a Skill back under its name while no other Skill in the scope has that name. `purge <archive-id>` deletes an archived Skill permanently. `delete`, `file remove` and `purge` require `--yes`. Deleting an Identity Agent moves its private Skills, their history and their archive into the archive with the Agent, from where `vbot archive restore` brings them back.
-- `history` lists the recorded changes of a scope's Skills, newest first, with who made them (`human`, `agent`, or a background `reflection` review) and the changed files. `revert <revision>...` takes back the named revisions, all or none; when a later revision changed the same part of that Skill, it refuses and names that revision, which you can revert together with it.
-- `pin <name>` protects a Skill from background reviews; `unpin` lifts it. Pins do not limit attended Agents or the user. `inventory` shows each editable Skill's creator (`created_by`), pin state and last use.
+- `history` lists the recorded changes of a scope's Skills, newest first, with who made them (`human`, `agent`, a background `reflection` review, or a `librarian` pass) and the changed files. `revert <revision>...` takes back the named revisions, all or none; when a later revision changed the same part of that Skill, it refuses and names that revision, which you can revert together with it.
+- `pin <name>` protects a Skill from background reviews and Librarian passes; `unpin` lifts it. Pins do not limit attended Agents or the user. `inventory` shows each editable Skill's creator (`created_by`), pin state and last use.
 - Mutation output includes the normalized Skill name, operation, scope, and validation warnings. Run `skill read <name> --scope ...` to verify content. `skill list` reports the global pool; use the `skill` Tool in the target Agent to verify its scoped availability.
+
+## Librarian
+
+The Librarian curates each Identity Agent's own Skills in the background. A scheduled pass runs every `librarian.interval_days` days, once the Agent has no active or queued Run. It archives each unpinned Skill that a background review or an earlier pass created and that went unused for `librarian.archive_after_days` days. A Skill named with `/<name>` or `$<name>` in one of the Agent's Cron jobs, Bootstrap jobs or Calendar actions stays. When `librarian.consolidate` is on, the pass then lets the Agent's Model merge overlapping Skills that the Agent or a background review created. A pass never changes a pinned Skill or a Skill the user created.
+
+```bash
+vbot librarian status <agent-id>
+vbot librarian run <agent-id>
+```
+
+- `status` shows the Librarian settings, the last pass, the next scheduled pass and the Skill revisions the last pass recorded. It ends with the `vbot skill revert` command that takes all of them back together.
+- `run` starts a pass now, regardless of the interval and of `librarian.enabled`. It refuses while a pass of that Agent runs, while the Agent has an active or queued Run, and for an Agent that cannot call `skill` and `skill_manage`. The pass runs in the background; read its result with `status`.
+- `librarian.enabled`, `librarian.interval_days`, `librarian.archive_after_days` and `librarian.consolidate` are Settings paths; read `references/configuration.md` before changing them.
 
 ## Disable and share policy
 
