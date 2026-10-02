@@ -1,0 +1,582 @@
+"""Resolve wire profiles for (Provider, Connection, Model id).
+
+``WireProfiles`` owns the bundled wire profile files, Custom Provider wire
+blocks and the optional observation source, and resolves one immutable
+:class:`~core.providers.wire_profile.WireProfile` per target. See the module
+docstring of :mod:`core.providers.wire_profile` for the layer order.
+"""
+
+from __future__ import annotations
+
+import threading
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, cast
+from typing import Protocol as TypingProtocol
+
+from core.providers._wire_profile_files import (
+    PROFILE_SCHEMA,
+    RuleMatcher,
+    WireIssueReport,
+    WireModelEntry,
+    WireProfileFile,
+    WireRule,
+    child_node,
+    is_opaque,
+)
+from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
+from core.providers.reasoning import normalize_thinking_effort
+from core.providers.wire_profile import (
+    PROTOCOLS,
+    Admission,
+    BudgetRule,
+    MediaRules,
+    ParameterRule,
+    ProfileStatus,
+    Protocol,
+    ReasoningWire,
+    ReplayRules,
+    RequestRules,
+    ResponseRules,
+    WireProfile,
+)
+
+if TYPE_CHECKING:
+    from core.models.models import Model
+    from core.providers.wire_observations import ObservedFacts
+
+ModelResolver = Callable[[str, str], "Model | None"]
+"""``(provider_id, model_id) -> Model | None`` from the live Model DB."""
+
+ProtocolSupport = Callable[[str], Sequence[Protocol] | None]
+"""``provider_id -> protocols its Adapter speaks`` (first = default), or ``None``."""
+
+LAYER_PROTOCOL = "protocol"
+LAYER_FILE_DEFAULTS = "defaults"
+LAYER_FILE_PROTOCOL = "protocols"
+LAYER_FILE_CONNECTION = "connections"
+LAYER_CATALOG = "catalog"
+LAYER_RULE = "rule"
+LAYER_OBSERVED = "observed"
+LAYER_MODEL = "model"
+LAYER_MODEL_CONNECTION = "model_connection"
+
+
+class ObservationSource(TypingProtocol):
+    """Learned wire facts (layer 7); implemented by ``WireObservations``."""
+
+    @property
+    def generation(self) -> int: ...
+
+    def facts_for(self, provider_id: str, connection_id: str, model_id: str) -> ObservedFacts:
+        """Return what live traffic showed for one target."""
+        ...
+
+
+@dataclass(frozen=True)
+class _CacheEntry:
+    model: Model | None
+    files_generation: int
+    observations_generation: int
+    profile: WireProfile
+
+
+class WireProfiles:
+    """Resolve and cache wire profiles for every Provider of one Runtime."""
+
+    def __init__(
+        self,
+        *,
+        files: Mapping[str, WireProfileFile],
+        protocol_support: ProtocolSupport,
+        model_resolver: ModelResolver,
+        report: WireIssueReport,
+        observations: ObservationSource | None = None,
+    ) -> None:
+        self._files: Mapping[str, WireProfileFile] = MappingProxyType(dict(files))
+        self._protocol_support = protocol_support
+        self._model_resolver = model_resolver
+        self._report = report
+        self._observations = observations
+        self._files_generation = 0
+        self._cache: dict[tuple[str, str, str], _CacheEntry] = {}
+        self._lock = threading.Lock()
+
+    def replace_files(self, files: Mapping[str, WireProfileFile]) -> None:
+        """Swap the profile data (bundled files plus Custom Provider blocks)."""
+
+        with self._lock:
+            self._files = MappingProxyType(dict(files))
+            self._files_generation += 1
+            self._cache.clear()
+
+    def set_observations(self, observations: ObservationSource | None) -> None:
+        with self._lock:
+            self._observations = observations
+            self._cache.clear()
+
+    def file_for(self, provider_id: str) -> WireProfileFile | None:
+        return self._files.get(provider_id)
+
+    def resolve(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        """Return the wire profile for one Model id on one local Connection id.
+
+        ``model_id`` may carry a ``::`` suffix; it is resolved by its bare wire id.
+        """
+
+        bare_id = model_id.split("::", 1)[0]
+        model = self._model_resolver(provider_id, bare_id)
+        observations = self._observations
+        observations_generation = observations.generation if observations is not None else 0
+        key = (provider_id, connection_id, bare_id)
+        cached = self._cache.get(key)
+        if (
+            cached is not None
+            and cached.model is model
+            and cached.files_generation == self._files_generation
+            and cached.observations_generation == observations_generation
+        ):
+            return cached.profile
+        profile = _Resolution(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            model_id=bare_id,
+            model=model,
+            file=self._files.get(provider_id),
+            protocols=self._protocol_support(provider_id),
+            observed=(
+                observations.facts_for(provider_id, connection_id, bare_id)
+                if observations is not None
+                else None
+            ),
+            report=self._report,
+        ).resolve()
+        self._cache[key] = _CacheEntry(
+            model=model,
+            files_generation=self._files_generation,
+            observations_generation=observations_generation,
+            profile=profile,
+        )
+        return profile
+
+    def bind(self, provider_id: str, connection_id: str) -> Callable[[str], WireProfile]:
+        """Return a ``model_id -> WireProfile`` lookup for one Connection (for Adapters)."""
+
+        def profile_for(model_id: str) -> WireProfile:
+            return self.resolve(provider_id, connection_id, model_id)
+
+        return profile_for
+
+
+# ---------------------------------------------------------------------------
+# Resolution
+# ---------------------------------------------------------------------------
+
+
+class _Resolution:
+    def __init__(
+        self,
+        *,
+        provider_id: str,
+        connection_id: str,
+        model_id: str,
+        model: Model | None,
+        file: WireProfileFile | None,
+        protocols: Sequence[Protocol] | None,
+        observed: ObservedFacts | None,
+        report: WireIssueReport,
+    ) -> None:
+        self.provider_id = provider_id
+        self.connection_id = connection_id
+        self.model_id = model_id
+        self.model = model
+        self.file = file
+        self.protocols = tuple(protocols) if protocols else ("chat_completions",)
+        self.observed = observed
+        self.report = report
+        self.values: dict[str, Any] = {}
+        self.provenance: dict[str, str] = {}
+
+    def resolve(self) -> WireProfile:
+        file = self.file
+        entry = file.models.get(self.model_id) if file is not None else None
+        rules = self._matching_rules()
+        protocol, protocol_layer = self._protocol(entry, rules)
+        self.provenance["protocol"] = protocol_layer
+
+        self._apply(PROTOCOL_DEFAULTS[protocol], LAYER_PROTOCOL)
+        if file is not None:
+            self._apply(file.defaults, LAYER_FILE_DEFAULTS)
+            self._apply(file.protocols.get(protocol, _EMPTY), LAYER_FILE_PROTOCOL)
+            self._apply(file.connections.get(self.connection_id, _EMPTY), LAYER_FILE_CONNECTION)
+        self._apply_catalog()
+        for rule in rules:
+            self._apply(rule.values, f"{LAYER_RULE}[{rule.index}]")
+        if self.observed is not None and not self.observed.is_empty():
+            self._apply_observed(self.observed)
+        if entry is not None:
+            self._apply(entry.values, LAYER_MODEL)
+            self._apply(entry.connections.get(self.connection_id, _EMPTY), LAYER_MODEL_CONNECTION)
+
+        status, verification = self._status(entry, rules)
+        return WireProfile(
+            provider_id=self.provider_id,
+            connection_id=self.connection_id,
+            model_id=self.model_id,
+            protocol=protocol,
+            status=status,
+            verification=verification,
+            admission=_build_admission(self.values.get("admission", {})),
+            request=_build_request(self.values.get("request", {})),
+            reasoning=_build_reasoning(self.values.get("reasoning", {})),
+            response=_build_response(self.values.get("response", {})),
+            replay=_build_replay(self.values.get("replay", {})),
+            media=_build_media(self.values.get("media", {})),
+            known_model=self.model is not None,
+            provenance=MappingProxyType(dict(self.provenance)),
+        )
+
+    # -- protocol -------------------------------------------------------------
+
+    def _protocol(
+        self, entry: WireModelEntry | None, rules: Sequence[WireRule]
+    ) -> tuple[Protocol, str]:
+        candidates: list[tuple[Any, str]] = []
+        if entry is not None:
+            candidates.append(
+                (
+                    entry.connections.get(self.connection_id, _EMPTY).get("protocol"),
+                    LAYER_MODEL_CONNECTION,
+                )
+            )
+            candidates.append((entry.values.get("protocol"), LAYER_MODEL))
+        for rule in reversed(rules):
+            candidates.append((rule.values.get("protocol"), f"{LAYER_RULE}[{rule.index}]"))
+        if self.file is not None:
+            candidates.append(
+                (
+                    self.file.connections.get(self.connection_id, _EMPTY).get("protocol"),
+                    LAYER_FILE_CONNECTION,
+                )
+            )
+            candidates.append((self.file.defaults.get("protocol"), LAYER_FILE_DEFAULTS))
+        for value, layer in candidates:
+            if value is None:
+                continue
+            if value in self.protocols:
+                return cast(Protocol, value), layer
+            self.report(
+                f"wire profile {self.provider_id}:{self.connection_id}/{self.model_id}: "
+                f"protocol {value!r} from {layer} is not spoken by the Provider's Adapter "
+                f"({', '.join(self.protocols)}), ignoring it"
+            )
+        return self.protocols[0], LAYER_PROTOCOL
+
+    # -- rules ----------------------------------------------------------------
+
+    def _matching_rules(self) -> tuple[WireRule, ...]:
+        if self.file is None:
+            return ()
+        return tuple(rule for rule in self.file.rules if self._matches(rule.when))
+
+    def _matches(self, when: RuleMatcher) -> bool:
+        model = self.model
+        model_id = self.model_id
+        if when.connections is not None and self.connection_id not in when.connections:
+            return False
+        if when.ids is not None and model_id not in when.ids:
+            return False
+        if when.prefix is not None and not model_id.startswith(when.prefix):
+            return False
+        if when.suffix is not None and not model_id.endswith(when.suffix):
+            return False
+        if when.unknown is not None and when.unknown != (model is None):
+            return False
+        if when.family is not None and (model is None or model.family not in when.family):
+            return False
+        if when.control is not None:
+            control = model.capabilities.reasoning.control if model is not None else None
+            if (control or "none") not in when.control:
+                return False
+        if when.npm is not None and _catalog_hint(self.provider_id, model, "npm") not in when.npm:
+            return False
+        return not when.metadata or self._metadata_matches(when.metadata)
+
+    def _metadata_matches(self, expected: Mapping[str, Any]) -> bool:
+        facts = _provider_metadata(self.provider_id, self.model)
+        for key, wanted in expected.items():
+            actual = facts.get(key)
+            if isinstance(wanted, Mapping) and set(wanted) == {"contains"}:
+                if not isinstance(actual, list | tuple) or wanted["contains"] not in actual:
+                    return False
+            elif _thaw(actual) != _thaw(wanted):
+                return False
+        return True
+
+    # -- layers ---------------------------------------------------------------
+
+    def _apply(self, partial: Mapping[str, Any], layer: str) -> None:
+        # The protocol was decided first (``_protocol``); layers only shape fields.
+        fields = {key: value for key, value in partial.items() if key != "protocol"}
+        _merge_into(self.values, fields, PROFILE_SCHEMA, "", layer, self.provenance)
+
+    def _apply_catalog(self) -> None:
+        model = self.model
+        if model is None:
+            return
+        reasoning = model.capabilities.reasoning
+        partial: dict[str, Any] = {}
+        reasoning_values: dict[str, Any] = {}
+        if isinstance(reasoning.supported, bool):
+            reasoning_values["supported"] = reasoning.supported
+        if isinstance(reasoning.control, str):
+            reasoning_values["control"] = reasoning.control
+        levels = tuple(
+            level for raw in reasoning.levels or () if (level := normalize_thinking_effort(raw))
+        )
+        if levels:
+            reasoning_values["catalog_levels"] = levels
+        budget_max = reasoning.budget_max
+        if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0:
+            reasoning_values["budget_max"] = budget_max
+        if _reasoning_mandatory(self.provider_id, model):
+            reasoning_values["mandatory"] = True
+        if reasoning_values:
+            partial["reasoning"] = reasoning_values
+
+        current_fields = tuple(self.values.get("response", {}).get("reasoning_fields", ()))
+        interleaved = _catalog_hint(self.provider_id, model, "interleaved_field")
+        preferred = interleaved or _catalog_hint(
+            self.provider_id, model, "reasoning_response_field"
+        )
+        if isinstance(preferred, str) and preferred:
+            partial["response"] = {
+                "reasoning_fields": (preferred, *(f for f in current_fields if f != preferred))
+            }
+        if isinstance(interleaved, str) and interleaved:
+            partial["replay"] = {"history_field": interleaved}
+        if model.reasoning_replay is not None:
+            partial.setdefault("replay", {})["scope"] = model.reasoning_replay
+        _merge_into(self.values, partial, _CATALOG_SCHEMA, "", LAYER_CATALOG, self.provenance)
+
+    def _apply_observed(self, facts: ObservedFacts) -> None:
+        """Translate learned facts into profile values (below every Model entry)."""
+
+        partial: dict[str, Any] = {}
+        field = facts.reasoning_field
+        if field:
+            current = tuple(self.values.get("response", {}).get("reasoning_fields", ()))
+            partial["response"] = {
+                "reasoning_fields": (field, *(item for item in current if item != field))
+            }
+            if self.values.get("replay", {}).get("history_field") is not None:
+                partial["replay"] = {"history_field": field}
+        if facts.rejected_parameters:
+            partial["request"] = {
+                "parameters": {name: {"mode": "drop"} for name in facts.rejected_parameters}
+            }
+        if facts.rejected_efforts:
+            reasoning = _build_reasoning(self.values.get("reasoning", {}))
+            ladder = tuple(
+                level for level in reasoning.ladder if level not in facts.rejected_efforts
+            )
+            partial["reasoning"] = {
+                "levels": ladder,
+                "effort_map": {
+                    effort: level
+                    for effort, level in reasoning.effort_map.items()
+                    if level not in facts.rejected_efforts
+                },
+            }
+        _merge_into(self.values, partial, PROFILE_SCHEMA, "", LAYER_OBSERVED, self.provenance)
+        if facts.rejected_efforts:
+            # A rejected mapping must disappear, not merge with the earlier map.
+            self.values["reasoning"]["effort_map"] = partial["reasoning"]["effort_map"]
+
+    # -- status ---------------------------------------------------------------
+
+    def _status(
+        self, entry: WireModelEntry | None, rules: Sequence[WireRule]
+    ) -> tuple[ProfileStatus, Any]:
+        if entry is not None:
+            verification = entry.verification
+            if verification is not None and (
+                not verification.connections or self.connection_id in verification.connections
+            ):
+                return "verified", verification
+            return "configured", None
+        if any(rule.when.ids is not None for rule in rules):
+            return "configured", None
+        return "inferred", None
+
+
+_EMPTY: Mapping[str, Any] = MappingProxyType({})
+
+# The catalog layer also writes ``reasoning.catalog_levels``, which no file may set.
+_CATALOG_SCHEMA: dict[str, Any] = {
+    **PROFILE_SCHEMA,
+    "reasoning": {
+        **PROFILE_SCHEMA["reasoning"],
+        "catalog_levels": PROFILE_SCHEMA["reasoning"]["floor"],
+    },
+}
+
+
+def _merge_into(
+    target: dict[str, Any],
+    partial: Mapping[str, Any],
+    schema: Any,
+    prefix: str,
+    layer: str,
+    provenance: dict[str, str],
+) -> None:
+    for key, value in partial.items():
+        node = child_node(schema, key)
+        path = f"{prefix}{key}"
+        if node is None or is_opaque(node):
+            target[key] = value
+            provenance[path] = layer
+            continue
+        child = target.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            target[key] = child
+        _merge_into(child, value, node, f"{path}.", layer, provenance)
+
+
+def _provider_metadata(provider_id: str, model: Model | None) -> Mapping[str, Any]:
+    if model is None:
+        return _EMPTY
+    facts = model.metadata.get(provider_id.replace("-", "_"))
+    return facts if isinstance(facts, Mapping) else _EMPTY
+
+
+def _catalog_hint(provider_id: str, model: Model | None, key: str) -> Any:
+    return _provider_metadata(provider_id, model).get(key)
+
+
+def _reasoning_mandatory(provider_id: str, model: Model) -> bool:
+    mandatory = getattr(model.capabilities.reasoning, "mandatory", None)
+    if isinstance(mandatory, bool):
+        return mandatory
+    return _catalog_hint(provider_id, model, "reasoning_mandatory") is True
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
+# ---------------------------------------------------------------------------
+# Building the frozen profile
+# ---------------------------------------------------------------------------
+
+
+def _frozen(mapping: Mapping[str, Any] | None) -> Mapping[str, Any]:
+    return MappingProxyType(dict(mapping or {}))
+
+
+def _build_admission(values: Mapping[str, Any]) -> Admission:
+    return Admission(**{key: values[key] for key in ("state", "message") if key in values})
+
+
+def _build_request(values: Mapping[str, Any]) -> RequestRules:
+    kwargs: dict[str, Any] = {
+        key: values[key]
+        for key in (
+            "output_limit_field",
+            "output_limit_default",
+            "output_limit_cap",
+            "allowed_parameters",
+            "tool_schema",
+            "tool_call_ids",
+            "list_announced_tools",
+            "prompt_cache",
+        )
+        if key in values
+    }
+    kwargs["parameters"] = MappingProxyType(
+        {name: ParameterRule(**rule) for name, rule in (values.get("parameters") or {}).items()}
+    )
+    for key in ("body_defaults", "extra_body", "extra_headers", "options"):
+        kwargs[key] = _frozen(values.get(key))
+    return RequestRules(**kwargs)
+
+
+def _build_reasoning(values: Mapping[str, Any]) -> ReasoningWire:
+    kwargs: dict[str, Any] = {
+        key: values[key]
+        for key in (
+            "dialect",
+            "supported",
+            "control",
+            "catalog_levels",
+            "levels",
+            "floor",
+            "snap",
+            "off",
+            "unset",
+            "mandatory",
+            "budget_max",
+        )
+        if key in values
+    }
+    kwargs["effort_map"] = _frozen(values.get("effort_map"))
+    kwargs["options"] = _frozen(values.get("options"))
+    if "budget" in values:
+        kwargs["budget"] = BudgetRule(**values["budget"])
+    return ReasoningWire(**kwargs)
+
+
+def _build_response(values: Mapping[str, Any]) -> ResponseRules:
+    return ResponseRules(
+        reasoning_fields=tuple(values.get("reasoning_fields", ())),
+        options=_frozen(values.get("options")),
+    )
+
+
+def _build_replay(values: Mapping[str, Any]) -> ReplayRules:
+    return ReplayRules(
+        **{
+            key: values[key]
+            for key in (
+                "scope",
+                "fidelity",
+                "history_field",
+                "echo_empty_on_tool_calls",
+                "strip_when_off",
+            )
+            if key in values
+        }
+    )
+
+
+def _build_media(values: Mapping[str, Any]) -> MediaRules:
+    kwargs: dict[str, Any] = {
+        key: values[key] for key in ("image_max_bytes", "request_max_bytes") if key in values
+    }
+    if "types" in values:
+        kwargs["types"] = frozenset(values["types"])
+    return MediaRules(**kwargs)
+
+
+__all__ = [
+    "LAYER_CATALOG",
+    "LAYER_FILE_CONNECTION",
+    "LAYER_FILE_DEFAULTS",
+    "LAYER_FILE_PROTOCOL",
+    "LAYER_MODEL",
+    "LAYER_MODEL_CONNECTION",
+    "LAYER_OBSERVED",
+    "LAYER_PROTOCOL",
+    "LAYER_RULE",
+    "PROTOCOLS",
+    "ModelResolver",
+    "ObservationSource",
+    "ProtocolSupport",
+    "WireProfiles",
+]

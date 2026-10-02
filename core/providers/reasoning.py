@@ -213,6 +213,22 @@ def closest_supported_effort(value: Any, supported_efforts: Iterable[str]) -> st
     not silently increase reasoning cost beyond the selected level.
     """
 
+    return snap_effort(value, supported_efforts, prefer="down")
+
+
+def snap_effort(
+    value: Any,
+    supported_efforts: Iterable[str],
+    *,
+    prefer: Literal["down", "up"] = "down",
+) -> str | None:
+    """Snap a vBot thinking effort onto a ladder of supported efforts.
+
+    An exact rung wins; otherwise the nearest active rung by effort rank, with
+    ``prefer`` breaking ties between equally distant rungs. ``none`` snaps only
+    to a ``none`` rung, and no active effort ever snaps to ``none``.
+    """
+
     effort = normalize_thinking_effort(value)
     if not effort:
         return None
@@ -224,11 +240,11 @@ def closest_supported_effort(value: Any, supported_efforts: Iterable[str]) -> st
             if (supported_effort := normalize_thinking_effort(raw_effort))
         )
     )
-    if effort == "none":
-        return "none" if "none" in supported else None
+    if effort == _NONE_EFFORT:
+        return _NONE_EFFORT if _NONE_EFFORT in supported else None
 
     active_supported = tuple(
-        supported_effort for supported_effort in supported if supported_effort != "none"
+        supported_effort for supported_effort in supported if supported_effort != _NONE_EFFORT
     )
     if not active_supported:
         return None
@@ -236,11 +252,12 @@ def closest_supported_effort(value: Any, supported_efforts: Iterable[str]) -> st
         return effort
 
     target_rank = THINKING_EFFORT_RANKS[effort]
+    direction = 1 if prefer == "down" else -1
     return min(
         active_supported,
         key=lambda supported_effort: (
             abs(THINKING_EFFORT_RANKS[supported_effort] - target_rank),
-            THINKING_EFFORT_RANKS[supported_effort],
+            direction * THINKING_EFFORT_RANKS[supported_effort],
         ),
     )
 
@@ -423,41 +440,63 @@ def effort_to_budget(
 ) -> int | None:
     """Map a vBot effort to a thinking-token budget, or ``None`` when none fits.
 
-    The single home of the effort→budget policy (D1/D3):
+    The default budget rule (see :func:`effort_budget_tokens`): a fraction of a
+    positive ``budget_max``, else the absolute ladder, at least
+    ``BUDGET_FLOOR_TOKENS`` and strictly under a positive ``max_tokens``.
+    """
 
-    * With a positive ``budget_max`` the budget is that ceiling times the
-      effort's fraction; without one it reads the absolute fallback ladder.
-    * The result is clamped into ``[BUDGET_FLOOR_TOKENS, budget_max]`` and kept
-      strictly under a positive ``max_tokens`` (the budget is part of the output
-      allowance).
+    return effort_budget_tokens(effort, budget_max=budget_max, output_allowance=max_tokens)
+
+
+def effort_budget_tokens(
+    effort: Any,
+    *,
+    budget_max: int | None = None,
+    strategy: Literal["fraction_of_max", "absolute"] = "fraction_of_max",
+    minimum: int = BUDGET_FLOOR_TOKENS,
+    maximum: int | None = None,
+    output_allowance: int | None = None,
+) -> int | None:
+    """Map a vBot effort to a thinking-token budget, or ``None`` when none fits.
+
+    * ``fraction_of_max`` with a positive ``budget_max`` takes the effort's
+      fraction of that ceiling; ``absolute`` (or no ceiling) reads the absolute
+      ladder.
+    * The result is raised to ``minimum``, capped by ``budget_max`` and
+      ``maximum``, and kept strictly under a positive ``output_allowance`` (the
+      budget is part of the output allowance).
     * Returns ``None`` when the effort is empty/``none`` or when even
-      ``BUDGET_FLOOR_TOKENS`` cannot fit under ``max_tokens`` (D3 skip) — the
-      caller then falls back to a plain *on* or warns.
+      ``minimum`` cannot fit under ``output_allowance`` — the caller then falls
+      back to a plain *on* or warns.
     """
 
     normalized = normalize_thinking_effort(effort)
     if not normalized or normalized == _NONE_EFFORT:
         return None
 
-    ceiling = (
-        budget_max
-        if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0
-        else None
-    )
-    # Every fraction is at most 1, so raising a budget to the floor never
-    # exceeds a ceiling at or above the floor.
-    if ceiling is not None:
+    ceiling = _positive_int(budget_max)
+    if strategy == "fraction_of_max" and ceiling is not None:
         budget = round(ceiling * _EFFORT_BUDGET_FRACTIONS[normalized])
     else:
         budget = _EFFORT_BUDGET_ABSOLUTE[normalized]
-    budget = max(budget, BUDGET_FLOOR_TOKENS)
+    for cap in (ceiling, _positive_int(maximum)):
+        if cap is not None:
+            budget = min(budget, cap)
+    budget = max(budget, minimum)
 
-    if isinstance(max_tokens, int) and not isinstance(max_tokens, bool) and max_tokens > 0:
-        if max_tokens <= BUDGET_FLOOR_TOKENS:
+    allowance = _positive_int(output_allowance)
+    if allowance is not None:
+        if allowance <= minimum:
             return None
-        budget = min(budget, max_tokens - 1)
+        budget = min(budget, allowance - 1)
 
     return budget
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
 
 
 def resolve_reasoning_intent(
