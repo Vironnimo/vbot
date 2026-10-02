@@ -64,18 +64,20 @@ def _profiles(
         assert parsed is not None
         files["acme"] = parsed
 
-    class _Observed:
-        generation = 1
-
-        def facts_for(self, provider_id: str, connection_id: str, model_id: str) -> Any:
-            return observed
+    store = WireObservations(None)
+    if observed is not None:
+        for target in ("m",):
+            if observed.reasoning_field:
+                store.record_reasoning_field("acme", "api-key", target, observed.reasoning_field)
+            for parameter in observed.rejected_parameters:
+                store.record_rejected_parameter("acme", "api-key", target, parameter)
 
     profiles = WireProfiles(
         files=files,
         protocol_support=lambda provider_id: protocols,  # type: ignore[arg-type,return-value]
         model_resolver=lambda provider_id, model_id: models.get(model_id),
         report=issues.append,
-        observations=_Observed() if observed is not None else None,
+        observations=store,
     )
     return profiles, issues
 

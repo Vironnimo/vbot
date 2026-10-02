@@ -51,7 +51,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.wire_profile import Protocol, WireProfile
-from core.providers.wire_profiles import standalone_profile_lookup
+from core.providers.wire_profiles import WireBinding, standalone_wire_binding
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
@@ -235,7 +235,7 @@ class ProviderAdapter(ABC):
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions",)
     """Wire protocols this Adapter implements; the first is its default."""
 
-    _wire_profile_for: Callable[[str], WireProfile] | None = None
+    _wire_binding: WireBinding | None = None
 
     def __init__(
         self,
@@ -270,32 +270,38 @@ class ProviderAdapter(ABC):
     # Wire profile
     # ------------------------------------------------------------------
 
-    def bind_wire_profiles(self, profile_for: Callable[[str], WireProfile]) -> None:
-        """Bind the Runtime's profile lookup for this Adapter's Connection."""
+    def bind_wire_profiles(self, binding: WireBinding) -> None:
+        """Bind the Runtime's wire profiles and learned facts for this Adapter's Connection."""
 
-        self._wire_profile_for = profile_for
+        self._wire_binding = binding
 
-    def wire_profile(self, model_id: str) -> WireProfile:
-        """Return the resolved wire profile for ``model_id`` on this Adapter's Connection.
+    @property
+    def wire(self) -> WireBinding:
+        """Profiles and learned facts of this Adapter's Connection.
 
-        The Runtime binds its shared lookup (bundled and Custom Provider data,
+        The Runtime binds its shared view (bundled and Custom Provider data,
         learned facts). An Adapter constructed directly resolves against the
         bundled files and its own Model lookup on its first configured
-        Connection.
+        Connection and learns nothing.
         """
 
-        profile_for = self._wire_profile_for
-        if profile_for is None:
+        binding = self._wire_binding
+        if binding is None:
             config = getattr(self, "_config", None)
             connections = getattr(config, "connections", ()) or ()
-            profile_for = standalone_profile_lookup(
+            binding = standalone_wire_binding(
                 provider_id=str(getattr(config, "id", "") or ""),
                 connection_id=str(getattr(connections[0], "id", "")) if connections else "",
                 protocols=type(self).WIRE_PROTOCOLS,
                 model_lookup=getattr(self, "_model_lookup", None),
             )
-            self._wire_profile_for = profile_for
-        return profile_for(model_id)
+            self._wire_binding = binding
+        return binding
+
+    def wire_profile(self, model_id: str) -> WireProfile:
+        """Return the resolved wire profile for ``model_id`` on this Adapter's Connection."""
+
+        return self.wire.profile(model_id)
 
     # ------------------------------------------------------------------
     # History shaping policy

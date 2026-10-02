@@ -14,7 +14,6 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
-from typing import Protocol as TypingProtocol
 
 from core.providers._wire_profile_files import (
     PROFILE_SCHEMA,
@@ -48,7 +47,7 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.models.models import Model
-    from core.providers.wire_observations import ObservedFacts
+    from core.providers.wire_observations import ObservedFacts, WireObservations
 
 _LOGGER = get_logger("providers.wire_profiles")
 
@@ -69,15 +68,41 @@ LAYER_MODEL = "model"
 LAYER_MODEL_CONNECTION = "model_connection"
 
 
-class ObservationSource(TypingProtocol):
-    """Learned wire facts (layer 7); implemented by ``WireObservations``."""
+@dataclass(frozen=True)
+class WireBinding:
+    """One Adapter's view of wire profiles and learned facts for its Connection."""
 
-    @property
-    def generation(self) -> int: ...
+    provider_id: str
+    connection_id: str
+    profiles: WireProfiles
+    observations: WireObservations | None = None
 
-    def facts_for(self, provider_id: str, connection_id: str, model_id: str) -> ObservedFacts:
-        """Return what live traffic showed for one target."""
-        ...
+    def profile(self, model_id: str) -> WireProfile:
+        return self.profiles.resolve(self.provider_id, self.connection_id, model_id)
+
+    def observe_reasoning_field(self, model_id: str, field: str) -> None:
+        if self.observations is not None:
+            self.observations.record_reasoning_field(
+                self.provider_id, self.connection_id, model_id, field
+            )
+
+    def observe_reasoning_returned(self, model_id: str) -> None:
+        if self.observations is not None:
+            self.observations.record_reasoning_returned(
+                self.provider_id, self.connection_id, model_id
+            )
+
+    def observe_rejected_parameter(self, model_id: str, parameter: str) -> None:
+        if self.observations is not None:
+            self.observations.record_rejected_parameter(
+                self.provider_id, self.connection_id, model_id, parameter
+            )
+
+    def observe_rejected_effort(self, model_id: str, effort: str) -> None:
+        if self.observations is not None:
+            self.observations.record_rejected_effort(
+                self.provider_id, self.connection_id, model_id, effort
+            )
 
 
 @dataclass(frozen=True)
@@ -98,7 +123,7 @@ class WireProfiles:
         protocol_support: ProtocolSupport,
         model_resolver: ModelResolver,
         report: WireIssueReport,
-        observations: ObservationSource | None = None,
+        observations: WireObservations | None = None,
     ) -> None:
         self._files: Mapping[str, WireProfileFile] = MappingProxyType(dict(files))
         self._protocol_support = protocol_support
@@ -117,7 +142,7 @@ class WireProfiles:
             self._files_generation += 1
             self._cache.clear()
 
-    def set_observations(self, observations: ObservationSource | None) -> None:
+    def set_observations(self, observations: WireObservations | None) -> None:
         with self._lock:
             self._observations = observations
             self._cache.clear()
@@ -166,13 +191,15 @@ class WireProfiles:
         )
         return profile
 
-    def bind(self, provider_id: str, connection_id: str) -> Callable[[str], WireProfile]:
-        """Return a ``model_id -> WireProfile`` lookup for one Connection (for Adapters)."""
+    def bind(self, provider_id: str, connection_id: str) -> WireBinding:
+        """Return the profile and observation view of one Connection (for Adapters)."""
 
-        def profile_for(model_id: str) -> WireProfile:
-            return self.resolve(provider_id, connection_id, model_id)
-
-        return profile_for
+        return WireBinding(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            profiles=self,
+            observations=self._observations,
+        )
 
 
 _reported_issues: set[str] = set()
@@ -196,13 +223,13 @@ def bundled_wire_profile_files() -> Mapping[str, WireProfileFile]:
     )
 
 
-def standalone_profile_lookup(
+def standalone_wire_binding(
     *,
     provider_id: str,
     connection_id: str,
     protocols: Sequence[Protocol],
     model_lookup: Callable[[str], Model | None] | None,
-) -> Callable[[str], WireProfile]:
+) -> WireBinding:
     """Profile lookup for an Adapter built outside a Runtime (tools, tests).
 
     Uses the bundled files and the Adapter's own Model lookup; no observations.
@@ -618,7 +645,7 @@ def _build_media(values: Mapping[str, Any]) -> MediaRules:
 __all__ = [
     "bundled_wire_profile_files",
     "log_wire_profile_issue",
-    "standalone_profile_lookup",
+    "standalone_wire_binding",
     "LAYER_CATALOG",
     "LAYER_FILE_CONNECTION",
     "LAYER_FILE_DEFAULTS",
@@ -630,7 +657,7 @@ __all__ = [
     "LAYER_RULE",
     "PROTOCOLS",
     "ModelResolver",
-    "ObservationSource",
+    "WireBinding",
     "ProtocolSupport",
     "WireProfiles",
 ]
