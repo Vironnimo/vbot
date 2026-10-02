@@ -42,6 +42,7 @@ _checkout_root = Path(__file__).resolve().parents[1]
 if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
+from cli.application.runtime_sqlite import interpreter_problem  # noqa: E402
 from core.utils.processes import activate_process_containment  # noqa: E402
 from scripts.perf_load_suite.directive import DEFAULT_TOOLS  # noqa: E402
 from scripts.perf_load_suite.profiling import py_spy_unavailable_reason  # noqa: E402
@@ -319,6 +320,10 @@ def run_compare(argv: Sequence[str]) -> int:
 def run(argv: Sequence[str]) -> int:
     parser = build_run_parser()
     args = parser.parse_args(argv)
+    # Measurements are only comparable on the SQLite installations run.
+    if problem := interpreter_problem(_checkout_root):
+        print(f"perf_load: {problem}", file=sys.stderr)
+        return 2
     try:
         config = config_from_args(args)
     except ValueError as exc:

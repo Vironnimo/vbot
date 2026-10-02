@@ -46,6 +46,7 @@ _project_root = Path(__file__).resolve().parents[1]
 if sys.path[:1] != [str(_project_root)]:
     sys.path.insert(0, str(_project_root))
 
+from cli.application.runtime_sqlite import interpreter_problem  # noqa: E402
 from scripts.perf_bench_suite.catalog import BENCHMARKS  # noqa: E402
 from scripts.perf_bench_suite.frontend import (  # noqa: E402
     FrontendRun,
@@ -257,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         _list_benchmarks(selected)
         return 0
+    # Measurements are only comparable on the SQLite installations run.
+    if problem := interpreter_problem(_project_root):
+        print(f"perf_bench: {problem}", file=sys.stderr)
+        return 2
 
     settings = RunSettings(
         samples=args.samples or (QUICK_SAMPLES if args.quick else DEFAULT_SAMPLES),

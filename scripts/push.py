@@ -3,9 +3,10 @@
 
 The commit ``main`` points to is checked out detached in a private checkout under
 ``.worktrees``, apart from every working tree, so uncommitted work cannot change
-the result. There, in this order: Ruff format check and lint, mypy for Windows and
-Linux as the commit hook runs it, the complete pytest suite on every core of the
-machine's test core pool, and the WebUI's format check, lint, Vitest and build.
+the result. There, in this order: whether this Python runs the SQLite the packages
+bundle, Ruff format check and lint, mypy for Windows and Linux as the commit hook
+runs it, the complete pytest suite on every core of the machine's test core pool,
+and the WebUI's format check, lint, Vitest and build.
 On Windows the complete pytest suite also runs on Linux in WSL, alongside the WebUI
 checks (``scripts/linux/push_tests.sh``); without a working WSL that step fails.
 Every step runs, whatever failed before it. Backend tests that fail run once more
@@ -46,6 +47,7 @@ _checkout_root = Path(__file__).resolve().parents[1]
 if sys.path[:1] != [str(_checkout_root)]:
     sys.path.insert(0, str(_checkout_root))
 
+from cli.application.runtime_sqlite import interpreter_problem  # noqa: E402
 from scripts import commit_check, worktree  # noqa: E402
 from scripts._worktree_seed import (  # noqa: E402
     seed_native_resources,
@@ -285,6 +287,10 @@ def run_checks(checkout: Path, log: TextIO) -> list[Step]:
             print(f"  {step.label:<14}{verdict}  {step.seconds:6.1f}s", flush=True)
 
     python = sys.executable
+    # The suite and the WebUI checks run on this interpreter: its SQLite decides the
+    # databases' journal mode, which must be the one installations run.
+    problem = interpreter_problem(checkout)
+    record(Step("sqlite", problem is None, 0.0, problem or ""))
     print("preparing the checkout (copies dependencies, no output until done)...", flush=True)
     seed_type_check_cache(worktree.PROJECT_ROOT, checkout)
     seed_native_resources(worktree.PROJECT_ROOT, checkout)

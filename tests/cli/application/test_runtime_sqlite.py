@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import sqlite3
+import sys
 import zipfile
 from pathlib import Path
 
@@ -13,6 +15,7 @@ import pytest
 from cli.application.runtime_sqlite import (
     SQLITE_LOCK,
     RuntimeSQLiteError,
+    interpreter_problem,
     provision_runtime_sqlite,
 )
 from core.database import is_wal_reset_vulnerable
@@ -114,3 +117,29 @@ def test_committed_pin_is_an_official_build_without_the_wal_reset_bug() -> None:
     assert lock["url"].startswith("https://sqlite.org/")
     assert lock["url"].endswith(f"-{major}{minor:02d}{patch:02d}00.zip")
     assert not is_wal_reset_vulnerable(version)
+
+
+@pytest.mark.parametrize(
+    ("platform", "version", "matches"),
+    [
+        ("win32", "3.53.4", True),
+        ("win32", "3.53.5", False),
+        ("win32", "3.50.4", False),
+        ("linux", "3.53.1", True),
+        ("linux", "3.50.4", False),
+    ],
+)
+def test_names_an_interpreter_whose_sqlite_differs_from_the_packages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, version: str, matches: bool
+) -> None:
+    """Windows needs the pinned library itself; elsewhere any SQLite that runs WAL."""
+    source = _source(tmp_path, _archive())
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(sqlite3, "sqlite_version", version)
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", tuple(map(int, version.split("."))))
+
+    problem = interpreter_problem(source)
+
+    assert (problem is None) == matches
+    if problem is not None:
+        assert version in problem

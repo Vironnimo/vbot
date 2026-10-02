@@ -99,3 +99,61 @@ def _download(url: str) -> bytes:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def interpreter_problem(source: Path) -> str | None:
+    """Return why this interpreter's SQLite differs from the packages', or None.
+
+    Development, tests and measurements must run the databases as installations
+    do. On Windows that means the pinned library itself; elsewhere a SQLite
+    without the WAL-reset bug, as the Linux packages' standalone runtime has.
+    """
+    import sqlite3
+    import sys
+
+    if sys.platform == "win32":
+        pinned = _read_lock(source / SQLITE_LOCK)["version"]
+        if sqlite3.sqlite_version == pinned:
+            return None
+        return (
+            f"This Python ({sys.base_prefix}) runs SQLite {sqlite3.sqlite_version}; the Windows "
+            f"packages bundle SQLite {pinned}, and the databases' journal mode follows it. "
+            "Install the pinned library into it from an elevated terminal: "
+            f'"{sys.executable}" -m cli.application.runtime_sqlite'
+        )
+    from core.database import required_journal_mode
+
+    if required_journal_mode(sqlite3.sqlite_version_info) == "wal":
+        return None
+    return (
+        f"This Python ({sys.executable}) runs SQLite {sqlite3.sqlite_version}, which confines "
+        "the databases to the rollback journal; the Linux packages run them with WAL. Use the "
+        "packages' Python runtime (scripts/linux/python.lock.json) for development."
+    )
+
+
+def main() -> int:
+    """Install the pinned SQLite library into this interpreter's Windows runtime."""
+    import sys
+
+    if sys.platform != "win32":
+        print("Only Windows runtimes take the pinned SQLite library; see interpreter_problem().")
+        return 2
+    source = Path(__file__).resolve().parents[2]
+    runtime = Path(sys.base_prefix)
+    try:
+        replaced = provision_runtime_sqlite(runtime, source)
+    except PermissionError:
+        print(f"{runtime} is not writable; run this command from an elevated terminal.")
+        return 1
+    except RuntimeSQLiteError as error:
+        print(f"The pinned SQLite library could not be installed: {error}")
+        return 1
+    pinned = _read_lock(source / SQLITE_LOCK)["version"]
+    state = "installed" if replaced else "already installed"
+    print(f"SQLite {pinned} is {state} in {runtime / 'DLLs'}; new Python processes use it.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
