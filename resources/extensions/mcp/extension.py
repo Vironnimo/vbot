@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from collections import defaultdict
-from dataclasses import replace
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from typing import Any
 
 from core.extensions import ExtensionAPI
@@ -84,6 +85,12 @@ __all__ = [
 _DETAIL_CHARACTERS = 300
 
 
+@dataclass
+class _ConnectionLock:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class MCPService:
     def __init__(self, api: ExtensionAPI) -> None:
         self.api = api
@@ -95,8 +102,10 @@ class MCPService:
         self.inputs = InputRequests(on_change=self._inputs_changed)
         self._inputs_revision = 0
         self.jobs = ManagementJobs(self.inputs)
+        # Serializes changes to the saved connections; held only while they change.
         self._lock = asyncio.Lock()
-        self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        # Per connection while in use: runner changes and the calls that select a runner.
+        self._runner_locks: dict[str, _ConnectionLock] = {}
         # Per connection, the server title and Tool names its description shows.
         self.catalogs = CatalogSummaries(api.logger)
         self._closed = False
@@ -144,6 +153,19 @@ class MCPService:
             # The registration retired for a reload or disable, which
             # invalidates every Extension surface itself.
             self.api.logger.debug("Pending input change not published: registration retired")
+
+    @asynccontextmanager
+    async def _connection_lock(self, identifier: str) -> AsyncIterator[None]:
+        """Hold *identifier*'s runner lock; it is dropped once nobody holds or awaits it."""
+        entry = self._runner_locks.setdefault(identifier, _ConnectionLock(asyncio.Lock()))
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if not entry.users:
+                del self._runner_locks[identifier]
 
     def _host(self) -> ExtensionHost:
         if self.host is None or self._closed:
@@ -238,7 +260,7 @@ class MCPService:
         async def invoke(context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
             # Select a runner only after an admitted configuration change has
             # finished closing the previous one and publishing its replacement.
-            async with self._runner_locks[connection]:
+            async with self._connection_lock(connection):
                 gone = self._gone(connection)
                 if gone is not None:
                     return gone
@@ -529,7 +551,7 @@ class MCPService:
             return self._inspect(identifier, arguments)
         if operation in {"enable", "disable", "remove"}:
             return await self._mutate(operation, config)
-        async with self._runner_locks[identifier]:
+        async with self._connection_lock(identifier):
             config = self._connection(identifier)
             if operation == "credential":
                 sources = set(config.get("credential_environment", {}).values()) | set(
@@ -623,44 +645,42 @@ class MCPService:
 
     async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
         config = validate_connection(value)
-        async with self._lock, self._runner_locks[config["id"]]:
-            previous = self.connections.get(config["id"])
-            records = {**self.connections, config["id"]: config}
-            if self.store is None:
-                raise RuntimeError("MCP store was not initialized")
-            await run_tool_worker(self.store.save, records)
-            runner = self.runners.get(config["id"])
+        identifier = config["id"]
+        # The connection's lock spans the replacement of its runner; the saved
+        # connections are locked only while they change, so closing this runner
+        # never holds up changes to other connections.
+        async with self._connection_lock(identifier):
+            async with self._lock:
+                previous = self.connections.get(identifier)
+                await self._store_connections({**self.connections, identifier: config})
+            runner = self.runners.get(identifier)
             if (
                 runner is not None
                 and previous is not None
                 and _without_description(previous) == _without_description(config)
             ):
                 # Only the description changed: republish it and keep the connection.
-                self.connections = records
                 runner.config = config
                 self._publish(runner, runner.catalog or None)
             else:
-                await self._stop(config["id"])
-                self.connections = records
+                await self._stop(identifier)
                 if config["enabled"]:
                     self._runner(config).start()
-        self.api.logger.info("MCP connection configured (connection=%s)", config["id"])
-        return self._status(config["id"])
+        self.api.logger.info("MCP connection configured (connection=%s)", identifier)
+        return self._status(identifier)
 
     async def _mutate(self, operation: str, original: dict[str, Any]) -> dict[str, Any]:
         identifier = original["id"]
-        async with self._lock, self._runner_locks[identifier]:
-            config = copy.deepcopy(self._connection(identifier))
-            records = dict(self.connections)
-            if operation == "remove":
-                records.pop(identifier)
-            elif operation in {"enable", "disable"}:
-                config["enabled"] = operation == "enable"
-                records[identifier] = config
-            if self.store is None:
-                raise RuntimeError("MCP store was not initialized")
-            await run_tool_worker(self.store.save, records)
-            self.connections = records
+        async with self._connection_lock(identifier):
+            async with self._lock:
+                config = copy.deepcopy(self._connection(identifier))
+                records = dict(self.connections)
+                if operation == "remove":
+                    records.pop(identifier)
+                elif operation in {"enable", "disable"}:
+                    config["enabled"] = operation == "enable"
+                    records[identifier] = config
+                await self._store_connections(records)
             if operation == "remove":
                 self.catalogs.forget(identifier)
             if operation in {"disable", "remove"}:
@@ -675,6 +695,13 @@ class MCPService:
             if operation == "remove"
             else self._status(identifier)
         )
+
+    async def _store_connections(self, records: dict[str, dict[str, Any]]) -> None:
+        """Save *records* and make them the current connections; the caller holds ``_lock``."""
+        if self.store is None:
+            raise RuntimeError("MCP store was not initialized")
+        await run_tool_worker(self.store.save, records)
+        self.connections = records
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)
