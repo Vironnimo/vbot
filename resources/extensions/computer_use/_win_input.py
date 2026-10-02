@@ -96,7 +96,9 @@ _KEYUP, _EXTENDED, _UNICODE = 0x2, 0x1, 0x4
 _MOVE, _ABSOLUTE_VIRTUAL, _WHEEL, _HWHEEL = 0x1, 0x8000 | 0x4000, 0x800, 0x1000
 _BUTTON_FLAGS = {"left": (0x2, 0x4), "right": (0x8, 0x10), "middle": (0x20, 0x40)}
 _WHEEL_DELTA = 120
-_TEXT_CHUNK = 20  # characters per SendInput call; stop is checked between chunks
+# Windows 11 Notepad and other WinUI text boxes drop or repeat keys that go down and
+# up in the same instant; a held key followed by a short gap reads like real typing.
+_KEY_HOLD, _KEY_GAP = 0.02, 0.02
 _DRAG_STEPS, _DRAG_SECONDS = 15, 0.25
 _BLOCKED = (
     "Windows blocked the input: the screen may be locked, or a secure prompt such as "
@@ -138,12 +140,12 @@ def mouse_event(flags: int, dx: int = 0, dy: int = 0, data: int = 0) -> Input:
     )
 
 
-def text_units(text: str) -> list[str | int]:
-    """Plan typed text: Enter or Tab key names, else UTF-16 code units.
+def text_units(text: str) -> list[str | tuple[int, ...]]:
+    """Plan typed text: Enter or Tab key names, else each character's UTF-16 code units.
 
     Windows line endings and lone carriage returns each press Enter once.
     """
-    plan: list[str | int] = []
+    plan: list[str | tuple[int, ...]] = []
     for char in text.replace("\r\n", "\n").replace("\r", "\n"):
         if char == "\n":
             plan.append("enter")
@@ -151,8 +153,10 @@ def text_units(text: str) -> list[str | int]:
             plan.append("tab")
         else:
             encoded = char.encode("utf-16-le")
-            plan.extend(
-                int.from_bytes(encoded[i : i + 2], "little") for i in range(0, len(encoded), 2)
+            plan.append(
+                tuple(
+                    int.from_bytes(encoded[i : i + 2], "little") for i in range(0, len(encoded), 2)
+                )
             )
     return plan
 
@@ -280,9 +284,10 @@ class WindowsInput:
                 self._pause(0.03)
             try:
                 self._press_keys(keys)
-                self._pause(0.01)  # let raw-input readers see the chord before release
+                self._pause(_KEY_HOLD)
             finally:
                 self._release_keys(keys)
+            self._pause(_KEY_GAP)
 
     def hold(self, chord: list[str], seconds: float) -> None:
         _win32.enter_thread()
@@ -295,24 +300,20 @@ class WindowsInput:
 
     def type_text(self, text: str) -> None:
         _win32.enter_thread()
-        plan = text_units(text)
-        batch: list[Input] = []
-        characters = 0
-        for unit in plan:
+        for unit in text_units(text):
             if isinstance(unit, str):
-                self._send(batch)
-                batch = []
-                key = self._named(unit)
-                self._send([key.event(False), key.event(True)])
-                self._pause(0.01)
+                self.keys([unit], 1)
                 continue
-            batch += [key_event(0, unit, _UNICODE), key_event(0, unit, _UNICODE | _KEYUP)]
-            characters += 1
-            if characters % _TEXT_CHUNK == 0:
-                self._send(batch)
-                batch = []
-                self._pause(0.005)
-        self._send(batch)
+            names = [f"text:{index}" for index in range(len(unit))]
+            try:
+                for name, code in zip(names, unit, strict=True):
+                    down = key_event(0, code, _UNICODE)
+                    self._press(name, down, key_event(0, code, _UNICODE | _KEYUP))
+                self._pause(_KEY_HOLD)
+            finally:
+                for name in reversed(names):
+                    self._release(name)
+            self._pause(_KEY_GAP)
 
     def _nudge(self) -> None:
         """A zero mouse move: makes this process the source of the latest input."""
