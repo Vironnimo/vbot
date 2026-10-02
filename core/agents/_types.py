@@ -136,7 +136,7 @@ def librarian_problem_message(problem: LibrarianProblem) -> str:
     if problem == "invalid_config":
         return (
             f"The Librarian is unavailable: agents/{LIBRARIAN_AGENT_ID}/agent.json cannot be "
-            "loaded. Fix that file (vbot doctor names the problem) and restart vBot."
+            "loaded. Fix that file (vbot doctor config names the problem) and restart vBot."
         )
     return "The Librarian is unavailable: it does not exist yet. Restart vBot to create it."
 

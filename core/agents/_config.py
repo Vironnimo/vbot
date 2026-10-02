@@ -107,6 +107,13 @@ _EXCLUDED_SKILLS_WILDCARD_ERROR = (
 # What a built-in Agent keeps whatever its ``agent.json`` says: the Librarian
 # can only load and maintain Skills, and has no Memory, Project, custom System
 # Prompt or Librarian passes of its own.
+# An Agent of the user that holds the id of the built-in Librarian.
+_LIBRARIAN_ID_TAKEN_WARNING = (
+    f"{LIBRARIAN_AGENT_ID} is the id of vBot's built-in Librarian, so the Librarian is "
+    "unavailable and no Librarian pass runs while this Agent holds it; rename this Agent "
+    f"(vbot agent rename {LIBRARIAN_AGENT_ID} <new-id>) and restart vBot to create the "
+    "Librarian"
+)
 _LIBRARIAN_TOOL_ACCESS = ToolAccess(
     mode=TOOL_ACCESS_MODE_SELECTED, allowed=LIBRARIAN_TOOLS, fixed=True
 )
@@ -329,6 +336,11 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
             add_error(
                 diagnostics, "$.builtin", f"is valid only for the Agent id {LIBRARIAN_AGENT_ID}"
             )
+    elif data.get("id") == LIBRARIAN_AGENT_ID:
+        # The Agent of the user keeps working; doctor says why the Librarian does not.
+        diagnostics.append(
+            JsonDiagnostic(severity="warning", path="$.id", message=_LIBRARIAN_ID_TAKEN_WARNING)
+        )
     validate_optional_compaction_policy(
         diagnostics, data.get("compaction_policy"), "$.compaction_policy"
     )

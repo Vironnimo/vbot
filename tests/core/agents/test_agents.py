@@ -19,6 +19,7 @@ from core.agents import (
     BuiltinAgentError,
     InvalidAgentIdError,
     is_librarian,
+    validate_agent_file,
 )
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
@@ -247,6 +248,11 @@ def test_an_agent_holding_the_librarian_id_stays_and_the_librarian_is_unavailabl
     assert store.librarian_problem() == problem
     assert store.librarian() is None
     assert agent_path(store, "librarian").read_bytes() == before
+    # vbot doctor config names the cause at the file.
+    report = validate_agent_file(agent_path(store, "librarian"))
+    assert [(item.severity, item.path) for item in report.diagnostics] == [
+        ("warning", "$.id") if problem == "agent_id_taken" else ("error", "$.builtin")
+    ]
     assert [agent.id for agent in store.list_with_builtins()] == (
         ["librarian"] if problem == "agent_id_taken" else []
     )

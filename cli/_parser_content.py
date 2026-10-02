@@ -544,11 +544,19 @@ def _add_librarian_parsers(
         description=AREA_HELP["librarian"],
     )
     commands = librarian_parser.add_subparsers(dest="command", required=True)
-    for command in ("status", "run"):
-        command_parser = _add_command_parser(
-            commands, command, LIBRARIAN_HELP[command], example=f"librarian {command} assistant"
-        )
-        command_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
+    status_parser = _add_command_parser(
+        commands, "status", LIBRARIAN_HELP["status"], example="librarian status assistant"
+    )
+    status_parser.add_argument(
+        "agent",
+        nargs="?",
+        metavar="<agent-id>",
+        help="Identity Agent id; without it, the recent passes over all agents",
+    )
+    run_parser = _add_command_parser(
+        commands, "run", LIBRARIAN_HELP["run"], example="librarian run assistant"
+    )
+    run_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
 
 
 def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:

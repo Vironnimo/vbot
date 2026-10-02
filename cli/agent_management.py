@@ -303,6 +303,13 @@ def _format_agent_row(agent: object) -> str:
     )
 
 
+# The built-in Librarian: what it is and what an update may change.
+_LIBRARIAN_LINE = (
+    "builtin: librarian (curates the skills of your other agents; only model, "
+    "fallback_models, temperature and thinking_effort can change)"
+)
+
+
 def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     custom_prompt_text = _bool_text(agent.get("custom_system_prompt_enabled"))
     lines = [
@@ -325,6 +332,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"created_at: {_string_or_default(agent.get('created_at'), '-')}",
         f"updated_at: {_string_or_default(agent.get('updated_at'), '-')}",
     ]
+    if agent.get("builtin") == "librarian":
+        lines.insert(3, _LIBRARIAN_LINE)
     project_index = next(index for index, line in enumerate(lines) if line.startswith("project:"))
     if "default_workspace" in agent:
         lines.insert(
