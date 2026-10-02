@@ -12,6 +12,9 @@ each written version of a file once.
 ``baseline`` records a Skill found without history (its whole package, origin
 from ``metadata.vbot.author``); ``external`` records files changed outside the
 Skill write owner, noticed before the next write or history read of that Skill.
+An ``archive`` revision of a Skill merged into another one lists what moved to
+that Skill with it (``followed``): its shares and the automations that triggered
+it.
 A line that is not a readable revision (a torn write, a hand edit) is skipped
 with a warning; an append after a last line without its newline starts a new
 line, so the fragment stays separate and the new revision stays readable.
@@ -68,6 +71,8 @@ EXTERNAL_ACTOR = "external"
 _KINDS = frozenset(
     {"baseline", "create", "change", "external", "archive", "restore", "revert", "pin", "unpin"}
 )
+SkillReferenceKind = Literal["shared", "bootstrap", "cron", "calendar"]
+_REFERENCE_KINDS = frozenset({"shared", "bootstrap", "cron", "calendar"})
 _ACTORS = frozenset({*SKILL_ACTORS, EXTERNAL_ACTOR})
 _CHANGES = frozenset({"created", "updated", "deleted"})
 _REASONS = frozenset(ARCHIVE_REASONS)
@@ -96,6 +101,24 @@ class SkillFileRecord:
 
 
 @dataclass(frozen=True)
+class SkillReference:
+    """Something outside a Skill's package that names the Skill.
+
+    ``shared`` is the share with one receiver Agent (``id`` its Agent id,
+    ``name`` its name); ``bootstrap``, ``cron`` and ``calendar`` are an
+    automation of the owning Agent whose texts trigger the Skill (``id`` the job
+    or Calendar action id, ``name`` the job name or the event title).
+    """
+
+    kind: SkillReferenceKind
+    id: str
+    name: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"kind": self.kind, "id": self.id, "name": self.name}
+
+
+@dataclass(frozen=True)
 class SkillRevision:
     """One recorded change of one Skill in one home.
 
@@ -103,7 +126,9 @@ class SkillRevision:
     ``external`` (baseline and external revisions). ``live`` is set when the
     revision moved the Skill into or out of the home; ``archive_id`` names the
     archived package involved. ``origin``/``created_at``/``pinned`` carry a
-    Skill's provenance where a revision starts or restores it.
+    Skill's provenance where a revision starts or restores it. ``followed``
+    lists, on the archive revision of a Skill merged into ``absorbed_into``,
+    what moved to that Skill with it.
     """
 
     id: int
@@ -123,6 +148,7 @@ class SkillRevision:
     absorbed_into: str | None = None
     archive_id: str | None = None
     reverts: tuple[int, ...] = ()
+    followed: tuple[SkillReference, ...] = ()
 
     @property
     def moves(self) -> bool:
@@ -159,6 +185,8 @@ class SkillRevision:
                 data[key] = value
         if self.reverts:
             data["reverts"] = list(self.reverts)
+        if self.followed:
+            data["followed"] = [reference.to_dict() for reference in self.followed]
         return data
 
 
@@ -381,6 +409,7 @@ class SkillHistory:
         absorbed_into: str | None = None,
         archive_id: str | None = None,
         reverts: Iterable[int] = (),
+        followed: Iterable[SkillReference] = (),
     ) -> SkillRevision:
         """Append one revision; ``texts`` maps a file path to its stored text after."""
         with self._lock():
@@ -402,6 +431,7 @@ class SkillHistory:
                 absorbed_into=absorbed_into,
                 archive_id=archive_id,
                 reverts=tuple(reverts),
+                followed=tuple(followed),
             )
 
     def changes(
@@ -482,6 +512,7 @@ class SkillHistory:
         absorbed_into: str | None = None,
         archive_id: str | None = None,
         reverts: tuple[int, ...] = (),
+        followed: tuple[SkillReference, ...] = (),
     ) -> SkillRevision:
         stored = tuple(
             SkillFileRecord(
@@ -511,6 +542,7 @@ class SkillHistory:
             absorbed_into=absorbed_into,
             archive_id=archive_id,
             reverts=reverts,
+            followed=followed,
         )
         line = json.dumps(_line(revision, texts), ensure_ascii=False, separators=(",", ":"))
         data = (line + "\n").encode("utf-8")
@@ -740,6 +772,8 @@ def _line(revision: SkillRevision, texts: Mapping[str, str]) -> dict[str, Any]:
             data[key] = value
     if revision.reverts:
         data["reverts"] = list(revision.reverts)
+    if revision.followed:
+        data["followed"] = [reference.to_dict() for reference in revision.followed]
     return data
 
 
@@ -771,11 +805,22 @@ def _parse_revision(line: bytes) -> SkillRevision | None:
             absorbed_into=_optional_text(data.get("absorbed_into")),
             archive_id=_optional_text(data.get("archive_id")),
             reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
+            followed=tuple(_parse_reference(item) for item in _array(data.get("followed", []))),
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is
     # deeply nested JSON.
     except KeyError, TypeError, ValueError, RecursionError:
         return None
+
+
+def _parse_reference(data: Any) -> SkillReference:
+    if not isinstance(data, dict):
+        raise ValueError("malformed Skill reference")
+    return SkillReference(
+        kind=_member(data["kind"], _REFERENCE_KINDS),
+        id=_text(data["id"]),
+        name=_text(data["name"]),
+    )
 
 
 def _parse_file(data: Any) -> SkillFileRecord:

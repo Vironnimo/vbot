@@ -35,6 +35,7 @@ from core.skills._history import (
     SkillArchiveReason,
     SkillHistory,
     SkillRecord,
+    SkillReference,
     SkillRevision,
     SkillRevisionKind,
     declared_origin,
@@ -449,20 +450,25 @@ class SkillAuthoringService:
         writer: SkillWriter,
         reason: SkillArchiveReason | None = None,
         absorbed_into: str | None = None,
+        followed: Sequence[SkillReference] = (),
     ) -> SkillWriteResult:
         """Move a Skill package into the home's archive.
 
         ``reason`` is ``deleted`` by default and ``absorbed`` with
         ``absorbed_into``, another Skill in the same home that now holds this
         Skill's instructions; ``inactive`` marks a Skill retired for disuse.
-        The reported changes delete every package file; the archived package
-        keeps them for ``restore`` until ``purge``.
+        ``followed`` names what moves to ``absorbed_into`` with the Skill (its
+        shares, the automations that trigger it); the history records it and the
+        caller moves it. The reported changes delete every package file; the
+        archived package keeps them for ``restore`` until ``purge``.
         """
         with self._write_lock:
             _check_writer(writer)
             skill_dir = self._existing_skill_dir(target_root, skill_name)
             root = skill_dir.parent
             reason, absorbed_into = self._archive_reason(root, skill_dir, reason, absorbed_into)
+            if followed and absorbed_into is None:
+                raise SkillAuthoringError("followed is only valid with absorbed_into.")
             history = SkillHistory(root)
             self._observe(history, skill_name, skill_dir, writer)
             # Path.walk never enters a link, Windows junctions included, so files
@@ -494,6 +500,7 @@ class SkillAuthoringService:
                 reason=reason,
                 absorbed_into=absorbed_into,
                 archive_id=archive_id,
+                followed=tuple(followed),
             )
             return SkillWriteResult(
                 name=skill_name,
@@ -1400,6 +1407,7 @@ __all__ = [
     "SkillAuthoringService",
     "SkillProtectedError",
     "SkillRecord",
+    "SkillReference",
     "SkillRevertConflictError",
     "SkillRevertIncompleteError",
     "SkillRevision",

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -20,6 +20,7 @@ from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
     SkillProtectedError,
+    SkillReference,
     SkillWriter,
     SkillWriteResult,
 )
@@ -75,6 +76,16 @@ SKILL_MANAGE_ABSORBED = (
     "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
     "kept in the archive, where the user can restore it."
 )
+# Notes after a merge: the deleted Skill's shares and the automations that loaded
+# it now use the Skill that absorbed it, so nobody has to change them by hand.
+SKILL_MANAGE_FOLLOWED_NOTE = "These now use Skill '{target}' in place of '{name}': {items}."
+SKILL_MANAGE_NOT_FOLLOWED_NOTE = "These could not be changed and still use '{name}': {items}."
+_REFERENCE_LABELS = {
+    "shared": "the share with Agent '{name}'",
+    "bootstrap": "Bootstrap job '{name}'",
+    "cron": "Cron job '{name}'",
+    "calendar": "Calendar event '{name}'",
+}
 # Refusals of a background writer: a Reflection, or the Librarian, also while
 # the user talks with it in a Librarian Session. It never changes a Skill the
 # user pinned, and deletes a Skill only into another one (``absorbed_into``). The
@@ -114,6 +125,11 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
+# follow_merge(owner_id, name, target, delete) -> the references that could not move.
+SkillMergeFollower = Callable[
+    [str, str, str, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
+    Awaitable[tuple[SkillReference, ...]],
+]
 # Actions that may operate on a Skill shared into the caller (maintained in the
 # owner's package), by every writer. ``create`` is own-home-only by definition;
 # ``delete`` stays owner/human-only so a receiver cannot remove someone else's
@@ -276,7 +292,7 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-) -> Callable[[ToolContext, JsonObject, str | None], JsonObject]:
+) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], JsonObject]:
     """Return the direct Skill-management handler.
 
     A background writer (a Reflection or the Librarian) never changes a Skill
@@ -286,7 +302,9 @@ def make_skill_manage_handler(
     Librarian Run. Such a Run builds its changes from Skills it read during the Run, so a
     change to an existing Skill that someone else changed after the Run started
     is refused once per outside change; the Run reads the Skill again and
-    retries, or leaves it.
+    retries, or leaves it. The fourth is what a delete with ``absorbed_into``
+    moves to the absorbing Skill (``register_skill_manage_tool``); the archive
+    revision records it.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -336,6 +354,7 @@ def make_skill_manage_handler(
         context: ToolContext,
         arguments: JsonObject,
         run_started_at: str | None = None,
+        followed: tuple[SkillReference, ...] = (),
     ) -> JsonObject:
         writer = _writer(context)
         try:
@@ -384,7 +403,7 @@ def make_skill_manage_handler(
                 check_unchanged_since(target_root, call.name, writer, run_started_at)
             if call.action == "delete":
                 _check_absorbed_into(call, own_root, writer)
-            result, summary = _apply(authoring, target_root, call, writer)
+            result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
         except SkillProtectedError as error:
@@ -767,7 +786,11 @@ def _read_hint(name: str, file_path: str) -> str:
 
 
 def _apply(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
+    authoring: SkillAuthoringService,
+    target_root: Path,
+    call: _Call,
+    writer: SkillWriter,
+    followed: tuple[SkillReference, ...] = (),
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
@@ -789,7 +812,7 @@ def _apply(
         return result, f"Removed {file_path} from Skill '{name}'."
     if call.absorbed_into is not None:
         result = authoring.delete(
-            target_root, name, writer=writer, absorbed_into=call.absorbed_into
+            target_root, name, writer=writer, absorbed_into=call.absorbed_into, followed=followed
         )
         return result, SKILL_MANAGE_ABSORBED.format(name=name, target=call.absorbed_into)
     result = authoring.delete(target_root, name, writer=writer)
@@ -1083,12 +1106,19 @@ def register_skill_manage_tool(
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
     run_started_at: Callable[[str], str | None] | None = None,
+    follow_merge: SkillMergeFollower | None = None,
 ) -> None:
     """Register identity-only direct Skill management.
 
     ``run_started_at(run_id)`` returns when a Run started (``None`` when
     unknown). It reads Event Loop state, so it runs on the Loop, before the
     write moves to a worker.
+
+    ``follow_merge(owner_id, name, target, delete)`` runs a delete with
+    ``absorbed_into``: it calls ``delete(followed)`` with what names the Skill
+    (its shares, the automations that trigger it), and once that delete
+    succeeded moves each of them to ``target``, returning those it could not
+    move. The result then notes both.
     """
     handler = make_skill_manage_handler(
         authoring,
@@ -1100,16 +1130,36 @@ def register_skill_manage_tool(
     )
 
     def guarded_handler(
-        context: ToolContext, arguments: JsonObject, started: str | None
+        context: ToolContext,
+        arguments: JsonObject,
+        started: str | None,
+        followed: tuple[SkillReference, ...],
     ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments, started)
+            return handler(context, arguments, started, followed)
 
     async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
         started = None
         if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
             started = run_started_at(context.run_id)
-        return await run_tool_worker(guarded_handler, context, arguments, started)
+        merge = _merge(arguments)
+        if follow_merge is None or merge is None:
+            return await run_tool_worker(guarded_handler, context, arguments, started, ())
+        name, target = merge
+        results: list[JsonObject] = []
+        planned: list[SkillReference] = []
+
+        async def delete(followed: tuple[SkillReference, ...]) -> bool:
+            result = await run_tool_worker(guarded_handler, context, arguments, started, followed)
+            results.append(result)
+            planned.extend(followed)
+            return result.get("ok") is True
+
+        failed = await follow_merge(context.agent_id, name, target, delete)
+        result = results[0]
+        if result.get("ok") is True and planned:
+            _note_followed(result, name, target, planned, failed)
+        return result
 
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
@@ -1128,6 +1178,40 @@ def register_skill_manage_tool(
             details=True,
         ),
     )
+
+
+def _merge(arguments: JsonObject) -> tuple[str, str] | None:
+    """The Skill name and the absorbing Skill of a delete with ``absorbed_into``."""
+    name, target = arguments.get("name"), arguments.get("absorbed_into")
+    if arguments.get("action") != "delete" or not isinstance(name, str):
+        return None
+    if not isinstance(target, str) or not target or target == name:
+        return None
+    return name, target
+
+
+def _note_followed(
+    result: JsonObject,
+    name: str,
+    target: str,
+    planned: list[SkillReference],
+    failed: tuple[SkillReference, ...],
+) -> None:
+    """Add the merge's notes: what now uses ``target``, and what still uses ``name``."""
+    lines = [result["data"]["content"]]
+    moved = [reference for reference in planned if reference not in failed]
+    if moved:
+        items = "; ".join(_reference_label(reference) for reference in moved)
+        note = SKILL_MANAGE_FOLLOWED_NOTE.format(target=target, name=name, items=items)
+        lines.append(f"Note: {note}")
+    if failed:
+        items = "; ".join(_reference_label(reference) for reference in failed)
+        lines.append(f"Note: {SKILL_MANAGE_NOT_FOLLOWED_NOTE.format(name=name, items=items)}")
+    result["data"]["content"] = "\n".join(lines)
+
+
+def _reference_label(reference: SkillReference) -> str:
+    return _REFERENCE_LABELS[reference.kind].format(name=reference.name)
 
 
 def _skill_manage_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

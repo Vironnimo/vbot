@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import Any, cast
@@ -15,29 +16,59 @@ _SESSION = SessionAddress(project_id=None, agent_id="builder", session_id="s1")
 
 
 class _Automations:
-    """Bootstrap, Cron and Calendar fakes listing what a test arranges."""
+    """Bootstrap, Cron and Calendar fakes listing what a test arranges.
+
+    ``edits`` records each change of an automation's texts: the owner, the job,
+    action or event id, and the changed fields.
+    """
 
     def __init__(self) -> None:
         self.bootstrap_jobs: list[Any] = []
         self.cron_jobs: list[Any] = []
         self.actions: list[dict[str, Any]] = []
         self.event_notes: str | None = None
-        self.bootstrap = SimpleNamespace(list_jobs=lambda: list(self.bootstrap_jobs))
-        self.cron = SimpleNamespace(list_jobs=lambda: list(self.cron_jobs))
+        self.edits: list[tuple[str, str, dict[str, Any]]] = []
+        self.bootstrap = SimpleNamespace(
+            list_jobs=lambda: list(self.bootstrap_jobs),
+            get_job=lambda job_id: _find(self.bootstrap_jobs, job_id),
+            rename_prompt_skill=lambda job_id, prompt, actor: self.edits.append(
+                ("bootstrap", job_id, {"prompt": prompt})
+            ),
+        )
+        self.cron = SimpleNamespace(
+            list_jobs=lambda: list(self.cron_jobs),
+            get_job=lambda job_id: _find(self.cron_jobs, job_id),
+            update_job=self._edit("cron"),
+        )
         self.calendar = SimpleNamespace(
             actions=SimpleNamespace(
-                list_actions=lambda: list(self.actions),
+                list_actions=lambda event_id=None: [
+                    action
+                    for action in self.actions
+                    if event_id is None or action["event_id"] == event_id
+                ],
                 # A test marks an action whose occurrences are used up "spent".
                 can_fire=lambda action_id: (
                     not any(
                         action["id"] == action_id and action.get("spent") for action in self.actions
                     )
                 ),
+                update=self._edit("calendar-action"),
             ),
-            list_events=lambda: [
-                SimpleNamespace(id="evt-1", title="Weekly review", notes=self.event_notes)
-            ],
+            list_events=lambda: [self._event()],
+            get_event=lambda _event_id: self._event(),
+            update_event=self._edit("calendar-event"),
         )
+
+    def _event(self) -> Any:
+        return SimpleNamespace(id="evt-1", title="Weekly review", notes=self.event_notes)
+
+    def _edit(self, owner: str) -> Callable[..., Any]:
+        async def edit(item_id: str, *, actor: str, **fields: Any) -> None:
+            assert actor == "tool"
+            self.edits.append((owner, item_id, fields))
+
+        return edit
 
     def references(self) -> AutomationReferences:
         return AutomationReferences(
@@ -45,6 +76,10 @@ class _Automations:
             cron=cast(Any, self.cron),
             calendar=cast(Any, self.calendar),
         )
+
+
+def _find(jobs: list[Any], job_id: str) -> Any:
+    return next(job for job in jobs if job.id == job_id)
 
 
 def _job(**fields: Any) -> Any:
@@ -207,3 +242,43 @@ def test_agent_triggered_skill_names_read_every_live_text_of_the_identity_agent(
         "warmup",
         "agenda",
     }
+
+
+# A Calendar event's title and notes reach the Runs of every action of the event,
+# so they follow only while all of them start Runs of the merging Agent.
+@pytest.mark.parametrize("shared_event", [False, True], ids=["own-event", "shared-event"])
+def test_a_skill_merge_renames_the_triggers_in_the_identity_agents_automations(
+    shared_event: bool,
+) -> None:
+    automations = _Automations()
+    automations.event_notes = "Bring $deploy-web and $agenda."
+    for arrange in (
+        # Only a leading /name triggers, and $name only with the whole name.
+        _cron(prompt="/deploy-web the release, not /deploy-web or $deploy-webhook."),
+        _bootstrap(id="boot-1", prompt="Warm up with $deploy-web."),
+        _calendar(prompt="Use $deploy-web."),
+        _cron(id="cron-2", prompt="$deploy-web", status="completed"),
+        _cron(id="cron-3", prompt="$deploy-web", project_id="vbot"),
+        _cron(id="cron-4", prompt="/deploy the release."),
+    ):
+        arrange(automations)
+    if shared_event:
+        _calendar(id="act-2", target="writer", prompt="Prepare.")(automations)
+    references = automations.references()
+
+    found = references.agent_skill_triggers("builder", "deploy-web")
+    for reference in found:
+        asyncio.run(references.rename_skill_triggers("builder", reference, "deploy-web", "deploy"))
+
+    assert [reference.label for reference in found] == [
+        "bootstrap:boot-1",
+        "calendar:act-1",
+        "cron:job-1",
+    ]
+    event_edit = ("calendar-event", "evt-1", {"notes": "Bring $deploy and $agenda."})
+    assert automations.edits == [
+        ("bootstrap", "boot-1", {"prompt": "Warm up with $deploy."}),
+        ("calendar-action", "act-1", {"prompt": "Use $deploy."}),
+        *([] if shared_event else [event_edit]),
+        ("cron", "job-1", {"prompt": "/deploy the release, not /deploy-web or $deploy-webhook."}),
+    ]

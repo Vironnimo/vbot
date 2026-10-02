@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,7 +14,12 @@ import pytest
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.runs import RunKind
 from core.skills import _history as skill_history_module
-from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService, SkillWriter
+from core.skills.authoring import (
+    HUMAN_WRITER,
+    SkillAuthoringService,
+    SkillReference,
+    SkillWriter,
+)
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
@@ -62,6 +68,11 @@ class _Harness:
         self.shared: set[str] = set()
         # When each Run started, by Run id.
         self.run_started: dict[str, str] = {}
+        # What names a Skill a merge deletes, which of it cannot move, and each
+        # merge: owner, Skill, absorbing Skill and whether the delete succeeded.
+        self.references: tuple[SkillReference, ...] = ()
+        self.unmovable: set[SkillReference] = set()
+        self.merges: list[tuple[str, str, str, bool]] = []
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -75,7 +86,21 @@ class _Harness:
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
             run_started_at=self.run_started.get,
+            follow_merge=self.follow_merge,
         )
+
+    async def follow_merge(
+        self,
+        owner_id: str,
+        name: str,
+        target: str,
+        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+    ) -> tuple[SkillReference, ...]:
+        deleted = await delete(self.references)
+        self.merges.append((owner_id, name, target, deleted))
+        if not deleted:
+            return ()
+        return tuple(reference for reference in self.references if reference in self.unmovable)
 
     def home(self, agent_id: str) -> Path:
         return self.root / "agents" / agent_id / "skills"
@@ -762,11 +787,15 @@ def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("arguments", "code", "message"),
     [
+        # What named the Skill moves to the one that absorbed it, or says it could not.
         pytest.param(
             {"action": "delete", "name": "old", "absorbed_into": "new"},
             None,
             "Deleted Skill 'old'; its instructions now live in Skill 'new'. Its files are "
-            "kept in the archive, where the user can restore it.",
+            "kept in the archive, where the user can restore it.\n"
+            "Note: These now use Skill 'new' in place of 'old': the share with Agent 'Coder'; "
+            "Bootstrap job 'Warm up'.\n"
+            "Note: These could not be changed and still use 'old': Cron job 'Daily report'.",
             id="absorbed",
         ),
         pytest.param(
@@ -797,6 +826,13 @@ def test_delete_names_the_skill_that_absorbed_it(
     harness = _Harness(tmp_path)
     harness.create(name="old")
     harness.create(name="new")
+    unmovable = SkillReference("cron", "job-1", "Daily report")
+    harness.references = (
+        SkillReference("shared", "coder", "Coder"),
+        SkillReference("bootstrap", "boot-1", "Warm up"),
+        unmovable,
+    )
+    harness.unmovable = {unmovable}
 
     result = harness.run(arguments)
 
@@ -804,9 +840,15 @@ def test_delete_names_the_skill_that_absorbed_it(
         assert result["data"] == {"content": message}
         [archived] = harness.authoring.archived(harness.home("main"))
         assert (archived.reason, archived.absorbed_into) == ("absorbed", "new")
+        # The archive revision records what was to move with the Skill.
+        [revision] = harness.authoring.history(harness.home("main"), "old", limit=1)
+        assert revision.followed == harness.references
+        assert harness.merges == [("main", "old", "new", True)]
     else:
         assert result == tool_failure(code, message, retryable=False)
         assert harness.document("old").is_file()
+        # A refused delete moves nothing.
+        assert not any(deleted for *_, deleted in harness.merges)
 
 
 # --- Names and scopes -------------------------------------------------------

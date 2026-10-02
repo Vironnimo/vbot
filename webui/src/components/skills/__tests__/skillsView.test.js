@@ -1151,6 +1151,10 @@ describe('Skills manager', () => {
         change(9, 'old-deploy', 'archive', {
           reason: 'absorbed',
           absorbed_into: 'deploy',
+          followed: [
+            { kind: 'shared', id: 'coder', name: 'Coder' },
+            { kind: 'cron', id: 'job-1', name: 'Nightly' },
+          ],
         }),
         change(8, 'deploy', 'change'),
         change(7, 'stale', 'archive', { reason: 'inactive' }),
@@ -1199,7 +1203,7 @@ describe('Skills manager', () => {
       ['Merging', '1 merged away, 1 changed, 0 created'],
     ]);
     expect(texts('.skills-librarian .skills-history__what')).toEqual([
-      'Merged into deploy',
+      'Merged into deploy · share with Coder, cron job “Nightly” moved along',
       'Changed',
       'Retired as unused',
     ]);

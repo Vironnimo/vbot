@@ -1,4 +1,5 @@
 import { t } from '$lib/i18n.js';
+import { skillMergedText } from '$lib/skillMerges.js';
 import { formatAbsoluteTime } from '$lib/timeText.js';
 import { isPlainObject } from '$lib/values.js';
 
@@ -188,7 +189,10 @@ export const reflectionChangeItems = (changes) =>
             ? change.text
             : ''
           : absorbedInto
-            ? t('chat.activity.change.mergedInto', { skill: absorbedInto })
+            ? skillMergedText(
+                t('chat.activity.change.mergedInto', { skill: absorbedInto }),
+                change.followed,
+              )
             : stringList(change.files).join(', '),
         mono: !memory,
         undone: change.undone === true,

@@ -437,6 +437,7 @@ def bootstrap(runtime: Runtime) -> None:
             lifecycle_guard=runtime._agents.lifecycle_guard,
             on_changed=runtime._notify_skills_changed,
             run_started_at=runtime.run_started_at,
+            follow_merge=runtime.follow_skill_merge,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(

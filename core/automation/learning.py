@@ -37,6 +37,7 @@ from core.skills import (
     HUMAN_WRITER,
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillReference,
     SkillRevertConflictError,
     SkillRevertIncompleteError,
     SkillRevision,
@@ -64,9 +65,11 @@ class LearningChange:
     Skill change sums up what
     the Run did to one Skill: ``kind`` is ``created``, ``changed`` (its
     ``SKILL.md``), ``archived`` (``absorbed_into`` names the Skill that took
-    over its instructions), ``file_written`` or ``file_removed``; ``files`` lists
-    the changed package files. ``revisions`` are the history revisions behind
-    the change; ``undone`` says they were taken back.
+    over its instructions, ``followed`` what moved to that Skill with it),
+    ``file_written`` or ``file_removed``; ``files`` lists the changed package
+    files. ``revisions`` are the history revisions behind the change; ``undone``
+    says they were taken back. Undoing a merge restores the Skill but moves
+    nothing in ``followed`` back.
     """
 
     store: LearningStore
@@ -78,6 +81,7 @@ class LearningChange:
     skill: str | None = None
     files: tuple[str, ...] = ()
     absorbed_into: str | None = None
+    followed: tuple[SkillReference, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -94,6 +98,8 @@ class LearningChange:
             data["files"] = list(self.files)
             if self.absorbed_into is not None:
                 data["absorbed_into"] = self.absorbed_into
+            if self.followed:
+                data["followed"] = [reference.to_dict() for reference in self.followed]
         return data
 
 
@@ -659,9 +665,11 @@ def _skill_change(
     files = tuple(dict.fromkeys(record.path for revision in revisions for record in revision.files))
     last = revisions[-1]
     absorbed_into = None
+    followed: tuple[SkillReference, ...] = ()
     if last.live is False:
         kind = "archived"
         absorbed_into = last.absorbed_into
+        followed = last.followed
         files = ()
     elif any(revision.kind == "create" for revision in revisions):
         kind = "created"
@@ -679,6 +687,7 @@ def _skill_change(
         skill=skill,
         files=files,
         absorbed_into=absorbed_into,
+        followed=followed,
     )
 
 
