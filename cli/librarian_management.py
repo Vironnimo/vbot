@@ -15,7 +15,12 @@ _CONSOLIDATION_TEXT = {
     "unchanged": "skipped, no skill it may change has changed since the last merge",
     "too_few": "skipped, fewer than 2 skills it may change",
     "disabled": "off",
-    "failed": "failed",
+    "failed": "did not finish",
+}
+# A pass that stopped before it finished; the next scheduled pass still waits a full interval.
+_OUTCOME_TEXT = {
+    "failed": "stopped early by an error",
+    "interrupted": "stopped early because vBot stopped",
 }
 
 
@@ -86,8 +91,11 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
 def _format_pass(last_pass: Mapping[str, Any]) -> list[str]:
     trigger = "started by hand" if last_pass.get("trigger") == "manual" else "scheduled"
     outcome = str(last_pass.get("consolidation"))
-    lines = [
-        f"last pass: {_string_or_default(last_pass.get('finished_at'), '?')} ({trigger})",
+    lines = [f"last pass: {_string_or_default(last_pass.get('finished_at'), '?')} ({trigger})"]
+    stopped = _OUTCOME_TEXT.get(str(last_pass.get("outcome")))
+    if stopped is not None:
+        lines.append(f"  {stopped}")
+    lines += [
         f"  archived {last_pass.get('archived', 0)} unused skills",
         f"  merge: {_CONSOLIDATION_TEXT.get(outcome, outcome)} "
         f"({last_pass.get('candidates', 0)} skills it may change)",

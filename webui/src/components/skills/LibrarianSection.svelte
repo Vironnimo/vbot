@@ -238,6 +238,16 @@
             })}
           </dd>
         </div>
+        {#if lastPass.outcome === 'failed' || lastPass.outcome === 'interrupted'}
+          <div class="skills-page-fact">
+            <dt>{t('skills.librarian.result')}</dt>
+            <dd>
+              {lastPass.outcome === 'failed'
+                ? t('skills.librarian.resultFailed')
+                : t('skills.librarian.resultInterrupted')}
+            </dd>
+          </div>
+        {/if}
         <div class="skills-page-fact">
           <dt>{t('skills.librarian.retired')}</dt>
           <dd>{lastPass.archived ?? 0}</dd>

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from tests.cli.cli_test_support import FakeRpc, RunCli
 
 _STATUS = {
@@ -59,7 +61,10 @@ _STATUS = {
 def test_librarian_status_reports_the_last_pass_and_how_to_undo_it(
     rpc: FakeRpc, run_cli: RunCli
 ) -> None:
+    failed = {**cast(dict[str, Any], _STATUS["last_pass"]), "outcome": "failed"}
+    failed["consolidation"] = "failed"
     rpc.reply("librarian.status", _STATUS)
+    rpc.reply("librarian.status", {**_STATUS, "last_pass": failed, "changes": []})
 
     code, out, _err = run_cli("librarian", "status", "assistant")
 
@@ -83,6 +88,16 @@ def test_librarian_status_reports_the_last_pass_and_how_to_undo_it(
         "by librarian",
         "undo them together with: vbot skill revert 9 7 --scope agent:assistant",
     ]
+
+    # A pass that stopped early says so.
+    code, out, _err = run_cli("librarian", "status", "assistant")
+
+    assert out.splitlines()[3:6] == [
+        "last pass: 2026-09-30T10:02:00Z (scheduled)",
+        "  stopped early by an error",
+        "  archived 1 unused skills",
+    ]
+    assert "  merge: did not finish (3 skills it may change)" in out.splitlines()
 
 
 def test_librarian_run_starts_a_pass(rpc: FakeRpc, run_cli: RunCli) -> None:

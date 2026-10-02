@@ -350,6 +350,11 @@ export default Object.freeze({
   'skills.librarian.passValue': '{time} ({trigger})',
   'skills.librarian.triggerSchedule': 'scheduled',
   'skills.librarian.triggerManual': 'started by hand',
+  'skills.librarian.result': 'Result',
+  'skills.librarian.resultFailed':
+    'Stopped early by an error; the next pass comes after the usual interval',
+  'skills.librarian.resultInterrupted':
+    'Stopped early because vBot stopped; the next pass comes after the usual interval',
   'skills.librarian.retired': 'Retired as unused',
   'skills.librarian.merging': 'Merging',
   'skills.librarian.mergeRan':

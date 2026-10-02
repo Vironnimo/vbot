@@ -1165,6 +1165,7 @@ describe('Skills manager', () => {
           ...mainStatus,
           running: true,
           running_since: '2026-10-01T09:00:00.000000Z',
+          last_pass: { ...mainStatus.last_pass, outcome: 'interrupted' },
         };
       if (method === 'librarian.run')
         throw Object.assign(new Error('busy-sentinel'), {
@@ -1253,6 +1254,11 @@ describe('Skills manager', () => {
       variant: 'success',
     });
     expect(facts()).toContainEqual(['Now', expect.stringContaining('Running')]);
+    // A pass that stopped early says so; a completed one shows no result row.
+    expect(facts()).toContainEqual([
+      'Result',
+      t('skills.librarian.resultInterrupted'),
+    ]);
     expect(button('Run now', section()).disabled).toBe(true);
 
     // Another Agent with no pass yet; its Run is refused while it works.

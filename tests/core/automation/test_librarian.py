@@ -30,6 +30,7 @@ from core.automation.librarian import (
 )
 from core.prompts.briefs import librarian_brief
 from core.runs import RunKind
+from core.sessions import SessionAddress
 from core.skills import SkillAuthoringService, SkillWriter
 from core.statistics.skills import SkillUse
 from core.storage import StorageManager
@@ -67,6 +68,9 @@ class _Harness:
         self.agents: dict[str, Any] = {"main": self.agent()}
         self.busy: set[str] = set()
         self.usage: dict[tuple[str, str], SkillUse] = {}
+        # Raised by the next Skill use read, when set.
+        self.usage_error: Exception | None = None
+        self.usage_reads = 0
         self.scheduled: dict[str, frozenset[str]] = {}
         self.changed: list[str] = []
         self.announced = 0
@@ -76,6 +80,8 @@ class _Harness:
         # Called with the start kwargs while the consolidation Run "runs".
         self.on_run: Any = None
         self.run_gate: asyncio.Event | None = None
+        # Set once the pass awaits its consolidation Run.
+        self.run_awaited = asyncio.Event()
         self.now = datetime.now(UTC) + _LATER
 
         async def resolve_agent_async(_project_id: str | None, agent_id: str) -> Any:
@@ -97,11 +103,17 @@ class _Harness:
             chat_sessions=SimpleNamespace(create_async=self._create_session, delete=self._delete),
             streaming_chat_loop=SimpleNamespace(start_run=self._start_run),
             chat_run_manager=SimpleNamespace(
-                has_activity_for_agent=lambda agent_id, *, project_id: agent_id in self.busy
+                has_activity_for_agent=lambda agent_id, *, project_id: agent_id in self.busy,
+                has_activity_for_session=lambda agent_id, _session_id, *, project_id: (
+                    agent_id in self.busy
+                ),
             ),
         )
 
         async def skill_usage() -> dict[tuple[str, str], SkillUse]:
+            self.usage_reads += 1
+            if self.usage_error is not None:
+                raise self.usage_error
             return dict(self.usage)
 
         self.service = LibrarianService(
@@ -164,6 +176,7 @@ class _Harness:
         gate = self.run_gate
 
         async def wait() -> Any:
+            self.run_awaited.set()
             if gate is not None:
                 await gate.wait()
             return SimpleNamespace(content="Nothing to change.")
@@ -378,13 +391,81 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
 
 
 @pytest.mark.asyncio
+async def test_a_pass_that_stops_early_is_recorded_and_only_the_newest_session_stays(
+    harness: _Harness,
+) -> None:
+    root = harness.home("main")
+    for name in ("deploy-web", "deploy-api"):
+        harness.authoring.create(root, name, _document(name), writer=_AGENT)
+    harness.now = datetime.now(UTC)
+
+    def change_web(started: dict[str, Any], run_id: str) -> None:
+        writer = SkillWriter(
+            actor="librarian", session_id=started["session_id"], run_id=run_id, run_kind="librarian"
+        )
+        changed = _document("deploy-web", body=f"# {run_id}\n")
+        harness.authoring.edit(root, "deploy-web", changed, writer=writer)
+
+    harness.on_run = change_web
+    await harness.run_pass()
+
+    # An error stops a pass: it records itself as failed, and the next scheduled
+    # pass waits a full interval. The Session of the pass before it goes.
+    harness.usage_error = RuntimeError("statistics unavailable")
+    status = await harness.run_pass()
+    failed = status["last_pass"]
+    assert (failed["outcome"], failed["consolidation"], failed["error"]) == (
+        "failed",
+        "failed",
+        "statistics unavailable",
+    )
+    finished = datetime.fromisoformat(failed["finished_at"])
+    assert datetime.fromisoformat(status["next_due_at"]) == finished + timedelta(days=7)
+    assert "running_pass" not in harness.state()
+    assert harness.deleted_sessions == [
+        SessionAddress(project_id=None, agent_id="main", session_id="lib-1")
+    ]
+
+    # vBot stops while a consolidation Run runs: the running record written
+    # before the pass awaited the Run reports the pass as interrupted.
+    harness.usage_error = None
+    harness.authoring.create(root, "deploy-cli", _document("deploy-cli"), writer=_AGENT)
+    harness.run_gate = asyncio.Event()
+    harness.run_awaited.clear()
+    await harness.service.run("main")
+    await asyncio.wait_for(harness.run_awaited.wait(), timeout=10)
+    await harness.service.aclose()
+
+    status = await harness.service.status("main")
+    interrupted = status["last_pass"]
+    assert {
+        key: interrupted[key] for key in ("outcome", "consolidation", "session_id", "run_id")
+    } == {
+        "outcome": "interrupted",
+        "consolidation": "failed",
+        "session_id": "lib-2",
+        "run_id": "run-lib-2",
+    }
+    # Its counts come from the revisions its Run recorded.
+    assert (interrupted["changed"], [change["skill"] for change in status["changes"]]) == (
+        1,
+        ["deploy-web"],
+    )
+    finished = datetime.fromisoformat(interrupted["finished_at"])
+    assert datetime.fromisoformat(status["next_due_at"]) == finished + timedelta(days=7)
+    path = harness.storage.data_dir / "agents" / "main" / "librarian.json"
+    assert validate_librarian_state_file(path).diagnostics == ()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     harness: _Harness, monkeypatch: pytest.MonkeyPatch, enabled: bool
 ) -> None:
     harness.settings["consolidate"] = False
     harness.settings["enabled"] = enabled
-    for agent_id in ("due", "new", "busy", "recent", "limited"):
+    agent_ids = ("broken", "due", "due-too", "new", "busy", "recent", "interrupted", "limited")
+    for agent_id in agent_ids:
         harness.agents[agent_id] = harness.agent()
         harness.authoring.create(
             harness.home(agent_id), "old-review", _document("old-review"), writer=_REFLECTION
@@ -394,7 +475,7 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     harness.busy.add("busy")
     # A first pass is due one interval after a check first saw the Agent.
     seen = format_canonical_timestamp(harness.now - timedelta(days=8))
-    for agent_id in ("due", "busy", "limited"):
+    for agent_id in ("due", "due-too", "busy", "limited"):
         harness.write_state(agent_id, {"first_seen_at": seen})
     passed = format_canonical_timestamp(harness.now - timedelta(days=1))
     recent = {
@@ -404,6 +485,14 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
         "consolidation": "disabled",
     }
     harness.write_state("recent", {"first_seen_at": seen, "last_pass": recent})
+    # A pass that vBot stopped counts as the last pass: no retry before the interval.
+    harness.write_state(
+        "interrupted",
+        {"first_seen_at": seen, "running_pass": {**recent, "outcome": "interrupted"}},
+    )
+    # A state whose next pass cannot be computed fails this Agent's check only.
+    far = {**recent, "started_at": "9999-12-30T00:00:00Z", "finished_at": "9999-12-30T00:00:00Z"}
+    harness.write_state("broken", {"first_seen_at": seen, "last_pass": far})
     delays: list[float] = []
     checked = asyncio.Event()
 
@@ -423,8 +512,11 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
 
     assert delays == [FIRST_CHECK_DELAY_SECONDS, CHECK_INTERVAL_SECONDS]
     if enabled:
-        assert harness.state("due")["last_pass"]["trigger"] == "schedule"
-        assert harness.state("due")["first_seen_at"] == seen
+        for agent_id in ("due", "due-too"):
+            assert harness.state(agent_id)["last_pass"]["trigger"] == "schedule"
+            assert harness.state(agent_id)["first_seen_at"] == seen
+        # One check reads Skill use once for all its passes.
+        assert harness.usage_reads == 1
         # A new Agent only gets seen; its first pass is one interval away.
         assert harness.state("new") == {
             "format_version": 1,
@@ -434,7 +526,8 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
         assert datetime.fromisoformat(status["next_due_at"]) == harness.now + timedelta(days=7)
     else:
         assert not (harness.storage.data_dir / "agents" / "new" / "librarian.json").exists()
-    assert harness.changed == (["due"] if enabled else [])
-    for agent_id in ("new", "busy", "recent", "limited", *(() if enabled else ("due",))):
+    assert harness.changed == (["due", "due-too"] if enabled else [])
+    kept = ("broken", "new", "busy", "recent", "interrupted", "limited")
+    for agent_id in (*kept, *(() if enabled else ("due", "due-too"))):
         assert "old-review" in harness.authoring.records(harness.home(agent_id))
     assert "last_pass" not in harness.state("busy")
