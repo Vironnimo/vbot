@@ -371,6 +371,10 @@ def test_statistics_runs_prints_outcomes_percentiles_and_notable_runs(
         "most_steps": [],
         "cancelled": {"runs": 1, "cost_usd": 0.12, "wait_p50_ms": 300000},
         "errors": {"total": 1, "failed_attempts": 4},
+        "previous": {
+            "totals": {"total": 2, "completed": 2},
+            "user": {"duration_p50_ms": 90000, "duration_p90_ms": None},
+        },
     }
     rpc.reply("statistics.report", {"window": ALL_TIME, "runs": runs})
 
@@ -380,6 +384,8 @@ def test_statistics_runs_prints_outcomes_percentiles_and_notable_runs(
     assert rpc.calls == [("statistics.report", {"sections": ["runs"]})]
     for text in (
         "runs: total=6 completed=3 failed=1 cancelled=1 interrupted=1 running=0",
+        "previous window of equal length: total=2 completed=2 failed=0 cancelled=0 "
+        "interrupted=0 running=0 user_duration_p50=1m30s user_duration_p90=-",
         "cancelled: runs=1 cost=$0.1200 wait_p50=5m00s",
         "errors: 1 (failed model requests=4; details: vbot statistics errors)",
         "  user: runs=6 completed=3 failed=1 cancelled=1 interrupted=1 duration_p50=3m00s "

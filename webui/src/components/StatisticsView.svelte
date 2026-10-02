@@ -263,6 +263,7 @@
           {#if report.overview}
             <OverviewPanel
               section={report.overview}
+              bucket={report.window?.bucket}
               bind:granularity
               bind:metric={overviewMetric}
               onOpenUsage={openUsage}
@@ -275,6 +276,7 @@
           {#if report.usage}
             <UsagePanel
               section={report.usage}
+              bucket={report.window?.bucket}
               bind:dimension={usageDimension}
               bind:granularity
               bind:metric={usageMetric}

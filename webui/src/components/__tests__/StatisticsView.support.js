@@ -76,7 +76,7 @@ function makeRunRow(overrides = {}) {
   };
 }
 
-/** Run outcome counts (`totals`, `runs`, `previous_runs`). */
+/** Run outcome counts (`totals`, `runs`, `previous_runs`, `previous.totals`). */
 function makeRunCounts(overrides = {}) {
   return {
     total: 10,
@@ -133,7 +133,7 @@ function makeOverviewSeries() {
   ];
 }
 
-/** Costs & tokens' day series: full Totals per day. */
+/** Costs & tokens' day series: full Totals and the Runs started per day. */
 function makeUsageSeries() {
   return [
     {
@@ -146,6 +146,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2,
         estimated_cost_usd: 3,
       }),
+      runs: 6,
     },
     {
       date: '2026-06-13',
@@ -157,6 +158,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2.5,
         estimated_cost_usd: 5,
       }),
+      runs: 4,
     },
   ];
 }
@@ -415,6 +417,15 @@ function makeRunsSection(overrides = {}) {
         hour,
         count: hour === 9 ? 3 : 0,
       })),
+    },
+    previous: {
+      totals: makeRunCounts({
+        total: 8,
+        completed: 6,
+        failed: 2,
+        cancelled: 0,
+      }),
+      user: { duration_p50_ms: 40_000, duration_p90_ms: 150_000 },
     },
     ...overrides,
   };

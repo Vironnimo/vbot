@@ -6,6 +6,7 @@
   import Button from '../ui/Button.svelte';
   import DataTable from '../ui/DataTable.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import TrendChart from './TrendChart.svelte';
   import {
     barEntries,
@@ -19,9 +20,9 @@
     formatShare,
     formatTokens,
     insightLines,
-    periodChange,
     shareOf,
     statisticsTabLabel,
+    tileChange,
     tokenTooltip,
     totalTokens,
     usageRowLabel,
@@ -39,6 +40,8 @@
   let {
     section,
     granularity = $bindable(null),
+    // The report's series bucket: `day`, or `hour` for a short window.
+    bucket = 'day',
     metric = $bindable('cost'),
     onOpenUsage = () => {},
     onNavigate = () => {},
@@ -68,12 +71,7 @@
   }
 
   function change(current, before, format, options = {}) {
-    const result = periodChange(current, before, { ...options, locale });
-    if (!result) return null;
-    return {
-      ...result,
-      tooltip: t('statistics.change.previous', { value: format(before) }),
-    };
+    return tileChange(current, before, format, { ...options, locale });
   }
 
   const tiles = $derived([
@@ -305,13 +303,14 @@
     {/each}
   </div>
   {#if !previous && !previousRuns}
-    <p class="stats-note">{t('statistics.overview.noComparison')}</p>
+    <p class="stats-note">{t('statistics.change.noComparison')}</p>
   {/if}
 
   <TrendChart
     series={section.series ?? []}
     bind:metric
     bind:granularity
+    {bucket}
     title={t('statistics.overview.trend')}
   />
 
@@ -320,6 +319,7 @@
       <div class="stats-block__head">
         <h3 class="stats-block__title">
           {t('statistics.overview.costByOrigin')}
+          <InfoHint text={t('statistics.overview.costByOriginHint')} />
         </h3>
         {@render allLink('origin', t('statistics.overview.allOrigins'))}
       </div>

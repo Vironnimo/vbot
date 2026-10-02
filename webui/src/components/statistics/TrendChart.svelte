@@ -1,8 +1,11 @@
 <script>
   // A report series over time: one metric (cost, tokens or Runs) per local
-  // calendar day, week or month, as stacked columns, with the numbers behind
-  // the chart in a collapsed table. The series comes from the server with
-  // every day of the window filled in.
+  // calendar day, week or month, or per hour in a short window, as stacked
+  // columns, with the numbers behind the chart in a collapsed table. The
+  // series comes from the server with every day or hour of the window
+  // filled in; `bucket` says which (the report's `window.bucket`). Rows that
+  // count the Runs started per period show them beside a cost or token
+  // metric, in the tooltip and the table.
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import EmptyState from '../ui/EmptyState.svelte';
   import DataTable from '../ui/DataTable.svelte';
@@ -23,16 +26,25 @@
     series = [],
     metrics = ['cost', 'tokens', 'runs'],
     metric = $bindable('cost'),
-    // null follows the series length (autoGranularity).
+    // null follows the series length (autoGranularity); an hour series
+    // keeps its hours.
     granularity = $bindable(null),
+    bucket = 'day',
     title = '',
   } = $props();
 
   const locale = $derived(activeLocaleTag());
   const activeMetric = $derived(metrics.includes(metric) ? metric : metrics[0]);
-  const period = $derived(granularity ?? autoGranularity(series.length));
+  const hourly = $derived(bucket === 'hour');
+  const period = $derived(
+    hourly ? 'hour' : (granularity ?? autoGranularity(series.length)),
+  );
   const chart = $derived(trendColumns(series, activeMetric, period));
   const segmentIds = $derived(trendSegments(activeMetric));
+  const withRuns = $derived(
+    activeMetric !== 'runs' &&
+      series.some((row) => typeof row?.runs === 'number'),
+  );
 
   const METRIC_LABELS = {
     cost: () => t('statistics.chart.metric.cost'),
@@ -48,6 +60,7 @@
     failed: () => t('statistics.chart.segment.failed'),
   };
   const GRANULARITY_LABELS = {
+    hour: () => t('statistics.granularity.hour'),
     day: () => t('statistics.granularity.day'),
     week: () => t('statistics.granularity.week'),
     month: () => t('statistics.granularity.month'),
@@ -70,10 +83,20 @@
   function columnTooltip(column) {
     return {
       title: `${periodLabel(column, true)} · ${exactText(column.total)}`,
-      rows: column.segments.map((segment) => ({
-        label: SEGMENT_LABELS[segment.id](),
-        value: exactText(segment.value),
-      })),
+      rows: [
+        ...column.segments.map((segment) => ({
+          label: SEGMENT_LABELS[segment.id](),
+          value: exactText(segment.value),
+        })),
+        ...(withRuns
+          ? [
+              {
+                label: METRIC_LABELS.runs(),
+                value: formatInteger(column.row.runs, locale),
+              },
+            ]
+          : []),
+      ],
     };
   }
 
@@ -98,6 +121,17 @@
       sortValue: (column) => column.total,
       format: (column) => exactText(column.total),
     },
+    ...(withRuns
+      ? [
+          {
+            id: 'runs',
+            label: METRIC_LABELS.runs(),
+            align: 'end',
+            sortValue: (column) => column.row.runs ?? 0,
+            format: (column) => formatInteger(column.row.runs, locale),
+          },
+        ]
+      : []),
   ]);
 </script>
 
@@ -122,22 +156,24 @@
           {/each}
         </div>
       {/if}
-      <div
-        class="stats-toggle"
-        role="group"
-        aria-label={t('statistics.granularity.label')}
-      >
-        {#each TREND_GRANULARITIES as id (id)}
-          <button
-            type="button"
-            class="stats-toggle__option"
-            class:stats-toggle__option--active={period === id}
-            aria-pressed={period === id}
-            onclick={() => (granularity = id)}
-            >{GRANULARITY_LABELS[id]()}</button
-          >
-        {/each}
-      </div>
+      {#if !hourly}
+        <div
+          class="stats-toggle"
+          role="group"
+          aria-label={t('statistics.granularity.label')}
+        >
+          {#each TREND_GRANULARITIES as id (id)}
+            <button
+              type="button"
+              class="stats-toggle__option"
+              class:stats-toggle__option--active={period === id}
+              aria-pressed={period === id}
+              onclick={() => (granularity = id)}
+              >{GRANULARITY_LABELS[id]()}</button
+            >
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
   {#if chart.scaleMax === 0}

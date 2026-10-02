@@ -95,7 +95,7 @@ describe('StatisticsView', () => {
     expect(failureChange.classList).toContain('stats-change--down');
     expect(failureChange.classList).toContain('stats-change--good');
     expect(document.body.textContent).not.toContain(
-      t('statistics.overview.noComparison'),
+      t('statistics.change.noComparison'),
     );
     // Where the cost comes from, the largest share first.
     expect(
@@ -135,6 +135,91 @@ describe('StatisticsView', () => {
     await waitForCondition(() => document.querySelector('.stats-limits'));
     expect(reportCalls()).toHaveLength(before);
     expect(document.querySelector('.stats-toolbar')).toBeNull();
+  });
+
+  it('compares the Runs tab with the previous period and names error kinds', async () => {
+    // Only a report with a start has a previous period.
+    rpcMock.mockImplementation(
+      routedRpc(undefined, (params) =>
+        params.since
+          ? makeReport(params.sections)
+          : makeReport(params.sections, {
+              runs: { ...makeReport(['runs']).runs, previous: null },
+            }),
+      ),
+    );
+    const navigation = createStandaloneNavigation(['runs']);
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    await waitForCondition(() => tileText('statistics.runs.failed'));
+
+    const marker = (key, row = '.stats-tile__value-row') =>
+      tileText(key).tile.querySelector(`${row} .stats-change`);
+    expect(marker('statistics.overview.runs').textContent).toContain('25.0%');
+    expect(marker('statistics.runs.completed').textContent).toContain(
+      '5.0 pts',
+    );
+    expect(marker('statistics.runs.cancelled').textContent).toContain('new');
+    // Counts are not judged; a falling failure rate is good news.
+    const failed = marker('statistics.runs.failed');
+    expect(failed.classList).toContain('stats-change--down');
+    expect(failed.classList).toContain('stats-change--neutral');
+    const failureRate = marker(
+      'statistics.runs.failed',
+      '.stats-tile__detail-row',
+    );
+    expect(failureRate.textContent).toContain('15.0 pts');
+    expect(failureRate.classList).toContain('stats-change--good');
+    expect(marker('statistics.runs.yourRuns').textContent).toContain('5.0%');
+    expect(panel().textContent).not.toContain(
+      t('statistics.change.noComparison'),
+    );
+    // Run cost covers only requests inside Runs; error kinds read as names.
+    expect(panel().textContent).toContain(t('statistics.col.runCost'));
+    expect(panel().textContent).toContain(t('statistics.errorKind.rate_limit'));
+
+    buttonNamed('statistics.range.all').click();
+    await waitForCondition(() =>
+      panel().textContent.includes(t('statistics.change.noComparison')),
+    );
+    expect(panel().querySelector('.stats-tiles .stats-change')).toBeNull();
+  });
+
+  it('counts a range of up to two days by the hour in the Settings time zone', async () => {
+    setApplicationTimeZone('Europe/Berlin');
+    const hourly = makeReport(['overview'], {
+      window: {
+        since: '2026-06-12T22:00:00.000000Z',
+        until: null,
+        timezone: 'Europe/Berlin',
+        bucket: 'hour',
+      },
+    });
+    hourly.overview.series = hourly.overview.series.map(
+      ({ date: _date, ...point }, index) => ({
+        hour_start: `2026-06-13T0${8 + index}:00:00.000000Z`,
+        ...point,
+      }),
+    );
+    rpcMock.mockImplementation(
+      routedRpc(undefined, (params) =>
+        params.sections.includes('overview')
+          ? hourly
+          : makeReport(params.sections),
+      ),
+    );
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+
+    // Hours have no Day/Week/Month periods; each reads as its local time.
+    expect(buttonNamed('statistics.granularity.week')).toBeUndefined();
+    expect(
+      [...panel().querySelectorAll('.stats-chart__column')].map((column) =>
+        column.getAttribute('aria-label').split(':').slice(0, 2).join(':'),
+      ),
+    ).toEqual(['Jun 13, 10:00 AM', 'Jun 13, 11:00 AM']);
   });
 
   it('shows a revisited tab from its cache while one request revalidates it', async () => {
@@ -295,6 +380,28 @@ describe('StatisticsView', () => {
     expect(
       reportCalls().filter((params) => params.sections.includes('usage')),
     ).toHaveLength(1);
+  });
+
+  it('lists the Runs started per period beside the Costs & tokens trend', async () => {
+    rpcMock.mockImplementation(routedRpc());
+    const navigation = createStandaloneNavigation(['usage']);
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    await waitForCondition(() => panel()?.querySelector('.stats-trend table'));
+
+    const table = panel().querySelector('.stats-trend table');
+    const headers = [...table.querySelectorAll('th')].map((cell) =>
+      cell.textContent.trim(),
+    );
+    expect(headers.at(-1)).toBe(t('statistics.chart.metric.runs'));
+    // Newest period first: Jun 13 started 4 Runs, Jun 12 six.
+    expect(
+      [...table.querySelectorAll('tbody tr')].map((row) =>
+        row.lastElementChild.textContent.trim(),
+      ),
+    ).toEqual(['4', '6']);
   });
 
   it('lists the insights it knows, links each to its tab and flags an uncertain cost', async () => {
