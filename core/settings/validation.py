@@ -73,6 +73,7 @@ from core.settings.settings import (
     ARCHIVE_RETENTION_DAYS_RULE,
     LIBRARIAN_BOOLEAN_FIELDS,
     LIBRARIAN_DAY_FIELDS,
+    MAX_LIBRARIAN_DAYS,
     NOTIFICATION_FIELDS,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
@@ -1123,6 +1124,8 @@ def _validate_librarian(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             _error(diagnostics, f"$.librarian.{field}", "must be a positive integer")
         elif days <= 0:
             _error(diagnostics, f"$.librarian.{field}", "must be at least 1")
+        elif days > MAX_LIBRARIAN_DAYS:
+            _error(diagnostics, f"$.librarian.{field}", f"must be at most {MAX_LIBRARIAN_DAYS}")
 
 
 def validate_temperature_diagnostic(

@@ -125,9 +125,12 @@ OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9
 OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
 OPENROUTER_MODEL_ID_MAX_LENGTH = 256
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
-# The Librarian section: switches, and day counts that are positive integers.
+# The Librarian section: switches, and day counts from 1 to 3650 (ten years,
+# like archive retention), which keeps every date computed from them valid.
 LIBRARIAN_BOOLEAN_FIELDS = ("enabled", "consolidate")
 LIBRARIAN_DAY_FIELDS = ("interval_days", "archive_after_days")
+MAX_LIBRARIAN_DAYS = 3650
+LIBRARIAN_DAYS_RULE = f"must be an integer from 1 to {MAX_LIBRARIAN_DAYS}"
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -635,7 +638,14 @@ def _parse_librarian_update(librarian: Any) -> JsonObject:
             parsed[field] = librarian[field]
     for field in LIBRARIAN_DAY_FIELDS:
         if field in librarian:
-            parsed[field] = _positive_integer(librarian[field], f"params.librarian.{field}")
+            days = librarian[field]
+            if (
+                isinstance(days, bool)
+                or not isinstance(days, int)
+                or not 1 <= days <= MAX_LIBRARIAN_DAYS
+            ):
+                raise SettingsValidationError(f"params.librarian.{field} {LIBRARIAN_DAYS_RULE}")
+            parsed[field] = days
     return parsed
 
 

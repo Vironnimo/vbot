@@ -525,6 +525,11 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
             id="librarian-fields",
         ),
         pytest.param(
+            {"librarian": {"interval_days": 3651}},
+            [("error", "$.librarian.interval_days", "must be at most 3650")],
+            id="librarian-days-above-maximum",
+        ),
+        pytest.param(
             {"local_models": []},
             [("error", "$.local_models", "must be an object")],
             id="local-models-not-an-object",

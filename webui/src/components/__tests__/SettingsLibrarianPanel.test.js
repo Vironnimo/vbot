@@ -78,13 +78,15 @@ describe('SettingsLibrarianPanel', () => {
     intervalInput().dispatchEvent(new Event('input', { bubbles: true }));
     archiveInput().value = '0';
     archiveInput().dispatchEvent(new Event('input', { bubbles: true }));
+    archiveInput().value = '3651';
+    archiveInput().dispatchEvent(new Event('input', { bubbles: true }));
     consolidateToggle.click();
     flushSync();
     findSaveButton().click();
     flushSync();
     await waitForCondition(() => commits.length === 1);
 
-    // The rejected 0 keeps the last valid archive age.
+    // The rejected 0 and 3651 keep the last valid archive age.
     expect(rpcMock.mock.calls).toEqual([
       [
         'settings.update',

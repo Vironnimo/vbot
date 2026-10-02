@@ -44,6 +44,7 @@ from core.settings.settings import (
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     MAX_ARCHIVE_RETENTION_DAYS,
+    MAX_LIBRARIAN_DAYS,
     MIN_ARCHIVE_RETENTION_DAYS,
     OPENROUTER_ROUTING_MODES,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
@@ -322,6 +323,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Days between scheduled Librarian passes of one Agent.",
         default=LIBRARIAN_SETTING_DEFAULTS["interval_days"],
         minimum=1,
+        maximum=MAX_LIBRARIAN_DAYS,
     ),
     _static(
         "librarian.archive_after_days",
@@ -329,6 +331,7 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         "Days without use after which a pass archives an unpinned background-made Skill.",
         default=LIBRARIAN_SETTING_DEFAULTS["archive_after_days"],
         minimum=1,
+        maximum=MAX_LIBRARIAN_DAYS,
     ),
     _static(
         "librarian.consolidate",

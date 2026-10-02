@@ -281,12 +281,12 @@ export default Object.freeze({
   'settings.librarian.intervalDescription':
     'Days between scheduled passes of one Agent.',
   'settings.librarian.intervalHelp':
-    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. Default: 7.',
+    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. From 1 to 3650 days. Default: 7.',
   'settings.librarian.archiveAfter': 'Retire unused Skills after',
   'settings.librarian.archiveAfterDescription':
     'Days without use or change before a Skill made in the background is retired.',
   'settings.librarian.archiveAfterHelp':
-    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays. Default: 90.',
+    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays. From 1 to 3650 days. Default: 90.',
   'settings.librarian.consolidate': 'Merge overlapping Skills',
   'settings.librarian.consolidateDescription':
     'Each pass lets the Agent merge and correct the Skills it made.',

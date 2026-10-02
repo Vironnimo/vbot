@@ -51,6 +51,8 @@ from core.settings.settings import (
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
     LIBRARIAN_BOOLEAN_FIELDS,
     LIBRARIAN_DAY_FIELDS,
+    LIBRARIAN_DAYS_RULE,
+    MAX_LIBRARIAN_DAYS,
     NOTIFICATION_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
@@ -508,10 +510,12 @@ def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
         value = section.get(key)
         if value is None:
             value = LIBRARIAN_SETTING_DEFAULTS[key]
-        elif not isinstance(value, int) or isinstance(value, bool):
-            raise StorageError(f"Librarian setting {key} must be an integer")
-        elif value <= 0:
-            raise StorageError(f"Librarian setting {key} must be positive")
+        elif (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= MAX_LIBRARIAN_DAYS
+        ):
+            raise StorageError(f"Librarian setting {key} {LIBRARIAN_DAYS_RULE}")
         normalized[key] = value
     return normalized
 

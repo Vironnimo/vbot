@@ -483,7 +483,11 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"librarian": {"consolidate": 1}}, "params.librarian.consolidate must be a boolean"),
         (
             {"librarian": {"archive_after_days": 0}},
-            "params.librarian.archive_after_days must be a positive integer",
+            "params.librarian.archive_after_days must be an integer from 1 to 3650",
+        ),
+        (
+            {"librarian": {"interval_days": 3651}},
+            "params.librarian.interval_days must be an integer from 1 to 3650",
         ),
         ({"local_models": []}, "params.local_models must be an object"),
         ({"local_models": {}}, "params.local_models requires context_windows"),
@@ -588,7 +592,11 @@ def test_stored_librarian_section_fills_defaults() -> None:
         (normalize_librarian_settings, "on", "Expected settings.librarian to be an object"),
         (normalize_librarian_settings, {"consolidate": "yes"}, "consolidate must be a boolean"),
         (normalize_librarian_settings, {"interval_days": 1.5}, "interval_days must be an integer"),
-        (normalize_librarian_settings, {"archive_after_days": 0}, "must be positive"),
+        (
+            normalize_librarian_settings,
+            {"archive_after_days": 3651},
+            "archive_after_days must be an integer from 1 to 3650",
+        ),
         (
             normalize_notification_settings,
             {"update_result": 1},

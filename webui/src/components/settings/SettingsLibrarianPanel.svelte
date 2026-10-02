@@ -27,10 +27,16 @@
   });
   const SWITCH_FIELDS = ['enabled', 'consolidate'];
   const DAY_FIELDS = ['interval_days', 'archive_after_days'];
+  const MIN_DAYS = 1;
+  const MAX_DAYS = 3650;
 
-  function positiveIntegerOr(value, fallback) {
+  function validDays(value) {
+    return Number.isInteger(value) && value >= MIN_DAYS && value <= MAX_DAYS;
+  }
+
+  function daysOr(value, fallback) {
     const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed >= 1 ? parsed : fallback;
+    return validDays(parsed) ? parsed : fallback;
   }
 
   function getLibrarianSettings(rawSettings) {
@@ -42,7 +48,7 @@
           ? librarian[field]
           : LIBRARIAN_SETTING_DEFAULTS[field];
     for (const field of DAY_FIELDS)
-      result[field] = positiveIntegerOr(
+      result[field] = daysOr(
         librarian[field],
         LIBRARIAN_SETTING_DEFAULTS[field],
       );
@@ -121,7 +127,7 @@
       return;
     }
     const numberValue = Number(next);
-    if (Number.isInteger(numberValue) && numberValue >= 1) {
+    if (validDays(numberValue)) {
       librarianSettings = { ...librarianSettings, [field]: numberValue };
       onError('');
     }
@@ -179,7 +185,8 @@
       <TextField
         id="settings-librarian-interval"
         type="number"
-        min="1"
+        min={MIN_DAYS}
+        max={MAX_DAYS}
         step="1"
         value={librarianSettings.interval_days}
         ariaLabel={t('settings.librarian.interval')}
@@ -202,7 +209,8 @@
       <TextField
         id="settings-librarian-archive-after"
         type="number"
-        min="1"
+        min={MIN_DAYS}
+        max={MAX_DAYS}
         step="1"
         value={librarianSettings.archive_after_days}
         ariaLabel={t('settings.librarian.archiveAfter')}
