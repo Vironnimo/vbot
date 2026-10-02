@@ -11,7 +11,12 @@ from __future__ import annotations
 from collections import Counter
 
 from core.statistics._accumulators import ReportLedger, _ModelAcc, _ProviderAcc
-from core.statistics._cache import CacheFacts, load_cache_facts
+from core.statistics._cache import (
+    TOP_CACHE_BREAK_INCIDENTS,
+    CacheFacts,
+    cache_section,
+    load_cache_facts,
+)
 from core.statistics._projection import (
     CACHE_SQL,
     CALL_KIND_CHAT,
@@ -20,21 +25,13 @@ from core.statistics._projection import (
 )
 from core.statistics._units import UnitScan
 from core.statistics.report import (
-    CacheSection,
     ModelUsage,
     ProviderUsage,
-    SuspectedCacheBreaks,
     UsageDailyPoint,
     UsageKind,
     UsageSection,
     UsageTotals,
 )
-
-TOP_CACHE_SESSIONS = 20
-
-
-TOP_CACHE_BREAK_INCIDENTS = 20
-
 
 # Token sums over ``stat_calls`` rows aliased ``c``, shared by every section
 # that reports call tokens.
@@ -218,7 +215,7 @@ class UsageAccumulator:
                 )
                 for date, bucket in ledger.sorted_daily()
             ],
-            cache=self._build_cache(),
+            cache=cache_section(self.cache),
             kinds=[
                 UsageKind(
                     kind,
@@ -229,22 +226,6 @@ class UsageAccumulator:
                 )
                 for kind, counts in sorted(self.kinds.items())
             ],
-        )
-
-    def _build_cache(self) -> CacheSection:
-        # Worst hit rate first; equal rates surface the bigger session (more
-        # tokens paid) before the smaller one.
-        sessions = sorted(
-            self.cache.sessions,
-            key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
-        )[:TOP_CACHE_SESSIONS]
-        return CacheSection(
-            lowest_hit_rate_sessions=sessions,
-            suspected_breaks=SuspectedCacheBreaks(
-                evaluated_turns=self.cache.evaluated_turns,
-                suspected_turns=self.cache.suspected_turns,
-                incidents=self.cache.incidents,
-            ),
         )
 
 

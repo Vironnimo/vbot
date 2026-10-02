@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -16,16 +15,16 @@ from core.database import DatabaseUnavailableError
 from core.models.pricing import TokenPricing
 from core.runs import Run, RunExecutionOwner
 from core.sessions import ChatSessionManager, SessionAddress
-from core.sessions._types import SessionRunAdmission
 from core.statistics._projection import datetime_instant
 from core.statistics.index import IndexView, StatisticsIndex, StatisticsScope
 from core.tools import tool_failure, tool_success
 from core.usage import UsageRecorder
-from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
+    _admit,
     _assistant,
+    _call,
     _compaction,
     _run_summary,
     _tool,
@@ -53,31 +52,8 @@ _ADDRESSES = {
 }
 
 
-@pytest.fixture
-def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[UsageRecorder]:
-    """A durable Usage ledger whose calls all start at BASE."""
-    recorder = UsageRecorder(tmp_path / "model-usage.db")
-    monkeypatch.setattr(
-        "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
-    )
-    yield recorder
-    recorder.close()
-
-
 def _at(seconds: float) -> datetime:
     return BASE + timedelta(seconds=seconds)
-
-
-def _admit(
-    manager: ChatSessionManager, address: SessionAddress, run_id: str, kind: str = "user"
-) -> None:
-    """Admit a Run of ``kind`` started at BASE; ``seed_history`` then writes and ends it."""
-    manager._store.admit_run(
-        address,
-        SessionRunAdmission(
-            run_id=run_id, run_kind=kind, started_at=format_canonical_timestamp(BASE)
-        ),
-    )
 
 
 def _scopes(manager: ChatSessionManager) -> tuple[StatisticsScope, ...]:
@@ -137,31 +113,6 @@ def _unavailable(*_args: Any, **_kwargs: Any) -> Any:
 
 def _runs(rows: Rows) -> dict[tuple[str, str], Row]:
     return {(row["address"][2], row["run_id"]): row for row in rows["agg_runs"]}
-
-
-async def _call(
-    ledger: UsageRecorder,
-    usage: dict[str, Any] | None,
-    *,
-    kind: str = "chat",
-    model: str = "chat/m",
-    address: SessionAddress | None = None,
-    run_id: str | None = None,
-    owner_name: str | None = None,
-    status: str = "completed",
-) -> str:
-    call = await ledger.start(
-        model=model,
-        kind=kind,
-        agent_id=None if address is None else address.agent_id,
-        project_id=None if address is None else address.project_id,
-        session_id=None if address is None else address.session_id,
-        run_id=run_id,
-        owner_name=owner_name,
-        group_id=None if owner_name is None else "group",
-    )
-    await ledger.finish(call, usage, status=status)
-    return call
 
 
 def _move_call(ledger: UsageRecorder, call_id: str, address: SessionAddress, run_id: str) -> None:
@@ -477,8 +428,17 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
         await _call(
             ledger,
             {"input_tokens": 200, "output_tokens": 50, "reported_cost_usd": 1.5},
+            kind="session_title",
             model="d/model",
             address=session.address,
+            run_id="run",
+        )
+        # An in-flight request counts as a request, never as a failed one.
+        await ledger.start(
+            model="d/model",
+            kind="chat",
+            agent_id="main",
+            session_id="session",
             run_id="run",
         )
     prices: Prices = {"b/model": TokenPricing.from_cost({"input": 1, "output": 1}, source="t")}
@@ -505,7 +465,7 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
         "tool_ms": 300,
         "compactions": 1,
         "errors": 1,
-        "calls": 2,
+        "calls": 2 if source == "saved" else 3,
     }
     assert (run["changed_files"], run["lines_added"], run["lines_removed"]) == (2, 10, 4)
     requests = {key: run[key] for key in list(run)[21:]}
@@ -527,6 +487,7 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "unpriced_calls": 0,
             "primary_model": "b/model",
             "models": '["b/model","a/model"]',
+            "kinds": '["chat"]',
         }
         assert run["failed_calls"] == 0
     else:
@@ -542,9 +503,10 @@ async def test_a_run_row_sums_its_steps_tools_and_requests(
             "cache_calls": 0,
             "reported_nusd": 1_500_000_000,
             "estimated_nusd": 0,
-            "unpriced_calls": 1,
+            "unpriced_calls": 2,
             "primary_model": "c/model",
             "models": '["c/model","d/model"]',
+            "kinds": '["chat","session_title"]',
         }
         assert run["failed_calls"] == 1
 

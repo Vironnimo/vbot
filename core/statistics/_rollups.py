@@ -79,6 +79,7 @@ CREATE TABLE agg_runs (
     unpriced_calls INTEGER NOT NULL,
     primary_model TEXT,
     models TEXT NOT NULL,
+    kinds TEXT NOT NULL,
     changed_files INTEGER,
     lines_added INTEGER,
     lines_removed INTEGER,
@@ -313,7 +314,8 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     )
 
 
-def _run_origin(session: str, run_kind: str) -> str:
+def run_origin_sql(session: str, run_kind: str) -> str:
+    """The origin of a Run of ``run_kind`` in the ``stat_sessions`` row ``session``."""
     return (
         f"CASE WHEN {session}.owner_name <> '' THEN 'extension' "
         f"WHEN {run_kind} = 'subagent' OR {session}.is_subagent = 1 THEN 'subagent' "
@@ -326,13 +328,24 @@ def _run_origin(session: str, run_kind: str) -> str:
     )
 
 
-def _session_origin(session: str) -> str:
+def session_origin_sql(session: str) -> str:
+    """The origin of Session-level work in the ``stat_sessions`` row ``session``."""
     return (
         f"CASE WHEN {session}.owner_name <> '' THEN 'extension' "
         f"WHEN {session}.is_subagent = 1 THEN 'subagent' ELSE 'user' END"
     )
 
 
+# The origin of a ledger request: ``r`` its record, ``c`` its call, ``u`` its
+# unit, and the LEFT JOINed ``s`` (the Session at the unit's address) and
+# ``rr`` (that Session's Run record of the request's Run id).
+USAGE_ORIGIN_SQL = f"""CASE WHEN u.owner_name <> '' THEN 'extension'
+    WHEN rr.run_id IS NOT NULL THEN {run_origin_sql("s", "rr.run_kind")}
+    WHEN s.owner_name <> '' OR s.is_subagent = 1
+        OR c.purpose IN ('chat', 'compaction') THEN {session_origin_sql("s")}
+    ELSE 'background' END"""
+# A failed attempt: a finished ledger request that did not complete.
+FAILED_STATUS_SQL = "r.status NOT IN ('completed', 'started')"
 _HOUR = f"r.instant / {MICROSECONDS_PER_HOUR}"
 _NUSD = "CAST(ROUND(c.cost_usd * 1000000000) AS INTEGER)"
 # Catalog-priced calls that report usage but no cache counter.
@@ -353,8 +366,9 @@ _CALL_MEASURES = f"""
     SUM(CASE WHEN c.cost_source = 2 THEN {_NUSD} ELSE 0 END),
     SUM(c.cost_source = 0)
 """
-# Positions in a per-Model row: key, run id, Model, has Model, first use, failed calls.
-_MODEL_KEY, _HAS_MODEL, _FIRST_USE, _FAILED, _MEASURES = 2, 3, 4, 5, 6
+# Positions in a per-Model and purpose row: key, run id, Model, has Model,
+# purpose, first use, failed calls, measures.
+_MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _FAILED, _MEASURES = 2, 3, 4, 5, 6, 7
 _INPUT = _MEASURES + 1
 
 _RUN_COLUMNS = (
@@ -364,7 +378,7 @@ _RUN_COLUMNS = (
     "failed_calls, input_tokens, estimated_input_tokens, output_tokens, "
     "estimated_output_tokens, reasoning_tokens, cache_read_tokens, cache_write_tokens, "
     "cache_input_tokens, cache_calls, reported_nusd, estimated_nusd, unpriced_calls, "
-    "primary_model, models, changed_files, lines_added, lines_removed"
+    "primary_model, models, kinds, changed_files, lines_added, lines_removed"
 )
 _NO_CALLS = (0,) * 14
 
@@ -372,7 +386,7 @@ _NO_CALLS = (0,) * 14
 def _recompute_runs(connection: sqlite3.Connection) -> None:
     runs = connection.execute(
         f"""
-        SELECT d.session_key, d.run_id, {_run_origin("s", "rr.run_kind")}, rr.run_kind,
+        SELECT d.session_key, d.run_id, {run_origin_sql("s", "rr.run_kind")}, rr.run_kind,
             rr.status, rr.completion_reason, rr.start_instant, rr.end_instant, rr.duration_ms,
             rr.iteration_count, rr.changed_files, rr.lines_added, rr.lines_removed
         FROM temp.rollup_runs d
@@ -403,26 +417,26 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
     ledger = _model_rows(
         connection,
         f"""
-        SELECT d.session_key, d.run_id, c.model_key, c.has_model, MIN(c.instant),
-            SUM(r.status <> 'completed'), {_CALL_MEASURES}
+        SELECT d.session_key, d.run_id, c.model_key, c.has_model, c.purpose, MIN(c.instant),
+            SUM({FAILED_STATUS_SQL}), {_CALL_MEASURES}
         FROM temp.rollup_runs d
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
         CROSS JOIN stat_usage_units u ON u.project_id = s.project_id
             AND u.agent_id = s.agent_id AND u.session_id = s.session_id
         CROSS JOIN stat_usage_records r ON r.session_key = u.session_key AND r.run_id = d.run_id
         CROSS JOIN stat_usage_calls c ON c.session_key = r.session_key AND c.seq = r.seq
-        GROUP BY d.session_key, d.run_id, c.model_key, c.has_model
+        GROUP BY d.session_key, d.run_id, c.model_key, c.has_model, c.purpose
         """,
     )
     saved = _model_rows(
         connection,
         f"""
-        SELECT d.session_key, d.run_id, c.model_key, c.has_model, MIN(c.instant), 0,
+        SELECT d.session_key, d.run_id, c.model_key, c.has_model, c.purpose, MIN(c.instant), 0,
             {_CALL_MEASURES}
         FROM temp.rollup_runs d
         CROSS JOIN stat_records r ON r.session_key = d.session_key AND r.run_id = d.run_id
         CROSS JOIN stat_calls c ON c.session_key = r.session_key AND c.seq = r.seq
-        GROUP BY d.session_key, d.run_id, c.model_key, c.has_model
+        GROUP BY d.session_key, d.run_id, c.model_key, c.has_model, c.purpose
         """,
     )
     rows = []
@@ -476,30 +490,38 @@ def _model_rows(
 
 
 def _run_usage(models: list[tuple[Any, ...]]) -> tuple[Any, ...]:
-    """Sum a Run's per-Model request rows; name its Models by first use.
+    """Sum a Run's per-Model and purpose request rows; name its Models by first use.
 
-    The primary Model is the one with the most input tokens (ties by name).
+    The primary Model is the one with the most input tokens (ties by name);
+    ``kinds`` lists the distinct request purposes by name.
     """
     if not models:
-        return (*_NO_CALLS, None, "[]")
+        return (*_NO_CALLS, None, "[]", "[]")
     sums = [sum(row[index] for row in models) for index in range(_MEASURES, len(models[0]))]
     failed = sum(row[_FAILED] for row in models)
-    named = [row for row in models if row[_HAS_MODEL]]
-    ordered = sorted(named, key=lambda row: (row[_FIRST_USE], row[_MODEL_KEY]))
-    primary = min(named, key=lambda row: (-row[_INPUT], row[_MODEL_KEY]), default=None)
+    first_use: dict[str, int] = {}
+    inputs: dict[str, int] = {}
+    for row in models:
+        if row[_HAS_MODEL]:
+            key = row[_MODEL_KEY]
+            first_use[key] = min(first_use.get(key, row[_FIRST_USE]), row[_FIRST_USE])
+            inputs[key] = inputs.get(key, 0) + row[_INPUT]
+    primary = min(inputs, key=lambda key: (-inputs[key], key), default=None)
+    ordered = sorted(first_use, key=lambda key: (first_use[key], key))
     return (
         sums[0],
         failed,
         *sums[1:],
-        None if primary is None else primary[_MODEL_KEY],
-        json.dumps(list(dict.fromkeys(row[_MODEL_KEY] for row in ordered)), separators=(",", ":")),
+        primary,
+        json.dumps(ordered, separators=(",", ":")),
+        json.dumps(sorted({row[_PURPOSE] for row in models}), separators=(",", ":")),
     )
 
 
 def _recompute_tools(connection: sqlite3.Connection) -> None:
     origin = (
-        f"CASE WHEN rr.run_id IS NOT NULL THEN {_run_origin('s', 'rr.run_kind')} "
-        f"ELSE {_session_origin('s')} END"
+        f"CASE WHEN rr.run_id IS NOT NULL THEN {run_origin_sql('s', 'rr.run_kind')} "
+        f"ELSE {session_origin_sql('s')} END"
     )
     source = """
         FROM temp.rollup_tool_sessions d
@@ -544,11 +566,7 @@ def _recompute_usage(connection: sqlite3.Connection) -> None:
             estimated_token_calls
         )
         SELECT {_HOUR} AS hour, r.session_key,
-            CASE WHEN u.owner_name <> '' THEN 'extension'
-                WHEN rr.run_id IS NOT NULL THEN {_run_origin("s", "rr.run_kind")}
-                WHEN s.owner_name <> '' OR s.is_subagent = 1
-                    OR c.purpose IN ('chat', 'compaction') THEN {_session_origin("s")}
-                ELSE 'background' END AS origin,
+            {USAGE_ORIGIN_SQL} AS origin,
             c.model_key, c.purpose, r.status,
             {_CALL_MEASURES},
             SUM({REASONING_SQL}),

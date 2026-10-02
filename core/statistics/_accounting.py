@@ -43,6 +43,7 @@ CREATE TABLE stat_usage_records (
     status TEXT NOT NULL
 );
 CREATE INDEX stat_usage_records_run ON stat_usage_records(session_key, run_id);
+CREATE INDEX stat_usage_records_instant ON stat_usage_records(instant);
 CREATE TABLE stat_usage_calls {CALL_TABLE_DEFINITION};
 CREATE INDEX stat_usage_calls_window ON stat_usage_calls(session_key, instant);
 CREATE INDEX stat_usage_calls_retrospective

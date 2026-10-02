@@ -2,16 +2,15 @@
 
 Extension participant Sessions feed every ordinary report section under one
 reserved actor key per owner (``extension:<name>``) instead of their synthetic
-participant Agent ids. The same aggregation pass also fills one slice per
-participant Session; this module rolls those slices up into groups and owners
-for the ``extensions`` report section, so its figures always agree with the
-report totals they are part of.
+participant Agent ids. The ``extensions`` section fills one slice per
+participant Session from the same aggregates and facts; this module rolls
+those slices up into groups and owners.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from core.statistics._costs import CostTotals
@@ -24,7 +23,7 @@ from core.utils.timestamps import parse_canonical_timestamp
 EXTENSION_ACTOR_PREFIX = "extension:"
 
 # Groups per owner, most recently active first; bounds the serialized report.
-TOP_EXTENSION_GROUPS = 100
+TOP_EXTENSION_GROUPS = 25
 
 
 def extension_actor_key(owner_name: str) -> str:
@@ -48,9 +47,12 @@ class ExtensionSliceKey:
 
 @dataclass
 class ExtensionSlice:
-    """Mutable in-window activity of one participant Session."""
+    """Mutable in-window activity of one participant Session.
 
-    records: int = 0
+    ``calls`` counts its requests by cost coverage with nano-USD amounts in
+    ``reported_nusd`` and ``estimated_nusd``, so rolled-up costs are exact.
+    """
+
     runs: int = 0
     status: Counter[str] = field(default_factory=Counter)
     errors: int = 0
@@ -60,11 +62,12 @@ class ExtensionSlice:
     measured_output_tokens: int = 0
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
-    costs: CostTotals = field(default_factory=CostTotals)
+    calls: CostTotals = field(default_factory=CostTotals)
+    reported_nusd: int = 0
+    estimated_nusd: int = 0
     last_activity: str | None = None
 
     def merge(self, other: ExtensionSlice) -> None:
-        self.records += other.records
         self.runs += other.runs
         self.status.update(other.status)
         self.errors += other.errors
@@ -74,7 +77,9 @@ class ExtensionSlice:
         self.measured_output_tokens += other.measured_output_tokens
         self.estimated_input_tokens += other.estimated_input_tokens
         self.estimated_output_tokens += other.estimated_output_tokens
-        self.costs.merge(other.costs)
+        self.calls.merge(other.calls)
+        self.reported_nusd += other.reported_nusd
+        self.estimated_nusd += other.estimated_nusd
         if other.last_activity is not None:
             self.last_activity = _max_timestamp(self.last_activity, other.last_activity)
 
@@ -174,9 +179,15 @@ class ExtensionUsageAccumulator:
                             activity=_activity(participant, sessions=1),
                         )
                     )
-                # A window hides groups without in-window activity; all-time
-                # reporting keeps every retained group, including idle ones.
-                if self._windowed and group_total.records == 0 and group_total.model_calls == 0:
+                # A window hides groups without in-window Runs, Tool calls,
+                # Model calls or errors; all-time reporting keeps every
+                # retained group, including idle ones.
+                if self._windowed and not (
+                    group_total.runs
+                    or group_total.tool_calls
+                    or group_total.model_calls
+                    or group_total.errors
+                ):
                     continue
                 owner_total.merge(group_total)
                 owner_sessions += len(participants)
@@ -222,7 +233,11 @@ def _activity(value: ExtensionSlice, *, sessions: int) -> ExtensionActivity:
         measured_output_tokens=value.measured_output_tokens,
         estimated_input_tokens=value.estimated_input_tokens,
         estimated_output_tokens=value.estimated_output_tokens,
-        costs=CostTotals(**vars(value.costs)),
+        costs=replace(
+            value.calls,
+            reported_usd=value.reported_nusd / 1e9 if value.calls.reported_calls else None,
+            estimated_usd=value.estimated_nusd / 1e9 if value.calls.estimated_calls else None,
+        ),
         last_activity=value.last_activity,
     )
 

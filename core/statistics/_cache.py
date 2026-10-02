@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from core.statistics._units import UnitScan, max_timestamp_sql
 from core.statistics.report import (
     CacheBreakIncident,
+    CacheSection,
     SessionCacheUsage,
+    SuspectedCacheBreaks,
 )
 
 # Prompt-cache-break heuristic (best-effort, derived — the cache-side sibling of
@@ -39,6 +41,9 @@ MIN_CACHE_SESSION_TURNS = 2
 
 
 _MICROSECONDS_PER_SECOND = 1_000_000
+
+TOP_CACHE_SESSIONS = 20
+TOP_CACHE_BREAK_INCIDENTS = 20
 
 
 @dataclass
@@ -189,3 +194,21 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
             )
         )
     return facts
+
+
+def cache_section(facts: CacheFacts) -> CacheSection:
+    """The cache view: the lowest hit rates and the suspected breaks of ``facts``."""
+    # Worst hit rate first; equal rates surface the bigger session (more
+    # tokens paid) before the smaller one.
+    sessions = sorted(
+        facts.sessions,
+        key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
+    )[:TOP_CACHE_SESSIONS]
+    return CacheSection(
+        lowest_hit_rate_sessions=sessions,
+        suspected_breaks=SuspectedCacheBreaks(
+            evaluated_turns=facts.evaluated_turns,
+            suspected_turns=facts.suspected_turns,
+            incidents=facts.incidents,
+        ),
+    )

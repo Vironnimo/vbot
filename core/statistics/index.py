@@ -139,6 +139,7 @@ CREATE TABLE stat_tools (
     latency_bucket INTEGER,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+CREATE INDEX stat_tools_rejected ON stat_tools(instant) WHERE outcome = 0;
 CREATE TABLE stat_errors (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,

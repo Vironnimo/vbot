@@ -22,7 +22,7 @@ from core.statistics.index import (
     StatisticsIndex,
     StatisticsUnavailableError,
 )
-from core.statistics.report import RunActivityReport, StatisticsReport
+from core.statistics.report import JsonObject, RunActivityReport
 from core.tools import tool_success
 from tests.core.sessions.history_fixtures import complete_run, seed_history
 from tests.core.statistics.statistics_test_support import (
@@ -103,9 +103,30 @@ def _make_index_file_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _without_generated_at(result: Any) -> dict[str, Any]:
-    values = asdict(result)
+    values = dict(result) if isinstance(result, dict) else asdict(result)
     values.pop("generated_at")
     return values
+
+
+def _runs(report: JsonObject) -> int:
+    total: int = report["runs"]["totals"]["total"]
+    return total
+
+
+def _run_states(report: JsonObject) -> tuple[int, int]:
+    """Completed and still-running Runs."""
+    totals = report["runs"]["totals"]
+    return totals["completed"], totals["running"]
+
+
+def _run_input_tokens(report: JsonObject) -> int:
+    """The saved input tokens the index attributes to the reported Runs."""
+    return sum(row["input_tokens"] for row in report["runs"]["longest"])
+
+
+def _assistant_messages(report: JsonObject) -> int:
+    count: int = report["diagnostics"]["roles"]["chat_messages_by_role"]["assistant"]
+    return count
 
 
 # -- Identity and reuse -------------------------------------------------------
@@ -127,7 +148,7 @@ def test_a_corrupt_kernel_projection_is_discarded_and_rebuilt_once(
 
     report = statistics().report()
 
-    assert report.overview.total_runs == 1
+    assert _runs(report) == 1
     assert _index_identity(tmp_path).items() >= expected_identity.items()
     assert _count(tmp_path, "stat_sessions") == 1
 
@@ -151,12 +172,12 @@ def test_persisted_index_serves_every_service_and_reads_only_appended_messages(
 
     # A restarted service and a repeated report reuse the persisted projection.
     second = statistics()
-    assert second.report().overview.total_runs == 1
-    assert first.report().usage.totals.measured_input_tokens == 10
+    assert _runs(second.report()) == 1
+    assert _run_input_tokens(first.report()) == 10
     assert reads == []
 
     _append_run(session, "run-two", minutes=1, input_tokens=5)
-    assert second.report().overview.total_runs == 2
+    assert _runs(second.report()) == 2
     # Only the appended part is read, continuing from the stored cursor.
     assert [(session_id, cursor is not None) for session_id, cursor in reads] == [
         ("session-one", True)
@@ -166,8 +187,8 @@ def test_persisted_index_serves_every_service_and_reads_only_appended_messages(
     report = first.report()
     # The other service's update is already in the shared index.
     assert reads == []
-    assert report.overview.total_runs == 2
-    assert report.usage.totals.measured_input_tokens == 15
+    assert _runs(report) == 2
+    assert _run_input_tokens(report) == 15
 
 
 def test_metadata_change_updates_index_without_loading_transcript(
@@ -193,11 +214,11 @@ def test_every_report_reads_the_index_instead_of_a_retained_projection(
     tmp_path: Path, session: ChatSession, statistics: StatisticsFactory
 ) -> None:
     service = statistics()
-    assert service.report().usage.totals.measured_input_tokens == 10
+    assert _run_input_tokens(service.report()) == 10
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection, connection:
-        connection.execute("UPDATE stat_calls SET input_tokens = 42")
+        connection.execute("UPDATE agg_runs SET input_tokens = 42")
 
-    assert service.report().usage.totals.measured_input_tokens == 42
+    assert _run_input_tokens(service.report()) == 42
 
 
 def test_unchanged_index_read_performs_no_write(
@@ -240,8 +261,8 @@ def test_index_projection_does_not_store_large_or_sensitive_message_content(
 
     report = statistics().report()
 
-    assert report.overview.chat_messages_by_role["assistant"] == 1
-    assert report.tools.tools[0].successes == 1
+    assert _assistant_messages(report) == 1
+    assert report["tools"]["tools"][0]["accepted"] == 1
     stored = _index_dump(tmp_path)
     assert secret_text not in stored
     assert "reasoning" not in stored
@@ -275,10 +296,15 @@ def test_replaced_canonical_session_rebuilds_only_that_projection(
 
     # The replaced Session is rebuilt from its start; the other one is not read.
     assert reads == [(session.id, None)]
-    assert report.overview.total_runs == 2
-    assert report.overview.run_status.failed == 1
-    assert report.overview.run_status.completed == 1
-    assert report.usage.totals.measured_input_tokens == 99 + 7
+    assert report["runs"]["totals"] == {
+        "total": 2,
+        "completed": 1,
+        "failed": 1,
+        "cancelled": 0,
+        "interrupted": 0,
+        "running": 0,
+    }
+    assert _run_input_tokens(report) == 99 + 7
 
 
 def test_history_edit_rebuilds_the_projection_and_keeps_superseded_spend(
@@ -306,8 +332,8 @@ def test_history_edit_rebuilds_the_projection_and_keeps_superseded_spend(
     # The edit ends the stored cursor, so the Session is rebuilt from its start.
     assert reads[-1] == (session.id, None)
     # The edited-away Run and its Usage were really spent and stay counted.
-    assert report.overview.total_runs == 2
-    assert report.usage.totals.measured_input_tokens == 17
+    assert _runs(report) == 2
+    assert _run_input_tokens(report) == 17
 
 
 def test_deleted_session_is_pruned_from_index(
@@ -321,7 +347,8 @@ def test_deleted_session_is_pruned_from_index(
 
     manager.delete(session.address)
 
-    assert service.report().overview.total_sessions == 0
+    report = service.report()
+    assert (_runs(report), report["overview"]["active_sessions"]) == (0, 0)
     for table in ("stat_sessions", *SESSION_FACT_TABLES):
         assert _count(tmp_path, table) == 0
 
@@ -350,8 +377,7 @@ def test_all_statistics_reads_skip_sessions_deleted_after_listing(
     monkeypatch.setattr(manager, "list_history_versions", delete_after_listing)
     if projection == "report":
         result = service.report()
-        assert result.overview.total_sessions == 0
-        assert result.overview.total_runs == 0
+        assert (_runs(result), result["overview"]["active_sessions"]) == (0, 0)
     else:
         activity = service.run_activity(since=BASE, until=BASE + timedelta(minutes=1))
         assert activity.total_runs == 0
@@ -378,9 +404,10 @@ def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(
         ],
     )
     forked = service.report()
-    assert forked.overview.total_sessions == 2
-    assert forked.overview.total_runs == 1
-    assert forked.usage.totals.measured_input_tokens == 17
+    # The inherited Run counts once, beside the fork's own still-open Run.
+    assert _run_states(forked) == (1, 1)
+    # The origin's step and the fork's own step; the copied history is not the fork's.
+    assert _assistant_messages(forked) == 2
     reads = _record_canonical_reads(monkeypatch)
 
     # Deleting the origin copies the history the fork shows into the fork and
@@ -399,11 +426,10 @@ def test_fork_history_counts_once_and_leaves_with_its_deleted_origin(
             "SELECT history_revision FROM stat_sessions WHERE session_id = ?", (fork.id,)
         ).fetchone()
     assert stored[0] == revision
-    assert after_delete.overview.total_sessions == 1
-    # The copied prefix is not the fork's own spend; the origin's usage left
-    # with the deleted origin.
-    assert after_delete.overview.total_runs == 0
-    assert after_delete.usage.totals.measured_input_tokens == 7
+    # The copied prefix is not the fork's own work; the origin's Run and step
+    # left with the deleted origin.
+    assert _run_states(after_delete) == (0, 1)
+    assert _assistant_messages(after_delete) == 1
 
 
 def test_index_file_and_transient_projection_agree_on_forks_windows_and_run_activity(
@@ -417,9 +443,9 @@ def test_index_file_and_transient_projection_agree_on_forks_windows_and_run_acti
     # Index the fork before it writes anything: it inherits the source's Run
     # without contributing it, and its own later work extends that projection.
     just_forked = service.report()
-    assert just_forked.overview.total_sessions == 2
-    assert just_forked.overview.total_runs == 1
-    assert just_forked.usage.totals.measured_input_tokens == 10
+    assert _runs(just_forked) == 1
+    assert _run_input_tokens(just_forked) == 10
+    assert _assistant_messages(just_forked) == 1
     seed_history(
         fork,
         [
@@ -442,16 +468,16 @@ def test_index_file_and_transient_projection_agree_on_forks_windows_and_run_acti
             ),
         ],
     )
-    window = {"since": BASE, "until": BASE + timedelta(seconds=4)}
-    indexed_report = _without_generated_at(service.report(**window))
-    indexed_activity = _without_generated_at(service.run_activity(**window))
-    assert indexed_report["overview"]["total_runs"] == 2
+    since, until = BASE, BASE + timedelta(seconds=4)
+    indexed_report = _without_generated_at(service.report(since=since, until=until))
+    indexed_activity = _without_generated_at(service.run_activity(since=since, until=until))
+    assert _runs(indexed_report) == 2
     assert indexed_activity["total_runs"] == 2
 
     _make_index_file_unavailable(monkeypatch)
 
-    assert _without_generated_at(service.report(**window)) == indexed_report
-    assert _without_generated_at(service.run_activity(**window)) == indexed_activity
+    assert _without_generated_at(service.report(since=since, until=until)) == indexed_report
+    assert _without_generated_at(service.run_activity(since=since, until=until)) == indexed_activity
 
 
 # -- Failure policy -----------------------------------------------------------
@@ -513,11 +539,11 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection, connection:
         for statement in stale_shape:
             connection.execute(statement)
-        connection.execute("UPDATE stat_calls SET input_tokens = 42")
+        connection.execute("UPDATE agg_runs SET input_tokens = 42")
 
     report = statistics().report()
 
-    assert report.usage.totals.measured_input_tokens == 10
+    assert _run_input_tokens(report) == 10
     assert _index_identity(tmp_path)["projection_version"] == "3"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         error_columns = {
@@ -553,7 +579,7 @@ def test_busy_index_raises_retryable_error_without_discarding(
 
     report = service.report()
 
-    assert report.usage.totals.measured_input_tokens == 15
+    assert _run_input_tokens(report) == 15
     # The retained index is extended from its cursor, not rebuilt.
     assert [cursor is not None for _session_id, cursor in reads] == [True]
 
@@ -597,7 +623,7 @@ def test_async_reads_run_on_the_index_worker_pool_and_are_unavailable_after_clos
 
     monkeypatch.setattr(StatisticsIndex, "read", read)
 
-    async def scenario() -> tuple[StatisticsReport, RunActivityReport]:
+    async def scenario() -> tuple[JsonObject, RunActivityReport]:
         report = await service.report_async()
         activity = await service.run_activity_async(since=BASE, until=BASE + timedelta(minutes=1))
         await service.warm_index_async()
@@ -611,7 +637,7 @@ def test_async_reads_run_on_the_index_worker_pool_and_are_unavailable_after_clos
 
     report, activity = asyncio.run(scenario())
 
-    assert report.usage.totals.measured_input_tokens == 10
+    assert _run_input_tokens(report) == 10
     assert activity.total_runs == 1
     assert len(threads) == 3
     assert all(name.startswith("vbot-db-statistics_") for name in threads)

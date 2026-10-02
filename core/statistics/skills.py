@@ -29,13 +29,16 @@ persisted ``seen_skills`` catalog and the activation carriers. Activations from
 older Sessions without catalog metadata remain visible in
 ``activated_sessions`` but cannot inflate the conversion or push it above 100%.
 
-**Window semantics** follow the domain convention. The inventory join and the
+**Window semantics** follow the domain convention: a window includes its
+``since`` and excludes its ``until``. The inventory join and the
 ``total_skills`` / ``never_used_skills`` snapshots are window-independent;
 ``offered_sessions`` and its timestamps filter by the offering session's
 ``created_at``; ``activated_sessions`` and its timestamps filter by note
 timestamp. Because ``never_used_skills`` means "zero activations *ever*" while
 ``used_skills`` means ">=1 activation *in window*", the accumulator tracks
-activations both windowed and unwindowed.
+activations both windowed and unwindowed. Timestamps are canonical stored
+text, whose fixed width orders them as text; any other form is bad data and
+raises ``ValueError``.
 
 **Background Sessions are not use.** A Session whose Runs are all unattended
 kinds (``core.runs.UNATTENDED_RUN_KINDS``: reflection reviews) contributes no
@@ -45,6 +48,7 @@ report and the per-Agent :func:`load_skill_use` query share.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -53,7 +57,7 @@ from typing import Protocol
 
 from core.runs import is_unattended_run_kind
 from core.sessions import SESSION_RUN_KINDS_META_KEY
-from core.utils.timestamps import parse_canonical_timestamp
+from core.utils.timestamps import format_canonical_timestamp
 
 # The session-metadata sidecar key holding the skills a session was offered
 # (its ``<available_skills>`` catalog names). Owned and written by the chat loop
@@ -67,6 +71,9 @@ SEEN_SKILLS_META_KEY = "seen_skills"
 # ``agent@projekt`` display-key spirit, so a row's ``origins`` says which agent a
 # private skill came from.
 AGENT_SKILL_ORIGIN_TEMPLATE = "agent:{agent_id}"
+
+# The shape of a canonical stored timestamp (``2026-06-01T12:00:00.000000Z``).
+_CANONICAL_SHAPE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z")
 
 # ---------------------------------------------------------------------------
 # Injected inventory source (minimal Protocol — no service locator, no globals)
@@ -231,8 +238,8 @@ class SkillUsageAccumulator:
     """
 
     def __init__(self, *, since: datetime | None, until: datetime | None) -> None:
-        self._since = since
-        self._until = until
+        self._since = None if since is None else format_canonical_timestamp(since)
+        self._until = None if until is None else format_canonical_timestamp(until)
         self._skills: dict[str, _SkillUsageAcc] = {}
 
     def observe_session(
@@ -253,6 +260,9 @@ class SkillUsageAccumulator:
         Names are recorded raw here — the inventory join and the drop of
         deleted-skill usage happen at build time.
         """
+        _require_canonical(created_at)
+        for _name, note_timestamp in activations:
+            _require_canonical(note_timestamp)
         # Offered filters by the session's own start (``created_at``); the
         # seen_skills list carries no per-skill time.
         offered_in_window = self._in_window(created_at)
@@ -357,10 +367,9 @@ class SkillUsageAccumulator:
         # stored canonical Session timestamp.
         if timestamp is None:
             return True
-        parsed = parse_canonical_timestamp(timestamp)
-        if self._since is not None and parsed < self._since:
+        if self._since is not None and timestamp < self._since:
             return False
-        return not (self._until is not None and parsed > self._until)
+        return not (self._until is not None and timestamp >= self._until)
 
 
 # ---------------------------------------------------------------------------
@@ -450,19 +459,18 @@ def _by_agent_entries(by_agent: dict[str, int]) -> list[SkillByAgentCount]:
     ]
 
 
+def _require_canonical(timestamp: str | None) -> None:
+    if timestamp is not None and not _CANONICAL_SHAPE.fullmatch(timestamp):
+        raise ValueError(f"timestamp is not in the canonical stored form: {timestamp!r}")
+
+
 def _min_timestamp(current: str | None, candidate: str | None) -> str | None:
     if candidate is None:
         return current
-    if current is None:
-        return candidate
-    earlier = parse_canonical_timestamp(candidate) < parse_canonical_timestamp(current)
-    return candidate if earlier else current
+    return candidate if current is None else min(current, candidate)
 
 
 def _max_timestamp(current: str | None, candidate: str | None) -> str | None:
     if candidate is None:
         return current
-    if current is None:
-        return candidate
-    later = parse_canonical_timestamp(candidate) > parse_canonical_timestamp(current)
-    return candidate if later else current
+    return candidate if current is None else max(current, candidate)

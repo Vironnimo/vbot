@@ -93,9 +93,6 @@ class ToolAccumulator:
             self.by_session[session] += calls
             if self.session_titles.get(session) is None:
                 self.session_titles[session] = report_unit.title
-            unit_slice = ledger.slices[unit]
-            if unit_slice is not None:
-                unit_slice.tool_calls += calls
 
     def build(self) -> ToolsSection:
         return ToolsSection(
