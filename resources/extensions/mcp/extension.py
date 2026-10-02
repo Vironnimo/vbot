@@ -59,7 +59,12 @@ from ._discovery import (
 )
 from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
 from ._views import compact
-from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError
+from .client import (
+    READ_OPERATIONS,
+    ConnectionRunner,
+    InvalidToolResultError,
+    InvocationNotSentError,
+)
 from .config import ConnectionStore, validate_connection
 from .content import ContentStore
 from .interactions import InputRequests
@@ -199,6 +204,14 @@ class MCPService:
             self.catalogs.record(runner.id, catalog_summary(catalog))
         parent = f"mcp_{runner.id}"
         about = self.connections.get(runner.id, runner.config).get("description")
+        disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
+        # A remote Tool is ready while its connection is up; naming one before
+        # tells the Agent why it cannot run and what to do.
+        follower_hint = (
+            disabled
+            if not self.connections.get(runner.id, runner.config).get("enabled")
+            else MCP_MESSAGES["disconnected"].format(connection=runner.id)
+        )
         declarations = [
             {
                 "name": parent,
@@ -206,6 +219,7 @@ class MCPService:
                 "parameters": MCP_PARAMETERS,
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
+                "readiness_hint": disabled,
                 "parallel_safe": False,
                 "open_input_schema": True,
                 "requires_opt_in": True,
@@ -223,6 +237,7 @@ class MCPService:
                     "parameters": parameters,
                     "handler": self._handler(runner.id, tool["name"], copy.deepcopy(parameters)),
                     "ready": lambda: runner.state == "connected",
+                    "readiness_hint": follower_hint,
                     "parallel_safe": False,
                     "open_input_schema": True,
                     "deferred": True,
@@ -478,6 +493,8 @@ class MCPService:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return self._unreachable(runner, error)
+        except InvalidToolResultError as error:
+            return await self._invalid_result(runner, context, error, source=source)
         except ValueError as error:
             detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             if operation in READ_OPERATIONS:
@@ -499,6 +516,39 @@ class MCPService:
             return tool_failure(
                 "mcp_result_unavailable", MCP_MESSAGES["result_unavailable"].format(detail=detail)
             )
+
+    async def _invalid_result(
+        self,
+        runner: ConnectionRunner,
+        context: ToolContext,
+        error: InvalidToolResultError,
+        *,
+        source: str | None,
+    ) -> dict[str, Any]:
+        """The failure for a Tool whose result fails the output schema it declares."""
+        assert self.content is not None
+        try:
+            text, artifacts = await self.content.error_report(
+                error.payload, context, runner.id, source=source
+            )
+        except (ValueError, OSError) as failure:
+            detail = runner.safe_error(failure)
+            self.api.logger.warning(
+                "MCP result preparation failed (connection=%s): %s", runner.id, detail
+            )
+            return tool_failure(
+                "mcp_result_unavailable", MCP_MESSAGES["result_unavailable"].format(detail=detail)
+            )
+        return tool_failure(
+            "mcp_invalid_result",
+            MCP_MESSAGES["invalid_result"].format(
+                tool=source or "operation",
+                problem=error.problem,
+                text=text,
+                connection=runner.id,
+            ),
+            artifacts=artifacts,
+        )
 
     async def _present(
         self,
@@ -664,8 +714,10 @@ class MCPService:
                 self._publish(runner, runner.catalog or None)
             else:
                 await self._stop(identifier)
+                # A disabled connection keeps its connection Tool, not ready.
+                runner = self._runner(config)
                 if config["enabled"]:
-                    self._runner(config).start()
+                    runner.start()
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
         return self._status(identifier)
 
@@ -684,9 +736,20 @@ class MCPService:
             if operation == "remove":
                 self.catalogs.forget(identifier)
             if operation in {"disable", "remove"}:
+                previous = self.runners.get(identifier)
                 await self._stop(identifier)
+                if operation == "disable":
+                    # Its Tools stay registered but not ready, so the Agent no longer
+                    # sees them and naming one says the connection is disabled.
+                    runner = self._runner(config)
+                    if previous is not None and previous.catalog:
+                        runner.catalog = previous.catalog
+                        self._publish(runner, runner.catalog)
             elif config["enabled"]:
-                self._runner(config).start()
+                runner = self._runner(config)
+                # Republished, its Tools no longer say the connection is disabled.
+                self._publish(runner, runner.catalog or None)
+                runner.start()
         self.api.logger.info(
             "MCP connection updated (connection=%s operation=%s)", identifier, operation
         )

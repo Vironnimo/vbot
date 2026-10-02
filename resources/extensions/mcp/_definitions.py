@@ -199,6 +199,18 @@ MCP_MESSAGES = {
         "The next call reconnects: try once more, and if it fails again, tell the user that "
         "the MCP server {connection} cannot be reached."
     ),
+    "disconnected": (
+        "The MCP connection {connection} is not connected, so nothing was run. Call "
+        "mcp_{connection} with action search to reconnect it, then call this tool again. If "
+        "it cannot connect, tell the user that the MCP server {connection} cannot be reached."
+    ),
+    "invalid_result": (
+        "The MCP tool {tool} ran, but its result does not match the output schema the tool "
+        "declares: {problem}. The result as received:\n{text}\n\nThe call ran, so repeating it "
+        "runs it again. Check the received result before you rely on it, and tell the user "
+        "that the MCP server {connection} returned a result that does not match its own "
+        "schema."
+    ),
     "call_invalid": (
         "The connection target only describes this connection and cannot be called. Call a "
         "tool, resource, prompt or operation target from search."
