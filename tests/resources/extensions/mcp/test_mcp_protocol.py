@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from urllib.request import url2pathname
 
 import httpcore2
+import httpx2
 import mcp.types as types
 import pytest
 import uvicorn
@@ -353,6 +354,96 @@ async def test_a_failing_connection_logs_once_until_it_recovers(
         logging.INFO,
     ]
     assert "failures=3" in records[-1].getMessage()
+
+
+# A local server that fails at startup after writing coloured, partly secret stderr.
+_FAILING_SERVER = (
+    "import sys\n"
+    "sys.stderr.write('\\x1b[33mstarting\\x1b[0m\\n')\n"
+    "sys.stderr.write('fatal: token secret-sentinel was rejected')\n"
+    "sys.exit(3)\n"
+)
+
+
+def _http_answer(status: int | None) -> type[httpx2.AsyncClient]:
+    """A connection's HTTP client class whose server answers *status*, or is unreachable."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        if status is None:
+            raise httpx2.ConnectError("connection refused", request=request)
+        return httpx2.Response(status, json={"error": "refused"})
+
+    class Answering(mcp_client._ObservedHTTPClient):
+        def __init__(self, observer: ConnectionRunner, **options: object) -> None:
+            super().__init__(observer, **{**options, "transport": httpx2.MockTransport(handler)})
+
+    return Answering
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        pytest.param(
+            "missing-program", {"code": "command_not_found", "requirement": "Node.js"}, id="program"
+        ),
+        pytest.param("missing-directory", {"code": "directory_not_found"}, id="directory"),
+        pytest.param(
+            "missing-credential",
+            {"code": "credential_missing", "credential": "UNSET_TOKEN"},
+            id="credential",
+        ),
+        pytest.param("server-exits", {"code": "process_exited"}, id="process-exit"),
+        pytest.param(401, {"code": "unauthorized", "status": 401}, id="http-401"),
+        pytest.param(404, {"code": "endpoint_not_found", "status": 404}, id="http-404"),
+        pytest.param(None, {"code": "server_unreachable", "host": "mcp.test"}, id="unreachable"),
+    ],
+)
+async def test_a_failed_connection_reports_its_cause(host, tmp_path, monkeypatch, case, expected):
+    host.set_credential("TEST_TOKEN", "secret-sentinel")
+    script = tmp_path / "server.py"
+    script.write_text(_FAILING_SERVER)
+    connection: dict[str, object] = {
+        "id": "example",
+        "transport": "stdio",
+        "command": sys.executable,
+        "args": [str(script)],
+        "credential_environment": {"TOKEN": "TEST_TOKEN"},
+    }
+    if case == "missing-program":
+        connection["command"] = str(tmp_path / "npx")
+    elif case == "missing-directory":
+        connection["cwd"] = str(tmp_path / "missing")
+    elif case == "missing-credential":
+        connection["credential_environment"] = {"TOKEN": "UNSET_TOKEN"}
+    elif case != "server-exits":
+        connection = {"id": "example", "transport": "http", "url": "https://mcp.test/mcp"}
+        monkeypatch.setattr(mcp_client, "_ObservedHTTPClient", _http_answer(case))
+    service, _registry = await start_service(host)
+    try:
+        async with asyncio.timeout(10):
+            await service.manage("save", {"connection": connection})
+            with pytest.raises(InvocationNotSentError):
+                await service.runners["example"].invoke("catalog", {})
+            status = await service.manage("status", {"id": "example"})
+            # The stderr of a process that ended can arrive after its failure.
+            while case == "server-exits" and "rejected" not in "".join(status["stderr_tail"]):
+                await asyncio.sleep(0.01)
+                status = await service.manage("status", {"id": "example"})
+    finally:
+        await service.close()
+
+    assert status["state"] == "failed"
+    assert {key: status["problem"][key] for key in expected} == expected
+    assert status["problem"]["message"]
+    # A credential without a value is named before connecting again.
+    assert status["missing_credentials"] == (
+        [expected["credential"]] if case == "missing-credential" else []
+    )
+    # Its last stderr lines, without terminal colours or the connection's credentials.
+    assert status["stderr_tail"] == (
+        ["starting", "fatal: token [redacted] was rejected"] if case == "server-exits" else []
+    )
 
 
 @pytest.mark.asyncio

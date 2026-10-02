@@ -674,6 +674,7 @@ class MCPService:
         result = {
             **status,
             "configuration": copy.deepcopy(config),
+            "missing_credentials": self._missing_credentials(config),
             "pending_requests": [
                 item for item in self.inputs.list() if item["connection"] == identifier
             ],
@@ -681,6 +682,15 @@ class MCPService:
         if config.get("oauth"):
             result["oauth"] = sign_in_status(self._host(), config)
         return result
+
+    def _missing_credentials(self, config: dict[str, Any]) -> list[str]:
+        """The credentials *config* references that have no value yet."""
+        host = self._host()
+        names = {
+            *config.get("credential_environment", {}).values(),
+            *config.get("credential_headers", {}).values(),
+        }
+        return sorted(name for name in names if not host.resolve_credential(name))
 
     def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
