@@ -133,20 +133,15 @@
       : t('skills.librarian.due');
   }
 
-  function counts(pass) {
-    return {
-      merged: pass.merged ?? 0,
-      changed: pass.changed ?? 0,
-      created: pass.created ?? 0,
-    };
-  }
-
   function mergeText(pass) {
+    const merged = pass.merged ?? 0;
+    const changed = pass.changed ?? 0;
+    const created = pass.created ?? 0;
     switch (pass.consolidation) {
       case 'ran':
-        return t('skills.librarian.mergeRan', counts(pass));
+        return t('skills.librarian.mergeRan', { merged, changed, created });
       case 'failed':
-        return t('skills.librarian.mergeFailed', counts(pass));
+        return t('skills.librarian.mergeFailed', { merged, changed, created });
       case 'unchanged':
         return t('skills.librarian.mergeUnchanged');
       case 'too_few':
