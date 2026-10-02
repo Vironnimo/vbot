@@ -245,8 +245,16 @@ def _owns_data_dir(
 
 
 def _clear_readonly_and_retry(func: Callable[[str], object], path: str, _excinfo: object) -> None:
-    """rmtree error handler: clear the read-only attribute and retry."""
-    os.chmod(path, stat.S_IWRITE)
+    """rmtree error handler: clear the read-only attribute of ``path`` itself and retry.
+
+    A link, Windows junctions included, never passes the change on to what it points
+    at. Where ``os.chmod`` cannot leave links unfollowed (Linux), a link stays as it is.
+    """
+    mode = os.lstat(path).st_mode | stat.S_IWRITE
+    if os.chmod in os.supports_follow_symlinks:
+        os.chmod(path, mode, follow_symlinks=False)
+    elif not os.path.islink(path):
+        os.chmod(path, mode)
     func(path)
 
 
