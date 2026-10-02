@@ -220,8 +220,7 @@ def _reference_vectors(
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    return dot / (math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b)))
+    return math.sumprod(a, b) / (math.hypot(*a) * math.hypot(*b))
 
 
 def _since(started: float) -> float:
