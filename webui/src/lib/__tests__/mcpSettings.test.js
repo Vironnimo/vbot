@@ -4,7 +4,9 @@ import {
   createMcpSettings,
   mcpConfiguration,
   mcpCredentialNames,
+  mcpCredentialSlot,
   mcpDraft,
+  mcpImportPlan,
   mcpProblemText,
 } from '../mcpSettings.js';
 
@@ -366,5 +368,99 @@ describe('MCP settings', () => {
         message: 'server-owned advice',
       }),
     ).toBe('server-owned advice');
+  });
+  it('plans an import of the chosen servers with typed credentials', () => {
+    const credential = (name, target, state) => ({ name, target, state });
+    const servers = [
+      {
+        name: 'files',
+        id: 'files',
+        credentials: [
+          credential('FILES_TOKEN', 'TOKEN', 'missing'),
+          credential('FILES_KEY', 'Authorization', 'missing'),
+        ],
+      },
+      {
+        name: 'search',
+        id: 'search_web',
+        credentials: [credential('SEARCH_KEY', 'KEY', 'missing')],
+      },
+      {
+        name: 'paused',
+        id: 'paused',
+        disabled: true,
+        credentials: [credential('PAUSED_KEY', 'KEY', 'missing')],
+      },
+      { name: 'taken', id: 'taken', conflict: true, credentials: [] },
+      { name: 'broken', id: 'broken', error: 'invalid', credentials: [] },
+      { name: 'skipped', id: 'skipped', credentials: [] },
+    ];
+    const values = {
+      [mcpCredentialSlot(servers[0], servers[0].credentials[0])]: 'one',
+      [mcpCredentialSlot(servers[0], servers[0].credentials[1])]: 'two',
+      [mcpCredentialSlot(servers[2], servers[2].credentials[0])]: 'three',
+    };
+    const chosen = new Set(['files', 'search', 'paused', 'taken', 'broken']);
+    expect(mcpImportPlan(servers, chosen, values)).toEqual({
+      servers: ['files', 'search', 'paused'],
+      ids: { files: 'files', search: 'search_web', paused: 'paused' },
+      credentials: [
+        { id: 'files', key: 'FILES_TOKEN', value: 'one' },
+        { id: 'files', key: 'FILES_KEY', value: 'two' },
+        { id: 'paused', key: 'PAUSED_KEY', value: 'three' },
+      ],
+      enable: ['files'],
+    });
+  });
+  it('imports, stores typed credentials, then enables the completed connections', async () => {
+    const operation = vi.fn(async (_extension, name, args) => {
+      if (name === 'import' && !args.apply) return { servers: [] };
+      if (name === 'credential' && args.key === 'BAD')
+        throw new Error('test-owned-credential-error');
+      return { connections: [] };
+    });
+    const state = setup(operation);
+    await controller.previewImport('{"mcpServers": {}}', { files: 'docs' });
+    expect(operation).toHaveBeenLastCalledWith('mcp', 'import', {
+      source: '{"mcpServers": {}}',
+      ids: { files: 'docs' },
+    });
+    const plan = {
+      servers: ['files'],
+      ids: { files: 'docs' },
+      credentials: [{ id: 'docs', key: 'FILES_TOKEN', value: 'secret' }],
+      enable: ['docs'],
+    };
+    expect(await controller.importServers('setup', plan)).toEqual({
+      ok: true,
+      saved: true,
+    });
+    expect(operation.mock.calls.slice(-4).map((call) => call.slice(1))).toEqual(
+      [
+        [
+          'import',
+          {
+            source: 'setup',
+            apply: true,
+            servers: ['files'],
+            ids: { files: 'docs' },
+          },
+        ],
+        ['credential', { id: 'docs', key: 'FILES_TOKEN', value: 'secret' }],
+        ['enable', { id: 'docs' }],
+        ['list', {}],
+      ],
+    );
+    expect(state().notice).toBe(t('mcp.imported', { count: 1 }));
+    expect(JSON.stringify(state())).not.toContain('secret');
+    const failing = {
+      ...plan,
+      credentials: [{ id: 'docs', key: 'BAD', value: 'x' }],
+    };
+    expect(await controller.importServers('setup', failing)).toEqual({
+      ok: false,
+      saved: true,
+    });
+    expect(state().error).toBe('test-owned-credential-error');
   });
 });

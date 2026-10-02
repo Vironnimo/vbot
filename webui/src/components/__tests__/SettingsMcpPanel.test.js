@@ -346,6 +346,111 @@ describe('MCP management surface', () => {
       arguments: { id: 'remote' },
     });
   });
+  it('imports reviewed servers from pasted setup text with a typed credential', async () => {
+    const files = {
+      id: 'files',
+      transport: 'stdio',
+      command: 'npx',
+      args: ['-y', '@scope/files server'],
+      enabled: false,
+      timeout: 120,
+      credential_environment: { TOKEN: 'FILES_TOKEN' },
+    };
+    const preview = {
+      servers: [
+        {
+          name: 'files',
+          id: 'files',
+          selected: true,
+          enabled: false,
+          connection: files,
+          credentials: [
+            {
+              name: 'FILES_TOKEN',
+              kind: 'environment',
+              target: 'TOKEN',
+              state: 'missing',
+            },
+          ],
+          warnings: [{ code: 'test', message: 'test-owned-warning' }],
+        },
+        {
+          name: 'example',
+          id: 'example',
+          conflict: true,
+          selected: false,
+          enabled: true,
+          connection: { ...original, args: [] },
+          credentials: [],
+          warnings: [],
+        },
+      ],
+    };
+    records = [
+      {
+        id: 'example',
+        configuration: structuredClone(original),
+        state: 'connected',
+      },
+    ];
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) => {
+      if (params?.operation !== 'import') return handler(method, params);
+      if (!params.arguments.apply) return structuredClone(preview);
+      records.push({
+        id: 'files',
+        configuration: structuredClone(files),
+        state: 'disconnected',
+      });
+      return { imported: ['files'] };
+    });
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Import').click();
+    await settle();
+    input('Setup text', 'test-owned-setup');
+    submit();
+    await settle();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain('npx -y "@scope/files server"');
+    expect(dialog.textContent).toContain('test-owned-warning');
+    expect(dialog.textContent).toContain(
+      'A connection named example already exists.',
+    );
+    input('Value for TOKEN (optional)', 'test-owned-secret');
+    submit();
+    await settle();
+    const operations = rpc.mock.calls
+      .map(([, params]) => params)
+      .filter((params) =>
+        ['import', 'credential', 'enable'].includes(params?.operation),
+      )
+      .map(({ operation, arguments: args }) => [operation, args]);
+    expect(operations).toEqual([
+      ['import', { source: 'test-owned-setup' }],
+      [
+        'import',
+        {
+          source: 'test-owned-setup',
+          apply: true,
+          servers: ['files'],
+          ids: { files: 'files' },
+        },
+      ],
+      [
+        'credential',
+        { id: 'files', key: 'FILES_TOKEN', value: 'test-owned-secret' },
+      ],
+      ['enable', { id: 'files' }],
+    ]);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(
+      document
+        .querySelector('button[aria-label="Details for files"]')
+        .getAttribute('aria-expanded'),
+    ).toBe('true');
+    expect(document.body.textContent).not.toContain('test-owned-secret');
+  });
   it('explains a failed connection with its server output and reconnects it', async () => {
     records = [
       {
@@ -415,6 +520,63 @@ describe('MCP management surface', () => {
     await unmount(component);
     component = null;
     expect(listener).toBeNull();
+  });
+  it('fills a new connection from a pasted URL and hands setup text to the import', async () => {
+    const sse = {
+      id: 'remote',
+      transport: 'sse',
+      url: 'https://mcp.example.com/sse',
+      enabled: true,
+      timeout: 120,
+    };
+    const handler = rpc.getMockImplementation();
+    rpc.mockImplementation(async (method, params) => {
+      if (params?.operation !== 'import') return handler(method, params);
+      if (params.arguments.source.startsWith('https://'))
+        return {
+          servers: [
+            {
+              name: 'remote',
+              id: 'remote',
+              selected: true,
+              enabled: true,
+              connection: sse,
+              credentials: [],
+              warnings: [{ code: 'test', message: 'test-owned-warning' }],
+            },
+          ],
+        };
+      return {
+        servers: ['one', 'two'].map((name) => ({
+          name,
+          id: name,
+          selected: true,
+          enabled: true,
+          connection: { ...sse, id: name },
+          credentials: [],
+          warnings: [],
+        })),
+      };
+    });
+    component = mount(Panel, { target: document.body });
+    await settle();
+    button('Add MCP connection').click();
+    await settle();
+    input('Connection name', 'studio');
+    input('Command line or URL (optional)', 'https://mcp.example.com/sse');
+    button('Fill in').click();
+    await settle();
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(field('Connection name').value).toBe('studio');
+    expect(field('Server URL').value).toBe('https://mcp.example.com/sse');
+    expect(dialog.textContent).toContain('test-owned-warning');
+    input('Command line or URL (optional)', 'test-owned-setup');
+    button('Fill in').click();
+    await settle();
+    expect(document.querySelector('[role="dialog"]').textContent).toContain(
+      'Import MCP servers',
+    );
+    expect(button('Import 2')).toBeTruthy();
   });
   it('reconciles enablement and requires confirmation before removal', async () => {
     records = [

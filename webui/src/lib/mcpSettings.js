@@ -126,6 +126,45 @@ export function mcpProblemText(problem) {
   });
 }
 
+// What importing the chosen servers of an import preview takes: the server
+// names and their connection ids for the `import` operation, then the
+// credential values the user typed for missing credentials, and the
+// connections those values complete, which are enabled after saving.
+// `values` holds the typed values by `mcpCredentialSlot`.
+export function mcpImportPlan(servers, chosen, values = {}) {
+  const plan = { servers: [], ids: {}, credentials: [], enable: [] };
+  for (const server of servers) {
+    if (!chosen.has(server.name) || server.error || server.conflict) continue;
+    plan.servers.push(server.name);
+    plan.ids[server.name] = server.id;
+    const missing = server.credentials.filter(
+      (credential) => credential.state === 'missing',
+    );
+    const typed = missing.filter(
+      (credential) => values[mcpCredentialSlot(server, credential)],
+    );
+    for (const credential of typed)
+      plan.credentials.push({
+        id: server.id,
+        key: credential.name,
+        value: values[mcpCredentialSlot(server, credential)],
+      });
+    if (
+      missing.length &&
+      typed.length === missing.length &&
+      !server.unresolved &&
+      !server.disabled
+    )
+      plan.enable.push(server.id);
+  }
+  return plan;
+}
+
+// The key of a typed credential value: its server's name and its target.
+export function mcpCredentialSlot(server, credential) {
+  return `${server.name}\n${credential.target}`;
+}
+
 // This controller owns RPC reconciliation. The MCP Extension publishes a
 // change whenever a connection's state or a job changes, so the panel reads
 // `list` again only then (`handleInvalidation`), never on a timer. Drafts
@@ -310,6 +349,34 @@ export function createMcpSettings({
           notice: value ? t('mcp.credentialSaved') : t('mcp.credentialCleared'),
         });
       });
+    },
+    // The servers `source` (setup text from another client, a command line
+    // or a URL) would import; saves nothing. `ids` replaces proposed
+    // connection ids by server name.
+    previewImport(source, ids = null) {
+      return invoke('import', ids ? { source, ids } : { source });
+    },
+    // Saves the planned servers of `source` (see `mcpImportPlan`), stores the
+    // typed credentials and enables the connections they complete. `saved`
+    // tells whether the connections exist even when a later step failed.
+    async importServers(source, plan) {
+      let saved = false;
+      const ok = await act(async () => {
+        await invoke('import', {
+          source,
+          apply: true,
+          servers: plan.servers,
+          ids: plan.ids,
+        });
+        saved = true;
+        for (const credential of plan.credentials)
+          await invoke('credential', credential);
+        for (const id of plan.enable) await invoke('enable', { id });
+        publish({
+          notice: t('mcp.imported', { count: plan.servers.length }),
+        });
+      });
+      return { ok, saved };
     },
     dispose() {
       disposed = true;

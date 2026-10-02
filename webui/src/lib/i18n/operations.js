@@ -128,6 +128,39 @@ export default Object.freeze({
   'mcp.title': 'MCP connections',
   'mcp.url': 'Server URL',
   'mcp.value': 'Value (non-secret)',
+  'mcp.import': 'Import',
+  'mcp.importTitle': 'Import MCP servers',
+  'mcp.importSource': 'Setup text',
+  'mcp.importSourceHelp':
+    'Paste the MCP setup a server gives for another app: an mcpServers or servers block (Claude Desktop, Cursor, VS Code, Windsurf and others), Codex TOML, a claude mcp add command, a command line or a server URL.',
+  'mcp.importFile': 'Open file…',
+  'mcp.importSafety':
+    'Only import setups from sources you trust: a local server runs its program on the machine hosting vBot.',
+  'mcp.importPreview': 'Preview',
+  'mcp.importReview':
+    'Check the program or URL of each server before importing it. Secrets in the setup are stored as vBot credentials, not in the connection.',
+  'mcp.importApply': 'Import {count}',
+  'mcp.importEdit': 'Edit setup text',
+  'mcp.importInvalid': 'Cannot import',
+  'mcp.importExists': 'Name in use',
+  'mcp.importConflict':
+    'A connection named {id} already exists. Enter another name to import this server.',
+  'mcp.importDisabled': 'Saved turned off',
+  'mcp.importCredentialProvided':
+    'Its value from the setup is stored as credential {name}.',
+  'mcp.importCredentialSet':
+    'Uses credential {name}, which already has a value.',
+  'mcp.importCredentialMissing':
+    'Stored as credential {name}. Enter the value now, or set it later under Credentials.',
+  'mcp.importCredentialValue': 'Value for {target} (optional)',
+  'mcp.imported': 'Imported {count} connections.',
+  'mcp.quickFill': 'Command line or URL (optional)',
+  'mcp.quickFillHelp':
+    'Paste the command or server URL from the server setup instructions to fill in the form.',
+  'mcp.quickFillPlaceholder': 'npx -y @scope/server-name or https://…',
+  'mcp.quickFillApply': 'Fill in',
+  'mcp.quickFillCredential':
+    'After saving, set credential {name} for {target} under Credentials.',
   'mcp.reconnect': 'Reconnect',
   'mcp.reconnectHelp':
     'Close the connection and connect again. A local program is restarted.',
