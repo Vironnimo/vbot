@@ -5,6 +5,7 @@ import {
   mcpConfiguration,
   mcpCredentialNames,
   mcpDraft,
+  mcpProblemText,
 } from '../mcpSettings.js';
 
 const configuration = {
@@ -345,5 +346,25 @@ describe('MCP settings', () => {
     });
     await controller.refresh();
     expect(state().error).toBe('test-owned-action-error');
+  });
+  it('words a diagnosed problem, preferring the install hint and the server advice for unknown codes', () => {
+    expect(mcpProblemText(null)).toBe('');
+    expect(
+      mcpProblemText({
+        code: 'command_not_found',
+        command: 'npx',
+        requirement: 'Node.js',
+        message: 'server-owned advice',
+      }),
+    ).toBe(t('mcp.problemInstall', { command: 'npx', requirement: 'Node.js' }));
+    expect(
+      mcpProblemText({ code: 'unauthorized', status: 401, message: 'x' }),
+    ).toBe(t('mcp.problem.unauthorized', { status: 401 }));
+    expect(
+      mcpProblemText({
+        code: 'future_problem',
+        message: 'server-owned advice',
+      }),
+    ).toBe('server-owned advice');
   });
 });

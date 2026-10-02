@@ -128,6 +128,36 @@ export default Object.freeze({
   'mcp.title': 'MCP connections',
   'mcp.url': 'Server URL',
   'mcp.value': 'Value (non-secret)',
+  'mcp.reconnect': 'Reconnect',
+  'mcp.reconnectHelp':
+    'Close the connection and connect again. A local program is restarted.',
+  'mcp.missingCredentials': 'Credentials without a value: {names}.',
+  'mcp.technicalDetails': 'Technical details',
+  'mcp.serverOutput': 'Server output (last {count} lines)',
+  'mcp.problemInstall':
+    "Program {command} was not found on the machine hosting vBot. Install {requirement}, then restart vBot so it finds the program, or enter the program's full path.",
+  'mcp.problem.command_not_found':
+    "Program {command} was not found on the machine hosting vBot. Install it, then restart vBot so it finds the program, or enter the program's full path.",
+  'mcp.problem.command_not_executable':
+    'Program {command} could not be started: permission denied. Choose a program file vBot may run.',
+  'mcp.problem.directory_not_found':
+    'Working directory {directory} does not exist on the machine hosting vBot. Create it or choose another one.',
+  'mcp.problem.credential_missing':
+    'Credential {credential} has no value. Set it under Credentials.',
+  'mcp.problem.process_exited':
+    'The local program ended or closed its connection. Its last output usually names the cause.',
+  'mcp.problem.server_unreachable':
+    'Could not reach {host}. Check that the server is running and the URL is correct.',
+  'mcp.problem.unauthorized':
+    'The server refused access (HTTP {status}). Set the credential it expects, or turn on OAuth sign-in if it offers one.',
+  'mcp.problem.endpoint_not_found':
+    'The server has no MCP endpoint at this URL (HTTP {status}). Check the full URL, including a path such as /mcp.',
+  'mcp.problem.method_not_allowed':
+    'The server does not accept Server URL (HTTP) connections at this URL (HTTP {status}). Check the URL; an older server may need Server URL (legacy SSE).',
+  'mcp.problem.server_error':
+    'The server failed with HTTP {status}. Try again later.',
+  'mcp.problem.timed_out':
+    'The server did not answer within {seconds} seconds.',
   'calendar.title': 'Calendar',
   'calendar.subtitle': 'Your appointments and the agent schedule in one view.',
   'calendar.view.month': 'Month',

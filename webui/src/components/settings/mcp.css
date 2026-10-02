@@ -165,3 +165,22 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+/* Why a connection fails: missing credentials, the technical error and the
+   local server's last error output. */
+.mcp-diagnostics__missing {
+  color: var(--text-med);
+}
+.mcp-diagnostics__output {
+  margin: 0;
+  max-height: 16em;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

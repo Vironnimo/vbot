@@ -346,6 +346,42 @@ describe('MCP management surface', () => {
       arguments: { id: 'remote' },
     });
   });
+  it('explains a failed connection with its server output and reconnects it', async () => {
+    records = [
+      {
+        id: 'example',
+        configuration: structuredClone(original),
+        state: 'failed',
+        error: 'test-owned-raw-error',
+        problem: {
+          code: 'command_not_found',
+          command: 'python',
+          requirement: 'Python 3',
+          message: 'test-owned-server-advice',
+        },
+        stderr_tail: ['test-owned-first-line', 'test-owned-last-line'],
+        missing_credentials: ['TEST_KEY'],
+      },
+    ];
+    component = mount(Panel, { target: document.body });
+    await settle();
+    const row = document.querySelector('.mcp-connection__error');
+    expect(row.textContent).toContain('Install Python 3');
+    expect(row.textContent).not.toContain('test-owned-raw-error');
+    const details = document.querySelector('article[aria-label="example"]');
+    expect(details.querySelector('pre').textContent).toBe(
+      'test-owned-first-line\ntest-owned-last-line',
+    );
+    expect(details.textContent).toContain('test-owned-raw-error');
+    expect(details.textContent).toContain('TEST_KEY');
+    button('Reconnect').click();
+    await settle();
+    expect(rpc).toHaveBeenCalledWith('extensions.operation', {
+      name: 'mcp',
+      operation: 'reconnect',
+      arguments: { id: 'example' },
+    });
+  });
   it('reads the connections again when the Extension publishes a change', async () => {
     let listener = null;
     const subscribeInvalidations = (next) => {

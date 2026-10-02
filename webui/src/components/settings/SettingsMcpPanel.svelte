@@ -13,12 +13,14 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
   import { t } from '$lib/i18n.js';
   import {
     createMcpSettings,
     MCP_DESCRIPTION_MAX_LENGTH,
     mcpDraft,
     mcpCredentialNames,
+    mcpProblemText,
   } from '$lib/mcpSettings.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -247,7 +249,7 @@
               {/if}
               {#if connection.error}
                 <div class="s-row-desc mcp-connection__error">
-                  {connection.error}
+                  {mcpProblemText(connection.problem) || connection.error}
                 </div>
               {/if}
             </div>
@@ -318,6 +320,7 @@
                   })}
                 </p>
               {/if}
+              <McpConnectionDiagnostics {connection} />
             </div>
             <div class="mcp-actions">
               <Button
@@ -337,6 +340,13 @@
                 disabled={blocked || !connection.configuration.enabled}
                 onClick={() => controller.test(connection.id)}
                 >{t('mcp.test')}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={blocked || !connection.configuration.enabled}
+                tooltip={t('mcp.reconnectHelp')}
+                onClick={() => controller.mutate('reconnect', connection.id)}
+                >{t('mcp.reconnect')}</Button
               >
               {#if mcpCredentialNames(connection.configuration).length}
                 <Button

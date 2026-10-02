@@ -1,5 +1,5 @@
 import { extensionOperation } from './api.js';
-import { t } from './i18n.js';
+import { t, tOr } from './i18n.js';
 
 const DEFAULT_TIMEOUT_SECONDS = 120;
 export const MCP_DESCRIPTION_MAX_LENGTH = 200;
@@ -105,6 +105,26 @@ export function mcpCredentialNames(configuration) {
 // (`CONNECTIONS_RESOURCE` and `JOBS_RESOURCE` in
 // `resources/extensions/mcp/_management.py`).
 const LIVE_RESOURCES = new Set(['connections', 'jobs']);
+
+// The advice for a failed connection's diagnosed `problem` (`status`
+// reports its `code` and details); a code this WebUI does not know shows
+// the Extension's own English advice.
+export function mcpProblemText(problem) {
+  if (!problem) return '';
+  if (problem.code === 'command_not_found' && problem.requirement)
+    return t('mcp.problemInstall', {
+      command: problem.command,
+      requirement: problem.requirement,
+    });
+  return tOr(`mcp.problem.${problem.code}`, problem.message ?? '', {
+    command: problem.command,
+    directory: problem.directory,
+    credential: problem.credential,
+    host: problem.host,
+    status: problem.status,
+    seconds: problem.seconds,
+  });
+}
 
 // This controller owns RPC reconciliation. The MCP Extension publishes a
 // change whenever a connection's state or a job changes, so the panel reads
