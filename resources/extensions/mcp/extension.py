@@ -632,12 +632,7 @@ class MCPService:
         async with self._connection_lock(identifier):
             config = self._connection(identifier)
             if operation == "credential":
-                sources = set(config.get("credential_environment", {}).values()) | set(
-                    config.get("credential_headers", {}).values()
-                )
-                if config.get("oauth_client_secret"):
-                    sources.add(config["oauth_client_secret"])
-                if arguments["key"] not in sources:
+                if arguments["key"] not in _credential_names(config):
                     raise ValueError("Credential must be referenced by this MCP connection")
                 self._host().set_credential(arguments["key"], arguments["value"])
                 # The variable name only: never its value.
@@ -721,11 +716,9 @@ class MCPService:
     def _missing_credentials(self, config: dict[str, Any]) -> list[str]:
         """The credentials *config* references that have no value yet."""
         host = self._host()
-        names = {
-            *config.get("credential_environment", {}).values(),
-            *config.get("credential_headers", {}).values(),
-        }
-        return sorted(name for name in names if not host.resolve_credential(name))
+        return sorted(
+            name for name in _credential_names(config) if not host.resolve_credential(name)
+        )
 
     def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
@@ -939,6 +932,17 @@ class MCPService:
                 await runner.close()
         finally:
             self.api.operations.replace_tools(identifier, [])
+
+
+def _credential_names(config: dict[str, Any]) -> set[str]:
+    """The credentials *config* references: variables, headers and an OAuth client secret."""
+    names = {
+        *config.get("credential_environment", {}).values(),
+        *config.get("credential_headers", {}).values(),
+    }
+    if config.get("oauth_client_secret"):
+        names.add(config["oauth_client_secret"])
+    return names
 
 
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:

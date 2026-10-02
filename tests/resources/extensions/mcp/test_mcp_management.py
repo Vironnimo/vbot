@@ -279,6 +279,8 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
     service, _registry = await start_service(host)
     try:
         await service.manage("save", {"connection": referencing})
+        status = await service.manage("status", {"id": "example"})
+        assert status["missing_credentials"] == ["EXAMPLE_TOKEN"]
 
         with caplog.at_level(logging.INFO):
             result = await service.manage(
@@ -287,6 +289,7 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
             )
 
         assert result["set"] is True
+        assert (await service.manage("status", {"id": "example"}))["missing_credentials"] == []
         assert "EXAMPLE_TOKEN" in caplog.text
         assert "secret-sentinel" not in caplog.text
     finally:
