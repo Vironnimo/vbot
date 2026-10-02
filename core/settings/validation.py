@@ -148,7 +148,7 @@ SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_model_step_interval"})
-LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS})
+LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS, "model"})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
@@ -1126,6 +1126,8 @@ def _validate_librarian(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             _error(diagnostics, f"$.librarian.{field}", "must be at least 1")
         elif days > MAX_LIBRARIAN_DAYS:
             _error(diagnostics, f"$.librarian.{field}", f"must be at most {MAX_LIBRARIAN_DAYS}")
+    if "model" in value and not isinstance(value["model"], str):
+        _error(diagnostics, "$.librarian.model", "must be a string")
 
 
 def validate_temperature_diagnostic(

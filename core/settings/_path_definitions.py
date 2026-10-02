@@ -336,8 +336,14 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
     _static(
         "librarian.consolidate",
         "boolean",
-        "Whether a Librarian pass may merge overlapping Skills with the Agent's Model.",
+        "Whether a Librarian pass may merge overlapping Skills in a consolidation Run.",
         default=LIBRARIAN_SETTING_DEFAULTS["consolidate"],
+    ),
+    _static(
+        "librarian.model",
+        "string",
+        "Optional Model binding for Librarian consolidation Runs; empty uses each Agent's Model.",
+        default=LIBRARIAN_SETTING_DEFAULTS["model"],
     ),
     _static(
         "web_fetch.provider",

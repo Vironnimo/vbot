@@ -2,10 +2,12 @@
 
 ``librarian.status`` returns an Identity Agent's Librarian settings, the state
 of its last pass (when, what it did, the next scheduled pass) and the Skill
-revisions that pass recorded. ``librarian.run`` starts a pass at once
-regardless of the interval: it refuses with ``agent_busy`` while a pass of the
-Agent runs or the Agent has an active or queued Run, and with
-``invalid_request`` when the Agent cannot call ``skill`` and ``skill_manage``.
+revisions that pass recorded; ``unscheduled_reason`` says why the Agent gets
+no scheduled pass. ``librarian.run`` starts a pass at once regardless of the
+interval: it refuses with ``agent_busy`` while a pass of the Agent runs or the
+Agent has an active or queued Run, and with ``invalid_request`` when the
+Agent's ``librarian_enabled`` is off or it cannot call ``skill`` and
+``skill_manage``.
 """
 
 from __future__ import annotations

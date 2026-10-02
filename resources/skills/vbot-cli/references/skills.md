@@ -59,16 +59,16 @@ vbot skill unpin <name> --scope <scope>
 
 ## Librarian
 
-The Librarian curates each Identity Agent's own Skills in the background. A scheduled pass runs every `librarian.interval_days` days, once the Agent has no active or queued Run; the first one comes that many days after the Librarian first saw the Agent. It archives each unpinned Skill that a background review or an earlier pass created and that was neither used nor changed in a conversation or by the user for `librarian.archive_after_days` days; changes by background reviews and passes do not count. A Skill named with `/<name>` or `$<name>` in one of the Agent's Cron jobs, Bootstrap jobs or Calendar actions stays, and so does a Skill the Agent shares with other Agents. When `librarian.consolidate` is on, the pass then lets the Agent's Model merge overlapping Skills that the Agent or a background review created and that it does not share. A pass never changes a pinned Skill or a Skill the user created.
+The Librarian curates each Identity Agent's own Skills in the background. A scheduled pass runs every `librarian.interval_days` days, once the Agent has no active or queued Run; the first one comes that many days after the Librarian first saw the Agent. It archives each unpinned Skill that a background review or an earlier pass created and that was neither used nor changed in a conversation or by the user for `librarian.archive_after_days` days; changes by background reviews and passes do not count. A Skill named with `/<name>` or `$<name>` in one of the Agent's Cron jobs, Bootstrap jobs or Calendar actions stays, and so does a Skill the Agent shares with other Agents. When `librarian.consolidate` is on, the pass then lets the Agent merge overlapping Skills that it or a background review created and that it does not share, in a Run of its own Session with the Agent's Model or with `librarian.model` when that is set. A pass never changes a pinned Skill or a Skill the user created. An Agent whose `librarian_enabled` is off gets no pass.
 
 ```bash
 vbot librarian status <agent-id>
 vbot librarian run <agent-id>
 ```
 
-- `status` shows the Librarian settings, the last pass, the next scheduled pass and the Skill revisions the last pass recorded. It ends with the `vbot skill revert` command that takes all of them back together.
-- `run` starts a pass now, regardless of the interval and of `librarian.enabled`. It refuses while a pass of that Agent runs, while the Agent has an active or queued Run, and for an Agent that cannot call `skill` and `skill_manage`. The pass runs in the background; read its result with `status`.
-- `librarian.enabled`, `librarian.interval_days`, `librarian.archive_after_days` and `librarian.consolidate` are Settings paths; read `references/configuration.md` before changing them.
+- `status` shows the Librarian settings, the last pass, the next scheduled pass and the Skill revisions the last pass recorded. It ends with the `vbot skill revert` command that takes all of them back together. For an Agent that gets no scheduled pass, it names the one reason: the Librarian is off for this Agent, the Agent cannot call `skill` and `skill_manage`, or scheduled passes are off (`librarian.enabled`).
+- `run` starts a pass now, regardless of the interval and of `librarian.enabled`. It refuses while a pass of that Agent runs, while the Agent has an active or queued Run, for an Agent whose Librarian is off (`vbot agent update <agent-id> --librarian true` turns it on), and for an Agent that cannot call `skill` and `skill_manage`. The pass runs in the background; read its result with `status`.
+- `librarian.enabled`, `librarian.interval_days`, `librarian.archive_after_days`, `librarian.consolidate` and `librarian.model` are Settings paths; read `references/configuration.md` before changing them. An empty `librarian.model` runs the merge step with each Agent's own Model and Model settings; a Model set there runs with its own defaults and without fallback Models, and only in Librarian passes.
 
 ## Disable and share policy
 

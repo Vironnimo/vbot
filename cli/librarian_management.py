@@ -11,11 +11,24 @@ from cli.server_management import CommandResult, ServerInstance
 from cli.skill_management import format_skill_revision
 
 _CONSOLIDATION_TEXT = {
-    "ran": "merged and fixed overlapping skills with the agent's model",
+    "ran": "merged and fixed overlapping skills",
     "unchanged": "skipped, no skill it may change has changed since the last merge",
     "too_few": "skipped, fewer than 2 skills it may change",
     "disabled": "off",
     "failed": "did not finish",
+}
+# Why an agent gets no scheduled pass (`unscheduled_reason`); status shows one reason.
+_UNSCHEDULED_TEXT = {
+    "agent_disabled": (
+        "not scheduled: the Librarian is off for this agent, so no pass runs; turn it on with: "
+        "vbot agent update {agent_id} --librarian true"
+    ),
+    "skill_tools_unavailable": (
+        "not scheduled: the agent cannot call skill and skill_manage, so no pass runs"
+    ),
+    "schedule_disabled": (
+        "not scheduled: scheduled passes are off (librarian.enabled); a pass can still be started"
+    ),
 }
 # A pass that stopped before it finished; the next scheduled pass still waits a full interval.
 _OUTCOME_TEXT = {
@@ -52,16 +65,15 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
     settings = data.get("settings")
     settings = settings if isinstance(settings, dict) else {}
     lines = [f"Librarian of {agent_id}"]
+    reason = _UNSCHEDULED_TEXT.get(str(data.get("unscheduled_reason")))
+    if reason is not None:
+        lines.append(reason.format(agent_id=agent_id))
     if settings.get("enabled"):
         lines.append(
             f"scheduled passes: every {settings.get('interval_days')} days; skills made in "
             f"the background are archived after {settings.get('archive_after_days')} days "
-            f"unused; merging overlapping skills: {'on' if settings.get('consolidate') else 'off'}"
+            f"unused; merging overlapping skills: {_merge_text(settings)}"
         )
-    else:
-        lines.append("scheduled passes: off (librarian.enabled); a pass can still be started")
-    if data.get("available") is False:
-        lines.append("not available: the agent cannot call skill and skill_manage, so no pass runs")
     if data.get("running"):
         lines.append(
             f"a pass is running since {_string_or_default(data.get('running_since'), '?')}"
@@ -86,6 +98,13 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
     ids = " ".join(str(revision.get("id")) for revision in changes)
     lines.append(f"undo them together with: vbot skill revert {ids} --scope agent:{agent_id}")
     return lines
+
+
+def _merge_text(settings: Mapping[str, Any]) -> str:
+    if not settings.get("consolidate"):
+        return "off"
+    model = settings.get("model")
+    return f"on, with model {model}" if model else "on, with the agent's model"
 
 
 def _format_pass(last_pass: Mapping[str, Any]) -> list[str]:

@@ -623,7 +623,7 @@ def _parse_librarian_update(librarian: Any) -> JsonObject:
     if not isinstance(librarian, dict):
         raise SettingsValidationError("params.librarian must be an object")
 
-    supported_fields = {*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS}
+    supported_fields = {*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS, "model"}
     unsupported_fields = sorted(set(librarian) - supported_fields)
     if unsupported_fields:
         raise SettingsValidationError(
@@ -646,6 +646,10 @@ def _parse_librarian_update(librarian: Any) -> JsonObject:
             ):
                 raise SettingsValidationError(f"params.librarian.{field} {LIBRARIAN_DAYS_RULE}")
             parsed[field] = days
+    if "model" in librarian:
+        if not isinstance(librarian["model"], str):
+            raise SettingsValidationError("params.librarian.model must be a string")
+        parsed["model"] = librarian["model"].strip()
     return parsed
 
 

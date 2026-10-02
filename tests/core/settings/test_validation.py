@@ -284,6 +284,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     "interval_days": 7,
                     "archive_after_days": 90,
                     "consolidate": False,
+                    "model": "openai/gpt-5.2",
                 },
                 "extensions": {
                     "disabled": ["legacy-ext"],
@@ -512,6 +513,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     "consolidate": "no",
                     "interval_days": "7",
                     "archive_after_days": 0,
+                    "model": 5,
                     "extra": 1,
                 }
             },
@@ -521,6 +523,7 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 ("error", "$.librarian.consolidate", "must be a boolean"),
                 ("error", "$.librarian.interval_days", "must be a positive integer"),
                 ("error", "$.librarian.archive_after_days", "must be at least 1"),
+                ("error", "$.librarian.model", "must be a string"),
             ],
             id="librarian-fields",
         ),
