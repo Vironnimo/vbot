@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<!--
+  Slides as a PDF in 16:9: presentations, pitches, workshop handouts, results to show on a
+  screen. One idea per slide; a slide holds a headline that states the point and at most
+  about 40 words or one chart.
+
+  To use: copy this file, replace every {{...}} placeholder, copy, reorder and delete slides.
+  Each <section class="slide"> is one page. `pdf.py create` reports placeholders that are left over.
+  Translate the fixed English labels (lines marked LABEL) into the language of the slides.
+  Slide types: .title, .divider, plain content, .columns, .statement, .picture.
+-->
+<html lang="{{de}}">
+<head>
+<meta charset="utf-8">
+<title>{{Presentation title}}</title>
+<style>
+  :root {
+    --accent: #0e7490;
+    --dark: #0f1720;
+    --ink: #17202a;
+    --muted: #5c6773;
+    --paper: #ffffff;
+    --tint: #eef3f6;
+    --sans: "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif,
+      "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  }
+
+  @page { size: 338.67mm 190.5mm; margin: 0; }
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body { margin: 0; font-family: var(--sans); color: var(--ink); counter-reset: slide; }
+
+  .slide {
+    position: relative; box-sizing: border-box; width: 338.67mm; height: 190.5mm; overflow: hidden;
+    padding: 22mm 26mm 20mm; background: var(--paper);
+    break-after: page; counter-increment: slide;
+    display: flex; flex-direction: column;
+  }
+  .slide:last-child { break-after: auto; }
+  .slide::after {
+    content: counter(slide); position: absolute; right: 26mm; bottom: 9mm;
+    font-size: 12pt; color: var(--muted);
+  }
+  .footer-note { position: absolute; left: 26mm; bottom: 9mm; font-size: 12pt; color: var(--muted); }
+
+  h1, h2 { margin: 0; text-wrap: balance; letter-spacing: -0.02em; }
+  h2 { font-size: 40pt; line-height: 1.12; font-weight: 700; margin-bottom: 12mm; max-width: 270mm; }
+  .slide p { font-size: 24pt; line-height: 1.45; margin: 0 0 5mm; max-width: 240mm; }
+  .slide ul { font-size: 24pt; line-height: 1.45; margin: 0; padding-left: 8mm; max-width: 240mm; }
+  .slide li { margin-bottom: 4.5mm; }
+  .slide li::marker { color: var(--accent); }
+
+  /* Title slide */
+  .title { background: var(--dark); color: #fff; justify-content: flex-end; padding-bottom: 30mm; }
+  .title::after, .divider::after { content: none; }
+  .title .kicker { font-size: 16pt; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: #7dd3e8; margin-bottom: 7mm; }
+  .title h1 { font-size: 62pt; line-height: 1.08; font-weight: 800; max-width: 260mm; }
+  .title .byline { font-size: 20pt; color: #b8c4cf; margin-top: 9mm; }
+  .title .bar { position: absolute; left: 26mm; top: 22mm; width: 24mm; height: 2.4mm; background: var(--accent); }
+
+  /* Section divider */
+  .divider { background: var(--accent); color: #fff; justify-content: center; }
+  .divider .number { font-size: 20pt; font-weight: 600; opacity: 0.8; margin-bottom: 4mm; }
+  .divider h2 { font-size: 56pt; margin: 0; }
+
+  /* Two columns */
+  .columns .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14mm; }
+  .columns h3 { font-size: 24pt; color: var(--accent); margin: 0 0 4mm; }
+  .columns .grid p, .columns .grid ul { font-size: 21pt; }
+
+  /* One big statement or number */
+  .statement { justify-content: center; background: var(--tint); }
+  .statement .big { font-size: 140pt; line-height: 1; font-weight: 800; color: var(--accent); letter-spacing: -0.03em; }
+  .statement p { font-size: 28pt; margin-top: 7mm; max-width: 220mm; }
+
+  /* Picture or chart with a headline */
+  .picture .frame { flex: 1 1 auto; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  .picture img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .picture .caption { font-size: 13pt; color: var(--muted); margin-top: 4mm; }
+</style>
+</head>
+<body>
+
+<section class="slide title">
+  <div class="bar"></div>
+  <div class="kicker">{{Event, organisation or date}}</div>
+  <h1>{{Presentation title}}</h1>
+  <div class="byline">{{Presenter name}} · {{Date}}</div>
+</section>
+
+<section class="slide">
+  <h2>{{Headline that states the point of this slide}}</h2>
+  <ul>
+    <li>{{Point}}</li>
+    <li>{{Point}}</li>
+    <li>{{Point}}</li>
+  </ul>
+  <div class="footer-note">{{Presentation title}}</div>
+</section>
+
+<section class="slide divider">
+  <div class="number">{{02}}</div>
+  <h2>{{Section title}}</h2>
+</section>
+
+<section class="slide columns">
+  <h2>{{Headline comparing two things}}</h2>
+  <div class="grid">
+    <div><h3>{{Left heading}}</h3><p>{{Short text.}}</p></div>
+    <div><h3>{{Right heading}}</h3><p>{{Short text.}}</p></div>
+  </div>
+</section>
+
+<section class="slide statement">
+  <div class="big">{{73 %}}</div>
+  <p>{{What the number means, in one sentence.}}</p>
+</section>
+
+<section class="slide picture">
+  <h2>{{Headline that says what the chart shows}}</h2>
+  <div class="frame"><img src="{{image.png}}" alt="{{Short description}}"></div>
+  <div class="caption">{{Source}}</div>
+</section>
+
+</body>
+</html>

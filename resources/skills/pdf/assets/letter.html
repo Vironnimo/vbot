@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<!--
+  Letter on A4 for a window envelope (DIN 5008 form B, also usual in Austria and Switzerland):
+  business letters, formal letters to authorities, landlords, insurers, cover letters.
+
+  To use: copy this file, replace every {{...}} placeholder, delete blocks you do not need.
+  `pdf.py create` reports placeholders that are left over.
+  Translate the fixed English labels (lines marked LABEL) into the letter's language.
+  Keep the measurements of .address and .info: the address must sit in the envelope window.
+  For a private letter, delete the .info rows you do not need and the footer columns in
+  @page :first (set their content to none).
+-->
+<html lang="{{de}}">
+<head>
+<meta charset="utf-8">
+<title>{{Subject of the letter}}</title>
+<style>
+  :root {
+    --accent: #0f4c5c;
+    --ink: #1c1f24;
+    --muted: #60666f;
+    --sans: "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif,
+      "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  }
+
+  /* Follow pages: page number at the top right. */
+  @page {
+    size: A4;
+    margin: 25mm 20mm 22mm 25mm;
+    @top-right {
+      content: "Page " counter(page) " of " counter(pages); /* LABEL */
+      font: 8pt var(--sans); color: var(--muted); vertical-align: bottom; padding-bottom: 8mm;
+    }
+  }
+  /* First page: letterhead at the top, fold and punch marks at the left edge, sender details
+     in three footer columns. Each footer column holds up to four lines separated by \A. */
+  @page :first {
+    margin: 0 20mm 30mm 25mm;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='210mm' height='297mm' viewBox='0 0 210 297'%3E%3Cg stroke='%23a0a4aa' stroke-width='0.25'%3E%3Cline x1='4' x2='9' y1='105' y2='105'/%3E%3Cline x1='4' x2='11' y1='148.5' y2='148.5'/%3E%3Cline x1='4' x2='9' y1='210' y2='210'/%3E%3C/g%3E%3C/svg%3E")
+      no-repeat -25mm 0 / 210mm 297mm;
+    @top-right { content: none; }
+    @bottom-left {
+      content: "{{Sender name}}\A {{Street and number}}\A {{Postcode and town}}";
+      width: 55mm; white-space: pre; text-align: left; vertical-align: top; padding-top: 7mm;
+      font: 7.5pt/1.45 var(--sans); color: var(--muted);
+    }
+    @bottom-center {
+      content: "{{Phone}}\A {{Email}}\A {{Website}}";
+      width: 55mm; white-space: pre; text-align: left; vertical-align: top; padding-top: 7mm;
+      font: 7.5pt/1.45 var(--sans); color: var(--muted);
+    }
+    @bottom-right {
+      content: "{{Bank name}}\A IBAN {{IBAN}}\A {{Register court and number or tax number}}";
+      width: 55mm; white-space: pre; text-align: left; vertical-align: top; padding-top: 7mm;
+      font: 7.5pt/1.45 var(--sans); color: var(--muted);
+    }
+  }
+
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body { margin: 0; color: var(--ink); font: 10.5pt/1.5 var(--sans); hyphens: auto; }
+  p { margin: 0 0 4.2mm; orphans: 3; widows: 3; text-wrap: pretty; }
+
+  /* Everything above the subject line; the subject starts 98.5 mm from the top edge. */
+  .head { position: relative; height: 98.5mm; }
+  .letterhead { position: absolute; top: 14mm; left: 0; right: 0; display: flex; justify-content: space-between; align-items: flex-end; }
+  .sender-name { font-size: 15pt; font-weight: 650; letter-spacing: -0.01em; color: var(--accent); }
+  .sender-line { font-size: 8.5pt; color: var(--muted); text-align: right; line-height: 1.45; }
+  .head-rule { position: absolute; top: 30mm; left: 0; right: 0; border-top: 0.6pt solid var(--accent); }
+
+  /* Address field: 45 mm from the top, 85 x 45 mm including the 5 mm in front of the text. */
+  .address { position: absolute; top: 45mm; left: 0; width: 80mm; height: 45mm; overflow: hidden; }
+  .return-line {
+    height: 17.7mm; display: flex; align-items: flex-end; padding-bottom: 1mm; box-sizing: border-box;
+    font-size: 7pt; color: var(--muted);
+  }
+  .return-line span { border-bottom: 0.4pt solid var(--muted); }
+  .recipient { font-size: 10pt; line-height: 1.32; }
+
+  /* Information block: 125 mm from the left edge, 50 mm from the top. */
+  .info { position: absolute; top: 50mm; left: 100mm; width: 65mm; font-size: 8.5pt; line-height: 1.45; }
+  .info dl { display: grid; grid-template-columns: auto 1fr; column-gap: 3mm; margin: 0; }
+  .info dt { color: var(--muted); }
+  .info dd { margin: 0; }
+  .info .date { margin-top: 3mm; }
+
+  .subject { font-weight: 650; margin-bottom: 8mm; }
+  .closing { margin-top: 6mm; break-inside: avoid; }
+  .signature-space { height: 14mm; }
+  .enclosures { margin-top: 8mm; font-size: 9pt; break-inside: avoid; }
+  .enclosures b { font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="head">
+  <div class="letterhead">
+    <div class="sender-name">{{Sender name or organisation}}</div>
+    <div class="sender-line">{{Street and number}} · {{Postcode and town}}<br>{{Phone}} · {{Email}}</div>
+  </div>
+  <div class="head-rule"></div>
+
+  <div class="address">
+    <div class="return-line"><span>{{Sender name}} · {{Street and number}} · {{Postcode and town}}</span></div>
+    <div class="recipient">
+      {{Recipient organisation}}<br>
+      {{Recipient name}}<br>
+      {{Street and number}}<br>
+      {{Postcode and town}}
+    </div>
+  </div>
+
+  <div class="info">
+    <dl>
+      <dt>Your reference</dt><dd>{{Their reference}}</dd> <!-- LABEL -->
+      <dt>Our reference</dt><dd>{{Our reference}}</dd>    <!-- LABEL -->
+      <dt>Contact</dt><dd>{{Name}}</dd>                   <!-- LABEL -->
+      <dt>Phone</dt><dd>{{Phone}}</dd>                    <!-- LABEL -->
+      <dt>Email</dt><dd>{{Email}}</dd>                    <!-- LABEL -->
+    </dl>
+    <dl class="date"><dt>Date</dt><dd>{{Date}}</dd></dl>  <!-- LABEL -->
+  </div>
+</div>
+
+<div class="subject">{{Subject: what the letter is about, in one line}}</div>
+
+<p>{{Salutation,}}</p>
+<p>{{Body text. Put the request or the result first; give the details after it.}}</p>
+<p>{{Body text.}}</p>
+
+<div class="closing">
+  <p>{{Closing phrase}}</p>
+  <div class="signature-space"></div>
+  <p>{{Name of the signatory}}<br>{{Role, if any}}</p>
+</div>
+
+<div class="enclosures"><b>Enclosures</b><br>{{Enclosure}}</div> <!-- LABEL; delete if none -->
+
+</body>
+</html>
