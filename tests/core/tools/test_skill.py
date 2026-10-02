@@ -606,27 +606,41 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
 
 
 @pytest.mark.parametrize(
-    ("run_kind", "listed"),
+    ("run_kind", "listed", "notes"),
     [
         pytest.param(
             RunKind.SKILL_REFLECTION,
-            "Your own skills:\n- mine: Mine.\n- pinned: Pinned. (read-only here: pinned by the "
-            "user)\n- shared: Shared. (read-only here: shared by another Agent)",
+            "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
+            "- pinned: Pinned. (read-only here: pinned by the user)\n- shared: Shared. "
+            "(read-only here: shared by another Agent)",
+            {
+                "pinned": "Skill 'pinned' is read-only here: pinned by the user. Do not change "
+                "it; name a needed change in your closing reply.",
+                "debugging": "Skill 'debugging' is read-only here. Do not change it; name a "
+                "needed change in your closing reply.",
+            },
             id="background",
         ),
         pytest.param(
             RunKind.USER,
-            "Your own skills:\n- mine: Mine.\n- pinned: Pinned.\n- shared: Shared.",
+            "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
+            "- pinned: Pinned.\n- shared: Shared.",
+            {},
             id="attended",
         ),
     ],
 )
-def test_background_lists_mark_own_skills_the_run_cannot_change(
-    tmp_path: Path, run_kind: RunKind, listed: str
+def test_background_runs_see_which_skills_they_cannot_change(
+    tmp_path: Path, run_kind: RunKind, listed: str, notes: dict[str, str]
 ) -> None:
-    for name in ("mine", "pinned", "shared"):
+    for root, name in (
+        ("agent", "mine"),
+        ("agent", "pinned"),
+        ("agent", "shared"),
+        ("global", "debugging"),
+    ):
         write_skill(
-            tmp_path / "agent",
+            tmp_path / root,
             name,
             f"---\nname: {name}\ndescription: {name.title()}.\n---\n\nBody.\n",
         )
@@ -638,14 +652,28 @@ def test_background_lists_mark_own_skills_the_run_cannot_change(
 
     tool = SkillTool(
         tmp_path,
-        SkillRegistry.load(tmp_path / "agent", origins=["agent"]),
+        SkillRegistry.load(
+            tmp_path / "agent", extra_dirs=[tmp_path / "global"], origins=["agent", "global"]
+        ),
         protection=protection,
     )
 
     result = tool.call({}, run_kind=run_kind)
+    # A load opens with the note, so a Run that skips the list still learns it
+    # before writing; a Skill it can change loads without one.
+    loads = {
+        name: tool.call({"name": name}, run_kind=run_kind)["data"]
+        for name in ("mine", "pinned", "debugging")
+    }
 
     assert result["data"]["content"] == listed
-    assert asked == ([("coder", ["mine", "pinned", "shared"])] if run_kind != RunKind.USER else [])
+    assert {name: data["note"] for name, data in loads.items() if "note" in data} == notes
+    assert all(
+        list(data).index("note") < list(data).index("content")
+        for data in loads.values()
+        if "note" in data
+    )
+    assert asked[:1] == ([("coder", ["mine", "pinned", "shared"])] if notes else [])
 
 
 def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:
