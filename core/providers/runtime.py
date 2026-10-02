@@ -79,6 +79,7 @@ class ProviderRuntime:
         self._resources_path = resources_path
         self._logger = logger
         self._catalog_refresh_lock: asyncio.Lock | None = None
+        self._catalog_changed_callbacks: list[Callable[[], None]] = []
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
         self._wire_observations = self._load_wire_observations(storage)
@@ -324,11 +325,12 @@ class ProviderRuntime:
                         self._publish_staged_catalog,
                         database_refresh,
                     )
-                    await self._models.reload_async(
+                    if await self._models.reload_async(
                         self._resources_path,
                         runtime_models_dir=self._storage.layout.models,
                         custom_providers=custom_providers,
-                    )
+                    ):
+                        self._notify_catalog_changed()
             except Exception as error:
                 self._logger.warning("Local catalog refresh could not be published: %s", error)
             finally:
@@ -337,6 +339,31 @@ class ProviderRuntime:
                 self.refresh_at = time.monotonic()
                 for staged_refresh in staged:
                     await _LOCAL_CATALOG_WORKERS.run(_discard_staged_refresh, staged_refresh)
+
+    def add_catalog_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to Model catalog changes a local catalog sweep publishes.
+
+        A manual Model DB refresh reports its own result; this channel covers
+        the automatic sweeps. Returns an unsubscribe function.
+        """
+        self._catalog_changed_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            if callback in self._catalog_changed_callbacks:
+                self._catalog_changed_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def _notify_catalog_changed(self) -> None:
+        for callback in tuple(self._catalog_changed_callbacks):
+            try:
+                callback()
+            except Exception as error:
+                self._logger.error(
+                    "Model catalog change callback failed: %s",
+                    error,
+                    exc_info=(type(error), error, error.__traceback__),
+                )
 
     def _publish_staged_catalog(
         self,

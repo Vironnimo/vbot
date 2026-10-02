@@ -52,6 +52,7 @@ from server._app_lifecycle import (
     _unregister_bash_process_change_bridge,
     _unregister_calendar_change_bridge,
     _unregister_cron_change_bridge,
+    _unregister_model_catalog_change_bridge,
     _unregister_recall_index_status_bridge,
     _unregister_run_event_bridge,
     _unregister_session_completion_read_bridge,
@@ -331,6 +332,7 @@ def create_app(
                 _unregister_calendar_change_bridge(app.state)
                 _unregister_archive_change_bridge(app.state)
                 _unregister_skill_change_bridge(app.state)
+                _unregister_model_catalog_change_bridge(app.state)
                 _unregister_terminal_change_bridge(app.state)
                 _unregister_bash_process_change_bridge(app.state)
                 _unregister_recall_index_status_bridge(app.state)

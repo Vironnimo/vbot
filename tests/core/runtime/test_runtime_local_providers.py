@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -240,3 +241,60 @@ async def test_local_catalog_refresh_stages_the_model_db_off_the_event_loop(
     assert threads and threading.get_ident() not in threads
     assert reloads == [1]
     assert staging_dirs and not staging_dirs[0].exists()
+
+
+@pytest.mark.asyncio
+async def test_local_catalog_refresh_signals_only_a_changed_model_catalog(
+    runtime: Runtime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runtime.storage.set_provider_connection_enabled("ollama:local", True)
+    served = ["signal-a:latest"]
+    failures: list[Exception] = []
+
+    async def fake_refresh(provider: Any, credential: str, resources_dir: Any, **kwargs: Any):
+        if failures:
+            raise failures.pop()
+        record = {
+            "name": "Local",
+            "capabilities": {
+                "vision": False,
+                "tools": True,
+                "json_mode": False,
+                "reasoning": {"supported": False},
+            },
+            "context_window": 32768,
+        }
+        catalog = {"provider_id": provider.id, "models": dict.fromkeys(served, record)}
+        resources_dir.joinpath("models", f"{provider.id}.json").write_text(
+            json.dumps(catalog), encoding="utf-8"
+        )
+        return {"provider_id": provider.id, "model_count": len(served)}
+
+    monkeypatch.setattr(discovery_module, "refresh_models", fake_refresh)
+    logger = Mock()
+    runtime.logger = logger
+    signals: list[str] = []
+
+    def failing_subscriber() -> None:
+        raise RuntimeError("subscriber failed")
+
+    runtime.add_model_catalog_changed_callback(failing_subscriber)
+    unsubscribe = runtime.add_model_catalog_changed_callback(lambda: signals.append("models"))
+
+    # A newly served Model changes the catalog; a failing subscriber is only logged.
+    await runtime.maybe_refresh_local_catalogs(force=True)
+    assert signals == ["models"]
+    assert runtime.models.get("ollama", "signal-a:latest").name == "Local"
+    assert logger.error.call_count == 1
+
+    # Republishing the same catalog and a failed sweep leave it unchanged.
+    await runtime.maybe_refresh_local_catalogs(force=True)
+    failures.append(ModelDiscoveryError("connection refused"))
+    await runtime.maybe_refresh_local_catalogs(force=True)
+    assert signals == ["models"]
+
+    unsubscribe()
+    served.append("signal-b:latest")
+    await runtime.maybe_refresh_local_catalogs(force=True)
+    assert runtime.models.get("ollama", "signal-b:latest").name == "Local"
+    assert signals == ["models"]

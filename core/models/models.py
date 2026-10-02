@@ -506,7 +506,7 @@ class ModelRegistry:
         *,
         runtime_models_dir: Path | None = None,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
-    ) -> None:
+    ) -> bool:
         """Re-assemble the registry in place from disk, keeping object identity.
 
         ``load`` rebinds nothing here: refresh writes new layer files, then
@@ -515,11 +515,14 @@ class ModelRegistry:
         the ``/status`` display, and the recall backend — sees the new catalog
         without re-wiring. The class cache entry is repointed at this same
         (now-updated) instance, so a later ``load`` returns it too.
+
+        Returns whether the swap changed the assembled catalog; a reload that a
+        newer one superseded changed nothing.
         """
 
         generation = self._begin_reload()
         assembled = self._assemble_reload(resources_dir, runtime_models_dir, custom_providers)
-        self._adopt(assembled, generation)
+        return self._adopt(assembled, generation)
 
     async def reload_async(
         self,
@@ -527,8 +530,8 @@ class ModelRegistry:
         *,
         runtime_models_dir: Path | None = None,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
-    ) -> None:
-        """Event-Loop-safe :meth:`reload`.
+    ) -> bool:
+        """Event-Loop-safe :meth:`reload`, with the same result.
 
         The catalog files are read and assembled on a worker thread; the swap
         then happens on the calling Event Loop, so a reader there never sees a
@@ -543,7 +546,7 @@ class ModelRegistry:
             runtime_models_dir,
             custom_providers,
         )
-        self._adopt(assembled, generation)
+        return self._adopt(assembled, generation)
 
     def _begin_reload(self) -> int:
         with self._reload_lock:
@@ -572,15 +575,20 @@ class ModelRegistry:
             cache_key=(resolved, resolved_runtime) if custom_providers is None else None,
         )
 
-    def _adopt(self, assembled: _AssembledCatalog, generation: int) -> None:
+    def _adopt(self, assembled: _AssembledCatalog, generation: int) -> bool:
         with self._reload_lock:
             if generation != self._reload_generation:
-                return
+                return False
+            changed = (
+                assembled.models != self._models
+                or assembled.provider_reasoning_replay != self._provider_reasoning_replay
+            )
             self._models = assembled.models
             self._provider_reasoning_replay = assembled.provider_reasoning_replay
             self._active_models_dir = assembled.models_dir
             if assembled.cache_key is not None:
                 type(self)._cache[assembled.cache_key] = self
+            return changed
 
     @classmethod
     def _assemble_models(

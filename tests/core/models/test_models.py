@@ -716,11 +716,13 @@ async def test_reload_async_assembles_off_the_loop_and_swaps_in_place(
         assert registry.get("test_provider", "model-a").name == "Original"
     finally:
         release.set()
-    await asyncio.wait_for(reloading, timeout=5)
+    # The result reports whether the swap changed the catalog.
+    assert await asyncio.wait_for(reloading, timeout=5) is True
 
     assert threads and threading.get_ident() not in threads
     assert registry.get("test_provider", "model-a").name == "Updated"
     assert ModelRegistry.load(tmp_path) is registry
+    assert await registry.reload_async(tmp_path) is False
 
 
 @pytest.mark.asyncio
@@ -763,17 +765,18 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
             # The newer request enters before the old worker is released.
             await asyncio.sleep(0)
             release_stale.set()
-            await asyncio.wait_for(stale_reload, timeout=5)
+            # A superseded reload changes nothing.
+            assert await asyncio.wait_for(stale_reload, timeout=5) is False
             assert await asyncio.to_thread(latest_assembled.wait, 5)
             # Keep the last published catalog while the latest one assembles.
             assert registry.get("test_provider", "model-a").name == "Original"
             release_latest.set()
-            await asyncio.wait_for(latest_reload, timeout=5)
+            assert await asyncio.wait_for(latest_reload, timeout=5) is True
         else:
-            registry.reload(tmp_path)
+            assert registry.reload(tmp_path) is True
             assert registry.get("test_provider", "model-a").name == "Latest"
             release_stale.set()
-            await asyncio.wait_for(stale_reload, timeout=5)
+            assert await asyncio.wait_for(stale_reload, timeout=5) is False
 
         assert registry.get("test_provider", "model-a").name == "Latest"
         assert registry.provider_reasoning_replay("test_provider") == "current_run"

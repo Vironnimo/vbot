@@ -480,6 +480,7 @@ class StubRuntime:
         self.recall: Any = StubRecall()
         self.extension_reload_count = 0
         self.skill_changed_callbacks: list[Callable[[], None]] = []
+        self.model_catalog_changed_callbacks: list[Callable[[], None]] = []
         self.extension_disabled_changes: list[set[str]] = []
         self.chat_loop = build_chat_loop(cast(Any, self))
         self.streaming_chat_loop = build_chat_loop(cast(Any, self), streaming=True)
@@ -566,6 +567,12 @@ class StubRuntime:
     def add_skill_changed_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
         self.skill_changed_callbacks.append(callback)
         return lambda: self.skill_changed_callbacks.remove(callback)
+
+    def add_model_catalog_changed_callback(
+        self, callback: Callable[[], None]
+    ) -> Callable[[], None]:
+        self.model_catalog_changed_callbacks.append(callback)
+        return lambda: self.model_catalog_changed_callbacks.remove(callback)
 
     def start(self) -> None:
         return None

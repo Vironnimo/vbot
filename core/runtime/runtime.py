@@ -1250,6 +1250,15 @@ class Runtime:
             return
         await self._provider_operations().maybe_refresh_local_catalogs(force=force)
 
+    def add_model_catalog_changed_callback(
+        self, callback: Callable[[], None]
+    ) -> Callable[[], None]:
+        """Subscribe to Model catalog changes a local catalog sweep publishes.
+
+        Returns an unsubscribe function.
+        """
+        return self._provider_operations().add_catalog_changed_callback(callback)
+
     def connection_reachability(self, connection_id: str) -> bool | None:
         """Return the latest local catalog probe outcome for one Connection."""
         if self._provider_runtime is None:
