@@ -89,7 +89,7 @@
           "remote": true
         },
         "ollama_cloud": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4.1-flash",
@@ -185,7 +185,7 @@
           "remote": true
         },
         "ollama_cloud": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.2",
@@ -236,7 +236,7 @@
           "remote": true
         },
         "ollama_cloud": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.3",
@@ -292,7 +292,7 @@
           "remote": true
         },
         "ollama_cloud": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.3-flash",

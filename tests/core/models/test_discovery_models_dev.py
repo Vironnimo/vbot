@@ -166,7 +166,7 @@ async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_facts
         "levels": ["high", "max"],
     }
     # models.dev ``interleaved`` projects to the Provider-scoped reasoning field.
-    assert "reasoning_response_field" not in (
+    assert "interleaved_field" not in (
         written["google/gemini-2.5-flash"].get("metadata", {}).get("openrouter", {})
     )
     # The inheriting Model drops only its bare flag; the reported fact stays.
@@ -176,7 +176,7 @@ async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_facts
     assert deepseek.capabilities.reasoning == ReasoningCapabilities(
         supported=True, control="levels", levels=("high", "xhigh"), mandatory=True
     )
-    assert deepseek.metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+    assert deepseek.metadata["openrouter"]["interleaved_field"] == "reasoning_content"
     # ... and merges under the inherited canonical reasoning.
     assert registry.get(
         "openrouter", "deepseek/deepseek-r1"

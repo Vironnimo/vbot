@@ -355,6 +355,10 @@ def standalone_wire_binding(
 # ---------------------------------------------------------------------------
 
 
+# Structured reasoning carriers: opaque state that replay fidelity decides, never readable text.
+_STRUCTURED_REASONING_FIELDS = frozenset({"reasoning_details", "encrypted_content"})
+
+
 class _Resolution:
     def __init__(
         self,
@@ -391,7 +395,7 @@ class _Resolution:
             self._apply(file.defaults, LAYER_FILE_DEFAULTS)
             self._apply(file.protocols.get(protocol, _EMPTY), LAYER_FILE_PROTOCOL)
             self._apply(file.connections.get(self.connection_id, _EMPTY), LAYER_FILE_CONNECTION)
-        self._apply_catalog()
+        self._apply_catalog(protocol)
         for rule in rules:
             self._apply(rule.values, f"{LAYER_RULE}[{rule.index}]")
         if self.observed is not None and not self.observed.is_empty():
@@ -516,7 +520,7 @@ class _Resolution:
         fields = {key: value for key, value in partial.items() if key != "protocol"}
         _merge_into(self.values, fields, PROFILE_SCHEMA, "", layer, self.provenance)
 
-    def _apply_catalog(self) -> None:
+    def _apply_catalog(self, protocol: Protocol) -> None:
         model = self.model
         if model is None:
             return
@@ -541,15 +545,20 @@ class _Resolution:
             partial["reasoning"] = reasoning_values
 
         current_fields = tuple(self.values.get("response", {}).get("reasoning_fields", ()))
+        # models.dev ``interleaved.field`` (an OpenAI-compatible Chat setting):
+        # the Model answers with readable reasoning in this field and takes it
+        # back there in history. A structured carrier is opaque state, which
+        # replay fidelity decides, never a readable field.
         interleaved = _catalog_hint(self.provider_id, model, "interleaved_field")
-        preferred = interleaved or _catalog_hint(
-            self.provider_id, model, "reasoning_response_field"
-        )
-        if isinstance(preferred, str) and preferred:
+        if (
+            protocol == "chat_completions"
+            and isinstance(interleaved, str)
+            and interleaved
+            and interleaved not in _STRUCTURED_REASONING_FIELDS
+        ):
             partial["response"] = {
-                "reasoning_fields": (preferred, *(f for f in current_fields if f != preferred))
+                "reasoning_fields": (interleaved, *(f for f in current_fields if f != interleaved))
             }
-        if isinstance(interleaved, str) and interleaved:
             partial["replay"] = {"history_field": interleaved}
         _merge_into(self.values, partial, _CATALOG_SCHEMA, "", LAYER_CATALOG, self.provenance)
 

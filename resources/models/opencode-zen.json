@@ -733,7 +733,7 @@
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4-flash",
@@ -783,7 +783,7 @@
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4-flash-vision-exp",
@@ -831,7 +831,7 @@
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4-pro",
@@ -881,7 +881,7 @@
       "max_output_tokens": 384000,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "deepseek-v4.1-flash",
@@ -1311,7 +1311,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.1",
@@ -1359,7 +1359,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.2",
@@ -1408,7 +1408,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.3",
@@ -1460,7 +1460,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "glm-5.3-flash",
@@ -2848,7 +2848,7 @@
       "max_output_tokens": 65536,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "kimi-k2.6",
@@ -2893,7 +2893,7 @@
       "max_output_tokens": 262144,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "kimi-k2.7-code",
@@ -2942,7 +2942,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "kimi-k3",
@@ -2985,7 +2985,7 @@
       "max_output_tokens": 131072,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "minimax-m2.7",
@@ -3030,7 +3030,7 @@
       "max_output_tokens": 128000,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "minimax-m3",
@@ -3381,7 +3381,7 @@
       "max_output_tokens": 524288,
       "metadata": {
         "opencode_zen": {
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content"
         }
       },
       "name": "space-bunny-free",

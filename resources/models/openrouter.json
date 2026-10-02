@@ -6635,8 +6635,8 @@
       "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "DeepSeek: DeepSeek V4 Flash 0423",
@@ -6848,8 +6848,8 @@
       "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "DeepSeek: DeepSeek V4 Pro 0423",
@@ -8049,8 +8049,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image+file+audio+video->text"
         }
       },
       "name": "Google: Gemini 3 Flash Preview",
@@ -9000,8 +9000,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image+file+audio+video->text"
         }
       },
       "name": "Google: Gemini 3.1 Pro Preview",
@@ -9089,8 +9089,8 @@
       "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file+audio+video->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image+file+audio+video->text"
         }
       },
       "name": "Google: Gemini 3.1 Pro Preview Custom Tools",
@@ -15289,8 +15289,8 @@
       "max_output_tokens": 176947,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "MiniMax: MiniMax M2",
@@ -15393,8 +15393,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "MiniMax: MiniMax M2.1",
@@ -15457,8 +15457,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "MiniMax: MiniMax M2.5",
@@ -17581,8 +17581,8 @@
       "max_output_tokens": 98304,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "MoonshotAI: Kimi K2 Thinking",
@@ -17648,8 +17648,8 @@
       "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image->text"
         }
       },
       "name": "MoonshotAI: Kimi K2.5",
@@ -17716,8 +17716,8 @@
       "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
-          "modality": "text+image->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image->text"
         }
       },
       "name": "MoonshotAI: Kimi K2.6",
@@ -37240,8 +37240,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+audio+video->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text+image+audio+video->text"
         }
       },
       "name": "Xiaomi: MiMo-V2.5",
@@ -37302,8 +37302,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "Xiaomi: MiMo-V2.5-Pro",
@@ -37940,8 +37940,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 4.7",
@@ -38004,8 +38004,8 @@
       "max_output_tokens": 117964,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_details"
+          "interleaved_field": "reasoning_details",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 4.7 Flash",
@@ -38065,8 +38065,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 5",
@@ -38119,8 +38119,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 5 Turbo",
@@ -38183,8 +38183,8 @@
       "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 5.1",
@@ -38253,8 +38253,8 @@
       "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
-          "modality": "text->text",
-          "reasoning_response_field": "reasoning_content"
+          "interleaved_field": "reasoning_content",
+          "modality": "text->text"
         }
       },
       "name": "Z.ai: GLM 5.2",

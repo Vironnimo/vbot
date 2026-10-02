@@ -26,6 +26,7 @@ from core.models.models import (
 from core.models.models_dev import (
     ModelsDevCatalog,
     auto_canonical_pointer,
+    interleaved_field,
     provider_family,
     provider_limits,
     provider_modalities,
@@ -33,7 +34,6 @@ from core.models.models_dev import (
     provider_pricing,
     provider_reasoning_block,
     provider_reasoning_supported,
-    reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers._wire_profile_files import WireProfileFile
@@ -462,7 +462,7 @@ def _carry_forward_enrichment(
         previous_metadata.get(metadata_key) if isinstance(previous_metadata, Mapping) else None
     )
     if isinstance(previous_facts, Mapping):
-        for fact in ("npm", "reasoning_response_field"):
+        for fact in ("npm", "interleaved_field"):
             if fact in previous_facts:
                 metadata = data.setdefault("metadata", {})
                 provider_metadata = metadata.setdefault(metadata_key, {})
@@ -583,7 +583,7 @@ def _enrich_provider_model(
       models.dev carries the provider-specific limits; "fill, don't overwrite",
       so a provider that DID report a limit keeps its own;
     * projects the models.dev ``interleaved`` response field into
-      ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
+      ``metadata.<provider>.interleaved_field`` (Phase 5) when present;
     * projects the Model's own AI SDK package (models.dev per-model
       ``provider.npm``) into ``metadata.<provider>.npm``, the catalog protocol
       hint of wire profiles;
@@ -640,7 +640,7 @@ def _enrich_provider_model(
         if md_output and set(capabilities.get("output_modalities") or []) < set(md_output):
             capabilities["output_modalities"] = md_output
 
-    response_field = reasoning_response_field(
+    response_field = interleaved_field(
         catalog,
         models_dev_id=models_dev_id,
         wire_id=wire_id,
@@ -650,7 +650,7 @@ def _enrich_provider_model(
         if isinstance(metadata, dict):
             provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
             if isinstance(provider_metadata, dict):
-                provider_metadata["reasoning_response_field"] = response_field
+                provider_metadata["interleaved_field"] = response_field
 
     npm = provider_npm(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
     if npm is not None:

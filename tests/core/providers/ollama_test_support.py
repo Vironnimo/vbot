@@ -153,7 +153,7 @@ def _model(
 
 _CLOUD_PROFILE = {
     "ollama": {"remote": True},
-    "ollama_cloud": {"reasoning_response_field": "reasoning"},
+    "ollama_cloud": {"interleaved_field": "reasoning"},
 }
 
 _MODELS = {

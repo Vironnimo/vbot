@@ -16,16 +16,6 @@
   },
   "rules": [
     {
-      "when": {"metadata": {"reasoning_response_field": "reasoning"}},
-      "set": {"replay": {"history_field": "reasoning"}},
-      "note": "The catalog names the Model's verified readable reasoning field; replay returns it there."
-    },
-    {
-      "when": {"metadata": {"reasoning_response_field": "reasoning_content"}},
-      "set": {"replay": {"history_field": "reasoning_content"}},
-      "note": "The catalog names the Model's verified readable reasoning field; replay returns it there."
-    },
-    {
       "when": {
         "ids": [
           "deepseek-v4-pro:0813",

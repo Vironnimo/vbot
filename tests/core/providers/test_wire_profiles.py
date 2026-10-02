@@ -204,20 +204,35 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.status == "configured"
 
 
-def test_catalog_hints_prefer_the_reported_reasoning_carrier() -> None:
-    model = _model("m", metadata={"acme": {"interleaved_field": "reasoning_content"}})
+@pytest.mark.parametrize(
+    ("interleaved", "fields", "history_field", "source"),
+    [
+        (
+            "reasoning",
+            ("reasoning", "reasoning_content", "reasoning_text", "thinking"),
+            "reasoning",
+            "catalog",
+        ),
+        # A structured carrier is opaque state, not a readable field: defaults stay.
+        (
+            "reasoning_details",
+            ("reasoning", "reasoning_content", "reasoning_text", "thinking"),
+            "reasoning_content",
+            "protocol",
+        ),
+    ],
+)
+def test_catalog_hints_prefer_the_reported_reasoning_carrier(
+    interleaved: str, fields: tuple[str, ...], history_field: str, source: str
+) -> None:
+    model = _model("m", metadata={"acme": {"interleaved_field": interleaved}})
     profiles, _ = _profiles(None, {"m": model})
 
     profile = _resolve(profiles, "m")
 
-    assert profile.response.reasoning_fields == (
-        "reasoning_content",
-        "reasoning",
-        "reasoning_text",
-        "thinking",
-    )
-    assert profile.replay.history_field == "reasoning_content"
-    assert profile.source_of("replay.history_field") == "catalog"
+    assert profile.response.reasoning_fields == fields
+    assert profile.replay.history_field == history_field
+    assert profile.source_of("replay.history_field") == source
 
 
 def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_speak() -> None:

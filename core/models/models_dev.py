@@ -557,7 +557,7 @@ def provider_reasoning_block(
     return {"supported": bool(provider_model.get("reasoning")), **provider_control}
 
 
-def reasoning_response_field(
+def interleaved_field(
     catalog: ModelsDevCatalog,
     *,
     models_dev_id: str,
@@ -567,7 +567,7 @@ def reasoning_response_field(
 
     Projects the provider section's models.dev ``interleaved`` value into the
     field-name selector the adapter reads from ``metadata.<provider>.\
-    reasoning_response_field``: ``{"field": "reasoning_content"}`` /
+    interleaved_field``: ``{"field": "reasoning_content"}`` /
     ``{"field": "reasoning_details"}`` → that field name. Bare ``interleaved:
     true`` (no field-name override) and an absent ``interleaved`` both yield
     ``None`` so the adapter keeps its hardcoded default-key scan (graceful).

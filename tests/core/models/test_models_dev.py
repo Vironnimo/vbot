@@ -23,6 +23,7 @@ from core.models.models_dev import (
     auto_canonical_pointer,
     derive_reasoning_control,
     fetch_catalog,
+    interleaved_field,
     lift_canonical_ladder,
     project_canonical_models,
     provider_family,
@@ -31,7 +32,6 @@ from core.models.models_dev import (
     provider_npm,
     provider_reasoning_block,
     provider_reasoning_supported,
-    reasoning_response_field,
     refresh_canonical_layer,
 )
 
@@ -184,8 +184,8 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
     }
     # The lab does not deviate from its own spec; the Model inherits it at load.
     assert provider_reasoning_block(catalog, **lab_v4) is None
-    assert reasoning_response_field(catalog, **openrouter_v4) == "reasoning_content"
-    assert reasoning_response_field(catalog, **openrouter_gemini) is None
+    assert interleaved_field(catalog, **openrouter_v4) == "reasoning_content"
+    assert interleaved_field(catalog, **openrouter_gemini) is None
     assert provider_limits(catalog, **openrouter_v4) == (1048576, 384000)
     assert provider_modalities(catalog, **openrouter_gemini) == (
         ["text", "image", "audio", "video", "pdf"],
@@ -208,7 +208,7 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
     ("lookup", "expected"),
     [
         (auto_canonical_pointer, None),
-        (reasoning_response_field, None),
+        (interleaved_field, None),
         (provider_limits, (None, None)),
         (provider_modalities, None),
         (provider_family, None),
