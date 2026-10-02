@@ -28,6 +28,7 @@ import mcp.types as types
 from jsonschema import Draft202012Validator
 from mcp import Client
 from mcp.client.auth import OAuthFlowError
+from mcp.client.extension import ClaimContext
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import MCP_SESSION_ID, streamable_http_client
@@ -44,6 +45,18 @@ from ._callbacks import ServerRequests
 from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
+from ._tasks import (
+    ExtensionWire,
+    LegacyWire,
+    TaskEndedError,
+    TaskHandle,
+    TasksExtension,
+    TaskState,
+    TaskWire,
+    cancel_quietly,
+    drive,
+    legacy_state,
+)
 from .interactions import InputRequests
 
 CONNECTION_QUEUE_LIMIT = 64
@@ -395,6 +408,8 @@ class ConnectionRunner:
         # Background work of the current connection: catalog watch and refresh.
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
+        # Cancellations of server tasks whose calls stopped waiting.
+        self._task_cancels: set[asyncio.Task[None]] = set()
         self._catalog_stale = False
         self._transport_warned = False
         # The log level an Agent chose with logging/setLevel; until then requests
@@ -664,6 +679,8 @@ class ConnectionRunner:
                     logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
+                    # Offered on 2026-07-28 connections only: legacy tasks need no declaration.
+                    extensions=[TasksExtension(self._resolve_task)],
                 )
                 self.client = await stack.enter_async_context(client)
                 self._check_results(self.client)
@@ -732,8 +749,16 @@ class ConnectionRunner:
         for task in background:
             task.cancel()
         tasks.update(background)
+        deadline = asyncio.get_running_loop().time() + CALL_STOP_SECONDS
         if tasks:
             await asyncio.wait(tasks, timeout=CALL_STOP_SECONDS)
+        # Stopped calls ask the server to cancel their tasks meanwhile; the
+        # transport ends after this, so later cancellations could not be sent.
+        if self._task_cancels:
+            remaining = deadline - asyncio.get_running_loop().time()
+            await asyncio.wait(set(self._task_cancels), timeout=max(0.0, remaining))
+            for task in self._task_cancels:
+                task.cancel()
 
     def _lose(self, reason: str) -> None:
         """End the current connection, which can no longer serve calls, because of *reason*."""
@@ -1013,7 +1038,8 @@ class ConnectionRunner:
         self._events.record("request_failed", {"operation": call.operation, "error": safe})
         if call.result.done():
             return
-        if isinstance(error, InvalidToolResultError):
+        if isinstance(error, InvalidToolResultError | TaskEndedError):
+            # The server's own account of the call, whatever happens to the connection.
             call.result.set_exception(error)
             return
         owner = call.owner
@@ -1165,12 +1191,11 @@ class ConnectionRunner:
                 ),
                 {},
             )
-            if tool.get("execution", {}).get("taskSupport") == "required" or "task" in arguments:
-                result = await self._task_send(
-                    "tools/call", {**arguments, "task": arguments.get("task", {})}
-                )
-                types.CreateTaskResult.model_validate(result)
-                return result
+            # From 2026-07-28 the server decides; the Tasks extension's claim drives its task.
+            if client.protocol_version < DISCOVERY_PROTOCOL_VERSION and (
+                tool.get("execution", {}).get("taskSupport") == "required" or "task" in arguments
+            ):
+                return await self._legacy_task_call(arguments)
             return dump(
                 await client.call_tool(
                     arguments["name"],
@@ -1264,13 +1289,69 @@ class ConnectionRunner:
         if request_type is None:
             raise ValueError("Unknown MCP task operation")
         request_type.model_validate({"method": operation, "params": arguments})
+        client = self._client()
+        if client.protocol_version >= DISCOVERY_PROTOCOL_VERSION and operation in {
+            "tasks/get",
+            "tasks/cancel",
+        }:
+            return await ExtensionWire(client.session).request(operation, arguments["taskId"])
         return await self._task_send(operation, arguments)
+
+    async def _legacy_task_call(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run a 2025-11-25 Tool call as a task and return the task's Tool result."""
+        started = await self._task_send(
+            "tools/call", {**arguments, "task": arguments.get("task", {})}
+        )
+        task = types.CreateTaskResult.model_validate(started).task
+        session = self._client().session
+        result = await self._drive_task(LegacyWire(session), legacy_state(task))
+        if not result.is_error:
+            # As ``call_tool`` does for a direct result.
+            await session.validate_tool_result(arguments["name"], result)
+        return dump(result)
+
+    async def _resolve_task(
+        self, handle: TaskHandle, context: ClaimContext
+    ) -> types.CallToolResult:
+        """Finish a task a 2026-07-28 server returned for a Tool call (Tasks extension)."""
+        return await self._drive_task(ExtensionWire(context.session), handle.state())
+
+    async def _drive_task(self, wire: TaskWire, state: TaskState) -> types.CallToolResult:
+        """Run a server task to its end; each status change becomes a ``task_status`` event."""
+        last: tuple[str, str | None] | None = None
+
+        def observe(state: TaskState) -> None:
+            nonlocal last
+            if (state.status, state.message) != last:
+                last = (state.status, state.message)
+                self._events.record(
+                    "task_status",
+                    {"task_id": state.task_id, "status": state.status, "message": state.message},
+                )
+
+        return await drive(
+            wire, state, observe=observe, abandon=functools.partial(self._abandon_task, wire)
+        )
+
+    def _abandon_task(self, wire: TaskWire, task_id: str) -> None:
+        """Cancel the server task of a call that stopped waiting, without blocking it."""
+
+        async def cancel() -> None:
+            # Part of no call: the call that started the task has ended.
+            _CURRENT_CALL.set(None)
+            await cancel_quietly(wire, task_id)
+
+        task = asyncio.create_task(cancel(), name=f"mcp-task-cancel:{self.id}")
+        self._task_cancels.add(task)
+        task.add_done_callback(self._task_cancels.discard)
 
     async def _task_send(self, method: str, arguments: dict[str, Any]) -> dict[str, Any]:
         # The pinned SDK's (2.2.0) typed send_request validates historical task handles
         # as CallToolResult and rejects them. Its pinned dispatcher retains the same
         # transport, cancellation and progress semantics without that wrong schema.
-        # Keep this one compatibility seam covered by the real stdio task test.
+        # Only the 2025-11-25 call that starts a task and the explicit task operations
+        # use it; ``_tasks`` drives tasks through public SDK requests. Keep this one
+        # compatibility seam covered by the real stdio task test.
         session = self._client().session
         options: CallOptions = {"timeout": self.config["timeout"], "on_progress": self._progress}
         session._stamp({"method": method, "params": arguments}, options)

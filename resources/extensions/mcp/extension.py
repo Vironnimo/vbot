@@ -67,6 +67,7 @@ from ._management import (
     register_management,
 )
 from ._oauth import forget_sign_in, sign_in_status
+from ._tasks import TaskEndedError
 from ._views import compact
 from .client import (
     READ_OPERATIONS,
@@ -521,6 +522,9 @@ class MCPService:
             return self._unreachable(runner, error)
         except InvalidToolResultError as error:
             return await self._invalid_result(runner, context, error, source=source)
+        except TaskEndedError as error:
+            detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
+            return tool_failure("mcp_task_ended", MCP_MESSAGES["task_ended"].format(detail=detail))
         except ValueError as error:
             detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             if operation in READ_OPERATIONS:

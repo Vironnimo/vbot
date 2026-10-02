@@ -24,6 +24,7 @@ from mcp.server import Server
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
+from resources.extensions.mcp import _tasks
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._callbacks import sampling_messages
 from resources.extensions.mcp._network import DestinationGuard
@@ -38,11 +39,12 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 )
 
 # A minimal stdio server: it answers the handshake, one plain Tool and one Tool that
-# requires the task protocol, whose result it hands out through tasks/result. It
-# also writes a line that is neither UTF-8 nor JSON.
+# requires the task protocol, whose task completes at its first status read and hands
+# out its result through tasks/result. It also writes a line that is neither UTF-8
+# nor JSON.
 _STDIO_SERVER = """import json
 import sys
-task = {"taskId": "task-sentinel", "status": "completed", "ttl": 1000,
+task = {"taskId": "task-sentinel", "status": "working", "ttl": 60000, "pollInterval": 100,
     "createdAt": "2026-01-01T00:00:00Z", "lastUpdatedAt": "2026-01-01T00:00:00Z"}
 for line in sys.stdin:
     request = json.loads(line)
@@ -66,6 +68,8 @@ for line in sys.stdin:
         result = {"content": [{"type": "text", "text": params["arguments"]["value"]}]}
     elif method == "tools/call" and "task" in params:
         result = {"task": task}
+    elif method == "tasks/get" and params.get("taskId") == "task-sentinel":
+        result = {**task, "status": "completed"}
     elif method == "tasks/result" and params.get("taskId") == "task-sentinel":
         result = {"content": [{"type": "text", "text": "payload-sentinel"}],
             "structuredContent": {"nested": [1, 2, 3]}, "_meta": {"preserved": True}}
@@ -79,7 +83,15 @@ for line in sys.stdin:
 
 
 @pytest.mark.asyncio
-async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(host, tmp_path):
+async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(
+    host, tmp_path, monkeypatch
+):
+    polls = []
+
+    async def poll(seconds):
+        polls.append(seconds)
+
+    monkeypatch.setattr(_tasks, "_sleep", poll)
     script = tmp_path / "server.py"
     script.write_text(_STDIO_SERVER)
     runner = ConnectionRunner(
@@ -95,14 +107,17 @@ async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(ho
             echoed = await runner.invoke(
                 "tools/call", {"name": "echo", "arguments": {"value": "wire-sentinel"}}
             )
-            # A Tool that requires tasks is started as a task; its handle stays usable.
-            started = await runner.invoke("tools/call", {"name": "long", "arguments": {}})
-            result = await runner.invoke("tasks/result", {"taskId": started["task"]["taskId"]})
+            # A Tool that requires tasks runs as one and returns the task's result.
+            result = await runner.invoke("tools/call", {"name": "long", "arguments": {}})
+            # The explicit task operations reach the same task.
+            payload = await runner.invoke("tasks/result", {"taskId": "task-sentinel"})
         assert echoed["content"][0]["text"] == "wire-sentinel"
         assert [event["kind"] for event in runner.events()["events"]].count("transport_error") == 1
-        assert result["content"][0]["text"] == "payload-sentinel"
-        assert result["structuredContent"] == {"nested": [1, 2, 3]}
-        assert result["_meta"] == {"preserved": True}
+        assert polls == [0.1]
+        for answer in (result, payload):
+            assert answer["content"][0]["text"] == "payload-sentinel"
+            assert answer["structuredContent"] == {"nested": [1, 2, 3]}
+            assert answer["_meta"] == {"preserved": True}
     finally:
         await runner.close()
     assert runner.state == "disconnected"

@@ -231,6 +231,12 @@ MCP_MESSAGES = {
         "unknown. Before you repeat a call that changes something, check the application's "
         "current state. A call that only reads is safe to repeat."
     ),
+    "task_ended": (
+        "{detail}. The MCP server ran this call in the background, and it ended without a "
+        "result. Work it did before it ended may remain: before you repeat a call that "
+        "changes something, check the application's current state. A call that only reads "
+        "is safe to repeat."
+    ),
     "read_unconfirmed": (
         "{detail}. This read returned no result and changed nothing; try it once more, and "
         "tell the user if it keeps failing."
