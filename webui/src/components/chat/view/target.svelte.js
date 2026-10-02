@@ -9,6 +9,7 @@ import {
 } from '../../../lib/chatState.js';
 import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
+import { LIBRARIAN_AGENT_ID, librarianName } from '$lib/librarian.js';
 import {
   projectTeam as normalizeProjectTeam,
   normalizeScanReport,
@@ -226,15 +227,19 @@ export function createChatViewTarget(context) {
 
   // Minimal agent-like object for an overridden session whose owner is not an
   // identity-roster agent — a project team agent's session (or a project
-  // child), or an identity agent deleted while its session is still viewed.
-  // Keeps the chat surface (header, banner, return button) alive instead of
-  // dead-ending on "choose an agent". The bare id stays in `id` so queue and
-  // cancel-tool payloads keep the bare spelling (trap 2).
+  // child), the hidden Librarian's session, or an identity agent deleted
+  // while its session is still viewed. Keeps the chat surface (header,
+  // banner, return button) alive instead of dead-ending on "choose an
+  // agent". The bare id stays in `id` so queue and cancel-tool payloads keep
+  // the bare spelling (trap 2).
   function overrideAgentDisplayStandIn(agentAddress) {
-    const { agentId } = parseAgentAddress(agentAddress);
+    const { agentId, projectId } = parseAgentAddress(agentAddress);
     return {
       id: agentId,
-      name: agentId || agentAddress,
+      name:
+        agentId === LIBRARIAN_AGENT_ID && !projectId
+          ? librarianName()
+          : agentId || agentAddress,
       current_session_id: '',
       context_window: null,
       __overrideAddress: agentAddress,

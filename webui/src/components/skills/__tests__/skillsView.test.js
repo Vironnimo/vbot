@@ -1101,7 +1101,7 @@ describe('Skills manager', () => {
     expect(calls('skill.history').length).toBeGreaterThan(historyReads);
   });
 
-  it('shows an Agent’s last Librarian pass, links its changes, reverts them together, starts a pass and names why another Agent gets none', async () => {
+  it('shows an Agent’s last Librarian pass, links its changes and Session, reverts them together, starts a pass and names why another Agent gets none', async () => {
     const change = (id, skill, kind, extra = {}) => ({
       id,
       at: `2026-09-30T10:0${id - 6}:00.000000Z`,
@@ -1142,6 +1142,8 @@ describe('Skills manager', () => {
         archived: 1,
         candidates: 3,
         consolidation: 'ran',
+        session_id: 'lib-1',
+        run_id: 'r-9',
         created: 0,
         changed: 1,
         merged: 1,
@@ -1191,7 +1193,8 @@ describe('Skills manager', () => {
         fact.querySelector('dt').textContent.trim(),
         fact.querySelector('dd').textContent.trim(),
       ]);
-    await render();
+    const onOpenSession = vi.fn();
+    await render({ onOpenSession });
     collection('Main');
     await settle();
     expect(calls('librarian.status')).toContainEqual({ agent_id: 'main' });
@@ -1201,7 +1204,11 @@ describe('Skills manager', () => {
       ['Last pass', expect.stringContaining('(scheduled)')],
       ['Retired as unused', '1'],
       ['Merging', '1 merged away, 1 changed, 0 created'],
+      ['Session', 'Open session'],
     ]);
+    // The merge ran in a Session of the Librarian, which Chat opens.
+    click(button('Open session', section()));
+    expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-1');
     expect(texts('.skills-librarian .skills-history__what')).toEqual([
       'Merged into deploy · share with Coder, cron job “Nightly” moved along',
       'Changed',
@@ -1284,17 +1291,26 @@ describe('Skills manager', () => {
     });
 
     // An Agent without scheduled passes shows the one reason the status
-    // names; the Agent's own switch and missing Tools also block Run now.
+    // names; all but the schedule switch also block Run now.
     const offInSettings = [['Schedule', t('skills.librarian.scheduleOff')]];
     for (const [reason, note, shownFacts] of [
       ['agent_disabled', t('skills.librarian.agentOff'), []],
-      ['skill_tools_unavailable', t('skills.librarian.unavailable'), []],
+      ['no_skills', t('skills.librarian.noSkills'), []],
+      [
+        'librarian_unavailable',
+        t('skills.librarian.unavailable', {
+          problem: t('librarian.problem.agentIdTaken'),
+        }),
+        [],
+      ],
       ['schedule_disabled', null, offInSettings],
     ]) {
       otherStatus = {
         settings: { ...mainStatus.settings, enabled: false },
         available: reason === 'schedule_disabled',
         unscheduled_reason: reason,
+        librarian_problem:
+          reason === 'librarian_unavailable' ? 'agent_id_taken' : null,
         next_due_at: null,
       };
       collection('Main');

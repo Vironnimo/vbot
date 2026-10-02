@@ -1,17 +1,24 @@
 <script>
   // The Librarian of one Identity Agent on its Skills manager page: the
-  // schedule, the last pass (what it retired, merged, changed and created),
-  // the next scheduled pass, the revisions the last pass recorded with links
-  // into each Skill's history, one action that reverts them together, and
-  // Run now. It reads `librarian.status` whenever the inventory reloads; the
-  // server announces the start and end of a pass as a Skills change, which
-  // reloads the inventory. An Agent without scheduled passes shows the one
-  // reason the status names: maintenance is off in Settings, off for this
-  // Agent, or the Agent cannot use the skill and skill_manage Tools; the last
-  // two also block Run now.
+  // schedule, the last pass (what it retired, merged, changed and created)
+  // with the Librarian Session of its merge, the next scheduled pass, the
+  // revisions the last pass recorded with links into each Skill's history,
+  // one action that reverts them together, and Run now. It reads
+  // `librarian.status` whenever the inventory reloads; the server announces
+  // the start and end of a pass as a Skills change, which reloads the
+  // inventory. An Agent without scheduled passes shows the one reason the
+  // status names: maintenance is off in Settings, off for this Agent, the
+  // Agent has no Skills of its own, or the Librarian is unavailable; all but
+  // the first also block Run now.
   import { onDestroy, untrack } from 'svelte';
   import { librarianStatus, runLibrarian } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
+  import {
+    LIBRARIAN_AGENT_ID,
+    librarianMergeText,
+    librarianProblemText,
+    librarianTriggerText,
+  } from '$lib/librarian.js';
   import Banner from '../ui/Banner.svelte';
   import Button from '../ui/Button.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
@@ -28,6 +35,7 @@
     onOpenHistory = noop,
     onOpenArchived = noop,
     onRevertPass = noop,
+    onOpenSession = noop,
     onToast = noop,
   } = $props();
 
@@ -46,14 +54,10 @@
       ? status.changes.filter((revision) => Number.isInteger(revision?.id))
       : [],
   );
-  let unavailableText = $derived(
-    status?.unscheduled_reason === 'agent_disabled'
-      ? t('skills.librarian.agentOff')
-      : t('skills.librarian.unavailable'),
-  );
+  let unavailableText = $derived(unavailableReason(status));
   let runBlocked = $derived(
     status?.available === false
-      ? unavailableText
+      ? unavailableText || t('skills.librarian.runError')
       : status?.running
         ? t('skills.librarian.alreadyRunning')
         : '',
@@ -89,9 +93,26 @@
     }
   }
 
+  // Why no pass can run for the Agent (`available` is false).
+  function unavailableReason(value) {
+    switch (value?.unscheduled_reason) {
+      case 'agent_disabled':
+        return t('skills.librarian.agentOff');
+      case 'no_skills':
+        return t('skills.librarian.noSkills');
+      case 'librarian_unavailable':
+        return t('skills.librarian.unavailable', {
+          problem: librarianProblemText(value.librarian_problem),
+        });
+      default:
+        return '';
+    }
+  }
+
   function runErrorText(failure) {
     if (failure?.code === 'agent_busy') return t('skills.librarian.busy');
-    if (failure?.code === 'invalid_request') return unavailableText;
+    if (failure?.code === 'invalid_request' && unavailableText)
+      return unavailableText;
     return `${t('skills.librarian.runError')} ${failure?.message ?? ''}`.trim();
   }
 
@@ -138,24 +159,6 @@
     return Number.isFinite(next) && next > Date.now()
       ? formatSkillTime(status.next_due_at)
       : t('skills.librarian.due');
-  }
-
-  function mergeText(pass) {
-    const merged = pass.merged ?? 0;
-    const changed = pass.changed ?? 0;
-    const created = pass.created ?? 0;
-    switch (pass.consolidation) {
-      case 'ran':
-        return t('skills.librarian.mergeRan', { merged, changed, created });
-      case 'failed':
-        return t('skills.librarian.mergeFailed', { merged, changed, created });
-      case 'unchanged':
-        return t('skills.librarian.mergeUnchanged');
-      case 'too_few':
-        return t('skills.librarian.mergeTooFew');
-      default:
-        return t('skills.librarian.mergeOff');
-    }
   }
 
   // Each change links to its Skill's history, or to the archive when the
@@ -206,7 +209,7 @@
       ></Banner
     >
   {:else if status}
-    {#if status.available === false}
+    {#if status.available === false && unavailableText}
       <p class="skills-page-note">{unavailableText}</p>
     {/if}
     <dl class="skills-page-facts">
@@ -238,10 +241,7 @@
           <dd>
             {t('skills.librarian.passValue', {
               time: formatSkillTime(lastPass.finished_at),
-              trigger:
-                lastPass.trigger === 'manual'
-                  ? t('skills.librarian.triggerManual')
-                  : t('skills.librarian.triggerSchedule'),
+              trigger: librarianTriggerText(lastPass),
             })}
           </dd>
         </div>
@@ -261,8 +261,22 @@
         </div>
         <div class="skills-page-fact">
           <dt>{t('skills.librarian.merging')}</dt>
-          <dd>{mergeText(lastPass)}</dd>
+          <dd>{librarianMergeText(lastPass)}</dd>
         </div>
+        {#if typeof lastPass.session_id === 'string' && lastPass.session_id}
+          <div class="skills-page-fact">
+            <dt>{t('skills.librarian.session')}</dt>
+            <dd>
+              <button
+                type="button"
+                class="skills-librarian__link"
+                onclick={() =>
+                  onOpenSession(LIBRARIAN_AGENT_ID, lastPass.session_id)}
+                >{t('skills.librarian.openSession')}</button
+              >
+            </dd>
+          </div>
+        {/if}
       {/if}
     </dl>
     {#if !lastPass}

@@ -557,7 +557,8 @@
 .skills-librarian__changes .skills-history {
   margin-bottom: 10px;
 }
-.skills-librarian__skill {
+.skills-librarian__skill,
+.skills-librarian__link {
   padding: 0;
   border: 0;
   border-radius: var(--r-sm);
@@ -566,12 +567,14 @@
   font: inherit;
   overflow-wrap: anywhere;
 }
-button.skills-librarian__skill {
+button.skills-librarian__skill,
+.skills-librarian__link {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
 }
-button.skills-librarian__skill:focus-visible {
+button.skills-librarian__skill:focus-visible,
+.skills-librarian__link:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }

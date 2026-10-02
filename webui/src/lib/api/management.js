@@ -238,6 +238,13 @@ export function librarianStatus(agentId, options = {}) {
   return rpc('librarian.status', { agent_id: agentId }, options);
 }
 
+// Whether the built-in Librarian Agent is available (`problem` says why not),
+// the Librarian settings and its recent passes over all Agents, each with the
+// curated Agent and the Librarian Session of its merge.
+export function librarianOverview(options = {}) {
+  return rpc('librarian.overview', {}, options);
+}
+
 // Starts a Librarian pass of an Agent now; returns its status.
 export function runLibrarian(agentId, options = {}) {
   requireNonEmptyString(

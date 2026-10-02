@@ -936,6 +936,60 @@ describe('ChatView Sessions', () => {
     });
   });
 
+  describe('Librarian Session', () => {
+    it('opens a Session of the hidden Librarian under its name and continues it', async () => {
+      rpcMock.mockImplementation(
+        createChatRpcMock({
+          sessionMessages: {
+            'lib-1': [message('lib-summary', 'Merged deploy notes')],
+          },
+          streamHandler: ({ agent_id: agentId, session_id: sessionId }) => {
+            if (agentId === 'librarian' && sessionId === 'lib-1') {
+              return runningRun('librarian-continue');
+            }
+            throw new Error(
+              `Unexpected stream target: ${agentId}/${sessionId}`,
+            );
+          },
+        }),
+      );
+      await chat.mountChat(
+        {
+          sharedAgents: [createAgent()],
+          sharedSelectedAgentId: 'alpha',
+          pendingSessionNavigation: {
+            agentId: 'librarian',
+            sessionId: 'lib-1',
+            subAgent: false,
+          },
+        },
+        { ready: 'Merged deploy notes' },
+      );
+
+      // The Librarian is not in the Agent roster; the picker names it.
+      expect(rpcMock).toHaveBeenCalledWith('chat.history', {
+        agent_id: 'librarian',
+        session_id: 'lib-1',
+        limit: 100,
+      });
+      expect(
+        document.querySelector('.chat-header__agent-picker').textContent.trim(),
+      ).toBe(t('librarian.name'));
+      expect(composerInput().disabled).toBe(false);
+
+      sendComposerMessage('Why did you merge deploy?');
+      await waitForCondition(() => rpcCalls('chat.stream').length === 1);
+
+      expect(rpcCalls('chat.stream')).toEqual([
+        {
+          agent_id: 'librarian',
+          session_id: 'lib-1',
+          content: 'Why did you merge deploy?',
+        },
+      ]);
+    });
+  });
+
   describe('Session info', () => {
     it('renders a restored Reflection and opens its Session', async () => {
       const baseRpc = createChatRpcMock({

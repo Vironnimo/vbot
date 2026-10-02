@@ -606,6 +606,7 @@ describe('RPC wrappers', () => {
       (o) => api.librarianStatus('main', o),
       { agent_id: 'main' },
     ],
+    ['librarian.overview', (o) => api.librarianOverview(o), {}],
     ['librarian.run', (o) => api.runLibrarian('main', o), { agent_id: 'main' }],
     [
       'skill.restore',
