@@ -93,7 +93,7 @@ class TerminalEvents:
 
     async def watch_for_operator(
         self, session: TerminalSession
-    ) -> AsyncGenerator[TerminalStreamEvent, None]:
+    ) -> AsyncGenerator[TerminalStreamEvent]:
         """Yield an authoritative VT snapshot followed by sequenced live events."""
         async with session.lock:
             after_sequence = session.stream_sequence

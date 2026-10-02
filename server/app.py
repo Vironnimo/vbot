@@ -921,7 +921,7 @@ async def _stream_request_body_with_limit(
     *,
     max_body_size_bytes: int,
     upload_kind: str,
-) -> AsyncGenerator[bytes, None]:
+) -> AsyncGenerator[bytes]:
     received_size_bytes = 0
     async for chunk in request.stream():
         received_size_bytes += len(chunk)
@@ -934,7 +934,7 @@ async def _stream_request_body_with_limit(
 
 async def _stream_speech(
     operation: Callable[[SpeechProgress], Awaitable[Any]],
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     """Request-local progress heartbeats followed by one terminal result."""
     progress = SpeechProgress()
     task = asyncio.ensure_future(operation(progress))

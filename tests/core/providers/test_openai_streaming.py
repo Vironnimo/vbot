@@ -172,7 +172,7 @@ async def test_closing_a_partial_codex_sse_stream_closes_the_response(
         codex_websocket_connect=AsyncMock(side_effect=OSError("connection unavailable"))
     )
     stream = cast(
-        AsyncGenerator[dict[str, Any], None],
+        AsyncGenerator[dict[str, Any]],
         adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, conversation_id=conversation_id),
     )
 

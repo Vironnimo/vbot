@@ -370,7 +370,7 @@ async def test_closing_the_public_stream_closes_the_partial_http_response(
         return_value=httpx.Response(200, stream=body, headers={"content-type": "text/event-stream"})
     )
     stream = cast(
-        AsyncGenerator[dict[str, Any], None],
+        AsyncGenerator[dict[str, Any]],
         adapter.stream([{"role": "user", "content": "test"}], model_id=model_id),
     )
     try:

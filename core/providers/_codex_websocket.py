@@ -125,7 +125,7 @@ class CodexWebSocket:
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         async with self._codex_websocket_lock:
             if self._codex_websocket_route not in {None, route}:
                 await self.aclose()
@@ -174,7 +174,7 @@ class CodexWebSocket:
         headers: dict[str, str],
         route: CodexWebSocketRoute,
         state: ResponsesStreamState,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         wire_payload = {"type": "response.create", **request_payload}
         wire_text = json.dumps(wire_payload, ensure_ascii=False, separators=(",", ":"))
         capture = (

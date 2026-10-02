@@ -147,7 +147,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Stream one Copilot request as normalized vBot deltas."""
 
         policy = self._policy_for_model(model_id)
@@ -155,7 +155,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             emitted_visible_reasoning = ""
             async with aclosing(
                 cast(
-                    AsyncGenerator[dict[str, Any], None],
+                    AsyncGenerator[dict[str, Any]],
                     super().stream(
                         messages,
                         model_id=model_id,
@@ -199,7 +199,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             return
         async with aclosing(
             cast(
-                AsyncGenerator[dict[str, Any], None],
+                AsyncGenerator[dict[str, Any]],
                 super().stream(
                     messages,
                     model_id=model_id,
@@ -438,7 +438,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(RESPONSES_ENDPOINT, payload, messages)
         state = ResponsesStreamState()
         event_lines: list[str] = []
@@ -471,7 +471,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         messages: list[dict[str, Any]],
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(MESSAGES_ENDPOINT, payload, messages)
         state = CopilotMessagesStreamState()
         seen_finish_delta = False

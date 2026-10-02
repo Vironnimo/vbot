@@ -194,13 +194,13 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         """Stream GPT-5.6 via Responses; retain Chat Completions for other Models."""
 
         if not self._uses_all_turns_responses(model_id):
             async with aclosing(
                 cast(
-                    AsyncGenerator[dict[str, Any], None],
+                    AsyncGenerator[dict[str, Any]],
                     super().stream(messages, model_id=model_id, **kwargs),
                 )
             ) as deltas:
@@ -391,7 +391,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _stream_responses(
         self,
         payload: dict[str, Any],
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_responses_stream(payload)
         state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}

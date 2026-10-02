@@ -33,7 +33,7 @@ def native_lines(
     arguments: list[str],
     context: ToolContext,
     budget: SearchBudget,
-) -> Generator[bytes, None, None]:
+) -> Generator[bytes]:
     """Drain both pipes with bounded storage and interrupt even a silent process."""
     cancelled = threading.Event()
     # The Run retains this callback until dispatch finishes on the Event Loop.
@@ -328,7 +328,7 @@ def content_events(
     context: ToolContext,
     budget: SearchBudget,
     window: int,
-) -> Generator[dict[str, Any], None, None]:
+) -> Generator[dict[str, Any]]:
     mode = "files" if options.enabled("quiet") else options.get("output")
     base = [
         "--threads",
@@ -366,7 +366,7 @@ def content_events(
     size = length
     cwd = Path(os.path.abspath(context.effective_cwd.expanduser()))
 
-    def execute() -> Generator[dict[str, Any], None, None]:
+    def execute() -> Generator[dict[str, Any]]:
         buffer = b""
         with (
             _explained_pattern_errors(),
