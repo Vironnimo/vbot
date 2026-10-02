@@ -668,15 +668,14 @@ export function onDesktopUpdate(handler) {
 }
 
 /**
- * Handle the Desktop's requests to restart into a new version while the user
- * is idle. A handled request leaves the restart to this page: it calls
- * `restartDesktop()` itself when nothing blocks, or does nothing and the
- * Desktop asks again later; an unhandled one lets the Desktop restart on its
- * own.
+ * Handle the Desktop's requests to restart into a newly activated version
+ * after an update. A handled request gives this page a short time to save its
+ * edits and call `restartDesktop()` itself before the Desktop restarts on its
+ * own; an unhandled one lets the Desktop restart at once.
  *
- * `handler({reason})` receives the Desktop's reason (`idle`, or null when it
- * names none); returning `false` reports the request as not handled. Returns
- * a cleanup function.
+ * `handler({reason})` receives the Desktop's reason (`update`, or null when
+ * it names none); returning `false` reports the request as not handled.
+ * Returns a cleanup function.
  */
 export function onDesktopRestartRequest(handler) {
   if (typeof window === 'undefined') return () => {};

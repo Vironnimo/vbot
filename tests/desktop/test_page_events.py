@@ -99,7 +99,7 @@ def dispatchers() -> Any:
             "vbot-desktop-open-session",
             {"agent": "builder@project", "session": "session-1"},
         ),
-        (restart_request_script("idle"), "vbot-desktop-restart", {"reason": "idle"}),
+        (restart_request_script("update"), "vbot-desktop-restart", {"reason": "update"}),
     ],
     ids=["live", "open-session", "restart"],
 )

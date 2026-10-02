@@ -526,32 +526,6 @@ def _take_activation_request(path: Path, *, now: float) -> ActivationRequest | N
     return request
 
 
-def foreground_is_own_process() -> bool:
-    """Whether the foreground window belongs to this process; ``True`` off Windows.
-
-    The Desktop's only top-level window is its main window, so this reports
-    whether the user has the Desktop in front.
-    """
-
-    if sys.platform != "win32":
-        return True
-    from ctypes import wintypes
-
-    user32 = win32_library("user32")
-    get_foreground = user32.GetForegroundWindow
-    get_foreground.argtypes = []
-    get_foreground.restype = wintypes.HWND
-    get_thread_process = user32.GetWindowThreadProcessId
-    get_thread_process.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-    get_thread_process.restype = wintypes.DWORD
-    window = get_foreground()
-    if not window:
-        return False
-    process_id = wintypes.DWORD()
-    get_thread_process(window, ctypes.byref(process_id))
-    return process_id.value == os.getpid()
-
-
 # -- WebView2 browser arguments -------------------------------------------------
 
 

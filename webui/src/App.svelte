@@ -202,8 +202,6 @@
   // Cron is unmounted as well; a changed new job waits here until its form
   // opens again.
   let cronNewJobDraft = $state.raw(null);
-  // A Live voice call is starting, live or stopping.
-  let liveCallRunning = $state(false);
   let restartDiscardConfirmOpen = $state(false);
 
   let modelsRefreshToken = $derived(appControllerState.modelsRefreshToken);
@@ -378,12 +376,13 @@
   };
 
   // A Desktop restart into a new version replaces this page. The Restart
-  // button and the Desktop's idle request both come here. The user's restart
-  // saves pending edits through the navigation's autosave gate (with its
-  // Retry / Discard dialog) and asks before it discards an unsaved new Cron
-  // job. The idle request declines without any UI while a Live voice call
-  // runs, a new Cron job is unsaved, or edits do not save within the time a
-  // navigation waits before it offers to leave; the Desktop asks again later.
+  // button and the Desktop's request both come here. The user's restart saves
+  // pending edits through the navigation's autosave gate (with its Retry /
+  // Discard dialog) and asks before it discards an unsaved new Cron job. The
+  // Desktop's request follows an update the user started and is never
+  // declined: it saves pending edits for at most the time a navigation waits
+  // before it offers to leave, then restarts without any UI (an unsaved new
+  // Cron job is discarded, a Live voice call ends).
   const restartDesktopApp = async ({
     interactive = false,
     discardCronDraft = false,
@@ -400,20 +399,9 @@
       }
       return requestAutosaveTransition(restart);
     }
-    const blocked = () =>
-      liveCallRunning ||
-      cronNewJobDraft !== null ||
-      restartDiscardConfirmOpen ||
-      autosaveTransitionSaving ||
-      autosavePrompt !== null;
-    if (blocked()) return false;
-    if (
-      autosaveCoordinator.hasPending() &&
-      !(await flushPendingWithinStillSavingLimit())
-    )
-      return false;
-    // Something may have started while the edits were saved.
-    if (blocked()) return false;
+    // A slower save keeps running and may still land before the handoff.
+    if (autosaveCoordinator.hasPending())
+      await flushPendingWithinStillSavingLimit();
     return restart();
   };
 
@@ -732,8 +720,8 @@
     const stopDesktopSessionRequests = isDesktopAccessor()
       ? onDesktopOpenSession(openSessionLink)
       : () => {};
-    // This page always takes over the Desktop's idle restart request, so the
-    // Desktop never restarts over pending edits on its own.
+    // This page always takes over the Desktop's restart request, so it saves
+    // pending edits before the Desktop would restart on its own.
     const stopDesktopRestartRequests = isDesktopAccessor()
       ? onDesktopRestartRequest(() => {
           void restartDesktopApp();
@@ -871,7 +859,6 @@
       {serverUnavailable}
       voiceStatus={desktop.voiceStatus}
       onToast={desktop.showToast}
-      onRunningChange={(running) => (liveCallRunning = running)}
     />
   {/snippet}
   {#if dataStoreIncident}

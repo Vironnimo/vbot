@@ -493,7 +493,6 @@ def _run_desktop(
             placement=lambda: (
                 window_state.placement(window_holder[0], settings_file) if window_holder else None
             ),
-            foreground=_windows.foreground_is_own_process,
             shell_busy=voice.is_busy,
             close_window=lambda: window_holder[0].destroy(),
         )

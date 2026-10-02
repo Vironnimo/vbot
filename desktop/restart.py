@@ -6,12 +6,17 @@ version this process runs, and the command that launches the active version.
 Source runs have no contract, and nothing here is active for them.
 
 :class:`DesktopRestart` watches the version file. Once another version is
-active, the Desktop is *pending*: the page shows a restart prompt, and the
-Desktop restarts on request (``restartDesktop``) or on its own when the user has
-not had the window in the foreground for :data:`IDLE_AFTER_SECONDS` and Voice is
-neither recording nor calibrating. Before an automatic restart the page is asked
-first (``vbot-desktop-restart``); a page that takes the request flushes its
-edits and calls ``restartDesktop`` itself, or declines by doing nothing.
+active, the Desktop is *pending*. Every activation comes from an update the
+user started, so the restart is due right away:
+
+- Voice recording or calibrating delays it until that ends, for at most
+  :data:`RESTART_GRACE_SECONDS`;
+- then the page is asked first (``vbot-desktop-restart``). A page that takes the
+  request saves its edits and calls ``restartDesktop`` itself; without that call
+  within :data:`RESTART_GRACE_SECONDS` the Desktop restarts on its own. An
+  unhandled request restarts at once.
+
+The user may also restart earlier through ``restartDesktop``.
 
 A restart is a handoff, so a new version that cannot start never costs the
 open window:
@@ -27,7 +32,9 @@ open window:
 
 Without the signal within :data:`HANDOFF_TIMEOUT_SECONDS` (or when the command
 fails) the restart is abandoned, the window stays and the page shows the
-failure; an automatic retry waits :data:`FAILED_RETRY_SECONDS`.
+failure. The next automatic attempt waits :data:`FAILED_RETRY_SECONDS`, doubling
+with every further failure up to :data:`FAILED_RETRY_MAX_SECONDS`; the user may
+retry at once.
 """
 
 from __future__ import annotations
@@ -57,11 +64,15 @@ RESTART_REQUEST_MAX_AGE_SECONDS = 120.0
 #: How long the running Desktop waits for its successor to report.
 HANDOFF_TIMEOUT_SECONDS = 60.0
 VERSION_POLL_SECONDS = 5.0
-IDLE_AFTER_SECONDS = 10 * 60.0
-#: After the page took an idle restart request without restarting.
-PAGE_RETRY_SECONDS = 5 * 60.0
-#: After a failed restart, before the next automatic attempt.
-FAILED_RETRY_SECONDS = 10 * 60.0
+#: How often the watcher looks again while an automatic restart is due.
+DUE_POLL_SECONDS = 1.0
+#: How long a due restart waits for Voice to finish, and then for the page that
+#: took the request to call ``restartDesktop``.
+RESTART_GRACE_SECONDS = 15.0
+#: After a first failed restart, before the next automatic attempt; it doubles
+#: with every further failure up to :data:`FAILED_RETRY_MAX_SECONDS`.
+FAILED_RETRY_SECONDS = 60.0
+FAILED_RETRY_MAX_SECONDS = 10 * 60.0
 MAX_LOCATION_LENGTH = 2048
 _MAX_VERSION_LENGTH = 128
 _MAX_REQUEST_BYTES = 16 * 1024
@@ -304,7 +315,7 @@ def _is_version_id(value: Any) -> bool:
 
 
 class RestartPage(Protocol):
-    """The page side: update status pushes and the idle restart request."""
+    """The page side: update status pushes and the restart request."""
 
     def publish_update(self, status: Mapping[str, Any]) -> None: ...
 
@@ -341,9 +352,8 @@ class DesktopRestart:
 
     The window-facing callables are wired by the launcher: ``active_server``
     (the shown server), ``location`` (the page's URL fragment), ``placement``,
-    ``foreground`` (whether the window has the foreground), ``shell_busy``
-    (Voice recording or calibrating) and ``close_window``. Every callable may
-    run on the watcher or a restart thread.
+    ``shell_busy`` (Voice recording or calibrating) and ``close_window``. Every
+    callable may run on the watcher or a restart thread.
     """
 
     def __init__(
@@ -355,7 +365,6 @@ class DesktopRestart:
         active_server: Callable[[], tuple[str, int] | None],
         location: Callable[[], str | None],
         placement: Callable[[], WindowPlacement | None],
-        foreground: Callable[[], bool],
         shell_busy: Callable[[], bool],
         close_window: Callable[[], None],
         spawn: Callable[[tuple[str, ...]], RelaunchProcess] = _spawn,
@@ -369,7 +378,6 @@ class DesktopRestart:
         self._active_server = active_server
         self._location = location
         self._placement = placement
-        self._foreground = foreground
         self._shell_busy = shell_busy
         self._close_window = close_window
         self._spawn = spawn
@@ -386,8 +394,13 @@ class DesktopRestart:
         self._restarting = False
         self._failed = False
         self._nonce: str | None = None
-        self._last_foreground = clock()
         self._next_automatic = clock()
+        self._failures = 0
+        # The current due period: when it began, whether it waits for Voice,
+        # and when the page that was asked must have restarted.
+        self._due_since: float | None = None
+        self._waiting_for_voice = False
+        self._page_deadline: float | None = None
 
     @property
     def running_version(self) -> str:
@@ -433,44 +446,55 @@ class DesktopRestart:
         return matches
 
     def check(self) -> None:
-        """Run one watcher step: version file, foreground tracking, automatic restart."""
+        """Run one watcher step: the version file, then a due automatic restart."""
 
-        now = self._clock()
-        try:
-            if self._foreground():
-                self._last_foreground = now
-        except Exception:
-            logger.debug("Desktop foreground state is unavailable", exc_info=True)
-            self._last_foreground = now
         self._check_version()
+        now = self._clock()
         with self._lock:
-            due = (
-                self._pending
-                and not self._restarting
-                and now >= self._next_automatic
-                and now - self._last_foreground >= IDLE_AFTER_SECONDS
-            )
-        if not due:
+            if not self._pending or self._restarting or now < self._next_automatic:
+                self._due_since, self._page_deadline = None, None
+                self._waiting_for_voice = False
+                return
+            if self._due_since is None:
+                self._due_since = now
+            due_since, page_deadline = self._due_since, self._page_deadline
+        if page_deadline is not None:
+            if now >= page_deadline:
+                self._begin_automatic("page_timeout")
             return
-        try:
-            busy = self._shell_busy()
-        except Exception:
-            logger.warning("Voice state is unavailable; not restarting now", exc_info=True)
-            busy = True
-        if busy:
+        if now - due_since < RESTART_GRACE_SECONDS and self._voice_busy():
+            with self._lock:
+                waiting, self._waiting_for_voice = self._waiting_for_voice, True
+            if not waiting:
+                logger.info(
+                    "Desktop restart waits for Voice to finish (timeout=%ds)",
+                    RESTART_GRACE_SECONDS,
+                )
             return
         with self._lock:
-            self._next_automatic = now + PAGE_RETRY_SECONDS
+            self._page_deadline = now + RESTART_GRACE_SECONDS
         self._page.request_restart(self._page_answered)
+
+    def _voice_busy(self) -> bool:
+        try:
+            return self._shell_busy()
+        except Exception:
+            # Counted as busy, so the grace still bounds the delay; logged once per due period.
+            level = logging.DEBUG if self._waiting_for_voice else logging.WARNING
+            logger.log(level, "Voice state is unavailable; counting it as busy", exc_info=True)
+            return True
 
     def _page_answered(self, handled: bool) -> None:
         if handled:
-            logger.info("The page took the idle restart request")
+            logger.info("The page took the restart request (timeout=%ds)", RESTART_GRACE_SECONDS)
             return
+        self._begin_automatic("update")
+
+    def _begin_automatic(self, reason: str) -> None:
         try:
-            self._begin("idle")
+            self._begin(reason)
         except RestartError:
-            logger.debug("Idle restart no longer applies", exc_info=True)
+            logger.debug("The automatic restart no longer applies", exc_info=True)
 
     def _watch(self) -> None:
         while not self._stop.is_set():
@@ -478,7 +502,11 @@ class DesktopRestart:
                 self.check()
             except Exception:
                 logger.warning("Desktop update check failed", exc_info=True)
-            self._stop.wait(self._poll_seconds)
+            with self._lock:
+                due = self._due_since is not None
+            self._stop.wait(
+                min(self._poll_seconds, DUE_POLL_SECONDS) if due else self._poll_seconds
+            )
 
     def _check_version(self) -> None:
         path = self._contract.version_file
@@ -501,15 +529,16 @@ class DesktopRestart:
             changed = pending != self._pending or (pending and active != self._active_version)
             self._pending, self._active_version = pending, active
             if changed:
-                # A failure belongs to the version it tried to start.
-                self._failed = False
+                # A failure and its retry delay belong to the version it tried to start.
+                self._failed, self._failures = False, 0
+                self._next_automatic = self._clock()
             status = self._status_locked()
         if not changed:
             return
         if pending:
             logger.info(
                 "A newer vBot version is active (running=%s active=%s); the Desktop "
-                "restarts on request or when idle",
+                "restarts into it now",
                 self._contract.version,
                 active,
             )
@@ -582,9 +611,13 @@ class DesktopRestart:
             if self._nonce != nonce:
                 return
             self._restarting, self._failed, self._nonce = False, True, None
-            self._next_automatic = self._clock() + FAILED_RETRY_SECONDS
+            self._failures += 1
+            retry = min(FAILED_RETRY_SECONDS * 2 ** (self._failures - 1), FAILED_RETRY_MAX_SECONDS)
+            self._next_automatic = self._clock() + retry
             status = self._status_locked()
-        logger.warning("Desktop restart failed: %s; the window stays open", reason)
+        logger.warning(
+            "Desktop restart failed: %s; the window stays open (retry_in=%ds)", reason, retry
+        )
         self._page.publish_update(status)
 
     @staticmethod

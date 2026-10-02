@@ -516,7 +516,7 @@ def execute(install: Installation, operation: Operation) -> None:
     operation.transition(
         install,
         "completed",
-        "Desktop client updated; an open Desktop offers a restart and restarts on its own when idle"
+        "Desktop client updated; an open Desktop restarts into the new version right away"
         if not install.owns_server
         else "Application update completed and startup verified"
         if operation.server_was_running

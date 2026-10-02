@@ -26,8 +26,6 @@
     // The Desktop Voice status snapshot, or null without Desktop Voice.
     voiceStatus = null,
     onToast = () => {},
-    // Called with whether a call is starting, live or stopping.
-    onRunningChange = () => {},
   } = $props();
 
   let voice = $state(createLiveVoiceState());
@@ -91,11 +89,6 @@
     };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  });
-
-  $effect(() => {
-    const isRunning = running;
-    untrack(() => onRunningChange(isRunning));
   });
 
   const MESSAGES = {
