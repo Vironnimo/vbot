@@ -8,7 +8,7 @@ immutable :class:`WireProfileFile`. Invalid values, rules or Model entries are
 reported and omitted individually; an invalid top-level shape rejects the whole
 file or block.
 
-Merging semantics live in :mod:`core.providers._wire_profile_resolve`; this
+Merging semantics live in :mod:`core.providers.wire_profiles`; this
 module only decides what is well formed.
 """
 
@@ -461,8 +461,8 @@ _BODY_FIELDS = frozenset({"defaults", "protocols", "connections", "rules", "mode
 class _Limits:
     """What one Provider offers: its Connection ids and its Adapter's protocols.
 
-    ``None`` accepts any id or known protocol (bundled files, which tests check
-    against their Provider instead).
+    ``None`` accepts any id or known protocol: the Runtime loads bundled files
+    without limits, and a test loads them with their Provider's limits.
     """
 
     connection_ids: frozenset[str] | None = None
@@ -486,8 +486,14 @@ def parse_wire_profile_file(
     *,
     source: str,
     report: WireIssueReport,
+    connection_ids: Collection[str] | None = None,
+    protocols: Sequence[str] | None = None,
 ) -> WireProfileFile | None:
-    """Validate a decoded wire profile document; ``None`` rejects the whole file."""
+    """Validate a decoded wire profile document; ``None`` rejects the whole file.
+
+    ``connection_ids`` and ``protocols`` limit the file to its Provider's
+    Connections and the protocols its Adapter speaks, as for a block.
+    """
 
     if not isinstance(raw, Mapping):
         report(f"{source}: expected a JSON object, ignoring the file")
@@ -503,7 +509,10 @@ def parse_wire_profile_file(
         report=report,
         separator=":",
         known=_BODY_FIELDS | {"format_version"},
-        limits=_NO_LIMITS,
+        limits=_Limits(
+            connection_ids=frozenset(connection_ids) if connection_ids is not None else None,
+            protocols=tuple(protocols) if protocols is not None else None,
+        ),
     )
 
 
@@ -786,8 +795,13 @@ def load_wire_profile_files(
     resources_dir: Path,
     *,
     report: WireIssueReport,
+    limits: Callable[[str], tuple[Collection[str] | None, Sequence[str] | None]] | None = None,
 ) -> dict[str, WireProfileFile]:
-    """Load every bundled ``resources/wire/<provider>.json`` file."""
+    """Load every bundled ``resources/wire/<provider>.json`` file.
+
+    ``limits(provider_id)`` returns the Provider's ``(connection_ids,
+    protocols)`` to validate each file against; ``None`` checks neither.
+    """
 
     directory = resources_dir / WIRE_PROFILE_DIR_NAME
     files: dict[str, WireProfileFile] = {}
@@ -803,7 +817,15 @@ def load_wire_profile_files(
         except (OSError, ValueError) as exc:
             report(f"{path.name}: cannot read wire profile file ({exc}), ignoring it")
             continue
-        parsed = parse_wire_profile_file(provider_id, raw, source=path.name, report=report)
+        connection_ids, protocols = limits(provider_id) if limits is not None else (None, None)
+        parsed = parse_wire_profile_file(
+            provider_id,
+            raw,
+            source=path.name,
+            report=report,
+            connection_ids=connection_ids,
+            protocols=protocols,
+        )
         if parsed is not None:
             files[provider_id] = parsed
     return files

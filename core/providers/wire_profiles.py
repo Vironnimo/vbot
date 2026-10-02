@@ -12,6 +12,7 @@ import functools
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
@@ -263,12 +264,18 @@ def log_wire_profile_issue(message: str) -> None:
 
 
 @functools.cache
-def bundled_wire_profile_files() -> Mapping[str, WireProfileFile]:
-    """The wire profile files shipped in ``resources/wire`` (loaded once)."""
+def bundled_wire_profile_files(resources_dir: Path | None = None) -> Mapping[str, WireProfileFile]:
+    """The wire profile files shipped in ``<resources>/wire`` (each directory loaded once).
 
-    return MappingProxyType(
-        load_wire_profile_files(VBOT_ROOT / "resources", report=log_wire_profile_issue)
-    )
+    ``resources_dir`` defaults to this installation's ``resources`` directory.
+    """
+
+    return _load_bundled_files((resources_dir or VBOT_ROOT / "resources").resolve())
+
+
+@functools.cache
+def _load_bundled_files(resources_dir: Path) -> Mapping[str, WireProfileFile]:
+    return MappingProxyType(load_wire_profile_files(resources_dir, report=log_wire_profile_issue))
 
 
 def custom_provider_wire_file(
@@ -307,14 +314,15 @@ def custom_provider_wire_file(
 
 def wire_profile_files(
     custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+    resources_dir: Path | None = None,
 ) -> Mapping[str, WireProfileFile]:
-    """The bundled files plus every Custom Provider's wire block.
+    """The bundled files (of ``resources_dir``) plus every Custom Provider's wire block.
 
     A Custom Provider's block is its only file; without a block it resolves
     from the protocol defaults and its catalog.
     """
 
-    files = dict(bundled_wire_profile_files())
+    files = dict(bundled_wire_profile_files(resources_dir))
     for provider_id, provider in (custom_providers or {}).items():
         files.pop(provider_id, None)
         parsed = custom_provider_wire_file(provider_id, provider, report=log_wire_profile_issue)

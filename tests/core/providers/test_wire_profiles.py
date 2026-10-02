@@ -15,6 +15,8 @@ from core.providers._wire_profile_files import (
     load_wire_profile_files,
     parse_wire_profile_file,
 )
+from core.providers.adapter_types import ADAPTER_TYPES
+from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import ReasoningIntent
 from core.providers.wire_observations import REJECTION_TTL, ObservedFacts, WireObservations
 from core.providers.wire_profile import (
@@ -379,8 +381,18 @@ def test_profiles_are_cached_until_the_model_or_the_files_change() -> None:
 
 
 def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
+    """Every bundled file parses and names only its Provider's Connections and protocols."""
+    providers = ProviderRegistry.load(RESOURCES)
+
+    def limits(provider_id: str) -> tuple[list[str], tuple[str, ...]]:
+        config = providers.get(provider_id)
+        return (
+            [connection.id for connection in config.connections],
+            ADAPTER_TYPES[config.adapter].WIRE_PROTOCOLS,
+        )
+
     issues: list[str] = []
-    files = load_wire_profile_files(RESOURCES, report=issues.append)
+    files = load_wire_profile_files(RESOURCES, report=issues.append, limits=limits)
     assert issues == []
 
     (tmp_path / "wire").mkdir()

@@ -90,7 +90,7 @@ class ProviderRuntime:
         self._connection_reachability: dict[str, bool] = {}
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
-            files=wire_profile_files(custom_providers),
+            files=wire_profile_files(custom_providers, resources_path),
             protocol_support=self._adapter_protocols,
             model_resolver=self._resolve_model,
             report=log_wire_profile_issue,
@@ -127,7 +127,9 @@ class ProviderRuntime:
         Adapters resolve profiles through this Runtime's shared wire profiles,
         so already built Adapters use the new blocks from their next request.
         """
-        self._wire_profiles.replace_files(wire_profile_files(custom_providers))
+        self._wire_profiles.replace_files(
+            wire_profile_files(custom_providers, self._resources_path)
+        )
 
     @property
     def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
