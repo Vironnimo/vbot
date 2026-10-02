@@ -19,6 +19,7 @@ from core.projects import (
     ProjectStore,
     effective_project_allowed_skills,
 )
+from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillRecord
 from core.skills.policy import SkillPolicyService
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
@@ -144,8 +145,12 @@ class SkillRuntime:
         resources_path: Path,
         logger: Any,
         reload_skills: Callable[[], None],
+        authoring: SkillAuthoringService | None = None,
     ) -> None:
         self._skills = registry
+        # Answers provenance, pins and archives of the writable homes; without it
+        # the inventory carries no records and no archive.
+        self._authoring = authoring
         self._policy = policy
         self._storage = storage
         self._agents = agents
@@ -269,6 +274,23 @@ class SkillRuntime:
     def global_skills_dir(self) -> Path:
         """Return the user-curated global skills directory (``<data_dir>/skills``)."""
         return self._storage.data_dir / _SKILLS_DIRNAME
+
+    def archived_skill(self, agent_id: str | None, name: str) -> ArchivedSkill | None:
+        """Return the archived Skill *name* of the homes a Run sees, own home first.
+
+        ``agent_id`` names an Identity Agent's own home; the global home is always
+        searched.
+        """
+        if self._authoring is None:
+            return None
+        homes = [self.global_skills_dir]
+        if agent_id is not None:
+            homes.insert(0, self.agent_skills_dir(agent_id))
+        for home in homes:
+            archived = self._authoring.archived_skill(home, name)
+            if archived is not None:
+                return archived
+        return None
 
     def skills_for(
         self, project_id: str | None, identity_agent_id: str | None = None
@@ -421,6 +443,11 @@ class SkillRuntime:
         ``agents`` projects each Identity Agent's effective Skill access (roster
         order) and ``projects`` each Project's Skill pool (by display name). Their
         ``package_id`` names the inventory entry of the package that wins there.
+
+        A package in a writable home (``editable_scope`` set) carries its history
+        record: ``created_by`` (``human``, ``agent``, ``reflection`` or
+        ``librarian``), ``created_at``, ``changed_at``, ``changed_by`` and
+        ``pinned``. ``archived`` lists every writable home's archived packages.
         """
         environment = self._skill_environment(self._storage.load_environment())
         policy = self._policy.load()
@@ -454,6 +481,7 @@ class SkillRuntime:
             origins=merged_origins,
         )
         global_root = self.global_skills_dir.resolve()
+        records = self._home_records(agents)
         skills: list[dict[str, Any]] = []
         package_ids: dict[Path, str] = {}
         for skill, source, warnings, loadable in raw_entries:
@@ -476,18 +504,26 @@ class SkillRuntime:
             entry_id = self._manager_entry_id(root, skill.path, owner_id)
             if loadable:
                 package_ids.setdefault(skill.path.resolve(), entry_id)
+            editable_scope = (
+                (
+                    f"agent:{owner_id}"
+                    if owner_id
+                    else "global"
+                    if root.resolve() == global_root
+                    else None
+                )
+                if loadable
+                else None
+            )
+            record = (
+                records.get(editable_scope, {}).get(skill.path.parent.name)
+                if editable_scope
+                else None
+            )
             skills.append(
                 {
                     "id": entry_id,
-                    "editable_scope": (
-                        f"agent:{owner_id}"
-                        if owner_id
-                        else "global"
-                        if root.resolve() == global_root
-                        else None
-                    )
-                    if loadable
-                    else None,
+                    "editable_scope": editable_scope,
                     "source_label": (root.parent.name if root.name == "skills" else root.name)
                     if origin == SKILL_ORIGIN_GLOBAL and root.resolve() != global_root
                     else None,
@@ -503,6 +539,7 @@ class SkillRuntime:
                     "missing": missing,
                     "optional_missing": optional_missing,
                     "warnings": warnings,
+                    **_record_fields(record),
                 }
             )
         project_pools = [
@@ -514,11 +551,37 @@ class SkillRuntime:
         ]
         return {
             "skills": skills,
+            "archived": self._archived_entries(agents),
             "agents": [self._agent_skill_access(agent, package_ids) for agent in agents],
             "projects": [pool for pool in project_pools if pool is not None],
             "policy_diagnostics": self._policy.validation_diagnostics(),
             "stale_shared": self._stale_shared_entries(policy),
         }
+
+    def _writable_homes(self, agents: list[Agent]) -> list[tuple[str, Path]]:
+        homes = [("global", self.global_skills_dir)]
+        homes.extend((f"agent:{agent.id}", self.agent_skills_dir(agent.id)) for agent in agents)
+        return homes
+
+    def _home_records(self, agents: list[Agent]) -> dict[str, dict[str, SkillRecord]]:
+        if self._authoring is None:
+            return {}
+        return {
+            scope: self._authoring.records(home)
+            for scope, home in self._writable_homes(agents)
+            if home.is_dir()
+        }
+
+    def _archived_entries(self, agents: list[Agent]) -> list[dict[str, Any]]:
+        if self._authoring is None:
+            return []
+        entries: list[dict[str, Any]] = []
+        for scope, home in self._writable_homes(agents):
+            entries.extend(
+                {"scope": scope, **archived.to_dict()}
+                for archived in self._authoring.archived(home)
+            )
+        return entries
 
     def _agent_skill_access(self, agent: Agent, package_ids: dict[Path, str]) -> dict[str, Any]:
         """Project one Identity Agent's effective Skill grants for the manager.
@@ -915,3 +978,22 @@ class SkillRuntime:
         # a disabled project skill is invisible everywhere, including opt-ins.
         names = scan_project_skill_names(project_cwd, project.source_format, environment)
         return _ProjectSkillBundle(registry=registry, names=names - disabled)
+
+
+def _record_fields(record: SkillRecord | None) -> dict[str, Any]:
+    """Inventory fields of a writable package's history record."""
+    if record is None:
+        return {
+            "created_by": None,
+            "created_at": None,
+            "changed_at": None,
+            "changed_by": None,
+            "pinned": False,
+        }
+    return {
+        "created_by": record.origin,
+        "created_at": record.created_at,
+        "changed_at": record.changed_at,
+        "changed_by": record.changed_by,
+        "pinned": record.pinned,
+    }

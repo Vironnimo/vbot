@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from core.skills import SkillAuthoringService
+from core.skills import ArchivedSkill, SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -163,6 +163,80 @@ def test_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
         "skill_not_found", "Skill not found: missing. Available Skills: debugging."
     )
     assert len(refreshes) == 1
+
+
+def _archived(name: str, reason: str, absorbed_into: str | None = None) -> ArchivedSkill:
+    return ArchivedSkill(
+        archive_id=f"{name}_0000",
+        name=name,
+        archived_at="2026-09-30T08:00:00.000000Z",
+        reason=reason,
+        absorbed_into=absorbed_into,
+        archived_by="reflection",
+        origin="agent",
+        description="",
+    )
+
+
+@pytest.mark.parametrize(
+    ("archived", "arguments", "expected"),
+    [
+        pytest.param(
+            _archived("debug-notes", "absorbed", "debugging"),
+            {"name": "debug-notes"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-09-30; these are "
+            "the instructions of 'debugging'.",
+            id="merged-loads-its-target",
+        ),
+        pytest.param(
+            _archived("debug-notes", "absorbed", "debugging"),
+            {"name": "debug-notes", "file_path": "references/guide.md"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-09-30 and has no "
+            "files of its own anymore. Load 'debugging' with skill and read its files instead.",
+            id="merged-file-read",
+        ),
+        pytest.param(
+            _archived("old-notes", "deleted"),
+            {"name": "old-notes"},
+            "Skill 'old-notes' was deleted on 2026-09-30 and cannot be loaded. The user can "
+            "restore it in the Skill controls. Call skill without arguments to list the "
+            "available Skills.",
+            id="deleted",
+        ),
+        pytest.param(
+            _archived("old-notes", "absorbed", "hidden"),
+            {"name": "old-notes"},
+            "Skill 'old-notes' was merged into Skill 'hidden' on 2026-09-30 and cannot be "
+            "loaded. The user can restore it in the Skill controls. Call skill without "
+            "arguments to list the available Skills.",
+            id="merged-into-a-skill-this-agent-cannot-load",
+        ),
+    ],
+)
+def test_archived_names_load_their_merged_skill_or_explain_the_archive(
+    tmp_path: Path, archived: ArchivedSkill, arguments: dict[str, object], expected: str
+) -> None:
+    lookups: list[tuple[str | None, str]] = []
+
+    def resolve(agent_id: str | None, name: str) -> ArchivedSkill | None:
+        lookups.append((agent_id, name))
+        return archived if name == archived.name else None
+
+    recorder = ActivationRecorder()
+    tool = SkillTool(tmp_path, SkillRegistry.load(debugging_skills(tmp_path)), archived=resolve)
+
+    result = tool.call(arguments, activation_hook=recorder)
+
+    if result["ok"]:
+        assert (result["data"]["name"], result["data"]["note"]) == ("debugging", expected)
+        assert list(recorder.activations) == ["debugging"]
+    else:
+        assert result == tool_failure("skill_not_found", expected)
+        assert recorder.activations == {}
+    # Only after a real miss, with the identity Agent whose own home it searches.
+    assert lookups == [("coder", archived.name)]
+    assert tool.call({"name": "debugging"})["ok"] is True
+    assert len(lookups) == 1
 
 
 def test_rescan_makes_a_newly_dropped_skill_loadable(tmp_path: Path) -> None:

@@ -555,6 +555,17 @@ class SkillAuthoringService:
                 ),
             )
 
+    def check_writable(self, target_root: Path, skill_name: str, *, writer: SkillWriter) -> None:
+        """Raise ``SkillProtectedError`` when *writer* may not change an existing Skill.
+
+        Every write enforces the same rule; this lets a caller refuse before it
+        prepares a change.
+        """
+        with self._write_lock:
+            _check_writer(writer)
+            skill_dir = self._existing_skill_dir(target_root, skill_name)
+            self._observe(SkillHistory(skill_dir.parent), skill_name, skill_dir, writer)
+
     def set_pinned(
         self, target_root: Path, skill_name: str, pinned: bool, *, writer: SkillWriter
     ) -> SkillWriteResult:
@@ -1244,6 +1255,7 @@ __all__ = [
     "PROVENANCE_AUTHOR_KEY",
     "PROVENANCE_SOURCE_KEY",
     "ArchivedSkill",
+    "SkillActor",
     "SkillAuthor",
     "SkillAuthoringError",
     "SkillAuthoringService",

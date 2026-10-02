@@ -12,9 +12,12 @@ from typing import Any
 
 import yaml
 
+from core.runs import is_unattended_run_kind
 from core.skills.authoring import (
+    SkillActor,
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillProtectedError,
     SkillWriter,
     SkillWriteResult,
 )
@@ -61,12 +64,64 @@ SKILL_MANAGE_TOOL_DESCRIPTION = (
     "patch replaces old_string with new_string in SKILL.md or in file_path."
 )
 
+# Results of a delete, which moves the Skill into the archive of its home.
+SKILL_MANAGE_DELETED = (
+    "Deleted Skill '{name}'. Its files are kept in the archive, where the user can restore it."
+)
+SKILL_MANAGE_ABSORBED = (
+    "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
+    "kept in the archive, where the user can restore it."
+)
+# Refusals of a background review (a Run without the user, such as a reflection
+# review). It changes only Skills an Agent created that the user has not pinned.
+SKILL_MANAGE_PINNED_REFUSAL = (
+    "Skill '{name}' is pinned by the user, so this review cannot change it; nothing changed. "
+    "Leave it as it is."
+)
+SKILL_MANAGE_USER_SKILL_REFUSAL = (
+    "Skill '{name}' comes from the user, so this review cannot change it; nothing changed. "
+    "Leave it as it is."
+)
+SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
+    "Who created Skill '{name}' cannot be determined right now, so this review cannot change "
+    "it; nothing changed. Leave it as it is."
+)
+SKILL_MANAGE_SHARED_REFUSAL = (
+    "Skill '{name}' is shared with you by another Agent, so this review cannot change it; "
+    "nothing changed. Leave it as it is."
+)
+SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
+    "delete in this review needs absorbed_into: the name of another of your own Skills that "
+    "now holds the instructions of '{name}'; nothing changed. Merge the instructions into "
+    "that Skill with patch or edit first, then call delete with absorbed_into. If no other "
+    "Skill holds them, leave '{name}' as it is."
+)
+# ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
+SKILL_MANAGE_ABSORBED_INTO_ACTION = (
+    "absorbed_into is used only by delete; nothing changed. Omit absorbed_into for {action}."
+)
+SKILL_MANAGE_ABSORBED_INTO_SELF = (
+    "absorbed_into names '{name}' itself; nothing changed. Name the other Skill that now holds "
+    "its instructions."
+)
+SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
+    "absorbed_into names '{target}', which is not one of your own Skills; nothing changed. "
+    "Name one of your own Skills that now holds the instructions of '{name}'."
+)
+
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
 # Actions that may operate on a Skill shared into the caller (maintained in the
 # owner's package). ``create`` is own-home-only by definition; ``delete`` stays
 # owner/human-only so a receiver cannot remove someone else's playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
-_AGENT_WRITER = SkillWriter(actor="agent")
+# The Skill history actor of a Run without the user; every unattended kind so far
+# is a reflection review.
+_BACKGROUND_ACTOR: SkillActor = "reflection"
+_PROTECTED_MESSAGES = {
+    "pinned": SKILL_MANAGE_PINNED_REFUSAL,
+    "user": SKILL_MANAGE_USER_SKILL_REFUSAL,
+    "unknown": SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL,
+}
 _LOGGER = get_logger("tools.skill_manage")
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
@@ -124,6 +179,8 @@ _UNADVERTISED_PARAMETERS: JsonObject = {
     "description": {"type": "string"},
     "scope": {"type": "string"},
     "category": {"type": "string"},
+    # Named in the background delete refusal; attended deletes accept it too.
+    "absorbed_into": {"type": "string"},
 }
 _FIELD_ALIASES = {
     "match": "old_string",
@@ -198,6 +255,7 @@ class _Call:
     replace_all: bool = False
     file_path: str | None = None
     description: str | None = None
+    absorbed_into: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -229,6 +287,7 @@ def make_skill_manage_handler(
     """
 
     def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        writer = _writer(context)
         try:
             call = _read_call(arguments)
             own_root = resolve_agent_skills_dir(context.agent_id)
@@ -243,6 +302,10 @@ def make_skill_manage_handler(
                     else None
                 )
                 if shared_root is not None:
+                    if writer.background:
+                        raise _RefusalError(
+                            "skill_protected", SKILL_MANAGE_SHARED_REFUSAL.format(name=call.name)
+                        )
                     target_root = shared_root
                     shared_target = True
             # A missing target package on a mutate/delete action is not always an
@@ -258,6 +321,10 @@ def make_skill_manage_handler(
                     if resolve_external_skill_scope is not None
                     else None
                 )
+                if scope == "shared" and writer.background:
+                    raise _RefusalError(
+                        "skill_protected", SKILL_MANAGE_SHARED_REFUSAL.format(name=call.name)
+                    )
                 if scope is not None:
                     return tool_failure(
                         "skill_write_rejected",
@@ -265,9 +332,19 @@ def make_skill_manage_handler(
                         retryable=False,
                     )
                 raise _RefusalError("skill_not_found", _unknown_skill_message(call.name, own_root))
-            result, summary = _apply(authoring, target_root, call)
+            if writer.background and call.action != "create":
+                authoring.check_writable(target_root, call.name, writer=writer)
+            if call.action == "delete":
+                _check_absorbed_into(call, own_root, writer)
+            result, summary = _apply(authoring, target_root, call, writer)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
+        except SkillProtectedError as error:
+            return tool_failure(
+                "skill_protected",
+                _PROTECTED_MESSAGES[error.reason].format(name=error.skill_name),
+                retryable=False,
+            )
         except SkillAuthoringError as error:
             return tool_failure(
                 "skill_write_rejected",
@@ -301,6 +378,37 @@ def make_skill_manage_handler(
     return skill_manage_handler
 
 
+def _writer(context: ToolContext) -> SkillWriter:
+    """Name the call's writer: an attended Agent, or a background review."""
+    kind = context.run_kind
+    return SkillWriter(
+        actor=_BACKGROUND_ACTOR if is_unattended_run_kind(kind) else "agent",
+        session_id=context.session_id or None,
+        run_id=context.run_id or None,
+        run_kind=None if kind is None else kind.value,
+    )
+
+
+def _check_absorbed_into(call: _Call, own_root: Path, writer: SkillWriter) -> None:
+    """A background delete names the own Skill that absorbed this one."""
+    target = call.absorbed_into
+    if target is None:
+        if writer.background:
+            raise _RefusalError(
+                "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_REQUIRED.format(name=call.name)
+            )
+        return
+    if target == call.name:
+        raise _RefusalError(
+            "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_SELF.format(name=call.name)
+        )
+    if find_skill_package_dir(own_root, target) is None:
+        raise _RefusalError(
+            "invalid_arguments",
+            SKILL_MANAGE_ABSORBED_INTO_UNKNOWN.format(target=target, name=call.name),
+        )
+
+
 def _record_display_details(context: ToolContext, result: SkillWriteResult) -> None:
     """Show the user the changed package files and the Skill's validation warnings."""
     for change in result.changes:
@@ -327,7 +435,12 @@ def _read_call(arguments: JsonObject) -> _Call:
         replace_all=arguments.get("replace_all") is True,
         file_path=_text(arguments, "file_path"),
         description=_text(arguments, "description"),
+        absorbed_into=_text(arguments, "absorbed_into"),
     )
+    if call.absorbed_into is not None and call.action != "delete":
+        raise _RefusalError(
+            "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_ACTION.format(action=call.action)
+        )
     _check_scope(arguments.get("scope"))
     if arguments.get("category"):
         call.notes.append("category is not used; Skills have no categories.")
@@ -593,32 +706,37 @@ def _read_hint(name: str, file_path: str) -> str:
 
 
 def _apply(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call
+    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
-        result = authoring.create(target_root, name, call.content or "", writer=_AGENT_WRITER)
+        result = authoring.create(target_root, name, call.content or "", writer=writer)
         return result, f"Created Skill '{name}'."
     if call.action == "edit":
-        result = authoring.edit(target_root, name, call.content or "", writer=_AGENT_WRITER)
+        result = authoring.edit(target_root, name, call.content or "", writer=writer)
         return result, f"Replaced SKILL.md of Skill '{name}'."
     if call.action == "patch":
-        return _patch(authoring, target_root, call)
+        return _patch(authoring, target_root, call, writer)
     file_path = call.file_path or ""
     if call.action == "write_file":
         result = authoring.write_file(
-            target_root, name, file_path, call.content or "", writer=_AGENT_WRITER
+            target_root, name, file_path, call.content or "", writer=writer
         )
         return result, f"Wrote {file_path} of Skill '{name}'."
     if call.action == "remove_file":
-        result = authoring.remove_file(target_root, name, file_path, writer=_AGENT_WRITER)
+        result = authoring.remove_file(target_root, name, file_path, writer=writer)
         return result, f"Removed {file_path} from Skill '{name}'."
-    result = authoring.delete(target_root, name, writer=_AGENT_WRITER)
-    return result, f"Deleted Skill '{name}' and its files."
+    if call.absorbed_into is not None:
+        result = authoring.delete(
+            target_root, name, writer=writer, absorbed_into=call.absorbed_into
+        )
+        return result, SKILL_MANAGE_ABSORBED.format(name=name, target=call.absorbed_into)
+    result = authoring.delete(target_root, name, writer=writer)
+    return result, SKILL_MANAGE_DELETED.format(name=name)
 
 
 def _patch(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call
+    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
 ) -> tuple[SkillWriteResult, str]:
     file_path = call.file_path or SKILL_FILENAME
     found: list[FuzzyReplacement] = []
@@ -632,7 +750,7 @@ def _patch(
         return replacement.new_content
 
     try:
-        result = authoring.rewrite(target_root, call.name, file_path, edit, writer=_AGENT_WRITER)
+        result = authoring.rewrite(target_root, call.name, file_path, edit, writer=writer)
     except _RefusalError as refusal:
         if refusal.code == "text_not_found" and call.file_path == SKILL_FILENAME:
             hint = _support_file_hint(authoring, target_root, call)
@@ -816,7 +934,15 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
                 _ACTION_SYNONYMS.get(spelling(value), value) if isinstance(value, str) else value
             )
         },
-        empty_as_omitted=("name", "file_path", "old_string", "scope", "category", "description"),
+        empty_as_omitted=(
+            "name",
+            "file_path",
+            "old_string",
+            "scope",
+            "category",
+            "description",
+            "absorbed_into",
+        ),
     )
     if not isinstance(repaired, dict):
         return repaired
