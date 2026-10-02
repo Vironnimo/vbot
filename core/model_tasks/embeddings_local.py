@@ -37,6 +37,7 @@ from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskT
 from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.utils.errors import VBotError
+from core.utils.file_status import is_file_strict
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 
@@ -248,7 +249,7 @@ class LocalEmbeddingSetup(LocalSetup):
             return error
         assert self.model_directory is not None
         try:
-            if not (self.model_directory / self.embedding_model.graph).is_file():
+            if not is_file_strict(self.model_directory / self.embedding_model.graph):
                 return "model_incomplete"
         except OSError:
             return "environment_unreadable"

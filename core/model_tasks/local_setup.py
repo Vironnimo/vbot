@@ -40,6 +40,7 @@ from core.model_tasks.model_files import (
     PinnedModel,
     fetch_model_files,
 )
+from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("local_engines.setup")
@@ -161,7 +162,7 @@ class LocalSetup:
         if self.model_directory is None:
             return "model_missing"
         try:
-            if not (self.model_directory / "verified.json").is_file():
+            if not is_file_strict(self.model_directory / "verified.json"):
                 return "model_missing"
         except OSError:
             return "environment_unreadable"
@@ -509,21 +510,23 @@ def environment_error(directory: Path, python: Path, python_version: str | None 
     The environment's ``pyvenv.cfg`` names the Python it is based on: when that
     Python is gone (``python_missing``) or *python_version* (``major.minor``)
     differs from it (``python_changed``), the environment must be created again.
+    What cannot be read is ``environment_unreadable``, never missing: a missing
+    Python lets setup delete the environment.
     """
     try:
-        if not python.is_file():
+        if not is_file_strict(python):
             return "python_missing"
         base = _environment_base(directory)
         if base is not None:
             home, version = base
-            if not home.is_dir():
+            if not is_dir_strict(home):
                 return "python_missing"
             if python_version is not None and version != python_version:
                 return "python_changed"
         # This receipt proves that setup finished, not that the installed
         # packages or application source are identical to today's recipe.
         # Updates must not revoke a completed setup based on text or hashes.
-        if not (directory / "verified.json").is_file():
+        if not is_file_strict(directory / "verified.json"):
             return "setup_incomplete"
     except OSError:
         return "environment_unreadable"
@@ -533,7 +536,7 @@ def environment_error(directory: Path, python: Path, python_version: str | None 
 def _environment_base(directory: Path) -> tuple[Path, str] | None:
     """Return the base Python's directory and ``major.minor`` from ``pyvenv.cfg``."""
     config = directory / "pyvenv.cfg"
-    if not config.is_file():
+    if not is_file_strict(config):
         return None
     values: dict[str, str] = {}
     for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
