@@ -8,6 +8,7 @@ import logging
 import re
 import socket
 import sys
+import warnings
 from dataclasses import replace
 from pathlib import Path
 from typing import override
@@ -21,6 +22,7 @@ import pytest
 import uvicorn
 from mcp.client.auth import OAuthFlowError
 from mcp.server import Server
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, ResourceUpdated
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
@@ -933,6 +935,106 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
                 await asyncio.sleep(0)
         # Republished once: refreshes that find the same catalog publish nothing.
         assert published == [["add"], ["add", "added"]]
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True], ids=["listen", "legacy-subscribe"])
+async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
+    host, monkeypatch, legacy
+):
+    bus = InMemorySubscriptionBus()
+    listen = ListenHandler(bus)
+    # The server's subscribe and unsubscribe requests, in order; legacy sessions to notify.
+    requests: list[tuple[str, str]] = []
+    sessions = []
+
+    async def listened(server_context, params):
+        for uri in params.notifications.resource_subscriptions or ():
+            requests.append(("subscribe", uri))
+        try:
+            return await listen(server_context, params)
+        finally:
+            for uri in params.notifications.resource_subscriptions or ():
+                requests.append(("unsubscribe", uri))
+
+    async def subscribe(server_context, params):
+        requests.append(("subscribe", str(params.uri)))
+        sessions.append(server_context.session)
+        return types.EmptyResult()
+
+    async def unsubscribe(server_context, params):
+        requests.append(("unsubscribe", str(params.uri)))
+        return types.EmptyResult()
+
+    async def list_resources(server_context, params):
+        return types.ListResourcesResult(resources=[])
+
+    async def list_templates(server_context, params):
+        return types.ListResourceTemplatesResult(resource_templates=[])
+
+    async def change():
+        if legacy:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", MCPDeprecationWarning)
+                await sessions[-1].send_resource_updated("test://watched")
+        else:
+            await bus.publish(ResourceUpdated(uri="test://watched"))
+
+    def changes():
+        return [
+            event["payload"]["uri"]
+            for event in runner.events()["events"]
+            if event["kind"] == "resource_changed"
+        ]
+
+    async def sleep(delay):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", MCPDeprecationWarning)
+        server = Server(
+            "watch",
+            on_list_resources=list_resources,
+            on_list_resource_templates=list_templates,
+            on_subscribe_resource=subscribe if legacy else None,
+            on_unsubscribe_resource=unsubscribe if legacy else None,
+            on_subscriptions_listen=None if legacy else listened,
+        )
+    stream = StreamServer(server)
+    runner = runner_for(host, stream, monkeypatch)
+    if legacy:
+        runner.config["transport"] = "sse"
+    try:
+        async with asyncio.timeout(10):
+            await runner.invoke("resources/subscribe", {"uri": "test://watched"})
+            await change()
+            while changes() != ["test://watched"]:
+                await asyncio.sleep(0)
+            # The new session subscribes again, before the connection serves calls.
+            await stream.kill()
+            while requests.count(("subscribe", "test://watched")) < 2:
+                await asyncio.sleep(0)
+            await change()
+            while changes() != ["test://watched"] * 2:
+                await asyncio.sleep(0)
+            await runner.invoke("resources/unsubscribe", {"uri": "test://watched"})
+            while requests[-1] != ("unsubscribe", "test://watched"):
+                await asyncio.sleep(0)
+            await stream.kill()
+            while stream.connections < 3:
+                await asyncio.sleep(0)
+            await runner.invoke("resources/subscribe", {"uri": "test://other"})
+        assert stream.connections == 3
+        assert requests == [
+            ("subscribe", "test://watched"),
+            *([] if legacy else [("unsubscribe", "test://watched")]),
+            ("subscribe", "test://watched"),
+            ("unsubscribe", "test://watched"),
+            ("subscribe", "test://other"),
+        ]
     finally:
         await runner.close()
 

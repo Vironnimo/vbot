@@ -408,6 +408,8 @@ class ConnectionRunner:
         # Background work of the current connection: catalog watch and refresh.
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
+        # Resources subscribed through this runner; each connection subscribes them again.
+        self._resource_subscriptions: set[str] = set()
         # Cancellations of server tasks whose calls stopped waiting.
         self._task_cancels: set[asyncio.Task[None]] = set()
         self._catalog_stale = False
@@ -695,6 +697,10 @@ class ConnectionRunner:
                 self._subscriptions["catalog"] = asyncio.create_task(
                     self._watch_catalog(), name=f"mcp-catalog-watch:{self.id}"
                 )
+                # A server forgets subscriptions with its session; a failure is a
+                # ``subscription_failed`` event and the next connection tries again.
+                for uri in self._resource_subscriptions:
+                    self._watch(uri)
                 try:
                     await self._serve()
                 finally:
@@ -1232,26 +1238,26 @@ class ConnectionRunner:
             )
         if operation == "resources/subscribe":
             uri = arguments["uri"]
-            watch = self._resource_watches.get(uri)
-            if watch is None or watch[0].done():
-                ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-                watch = (
-                    asyncio.create_task(
-                        self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
-                    ),
-                    ready,
-                )
-                self._resource_watches[uri] = watch
             # Concurrent subscribers share one acknowledgement; one that is
             # cancelled leaves it to the others.
-            await asyncio.shield(watch[1])
+            await asyncio.shield(self._watch(uri))
+            self._resource_subscriptions.add(uri)
             return {"subscribed": uri}
         if operation == "resources/unsubscribe":
-            watch = self._resource_watches.pop(arguments["uri"], None)
+            uri = arguments["uri"]
+            self._resource_subscriptions.discard(uri)
+            watch = self._resource_watches.pop(uri, None)
             if watch is not None:
                 watch[0].cancel()
                 await asyncio.gather(watch[0], return_exceptions=True)
-            return {"unsubscribed": arguments["uri"]}
+                subscribed = (
+                    watch[1].done() and not watch[1].cancelled() and not watch[1].exception()
+                )
+                if subscribed and client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+                    await self._legacy(
+                        "resource_subscriptions", lambda: client.unsubscribe_resource(uri)
+                    )
+            return {"unsubscribed": uri}
         if operation == "logging/setLevel":
             level = arguments["level"]
             types.LoggingMessageNotificationParams.model_validate({"level": level, "data": None})
@@ -1391,7 +1397,16 @@ class ConnectionRunner:
         return await started
 
     async def _message(self, message: Any) -> None:
-        if isinstance(message, types.ServerNotification):
+        client = self.client
+        if (
+            isinstance(message, types.ResourceUpdatedNotification)
+            and client is not None
+            and client.protocol_version < DISCOVERY_PROTOCOL_VERSION
+        ):
+            # A legacy subscription's change; a listen stream records its own.
+            uri = str(message.params.uri)
+            self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
+        elif isinstance(message, types.ServerNotification):
             self._events.record("notification", dump(message))
             if isinstance(
                 message,
@@ -1473,15 +1488,39 @@ class ConnectionRunner:
         except Exception as error:
             self._events.record("subscription_failed", {"error": self.safe_error(error)})
 
+    def _watch(self, uri: str) -> asyncio.Future[None]:
+        """The acknowledgement of this connection's subscription to *uri*, started if needed."""
+        watch = self._resource_watches.get(uri)
+        if watch is None or watch[0].done():
+            ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            # A restored subscription has no waiter; its failure is an event.
+            ready.add_done_callback(lambda done: done.cancelled() or done.exception())
+            watch = (
+                asyncio.create_task(
+                    self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                ),
+                ready,
+            )
+            self._resource_watches[uri] = watch
+        return watch[1]
+
     async def _watch_resource(self, uri: str, ready: asyncio.Future[None]) -> None:
+        """Subscribe to *uri* for this connection; changes become ``resource_changed`` events."""
         # The subscribing call created this task, but the watch outlives that call.
         _CURRENT_CALL.set(None)
+        client = self._client()
         try:
-            async with self._client().listen(resource_subscriptions=[uri]) as events:
-                if not ready.done():
+            if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+                await self._legacy("resource_subscriptions", lambda: client.subscribe_resource(uri))
+                ready.set_result(None)
+                # Changes arrive as notifications (``_message``); like a listen
+                # stream, the subscription lasts while this task runs.
+                await asyncio.Event().wait()
+            else:
+                async with client.listen(resource_subscriptions=[uri]) as events:
                     ready.set_result(None)
-                async for event in events:
-                    self._events.record("resource_changed", {"uri": uri, "event": dump(event)})
+                    async for event in events:
+                        self._events.record("resource_changed", {"uri": uri, "event": dump(event)})
         except asyncio.CancelledError:
             raise
         except Exception as error:
