@@ -132,7 +132,11 @@ class SkillRevision:
         return self.kind in ("baseline", "create") or self.live is not None
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the public projection: no file texts or hashes."""
+        """Return the public projection: no file texts or hashes.
+
+        ``live`` appears only on a revision that moved the Skill into (true) or
+        out of (false) the home.
+        """
         data: dict[str, Any] = {
             "id": self.id,
             "at": self.at,
@@ -147,6 +151,7 @@ class SkillRevision:
             "run_kind",
             "origin",
             "pinned",
+            "live",
             "reason",
             "absorbed_into",
             "archive_id",

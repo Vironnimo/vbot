@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +132,12 @@ def test_changes_outside_vbot_are_recorded_before_the_next_write(
         # Binary content is recorded by its hash only.
         ("assets/logo.bin", "created", False),
     ]
+
+    shutil.rmtree(root / "demo")
+
+    removed = service.history(root, "demo")[0].to_dict()
+    assert (removed["kind"], removed["actor"], removed["live"]) == ("external", "external", False)
+    assert {item["change"] for item in removed["files"]} == {"deleted"}
 
 
 @pytest.mark.parametrize(
