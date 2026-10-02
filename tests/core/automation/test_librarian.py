@@ -13,6 +13,7 @@ from typing import Any, cast
 import pytest
 
 import core.automation.librarian as librarian_module
+import core.skills._history as skill_history_module
 from core.agents import AgentNotFoundError
 from core.automation.librarian import (
     CHECK_INTERVAL_SECONDS,
@@ -178,7 +179,7 @@ def harness(tmp_path: Path) -> _Harness:
 
 @pytest.mark.asyncio
 async def test_a_pass_archives_inactive_background_skills_and_reports_them(
-    harness: _Harness,
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = harness.home("main")
     for name, writer in (
@@ -189,10 +190,18 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         ("old-human", _HUMAN),
         ("used-recently", _REFLECTION),
         ("scheduled", _REFLECTION),
+        ("reviewed-recently", _REFLECTION),
+        ("edited-recently", _REFLECTION),
     ):
         harness.authoring.create(root, name, _document(name), writer=writer)
     harness.authoring.set_pinned(root, "old-pinned", True, writer=_HUMAN)
     recent = format_canonical_timestamp(harness.now - timedelta(days=10))
+    # Only an attended change keeps a Skill; a background review's does not.
+    with monkeypatch.context() as patch:
+        patch.setattr(skill_history_module, "utc_now_timestamp", lambda: recent)
+        for name, writer in (("reviewed-recently", _REFLECTION), ("edited-recently", _AGENT)):
+            changed = _document(name, body="# Changed\n")
+            harness.authoring.edit(root, name, changed, writer=writer)
     harness.usage = {
         ("main", "used-recently"): SkillUse(last_activated=recent, count=3),
         # Another Agent's use of the same name does not keep this Agent's Skill.
@@ -204,6 +213,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
     status = await harness.run_pass()
 
     assert sorted(harness.authoring.records(root)) == [
+        "edited-recently",
         "old-agent",
         "old-human",
         "old-pinned",
@@ -214,6 +224,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         (change["skill"], change["actor"], change["reason"], change["run_kind"])
         for change in status["changes"]
     ] == [
+        ("reviewed-recently", "librarian", "inactive", "librarian"),
         ("old-review", "librarian", "inactive", "librarian"),
         ("old-pass", "librarian", "inactive", "librarian"),
     ]
@@ -223,7 +234,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
     last_pass = status["last_pass"]
     assert (last_pass["trigger"], last_pass["archived"], last_pass["consolidation"]) == (
         "manual",
-        2,
+        3,
         "disabled",
     )
     finished = datetime.fromisoformat(last_pass["finished_at"])

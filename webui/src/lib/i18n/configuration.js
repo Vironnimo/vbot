@@ -286,7 +286,7 @@ export default Object.freeze({
   'settings.librarian.archiveAfterDescription':
     'Days without use or change before a Skill made in the background is retired.',
   'settings.librarian.archiveAfterHelp':
-    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed for this many days. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays. Default: 90.',
+    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays. Default: 90.',
   'settings.librarian.consolidate': 'Merge overlapping Skills',
   'settings.librarian.consolidateDescription':
     'Each pass lets the Agent merge and correct the Skills it made.',

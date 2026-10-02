@@ -59,7 +59,7 @@ vbot skill unpin <name> --scope <scope>
 
 ## Librarian
 
-The Librarian curates each Identity Agent's own Skills in the background. A scheduled pass runs every `librarian.interval_days` days, once the Agent has no active or queued Run; the first one comes that many days after the Librarian first saw the Agent. It archives each unpinned Skill that a background review or an earlier pass created and that was neither used nor changed for `librarian.archive_after_days` days. A Skill named with `/<name>` or `$<name>` in one of the Agent's Cron jobs, Bootstrap jobs or Calendar actions stays. When `librarian.consolidate` is on, the pass then lets the Agent's Model merge overlapping Skills that the Agent or a background review created. A pass never changes a pinned Skill or a Skill the user created.
+The Librarian curates each Identity Agent's own Skills in the background. A scheduled pass runs every `librarian.interval_days` days, once the Agent has no active or queued Run; the first one comes that many days after the Librarian first saw the Agent. It archives each unpinned Skill that a background review or an earlier pass created and that was neither used nor changed in a conversation or by the user for `librarian.archive_after_days` days; changes by background reviews and passes do not count. A Skill named with `/<name>` or `$<name>` in one of the Agent's Cron jobs, Bootstrap jobs or Calendar actions stays. When `librarian.consolidate` is on, the pass then lets the Agent's Model merge overlapping Skills that the Agent or a background review created. A pass never changes a pinned Skill or a Skill the user created.
 
 ```bash
 vbot librarian status <agent-id>

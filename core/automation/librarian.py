@@ -10,8 +10,9 @@ A pass has two parts:
 
 1. **Aging** (no Model): every unpinned Skill that a background Run created
    (origin ``reflection`` or ``librarian``) and whose last activity (created,
-   last changed, last used in a conversation) is older than
-   ``librarian.archive_after_days`` is archived with the reason ``inactive``.
+   last changed by the user, an attended Agent or an outside edit, last used in
+   a conversation) is older than ``librarian.archive_after_days`` is archived
+   with the reason ``inactive``. Changes by background Runs do not keep a Skill.
    A Skill that a live Bootstrap job, Cron job or Calendar action of the Agent
    triggers by name is kept. Skills that the Agent or the user created are
    never aged.
@@ -85,7 +86,7 @@ from core.skills import (
     SkillRegistry,
     SkillWriter,
 )
-from core.skills._history import BACKGROUND_WRITABLE_ORIGINS
+from core.skills._history import BACKGROUND_WRITABLE_ORIGINS, EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -118,6 +119,8 @@ CHECK_INTERVAL_SECONDS = 3600.0
 
 # Aging archives only Skills that a background Run created.
 AGED_ORIGINS = frozenset({"reflection", "librarian"})
+# Writers whose changes count as activity for aging: background Runs' do not.
+_ATTENDED_ACTORS = frozenset({"human", "agent", EXTERNAL_ACTOR})
 _LIBRARIAN_WRITER = SkillWriter(actor="librarian", run_kind=RunKind.LIBRARIAN.value)
 
 LIBRARIAN_STATE_FILENAME = "librarian.json"
@@ -690,10 +693,13 @@ class LibrarianService:
             if not root.is_dir():
                 return _Library((), (), (), _fingerprint({}))
             records = self._authoring.records(root)
+            changed = _attended_changes(self._authoring.history(root, limit=_ALL_REVISIONS))
             archived: list[str] = []
             revisions: list[int] = []
             for name, record in sorted(records.items()):
-                if not _inactive(record, usage.get(name), cutoff) or name in scheduled:
+                if name in scheduled or not _inactive(
+                    record, usage.get(name), changed.get(name), cutoff
+                ):
                     continue
                 try:
                     result = self._authoring.delete(
@@ -868,11 +874,25 @@ class LibrarianService:
 _ALL_REVISIONS = 1_000_000
 
 
-def _inactive(record: SkillRecord, use: SkillUse | None, cutoff: datetime) -> bool:
-    """Whether aging archives ``record``: background-made, unpinned and idle since ``cutoff``."""
+def _attended_changes(history: Sequence[SkillRevision]) -> dict[str, str]:
+    """The time of each Skill's newest file change by an attended writer."""
+    changed: dict[str, str] = {}
+    for revision in history:
+        if revision.files and revision.kind != "baseline" and revision.actor in _ATTENDED_ACTORS:
+            changed.setdefault(revision.skill, revision.at)
+    return changed
+
+
+def _inactive(
+    record: SkillRecord, use: SkillUse | None, changed_at: str | None, cutoff: datetime
+) -> bool:
+    """Whether aging archives ``record``: background-made, unpinned and idle since ``cutoff``.
+
+    ``changed_at`` is the Skill's newest change by an attended writer.
+    """
     if record.pinned or record.origin not in AGED_ORIGINS:
         return False
-    moments = [record.created_at, record.changed_at, None if use is None else use.last_activated]
+    moments = [record.created_at, changed_at, None if use is None else use.last_activated]
     try:
         last_activity = max(parse_timestamp(moment) for moment in moments if moment)
     except ValueError:
