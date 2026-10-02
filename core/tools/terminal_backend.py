@@ -5,17 +5,21 @@ from __future__ import annotations
 import codecs
 import contextlib
 import copy
+import errno
 import hashlib
 import os
 import re
 import select
 import shutil
 import socket
+import struct
 import subprocess
+import sys
+import threading
+import weakref
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -28,6 +32,10 @@ _BRACKETED_PASTE_MODE = 2004
 _WINDOWS_INTERACTIVE_SHELLS = ("pwsh.exe", "powershell.exe")
 TERMINAL_TITLE_MAX_CHARS = 160
 TERMINAL_READ_TIMEOUT_SECONDS = 0.2
+# A POSIX child's exit status follows the end of its output by moments; closing
+# the PTY gives its session this long to end on the hangup before it is killed.
+_EXIT_STATUS_GRACE_SECONDS = 0.5
+_CLOSE_GRACE_SECONDS = 0.1
 _APPLICATION_CURSOR_MODE = 1
 _PRIVATE_MODE_SEQUENCE_MIN = 1000
 # pyte ignores the ``<``/``>``/``=`` CSI prefixes and dispatches the payload
@@ -535,56 +543,152 @@ class _WindowsTerminalAdapter:
 
 
 class _PosixTerminalAdapter:
-    def __init__(self, process: Any) -> None:
+    """A PTY master and the session-leading child process that holds its slave."""
+
+    def __init__(self, process: subprocess.Popen[bytes], master_fd: int) -> None:
         self._process = process
+        self._fd = master_fd
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-        os.set_blocking(self._process.fd, False)
+        self._lock = threading.Lock()
+        self._users = 0
+        self._closed = False
+        # Closes the master once, on close() or when the adapter is dropped
+        # without it, such as a naturally finished terminal leaving the catalog.
+        self._release = weakref.finalize(self, os.close, master_fd)
+        os.set_blocking(master_fd, False)
 
     @property
     def pid(self) -> int:
         return int(self._process.pid)
 
-    def read(self, size: int) -> str:
-        if not select.select([self._process.fd], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]:
-            raise TimeoutError
+    @contextlib.contextmanager
+    def _master(self) -> Iterator[int]:
+        """Hold the master open for one operation, so its number cannot be reused meanwhile."""
+        with self._lock:
+            if self._closed:
+                raise EOFError
+            self._users += 1
         try:
-            data = os.read(self._process.fd, size)
-        except BlockingIOError:
-            raise TimeoutError from None
+            yield self._fd
+        finally:
+            with self._lock:
+                self._users -= 1
+                release = self._closed and not self._users
+            if release:
+                self._release()
+
+    def read(self, size: int) -> str:
+        with self._master() as fd:
+            if not select.select([fd], [], [], TERMINAL_READ_TIMEOUT_SECONDS)[0]:
+                raise TimeoutError
+            try:
+                data = os.read(fd, size)
+            except BlockingIOError:
+                raise TimeoutError from None
         if not data:
             raise EOFError
         return self._decoder.decode(data, final=False)
 
     def write(self, text: str) -> None:
         remaining = memoryview(text.encode("utf-8"))
-        while remaining:
-            try:
-                written = os.write(self._process.fd, remaining)
-            except BlockingIOError:
-                select.select([], [self._process.fd], [], TERMINAL_READ_TIMEOUT_SECONDS)
-                continue
-            if not written:
-                raise EOFError
-            remaining = remaining[written:]
+        with self._master() as fd:
+            while remaining:
+                if self._closed:
+                    raise EOFError
+                try:
+                    written = os.write(fd, remaining)
+                except BlockingIOError:
+                    select.select([], [fd], [], TERMINAL_READ_TIMEOUT_SECONDS)
+                    continue
+                if not written:
+                    raise EOFError
+                remaining = remaining[written:]
 
     def resize(self, rows: int, columns: int) -> None:
-        self._process.setwinsize(rows, columns)
+        with self._master() as fd:
+            _set_window_size(fd, rows, columns)
 
     def is_alive(self) -> bool:
-        return bool(self._process.isalive())
+        return self._process.poll() is None
 
     def exit_code(self) -> int | None:
-        value = self._process.exitstatus
-        if isinstance(value, int):
-            return value
-        signal_status = self._process.signalstatus
-        return 128 + int(signal_status) if isinstance(signal_status, int) else None
+        # Output ends while the kernel still finishes the child's exit.
+        try:
+            return_code = self._process.wait(timeout=_EXIT_STATUS_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            return None
+        return return_code if return_code >= 0 else 128 - return_code
 
     def terminate(self) -> None:
-        self._process.terminate(force=True)
+        self._process.kill()
 
     def close(self) -> None:
-        self._process.close(force=True)
+        with self._lock:
+            self._closed = True
+            release = not self._users
+        if release:
+            self._release()
+        # Closing the master hangs up the terminal, which signals its session.
+        try:
+            self._process.wait(timeout=_CLOSE_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                self._process.wait(timeout=_CLOSE_GRACE_SECONDS)
+
+
+def _spawn_posix_terminal(
+    argv: Sequence[str], cwd: Path, env: Mapping[str, str], rows: int, columns: int
+) -> _PosixTerminalAdapter:
+    """Start *argv* as a session leader on a new PTY, without Python code in the fork.
+
+    A ``preexec_fn`` or ``os.forkpty`` would run Python in the child of this
+    multi-threaded server, where a lock another thread held at fork can
+    deadlock it. Without one, CPython starts the child in C. The PTY becomes the
+    controlling terminal in the guardian, after exec.
+    """
+    if sys.platform == "win32":
+        raise OSError("POSIX terminals are not available on Windows")
+    _require_program(argv[0], cwd, env)
+    launch = guarded_process_launch(argv, controlling_terminal=True)
+    master_fd, slave_fd = os.openpty()
+    try:
+        _set_window_size(master_fd, rows, columns)
+        process = subprocess.Popen(
+            launch.argv,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=cwd,
+            env=dict(env),
+            start_new_session=True,
+            pass_fds=launch.pass_fds,
+        )
+    except BaseException:
+        os.close(master_fd)
+        raise
+    finally:
+        os.close(slave_fd)
+    return _PosixTerminalAdapter(process, master_fd)
+
+
+def _require_program(program: str, cwd: Path, env: Mapping[str, str]) -> None:
+    """Report a missing program at launch; the guardian would only find out inside the PTY."""
+    if os.path.dirname(program):
+        found = shutil.which(os.path.join(cwd, program))
+    else:
+        found = shutil.which(program, path=env.get("PATH", os.defpath))
+    if found is None:
+        raise FileNotFoundError(errno.ENOENT, "No executable program found", program)
+
+
+def _set_window_size(fd: int, rows: int, columns: int) -> None:
+    if sys.platform == "win32":
+        raise OSError("PTY window sizes exist only on POSIX")
+    import fcntl
+    import termios
+
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
 
 
 def spawn_terminal_adapter(
@@ -606,29 +710,7 @@ def spawn_terminal_adapter(
             dimensions=(rows, columns),
         )
         return _WindowsTerminalAdapter(process)
-
-    from ptyprocess import PtyProcess
-
-    launch = guarded_process_launch(argv)
-    preexec_fn = (
-        partial(_make_file_descriptors_inheritable, launch.pass_fds) if launch.pass_fds else None
-    )
-    process = PtyProcess.spawn(
-        list(launch.argv),
-        cwd=str(cwd),
-        env=dict(env),
-        dimensions=(rows, columns),
-        pass_fds=launch.pass_fds,
-        preexec_fn=preexec_fn,
-    )
-    return _PosixTerminalAdapter(process)
-
-
-def _make_file_descriptors_inheritable(file_descriptors: Sequence[int]) -> None:
-    """Clear close-on-exec for descriptors explicitly retained by ptyprocess."""
-
-    for file_descriptor in file_descriptors:
-        os.set_inheritable(file_descriptor, True)
+    return _spawn_posix_terminal(argv, cwd, env, rows, columns)
 
 
 def terminate_process_tree(adapter: TerminalAdapter, *, targets: list[Any] | None = None) -> None:

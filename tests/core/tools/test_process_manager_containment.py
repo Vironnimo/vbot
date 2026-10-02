@@ -161,25 +161,36 @@ def test_windows_breakaway_propagates_job_query_failure(
 # --- server-lifetime boundary --------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("lifetime_fd", "controlling_terminal", "options", "pass_fds"),
+    [
+        (41, False, ["--lifetime-fd", "41"], (41,)),
+        (41, True, ["--controlling-terminal", "--lifetime-fd", "41"], (41,)),
+        (None, True, ["--controlling-terminal"], ()),
+        (None, False, None, ()),
+    ],
+    ids=["contained", "contained-terminal", "terminal", "uncontained"],
+)
 def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     monkeypatch: pytest.MonkeyPatch,
+    lifetime_fd: int | None,
+    controlling_terminal: bool,
+    options: list[str] | None,
+    pass_fds: tuple[int, ...],
 ) -> None:
-    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", 41)
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", lifetime_fd)
+    argv = ["bash", "-c", "echo exact"]
 
-    launch = guarded_process_launch(["bash", "-c", "echo exact"], platform_name="posix")
-
-    assert launch.argv == (
-        sys.executable,
-        "-m",
-        "core.utils.process_guardian",
-        "--lifetime-fd",
-        "41",
-        "--",
-        "bash",
-        "-c",
-        "echo exact",
+    launch = guarded_process_launch(
+        argv, controlling_terminal=controlling_terminal, platform_name="posix"
     )
-    assert launch.pass_fds == (41,)
+
+    if options is None:
+        assert launch.argv == tuple(argv)
+    else:
+        guardian = (sys.executable, "-m", "core.utils.process_guardian")
+        assert launch.argv == (*guardian, *options, "--", *argv)
+    assert launch.pass_fds == pass_fds
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")

@@ -1,8 +1,18 @@
-"""Tests for program-agnostic terminal rendering behavior."""
+"""Tests for program-agnostic terminal rendering and the PTY/ConPTY transport."""
 
 from __future__ import annotations
 
+import contextlib
+import os
+import re
+import shlex
+import signal
+import socket
 import sys
+import threading
+import time
+import warnings
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +20,10 @@ import pytest
 
 import core.tools.terminal_backend as terminal_backend
 from core.tools.terminal_backend import TERMINAL_TITLE_MAX_CHARS, TerminalRenderer
+from core.utils import processes as process_utils
+
+# The adapter's child process, already ended, for tests of its descriptor I/O.
+EXITED_PROCESS = SimpleNamespace(pid=0, poll=lambda: 0, wait=lambda timeout=None: 0)
 
 
 def test_screen_signature_tracks_styles_but_ignores_cursor_and_empty_extent() -> None:
@@ -91,58 +105,126 @@ def test_posix_default_terminal_uses_environment_then_login_shell_then_sh() -> N
     assert select_default_terminal("posix", {}, set()) == ["/bin/sh"]
 
 
-def test_posix_terminal_spawn_uses_shared_server_lifetime_guardian(monkeypatch) -> None:
-    monkeypatch.setattr(
-        terminal_backend.os, "set_blocking", lambda fd, blocking: None, raising=False
-    )
-    inherited: list[int] = []
-    spawned: dict[str, object] = {}
-    workdir = Path("/work")
+@pytest.fixture(params=[False, True], ids=["direct", "guardian"])
+def server_lifetime(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
+    """Spawn once as in tests and once under the server-lifetime guardian, as in the server."""
+    if not request.param:
+        yield
+        return
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    try:
+        yield
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
 
-    class FakePtyProcess:
-        @staticmethod
-        def spawn(argv, **kwargs):
-            spawned["argv"] = argv
-            spawned["kwargs"] = kwargs
-            return SimpleNamespace(pid=123, fd=99)
 
-    monkeypatch.setattr(
-        terminal_backend,
-        "guarded_process_launch",
-        lambda _argv: SimpleNamespace(argv=("guardian", "--", "tool"), pass_fds=(41,)),
-    )
-    monkeypatch.setattr(
-        terminal_backend,
-        "_make_file_descriptors_inheritable",
-        lambda file_descriptors: inherited.extend(file_descriptors),
-    )
-    monkeypatch.setitem(sys.modules, "ptyprocess", SimpleNamespace(PtyProcess=FakePtyProcess))
+def spawn_posix_terminal(argv: list[str], workdir: Path) -> terminal_backend.TerminalAdapter:
+    environment = {"PATH": os.environ.get("PATH", os.defpath)}
+    return terminal_backend.spawn_terminal_adapter(argv, workdir, environment, 24, 80)
 
-    adapter = terminal_backend.spawn_terminal_adapter(
-        ["tool"],
-        workdir,
-        {"PATH": "/bin"},
-        32,
-        120,
-        platform_name="posix",
-    )
 
-    assert adapter.pid == 123
-    spawn_kwargs = spawned["kwargs"]
-    assert isinstance(spawn_kwargs, dict)
-    preexec_fn = spawn_kwargs.pop("preexec_fn")
-    assert callable(preexec_fn)
-    preexec_fn()
-    assert inherited == [41]
-    assert spawned == {
-        "argv": ["guardian", "--", "tool"],
-        "kwargs": {
-            "cwd": str(workdir),
-            "env": {"PATH": "/bin"},
-            "dimensions": (32, 120),
-            "pass_fds": (41,),
-        },
-    }
+def read_until(adapter: terminal_backend.TerminalAdapter, marker: str) -> str:
+    output = ""
+    deadline = time.monotonic() + 5
+    while marker not in output:
+        assert time.monotonic() < deadline, f"{marker!r} did not appear in {output!r}"
+        with contextlib.suppress(TimeoutError):
+            output += adapter.read(4096)
+    return output
+
+
+def read_to_end(adapter: terminal_backend.TerminalAdapter) -> str:
+    output = ""
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            output += adapter.read(4096)
+        except TimeoutError:
+            continue
+        except EOFError, OSError:
+            return output
+    raise AssertionError(f"The terminal did not end: {output!r}")
+
+
+@pytest.mark.usefixtures("server_lifetime")
+def test_posix_terminal_gives_a_shell_its_controlling_terminal(tmp_path: Path) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux PTY contract")
+    # Python code run in a child forked from the multi-threaded server can
+    # deadlock it. CPython reports such a fork with a DeprecationWarning it
+    # never raises, even under an "error" filter, so the test records it.
+    released = threading.Event()
+    other_thread = threading.Thread(target=released.wait)
+    other_thread.start()
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            adapter = spawn_posix_terminal(["sh"], tmp_path)
+    finally:
+        released.set()
+        other_thread.join()
+    assert [str(item.message) for item in caught if item.category is DeprecationWarning] == []
+    try:
+        # The echoed input differs from the output: '<'1'>' prints <1>.
+        adapter.write("tty; stty size; echo '<'1'>'\n")
+        assert re.search(r"/dev/pts/\d+\r\n24 80\r\n<1>", read_until(adapter, "<1>"))
+        adapter.resize(30, 100)
+        adapter.write("stty size; echo '<'2'>'\n")
+        assert "30 100\r\n<2>" in read_until(adapter, "<2>")
+        # Ctrl-C signals the foreground job of the shell's controlling terminal,
+        # and the shell reports the job's interrupt. The job prints <3> once it
+        # holds the foreground and handles SIGINT (a shell script would race).
+        job = "print('<' + '3>', flush=True); import time; time.sleep(10)"
+        adapter.write(shlex.join([sys.executable, "-S", "-c", job]) + "\n")
+        read_until(adapter, "<3>")
+        adapter.write("\x03")
+        adapter.write("echo status=$?; echo '<'4'>'\n")
+        assert "status=130" in read_until(adapter, "<4>")
+        # Programs start with default signal actions, not those of Python.
+        adapter.write("grep SigIgn /proc/self/status; echo '<'5'>'\n")
+        ignored = re.search(r"SigIgn:\s*([0-9a-f]+)", read_until(adapter, "<5>"))
+        assert ignored is not None
+        assert not int(ignored.group(1), 16) & (1 << (signal.SIGPIPE - 1))
+        adapter.write("exit 3\n")
+        read_to_end(adapter)
+        assert adapter.exit_code() == 3
+    finally:
+        adapter.close()
+
+
+@pytest.mark.usefixtures("server_lifetime")
+def test_posix_terminal_program_without_job_control_receives_ctrl_c(tmp_path: Path) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux PTY contract")
+    program = (
+        "import sys, time\n"
+        "print('<ready>', flush=True)\n"
+        "try:\n    time.sleep(10)\n"
+        "except KeyboardInterrupt:\n    print('interrupted')\n    sys.exit(7)\n"
+    )
+    adapter = spawn_posix_terminal([sys.executable, "-c", program], tmp_path)
+    try:
+        read_until(adapter, "<ready>")
+        adapter.write("\x03")
+        output = read_to_end(adapter)
+        assert "interrupted" in output
+        assert "Traceback" not in output
+        assert adapter.exit_code() == 7
+    finally:
+        adapter.close()
+
+
+@pytest.mark.usefixtures("server_lifetime")
+def test_posix_terminal_reports_a_missing_program_before_launch(tmp_path: Path) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux PTY contract")
+    with pytest.raises(FileNotFoundError) as raised:
+        spawn_posix_terminal(["vbot-no-such-program"], tmp_path)
+    assert raised.value.filename == "vbot-no-such-program"
 
 
 def test_terminal_title_uses_vt_metadata_and_is_safe_for_single_line_ui() -> None:
@@ -337,9 +419,6 @@ def test_cursor_page_carries_absolute_buffer_metrics() -> None:
 
 @pytest.mark.parametrize("platform_name", ["nt", "posix"])
 def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monkeypatch):
-    import os
-    import socket
-
     if platform_name == "posix" and os.name == "nt":
         pytest.skip("POSIX descriptor readiness requires POSIX")
     # A read waits at most this long for output; zero proves it never blocks past it.
@@ -355,13 +434,13 @@ def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monk
             sender.close()
     else:
         read_fd, write_fd = os.pipe()
-        adapter = terminal_backend._PosixTerminalAdapter(SimpleNamespace(fd=read_fd))
+        adapter = terminal_backend._PosixTerminalAdapter(EXITED_PROCESS, read_fd)
 
         def send(value):
             os.write(write_fd, value)
 
         def close():
-            os.close(read_fd)
+            adapter.close()
             os.close(write_fd)
 
     try:
@@ -378,10 +457,10 @@ def test_adapter_read_is_bounded_and_preserves_split_unicode(platform_name, monk
         close()
 
 
-def test_posix_nonblocking_write_preserves_partial_unicode_input(monkeypatch):
-    monkeypatch.setattr(terminal_backend.os, "set_blocking", lambda *args: None, raising=False)
-    monkeypatch.setattr(terminal_backend.select, "select", lambda *args: ([], [99], []))
-    adapter = terminal_backend._PosixTerminalAdapter(SimpleNamespace(fd=99))
+def test_posix_write_preserves_partial_unicode_input_until_closed(monkeypatch):
+    read_fd, write_fd = os.pipe()
+    adapter = terminal_backend._PosixTerminalAdapter(EXITED_PROCESS, write_fd)
+    monkeypatch.setattr(terminal_backend.select, "select", lambda *args: ([], [write_fd], []))
     written = bytearray()
     calls = 0
 
@@ -394,5 +473,14 @@ def test_posix_nonblocking_write_preserves_partial_unicode_input(monkeypatch):
         return len(data[:2])
 
     monkeypatch.setattr(terminal_backend.os, "write", partial_write)
-    adapter.write("😀xyz")
+    try:
+        adapter.write("😀xyz")
+    finally:
+        adapter.close()
+        os.close(read_fd)
     assert written == "😀xyz".encode()
+    # A closed transport ends without touching its former descriptor number.
+    with pytest.raises(EOFError):
+        adapter.write("more")
+    with pytest.raises(EOFError):
+        adapter.read(4096)
