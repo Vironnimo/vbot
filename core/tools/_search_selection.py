@@ -13,8 +13,8 @@ from pathlib import Path
 
 from core.tools._search_ignores import IgnoreRules
 from core.tools._search_options import SearchOptions, size_bytes
-from core.tools._tool_context import is_link_status
 from core.tools.search import SearchBudget, _expand_brace_alternations
+from core.utils.file_status import is_link_status
 
 
 class Glob:

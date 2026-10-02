@@ -33,7 +33,7 @@ from typing import Any
 import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
-from core.utils.file_status import exists_strict
+from core.utils.file_status import exists_strict, is_link_status
 from core.utils.tree_move import remove_tree
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
@@ -80,10 +80,7 @@ def _parts(path: str) -> list[str]:
 
 def _is_link(path: Path) -> bool:
     """A symbolic link or a Windows junction, as ``snapshot_document_paths`` skips them."""
-    status = os.lstat(path)
-    junction: int | None = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
-    tag: int | None = getattr(status, "st_reparse_tag", None)
-    return stat.S_ISLNK(status.st_mode) or (junction is not None and tag == junction)
+    return is_link_status(os.lstat(path))
 
 
 def _contained_file(root: Path, parts: list[str]) -> Path | None:

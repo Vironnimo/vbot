@@ -28,6 +28,7 @@ from cli.application.state import (
     read_json,
     safe_id,
 )
+from core.utils.file_status import is_reparse_point
 
 MAX_ARCHIVE_BYTES = 4 * 1024**3
 MAX_PAYLOAD_BYTES = 12 * 1024**3
@@ -192,7 +193,7 @@ def validate_release(
         with os.scandir(directory) as entries:
             for entry in entries:
                 info = entry.stat(follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                if is_reparse_point(info):
                     raise ApplicationError("Release payload contains a link or reparse point")
                 path = Path(entry.path)
                 if stat.S_ISDIR(info.st_mode):
