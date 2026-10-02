@@ -60,10 +60,6 @@ class _Harness:
         self.changes: list[list[str | None]] = []
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
-        # Names the live automations of ``main`` trigger.
-        self.scheduled: set[str] = set()
-        # Names ``main`` shares with other Agents.
-        self.shared_out: set[str] = set()
         # When each Run started, by Run id.
         self.run_started: dict[str, str] = {}
         self.tools = ToolRegistry()
@@ -78,8 +74,6 @@ class _Harness:
             ),
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
-            triggered_skill_names=lambda agent_id: self.scheduled if agent_id == "main" else (),
-            shared_skill_names=lambda agent_id: self.shared_out if agent_id == "main" else (),
             run_started_at=self.run_started.get,
         )
 
@@ -328,60 +322,22 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     ("setup", "arguments", "code", "message"),
     [
         pytest.param(
-            "user",
-            {"action": "patch", "name": "demo", "old_string": "# Demo", "new_string": "# New"},
-            "skill_protected",
-            "Skill 'demo' was created by the user, so it cannot be changed in the background; "
-            "nothing changed. Leave it as it is and name the needed change in your closing "
-            "reply.",
-            id="user-skill",
-        ),
-        pytest.param(
             "pinned",
             {"action": "edit", "name": "demo", "content": _skill_md(body="# New\n")},
             "skill_protected",
-            "Skill 'demo' is pinned by the user, so it cannot be changed in the background; "
-            "nothing changed. Leave it as it is and name the needed change in your closing "
-            "reply.",
+            "Skill 'demo' is pinned by the user, so you cannot change it; nothing changed. "
+            "Leave it as it is and name the needed change in your reply.",
             id="pinned-skill",
-        ),
-        pytest.param(
-            "shared",
-            {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "#"},
-            "skill_protected",
-            "Skill 'deploy' is shared with you by another Agent, so it cannot be changed in "
-            "the background; nothing changed. Leave it as it is and name the needed change in "
-            "your closing reply.",
-            id="shared-skill",
         ),
         pytest.param(
             "agent",
             {"action": "delete", "name": "demo"},
             "invalid_arguments",
-            "In the background, delete needs absorbed_into: the name of another of your own "
-            "Skills that now holds the instructions of 'demo'; nothing changed. Merge the "
-            "instructions into that Skill with patch or edit first, then call delete with "
-            "absorbed_into. If no other Skill holds them, leave 'demo' as it is.",
+            "delete needs absorbed_into: the name of another of your own Skills that now "
+            "holds the instructions of 'demo'; nothing changed. Merge the instructions into "
+            "that Skill with patch or edit first, then call delete with absorbed_into. If no "
+            "other Skill holds them, leave 'demo' as it is.",
             id="delete-without-absorbed-into",
-        ),
-        pytest.param(
-            "scheduled",
-            {"action": "delete", "name": "demo", "absorbed_into": "other"},
-            "skill_protected",
-            "Skill 'demo' is used by one of your schedules, which loads it by its name, so it "
-            "cannot be deleted in the background; nothing changed. To merge it with other "
-            "Skills, move their instructions into 'demo' and delete them with absorbed_into "
-            "'demo'. Otherwise leave 'demo' as it is.",
-            id="scheduled-skill",
-        ),
-        pytest.param(
-            "shared-out",
-            {"action": "delete", "name": "demo", "absorbed_into": "other"},
-            "skill_protected",
-            "Skill 'demo' is shared with other Agents, so it cannot be deleted in the "
-            "background; nothing changed. Leave it as it is and name the needed change in "
-            "your closing reply.",
-            id="shared-out-skill",
         ),
     ],
 )
@@ -390,29 +346,17 @@ def test_background_reviews_refuse_skills_they_may_not_change(
 ) -> None:
     harness = _Harness(tmp_path)
     home = harness.home("main")
-    if setup == "user":
-        harness.authoring.create(home, "demo", _skill_md(), writer=HUMAN_WRITER)
-    elif setup == "shared":
-        harness.share()
-    else:
-        harness.create()
+    harness.create()
     if setup == "pinned":
         harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
-    if setup == "scheduled":
-        harness.create(name="other")
-        harness.scheduled.add("demo")
-    if setup == "shared-out":
-        harness.create(name="other")
-        harness.shared_out.add("demo")
     before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
 
     result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
 
     assert result == tool_failure(code, message, retryable=False)
     assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
-    # An attended Run is not limited by pins, by who created the Skill, by
-    # schedules or by shares.
-    if setup in ("user", "pinned", "scheduled", "shared-out"):
+    # An attended Run is not limited by pins.
+    if setup == "pinned":
         assert harness.run(arguments)["ok"] is True
 
 
@@ -421,11 +365,16 @@ def test_background_reviews_refuse_skills_they_may_not_change(
     ("review", "actor"),
     [(RunKind.REFLECTION, "reflection"), (RunKind.LIBRARIAN, "librarian")],
 )
-def test_background_reviews_change_and_merge_skills_agents_created(
+def test_background_reviews_change_and_merge_unpinned_skills(
     tmp_path: Path, review: RunKind, actor: str
 ) -> None:
     harness = _Harness(tmp_path)
     harness.create(name="old")
+    # Who created a Skill does not limit background writers, nor does sharing it.
+    harness.authoring.create(
+        harness.home("main"), "manual", _skill_md("manual"), writer=HUMAN_WRITER
+    )
+    harness.share()
 
     created = harness.run(
         {"action": "create", "name": "new", "content": _skill_md("new")}, run_kind=review
@@ -437,8 +386,18 @@ def test_background_reviews_change_and_merge_skills_agents_created(
     deleted = harness.run(
         {"action": "delete", "name": "old", "absorbed_into": "new"}, run_kind=review
     )
+    user_skill = harness.run(
+        {"action": "patch", "name": "manual", "old_string": "# Demo", "new_string": "# Kept"},
+        run_kind=review,
+    )
+    # A Skill another Agent shares with this one is changed in its owner's package.
+    shared_skill = harness.run(
+        {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "# Co"},
+        run_kind=review,
+    )
 
-    assert all(result["ok"] for result in (created, patched, deleted))
+    assert all(result["ok"] for result in (created, patched, deleted, user_skill, shared_skill))
+    assert "# Co" in harness.document("deploy", "owner").read_text(encoding="utf-8")
     home = harness.home("main")
     record = harness.authoring.record(home, "new")
     assert record is not None and record.origin == actor

@@ -292,8 +292,7 @@ class EvalWorker:
     def librarian_candidates(self) -> tuple[Any, ...]:
         """Return the Skills a Librarian pass may change, as production lists them.
 
-        The fixture has no Skill use and no schedules, so every candidate reads
-        as never used and not named by a schedule.
+        The fixture has no Skill use, so every candidate reads as never used.
         """
         from core.automation.librarian import librarian_candidates
 
@@ -302,7 +301,6 @@ class EvalWorker:
             runtime.skill_authoring,
             runtime.agent_skills_dir(EVAL_AGENT_ID),
             usage={},
-            scheduled=frozenset(),
         )
 
     async def prepare(

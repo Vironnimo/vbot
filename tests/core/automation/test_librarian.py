@@ -310,9 +310,7 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         )
 
     harness.on_run = merge
-    candidates = librarian_candidates(
-        harness.authoring, root, usage={}, scheduled=frozenset(), shared=harness.shared["main"]
-    )
+    candidates = librarian_candidates(harness.authoring, root, usage={})
 
     status = await harness.run_pass()
 
@@ -320,11 +318,10 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     assert started["message"] == librarian_brief(
         harness.storage, candidates, limit=LIBRARIAN_TOOL_ITERATION_LIMIT
     )
-    # Only unpinned Skills that the Agent or a background Run created and that it
-    # does not share are listed.
-    assert "- deploy-web\n" in started["message"] and "- deploy-api\n" in started["message"]
-    for kept in ("deploy-docs", "deploy-db", "deploy-team"):
-        assert f"- {kept}" not in started["message"]
+    # Every unpinned Skill is listed, whoever created it and whether it is shared.
+    for listed in ("deploy-web", "deploy-api", "deploy-docs", "deploy-team"):
+        assert f"- {listed}\n" in started["message"]
+    assert "- deploy-db" not in started["message"]
     assert {
         key: started[key]
         for key in (
@@ -354,7 +351,7 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         key: last_pass[key]
         for key in ("candidates", "consolidation", "session_id", "run_id", "created", "changed")
     } == {
-        "candidates": 2,
+        "candidates": 4,
         "consolidation": "ran",
         "session_id": "lib-1",
         "run_id": "run-lib-1",
@@ -384,7 +381,8 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     assert status["changes"] == []
 
     # A single candidate is never consolidated.
-    harness.authoring.delete(root, "deploy-cli", writer=_HUMAN)
+    for name in ("deploy-cli", "deploy-docs", "deploy-team"):
+        harness.authoring.delete(root, name, writer=_HUMAN)
     status = await harness.run_pass()
     assert (status["last_pass"]["consolidation"], len(harness.started)) == ("too_few", 2)
 

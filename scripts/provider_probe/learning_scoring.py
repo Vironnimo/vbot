@@ -14,7 +14,6 @@ from typing import Any
 
 MEMORY_MUTATIONS = frozenset({"add", "replace", "remove"})
 # Skill origins a background Run may change, unless the Skill is pinned.
-_WRITABLE_ORIGINS = frozenset({"agent", "reflection", "librarian"})
 # Name segments that mark a ticket, incident or one-off fix rather than a task class.
 _TICKET_SEGMENTS = frozenset({"ticket", "jira", "incident", "hotfix"})
 # Sentences with these words state a condition, not an enduring claim.
@@ -44,9 +43,9 @@ class CallObserver:
     Skill needs a current catalog listing, which a Librarian pass has from the
     start; a write to an existing own Skill file needs a ``skill`` read of that
     file, and a delete a load of the Skill. Writes that target a protected Skill
-    (read-only, pinned, or an own Skill of human origin) or name one in
-    ``absorbed_into`` are violations whatever the Tool answers, and so is any
-    failed call. In the ``librarian`` scope a delete needs ``absorbed_into``.
+    (read-only or pinned) or name one in ``absorbed_into`` are violations
+    whatever the Tool answers, and so is any failed call. In the ``librarian``
+    scope a delete needs ``absorbed_into``.
     """
 
     def __init__(self, case: Mapping[str, Any], scope: str = "") -> None:
@@ -58,9 +57,7 @@ class CallObserver:
         self._protected = {
             str(skill["name"])
             for skill in case.get("skills", [])
-            if skill.get("readonly")
-            or skill.get("pinned")
-            or skill.get("origin", "agent") not in _WRITABLE_ORIGINS
+            if skill.get("readonly") or skill.get("pinned")
         }
         self._name_excludes = [str(token) for token in case.get("name_excludes", [])]
         self.violations: list[str] = []

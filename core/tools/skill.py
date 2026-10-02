@@ -66,21 +66,19 @@ SkillRefresh = Callable[[], None | Awaitable[None]]
 ArchivedSkillResolver = Callable[[str | None, str], ArchivedSkill | None]
 
 # Answers why a background Run of an Agent cannot change each of the named Skills
-# it sees as its own (reason ``pinned``, ``user``, ``unknown`` or ``shared``); the
-# runtime wires this to ``Runtime.background_skill_protection``.
+# it sees as its own (reason ``pinned`` or ``unknown``); the runtime wires this to
+# ``Runtime.background_skill_protection``.
 BackgroundProtectionResolver = Callable[[str, list[str]], Mapping[str, str]]
 
 # Marks a Skill in a background Run's list that the Run cannot change.
 SKILL_READ_ONLY_MARKS = {
     "pinned": "read-only here: pinned by the user",
-    "user": "read-only here: created by the user",
-    "unknown": "read-only here: its creator is unknown",
-    "shared": "read-only here: shared by another Agent",
+    "unknown": "read-only here: its history cannot be read",
 }
 # Opens a background Run's load of a Skill it cannot change. ``{mark}`` is a
 # read-only mark or ``read-only here`` for a Skill that is not the Agent's own.
 SKILL_READ_ONLY_NOTE = (
-    "Skill '{name}' is {mark}. Do not change it; name a needed change in your closing reply."
+    "Skill '{name}' is {mark}. Do not change it; name a needed change in your reply."
 )
 
 # A name whose Skill was deleted into the archive. ``{date}`` is YYYY-MM-DD.

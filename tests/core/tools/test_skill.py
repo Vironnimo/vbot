@@ -635,20 +635,20 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
         pytest.param(
             RunKind.SKILL_REFLECTION,
             "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
-            "- pinned: Pinned. (read-only here: pinned by the user)\n- shared: Shared. "
-            "(read-only here: shared by another Agent)",
+            "- pinned: Pinned. (read-only here: pinned by the user)\n- unreadable: "
+            "Unreadable. (read-only here: its history cannot be read)",
             {
                 "pinned": "Skill 'pinned' is read-only here: pinned by the user. Do not change "
-                "it; name a needed change in your closing reply.",
+                "it; name a needed change in your reply.",
                 "debugging": "Skill 'debugging' is read-only here. Do not change it; name a "
-                "needed change in your closing reply.",
+                "needed change in your reply.",
             },
             id="background",
         ),
         pytest.param(
             RunKind.USER,
             "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
-            "- pinned: Pinned.\n- shared: Shared.",
+            "- pinned: Pinned.\n- unreadable: Unreadable.",
             {},
             id="attended",
         ),
@@ -660,7 +660,7 @@ def test_background_runs_see_which_skills_they_cannot_change(
     for root, name in (
         ("agent", "mine"),
         ("agent", "pinned"),
-        ("agent", "shared"),
+        ("agent", "unreadable"),
         ("global", "debugging"),
     ):
         write_skill(
@@ -672,7 +672,7 @@ def test_background_runs_see_which_skills_they_cannot_change(
 
     def protection(agent_id: str, names: list[str]) -> dict[str, str]:
         asked.append((agent_id, names))
-        return {"pinned": "pinned", "shared": "shared"}
+        return {"pinned": "pinned", "unreadable": "unknown"}
 
     tool = SkillTool(
         tmp_path,
@@ -697,7 +697,7 @@ def test_background_runs_see_which_skills_they_cannot_change(
         for data in loads.values()
         if "note" in data
     )
-    assert asked[:1] == ([("coder", ["mine", "pinned", "shared"])] if notes else [])
+    assert asked[:1] == ([("coder", ["mine", "pinned", "unreadable"])] if notes else [])
 
 
 def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:

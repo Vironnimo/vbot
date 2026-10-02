@@ -974,7 +974,6 @@ _LIBRARIAN_CANDIDATE = LibrarianCandidate(
     uses=0,
     skill_md_chars=1200,
     support_files=("references/env.md",),
-    scheduled=False,
 )
 
 

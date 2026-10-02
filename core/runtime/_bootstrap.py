@@ -436,8 +436,6 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._resolve_external_skill_scope,
             lifecycle_guard=runtime._agents.lifecycle_guard,
             on_changed=runtime._notify_skills_changed,
-            triggered_skill_names=runtime.automation_triggered_skill_names,
-            shared_skill_names=runtime.shared_skill_names,
             run_started_at=runtime.run_started_at,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)

@@ -1,10 +1,10 @@
 """The Librarian: scheduled curation of each Identity Agent's own Skills.
 
 A Librarian pass keeps one Agent's private Skill library small, current and
-free of duplicates. It touches only Skills that the background rules of Skill
-authoring let it change (unpinned, created by the Agent, a Reflection review or
-an earlier pass; see ``core.skills``), and every change it makes is a recorded
-Skill revision under the actor ``librarian`` that the user can see and revert.
+free of duplicates. It never touches a Skill the user pinned (the background
+rule of Skill authoring; see ``core.skills``), and every change it makes is a
+recorded Skill revision under the actor ``librarian`` that the user can see
+and revert.
 
 A pass has two parts:
 
@@ -100,7 +100,7 @@ from core.skills import (
     SkillRegistry,
     SkillWriter,
 )
-from core.skills._history import BACKGROUND_WRITABLE_ORIGINS, EXTERNAL_ACTOR
+from core.skills._history import EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -439,16 +439,12 @@ def librarian_candidates(
     root: Path,
     *,
     usage: Mapping[str, SkillUse],
-    scheduled: frozenset[str],
-    shared: frozenset[str] = frozenset(),
     records: Mapping[str, SkillRecord] | None = None,
 ) -> tuple[LibrarianCandidate, ...]:
     """Return the Skills of the home ``root`` that a Librarian pass may change.
 
-    A candidate is a loadable, unpinned Skill that the Agent, a Reflection
-    review or an earlier pass created and that the Agent does not share with
-    other Agents (``shared``). ``usage`` is the Agent's Skill use by name and
-    ``scheduled`` the names live automations trigger. Blocking.
+    A candidate is a loadable Skill the user has not pinned, whoever created
+    it. ``usage`` is the Agent's Skill use by name. Blocking.
     """
     if records is None:
         records = authoring.records(root)
@@ -456,7 +452,7 @@ def librarian_candidates(
     candidates: list[LibrarianCandidate] = []
     for name in sorted(records):
         record = records[name]
-        if record.pinned or record.origin not in BACKGROUND_WRITABLE_ORIGINS or name in shared:
+        if record.pinned:
             continue
         try:
             skill = registry.get(name)
@@ -475,7 +471,6 @@ def librarian_candidates(
                 uses=0 if use is None else use.count,
                 skill_md_chars=len(text),
                 support_files=tuple(scan_skill_resources(skill.path.parent)),
-                scheduled=name in scheduled,
             )
         )
     return tuple(candidates)
@@ -821,9 +816,7 @@ class LibrarianService:
         else:
             error = await self._consolidate(agent_id, library, active, settings["model"])
             if active.consolidation == "ran":
-                fingerprint = await _LIBRARIAN_WORKERS.run(
-                    self._fingerprint_now, agent_id, usage, kept
-                )
+                fingerprint = await _LIBRARIAN_WORKERS.run(self._fingerprint_now, agent_id, usage)
         finished = await self._finish(agent_id, active, "completed", fingerprint, error)
         _LOGGER.info(
             "Librarian pass completed (agent=%s trigger=%s archived=%d candidates=%d "
@@ -953,14 +946,7 @@ class LibrarianService:
                     revisions.append(result.revision)
             if archived:
                 records = self._authoring.records(root)
-            candidates = librarian_candidates(
-                self._authoring,
-                root,
-                usage=usage,
-                scheduled=kept.scheduled,
-                shared=kept.shared,
-                records=records,
-            )
+            candidates = librarian_candidates(self._authoring, root, usage=usage, records=records)
             return _Library(
                 tuple(archived),
                 tuple(revisions),
@@ -968,17 +954,13 @@ class LibrarianService:
                 _fingerprint(self._latest_revisions(root, candidates)),
             )
 
-    def _fingerprint_now(
-        self, agent_id: str, usage: Mapping[str, SkillUse], kept: _KeptSkills
-    ) -> str:
+    def _fingerprint_now(self, agent_id: str, usage: Mapping[str, SkillUse]) -> str:
         """Fingerprint the candidates as a consolidation Run left them."""
         with self._runtime.agents.lifecycle_guard():
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _fingerprint({})
-            candidates = librarian_candidates(
-                self._authoring, root, usage=usage, scheduled=kept.scheduled, shared=kept.shared
-            )
+            candidates = librarian_candidates(self._authoring, root, usage=usage)
             return _fingerprint(self._latest_revisions(root, candidates))
 
     def _latest_revisions(

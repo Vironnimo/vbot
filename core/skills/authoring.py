@@ -9,8 +9,7 @@ writes Project Skills.
 Every write records one revision in the home's Skill history (``_history``),
 naming its ``SkillWriter``. Deleting moves the package into the home's archive,
 from which it can be restored or purged. Background writers (``reflection``,
-``librarian``) change only Skills that an Agent or a background writer created
-and the user has not pinned.
+``librarian``) never change a Skill the user pinned.
 """
 
 from __future__ import annotations
@@ -29,7 +28,6 @@ import yaml
 from core.skills._history import (
     ARCHIVE_REASONS,
     BACKGROUND_ACTORS,
-    BACKGROUND_WRITABLE_ORIGINS,
     PROVENANCE_AUTHOR_KEY,
     SKILL_ACTORS,
     SkillActor,
@@ -81,7 +79,7 @@ SKILL_ARCHIVE_MAX_BYTES = MAX_DOWNLOAD_BYTES
 # ``metadata.vbot.author`` stamped into a written ``SKILL.md``.
 SkillAuthor = Literal["agent", "human"]
 SkillFileChangeKind = Literal["created", "updated", "deleted"]
-SkillProtection = Literal["pinned", "user", "unknown"]
+SkillProtection = Literal["pinned", "unknown"]
 
 
 class SkillAuthoringError(VBotError):
@@ -95,14 +93,13 @@ class SkillAuthoringError(VBotError):
 class SkillProtectedError(SkillAuthoringError):
     """A background writer tried to change a Skill it may not change.
 
-    ``reason`` is ``pinned`` (the user pinned it), ``user`` (a person created
-    it) or ``unknown`` (its history cannot be read, so its origin is unknown).
+    ``reason`` is ``pinned`` (the user pinned it) or ``unknown`` (its history
+    cannot be read, so whether the user pinned it is unknown).
     """
 
     def __init__(self, skill_name: str, reason: SkillProtection) -> None:
         explanation = {
             "pinned": "the user pinned it",
-            "user": "a person created it",
             "unknown": "its history cannot be read",
         }[reason]
         super().__init__(
@@ -657,8 +654,9 @@ class SkillAuthoringService:
     def background_protection(self, target_root: Path) -> dict[str, SkillProtection]:
         """Return why background writers may not change each protected Skill of a home.
 
-        Skills a background writer may change are absent. When the history
-        cannot be read, every Skill of the home is ``unknown``, as a write would be.
+        A pinned Skill is ``pinned``; Skills a background writer may change are
+        absent. When the history cannot be read, every Skill of the home is
+        ``unknown``, as a write would be.
         """
         records = self.records(target_root)
         with self._write_lock:
@@ -670,8 +668,6 @@ class SkillAuthoringService:
                 protection[name] = "unknown"
             elif record.pinned:
                 protection[name] = "pinned"
-            elif record.origin not in BACKGROUND_WRITABLE_ORIGINS:
-                protection[name] = "user"
         return protection
 
     def record(self, target_root: Path, skill_name: str) -> SkillRecord | None:
@@ -884,7 +880,8 @@ class SkillAuthoringService:
         """Record outside changes before a write; enforce the background rules.
 
         A history failure only logs, except for a background writer changing an
-        existing Skill: it cannot know the Skill's origin and is refused.
+        existing Skill: it cannot know whether the user pinned the Skill, and the
+        change could not be recorded for undo, so it is refused.
         """
         try:
             record = history.observe(skill_name, skill_dir)
@@ -893,11 +890,8 @@ class SkillAuthoringService:
                 raise SkillProtectedError(skill_name, "unknown") from error
             _LOGGER.warning("Skill history of '%s' not updated: %s", skill_name, error)
             return
-        if writer.background and record is not None:
-            if record.pinned:
-                raise SkillProtectedError(skill_name, "pinned")
-            if record.origin not in BACKGROUND_WRITABLE_ORIGINS:
-                raise SkillProtectedError(skill_name, "user")
+        if writer.background and record is not None and record.pinned:
+            raise SkillProtectedError(skill_name, "pinned")
 
     def _commit(
         self,

@@ -121,6 +121,7 @@ _LIBRARIAN_CANDIDATES = "{generated:candidates}"
 LIBRARIAN_SKILL_MD_MAX_CHARS = 12000
 # Who created a candidate, in the words of the Agent the brief addresses.
 _LIBRARIAN_ORIGIN_TEXTS = {
+    "human": "the user",
     "agent": "you, during a conversation",
     "reflection": "a background reflection on a conversation",
     "librarian": "an earlier Librarian pass",
@@ -142,7 +143,7 @@ class LibrarianCandidate:
     Dates are ISO dates (``YYYY-MM-DD``). ``changed`` is the last change of
     the Skill's files, ``last_used`` its last use in a conversation (``None``
     when it was never used there) and ``uses`` the number of Sessions that used
-    it. ``scheduled`` is set when a schedule's instructions name the Skill.
+    it.
     """
 
     name: str
@@ -154,7 +155,6 @@ class LibrarianCandidate:
     uses: int
     skill_md_chars: int
     support_files: tuple[str, ...]
-    scheduled: bool
 
 
 class BriefFragmentReader(Protocol):
@@ -215,8 +215,6 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
     uses = "1 use" if candidate.uses == 1 else f"{candidate.uses} uses"
     used = "never" if candidate.last_used is None else f"{candidate.last_used} ({uses})"
     files = ", ".join(candidate.support_files) or "none"
-    # skill_manage refuses to delete a Skill a schedule triggers by name.
-    scheduled = "yes, so it cannot be deleted" if candidate.scheduled else "no"
     return "\n".join(
         (
             f"- {candidate.name}",
@@ -227,7 +225,6 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
             f"  Last used: {used}",
             f"  SKILL.md: {candidate.skill_md_chars} characters",
             f"  Support files: {files}",
-            f"  Used by a schedule: {scheduled}",
         )
     )
 

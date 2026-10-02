@@ -59,10 +59,8 @@ SkillArchiveReason = Literal["deleted", "absorbed", "inactive"]
 
 SKILL_ACTORS: tuple[SkillActor, ...] = ("human", "agent", "reflection", "librarian")
 # Actors that write without a person attending: they never change a Skill the
-# user wrote or pinned.
+# user pinned.
 BACKGROUND_ACTORS: frozenset[str] = frozenset({"reflection", "librarian"})
-# Origins a background actor may change.
-BACKGROUND_WRITABLE_ORIGINS: frozenset[str] = frozenset({"agent", "reflection", "librarian"})
 ARCHIVE_REASONS: tuple[SkillArchiveReason, ...] = ("deleted", "absorbed", "inactive")
 # ``baseline`` and ``external`` revisions are written by nobody vBot knows.
 EXTERNAL_ACTOR = "external"
