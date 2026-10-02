@@ -34,6 +34,9 @@ MAX_FILES = 100_000
 #: Published beside the packages of a release; names the version they contain so an
 #: update can skip a download when that version is already active.
 RELEASE_IDENTITY_ASSET = "vbot-release.json"
+#: Every installed updater refuses a larger identity; ``scripts/release_assets.py``
+#: keeps the published one, asset digests included, within it.
+MAX_IDENTITY_BYTES = 4096
 # CPython's bytecode cache files and the temporaries of its atomic cache writes.
 _BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
 #: Concurrent readers for payload files. Windows scans every newly written file
@@ -322,21 +325,19 @@ def download_release(
 ) -> Path | None:
     """Download the signed package of the installation's channel.
 
-    Returns ``None`` without downloading when the channel publishes the version
-    that is already active.
+    Reads the channel's release identity, then the package and its signature,
+    all from the channel's release downloads; it never queries the GitHub API,
+    whose anonymous request limit shared IP addresses exhaust. Returns ``None``
+    without downloading when the channel publishes the version that is already
+    active.
     """
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
     expected = package_name(install.install_shape)
+    base = install.download_base
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
-        response = client.get(
-            install.release_url, headers={"Accept": "application/vnd.github+json"}
-        )
-        response.raise_for_status()
-        release = response.json()
-        assets = {item["name"]: item["browser_download_url"] for item in release.get("assets", [])}
-        identity = _release_identity(client, assets.get(RELEASE_IDENTITY_ASSET))
+        identity = _release_identity(client, f"{base}/{RELEASE_IDENTITY_ASSET}")
         label = version_label(identity)
         if identity["version_id"] == install.version().name:
             if progress:
@@ -346,24 +347,23 @@ def download_release(
             progress("Downloading the application package", label)
         directory.mkdir(parents=True, exist_ok=True)
         for name in (expected, expected + ".sig"):
-            url = assets.get(name)
-            if not isinstance(url, str) or not url.startswith("https://"):
-                raise ApplicationError("No matching signed application package in this release")
             limit = 1024 if name.endswith(".sig") else MAX_ARCHIVE_BYTES
-            _download(client, url, directory / name, limit)
+            _download(client, f"{base}/{name}", directory / name, limit)
     return directory / expected
 
 
-def _release_identity(client: httpx.Client, url: object) -> dict[str, Any]:
+def _release_identity(client: httpx.Client, url: str) -> dict[str, Any]:
     """Read the version identity every release publishes beside its packages."""
-    if not isinstance(url, str) or not url.startswith("https://"):
+    response = client.get(url)
+    if response.status_code == 404:
         raise ApplicationError(
             f"The channel's release publishes no {RELEASE_IDENTITY_ASSET} version identity, "
             "so vbot update cannot install it"
         )
-    response = client.get(url)
     response.raise_for_status()
-    if len(response.content) > 4096:
+    if response.url.scheme != "https":
+        raise ApplicationError("Release download redirected to an insecure URL")
+    if len(response.content) > MAX_IDENTITY_BYTES:
         raise ApplicationError("Release identity exceeds the size limit")
     try:
         value = response.json()
@@ -377,14 +377,19 @@ def _release_identity(client: httpx.Client, url: object) -> dict[str, Any]:
 
 def _download(client: httpx.Client, url: str, target: Path, limit: int) -> None:
     count = 0
-    with client.stream("GET", url) as stream, target.open("wb") as output:
+    with client.stream("GET", url) as stream:
+        if stream.status_code == 404:
+            raise ApplicationError(
+                f"No matching signed application package in this release ({target.name})"
+            )
         stream.raise_for_status()
         if stream.url.scheme != "https":
             raise ApplicationError("Release download redirected to an insecure URL")
-        for chunk in stream.iter_bytes():
-            count += len(chunk)
-            if count > limit:
-                raise ApplicationError("Release download exceeds the size limit")
-            output.write(chunk)
-        output.flush()
-        os.fsync(output.fileno())
+        with target.open("wb") as output:
+            for chunk in stream.iter_bytes():
+                count += len(chunk)
+                if count > limit:
+                    raise ApplicationError("Release download exceeds the size limit")
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())

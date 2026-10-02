@@ -48,11 +48,21 @@ NATIVE_HOST_NAMES = frozenset(
 )
 
 
-#: Where each update channel publishes its signed packages. CI publishes every
-#: green ``main`` commit to the rolling ``main-build`` prerelease.
+#: The update channels as ``application.json`` records them (``release_url``).
+#: These GitHub API URLs are only the stored channel identity: installed
+#: applications validate the recorded value against them, so they never change,
+#: and nothing requests them. Downloads use ``CHANNEL_DOWNLOADS``.
 CHANNEL_URLS = {
     "release": "https://api.github.com/repos/Vironnimo/vbot/releases/latest",
     "main": "https://api.github.com/repos/Vironnimo/vbot/releases/tags/main-build",
+}
+#: Where each update channel's release assets download from, as
+#: ``<base>/<asset name>``. CI publishes every green ``main`` commit to the rolling
+#: ``main-build`` prerelease. Release downloads, unlike the GitHub API (60
+#: anonymous requests per hour and IP), have no request limit.
+CHANNEL_DOWNLOADS = {
+    "release": "https://github.com/Vironnimo/vbot/releases/latest/download",
+    "main": "https://github.com/Vironnimo/vbot/releases/download/main-build",
 }
 
 
@@ -150,6 +160,11 @@ class Installation:
     def channel(self) -> str:
         """The update channel ``release_url`` publishes: ``release`` or ``main``."""
         return next(name for name, url in CHANNEL_URLS.items() if url == self.release_url)
+
+    @property
+    def download_base(self) -> str:
+        """Where the channel's release assets download from, as ``<base>/<asset name>``."""
+        return CHANNEL_DOWNLOADS[self.channel]
 
     def version(self, version_id: str | None = None) -> Path:
         if version_id is None:

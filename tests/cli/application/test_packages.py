@@ -9,6 +9,7 @@ import logging
 import re
 import stat
 import zipfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,13 @@ from cli.application.packages import (
     stage_package,
     validate_release,
 )
-from cli.application.state import ApplicationError, Installation, current_platform, package_name
+from cli.application.state import (
+    CHANNEL_URLS,
+    ApplicationError,
+    Installation,
+    current_platform,
+    package_name,
+)
 
 _VERSION = "rel_example"
 _CACHE = "app/cli/__pycache__/main.cpython-313.pyc"
@@ -351,29 +358,55 @@ def test_same_identity_is_idempotent_only_for_the_exact_same_payload(tmp_path: P
         stage_package(install, changed, local=True)
 
 
-@pytest.mark.parametrize("published", ["rel_active", "rel_newer", None])
+_DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"
+
+
+@pytest.mark.parametrize(
+    ("channel", "published", "package_published"),
+    [
+        pytest.param("release", "rel_active", True, id="already-active"),
+        pytest.param("main", "rel_newer", True, id="newer-main-build"),
+        pytest.param("release", "rel_newer", False, id="no-package"),
+        # A release without the identity names no version and is never downloaded.
+        pytest.param("release", None, True, id="no-identity"),
+    ],
+)
 def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active(
-    tmp_path: Path, published: str | None
+    tmp_path: Path, channel: str, published: str | None, package_published: bool
 ) -> None:
     respx = pytest.importorskip("respx")
-    install = _install(tmp_path / "install", public_key="key")
+    install = replace(
+        _install(tmp_path / "install", public_key="key"), release_url=CHANNEL_URLS[channel]
+    )
     (install.root / "versions" / "rel_active").mkdir(parents=True)
     (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
     archive = package_name("server")
-    base = "https://downloads.example"
-    # A release without the identity asset names no version and is never downloaded.
-    names = (archive, archive + ".sig") + ((RELEASE_IDENTITY_ASSET,) if published else ())
-    assets = [{"name": name, "browser_download_url": f"{base}/{name}"} for name in names]
+    # Only the channel's release downloads are mocked, so a GitHub API request fails.
+    base_url = {
+        "release": f"{_DOWNLOADS}/latest/download",
+        "main": f"{_DOWNLOADS}/download/main-build",
+    }[channel]
+    storage = "https://release-assets.example"
     identity = {"schema_version": 1, "version_id": published, "version": "1.0.0"}
     with respx.mock(assert_all_called=False) as router:
-        router.get(install.release_url).respond(json={"tag_name": "main-build", "assets": assets})
-        router.get(f"{base}/{RELEASE_IDENTITY_ASSET}").respond(json=identity)
-        package = router.get(f"{base}/{archive}").respond(content=b"zip")
-        router.get(f"{base}/{archive}.sig").respond(content=b"sig")
+        identity_route = router.get(f"{base_url}/{RELEASE_IDENTITY_ASSET}")
+        if published:
+            identity_route.respond(json=identity)
+        else:
+            identity_route.respond(404)
+        # GitHub redirects every release download to its asset storage.
+        for name in (archive, archive + ".sig"):
+            route = router.get(f"{base_url}/{name}")
+            if package_published:
+                route.respond(302, headers={"Location": f"{storage}/{name}"})
+            else:
+                route.respond(404)
+        package = router.get(f"{storage}/{archive}").respond(content=b"zip")
+        router.get(f"{storage}/{archive}.sig").respond(content=b"sig")
         labels: list[str | None] = []
 
-        if published is None:
-            with pytest.raises(ApplicationError):
+        if published is None or not package_published:
+            with pytest.raises(ApplicationError, match="publishes no|No matching signed"):
                 download_release(install, "upd_test")
             assert not package.called
             return
@@ -388,3 +421,4 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
     else:
         assert result is not None and result.name == archive
         assert result.read_bytes() == b"zip"
+        assert result.with_suffix(".zip.sig").read_bytes() == b"sig"
