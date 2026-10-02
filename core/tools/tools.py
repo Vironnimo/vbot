@@ -10,7 +10,7 @@ import weakref
 from collections.abc import Callable, Sequence
 from contextlib import nullcontext
 from functools import wraps
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar
 
 from core.tools._tool_context import (
     TOOL_ALLOWLIST_WILDCARD,
@@ -102,7 +102,6 @@ BUILTIN_TOOL_FAMILY_LABELS = {
 }
 
 JsonObject = dict[str, Any]
-_ToolWorkerResult = TypeVar("_ToolWorkerResult")
 
 _TOOL_WORKERS = BoundedWorkerPool(
     name="tool",
@@ -110,11 +109,11 @@ _TOOL_WORKERS = BoundedWorkerPool(
 )
 
 
-async def run_tool_worker(
-    function: Callable[..., _ToolWorkerResult],
+async def run_tool_worker[ToolWorkerResult](
+    function: Callable[..., ToolWorkerResult],
     *arguments: Any,
     **keyword_arguments: Any,
-) -> _ToolWorkerResult:
+) -> ToolWorkerResult:
     """Run blocking Tool work through the dedicated backpressured worker pool."""
     return await _TOOL_WORKERS.run(function, *arguments, **keyword_arguments)
 

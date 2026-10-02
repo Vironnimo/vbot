@@ -11,7 +11,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
-from typing import Any, TypeVar
+from typing import Any
 
 from core.agents import _archive
 from core.agents import _workspace as workspace_ops
@@ -161,8 +161,6 @@ _LOGGER = get_logger("agents")
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _DEFAULT_TEMPLATE_DIR = _PROJECT_ROOT / "resources" / "workspace-templates"
-
-_Read = TypeVar("_Read")
 
 
 @dataclass(frozen=True)
@@ -1116,7 +1114,7 @@ class AgentStore:
         with document_change(self._data_dir / "agents"), self._write_lock:
             yield
 
-    def _repairing_read(self, read: Callable[[], _Read]) -> _Read:
+    def _repairing_read[Read](self, read: Callable[[], Read]) -> Read:
         """Run a read that may repair what it finds; it never waits for a snapshot under the lock.
 
         A repair writes without waiting (``_write_agent``): while a data snapshot

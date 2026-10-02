@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.runs import Run
 
-_BoundaryResult = TypeVar("_BoundaryResult")
 
-
-async def _finish_visible_boundary(
-    work: Awaitable[_BoundaryResult], run: Run, preserve_after_cancel: bool
-) -> _BoundaryResult:
+async def _finish_visible_boundary[BoundaryResult](
+    work: Awaitable[BoundaryResult], run: Run, preserve_after_cancel: bool
+) -> BoundaryResult:
     """Finish already-visible output preparation/persistence before honoring Stop."""
     if not preserve_after_cancel:
         return await work

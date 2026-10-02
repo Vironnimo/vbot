@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from time import monotonic
-from typing import Any, TypeVar
+from typing import Any
 
 import httpx
 
@@ -25,7 +25,6 @@ from core.utils.logging import get_logger
 from core.utils.tls import shared_ssl_context
 
 _LOGGER = get_logger("decisions")
-_Result = TypeVar("_Result")
 
 
 class DecisionService:
@@ -53,9 +52,9 @@ class DecisionService:
         """The canonical ``decisions.db`` handle, for data snapshots and health."""
         return self._store.database
 
-    async def _run(
-        self, function: Callable[..., _Result], *arguments: Any, **keywords: Any
-    ) -> _Result:
+    async def _run[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keywords: Any
+    ) -> Result:
         """Run blocking store work on the ``decisions.db`` worker pool.
 
         After close it raises :class:`~core.database.DatabaseUnavailableError`.

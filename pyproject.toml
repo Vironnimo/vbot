@@ -76,8 +76,9 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP", "B", "C4", "SIM", "RUF007"]
-# PEP 695 type parameter syntax is allowed but not required.
-ignore = ["UP040", "UP046", "UP047", "UP049"]
+# UP requires PEP 695 syntax: `type` aliases and type parameter lists instead of
+# TypeAlias, TypeVar and Generic (UP040, UP046, UP047, UP049). UP047 skips
+# methods; give generic methods type parameter lists all the same.
 
 [tool.ruff.lint.per-file-ignores]
 "scripts/test-env.py" = ["N999"]

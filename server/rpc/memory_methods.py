@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from core.memory import (
     MemoryEntry,
@@ -25,7 +25,6 @@ from server.rpc.event_bridge import publish_resource_changed
 from server.rpc.validation import _reject_unsupported, _required_string
 
 JsonObject = dict[str, Any]
-_Result = TypeVar("_Result")
 _MEMORY_SCOPES: tuple[MemoryScope, ...] = ("agent", "user")
 # Memory files are read and rewritten here, never on the Event Loop.
 _MEMORY_RPC_WORKERS = BoundedWorkerPool(name="memory-rpc", max_workers=2)
@@ -213,10 +212,10 @@ async def _memory_revert(state: Any, params: JsonObject) -> JsonObject:
     return response
 
 
-def _expected(operation: Callable[..., _Result]) -> Callable[..., _Result]:
+def _expected[Result](operation: Callable[..., Result]) -> Callable[..., Result]:
     """Run a Memory operation, mapping its expected failures to RPC errors."""
 
-    def run(*args: Any, **kwargs: Any) -> _Result:
+    def run(*args: Any, **kwargs: Any) -> Result:
         try:
             return operation(*args, **kwargs)
         except Exception as exc:

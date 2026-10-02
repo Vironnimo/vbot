@@ -33,7 +33,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from core.database._connections import (
     classified_error,
@@ -81,7 +81,6 @@ from core.utils.version import detect_vbot_version
 from core.utils.workers import BoundedWorkerPool
 
 _LOGGER = logging.getLogger("vbot.database")
-_Result = TypeVar("_Result")
 
 IO_WORKERS = 8
 #: Test seam: the SQLite ``synchronous`` level with which the kernel opens every
@@ -173,12 +172,12 @@ class Database:
         """One read transaction on a pooled reader, or on the writer without WAL."""
         return self._runtime.read_ctx()
 
-    def write(
+    def write[Result](
         self,
-        operation: Callable[[sqlite3.Connection], _Result],
+        operation: Callable[[sqlite3.Connection], Result],
         *,
         patience_s: float = WRITE_PATIENCE_S,
-    ) -> _Result:
+    ) -> Result:
         """Run ``operation`` in one ``BEGIN IMMEDIATE`` transaction with busy retry.
 
         A write to a held database of a data directory first passes the data
@@ -190,9 +189,9 @@ class Database:
         with member_change(self._data_dir, held=self._held):
             return self._runtime.execute_write(operation, patience_s=patience_s)  # type: ignore[no-any-return]
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking work that uses this database on its bounded worker pool.
 
         A closed database raises :class:`DatabaseUnavailableError`, including when
@@ -207,18 +206,18 @@ class Database:
                 raise DatabaseUnavailableError(f"{self.name} is closed") from exc
             raise
 
-    async def read_async(self, operation: Callable[[sqlite3.Connection], _Result]) -> _Result:
+    async def read_async[Result](self, operation: Callable[[sqlite3.Connection], Result]) -> Result:
         return await self.run_async(self._read_operation, operation)
 
-    async def write_async(
+    async def write_async[Result](
         self,
-        operation: Callable[[sqlite3.Connection], _Result],
+        operation: Callable[[sqlite3.Connection], Result],
         *,
         patience_s: float = WRITE_PATIENCE_S,
-    ) -> _Result:
+    ) -> Result:
         return await self.run_async(self.write, operation, patience_s=patience_s)
 
-    def _read_operation(self, operation: Callable[[sqlite3.Connection], _Result]) -> _Result:
+    def _read_operation[Result](self, operation: Callable[[sqlite3.Connection], Result]) -> Result:
         with self.read() as connection:
             return operation(connection)
 

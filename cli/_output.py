@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, ParamSpec
+from typing import TYPE_CHECKING
 
 from cli._progress import ProgressPrinter, Status, current_progress, status_line
 from cli._recovery import format_command, recovery_guidance
@@ -26,7 +26,6 @@ SUCCESS_EXIT_CODE = 0
 
 FAILURE_EXIT_CODE = 1
 
-_P = ParamSpec("_P")
 _arguments: ContextVar[argparse.Namespace] = ContextVar("cli_arguments")
 _last_result: ContextVar[CommandResult | None] = ContextVar("cli_last_result", default=None)
 
@@ -35,11 +34,11 @@ def command_arguments() -> argparse.Namespace:
     return _arguments.get()
 
 
-def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
+def with_command_output[**P](function: Callable[P, int]) -> Callable[P, int]:
     """Own presentation for every command, including injected operations in tests."""
 
     @wraps(function)
-    def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> int:
+    def wrapped(*args: P.args, **kwargs: P.kwargs) -> int:
         argv = args[0] if args else kwargs.get("argv")
         parsed = parse_args(argv)  # type: ignore[arg-type]
         with (

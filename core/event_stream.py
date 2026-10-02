@@ -6,13 +6,10 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Generic, TypeVar
-
-EventT = TypeVar("EventT")
 
 
 @dataclass
-class _Subscriber(Generic[EventT]):
+class _Subscriber[EventT]:
     queue: asyncio.Queue[EventT]
     closed: bool = False
     queued_bytes: int = 0
@@ -22,7 +19,7 @@ class _Subscriber(Generic[EventT]):
     catching_up: bool = True
 
 
-class ReplayEventStream(Generic[EventT]):
+class ReplayEventStream[EventT]:
     """Own retained replay, live fan-out, and bounded subscriber queues.
 
     The event's shape and terminal semantics stay with the consuming domain.

@@ -26,15 +26,12 @@ from collections.abc import Awaitable, Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from functools import partial
 from time import perf_counter
-from typing import Any, TypeVar
+from typing import Any
 
 from core.performance.performance import measure, record_span, set_gauge
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
-_WorkerResult = TypeVar("_WorkerResult")
-_OrderedResult = TypeVar("_OrderedResult")
-_SettledResult = TypeVar("_SettledResult")
 # Admission waits shorter than this stay histogram-only in recordings.
 _WAIT_SPAN_MIN_MS = 1.0
 
@@ -76,12 +73,12 @@ class BoundedWorkerPool:
         """Return the maximum number of admitted worker calls."""
         return self._max_workers
 
-    async def run(
+    async def run[WorkerResult](
         self,
-        function: Callable[..., _WorkerResult],
+        function: Callable[..., WorkerResult],
         *arguments: Any,
         **keyword_arguments: Any,
-    ) -> _WorkerResult:
+    ) -> WorkerResult:
         """Run one callable without blocking the Event Loop.
 
         Cancellation while waiting for admission starts no worker.  Once the
@@ -113,12 +110,12 @@ class BoundedWorkerPool:
         finally:
             semaphore.release()
 
-    async def _run_admitted(
+    async def _run_admitted[WorkerResult](
         self,
-        function: Callable[..., _WorkerResult],
+        function: Callable[..., WorkerResult],
         arguments: tuple[Any, ...],
         keyword_arguments: dict[str, Any],
-    ) -> _WorkerResult:
+    ) -> WorkerResult:
         loop = asyncio.get_running_loop()
         call = partial(function, *arguments, **keyword_arguments)
         # Settling first keeps a cancelled caller from releasing the semaphore early.
@@ -180,7 +177,7 @@ class OrderedWorker:
         self._hand_offs = 0
         self._hand_offs_lock = threading.Lock()
 
-    def call(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+    def call[OrderedResult](self, operation: Callable[[], OrderedResult]) -> OrderedResult:
         """Run *operation* after all earlier work and wait for it, blocking the caller.
 
         For synchronous callers only; on the worker thread itself it runs inline.
@@ -189,7 +186,9 @@ class OrderedWorker:
             return operation()
         return self._submit(operation).result()
 
-    async def call_async(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+    async def call_async[OrderedResult](
+        self, operation: Callable[[], OrderedResult]
+    ) -> OrderedResult:
         """Run *operation* after all earlier work without blocking the Event Loop."""
         return await settle_before_cancelling(
             asyncio.wrap_future(self._submit(operation)),
@@ -217,10 +216,12 @@ class OrderedWorker:
         """Wait until every operation submitted so far has finished."""
         await self.call_async(_nothing)
 
-    def _submit(self, operation: Callable[[], _OrderedResult]) -> Future[_OrderedResult]:
+    def _submit[OrderedResult](
+        self, operation: Callable[[], OrderedResult]
+    ) -> Future[OrderedResult]:
         return self._executor.submit(self._run_measured, operation)
 
-    def _run_measured(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
+    def _run_measured[OrderedResult](self, operation: Callable[[], OrderedResult]) -> OrderedResult:
         with measure(self._run_metric, track=self._track, name=_callable_name(operation)):
             return operation()
 
@@ -232,11 +233,11 @@ class OrderedWorker:
         self._local.is_worker_thread = True
 
 
-async def settle_before_cancelling(
-    work: Awaitable[_SettledResult],
+async def settle_before_cancelling[SettledResult](
+    work: Awaitable[SettledResult],
     *,
     on_late_failure: Callable[[BaseException], None] | None = None,
-) -> _SettledResult:
+) -> SettledResult:
     """Await *work*; when the caller is cancelled meanwhile, let *work* finish first.
 
     For work that mutates state and must not be seen as abandoned halfway, such

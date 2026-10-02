@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Protocol, TypeVar, runtime_checkable
+from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 import httpx
@@ -75,9 +75,6 @@ class RejectedTokenRefresher(Protocol):
         ...
 
 
-_RequestResult = TypeVar("_RequestResult")
-
-
 class OAuthRequestRecovery:
     """Recover one rejected HTTP request using its exact Account token getter.
 
@@ -108,7 +105,9 @@ class OAuthRequestRecovery:
             if token:
                 self._rejection = (token, status_code, response_body)
 
-    async def run(self, operation: Callable[[], Awaitable[_RequestResult]]) -> _RequestResult:
+    async def run[RequestResult](
+        self, operation: Callable[[], Awaitable[RequestResult]]
+    ) -> RequestResult:
         """Run with at most one rejected-token refresh for this logical request."""
 
         self._rejection = None

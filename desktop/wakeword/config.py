@@ -57,7 +57,7 @@ import copy
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, TypeAlias
+from typing import Any
 from urllib.parse import urlsplit
 
 MAX_ACTIVE_PHRASES = 8
@@ -182,7 +182,7 @@ class LiveVoiceAction:
         return {"type": ACTION_LIVE_VOICE, "mode": self.mode}
 
 
-PhraseAction: TypeAlias = CommandAction | LiveVoiceAction
+type PhraseAction = CommandAction | LiveVoiceAction
 
 
 @dataclass(frozen=True)

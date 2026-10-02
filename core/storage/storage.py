@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from threading import RLock
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from core.json_documents import (
     FORMAT_VERSION_FIELD,
@@ -80,7 +80,6 @@ if TYPE_CHECKING:
 
     from core.prompts import LayoutEntry
 
-SettingsUpdateResult = TypeVar("SettingsUpdateResult")
 # A settings file modified this recently may change again within the same
 # filesystem timestamp tick, so its stat stamp cannot prove it unchanged yet.
 _SETTINGS_RACY_WINDOW_NS = 3_000_000_000
@@ -337,7 +336,7 @@ class StorageManager:
         except SettingsValidationError as exc:
             raise StorageError(str(exc)) from exc
 
-    def update_settings(
+    def update_settings[SettingsUpdateResult](
         self,
         mutator: Callable[[dict[str, Any]], SettingsUpdateResult],
     ) -> SettingsUpdateResult:

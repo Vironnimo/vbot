@@ -33,7 +33,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 import psutil  # type: ignore[import-untyped]
 
@@ -99,7 +99,6 @@ UI_HISTORY_PROGRESS_TURNS = 50
 UI_HISTORY_COMPACTION_TOKENS = 200_000
 PROBE_MARGIN_SECONDS = 300
 DEFAULT_OUTPUT_ROOT = PROJECT_ROOT / "perf-results"
-T = TypeVar("T")
 
 
 class LevelError(RuntimeError):
@@ -803,7 +802,7 @@ class LoadPhase:
     deadline: float | None
 
 
-def measure_load(
+def measure_load[T](
     context: LevelContext,
     *,
     probe: UiProbe | None,

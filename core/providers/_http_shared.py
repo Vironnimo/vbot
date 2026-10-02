@@ -14,7 +14,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from logging import Logger
-from typing import TYPE_CHECKING, Any, TypeVar, override
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
     from core.providers.token_getter import OAuthRequestRecovery
 
-_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # HTTP status constants
@@ -317,13 +316,13 @@ def unsupported_sampling_parameter(detail: str) -> str | None:
     return None
 
 
-async def execute_with_sampling_fallback(
-    execute_attempt: Callable[[], Awaitable[_T]],
+async def execute_with_sampling_fallback[T](
+    execute_attempt: Callable[[], Awaitable[T]],
     payload: dict[str, Any],
     *,
     logger: Logger,
     provider_label: str,
-) -> _T:
+) -> T:
     """Run one adapter request, retrying once without a rejected sampling parameter.
 
     ``execute_attempt`` must perform one full ``retry_async``-wrapped request
