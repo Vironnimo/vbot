@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from functools import partial
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
@@ -55,10 +56,24 @@ class AutomationReference:
 
 @dataclass(frozen=True, slots=True)
 class _LiveAutomation:
-    """One live automation and the texts its Runs receive."""
+    """One live automation; ``texts`` returns the texts its Runs receive.
+
+    The texts are read only when asked for: a reference check needs the target alone.
+    """
 
     reference: AutomationReference
-    texts: tuple[str, ...]
+    texts: Callable[[], tuple[str, ...]]
+
+
+def _job_texts(job: Any) -> tuple[str, ...]:
+    return (job.prompt,)
+
+
+def _action_texts(action: dict[str, Any], event: Any | None) -> tuple[str, ...]:
+    texts = [action["prompt"]]
+    if event is not None:
+        texts.extend(text for text in (event.title, event.notes) if text)
+    return tuple(texts)
 
 
 class AutomationReferences:
@@ -118,7 +133,7 @@ class AutomationReferences:
         return frozenset(
             name
             for automation in automations
-            for text in automation.texts
+            for text in automation.texts()
             for name in triggered_skill_names(text)
         )
 
@@ -128,15 +143,17 @@ class AutomationReferences:
         return tuple(sorted(references, key=lambda reference: reference.label))
 
     def _live_automations(self, selects: _Selector) -> list[_LiveAutomation]:
-        """Return the live automations whose target ``selects`` accepts, with their texts."""
+        """Return the live automations whose target ``selects`` accepts."""
         automations = [
-            _LiveAutomation(AutomationReference("bootstrap", job.id, job.name), (job.prompt,))
+            _LiveAutomation(
+                AutomationReference("bootstrap", job.id, job.name), partial(_job_texts, job)
+            )
             for job in self._bootstrap.list_jobs()
             if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_BOOTSTRAP_STATUSES
         ]
         automations.extend(
-            _LiveAutomation(AutomationReference("cron", job.id, job.name), (job.prompt,))
+            _LiveAutomation(AutomationReference("cron", job.id, job.name), partial(_job_texts, job))
             for job in self._cron.list_jobs()
             if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_CRON_JOB_STATUSES
@@ -152,12 +169,10 @@ class AutomationReferences:
             for action in actions:
                 event = events.get(action["event_id"])
                 name = event.title if event is not None else action["event_id"]
-                texts = [action["prompt"]]
-                if event is not None:
-                    texts.extend(text for text in (event.title, event.notes) if text)
                 automations.append(
                     _LiveAutomation(
-                        AutomationReference("calendar", action["id"], name), tuple(texts)
+                        AutomationReference("calendar", action["id"], name),
+                        partial(_action_texts, action, event),
                     )
                 )
         return automations
