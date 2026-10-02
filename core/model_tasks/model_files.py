@@ -19,7 +19,7 @@ import hashlib
 import os
 import shutil
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -86,12 +86,16 @@ def fetch_model_files(
     *,
     progress: Callable[[int], None],
     cancelled: threading.Event,
+    reuse: Sequence[Path] = (),
 ) -> None:
     """Make *directory* hold every file of *model*, verified; blocking.
 
     *progress* receives the bytes completed so far, out of
-    ``model.download_bytes``. Raises :class:`ModelFilesError` or
-    :class:`ModelFilesCancelledError`; files already verified stay in place.
+    ``model.download_bytes``. Missing files are adopted when a matching copy
+    exists under one of the *reuse* directories (such as an earlier revision
+    of this model) or in the Hugging Face cache, and downloaded otherwise.
+    Raises :class:`ModelFilesError` or :class:`ModelFilesCancelledError`;
+    files already verified stay in place.
     """
     directory.mkdir(parents=True, exist_ok=True)
     done = 0
@@ -114,7 +118,7 @@ def fetch_model_files(
             target = directory / item.path
             target.parent.mkdir(parents=True, exist_ok=True)
             report = partial(_offset, progress, done)
-            if not _adopt(model, item, target, cancelled, report):
+            if not _adopt(model, item, target, reuse, cancelled, report):
                 _download(client, model, item, target, cancelled, report)
             done += item.size
             progress(done)
@@ -180,11 +184,13 @@ def _adopt(
     model: PinnedModel,
     item: ModelFile,
     target: Path,
+    reuse: Sequence[Path],
     cancelled: threading.Event,
     report: Callable[[int], None],
 ) -> bool:
     partial = target.with_name(target.name + ".part")
-    for candidate in _cached_candidates(model, item):
+    candidates = (*(folder / item.path for folder in reuse), *_cached_candidates(model, item))
+    for candidate in candidates:
         try:
             if not candidate.is_file() or candidate.stat().st_size != item.size:
                 continue

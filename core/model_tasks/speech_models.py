@@ -5,7 +5,8 @@ revision. Installing the target fetches and verifies them
 (:mod:`core.model_tasks.model_files`); execution loads them from their local
 directory and never contacts the Hub. Moving a target to a newer upstream
 revision means updating its entry here: the next installation then fetches
-the changed files, keeps the unchanged ones and removes the old revision.
+the changed files, takes the unchanged ones over from the installed revision
+and removes it.
 """
 
 from __future__ import annotations

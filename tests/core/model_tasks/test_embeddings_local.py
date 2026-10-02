@@ -218,7 +218,9 @@ class _Fetch:
         self.models: list[Any] = []
         self.seen: list[dict[str, Any]] = []
 
-    def __call__(self, model: Any, directory: Path, *, progress: Any, cancelled: Any) -> None:
+    def __call__(
+        self, model: Any, directory: Path, *, progress: Any, cancelled: Any, reuse: Any = ()
+    ) -> None:
         self.models.append(model)
         progress(model.download_bytes // 2)
         self.seen.append(self.setup.status())

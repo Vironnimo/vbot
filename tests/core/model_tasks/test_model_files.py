@@ -95,9 +95,22 @@ def test_fetch_downloads_missing_files_and_keeps_complete_ones(tmp_path: Path, h
     assert reported == sorted(reported) and reported[-1] == model.download_bytes
 
 
-def test_fetch_adopts_verified_copies_from_the_hugging_face_cache(tmp_path: Path, hub) -> None:
+def test_fetch_adopts_verified_copies_from_earlier_revisions_and_the_cache(
+    tmp_path: Path, hub
+) -> None:
     tokenizer = b"tokens" * 10
-    model = pinned(**{"model.bin": WEIGHTS, "config.json": CONFIG, "tokenizer.json": tokenizer})
+    vocabulary = b"vocabulary"
+    model = pinned(
+        **{
+            "model.bin": WEIGHTS,
+            "config.json": CONFIG,
+            "tokenizer.json": tokenizer,
+            "vocab.txt": vocabulary,
+        }
+    )
+    earlier = tmp_path / "earlier-revision"
+    earlier.mkdir()
+    (earlier / "vocab.txt").write_bytes(vocabulary)
     repository = tmp_path / "hf-cache" / "models--example--model"
     # Large files are cache blobs named by their SHA-256; small ones sit in snapshots.
     (repository / "blobs").mkdir(parents=True)
@@ -109,10 +122,17 @@ def test_fetch_adopts_verified_copies_from_the_hugging_face_cache(tmp_path: Path
     (snapshot / "tokenizer.json").write_bytes(b"x" * len(tokenizer))
     server = hub(Hub({"tokenizer.json": tokenizer}))
 
-    fetch(model, tmp_path / "model")
+    fetch_model_files(
+        model,
+        tmp_path / "model",
+        progress=lambda _done: None,
+        cancelled=threading.Event(),
+        reuse=[earlier],
+    )
 
     assert [path for path, _range in server.requests] == ["tokenizer.json"]
-    for item, content in zip(model.files, (WEIGHTS, CONFIG, tokenizer), strict=True):
+    contents = (WEIGHTS, CONFIG, tokenizer, vocabulary)
+    for item, content in zip(model.files, contents, strict=True):
         assert (tmp_path / "model" / item.path).read_bytes() == content
 
 

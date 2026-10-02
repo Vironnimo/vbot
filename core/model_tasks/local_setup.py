@@ -212,6 +212,15 @@ class LocalSetup:
             return False
         model, directory = self.model, self.model_directory
         (directory / "verified.json").unlink(missing_ok=True)
+        try:
+            # Earlier revisions supply the files a newer one did not change.
+            earlier = [
+                entry
+                for entry in directory.parent.iterdir()
+                if entry.is_dir() and entry != directory
+            ]
+        except OSError:
+            earlier = []
         total = model.download_bytes
         self._phase = "downloading"
         self._progress = (0, total)
@@ -228,6 +237,7 @@ class LocalSetup:
                 directory,
                 progress=progress,
                 cancelled=cancelled,
+                reuse=earlier,
             ),
         )
         try:
