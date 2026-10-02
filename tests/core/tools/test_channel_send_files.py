@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -118,6 +119,14 @@ def test_relative_paths_start_in_the_working_directory(tmp_path: Path) -> None:
             for index, address in enumerate(
                 ["https://example.test/a.png", "/api/images/artifacts/abc", "data:image/png;x"]
             )
+        ),
+        pytest.param(
+            {"file_paths": ["file://fileserver.example/share/note.txt"]},
+            'channel_send was not run: file_paths "file://fileserver.example/share/note.txt" is '
+            "a web address, not a file on this computer. Send the file's local path, or put "
+            "the link in message.",
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="a UNC path on Windows"),
+            id="file-url-of-another-computer",
         ),
         pytest.param(
             {"file_paths": ["shots"]},

@@ -7,12 +7,9 @@ the generation Tools take local image files only (``resolve_local_images``).
 from __future__ import annotations
 
 import json
-import os
-import re
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
 
 from core.tools._image_downloads import ImageDownloadError, download_images, image_address
 from core.tools._path_suggestions import corrected_paths
@@ -20,6 +17,7 @@ from core.tools.call_syntax import SpellingAliases, normalize_call_arguments
 from core.tools.contracts import ToolContract
 from core.tools.search import display_search_path
 from core.tools.tools import ToolContext
+from core.utils.paths import file_url_path
 
 # Names other image Tools and Agents use for analyze_image fields.
 ANALYZE_FIELD_ALIASES = SpellingAliases(
@@ -93,7 +91,6 @@ _IMAGE_SUFFIXES = frozenset(
 _FOLDER_EXAMPLES = 6
 # A suggestion must share most of the missing file's name, not only its extension.
 _MIN_STEM_RATIO = 0.6
-_WINDOWS_DRIVE_PATH = re.compile(r"/[A-Za-z]:[/\\]")
 
 
 class UnusableImageError(ValueError):
@@ -200,21 +197,19 @@ def _local_path_text(text: str, field: str) -> str:
             f"{field} must be local image files; data: URLs cannot be opened. Save the "
             "image to a file first, then pass that file's path.",
         )
+    if address is None and text.casefold().startswith("file:"):
+        path = file_url_path(text)
+        if path is not None:
+            return path
+        # A file on another computer, which only Windows paths can name.
+        address = text
     if address is not None:
         raise UnusableImageError(
             "invalid_arguments",
             f"{field} must be local image files; web addresses such as {address} cannot be "
             "opened. Save the image to a file first, then pass that file's path.",
         )
-    if not text.casefold().startswith("file:"):
-        return text
-    parts = urlsplit(text)
-    path = unquote(parts.path)
-    if parts.netloc and parts.netloc.casefold() != "localhost":
-        path = f"//{parts.netloc}{path}"
-    elif os.name == "nt" and _WINDOWS_DRIVE_PATH.match(path):
-        path = path[1:]
-    return path
+    return text
 
 
 def _call(field: str, paths: list[str], single: bool) -> str:
