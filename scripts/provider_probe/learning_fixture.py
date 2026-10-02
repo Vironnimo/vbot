@@ -1,13 +1,17 @@
 """Disposable vBot fixture that renders and dispatches learning evaluations like production.
 
 Each worker owns one Runtime on a temporary data directory and reuses it for
-its attempts: the fixture Identity Agent (``main``) and the global Skill home
-are restored to their state after startup before every attempt. The System
+its attempts: the fixture Identity Agent (``main``), the global Skill home and
+its Skill history and archive are restored to their state after startup before
+every attempt. The System
 Prompt comes from production prompt assembly with the attempt's pinned Memory
 and Skill catalog, the Model is offered the Agent's full effective Tool
 definitions, and Tool calls run through the production Tool executor; a scope's
 Tool restriction and its denial answer apply only at dispatch, as in a
-Reflection review.
+Reflection review. Calls carry the production Run kind (a review kind, or
+``user`` for ``/learn`` and the source Session's own calls), so background
+guards such as ``skill_manage``'s protection of user-created and pinned Skills
+apply as in production.
 """
 
 from __future__ import annotations
@@ -54,6 +58,8 @@ class PreparedAttempt:
     run_id: str
     agent_temperature: float | None
     activated: dict[str, str]
+    # The production Run kind value of the attempt's Tool calls.
+    run_kind: str = "user"
 
 
 def _activation_hook(activated: dict[str, str]) -> Callable[[str, str], bool]:
@@ -164,14 +170,24 @@ class EvalWorker:
 
     def _fixture_roots(self) -> list[Path]:
         runtime = self.runtime
+        data_dir = Path(runtime.storage.data_dir)
+        # The Agent directory holds its private Skill history and archive; the
+        # global home keeps both next to it.
         return [
-            Path(runtime.storage.data_dir) / "agents" / EVAL_AGENT_ID,
+            data_dir / "agents" / EVAL_AGENT_ID,
             runtime.global_skills_dir,
+            data_dir / "skill-archive",
         ]
+
+    def _fixture_single_files(self) -> list[Path]:
+        return [Path(self.runtime.storage.data_dir) / "skill-history.jsonl"]
 
     def _fixture_files(self) -> tuple[dict[Path, bytes], set[Path]]:
         files: dict[Path, bytes] = {}
         dirs: set[Path] = set()
+        for path in self._fixture_single_files():
+            if path.is_file():
+                files[path] = path.read_bytes()
         for root in self._fixture_roots():
             if not root.is_dir():
                 continue
@@ -184,7 +200,10 @@ class EvalWorker:
         return files, dirs
 
     def _reset(self) -> None:
-        """Restore the fixture Agent and global Skill home to their post-startup state."""
+        """Restore the fixture Agent and global Skill state to their post-startup state."""
+        for path in self._fixture_single_files():
+            if path.is_file() and path not in self._baseline_files:
+                path.unlink()
         for root in self._fixture_roots():
             if not root.is_dir():
                 continue
@@ -247,6 +266,7 @@ class EvalWorker:
     ) -> PreparedAttempt:
         """Seed one attempt's state and build its first request like production."""
         from core.automation.reflection import (
+            REFLECTION_RUN_KINDS,
             REFLECTION_TOOL_RESTRICTIONS,
             _review_tool_denial_resolver,
         )
@@ -255,6 +275,7 @@ class EvalWorker:
         from core.chat.messages import ToolCall as CanonicalToolCall
         from core.projects.resolver import runtime_agent_body
         from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY
+        from core.skills import HUMAN_WRITER, SkillWriter
 
         if self.applied is None:
             raise RuntimeError("EvalWorker is not started")
@@ -279,7 +300,8 @@ class EvalWorker:
             home = (
                 runtime.global_skills_dir if readonly else runtime.agent_skills_dir(EVAL_AGENT_ID)
             )
-            runtime.skill_authoring.create(home, skill["name"], skill["content"], author=origin)
+            writer = HUMAN_WRITER if origin == "human" else SkillWriter(actor="agent")
+            runtime.skill_authoring.create(home, skill["name"], skill["content"], writer=writer)
         self._invalidate_skills()
         agent = self._agent()
         if pinned_memory is None:
@@ -297,9 +319,11 @@ class EvalWorker:
         )
         if scope == "learn":
             restriction, denial_resolver = LEARN_DISPATCH_TOOLS, None
+            run_kind = "user"
         else:
             restriction = tuple(REFLECTION_TOOL_RESTRICTIONS[scope])  # type: ignore[index]
             denial_resolver = _review_tool_denial_resolver(scope)  # type: ignore[arg-type]
+            run_kind = REFLECTION_RUN_KINDS[scope].value  # type: ignore[index]
         prepared = PreparedAttempt(
             system_prompt=system_prompt,
             definitions=definitions,
@@ -310,6 +334,7 @@ class EvalWorker:
             run_id=f"eval-{attempt_id}-run",
             agent_temperature=getattr(agent, "temperature", None),
             activated={},
+            run_kind=run_kind,
         )
         model = str(agent.model or "")
         session: list[Any] = []
@@ -340,7 +365,11 @@ class EvalWorker:
                 call = calls[item["tool_call_id"]]
                 if item.get("dispatch"):
                     # The original Session's own call: every Tool the Agent allows.
-                    result = (await self.dispatch([call], prepared, restriction=None, notes=[]))[0]
+                    result = (
+                        await self.dispatch(
+                            [call], prepared, restriction=None, notes=[], source_call=True
+                        )
+                    )[0]
                 else:
                     result = item["result"]
                 session.append(
@@ -373,15 +402,18 @@ class EvalWorker:
         denial_resolver: Callable[[str], str | None] | None = None,
         notes: list[str],
         iteration: int = 0,
+        source_call: bool = False,
     ) -> list[dict[str, Any]]:
         """Run Tool calls through the production executor and dispatch allowlist.
 
         ``restriction`` narrows dispatch like a Run's Tool restriction; ``None``
         dispatches with the Agent's full allowlist. A call ``denial_resolver``
         answers fails with that message without running, as Chat answers it
-        before dispatch. Tool notes go to ``notes``.
+        before dispatch. Tool notes go to ``notes``. Calls carry the attempt's
+        Run kind; ``source_call`` marks the source Session's own (user) call.
         """
         from core.chat.tool_dispatch import _dispatch_allowed_tools
+        from core.runs import RunKind
         from core.tools import ToolCall, ToolExecutionConfig, ToolExecutor, tool_failure
         from core.tools.availability import agent_tool_settings
 
@@ -400,6 +432,7 @@ class EvalWorker:
             agent_id=EVAL_AGENT_ID,
             session_id=prepared.session_id,
             run_id=prepared.run_id,
+            run_kind=RunKind.USER if source_call else RunKind(prepared.run_kind),
             workspace=workspace,
             vbot_root=Path(runtime.system_prompts.vbot_root),
             data_root=Path(runtime.storage.data_dir),
