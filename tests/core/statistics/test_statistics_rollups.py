@@ -291,6 +291,7 @@ async def test_every_run_tool_call_and_request_gets_one_origin(
         "reflection": "reflection",
         "memory_reflection": "reflection",
         "skill_reflection": "reflection",
+        "librarian": "reflection",
         "system": "system",
         "subagent": "subagent",
     }
