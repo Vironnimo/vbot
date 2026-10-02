@@ -812,6 +812,61 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
     await service.close()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("format_", "accepted", "refused", "expected"),
+    [
+        (
+            "email",
+            ["name@example.com"],
+            ["name.example.com", "name@example", "two words@example.com"],
+            "an email address such as name@example.com",
+        ),
+        (
+            "uri",
+            ["https://example.com/page?q=1", "mailto:name@example.com", "urn:isbn:0451450523"],
+            ["example.com/page", "https://exa mple.com", "http://[::1"],
+            "an absolute URI with a scheme, such as https://example.com/page",
+        ),
+        (
+            "date",
+            ["2024-02-29"],
+            ["2026-02-29", "20261002", "2026-10-02T14:30:00Z"],
+            "a date as YYYY-MM-DD, such as 2026-10-02",
+        ),
+        (
+            "date-time",
+            ["2026-10-02T14:30:00Z", "2026-10-02t14:30:00.25+02:00", "2016-12-31T23:59:60Z"],
+            ["2026-10-02T14:30:00", "2026-10-02 14:30:00Z", "2026-10-02T24:00:00Z", "2026-10-02"],
+            "a date and time with a time zone (RFC 3339), such as 2026-10-02T14:30:00Z",
+        ),
+    ],
+    ids=["email", "uri", "date", "date-time"],
+)
+async def test_input_answers_must_have_their_requested_string_format(
+    format_, accepted, refused, expected
+):
+    inputs = InputRequests()
+    schema = {"type": "object", "properties": {"when": {"type": "string", "format": format_}}}
+    for value in [*refused, *accepted]:
+        task = asyncio.create_task(
+            inputs.request("example", "elicitation", {"requestedSchema": schema})
+        )
+        await asyncio.sleep(0)
+        identifier = inputs.list()[0]["id"]
+        if value in refused:
+            with pytest.raises(ValueError) as problem:
+                inputs.respond(identifier, {"action": "accept", "content": {"when": value}})
+            assert str(problem.value) == (
+                f"MCP input response does not satisfy the requested schema: field 'when' must "
+                f"be {expected}"
+            )
+            inputs.respond(identifier, {"action": "cancel"})
+        else:
+            inputs.respond(identifier, {"action": "accept", "content": {"when": value}})
+        await task
+
+
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
     with pytest.raises(ValueError):
         sampling_messages({"messages": [{"role": "user", "content": {"type": "future-data"}}]})
