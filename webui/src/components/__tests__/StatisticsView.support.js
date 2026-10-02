@@ -23,7 +23,8 @@ const { default: StatisticsView } = await import('../StatisticsView.svelte');
 const { clearStatisticsReports } =
   await import('../../lib/statisticsReports.svelte.js');
 
-// Spec-shaped `statistics.report` sections. Each tab requests only its own
+// `statistics.report` sections in the shapes the server sends (canonical
+// UTC timestamps, `{ key, count }` lists). Each tab requests only its own
 // sections; makeReport() assembles an answer from the requested ones.
 
 function makeTotals(overrides = {}) {
@@ -31,71 +32,131 @@ function makeTotals(overrides = {}) {
     calls: 40,
     failed_calls: 2,
     input_tokens: 1_200_000,
-    output_tokens: 80_000,
     estimated_input_tokens: 2_000,
+    output_tokens: 80_000,
     estimated_output_tokens: 500,
     reasoning_tokens: 12_000,
     cache_read_tokens: 600_000,
     cache_write_tokens: 10_000,
     cache_input_tokens: 1_000_000,
     cache_calls: 30,
+    unreported_calls: 1,
     cost_usd: 12.5,
     reported_cost_usd: 4.5,
-    estimated_cost_usd: 8,
     reported_calls: 10,
+    estimated_cost_usd: 8,
     estimated_calls: 28,
     unpriced_calls: 2,
     retrospective_calls: 3,
-    unreported_calls: 1,
     uncached_cost_usd: 2,
-    uncached_calls: 4,
-    estimated_token_calls: 1,
     ...overrides,
   };
 }
 
 function makeRunRow(overrides = {}) {
   return {
-    run_id: 'run-1',
     agent_id: 'main',
     session_id: 'session-1',
     session_title: 'Plan the release',
-    started_at: '2026-06-12T09:00:00+00:00',
+    run_id: 'run-1',
     origin: 'user',
     status: 'completed',
+    started_at: '2026-06-12T09:00:00.000000Z',
     duration_ms: 95_000,
-    model_steps: 12,
-    tool_calls: 7,
+    cost_usd: 0.42,
     input_tokens: 90_000,
     output_tokens: 4_000,
-    cost_usd: 0.42,
+    calls: 12,
+    model_steps: 12,
+    tool_calls: 7,
+    iterations: 12,
     primary_model: 'openrouter/anthropic/claude-sonnet-4',
     models: ['openrouter/anthropic/claude-sonnet-4'],
     ...overrides,
   };
 }
 
-function makeSeries() {
+/** Run outcome counts (`totals`, `runs`, `previous_runs`). */
+function makeRunCounts(overrides = {}) {
+  return {
+    total: 10,
+    completed: 8,
+    failed: 1,
+    cancelled: 1,
+    interrupted: 0,
+    running: 0,
+    ...overrides,
+  };
+}
+
+function makeUserRuns(overrides = {}) {
+  return {
+    count: 7,
+    duration_p50_ms: 42_000,
+    duration_p90_ms: 180_000,
+    cost_p50_usd: 0.31,
+    cost_p90_usd: 1.2,
+    first_visible_p50_ms: 3_000,
+    ...overrides,
+  };
+}
+
+/** The Overview's day series: cost, tokens, cache and Run counts. */
+function makeOverviewSeries() {
   return [
     {
       date: '2026-06-12',
+      calls: 22,
+      input_tokens: 500_000,
+      output_tokens: 30_000,
       cost_usd: 5,
       reported_cost_usd: 2,
       estimated_cost_usd: 3,
-      input_tokens: 500_000,
-      output_tokens: 30_000,
+      cache_read_tokens: 250_000,
+      cache_input_tokens: 400_000,
       runs: 6,
       failed_runs: 1,
     },
     {
       date: '2026-06-13',
+      calls: 18,
+      input_tokens: 700_000,
+      output_tokens: 50_000,
       cost_usd: 7.5,
       reported_cost_usd: 2.5,
       estimated_cost_usd: 5,
-      input_tokens: 700_000,
-      output_tokens: 50_000,
+      cache_read_tokens: 350_000,
+      cache_input_tokens: 600_000,
       runs: 4,
       failed_runs: 0,
+    },
+  ];
+}
+
+/** Costs & tokens' day series: full Totals per day. */
+function makeUsageSeries() {
+  return [
+    {
+      date: '2026-06-12',
+      ...makeTotals({
+        calls: 22,
+        input_tokens: 500_000,
+        output_tokens: 30_000,
+        cost_usd: 5,
+        reported_cost_usd: 2,
+        estimated_cost_usd: 3,
+      }),
+    },
+    {
+      date: '2026-06-13',
+      ...makeTotals({
+        calls: 18,
+        input_tokens: 700_000,
+        output_tokens: 50_000,
+        cost_usd: 7.5,
+        reported_cost_usd: 2.5,
+        estimated_cost_usd: 5,
+      }),
     },
   ];
 }
@@ -104,54 +165,56 @@ function makeOverviewSection(overrides = {}) {
   return {
     totals: makeTotals(),
     previous: makeTotals({ cost_usd: 10, input_tokens: 1_000_000 }),
-    runs: {
-      total: 10,
-      completed: 8,
-      failed: 1,
-      cancelled: 1,
-      interrupted: 0,
-      running: 0,
-    },
-    previous_runs: {
+    runs: makeRunCounts(),
+    previous_runs: makeRunCounts({
       total: 8,
       completed: 6,
       failed: 2,
       cancelled: 0,
-      interrupted: 0,
-      running: 0,
-    },
-    user_runs: {
-      runs: 7,
-      duration_p50_ms: 42_000,
-      duration_p90_ms: 180_000,
-      cost_p50_usd: 0.31,
-      cost_p90_usd: 1.2,
-    },
-    previous_user_runs: {
-      runs: 5,
+    }),
+    user_runs: makeUserRuns(),
+    previous_user_runs: makeUserRuns({
+      count: 5,
       duration_p50_ms: 40_000,
       duration_p90_ms: 150_000,
       cost_p50_usd: 0.3,
       cost_p90_usd: 1,
-    },
-    series: makeSeries(),
+    }),
+    active_agents: 2,
+    active_sessions: 3,
+    series: makeOverviewSeries(),
+    // In the server's origin order, not by cost.
     by_origin: [
-      { origin: 'user', runs: 7, cost_usd: 9 },
-      { origin: 'automation', runs: 3, cost_usd: 3.5 },
+      {
+        origin: 'automation',
+        calls: 10,
+        runs: 3,
+        input_tokens: 300_000,
+        output_tokens: 20_000,
+        cost_usd: 3.5,
+      },
+      {
+        origin: 'user',
+        calls: 30,
+        runs: 7,
+        input_tokens: 900_000,
+        output_tokens: 60_000,
+        cost_usd: 9,
+      },
     ],
     top_agents: [
       {
         agent_id: 'main',
-        runs: 6,
         calls: 30,
+        runs: 6,
         input_tokens: 900_000,
         output_tokens: 60_000,
         cost_usd: 9,
       },
       {
         agent_id: 'writer@docs',
-        runs: 4,
         calls: 10,
+        runs: 4,
         input_tokens: 300_000,
         output_tokens: 20_000,
         cost_usd: 3.5,
@@ -161,10 +224,12 @@ function makeOverviewSection(overrides = {}) {
       {
         model: 'openrouter/anthropic/claude-sonnet-4',
         calls: 30,
+        input_tokens: 900_000,
+        output_tokens: 60_000,
+        cost_usd: 10,
         cache_read_tokens: 500_000,
         cache_input_tokens: 800_000,
         cache_calls: 25,
-        cost_usd: 10,
       },
     ],
     insights: [
@@ -185,7 +250,7 @@ function makeOverviewSection(overrides = {}) {
 }
 
 function breakdownRow(key, overrides = {}) {
-  return { key, ...makeTotals(), ...overrides };
+  return { key, ...makeTotals(), runs: 3, sessions: 2, ...overrides };
 }
 
 function makeUsageSection(overrides = {}) {
@@ -195,6 +260,8 @@ function makeUsageSection(overrides = {}) {
       agent: [
         breakdownRow('main', { cost_usd: 9 }),
         breakdownRow('writer@docs', { cost_usd: 3.5 }),
+        // Calls made outside any Session have no Agent.
+        breakdownRow('', { cost_usd: 0.01, runs: 0, sessions: 0 }),
       ],
       model: [
         breakdownRow('openrouter/anthropic/claude-sonnet-4', { cost_usd: 10 }),
@@ -208,7 +275,7 @@ function makeUsageSection(overrides = {}) {
       origin: [breakdownRow('user', { cost_usd: 12.5 })],
       kind: [breakdownRow('chat', { cost_usd: 12.5 })],
     },
-    series: makeSeries(),
+    series: makeUsageSeries(),
     top_runs: [makeRunRow()],
     top_sessions: [
       {
@@ -216,15 +283,12 @@ function makeUsageSection(overrides = {}) {
         session_id: 'session-1',
         session_title: 'Plan the release',
         runs: 3,
-        calls: 12,
-        input_tokens: 400_000,
-        output_tokens: 20_000,
-        cost_usd: 4,
+        ...makeTotals({ cost_usd: 4 }),
       },
     ],
     recent_calls: [
       {
-        timestamp: '2026-06-13T09:30:00+00:00',
+        timestamp: '2026-06-13T09:30:00.000000Z',
         model: 'openrouter/anthropic/claude-sonnet-4',
         kind: 'chat',
         status: 'completed',
@@ -234,13 +298,31 @@ function makeUsageSection(overrides = {}) {
         session_title: 'Plan the release',
         input_tokens: 12_000,
         output_tokens: 800,
-        estimated_tokens: 0,
+        cache_read_tokens: 6_000,
+        estimated_tokens: false,
         retrospective: false,
         cost: {
-          source: 'catalog',
           amount_usd: 0.0123,
-          pricing: { rates: { input: 3, output: 15 }, source: 'models.dev' },
+          source: 'catalog',
+          estimated_tokens: false,
+          pricing: { source: 'models.dev', rates: { input: 3, output: 15 } },
         },
+      },
+      {
+        timestamp: '2026-06-13T09:20:00.000000Z',
+        model: 'local/embedder',
+        kind: 'text_embedding',
+        status: 'completed',
+        origin: 'background',
+        agent_id: '',
+        session_id: null,
+        session_title: null,
+        input_tokens: 300,
+        output_tokens: 0,
+        cache_read_tokens: 0,
+        estimated_tokens: true,
+        retrospective: false,
+        cost: { amount_usd: null, source: 'unknown', reason: 'missing_usage' },
       },
     ],
     ...overrides,
@@ -249,15 +331,7 @@ function makeUsageSection(overrides = {}) {
 
 function makeRunsSection(overrides = {}) {
   return {
-    totals: {
-      total: 10,
-      completed: 8,
-      failed: 1,
-      cancelled: 1,
-      interrupted: 0,
-      running: 1,
-    },
-    cancelled: { cost_usd: 0.8, wait_p50_ms: 30_000 },
+    totals: makeRunCounts({ running: 1 }),
     by_origin: [
       {
         origin: 'user',
@@ -265,10 +339,12 @@ function makeRunsSection(overrides = {}) {
         completed: 6,
         failed: 1,
         cancelled: 0,
+        interrupted: 0,
         duration_p50_ms: 42_000,
         duration_p90_ms: 180_000,
         cost_usd: 9,
         cost_p50_usd: 0.31,
+        cost_p90_usd: 1.2,
         avg_tool_calls: 4.2,
         avg_model_steps: 9.5,
       },
@@ -284,15 +360,36 @@ function makeRunsSection(overrides = {}) {
         runs: 7,
         completed: 6,
         failed: 1,
+        cancelled: 0,
+        interrupted: 0,
+        duration_p50_ms: 42_000,
+        duration_p90_ms: 180_000,
         cost_usd: 9,
         cost_p50_usd: 0.31,
         avg_tool_calls: 4.2,
+        avg_model_steps: 9.5,
         tool_ms: 64_000,
         changed_files: 3,
         lines_added: 40,
         lines_removed: 12,
-        duration_p50_ms: 42_000,
-        duration_p90_ms: 180_000,
+      },
+    ],
+    daily: [
+      {
+        date: '2026-06-12',
+        runs: 6,
+        completed: 5,
+        failed: 1,
+        cancelled: 0,
+        interrupted: 0,
+      },
+      {
+        date: '2026-06-13',
+        runs: 4,
+        completed: 3,
+        failed: 0,
+        cancelled: 1,
+        interrupted: 0,
       },
     ],
     longest: [makeRunRow({ run_id: 'run-long', session_title: 'Longest run' })],
@@ -302,14 +399,22 @@ function makeRunsSection(overrides = {}) {
     most_steps: [
       makeRunRow({ run_id: 'run-steps', session_title: 'Busiest run' }),
     ],
+    cancelled: { runs: 1, cost_usd: 0.8, wait_p50_ms: 30_000 },
     errors: {
       total: 3,
       failed_attempts: 2,
-      by_kind: [{ key: 'ProviderError', count: 2 }],
+      by_kind: [{ key: 'rate_limit', count: 2 }],
       by_provider: [{ key: 'openrouter', count: 3 }],
       by_model: [{ key: 'model-error-sentinel', count: 3 }],
       by_agent: [{ key: 'main', count: 3 }],
-      by_hour: [{ hour: 9, count: 3 }],
+      daily: [
+        { date: '2026-06-12', count: 1 },
+        { date: '2026-06-13', count: 2 },
+      ],
+      by_hour: Array.from({ length: 24 }, (_, hour) => ({
+        hour,
+        count: hour === 9 ? 3 : 0,
+      })),
     },
     ...overrides,
   };
@@ -319,23 +424,25 @@ function makeToolsSection(overrides = {}) {
   return {
     totals: {
       calls: 20,
-      tools: 3,
       accepted: 15,
       rejected: 4,
       unknown: 1,
       tool_ms: 64_000,
+      tools: 3,
     },
     tools: [
       {
         name: 'web_fetch',
         calls: 10,
+        accepted: 6,
         rejected: 4,
         rejection_rate: 0.4,
-        top_codes: [{ code: 'invalid_arguments', count: 4 }],
         p50_ms: 800,
         p95_ms: 4_000,
+        max_ms: 9_000,
         total_ms: 30_000,
         time_share: 0.47,
+        top_codes: [{ code: 'invalid_arguments', count: 4 }],
       },
     ],
     rejection_codes: [
@@ -350,6 +457,7 @@ function makeSkillsSection(overrides = {}) {
   return {
     total_skills: 2,
     used_skills: 1,
+    never_used_skills: 1,
     offered_unactivated_skills: 1,
     skills_without_offer_data: 0,
     skills: [
@@ -360,7 +468,11 @@ function makeSkillsSection(overrides = {}) {
         activated_sessions: 2,
         activated_offered_sessions: 2,
         usage_rate: 0.5,
-        last_activated: '2026-06-12T10:00:00+00:00',
+        first_offered: '2026-06-10T08:00:00.000000Z',
+        last_offered: '2026-06-12T09:00:00.000000Z',
+        first_activated: '2026-06-11T08:00:00.000000Z',
+        last_activated: '2026-06-12T10:00:00.000000Z',
+        by_agent: [{ key: 'main', count: 2 }],
       },
       {
         name: 'unused-skill-sentinel',
@@ -369,7 +481,11 @@ function makeSkillsSection(overrides = {}) {
         activated_sessions: 0,
         activated_offered_sessions: 0,
         usage_rate: 0,
+        first_offered: '2026-06-10T08:00:00.000000Z',
+        last_offered: '2026-06-12T09:00:00.000000Z',
+        first_activated: null,
         last_activated: null,
+        by_agent: [],
       },
     ],
     ...overrides,
@@ -381,18 +497,23 @@ function makeExtensionActivity(overrides = {}) {
     sessions: 2,
     runs: 3,
     run_status: { completed: 2, failed: 1, cancelled: 0, interrupted: 0 },
+    errors: 1,
+    tool_calls: 5,
+    model_calls: 3,
     measured_input_tokens: 20_000,
     measured_output_tokens: 2_000,
     estimated_input_tokens: 0,
     estimated_output_tokens: 0,
-    tool_calls: 5,
     costs: {
-      reported_usd: 0.2,
-      estimated_usd: 0.1,
+      calls: 3,
       reported_calls: 2,
       estimated_calls: 1,
       unpriced_calls: 0,
+      retrospective_calls: 0,
+      reported_usd: 0.2,
+      estimated_usd: 0.1,
     },
+    last_activity: '2026-06-12T09:00:00.000000Z',
     ...overrides,
   };
 }
@@ -402,6 +523,7 @@ function makeExtensionsSection(overrides = {}) {
     extensions: [
       {
         name: 'swarm',
+        actor_key: 'extension:swarm',
         total_groups: 1,
         groups_truncated: false,
         activity: makeExtensionActivity(),
@@ -409,14 +531,14 @@ function makeExtensionsSection(overrides = {}) {
           {
             group_id: 'group-abcdef',
             title: 'Walross research',
-            started_at: '2026-06-12T08:00:00+00:00',
+            started_at: '2026-06-12T08:00:00.000000Z',
             activity: makeExtensionActivity(),
             participants: [
               {
                 participant_id: 'p1',
                 name: 'Scout',
-                session_id: 'swarm-session-1',
                 model: 'prov/a',
+                session_id: 'swarm-session-1',
                 activity: makeExtensionActivity({ runs: 2 }),
               },
             ],
@@ -434,16 +556,9 @@ function makeDiagnosticsSection(overrides = {}) {
       total_compactions: 4,
       sessions_with_compactions: 2,
       average_per_compacted_session: 2,
-      context: {
-        observations: 4,
-        reduction_ratio: 0.6,
-        average_after_tokens: 40_000,
-        p95_after_tokens: 60_000,
-        average_duration_ms: 12_000,
-        average_steps_between: 18,
-        non_shrinking: 0,
-        rapid_recompactions: 1,
-      },
+      p50_per_compacted_session: 2,
+      p95_per_compacted_session: 3,
+      max_per_session: 3,
       by_strategy: [
         {
           strategy: 'summary_tail',
@@ -453,17 +568,35 @@ function makeDiagnosticsSection(overrides = {}) {
           reduction_ratio: 0.6,
         },
       ],
+      context: {
+        observations: 4,
+        average_before_tokens: 100_000,
+        average_after_tokens: 40_000,
+        p50_after_tokens: 38_000,
+        p95_after_tokens: 60_000,
+        reduction_ratio: 0.6,
+        non_shrinking: 0,
+        average_duration_ms: 12_000,
+        p95_duration_ms: 20_000,
+        duration_observations: 4,
+        average_steps_between: 18,
+        interval_observations: 2,
+        rapid_recompactions: 1,
+        average_next_input_tokens: 45_000,
+        next_input_observations: 3,
+      },
       recent: [
         {
           agent_id: 'main',
           session_id: 'session-1',
           session_title: 'Plan the release',
-          timestamp: '2026-06-13T08:00:00+00:00',
+          timestamp: '2026-06-13T08:00:00.000000Z',
           strategy: 'summary_tail',
           before_tokens: 100_000,
           after_tokens: 40_000,
           duration_ms: 12_000,
           steps_since_previous: 18,
+          next_input_tokens: null,
         },
       ],
     },
@@ -472,17 +605,18 @@ function makeDiagnosticsSection(overrides = {}) {
         {
           agent_id: 'main',
           session_id: 'session-1',
-          session_title: 'Plan the release',
           cache_turns: 4,
           input_tokens: 100_000,
           cache_read_tokens: 10_000,
+          cache_write_tokens: 0,
           hit_rate: 0.1,
-          last_activity: '2026-06-13T09:00:00+00:00',
+          last_activity: '2026-06-13T09:00:00.000000Z',
+          session_title: 'Plan the release',
         },
       ],
       suspected_breaks: {
-        suspected_turns: 1,
         evaluated_turns: 9,
+        suspected_turns: 1,
         incidents: [],
       },
     },
@@ -502,11 +636,11 @@ function makeDiagnosticsSection(overrides = {}) {
       total: 2,
       hours: [
         {
-          hour_start: '2026-06-13T09:00:00+00:00',
-          failed: 2,
+          hour_start: '2026-06-13T09:00:00.000000Z',
           calls: 5,
+          failed: 2,
           models: [{ key: 'local/qwen', count: 2 }],
-          agents: ['main'],
+          agents: [{ key: 'main', count: 2 }],
         },
       ],
     },
@@ -516,7 +650,18 @@ function makeDiagnosticsSection(overrides = {}) {
     open_runs: 1,
     roles: {
       chat_messages_by_role: { user: 5, assistant: 6 },
-      session_records_by_role: { user: 5, assistant: 6, tool: 4 },
+      session_records_by_role: {
+        system: 0,
+        user: 5,
+        assistant: 6,
+        tool: 4,
+        note: 2,
+        error: 0,
+        compaction_checkpoint: 1,
+        run_summary: 3,
+        agent_takeover: 0,
+        history_edit: 0,
+      },
     },
     ...overrides,
   };
@@ -536,9 +681,8 @@ const SECTION_BUILDERS = {
  *  sections or top-level fields. */
 function makeReport(sections = Object.keys(SECTION_BUILDERS), overrides = {}) {
   const report = {
-    generated_at: '2026-06-13T10:00:00+00:00',
-    window: { since: null, until: '2026-06-13T10:00:00+00:00' },
-    timezone: 'UTC',
+    generated_at: '2026-06-13T10:00:00.000000Z',
+    window: { since: null, until: null, timezone: 'UTC' },
   };
   for (const section of sections) {
     report[section] = SECTION_BUILDERS[section]();
