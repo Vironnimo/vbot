@@ -33,6 +33,8 @@ from typing import Any
 import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
+from core.utils.file_status import exists_strict, is_link_status
+from core.utils.tree_move import remove_tree
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
 #: The quarantine child of replaced documents; never a valid database name.
@@ -78,10 +80,7 @@ def _parts(path: str) -> list[str]:
 
 def _is_link(path: Path) -> bool:
     """A symbolic link or a Windows junction, as ``snapshot_document_paths`` skips them."""
-    status = os.lstat(path)
-    junction: int | None = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
-    tag: int | None = getattr(status, "st_reparse_tag", None)
-    return stat.S_ISLNK(status.st_mode) or (junction is not None and tag == junction)
+    return is_link_status(os.lstat(path))
 
 
 def _contained_file(root: Path, parts: list[str]) -> Path | None:
@@ -335,7 +334,7 @@ def restore_documents(
         displaced = [
             path
             for path in (*plan.restored, *plan.removed)
-            if os.path.lexists(_data_path(data_dir, path))
+            if exists_strict(_data_path(data_dir, path), follow_symlinks=False)
         ]
         quarantine = (
             _quarantine_documents(data_dir, displaced, quarantine_batch) if displaced else None
@@ -350,8 +349,9 @@ def restore_documents(
         ) from exc
     finally:
         for temporary in staged.values():
+            # A staged copy keeps its document's bits, read-only ones included.
             with suppress(OSError):
-                temporary.unlink()
+                remove_tree(temporary, within=data_dir)
     return DocumentRestore(restored=plan.restored, removed=plan.removed, quarantine=quarantine)
 
 

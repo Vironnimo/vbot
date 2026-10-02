@@ -46,8 +46,10 @@ def provision_runtime_sqlite(
     destination = runtime / "DLLs" / _LIBRARY
     if not destination.parent.is_dir():
         raise RuntimeSQLiteError("the runtime has no DLLs directory")
-    if destination.is_file() and _sha256(destination.read_bytes()) == lock["library_sha256"]:
-        return False
+    if destination.is_file():
+        with destination.open("rb") as installed:
+            if hashlib.file_digest(installed, "sha256").hexdigest() == lock["library_sha256"]:
+                return False
     archive = (fetch or _download)(lock["url"])
     if hashlib.sha3_256(archive).hexdigest() != lock["archive_sha3_256"]:
         raise RuntimeSQLiteError("the SQLite archive failed integrity verification")

@@ -1,5 +1,6 @@
 """Prompt fragments: user copies over bundled resources, and per-Agent editable copies."""
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -63,16 +64,30 @@ def test_read_prompt_fragment_prefers_the_user_copy_over_the_bundled_resource(
 
 
 @pytest.mark.parametrize(
-    ("fragment_name", "match"),
-    [("../runtime.md", None), ("other.md", None), ("compaction.md", r"compaction\.md")],
-    ids=["path-traversal", "unknown-name", "known-name-without-resource"],
+    ("fragment_name", "match", "user_copy_denied"),
+    [
+        ("../runtime.md", None, False),
+        ("other.md", None, False),
+        ("compaction.md", r"compaction\.md", False),
+        # The bundled default never silently replaces a user copy it cannot read.
+        ("runtime.md", r"runtime\.md", True),
+    ],
+    ids=["path-traversal", "unknown-name", "known-name-without-resource", "unreadable-user-copy"],
 )
-def test_read_prompt_fragment_rejects_unknown_or_missing_fragments(
-    tmp_path: Path, fragment_name: str, match: str | None
+def test_read_prompt_fragment_rejects_unknown_missing_or_unreadable_fragments(
+    tmp_path: Path,
+    deny_access: Callable[[Path], None],
+    fragment_name: str,
+    match: str | None,
+    user_copy_denied: bool,
 ) -> None:
     resources_dir = tmp_path / "resources"
     create_prompt_resources(resources_dir, include_compaction=False)
     storage = StorageManager(tmp_path / "data", resources_dir=resources_dir)
+    if user_copy_denied:
+        storage.ensure_directories()
+        (storage.prompts_dir / fragment_name).write_text("custom", encoding="utf-8")
+        deny_access(storage.prompts_dir)
 
     with pytest.raises(StorageError, match=match):
         storage.read_prompt_fragment(fragment_name)
@@ -80,6 +95,8 @@ def test_read_prompt_fragment_rejects_unknown_or_missing_fragments(
 
 def test_copy_agent_prompt_fragments_seeds_editable_defaults_and_keeps_agent_copies(
     storage: StorageManager,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
 ) -> None:
     storage.ensure_directories()
     # A hand-created data-dir copy overrides the bundled default and seeds the scope.
@@ -96,6 +113,15 @@ def test_copy_agent_prompt_fragments_seeds_editable_defaults_and_keeps_agent_cop
     assert storage.read_agent_prompt_fragment("coder", "runtime.md") == "custom default runtime"
     assert storage.read_agent_prompt_fragment("coder", "skills.md") == "custom agent skills"
     assert not (agent_prompts_dir / "compaction.md").exists()
+
+    # Copies that cannot be checked are neither replaced nor read as empty.
+    deny_access(agent_prompts_dir)
+    with pytest.raises(StorageError):
+        storage.copy_agent_prompt_fragments("coder")
+    with pytest.raises(StorageError):
+        storage.read_agent_prompt_fragment("coder", "skills.md")
+    monkeypatch.undo()
+    assert storage.read_agent_prompt_fragment("coder", "skills.md") == "custom agent skills"
 
 
 def test_read_missing_agent_prompt_fragment_returns_empty_string(storage: StorageManager) -> None:

@@ -60,6 +60,7 @@ from core.prompts import LayoutEntry
 from core.settings import is_valid_agent_id
 from core.storage.errors import StorageError
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict
 from core.utils.ids import has_id_entry
 
 # The block-id source prefixes that may appear on disk as a ``blocks/<namespace>``
@@ -319,7 +320,7 @@ class PromptBlockStore:
         """
 
         target_path = self.block_override_path(scope, block_id)
-        if target_path.exists() and not self._is_stored_exactly(target_path):
+        if self._exists(target_path) and not self._is_stored_exactly(target_path):
             raise StorageError(
                 f"Block override {target_path.name} would replace the file of a block whose "
                 "id differs only by case"
@@ -354,6 +355,15 @@ class PromptBlockStore:
     # -- Validation & id-to-path mapping ------------------------------------
 
     @staticmethod
+    def _exists(path: Path) -> bool:
+        """Whether an override file exists; one that cannot be checked is an error."""
+
+        try:
+            return exists_strict(path)
+        except OSError as exc:
+            raise StorageError(f"Cannot inspect block override {path}: {exc}") from exc
+
+    @staticmethod
     def _is_stored_exactly(path: Path) -> bool:
         """Whether a file is stored under exactly ``path``'s spelling.
 
@@ -361,8 +371,10 @@ class PromptBlockStore:
         belongs to the block spelled ``Notes``, so a case variant finds nothing.
         """
 
+        if not PromptBlockStore._exists(path):
+            return False
         try:
-            return path.exists() and has_id_entry(path.parent, path.name)
+            return has_id_entry(path.parent, path.name)
         except OSError as exc:
             raise StorageError(f"Cannot inspect block override {path}: {exc}") from exc
 

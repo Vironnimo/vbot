@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
+from core.utils.file_status import is_reparse_point
+
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_PACKAGE_BYTES = 128 * 1024 * 1024
 MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -66,9 +68,8 @@ def package_path(value: str) -> str:
 
 
 def is_redirect(path: Path) -> bool:
-    """Include Windows junctions/reparse points on every supported Python version."""
-    info = path.lstat()
-    return stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+    """Whether ``path`` is a symbolic link or any Windows reparse point, junctions included."""
+    return is_reparse_point(path.lstat())
 
 
 def excluded(path: str) -> bool:

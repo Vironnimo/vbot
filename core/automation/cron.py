@@ -23,6 +23,7 @@ from core.projects import (
 )
 from core.runs import RunCancelledError, RunKind
 from core.sessions import SessionAddress, SessionNotFoundError
+from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 from core.utils.workers import OrderedWorker, settle_before_cancelling
@@ -1176,7 +1177,7 @@ class CronService:
     def _ensure_storage_exists(self) -> None:
         try:
             self._cron_dir.mkdir(parents=True, exist_ok=True)
-            if not self._jobs_path.exists():
+            if not exists_strict(self._jobs_path):
                 write_json_document(self._jobs_path, {"jobs": []}, CRON_JOBS_FORMAT)
         except OSError as error:
             raise CronStorageError(

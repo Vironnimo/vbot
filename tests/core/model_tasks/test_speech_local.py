@@ -11,7 +11,7 @@ import subprocess
 import sys
 import threading
 import wave
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
@@ -684,12 +684,21 @@ def test_managed_speech_never_runs_during_incomplete_setup(tmp_path: Path, state
 
 
 def test_managed_speech_reports_filesystem_access_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, deny_access: Callable[[Path], None]
 ) -> None:
-    setup = LocalSpeechSetup(directory=tmp_path)
-    monkeypatch.setattr(Path, "is_file", MagicMock(side_effect=PermissionError))
+    setup = LocalSpeechSetup(directory=tmp_path / "stt")
+    current = f"{sys.version_info.major}.{sys.version_info.minor}.0"
+    home = tmp_path / "base" / "python"
+    home.mkdir(parents=True)
+    _environment(setup, home=home, version=current)
+    # The base Python cannot be checked, which is not the same as gone.
+    deny_access(home.parent)
+
     assert setup.status()["error"] == "environment_unreadable"
     assert not setup.available()
+    # Setup keeps an environment it cannot check instead of deleting it to start over.
+    assert not setup._environment_needed()
+    assert (tmp_path / "stt" / "verified.json").is_file()
 
 
 @pytest.mark.asyncio

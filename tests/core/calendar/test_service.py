@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -581,27 +582,44 @@ class TestPersistence:
         assert rewritten["events"][0]["rrule"]["by_month_day"] == [1]
 
     @pytest.mark.parametrize(
-        ("content", "message"),
+        ("content", "message", "denied"),
         [
             pytest.param(
                 json.dumps({"format_version": 2, "events": []}),
                 "written by a newer vBot",
+                False,
                 id="newer-format",
             ),
-            pytest.param("{not an array", "Invalid JSON", id="malformed"),
+            pytest.param("{not an array", "Invalid JSON", False, id="malformed"),
+            # A file that cannot be checked is not missing: it is never seeded over.
+            pytest.param(
+                json.dumps({"format_version": 1, "events": []}),
+                "Cannot initialize calendar storage",
+                True,
+                id="access-denied",
+            ),
         ],
     )
     def test_unreadable_storage_reads_empty_and_is_never_overwritten(
-        self, tmp_path: Path, content: str, message: str
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        deny_access: Callable[[Path], None],
+        content: str,
+        message: str,
+        denied: bool,
     ) -> None:
         events_path = tmp_path / "calendar" / "events.json"
         events_path.parent.mkdir(parents=True)
         events_path.write_text(content, encoding="utf-8")
+        if denied:
+            deny_access(events_path.parent)
         service = CalendarService(tmp_path)
 
         assert service.list_events() == []
         with pytest.raises(CalendarStorageError, match=message):
             service.create_event(title="X", start="2026-09-14")
+        monkeypatch.undo()
         assert events_path.read_text(encoding="utf-8") == content
 
     def test_changed_callback_fires_on_mutation(self, tmp_path: Path) -> None:

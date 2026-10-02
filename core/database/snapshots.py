@@ -72,11 +72,13 @@ from core.database.spec import (
     validate_database_name,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict, is_file_strict
 from core.utils.timestamps import (
     is_canonical_timestamp,
     parse_canonical_timestamp,
     utc_now_timestamp,
 )
+from core.utils.tree_move import remove_tree
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -827,7 +829,7 @@ def create_data_snapshot(
             needed = sum(
                 canonical_database_path(data_dir, name).stat().st_size
                 for name in marker.databases
-                if canonical_database_path(data_dir, name).exists()
+                if exists_strict(canonical_database_path(data_dir, name))
             ) + documents_size(data_dir)
             if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
                 _record_snapshot_health(
@@ -844,7 +846,7 @@ def create_data_snapshot(
 
         def copy_member(name: str) -> None:
             source_path = canonical_database_path(data_dir, name)
-            if not source_path.is_file():
+            if not is_file_strict(source_path):
                 raise DatabaseUnavailableError(missing_database_reason(name))
             destination = staging / member_file_name(name)
             handle = open_databases.get(name)
@@ -861,7 +863,8 @@ def create_data_snapshot(
                 raise _SnapshotCancelledError
 
         def discard_copies() -> None:
-            shutil.rmtree(staging)
+            # Copies keep their source's bits; read-only ones are removed too.
+            remove_tree(staging, within=root)
             staging.mkdir()
 
         capture = capture_members(
@@ -941,7 +944,8 @@ def create_data_snapshot(
         return None
     finally:
         if partial is not None:
-            shutil.rmtree(partial, ignore_errors=True)
+            with suppress(OSError):
+                remove_tree(partial, within=root)
         lock.release()
 
 
@@ -966,9 +970,11 @@ def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     )
     total = protected.total_size
     retained = 1
+    root = snapshot_root(data_dir)
     for child, manifest in others:
         if retained >= SNAPSHOT_KEEP_COUNT or total + manifest.total_size > SNAPSHOT_KEEP_BYTES:
-            shutil.rmtree(child, ignore_errors=True)
+            with suppress(OSError):
+                remove_tree(child, within=root)
         else:
             retained += 1
             total += manifest.total_size

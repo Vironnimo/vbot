@@ -6,13 +6,14 @@ import json
 import os
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 import pytest
 
 from core.database import (
     DatabaseCorruptError,
     DatabaseUnavailableError,
+    create_data_snapshot,
     data_store_status,
     list_data_snapshots,
     open_database,
@@ -20,8 +21,10 @@ from core.database import (
     read_maintenance,
     read_verified_manifest,
     restore_data_snapshot,
+    snapshot_root,
     snapshot_summaries,
 )
+from core.database import snapshots as snapshots_module
 from core.database.recovery import quarantine_root
 from core.database.snapshots import SNAPSHOT_MANIFEST_NAME
 from tests.core.database.database_test_support import (
@@ -77,16 +80,49 @@ def test_a_snapshot_holds_every_durable_document_and_nothing_else(data_dir: Path
     assert "secret" not in json.dumps(summary)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
-def test_a_document_copy_keeps_its_permissions(data_dir: Path) -> None:
-    token = write_document(data_dir, "oauth/provider.json", '{"format_version": 1}\n')
-    token.chmod(0o600)
+@pytest.mark.parametrize(
+    "mode",
+    [
+        pytest.param(
+            0o600,
+            id="private",
+            marks=pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits"),
+        ),
+        # The read-only attribute on Windows, owner read only on POSIX.
+        pytest.param(stat.S_IREAD, id="read-only"),
+    ],
+)
+def test_a_document_keeps_its_permissions_through_snapshots_and_restores(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch, mode: int
+) -> None:
+    original = '{"format_version": 1}\n'
+    token = write_document(data_dir, "oauth/provider.json", original)
+    token.chmod(mode)
+    permissions = stat.S_IMODE(token.stat().st_mode)
 
-    snapshot = snapshot_with_notes(data_dir, "saved")
-
-    assert stat.S_IMODE((snapshot / "documents" / "oauth" / "provider.json").stat().st_mode) == (
-        0o600
+    first = snapshot_with_notes(data_dir, "saved")
+    assert stat.S_IMODE((first / "documents" / "oauth" / "provider.json").stat().st_mode) == (
+        permissions
     )
+    # A failed attempt and retention remove copies whatever their bits.
+    with monkeypatch.context() as patched:
+        patched.setattr(snapshots_module, "verify_database_file", _corrupt)
+        assert create_data_snapshot(data_dir, reason="test") is None
+    assert not [path for path in snapshot_root(data_dir).iterdir() if path.name.startswith(".")]
+    monkeypatch.setattr(snapshots_module, "SNAPSHOT_KEEP_COUNT", 1)
+    second = snapshot_with_notes(data_dir)
+    assert not first.exists()
+
+    token.chmod(stat.S_IREAD | stat.S_IWRITE)
+    token.write_text('{"format_version": 1, "changed": true}\n', encoding="utf-8")
+    restore_data_snapshot(data_dir, second, names=(), documents=True)
+
+    assert token.read_text(encoding="utf-8") == original
+    assert stat.S_IMODE(token.stat().st_mode) == permissions
+
+
+def _corrupt(*_args: object, **_kwargs: object) -> NoReturn:
+    raise DatabaseCorruptError("test sentinel")
 
 
 def test_a_linked_document_is_not_a_member(data_dir: Path, tmp_path: Path) -> None:

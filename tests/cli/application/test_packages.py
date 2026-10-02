@@ -31,6 +31,7 @@ from cli.application.state import (
     current_platform,
     package_name,
 )
+from tests.directory_links import link_directory
 
 _VERSION = "rel_example"
 _CACHE = "app/cli/__pycache__/main.cpython-313.pyc"
@@ -122,7 +123,7 @@ def test_signed_complete_release_stages_for_the_matching_installation(tmp_path: 
     ).is_file()
 
 
-@pytest.mark.parametrize("change", ["tamper", "extra", "missing", "link"])
+@pytest.mark.parametrize("change", ["tamper", "extra", "missing", "link", "directory-link"])
 def test_revalidation_checks_payload_bytes_and_rejects_links(tmp_path, change):
     install = _install(tmp_path / "install")
     stage_package(install, _archive(tmp_path / "release.zip"), local=True)
@@ -134,6 +135,10 @@ def test_revalidation_checks_payload_bytes_and_rejects_links(tmp_path, change):
         (root / "app" / "extra.py").write_bytes(b"extra")
     elif change == "missing":
         target.unlink()
+    elif change == "directory-link":
+        # A junction on Windows, which needs no privilege; it adds no payload file.
+        (tmp_path / "outside").mkdir()
+        link_directory(root / "app" / "linked", tmp_path / "outside")
     else:
         outside = tmp_path / "outside.py"
         outside.write_bytes(target.read_bytes())

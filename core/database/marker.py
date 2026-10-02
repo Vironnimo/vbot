@@ -46,6 +46,7 @@ from core.database.spec import (
     validate_database_name,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import is_file_strict
 from core.utils.timestamps import utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
@@ -577,12 +578,16 @@ def missing_database_reason(name: str) -> str:
 
 
 def describe_missing_databases(data_dir: Path, marker: DataStoreMarker) -> str | None:
-    """Explain every registered database whose file is missing, or ``None``."""
-    missing = sorted(
-        name for name in marker.databases if not canonical_database_path(data_dir, name).is_file()
-    )
-    if not missing:
+    """Explain every registered database whose file is missing or unreadable, or ``None``."""
+    reasons: list[str] = []
+    for name in sorted(marker.databases):
+        try:
+            if is_file_strict(canonical_database_path(data_dir, name)):
+                continue
+        except OSError as exc:
+            reasons.append(f"the registered database {name} cannot be checked: {exc}")
+            continue
+        reasons.append(missing_database_reason(name))
+    if not reasons:
         return None
-    return "data snapshots need every registered database: " + "; ".join(
-        missing_database_reason(name) for name in missing
-    )
+    return "data snapshots need every registered database: " + "; ".join(reasons)

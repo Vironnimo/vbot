@@ -75,6 +75,7 @@ from core.database.spec import (
     DatabaseSpec,
     canonical_data_dir,
 )
+from core.utils.file_status import exists_strict
 from core.utils.timestamps import utc_now_timestamp
 from core.utils.version import detect_vbot_version
 from core.utils.workers import BoundedWorkerPool
@@ -316,7 +317,12 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
     _require_generation(spec, entry, data_dir)
     if pending_restore(data_dir, spec.name):
         auto_restore_if_needed(data_dir, spec, entry.database_id)
-    if not spec.path.exists() and not auto_restore_if_needed(data_dir, spec, entry.database_id):
+    try:
+        present = exists_strict(spec.path)
+    except OSError as exc:
+        # Unknown is not missing: restoring over it could discard newer data.
+        raise DatabaseUnavailableError(f"database file is unavailable: {spec.path}") from exc
+    if not present and not auto_restore_if_needed(data_dir, spec, entry.database_id):
         raise DatabaseUnavailableError(
             f"the {spec.name} database is missing although the data store lists it: "
             f"{spec.path}; no verified data snapshot could restore it"
@@ -435,7 +441,13 @@ def _discard(spec: DatabaseSpec) -> None:
             f"{spec.name}: the projection is still open in this process and cannot be rebuilt"
         )
     remove_database_files(spec.path)
-    if any(Path(f"{spec.path}{suffix}").exists() for suffix in ("", "-wal", "-shm", "-journal")):
+    try:
+        remaining = any(
+            exists_strict(f"{spec.path}{suffix}") for suffix in ("", "-wal", "-shm", "-journal")
+        )
+    except OSError:
+        remaining = True
+    if remaining:
         raise DatabaseUnavailableError(f"{spec.name}: the projection files cannot be removed")
 
 

@@ -5,8 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 import os
-import stat
-import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +26,7 @@ from core.tools._tool_display import (
 from core.tools.change_tracker import ChangeTracker
 from core.tools.contracts import JsonObject, ToolContract, ToolContractError
 from core.tools.model_names import model_tool_name
+from core.utils.file_status import is_link_status
 
 _DISPLAY_MEDIA_KINDS = ("image", "video", "audio")
 # An allowlist entry that allows every Tool.
@@ -43,20 +42,6 @@ def _path_argument(path: str | Path, *, windows: bool) -> str | Path:
     # Single quotes are legal on Windows. POSIX also permits double quotes and
     # backslashes. Existence must not redirect a missing literal to another file.
     return path
-
-
-def is_link_status(info: os.stat_result) -> bool:
-    """Return whether unfollowed metadata describes a symbolic link or Windows junction.
-
-    Junctions are directory links that ``Path.is_symlink`` does not report; other
-    reparse points (for example cloud-file placeholders) remain ordinary entries.
-    Reparse tags exist only on Windows.
-    """
-    if stat.S_ISLNK(info.st_mode):
-        return True
-    if sys.platform == "win32":
-        return info.st_reparse_tag == stat.IO_REPARSE_TAG_MOUNT_POINT
-    return False
 
 
 def is_link_entry(path: Path) -> bool:

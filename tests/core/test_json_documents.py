@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -291,23 +292,33 @@ def test_write_json_document_keeps_unmodeled_map_entries_of_drop_empty_maps(
 
 
 @pytest.mark.parametrize(
-    "content",
+    ("content", "unreadable"),
     [
-        "{not json",
-        json.dumps({"title": "missing version"}),
-        json.dumps({"format_version": 2, "title": "newer"}),
-        json.dumps({"format_version": 1, "title": 5}),
+        ("{not json", False),
+        (json.dumps({"title": "missing version"}), False),
+        (json.dumps({"format_version": 2, "title": "newer"}), False),
+        (json.dumps({"format_version": 1, "title": 5}), False),
+        # A file whose folder denies access is not missing, however Path.exists answers.
+        (json.dumps({"format_version": 1, "title": "kept"}), True),
     ],
 )
 def test_write_json_document_never_overwrites_a_file_that_failed_to_load(
-    tmp_path: Path, content: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    content: str,
+    unreadable: bool,
 ) -> None:
-    path = tmp_path / "doc.json"
+    path = tmp_path / "locked" / "doc.json"
+    path.parent.mkdir()
     path.write_text(content, encoding="utf-8")
+    if unreadable:
+        deny_access(path.parent)
 
     with pytest.raises(JsonDocumentWriteError, match="Refusing to overwrite test document"):
         write_json_document(path, {"title": "new"}, FORMAT)
 
+    monkeypatch.undo()
     assert path.read_text(encoding="utf-8") == content
 
 

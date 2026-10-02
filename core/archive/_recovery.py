@@ -8,7 +8,6 @@ logged and tried again at the next start, and never stops the start itself.
 
 from __future__ import annotations
 
-import os
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +33,7 @@ from core.sessions import (
     ArchiveEntry,
     ArchiveTree,
 )
+from core.utils.file_status import exists_strict, is_dir_strict
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp
 from core.utils.tree_move import move_tree, remove_tree
@@ -142,9 +142,10 @@ def _roll_back_archive(services: ArchiveServices, entry: ArchiveEntry) -> bool:
             continue
         payload = stored_path(services, tree.path)
         source = stored_path(services, tree.source_path)
-        if not payload.exists():
+        # Raises when either cannot be checked: the entry is retried at the next start.
+        if not exists_strict(payload):
             continue
-        if not os.path.lexists(source):
+        if not exists_strict(source, follow_symlinks=False):
             source.parent.mkdir(parents=True, exist_ok=True)
             move_tree(payload, source)
         elif _partial_copy(payload, source, tree.role):
@@ -181,11 +182,12 @@ def _partial_copy(payload: Path, source: Path, role: str) -> bool:
     if name is None:
         return False
     copied = payload / name
-    if not copied.exists():
-        return True
     try:
+        if not exists_strict(copied):
+            return True
         return copied.read_bytes() == (source / name).read_bytes()
     except OSError:
+        # What cannot be compared is kept.
         return False
 
 
@@ -204,7 +206,7 @@ def _adopt_orphan_payloads(services: ArchiveServices) -> bool:
     candidates = []
     for child in children:
         try:
-            if child.name.startswith("arc_") and child.is_dir() and not child.is_symlink():
+            if child.name.startswith("arc_") and is_dir_strict(child) and not child.is_symlink():
                 candidates.append(child)
         except OSError as error:
             _unreadable(child, error)
@@ -257,7 +259,7 @@ def _payload_contents(
     """
     agent_dir = child / "agent"
     project_dir = child / "project"
-    if agent_dir.is_dir():
+    if is_dir_strict(agent_dir):
         inspected = services.agents.inspect_archived(agent_dir)
         facts = _format_facts(inspected.problem, AGENT_FORMAT_VERSION)
         subject = child.name
@@ -270,7 +272,7 @@ def _payload_contents(
             subject,
             facts,
         )
-    if project_dir.is_dir():
+    if is_dir_strict(project_dir):
         inspected_project = services.projects.inspect_archived(project_dir)
         facts = _format_facts(inspected_project.problem, PROJECT_FORMAT_VERSION)
         subject = child.name

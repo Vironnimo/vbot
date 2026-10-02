@@ -43,6 +43,7 @@ from core.sessions._archive_types import (
     ArchiveAdoption,
     ArchiveTree,
 )
+from core.utils.file_status import is_dir_strict, is_file_strict
 from core.utils.logging import get_logger
 from core.utils.timestamps import format_canonical_timestamp, parse_timestamp, utc_now_timestamp
 
@@ -354,7 +355,7 @@ def _directories(path: Path) -> list[Path]:
     directories = []
     for child in children:
         try:
-            if child.is_dir() and not child.is_symlink():
+            if is_dir_strict(child) and not child.is_symlink():
                 directories.append(child)
         except OSError as error:
             _unreadable(child, error)
@@ -408,7 +409,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     Raises ``OSError`` when the container cannot be read.
     """
     agent_dir = container / "agent"
-    if not agent_dir.is_dir():
+    if not is_dir_strict(agent_dir):
         return None
     mtime = _mtime(container)
     subject = container.name
@@ -423,7 +424,7 @@ def _agent_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
     for child in sorted(container.iterdir(), key=lambda entry: entry.name):
         if child.name == "agent":
             continue
-        if child.name == "workspace" and child.is_dir():
+        if child.name == "workspace" and is_dir_strict(child):
             moved = True
             if isinstance(workspace, str) and _outside(workspace, data_dir):
                 facts["user_folders"] = [_relative(child, data_dir)]
@@ -473,7 +474,7 @@ def _project_tree(container: Path, data_dir: Path) -> _LegacyTree | None:
 
     Raises ``OSError`` when the container cannot be read.
     """
-    if not (container / "project.json").is_file():
+    if not is_file_strict(container / "project.json"):
         return None
     mtime = _mtime(container)
     document = _document(container / "project.json")

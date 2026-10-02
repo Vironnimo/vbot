@@ -110,6 +110,7 @@ from core.settings.normalizers import normalize_compaction_policy
 from core.tools.availability import (
     ToolAccess,
 )
+from core.utils.file_status import exists_strict
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
@@ -250,7 +251,7 @@ class AgentStore:
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_agent_id(agent_id)
             agent_dir = self._agent_dir(agent_id)
-            if agent_dir.exists():
+            if exists_strict(agent_dir):
                 raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
             if agent_id in self._pending_rename_ids():
                 raise AgentError(
@@ -455,7 +456,10 @@ class AgentStore:
 
         effective_ids = tuple(agent.id for agent in ordered_agents)
         order_path = self._agent_order_path()
-        order_is_invalid = order is None and order_path.exists()
+        try:
+            order_is_invalid = order is None and exists_strict(order_path)
+        except OSError:
+            order_is_invalid = True  # an order that cannot be checked is never replaced
         if order is None and not order_is_invalid:
             materialized = _AgentOrderDocument(agent_ids=effective_ids, revision=1)
             try:
@@ -544,7 +548,7 @@ class AgentStore:
             candidate = _BOOTSTRAP_AGENT_ID
             suffix = 2
             reserved = self._pending_rename_ids()
-            while self._agent_dir(candidate).exists() or candidate in reserved:
+            while exists_strict(self._agent_dir(candidate)) or candidate in reserved:
                 candidate = f"{_BOOTSTRAP_AGENT_ID}-{suffix}"
                 suffix += 1
             return self.create(candidate, _BOOTSTRAP_AGENT_NAME)
@@ -726,7 +730,7 @@ class AgentStore:
             _validate_agent_id(new_agent_id)
             if agent_id == new_agent_id:
                 raise AgentError("new agent id must differ from the current id")
-            if self._rename_record_path().exists():
+            if exists_strict(self._rename_record_path()):
                 raise AgentError(
                     "An earlier Agent rename is still pending; restart vBot to finish it"
                 )
@@ -735,7 +739,7 @@ class AgentStore:
             destination_dir = self._agent_dir(new_agent_id)
             agent_path = self._require_agent_path(agent_id)
             case_only = _paths_are_same_location(source_dir, destination_dir)
-            if destination_dir.exists() and not case_only:
+            if exists_strict(destination_dir) and not case_only:
                 raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
             sessions = self._session_manager()
             # Rolling back renames the new id's Sessions back, so it must own none yet.

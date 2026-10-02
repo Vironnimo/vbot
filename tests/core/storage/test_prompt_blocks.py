@@ -1,6 +1,7 @@
 """The block-model prompt store: ``layout.json`` plus per-block text overrides per scope."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -209,7 +210,13 @@ def test_prune_layout_drops_inert_entries_and_keeps_live_order_and_flags(tmp_pat
         ("assistant", "agents/assistant/prompts/blocks/user/notes.md"),
     ],
 )
-def test_block_override_lifecycle(tmp_path: Path, scope: str | None, relative_path: str) -> None:
+def test_block_override_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    scope: str | None,
+    relative_path: str,
+) -> None:
     store = make_store(tmp_path)
     assert store.read_block_override(scope, "user:notes") is None
 
@@ -222,6 +229,18 @@ def test_block_override_lifecycle(tmp_path: Path, scope: str | None, relative_pa
     assert store.remove_block_override(scope, "user:notes") is True
     assert store.remove_block_override(scope, "user:notes") is False
     assert store.read_block_override(scope, "user:notes") is None
+
+    # An override that cannot be checked is an error, never an absent override.
+    store.write_block_override(scope, "user:notes", "kept")
+    deny_access(written_path.parent)
+    with pytest.raises(StorageError):
+        store.read_block_override(scope, "user:notes")
+    with pytest.raises(StorageError):
+        store.write_block_override(scope, "user:notes", "replaced")
+    with pytest.raises(StorageError):
+        store.remove_block_override(scope, "user:notes")
+    monkeypatch.undo()
+    assert store.read_block_override(scope, "user:notes") == "kept"
 
 
 def test_case_variant_blocks_never_read_write_or_remove_each_others_file(tmp_path: Path) -> None:

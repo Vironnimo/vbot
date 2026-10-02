@@ -32,6 +32,7 @@ from core.database.errors import (
     DatabaseUnavailableError,
 )
 from core.performance import measure, record_span
+from core.utils.file_status import exists_strict
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -384,7 +385,13 @@ class ConnectionRuntime:
         ``cancelled`` stopped the copy.
         """
         destination = Path(destination).expanduser().resolve()
-        if destination.exists():
+        try:
+            occupied = exists_strict(destination)
+        except OSError as exc:
+            raise DatabaseUnavailableError(
+                f"backup destination cannot be checked: {destination}"
+            ) from exc
+        if occupied:
             raise DatabaseUnavailableError(f"backup destination already exists: {destination}")
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_name(

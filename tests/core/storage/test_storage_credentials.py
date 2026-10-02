@@ -1,10 +1,12 @@
 """Data-directory credentials: the ``.env`` file beside the process environment."""
 
+import errno
 import os
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -202,15 +204,19 @@ def test_concurrent_credential_mutations_preserve_both_updates(
     assert storage.load_data_dir_credentials() == expected
 
 
-def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
+@pytest.mark.parametrize("failure", ["read", "replace"])
+def test_set_data_dir_credential_preserves_env_it_cannot_rewrite(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    failure: str,
 ) -> None:
     storage = StorageManager(tmp_path)
     env_path = tmp_path / ".env"
     env_path.write_text("OPENROUTER_API_KEY=old\nOTHER_KEY=value\n", encoding="utf-8")
     replace_calls: list[tuple[Path, Path]] = []
     original_replace = os.replace
+    original_exists = os.path.exists
+    original_read_text = Path.read_text
 
     def fail_replace(source: Path, target: Path) -> None:
         replace_calls.append((source, target))
@@ -219,12 +225,26 @@ def test_set_data_dir_credential_preserves_env_when_atomic_replace_fails(
             raise OSError("replace failed")
         return original_replace(source, target)
 
-    monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
+    def exists_unless_env(path: Any) -> bool:
+        return Path(path) != env_path and original_exists(path)
+
+    def refuse_env(path: Path, *args: Any, **kwargs: Any) -> str:
+        if path == env_path:
+            raise PermissionError(errno.EACCES, "Access is denied", str(path))
+        return original_read_text(path, *args, **kwargs)
+
+    if failure == "read":
+        # A file whose check fails reads as missing (Python 3.14), but it is there.
+        monkeypatch.setattr(os.path, "exists", exists_unless_env)
+        monkeypatch.setattr(Path, "read_text", refuse_env)
+    else:
+        monkeypatch.setattr("core.utils.atomic.os.replace", fail_replace)
 
     with pytest.raises(StorageError):
         storage.set_data_dir_credential("OPENROUTER_API_KEY", "new")
+    monkeypatch.undo()
 
-    assert any(target == env_path for _, target in replace_calls)
+    assert (failure == "replace") == any(target == env_path for _, target in replace_calls)
     assert env_path.read_text(encoding="utf-8") == "OPENROUTER_API_KEY=old\nOTHER_KEY=value\n"
     assert list(DataDirectoryLayout(tmp_path).atomic_temporary.iterdir()) == []
 

@@ -50,6 +50,7 @@ from core.config_validation import (
 )
 from core.database.snapshot_barrier import member_change
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import is_link_status
 
 FORMAT_VERSION_FIELD = "format_version"
 
@@ -502,13 +503,6 @@ def _document_data_dirs(path: Path) -> tuple[Path, ...]:
     return tuple(sorted(found))
 
 
-def _is_link(status: os.stat_result) -> bool:
-    """A symbolic link or a Windows junction; other reparse points are ordinary files."""
-    junction: int | None = getattr(stat, "IO_REPARSE_TAG_MOUNT_POINT", None)
-    tag: int | None = getattr(status, "st_reparse_tag", None)
-    return stat.S_ISLNK(status.st_mode) or (junction is not None and tag == junction)
-
-
 def _segment_matches(name: str, pattern: str) -> bool:
     return not name.startswith(".") and fnmatch.fnmatchcase(name, pattern)
 
@@ -532,7 +526,7 @@ def _matching_documents(
             status = os.lstat(directory / name)
         except (FileNotFoundError, NotADirectoryError):
             continue
-        if _is_link(status):
+        if is_link_status(status):
             continue
         if rest:
             if stat.S_ISDIR(status.st_mode):
