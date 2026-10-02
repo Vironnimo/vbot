@@ -566,7 +566,7 @@ def parse_local(text: str) -> datetime | None:
     if is_date(value):
         return None
     try:
-        return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 
@@ -919,7 +919,7 @@ def _rule(value: Any, problems: _Problems, start: str | None) -> dict[str, Any] 
         if freq is not None:
             rule["freq"] = freq
     for name in ("interval", "count"):
-        if isinstance(rule.get(name), str) and rule[name].strip().isdigit():
+        if isinstance(rule.get(name), str) and rule[name].strip().isdecimal():
             rule[name] = int(rule[name].strip())
     if "until" in rule and isinstance(rule["until"], str):
         until = _until_date(rule["until"])
@@ -965,10 +965,10 @@ def _rrule_text(text: str, problems: _Problems, start: str | None) -> dict[str, 
             "day and time. The call below repeats that way without "
             f"{', '.join(unsupported)}; send it only if that is meant."
         )
-    if fields.get("INTERVAL", "").isdigit():
-        rule["interval"] = int(fields["INTERVAL"])
-    if fields.get("COUNT", "").isdigit():
-        rule["count"] = int(fields["COUNT"])
+    for key, field in (("INTERVAL", "interval"), ("COUNT", "count")):
+        if number := fields.get(key):
+            # A value that is not a whole number stays text, which validation refuses.
+            rule[field] = int(number) if number.isdecimal() else number
     if "UNTIL" in fields:
         until = _until_date(fields["UNTIL"])
         if until is None:

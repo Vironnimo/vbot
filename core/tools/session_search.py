@@ -477,7 +477,7 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
             value = str(value)
         if field in {"query", "agent_id", "session_id"} and isinstance(value, str):
             value = value.strip()
-        if field == "limit" and isinstance(value, str) and value.strip().isdigit():
+        if field == "limit" and isinstance(value, str) and value.strip().isdecimal():
             value = int(value.strip())
         if field in normalized and normalized[field] != value:
             raise _SessionSearchError(
@@ -603,8 +603,7 @@ def _parse_datetime(
                 (last, datetime_time.max) if end_of_range else (first, datetime_time.min)
             )
             return datetime.combine(day, boundary, tzinfo=zone.tz), True
-        normalized = raw[:-1] + "+00:00" if raw[-1:] in ("Z", "z") else raw
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(raw[:-1] + "Z" if raw.endswith("z") else raw)
     except ValueError as error:
         raise _SessionSearchError(
             "invalid_arguments",

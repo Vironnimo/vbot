@@ -98,6 +98,13 @@ _NOT_RECOGNIZED_DE = (
             "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
             ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
         ),
+        pytest.param(
+            "Select-String todo " * 40_000 + "| Select-String -Pattern todo -Recurse",
+            1,
+            "Select-String: A parameter cannot be found that matches parameter name 'Recurse'.",
+            ["`Get-ChildItem -Recurse -File | Select-String 'text'`"],
+            id="long_command_is_scanned_once",
+        ),
     ],
 )
 def test_failure_output_gets_the_matching_hint(
@@ -208,6 +215,12 @@ def test_missing_powershell_command_names_the_equivalent(command, name, expected
             "python -c @'\nprint(''hello'')\n'@",
             "SyntaxError: invalid syntax. Is this intended to be part of the string?",
             "Inside a @'...'@ here-string, '' stays two quotes.",
+        ),
+        pytest.param(
+            '@"\n' * 40_000 + "python -c @'\nprint(''hello'')\n'@",
+            "SyntaxError: invalid syntax. Is this intended to be part of the string?",
+            "Inside a @'...'@ here-string, '' stays two quotes.",
+            id="unclosed_here_strings_are_scanned_once",
         ),
         # Quotes a here-string keeps literal and empty strings explain nothing.
         ("@'\nprint(''.join(parts))\nprint(\"a\\\"b\"\n'@ | python -", "SyntaxError: x", None),

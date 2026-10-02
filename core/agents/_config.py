@@ -6,7 +6,6 @@ import re
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import asdict, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -79,6 +78,7 @@ from core.tools.availability import (
     normalize_env_keys,
     normalize_tool_access,
 )
+from core.utils.timestamps import utc_now_timestamp
 
 DEFAULT_FALLBACK_MODELS: list[str] = []
 
@@ -549,10 +549,6 @@ def _validate_root_project_id(project_id: Any) -> str | None:
     return project_id
 
 
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
 def _agent_from_dict(
     data: dict[str, Any],
     *,
@@ -566,7 +562,7 @@ def _agent_from_dict(
     sanitization, optional-field defaults) without re-validating.
     """
     agent_id = cast(str, data["id"])
-    timestamp_default = _utc_now()
+    timestamp_default = utc_now_timestamp()
     temperature = data.get("temperature")
     memory_prompt_mode = data.get("memory_prompt_mode")
     return Agent(

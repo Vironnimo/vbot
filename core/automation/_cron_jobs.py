@@ -537,8 +537,7 @@ def _resolve_timezone(value: str | ZoneInfo | None) -> ZoneInfo:
                 f"timezone is not a known IANA timezone: {value}"
             ) from error
     try:
-        local = get_localzone()
-        return local if isinstance(local, ZoneInfo) else ZoneInfo(str(local))
+        return get_localzone()
     except Exception as error:
         get_logger("automation.cron").warning("Could not resolve system timezone: %s", error)
         return ZoneInfo("UTC")
@@ -548,9 +547,8 @@ def _parse_iso_datetime(value: str, *, field_name: str, allow_naive: bool) -> da
     if not isinstance(value, str) or not value:
         raise CronJobValidationError(f"{field_name} must be a non-empty ISO 8601 timestamp")
 
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise CronJobValidationError(f"{field_name} must be a valid ISO 8601 timestamp") from error
 

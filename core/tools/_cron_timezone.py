@@ -136,7 +136,7 @@ def _moment_in_zone(
 ) -> tuple[dict[str, Any], str | None]:
     text = schedule.strip()
     try:
-        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         # The schedule parser explains the form; a time zone cannot fix it.
         return arguments, None
@@ -221,7 +221,7 @@ def _shift_cron(fields: list[str], shift: int) -> str | None:
     minute, hour, day, month, weekday = fields
     shift_hours, shift_minutes = divmod(shift, 60)
     carry = 0
-    if minute.isdigit():
+    if minute.isdecimal():
         carry, new_minute = divmod(int(minute) + shift_minutes, 60)
         minute = str(new_minute)
     elif shift_minutes:
@@ -235,7 +235,7 @@ def _shift_cron(fields: list[str], shift: int) -> str | None:
     day_moves: set[int] = set()
     for part in hour.split(","):
         start_text, _dash, end_text = part.partition("-")
-        if not start_text.isdigit() or (end_text and not end_text.isdigit()):
+        if not start_text.isdecimal() or (end_text and not end_text.isdecimal()):
             return None
         start = int(start_text) + hours
         end = int(end_text or start_text) + hours
@@ -265,7 +265,7 @@ def _shift_weekdays(field: str, days: int) -> str | None:
     weekdays: set[int] = set()
     for part in field.casefold().split(","):
         body, slash, step_text = part.partition("/")
-        step = int(step_text) if step_text.isdigit() and int(step_text) > 0 else 0
+        step = int(step_text) if step_text.isdecimal() and int(step_text) > 0 else 0
         if slash and not step:
             return None
         if body == "*":
@@ -288,7 +288,7 @@ def _shift_weekdays(field: str, days: int) -> str | None:
 
 def _weekday_number(text: str) -> int | None:
     """0-7 as written (0 and 7 are Sunday) or a three-letter day name."""
-    if text.isdigit():
+    if text.isdecimal():
         return int(text) if int(text) <= 7 else None
     return _WEEKDAY_NAMES.get(text)
 

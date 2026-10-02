@@ -172,6 +172,10 @@ def _rate_limited(_request: httpx.Request) -> httpx.Response:
     return httpx.Response(429, headers={"retry-after": "7"})
 
 
+def _rate_limited_for_a_fraction(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(429, headers={"retry-after": "1.5"})
+
+
 def _connection_lost(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadError("secret-url?token=credential", request=request)
 
@@ -179,8 +183,12 @@ def _connection_lost(request: httpx.Request) -> httpx.Response:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("server", "retryable", "retry_after"),
-    [(_rate_limited, True, 7), (_connection_lost, False, None)],
-    ids=["rate-limited", "ambiguous-write"],
+    [
+        (_rate_limited, True, 7),
+        (_rate_limited_for_a_fraction, True, 1.5),
+        (_connection_lost, False, None),
+    ],
+    ids=["rate-limited", "fractional-retry-after", "ambiguous-write"],
 )
 async def test_request_failure_keeps_retry_hint_without_request_details(
     tmp_path: Path,

@@ -635,9 +635,8 @@ def _to_utc(value: datetime) -> datetime:
 
 
 def _parse_utc_timestamp(value: str) -> datetime | None:
-    normalized_value = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(normalized_value)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:

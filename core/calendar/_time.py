@@ -19,8 +19,7 @@ _LOGGER = get_logger("calendar.service")
 def _default_timezone() -> ZoneInfo:
     """Resolve the server's local zone, falling back to UTC when undetectable."""
     try:
-        zone = get_localzone()
-        return zone if isinstance(zone, ZoneInfo) else ZoneInfo(str(zone))
+        return get_localzone()
     except Exception as error:
         _LOGGER.warning("Could not resolve system timezone: %s", error)
         return ZoneInfo("UTC")
@@ -39,9 +38,8 @@ def _local_naive_iso(value: datetime, zone: ZoneInfo) -> str:
 
 
 def _parse_iso_datetime(value: str, *, field_name: str) -> datetime:
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        return datetime.fromisoformat(normalized)
+        return datetime.fromisoformat(value)
     except ValueError as error:
         raise CalendarValidationError(f"{field_name} must be a valid ISO 8601 datetime") from error
 

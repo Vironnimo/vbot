@@ -80,8 +80,7 @@ def _optional_utc_timestamp(params: JsonObject, key: str) -> datetime | None:
 
 def _parse_iso_utc(value: str) -> datetime | None:
     try:
-        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(value)
     except ValueError:
         return None
     if parsed.tzinfo is None:

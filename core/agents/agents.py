@@ -36,7 +36,6 @@ from core.agents._config import (
     _normalize_agent_name,
     _normalize_agent_tools,
     _replace_list_item_once,
-    _utc_now,
     _validate_agent_id,
     _validate_allowed_items,
     _validate_bool_field,
@@ -113,6 +112,7 @@ from core.tools.availability import (
 from core.utils.file_status import exists_strict
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
+from core.utils.timestamps import utc_now_timestamp
 
 __all__ = [
     "Agent",
@@ -279,7 +279,7 @@ class AgentStore:
                 if compaction_policy is not None
                 else None
             )
-            now = _utc_now()
+            now = utc_now_timestamp()
             workspace_value = workspace
             if workspace_value is None or (
                 isinstance(workspace_value, str) and not workspace_value.strip()
@@ -655,7 +655,7 @@ class AgentStore:
             if not changes:
                 return AgentUpdateResult(_apply_defaults(agent, self._agent_defaults()))
 
-            updated_agent = replace(agent, **changes, updated_at=_utc_now())
+            updated_agent = replace(agent, **changes, updated_at=utc_now_timestamp())
             relocation = _WorkspaceRelocation()
             try:
                 if "workspace" in changes:
@@ -909,7 +909,7 @@ class AgentStore:
         if agent.id == rename.target_id and workspace == agent.workspace:
             return
         self._write_agent(
-            replace(agent, id=rename.target_id, workspace=workspace, updated_at=_utc_now())
+            replace(agent, id=rename.target_id, workspace=workspace, updated_at=utc_now_timestamp())
         )
 
     def _rename_order_entry(self, rename: AgentRename) -> None:
@@ -935,7 +935,7 @@ class AgentStore:
             tools["subagent"]["allowed_agents"] = _replace_list_item_once(
                 allowed_agents, old_agent_id, new_agent_id
             )
-            self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+            self._write_agent(replace(agent, tools=tools, updated_at=utc_now_timestamp()))
             changed.append(agent.id)
         return tuple(changed)
 
@@ -967,7 +967,7 @@ class AgentStore:
                 item for item in allowed_agents if item != agent_id
             ]
             try:
-                self._write_agent(replace(agent, tools=tools, updated_at=_utc_now()))
+                self._write_agent(replace(agent, tools=tools, updated_at=utc_now_timestamp()))
             except (AgentError, OSError) as error:
                 if not best_effort:
                     raise
@@ -1096,7 +1096,7 @@ class AgentStore:
                 landing_session_id = created_session.id
 
             updated_agent = replace(
-                agent, current_session_id=landing_session_id, updated_at=_utc_now()
+                agent, current_session_id=landing_session_id, updated_at=utc_now_timestamp()
             )
             try:
                 self._write_agent(updated_agent)
@@ -1338,7 +1338,9 @@ class AgentStore:
         # defers creates none (see ``_repairing_read``).
         with document_change(self._agent_path(agent.id), wait=False):
             session = self._session_manager().create(agent.id)
-            updated_agent = replace(agent, current_session_id=session.id, updated_at=_utc_now())
+            updated_agent = replace(
+                agent, current_session_id=session.id, updated_at=utc_now_timestamp()
+            )
             try:
                 self._write_agent(updated_agent)
             except Exception:

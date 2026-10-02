@@ -31,7 +31,7 @@ def parse_timestamp(value: str) -> datetime:
     """
     if not isinstance(value, str) or not value:
         raise ValueError("timestamp must be a non-empty ISO 8601 string")
-    text = value[:-1] + "+00:00" if value.endswith(("Z", "z")) else value
+    text = value[:-1] + "Z" if value.endswith("z") else value
     try:
         parsed = datetime.fromisoformat(text)
     except ValueError as exc:

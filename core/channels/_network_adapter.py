@@ -35,6 +35,7 @@ from core.channels.adapter import (
 from core.channels.config import ChannelConfig, ChannelConfigError, ChannelError
 from core.channels.engine import ChannelConversationEngine
 from core.chat.content_blocks import ContentBlock, TextBlock
+from core.utils.http_status import parse_retry_after
 from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
 from core.utils.workers import BoundedWorkerPool
@@ -246,11 +247,10 @@ class NetworkChannelAdapter(ChannelAdapter):
         if response.is_success:
             return
         status = response.status_code
-        retry_after = response.headers.get("retry-after", "")
         raise ChannelError(
             f"Channel request failed (HTTP {status})",
             retryable=status == 429 or (status >= 500 and retry_server_error),
-            retry_after=float(retry_after) if retry_after.isdigit() else None,
+            retry_after=parse_retry_after(response.headers),
         )
 
     async def request(self, method: str, url: str, **kwargs: Any) -> Any:

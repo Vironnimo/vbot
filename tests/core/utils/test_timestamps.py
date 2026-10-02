@@ -33,7 +33,7 @@ def test_every_aware_form_normalizes_to_one_fixed_width_text(value: str | dateti
 
 
 @pytest.mark.parametrize(
-    "value", ["", "2026-07-01T12:00:00", "not a time", datetime(2026, 7, 1, 12)]
+    "value", ["", "2026-07-01T12:00:00", "2026-07-01Z", "not a time", datetime(2026, 7, 1, 12)]
 )
 def test_a_value_without_an_offset_is_never_guessed(value: str | datetime) -> None:
     with pytest.raises(ValueError):

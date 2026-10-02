@@ -25,7 +25,6 @@ import shutil
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
@@ -57,6 +56,7 @@ from core.settings import (
 from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
+from core.utils.timestamps import utc_now_timestamp
 from core.utils.tree_move import move_tree
 
 if TYPE_CHECKING:
@@ -310,7 +310,7 @@ class ProjectStore:
             if "cwd" in changes and rebuilt.cwd != project.cwd:
                 self._reject_duplicate_cwd(rebuilt.cwd, exclude_project_id=project_id)
 
-            updated = replace(rebuilt, updated_at=_utc_now())
+            updated = replace(rebuilt, updated_at=utc_now_timestamp())
             self._write_project(updated)
             return updated
 
@@ -383,7 +383,7 @@ class ProjectStore:
             overrides=overrides,
             created_at=project.created_at,
         )
-        updated = replace(rebuilt, updated_at=_utc_now())
+        updated = replace(rebuilt, updated_at=utc_now_timestamp())
         self._write_project(updated)
         return self._read_project(self._config_path(project.project_id))
 
@@ -463,7 +463,7 @@ class ProjectStore:
                 load_validated_project_json(source / _PROJECT_CONFIG_FILENAME)
             )
             self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
-            restored = replace(project, project_id=target_id, updated_at=_utc_now())
+            restored = replace(project, project_id=target_id, updated_at=utc_now_timestamp())
             project_dir = self._project_dir(target_id)
             config = project_dir / _PROJECT_CONFIG_FILENAME
             try:
@@ -597,7 +597,3 @@ def _move_back(source: Path, destination: Path, error: BaseException, failure: s
 def _copy_overrides(overrides: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Return a deep-enough copy of an override map (each agent's override object copied)."""
     return {agent_id: dict(override) for agent_id, override in overrides.items()}
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")

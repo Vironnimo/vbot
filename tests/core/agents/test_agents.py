@@ -19,6 +19,7 @@ from core.agents import (
 )
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
+from core.utils.timestamps import is_canonical_timestamp
 from tests.core.agents.agents_test_support import (
     TEMPLATE_FILES,
     agent_path,
@@ -52,7 +53,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert data["custom_system_prompt_enabled"] is False
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
-    assert data["created_at"].endswith("Z")
+    assert is_canonical_timestamp(data["created_at"])
     assert data["updated_at"] == data["created_at"]
     assert (store.data_dir / "sessions.db").is_file()
     assert store._session_manager().exists(

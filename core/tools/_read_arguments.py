@@ -366,7 +366,7 @@ def _first_value(value: dict[str, Any], keys: tuple[str, ...]) -> Any:
 def _line_number(value: Any, field: str, *, required: bool = True) -> int | None:
     if value is None:
         return None
-    if isinstance(value, str) and value.strip().isdigit():
+    if isinstance(value, str) and value.strip().isdecimal():
         value = int(value.strip())
     if _is_int(value) and value >= 0:
         return value if value > 0 else 1

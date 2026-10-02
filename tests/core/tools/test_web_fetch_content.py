@@ -341,6 +341,23 @@ async def test_non_html_responses_become_text_or_a_binary_notice(
 
 
 @pytest.mark.asyncio
+async def test_text_output_of_markdown_keeps_link_text_without_urls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The unclosed brackets made link collapsing quadratic: past the test timeout.
+    unclosed = "[a" * 100_000 + "[](https://a" * 20_000
+    links = "See [the docs](https://example.com/docs) and ![chart](https://example.com/c.png)."
+    page = f"{links}\n{unclosed}"
+    _serve(monkeypatch, content_type="text/markdown; charset=utf-8", text=page)
+
+    data = assert_success_envelope(
+        await fetch(tmp_path, {"url": "https://example.com/readme.md", "output": "text"})
+    )
+
+    assert data["content"].startswith("See the docs and chart.\n[a[a")
+
+
+@pytest.mark.asyncio
 async def test_notebook_is_recognized_by_the_final_url_after_a_redirect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
