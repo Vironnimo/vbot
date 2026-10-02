@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Any
 import pytest
 
 from scripts import commit_check
+from scripts.package_build import PYTHON_VERSION
 
 UNFORMATTED = "value  =  {'a':1}\n"
 FORMATTED = 'value = {"a": 1}\n'
@@ -101,17 +103,18 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
     ("path", "checked"),
     [
         ("core/model_tasks/speech_worker.py", True),
-        ("core/model_tasks/embedding_worker.py", True),
         # It holds the mypy version and configuration.
         ("pyproject.toml", True),
+        # The embedding environment runs on vBot's Python.
+        ("core/model_tasks/embedding_worker.py", False),
         ("core/model_tasks/speech_local.py", False),
     ],
 )
-def test_python_312_workers_are_type_checked_against_3_12_when_they_can_change(
+def test_older_python_files_are_type_checked_against_that_python_when_they_can_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, checked: bool
 ) -> None:
-    # Managed model environments run the workers on Python 3.12, not on vBot's Python;
-    # their package's other modules run on vBot's Python and are not checked.
+    # Managed speech environments also run the worker on an older Python than vBot's;
+    # its package's other modules run on vBot's Python and are not checked.
     monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     commands: list[list[str]] = []
     error = "core/model_tasks/speech_worker.py:9: error: Module has no attribute  [attr-defined]"
@@ -127,15 +130,36 @@ def test_python_312_workers_are_type_checked_against_3_12_when_they_can_change(
 
     results = commit_check.check_python(tmp_path, [path], set())
 
-    python_312 = [command for command in commands if "--python-version" in command]
+    version = commit_check.OLDER_PYTHON_VERSION
+    older = [command for command in commands if "--python-version" in command]
     if checked:
-        assert python_312 == [
-            [sys.executable, "-m", "mypy", "--python-version", "3.12", "--follow-imports", "skip"]
-            + list(commit_check.PYTHON_312_FILES)
+        assert older == [
+            [sys.executable, "-m", "mypy", "--python-version", version, "--follow-imports", "skip"]
+            + list(commit_check.OLDER_PYTHON_FILES)
         ]
-        assert ("mypy 3.12", "FAIL", True, error) in results
+        assert (f"mypy {version}", "FAIL", True, error) in results
     else:
-        assert python_312 == []
+        assert older == []
+
+
+def test_older_python_checks_target_the_oldest_python_running_the_speech_worker() -> None:
+    """Every speech environment runs the worker: Ruff, the hook and CI check the oldest one.
+
+    Once every environment runs on vBot's Python, drop these checks instead.
+    """
+    root = Path(__file__).resolve().parents[2]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    recipes = project["tool"]["vbot"]["local-tts"].values()
+    # Managed STT has no recipe and, like a recipe without `python`, runs on vBot's.
+    versions = {PYTHON_VERSION, *(recipe.get("python", PYTHON_VERSION) for recipe in recipes)}
+    oldest = min(versions, key=lambda version: tuple(map(int, version.split("."))))
+    assert oldest != PYTHON_VERSION, "every speech environment runs on vBot's Python"
+    assert oldest == commit_check.OLDER_PYTHON_VERSION
+    targets = project["tool"]["ruff"]["per-file-target-version"]
+    assert commit_check.OLDER_PYTHON_FILES == ("core/model_tasks/speech_worker.py",)
+    assert targets["core/model_tasks/speech_worker.py"] == "py" + oldest.replace(".", "")
+    workflow = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert f"--python-version {oldest} --follow-imports skip" in workflow
 
 
 @pytest.mark.parametrize(

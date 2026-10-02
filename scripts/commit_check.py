@@ -17,9 +17,9 @@ needs a fix.
 mypy checks the whole configured project, because a staged change can break a
 caller elsewhere, once for Windows and once for Linux (the platforms CI
 type-checks), so a Windows-only name without a platform check fails on any host.
-The model workers that managed environments run on Python 3.12 are checked once
-more against 3.12's standard library when one of them or ``pyproject.toml`` is
-staged. mypy errors block the commit when they are in a staged file or
+The speech worker, which managed environments also run on an older Python, is
+checked once more against that version's standard library when it or
+``pyproject.toml`` is staged. mypy errors block the commit when they are in a staged file or
 in a file without uncommitted changes; errors in files with unstaged or untracked
 work in progress are reported without blocking.
 
@@ -68,10 +68,12 @@ SHOWN_DIFFERENCES = 5
 # The platforms CI type-checks (.github/workflows/ci.yml, static job). mypy keeps
 # the host platform in its default cache and every other one in its own.
 MYPY_PLATFORMS = ("win32", "linux")
-# Workers that managed model environments run on Python 3.12, not on vBot's Python
-# (PROJECT.md -> Development -> Python version). Ruff keeps their syntax valid there;
-# mypy checks their standard-library use.
-PYTHON_312_FILES = ("core/model_tasks/embedding_worker.py", "core/model_tasks/speech_worker.py")
+# Files that managed model environments also run on a Python older than vBot's, and
+# the oldest such Python: every speech environment runs the speech worker, Chatterbox's
+# on 3.13 (PROJECT.md -> Development -> Python version). Ruff keeps their syntax valid
+# there; mypy checks their standard-library use.
+OLDER_PYTHON_FILES = ("core/model_tasks/speech_worker.py",)
+OLDER_PYTHON_VERSION = "3.13"
 MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>error|note):")
 
 
@@ -297,8 +299,8 @@ def check_python(root: Path, staged: list[str], dirty: set[str]) -> list[StepRes
     targets = mypy_targets(root, python_files)
     if targets:
         results.extend(check_types(root, targets, set(staged), dirty))
-    if "pyproject.toml" in staged or set(PYTHON_312_FILES) & set(python_files):
-        results.extend(check_python_312(root, set(staged), dirty))
+    if "pyproject.toml" in staged or set(OLDER_PYTHON_FILES) & set(python_files):
+        results.extend(check_older_python(root, set(staged), dirty))
     return results
 
 
@@ -321,24 +323,24 @@ def check_types(
     return results
 
 
-def check_python_312(root: Path, staged: set[str], dirty: set[str]) -> list[StepResult]:
-    """Run mypy over ``PYTHON_312_FILES`` against Python 3.12's standard library.
+def check_older_python(root: Path, staged: set[str], dirty: set[str]) -> list[StepResult]:
+    """Run mypy over ``OLDER_PYTHON_FILES`` against ``OLDER_PYTHON_VERSION``'s standard library.
 
-    The workers import only the standard library. Repository imports are skipped:
-    mypy would otherwise parse their package, whose modules run on the server's
-    Python and may use newer syntax.
+    These files import only the standard library at startup. Repository imports are
+    skipped: mypy would otherwise parse their package, whose modules run on the
+    server's Python and may use newer syntax.
     """
     command = [
         sys.executable,
         "-m",
         "mypy",
         "--python-version",
-        "3.12",
+        OLDER_PYTHON_VERSION,
         "--follow-imports",
         "skip",
-        *PYTHON_312_FILES,
+        *OLDER_PYTHON_FILES,
     ]
-    return _mypy_results("mypy 3.12", _run(command, root), staged, dirty)
+    return _mypy_results(f"mypy {OLDER_PYTHON_VERSION}", _run(command, root), staged, dirty)
 
 
 def _mypy_results(

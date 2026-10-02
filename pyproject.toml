@@ -68,9 +68,8 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.per-file-target-version]
-# Workers that managed model environments run on Python 3.12.
-"core/model_tasks/speech_worker.py" = "py312"
-"core/model_tasks/embedding_worker.py" = "py312"
+# Every managed speech environment runs this worker; Chatterbox's runs Python 3.13.
+"core/model_tasks/speech_worker.py" = "py313"
 # Bundled Skill scripts run on the host's `python`; they support 3.9 and later.
 "resources/skills/*/scripts/*.py" = "py39"
 
