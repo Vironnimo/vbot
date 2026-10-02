@@ -201,7 +201,7 @@ class LocalSetup:
             self._required_python = str(version or SERVER_PYTHON)
         return self._required_python
 
-    def _environment_needed(self) -> bool:
+    async def _environment_needed(self) -> bool:
         """Remove an environment whose Python cannot serve; return whether one must be created.
 
         Its interpreter is gone, or the environment is based on a Python that no
@@ -213,7 +213,15 @@ class LocalSetup:
         if error not in {"python_missing", "python_changed"}:
             return False
         if self.directory.exists():
-            shutil.rmtree(self.directory)
+            # A Torch environment holds tens of thousands of files: remove them
+            # off the Event Loop, and finish even when the installation is
+            # cancelled, so no later installation starts in a half-removed tree.
+            removal = asyncio.ensure_future(asyncio.to_thread(shutil.rmtree, self.directory))
+            try:
+                await asyncio.shield(removal)
+            except asyncio.CancelledError:
+                await asyncio.wait([removal])
+                raise
         return True
 
     def install(self) -> dict[str, Any]:
@@ -387,7 +395,7 @@ class LocalSetup:
         uv = [sys.executable, "-c", _UV]
         self._phase = "python"
         if (
-            self._environment_needed()
+            await self._environment_needed()
             and await self._command(
                 [
                     *uv,

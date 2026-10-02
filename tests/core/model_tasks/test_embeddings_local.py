@@ -261,13 +261,24 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
             "phase": "checking",
             "error": "python_changed",
         }
+        removals: list[tuple[Path, int]] = []
+        rmtree = local_setup.shutil.rmtree
+
+        def remove(path: Path, *args: Any, **kwargs: Any) -> None:
+            removals.append((Path(path), threading.get_ident()))
+            rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(local_setup.shutil, "rmtree", remove)
 
         harrier.install()
         assert harrier._task is not None
         await harrier._task
 
-        # The environment was created again on a uv-managed Python of the server's
-        # version; uv does not see the server's interpreter as its parent.
+        # The environment was removed off the Event Loop, then created again on a
+        # uv-managed Python of the server's version: uv does not see the server's
+        # interpreter as its parent.
+        threads = [thread for path, thread in removals if path == harrier.directory]
+        assert threads and threading.get_ident() not in threads
         assert not (harrier.directory / "pyvenv.cfg").exists()
         venv = next(call for call in commands.calls if "venv" in call)
         server = f"{sys.version_info.major}.{sys.version_info.minor}"

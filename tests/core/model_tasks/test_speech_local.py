@@ -700,7 +700,8 @@ def test_managed_speech_never_runs_during_incomplete_setup(tmp_path: Path, state
     assert not setup.available()
 
 
-def test_managed_speech_reports_filesystem_access_failure(
+@pytest.mark.asyncio
+async def test_managed_speech_reports_filesystem_access_failure(
     tmp_path: Path, deny_access: Callable[[Path], None]
 ) -> None:
     setup = LocalSpeechSetup(directory=tmp_path / "stt")
@@ -714,7 +715,7 @@ def test_managed_speech_reports_filesystem_access_failure(
     assert setup.status()["error"] == "environment_unreadable"
     assert not setup.available()
     # Setup keeps an environment it cannot check instead of deleting it to start over.
-    assert not setup._environment_needed()
+    assert not await setup._environment_needed()
     assert (tmp_path / "stt" / "verified.json").is_file()
 
 

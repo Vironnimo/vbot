@@ -228,7 +228,7 @@ class LocalSpeechSetup(LocalSetup):
         ]
         uv = [sys.executable, "-m", "uv"]
         self._phase = "python"
-        if self._environment_needed():
+        if await self._environment_needed():
             install = self._packaged_installation()
             if install is None:
                 self._fail("setup_unavailable")
