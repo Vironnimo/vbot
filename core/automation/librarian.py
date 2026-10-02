@@ -376,14 +376,24 @@ class LibrarianService:
         skill_usage: Callable[[], Awaitable[Mapping[tuple[str, str], SkillUse]]],
         triggered_skill_names: Callable[[str], frozenset[str]],
         skills_changed: Callable[[str], None],
+        status_changed: Callable[[], None] = lambda: None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        """Curate the homes ``skills_dir`` names with ``authoring``.
+
+        ``skill_usage`` reads every Agent's Skill use by ``(agent id, name)``;
+        ``triggered_skill_names`` names the Skills an Agent's live automations
+        trigger. ``skills_changed`` runs after aging archived Skills of an Agent
+        (consolidation writes report themselves through ``skill_manage``), and
+        ``status_changed`` whenever a pass starts or ends.
+        """
         self._runtime = runtime
         self._authoring = authoring
         self._skills_dir = skills_dir
         self._skill_usage = skill_usage
         self._triggered_skill_names = triggered_skill_names
         self._skills_changed = skills_changed
+        self._status_changed = status_changed
         self._clock = clock or (lambda: datetime.now(UTC))
         self._active: dict[str, _ActivePass] = {}
         self._task: asyncio.Task[None] | None = None
@@ -544,7 +554,15 @@ class LibrarianService:
     def _begin(self, agent_id: str, trigger: PassTrigger) -> _ActivePass:
         active = _ActivePass(started_at=format_canonical_timestamp(self._clock()), trigger=trigger)
         self._active[agent_id] = active
+        self._announce()
         return active
+
+    def _announce(self) -> None:
+        """Tell observers that a pass started or ended."""
+        try:
+            self._status_changed()
+        except Exception:
+            _LOGGER.warning("Librarian status callback failed", exc_info=True)
 
     async def _guarded_pass(self, agent_id: str, active: _ActivePass) -> None:
         try:
@@ -556,6 +574,7 @@ class LibrarianService:
         finally:
             if self._active.get(agent_id) is active:
                 del self._active[agent_id]
+                self._announce()
 
     # -- one pass ----------------------------------------------------------------
 

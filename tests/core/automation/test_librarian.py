@@ -68,6 +68,7 @@ class _Harness:
         self.usage: dict[tuple[str, str], SkillUse] = {}
         self.scheduled: dict[str, frozenset[str]] = {}
         self.changed: list[str] = []
+        self.announced = 0
         self.started: list[dict[str, Any]] = []
         self.created_sessions: list[dict[str, Any]] = []
         self.deleted_sessions: list[Any] = []
@@ -109,6 +110,7 @@ class _Harness:
             skill_usage=skill_usage,
             triggered_skill_names=lambda agent_id: self.scheduled.get(agent_id, frozenset()),
             skills_changed=self.changed.append,
+            status_changed=self.announce,
             clock=lambda: self.now,
         )
 
@@ -119,6 +121,9 @@ class _Harness:
             memory_prompt_mode="agent_user",
             tool_access=ToolAccess(**tool_access),
         )
+
+    def announce(self) -> None:
+        self.announced += 1
 
     def home(self, agent_id: str) -> Path:
         return self.storage.data_dir / "agents" / agent_id / "skills"
@@ -208,6 +213,8 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         ("old-pass", "librarian", "inactive", "librarian"),
     ]
     assert harness.changed == ["main"]
+    # Observers learn that the pass started and that it ended.
+    assert harness.announced == 2
     last_pass = status["last_pass"]
     assert (last_pass["trigger"], last_pass["archived"], last_pass["consolidation"]) == (
         "manual",

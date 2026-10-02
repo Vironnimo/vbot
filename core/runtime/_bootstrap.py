@@ -768,6 +768,8 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
         skill_usage=usage.skill_usage_async,
         triggered_skill_names=automation.agent_triggered_skill_names,
         skills_changed=skills_changed,
+        # The Skill manager shows the Librarian; its observers reload on Skill changes.
+        status_changed=runtime._notify_skills_changed,
     )
 
 
