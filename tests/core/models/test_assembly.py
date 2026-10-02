@@ -99,11 +99,18 @@ def test_canonical_join_is_deterministic(
             },
             id="null-fills-but-never-erases",
         ),
+        # The reasoning control description is one unit: a higher block replaces
+        # the lower ladder whole, while the independent ``mandatory`` fact survives.
         pytest.param(
             [
                 {
                     "capabilities": {
-                        "reasoning": {"supported": True, "control": "levels", "levels": ["high"]},
+                        "reasoning": {
+                            "supported": True,
+                            "control": "levels",
+                            "levels": ["high"],
+                            "mandatory": True,
+                        },
                         "vision": False,
                         "tools": True,
                         "input_modalities": ["text", "image"],
@@ -123,7 +130,7 @@ def test_canonical_join_is_deterministic(
             ],
             {
                 "capabilities": {
-                    "reasoning": {"supported": True, "control": "on_off"},
+                    "reasoning": {"supported": True, "control": "on_off", "mandatory": True},
                     "vision": False,
                     "tools": False,
                     "input_modalities": ["text"],
@@ -131,7 +138,54 @@ def test_canonical_join_is_deterministic(
                     "json_mode": None,
                 }
             },
-            id="capabilities-merge-one-level-deep-with-nested-values-wholesale",
+            id="capabilities-merge-one-level-deep-with-the-reasoning-control-as-one-unit",
+        ),
+        # A provider block with only independent facts keeps the canonical ladder.
+        pytest.param(
+            [
+                {
+                    "capabilities": {
+                        "reasoning": {"supported": True, "control": "levels", "levels": ["high"]}
+                    }
+                },
+                {"capabilities": {"reasoning": {"mandatory": True}}},
+            ],
+            {
+                "capabilities": {
+                    "reasoning": {
+                        "supported": True,
+                        "control": "levels",
+                        "levels": ["high"],
+                        "mandatory": True,
+                    }
+                }
+            },
+            id="reasoning-facts-merge-under-an-inherited-ladder",
+        ),
+        pytest.param(
+            [
+                {
+                    "metadata": {
+                        "acme": {"protocol": "responses", "routes": ["a"], "remote": True},
+                        "other": {"flag": True},
+                        "note": "generated",
+                    }
+                },
+                {
+                    "metadata": {
+                        "acme": {"routes": ["b"], "remote": None, "extra": 1},
+                        "note": {"text": "hand"},
+                    }
+                },
+            ],
+            {
+                "metadata": {
+                    "acme": {"protocol": "responses", "routes": ["b"], "remote": True, "extra": 1},
+                    "other": {"flag": True},
+                    "note": {"text": "hand"},
+                }
+            },
+            id="metadata-merges-per-provider-key-then-per-field",
         ),
     ],
 )
@@ -217,7 +271,7 @@ def test_worked_example_loads_one_canonical_model_with_per_provider_ladders() ->
     )
     assert standalone.capabilities.reasoning.supported is False
     # The override (no provider_id, manual pointer) wins, and its ladder replaces
-    # both the provider ladder [low, medium] and the canonical [high, max] wholesale.
+    # both the provider ladder [low, medium] and the canonical [high, max] as one unit.
     assert (hand_corrected.name, hand_corrected.family) == (
         "Thin DeepSeek (hand-corrected)",
         "deepseek-v4",

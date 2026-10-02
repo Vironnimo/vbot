@@ -16,6 +16,7 @@ from typing import Any, Protocol
 
 import httpx
 
+from core.models.assembly import REASONING_CONTROL_FIELDS
 from core.models.models import (
     Model,
     ModelRegistry,
@@ -444,13 +445,17 @@ def _enrich_provider_model(
     * projects the models.dev ``interleaved`` response field into
       ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
     * when models.dev reports a ladder that *deviates* from the lab spec, sets
-      ``capabilities.reasoning`` to that deviating block (provider layer wins at
-      load);
-    * when the model joins the canonical layer and does NOT deviate, REMOVES the
-      provider's bare ``reasoning`` sub-field so the canonical lifted ladder is
-      inherited at load (the assembly merges ``capabilities`` one level deep, so
-      a present-but-bare provider ``reasoning`` would otherwise shadow the
-      canonical one — handoff: non-deviating provider layer is empty).
+      the reasoning control description to that deviating block (provider layer
+      wins at load);
+    * when the model joins the canonical layer and does NOT deviate, keeps an
+      adapter-reported control description (one with a ``control``) and drops
+      only a bare ``supported`` flag, so the canonical lifted ladder is
+      inherited at load. Adapters default that flag when the endpoint is silent,
+      so it is not a reported fact and must not shadow the canonical ladder (the
+      assembly takes the control description as one unit).
+
+    Reasoning facts outside the control description are always kept: they are
+    adapter facts that no models.dev or canonical source carries.
     """
 
     pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
@@ -512,14 +517,26 @@ def _enrich_provider_model(
     capabilities = data.get("capabilities")
     if not isinstance(capabilities, dict):
         return
+    current = capabilities.get("reasoning")
+    adapter_facts = (
+        {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
+        if isinstance(current, dict)
+        else {}
+    )
     if deviating is not None:
-        capabilities["reasoning"] = deviating
+        capabilities["reasoning"] = {**deviating, **adapter_facts}
         return
-    # No deviation: let the canonical ladder flow through at load by dropping the
-    # provider's own reasoning block — but only when a canonical join exists to
-    # inherit from (an explicit pointer, or the wire-id is itself a canonical id).
+    # No deviation: let the canonical ladder flow through at load by dropping a
+    # bare adapter flag — but only when a canonical join exists to inherit from
+    # (an explicit pointer, or the wire-id is itself a canonical id). An adapter
+    # that reported a control keeps its whole block.
     if _has_canonical_join(catalog, pointer, wire_id):
-        capabilities.pop("reasoning", None)
+        if isinstance(current, dict) and current.get("control") is not None:
+            return
+        if adapter_facts:
+            capabilities["reasoning"] = adapter_facts
+        else:
+            capabilities.pop("reasoning", None)
         return
     # No deviating control AND no canonical base to inherit from (a gateway model
     # whose wire-id cannot reach the canonical layer): still project the bare
@@ -529,10 +546,9 @@ def _enrich_provider_model(
     md_reasoning = provider_reasoning_supported(
         catalog, models_dev_id=models_dev_id, wire_id=wire_id
     )
-    current = capabilities.get("reasoning")
     current_supported = current.get("supported") if isinstance(current, dict) else False
     if md_reasoning and not current_supported:
-        capabilities["reasoning"] = {"supported": True}
+        capabilities["reasoning"] = {**adapter_facts, "supported": True}
 
 
 def _has_canonical_join(catalog: ModelsDevCatalog, pointer: str | None, wire_id: str) -> bool:

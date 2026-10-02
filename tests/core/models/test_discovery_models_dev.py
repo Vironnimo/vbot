@@ -18,11 +18,13 @@ from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.models.query import ModelQuery
+from core.providers.providers import ProviderConfig
 
 from .discovery_test_support import (
     API_KEY,
     FIXTURES_DIR,
     OPENROUTER_MODELS_URL,
+    api_key_connection,
     fixture_models_dev_catalog,
     mock_openrouter_image_catalog,
     openrouter_config,
@@ -62,6 +64,72 @@ async def test_lab_provider_gets_an_auto_pointer_and_inherits_the_canonical_ladd
     )
     # The raw models.dev dump the canonical refresh wrote is never loaded as a Provider.
     assert {provider_id for provider_id, _ in registry.query(ModelQuery())} == {"deepseek"}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_a_ladder_the_provider_reports_survives_the_canonical_join(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    raw_catalog = json.loads((FIXTURES_DIR / "models_dev_catalog.json").read_text("utf-8"))
+    lab_model = raw_catalog["providers"]["deepseek"]["models"]["deepseek-v4-pro"]
+    raw_catalog["models"]["anthropic/claude-x"] = {
+        **raw_catalog["models"]["deepseek/deepseek-v4-pro"],
+        "id": "anthropic/claude-x",
+        "name": "Claude X",
+    }
+    raw_catalog["providers"]["anthropic"] = {
+        "id": "anthropic",
+        "models": {
+            "claude-x": {
+                **lab_model,
+                "id": "claude-x",
+                "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
+            }
+        },
+    }
+    catalog = ModelsDevCatalog(raw_catalog)
+    await refresh_canonical_layer(resources_dir, catalog=catalog)
+    config = ProviderConfig(
+        id="anthropic",
+        name="Anthropic",
+        adapter="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        connections=[api_key_connection("ANTHROPIC_API_KEY")],
+        defaults={"max_tokens": 8192},
+        models_endpoint="/models",
+    )
+    respx.get(url__startswith="https://api.anthropic.com/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "claude-x",
+                        "display_name": "Claude X",
+                        "capabilities": {
+                            "thinking": {
+                                "supported": True,
+                                "types": {"adaptive": {"supported": True}},
+                            },
+                            "effort": {"low": {"supported": True}, "high": {"supported": True}},
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    await refresh_models(config, API_KEY, resources_dir, models_dev_catalog=catalog)
+
+    written = read_models_file(resources_dir, "anthropic.json")["models"]["claude-x"]
+    assert written["canonical"] == "anthropic/claude-x"
+    assert written["capabilities"]["reasoning"] == {
+        "supported": True,
+        "control": "levels",
+        "levels": ["low", "high"],
+    }
+    loaded = ModelRegistry.load(resources_dir).get("anthropic", "claude-x")
+    assert loaded.capabilities.reasoning.levels == ("low", "high")
 
 
 @respx.mock

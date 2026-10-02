@@ -36,7 +36,7 @@ LM Studio discovery uses its native `GET /api/v1/models` response rather than th
 
 Embedding Models are tagged from each Provider's own catalog facts and normalized through `text_embedding_capabilities()` (`core/models/models.py`): text in, `embeddings` out, no Tools. That output derives only the `text_embedding` task, so such a Model never becomes a chat Model. The facts per Provider: OpenRouter's `output_modalities=embeddings` feed (`providers/openrouter.md`), OpenAI Platform `text-embedding-*` ids on the `api-key` Connection (`providers/openai.md`), Mistral non-chat `*-embed` ids, Ollama's `embedding` capability without `completion`, and LM Studio's native `type: embedding`. GitHub Copilot keeps skipping its embedding entries (`providers/github-copilot.md`).
 
-Provider-generated data can be enriched from that Provider's own models.dev section under the Models-domain fill-without-overwrite rules. Hand-maintained overrides are for durable facts the upstream feeds cannot supply and are applied at Model load, not discovery.
+Provider-generated data can be enriched from that Provider's own models.dev section under the Models-domain fill-without-overwrite rules. At a canonical join, enrichment keeps an Adapter-reported reasoning control and every non-control reasoning fact; only a bare `supported` flag yields to the canonical ladder (`models.md` -> Typed reasoning). Hand-maintained overrides are for durable facts the upstream feeds cannot supply and are applied at Model load, not discovery.
 
 ## Retry and failure behavior
 

@@ -163,9 +163,8 @@ class Capabilities:
 
     Projected at refresh from provider task-capability feeds (e.g. the
     OpenRouter image API) or hand-authored in ``<provider>.overrides.json``
-    for providers whose APIs publish nothing (OpenAI native). Like
-    ``metadata``, it is frozen on construction and merged wholesale as one
-    ``capabilities`` sub-field at load.
+    for providers whose APIs publish nothing (OpenAI native). It is frozen on
+    construction and merged wholesale as one ``capabilities`` sub-field at load.
 
     ``unlisted_tool_calls`` says whether the route returns calls to Tool names
     that are not in the request's ``tools[]`` (Tools announced by a System
