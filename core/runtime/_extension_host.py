@@ -387,6 +387,7 @@ class ExtensionHostFactory:
                 self.chat_sessions,
                 cast(Any, self.agents),
                 cast(Any, self.projects),
+                pricing_lookup=self.models.pricing_for,
                 index=self._statistics_index,
                 usage_recorder=self._usage_recorder,
             )

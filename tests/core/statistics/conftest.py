@@ -12,7 +12,10 @@ import pytest
 from core.sessions import ChatSessionManager
 from core.statistics import AgentDirectory, ProjectDirectory, StatisticsService
 from core.statistics.index import StatisticsIndex
+from core.usage import UsageRecorder
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.statistics.statistics_test_support import (
+    BASE,
     StatisticsFactory,
     _FakeAgents,
     _FakeProjects,
@@ -70,3 +73,14 @@ def statistics(tmp_path: Path, manager: ChatSessionManager) -> Iterator[Statisti
     yield build
     for service_index in indexes:
         service_index.close()
+
+
+@pytest.fixture
+def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[UsageRecorder]:
+    """A durable Usage ledger whose calls start at BASE unless a call says otherwise."""
+    recorder = UsageRecorder(tmp_path / "model-usage.db")
+    monkeypatch.setattr(
+        "core.usage.usage.utc_now_timestamp", lambda: format_canonical_timestamp(BASE)
+    )
+    yield recorder
+    recorder.close()

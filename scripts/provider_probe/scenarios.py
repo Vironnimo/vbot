@@ -13,7 +13,6 @@ from scripts.provider_probe.common import (
     _probe_content,
     _probe_messages,
 )
-from scripts.provider_probe.computer_cases import COMPUTER_CASE_ARGUMENTS
 from scripts.provider_probe.scenario_agents import (
     _bash_scenario,
     _channel_send_scenario,
@@ -122,34 +121,6 @@ def _optional_boolean_scenario(
 def _scenario(args: argparse.Namespace) -> ProbeScenario:
     direct = json.loads(json.dumps(PROBE_TOOL))
     name = str(args.scenario)
-    if name == "computer":
-        from resources.extensions.computer_use.extension import (
-            COMPUTER_DESCRIPTION,
-            COMPUTER_PARAMETERS,
-        )
-
-        expected = COMPUTER_CASE_ARGUMENTS[args.computer_case]
-        instruction = (
-            "This is an inert Tool-contract test; no desktop action will execute. "
-            "The target is a test-owned window with a fresh capture and element 1 / s00000001:1. "
-            "The user explicitly requested foreground input where specified. "
-            "Emit exactly one computer call using only these arguments, "
-            "including deliberate invalid cases: " + json.dumps(expected)
-        )
-        return ProbeScenario(
-            name,
-            [
-                {
-                    "name": "computer",
-                    "description": COMPUTER_DESCRIPTION,
-                    "parameters": COMPUTER_PARAMETERS,
-                }
-            ],
-            _probe_messages(instruction),
-            "computer",
-            require_closed_input=False,
-            expected_arguments=expected,
-        )
     if name == "direct_required":
         return ProbeScenario(name, [direct], _probe_messages("Inspect key alpha."), PROBE_TOOL_NAME)
     if name == "nested_operation":

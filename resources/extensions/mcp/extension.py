@@ -57,6 +57,7 @@ from ._discovery import (
     search_page,
     summarize,
     target_arguments,
+    unsupported_operation,
 )
 from ._importer import ImportDraft, parse_setup
 from ._management import (
@@ -75,6 +76,7 @@ from .client import (
     ConnectionRunner,
     InvalidToolResultError,
     InvocationNotSentError,
+    UnsupportedOperationError,
 )
 from .config import ConnectionStore, validate_connection
 from .content import ContentStore
@@ -527,6 +529,8 @@ class MCPService:
     ) -> dict[str, Any]:
         try:
             payload = await runner.invoke(operation, arguments, context)
+        except UnsupportedOperationError:
+            return unsupported_operation(operation)
         except InvocationNotSentError as error:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])

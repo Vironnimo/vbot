@@ -58,6 +58,7 @@ if TYPE_CHECKING:
         SessionReadCursor,
         SessionRunAdmission,
         SessionRunCompletion,
+        SessionRunRecord,
         TemporarySessionBinding,
         ToolResultFacts,
     )
@@ -852,6 +853,15 @@ class SessionStore:
                 before=before,
                 after=after,
                 excluded_tool_name=excluded_tool_name,
+            )
+        )
+
+    def run_records(
+        self, address: SessionAddress, expected_generation_id: str | None = None
+    ) -> tuple[SessionRunRecord, ...]:
+        return self._read(
+            lambda connection: _store_history.run_records(
+                connection, address, expected_generation_id
             )
         )
 

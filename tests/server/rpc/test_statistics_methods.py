@@ -1,8 +1,9 @@
 """Tests for the ``statistics.*`` RPC handlers.
 
 The report computations are owned by ``core.statistics``; these tests cover the
-RPC edge: parameter validation, the payload form, and the runtime wiring of the
-service (Sessions, Agents, Projects, the Skill inventory and the index).
+RPC edge: parameter validation, the payload form, the default timezone, and the
+runtime wiring of the service (Sessions, Agents, Projects, the Skill inventory
+and the index).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from core.chat.messages import ChatMessage
 from core.database import write_bootstrap_marker
 from core.projects import ProjectStore
 from core.sessions import ChatSession, ChatSessionManager
-from core.statistics import StatisticsIndex
+from core.statistics import REPORT_SECTIONS, StatisticsIndex
 from server.rpc.methods import dispatch_rpc
 from server.rpc.statistics_methods import _RuntimeSkillInventory
 from tests.core.sessions.history_fixtures import complete_run
@@ -66,6 +67,9 @@ class _RuntimeStub:
 
     def skills_for(self, project_id: str | None, agent_id: str | None = None) -> Any:
         return _FakeSkillRegistry(self.global_skills)
+
+    def timezone_name(self) -> str:
+        return "Europe/Berlin"
 
     def agent_skills_dir(self, agent_id: str) -> Path:
         return self._data_dir / "agents" / agent_id / "skills"
@@ -135,7 +139,7 @@ async def _result(state: Any, method: str, params: JsonObject) -> JsonObject:
 
 
 @pytest.mark.asyncio
-async def test_report_returns_the_service_report_for_the_requested_window(
+async def test_report_returns_the_requested_sections_for_the_window_and_timezone(
     tmp_path: Path,
 ) -> None:
     state, manager = _state(tmp_path, ["main"])
@@ -156,45 +160,39 @@ async def test_report_returns_the_service_report_for_the_requested_window(
     windowed = await _result(
         state,
         "statistics.report",
-        {"since": "2026-07-01T00:00:00Z", "until": "2026-07-31T00:00:00Z"},
+        {
+            "since": "2026-07-01T00:30:00+02:00",
+            "until": "2026-07-31T00:00:00Z",
+            "timezone": "UTC",
+            "sections": ["runs", "overview", "runs"],
+        },
     )
 
-    assert set(result) == {
-        "generated_at",
-        "window",
-        "overview",
-        "usage",
-        "costs",
-        "runs",
-        "compactions",
-        "errors",
-        "tools",
-        "skills",
-        "extensions",
+    assert set(result) == {"generated_at", "window", *REPORT_SECTIONS}
+    # Without a timezone the Settings timezone applies.
+    assert result["window"] == {
+        "since": None,
+        "until": None,
+        "timezone": "Europe/Berlin",
+        "bucket": "day",
     }
-    assert result["window"] == {"since": None, "until": None}
     assert result["extensions"] == {"extensions": []}
     # Project Sessions count under their ``agent@project`` address.
-    assert result["overview"]["total_agents"] == 2
-    assert {agent["agent_id"] for agent in result["overview"]["agents"]} == {
-        "main",
-        "builder@vbot",
-    }
-    assert result["overview"]["total_runs"] == 2
-    assert result["usage"]["totals"]["measured_input_tokens"] == 30
-    assert result["usage"]["totals"]["cache_write_tokens"] == 4
-    assert result["usage"]["totals"]["reasoning_tokens"] == 3
-    assert result["usage"]["totals"]["reasoning_turns"] == 1
-    assert result["usage"]["providers"][0]["reasoning_tokens"] == 3
-    assert result["usage"]["models"][0]["reasoning_tokens"] == 3
-    assert result["usage"]["daily"][0]["reasoning_tokens"] == 3
-    assert result["runs"]["duration"]["p95_ms"] == 1200.0
-    assert result["compactions"]["total_compactions"] == 0
+    assert result["overview"]["active_agents"] == 2
+    assert {row["agent_id"] for row in result["runs"]["agents"]} == {"main", "builder@vbot"}
+    assert result["runs"]["totals"]["completed"] == 2
     # The runtime Skill inventory is joined into the skills section.
     assert [row["name"] for row in result["skills"]["skills"]] == ["deploy"]
-    # The window is normalized to UTC and applied; the service is built once.
-    assert windowed["window"]["since"] == "2026-07-01T00:00:00+00:00"
-    assert windowed["overview"]["total_runs"] == 0
+    # The window is normalized to whole UTC hours and applied; only the
+    # requested sections are built; the service is built once.
+    assert set(windowed) == {"generated_at", "window", "overview", "runs"}
+    assert windowed["window"] == {
+        "since": "2026-06-30T22:00:00.000000Z",
+        "until": "2026-07-31T00:00:00.000000Z",
+        "timezone": "UTC",
+        "bucket": "day",
+    }
+    assert windowed["runs"]["totals"]["total"] == 0
     assert state.statistics_service is service
     assert service._index is state.runtime.statistics_index
 
@@ -226,6 +224,10 @@ _INVERTED = {"since": "2026-06-10T00:00:00Z", "until": "2026-06-01T00:00:00Z"}
         pytest.param("statistics.report", {"bogus": 1}, "bogus", id="unknown-field"),
         pytest.param("statistics.report", {"since": "not-a-date"}, "since", id="malformed"),
         pytest.param("statistics.report", _INVERTED, "since", id="inverted"),
+        pytest.param("statistics.report", {"timezone": "Mars/Olympus"}, "timezone", id="zone"),
+        pytest.param("statistics.report", {"sections": ["bogus"]}, "bogus", id="section"),
+        pytest.param("statistics.report", {"sections": []}, "sections", id="no-sections"),
+        pytest.param("statistics.report", {"sections": "runs"}, "sections", id="section-text"),
         # Run activity is bounded: both ends of the window are required.
         pytest.param(
             "statistics.run_activity",

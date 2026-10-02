@@ -22,6 +22,7 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    LearningChanges,
     ReflectionService,
     TriggerService,
 )
@@ -219,6 +220,7 @@ class Runtime:
         self._archive: ArchiveService | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
+        self._learning_changes: LearningChanges | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._chat_loop: ChatLoop | None = None
@@ -339,10 +341,18 @@ class Runtime:
         self.reload_environment_credentials()
 
     def _extension_tool_agent(self, context: Any) -> Any:
-        from core.sessions import SessionAddress
+        from core.sessions import SessionAddress, SessionNotFoundError
 
         address = SessionAddress(context.project_id, context.agent_id, context.session_id)
-        binding = self.chat_sessions.temporary_binding(address)
+        try:
+            binding = self.chat_sessions.temporary_binding(address)
+        except SessionNotFoundError:
+            # A temporary invocation needs its live Session. A call outside any
+            # Session (Extension management such as MCP ``invoke``) runs as the
+            # addressed Agent, which no Session overrides.
+            if context.execution_owner is not None:
+                raise ValueError("Temporary Tool invocation no longer owns this Session") from None
+            return self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
         if binding is not None:
             owner = context.execution_owner
             if owner is None or (
@@ -1170,6 +1180,10 @@ class Runtime:
 
     reflection: _StartedService[ReflectionService] = _StartedService(
         lambda runtime: runtime._reflection_service, "Reflection service not available"
+    )
+
+    learning_changes: _StartedService[LearningChanges] = _StartedService(
+        lambda runtime: runtime._learning_changes, "Learning changes service not available"
     )
 
     streaming_chat_loop: _StartedService[ChatLoop] = _StartedService(

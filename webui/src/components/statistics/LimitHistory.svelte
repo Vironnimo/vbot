@@ -16,15 +16,17 @@
   } from '$lib/api.js';
   import { activeLocaleTag, t, tOr } from '$lib/i18n.js';
   import {
-    USAGE_HISTORY_RANGES,
-    buildUsageHistorySeries,
     formatDateTime,
     formatDurationMs,
     formatInteger,
-    formatTokens,
+    formatTokensExact,
+    sessionTooltip,
+  } from '$lib/statisticsView.js';
+  import {
+    USAGE_HISTORY_RANGES,
+    buildUsageHistorySeries,
     formatUsageDelta,
     runActivityTotals,
-    sessionTooltip,
     usageHistoryIntervalTooltip,
     usageHistoryIntervals,
     usageHistoryPointCoordinates,
@@ -33,13 +35,15 @@
     usageHistorySince,
     usageHistorySlots,
     usageHistorySummary,
-  } from '$lib/statisticsView.js';
+  } from '$lib/statisticsLimits.js';
 
   const HISTORY_REFRESH_INTERVAL_MS = 60_000;
   const CHART_WIDTH = 720;
   const CHART_HEIGHT = 160;
   const CHART_TICKS = [0, 25, 50, 75, 100];
   const MAX_INTERVAL_ROWS = 12;
+  // Runs of the selected interval shown before "Show all".
+  const RUN_PREVIEW_COUNT = 10;
 
   let range = $state('7d');
   let historyReport = $state(null);
@@ -51,6 +55,7 @@
   let activityLoading = $state(false);
   let activityError = $state('');
   let clearConfirmOpen = $state(false);
+  let showAllRuns = $state(false);
   // Per trace, the snapshot slot that takes the Tab stop (the latest by
   // default); arrow keys move between the snapshots of one trace.
   let activeSlots = $state({});
@@ -73,6 +78,10 @@
   );
   const activityTotals = $derived(
     runActivityTotals(activityReport?.runs ?? []),
+  );
+  const activityRuns = $derived(activityReport?.runs ?? []);
+  const shownRuns = $derived(
+    showAllRuns ? activityRuns : activityRuns.slice(0, RUN_PREVIEW_COUNT),
   );
 
   onMount(() => {
@@ -102,6 +111,7 @@
 
   $effect(() => {
     const interval = selectedInterval;
+    showAllRuns = false;
     if (!interval) {
       activityReport = null;
       activityError = '';
@@ -314,17 +324,6 @@
         {t('statistics.limits.historyDescription')}
       </p>
     </div>
-    <Button
-      variant="danger"
-      disabled={historySummary.samples === 0}
-      disabledReason={historySummary.samples === 0
-        ? t('statistics.limits.noHistoryToDelete')
-        : ''}
-      loading={clearing}
-      onClick={() => (clearConfirmOpen = true)}
-    >
-      {t('statistics.limits.deleteHistory')}
-    </Button>
   </div>
 
   <div class="limit-history__controls">
@@ -608,14 +607,16 @@
                   <dt>
                     {t('statistics.limits.measuredTokens')}
                   </dt>
-                  <dd>{formatTokens(activityTotals.measuredTokens, locale)}</dd>
+                  <dd>
+                    {formatTokensExact(activityTotals.measuredTokens, locale)}
+                  </dd>
                 </div>
                 <div>
                   <dt>
                     {t('statistics.limits.estimatedTokens')}
                   </dt>
                   <dd>
-                    {formatTokens(activityTotals.estimatedTokens, locale)}
+                    {formatTokensExact(activityTotals.estimatedTokens, locale)}
                   </dd>
                 </div>
               </dl>
@@ -626,14 +627,14 @@
                 </Banner>
               {/if}
 
-              {#if activityReport.runs.length === 0}
+              {#if activityRuns.length === 0}
                 <EmptyState
                   density="compact"
                   description={t('statistics.limits.noRunsInInterval')}
                 />
               {:else}
                 <ol class="limit-runs">
-                  {#each activityReport.runs as run (run.run_id)}
+                  {#each shownRuns as run (run.run_id)}
                     <li>
                       <div class="limit-run__head">
                         <div>
@@ -669,18 +670,35 @@
                       <div class="limit-run__tokens">
                         <span>
                           {t('statistics.limits.measuredShort')}
-                          {formatTokens(runMeasuredTokens(run), locale)}
+                          {formatTokensExact(runMeasuredTokens(run), locale)}
                         </span>
                         {#if runEstimatedTokens(run) > 0}
                           <span>
                             {t('statistics.limits.estimatedShort')}
-                            ~{formatTokens(runEstimatedTokens(run), locale)}
+                            ~{formatTokensExact(
+                              runEstimatedTokens(run),
+                              locale,
+                            )}
                           </span>
                         {/if}
                       </div>
                     </li>
                   {/each}
                 </ol>
+                {#if activityRuns.length > RUN_PREVIEW_COUNT}
+                  <Button
+                    variant="tertiary"
+                    class="limit-runs__toggle"
+                    aria-expanded={showAllRuns}
+                    onClick={() => (showAllRuns = !showAllRuns)}
+                  >
+                    {showAllRuns
+                      ? t('statistics.limits.showFewerRuns')
+                      : t('statistics.limits.showAllRuns', {
+                          count: formatInteger(activityRuns.length, locale),
+                        })}
+                  </Button>
+                {/if}
               {/if}
             {/if}
           </section>
@@ -688,6 +706,23 @@
       {/if}
     {/if}
   {/if}
+
+  <!-- Deleting the history is rare and destructive: a quiet action at the
+       end, confirmed in a dialog. -->
+  <div class="limit-history__footer">
+    <Button
+      variant="tertiary"
+      class="limit-history__delete"
+      disabled={historySummary.samples === 0}
+      disabledReason={historySummary.samples === 0
+        ? t('statistics.limits.noHistoryToDelete')
+        : ''}
+      loading={clearing}
+      onClick={() => (clearConfirmOpen = true)}
+    >
+      {t('statistics.limits.deleteHistory')}
+    </Button>
+  </div>
 </section>
 
 {#if clearConfirmOpen}

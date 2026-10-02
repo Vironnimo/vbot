@@ -742,12 +742,23 @@ async def test_legacy_server_sampling_and_roots(host, monkeypatch, caplog, recwa
     assert [f"{item.filename}:{item.lineno}: {item.message}" for item in recwarn] == []
 
 
+def _notified(runner: ConnectionRunner) -> list[str]:
+    """The kinds of the events *runner* recorded for server notifications."""
+    kinds = {"log", "progress", "notification", "resource_changed", "catalog_changed"}
+    return [event["kind"] for event in runner.events()["events"] if event["kind"] in kinds]
+
+
 @pytest.mark.asyncio
 async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatch):
     levels = []
 
     async def call(server_context, params):
         levels.append((params.meta or {}).get(types.LOG_LEVEL_META_KEY))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MCPDeprecationWarning)
+            # Sent only on a request that carries a level.
+            await server_context.session.send_log_message("info", "test-owned-log")
+        await server_context.session.report_progress(1, 2)
         return types.CallToolResult(content=[])
 
     async def list_tools(server_context, params):
@@ -763,11 +774,15 @@ async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatc
             await runner.invoke("tools/call", {"name": "levels"}, context(host))
             await runner.invoke("logging/setLevel", {"level": "debug"})
             await runner.invoke("tools/call", {"name": "levels"}, context(host))
+            while len(_notified(runner)) < 3:
+                await asyncio.sleep(0)
     finally:
         await runner.close()
 
     # Without an explicit level the server applies its own default.
     assert levels == [None, "debug"]
+    # Each notification is recorded once, as its own kind of event.
+    assert sorted(_notified(runner)) == ["log", "progress", "progress"]
 
 
 @pytest.mark.asyncio
@@ -810,6 +825,61 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
     expected = [(PENDING_INPUTS_RESOURCE, [pending["id"]], revision) for revision in (1, 2)]
     assert changes == ([] if retired else expected)
     await service.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("format_", "accepted", "refused", "expected"),
+    [
+        (
+            "email",
+            ["name@example.com"],
+            ["name.example.com", "name@example", "two words@example.com"],
+            "an email address such as name@example.com",
+        ),
+        (
+            "uri",
+            ["https://example.com/page?q=1", "mailto:name@example.com", "urn:isbn:0451450523"],
+            ["example.com/page", "https://exa mple.com", "http://[::1"],
+            "an absolute URI with a scheme, such as https://example.com/page",
+        ),
+        (
+            "date",
+            ["2024-02-29"],
+            ["2026-02-29", "20261002", "2026-10-02T14:30:00Z"],
+            "a date as YYYY-MM-DD, such as 2026-10-02",
+        ),
+        (
+            "date-time",
+            ["2026-10-02T14:30:00Z", "2026-10-02t14:30:00.25+02:00", "2016-12-31T23:59:60Z"],
+            ["2026-10-02T14:30:00", "2026-10-02 14:30:00Z", "2026-10-02T24:00:00Z", "2026-10-02"],
+            "a date and time with a time zone (RFC 3339), such as 2026-10-02T14:30:00Z",
+        ),
+    ],
+    ids=["email", "uri", "date", "date-time"],
+)
+async def test_input_answers_must_have_their_requested_string_format(
+    format_, accepted, refused, expected
+):
+    inputs = InputRequests()
+    schema = {"type": "object", "properties": {"when": {"type": "string", "format": format_}}}
+    for value in [*refused, *accepted]:
+        task = asyncio.create_task(
+            inputs.request("example", "elicitation", {"requestedSchema": schema})
+        )
+        await asyncio.sleep(0)
+        identifier = inputs.list()[0]["id"]
+        if value in refused:
+            with pytest.raises(ValueError) as problem:
+                inputs.respond(identifier, {"action": "accept", "content": {"when": value}})
+            assert str(problem.value) == (
+                f"MCP input response does not satisfy the requested schema: field 'when' must "
+                f"be {expected}"
+            )
+            inputs.respond(identifier, {"action": "cancel"})
+        else:
+            inputs.respond(identifier, {"action": "accept", "content": {"when": value}})
+        await task
 
 
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
@@ -991,12 +1061,15 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
     try:
         async with asyncio.timeout(10):
             await runner.invoke("tools/call", {"name": "add"})
-            while runner.catalog["tools"][-1]["name"] != "added" or not (
-                runner._subscriptions["catalog-refresh"].done()
+            while (
+                runner.catalog["tools"][-1]["name"] != "added"
+                or not runner._subscriptions["catalog-refresh"].done()
+                or len(_notified(runner)) < 3
             ):
                 await asyncio.sleep(0)
         # Republished once: refreshes that find the same catalog publish nothing.
         assert published == [["add"], ["add", "added"]]
+        assert _notified(runner) == ["catalog_changed"] * 3
     finally:
         await runner.close()
 
@@ -1090,6 +1163,7 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
                 await asyncio.sleep(0)
             await runner.invoke("resources/subscribe", {"uri": "test://other"})
         assert stream.connections == 3
+        assert _notified(runner) == ["resource_changed"] * 2
         assert requests == [
             ("subscribe", "test://watched"),
             *([] if legacy else [("unsubscribe", "test://watched")]),
@@ -1103,7 +1177,21 @@ async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows runs batch files through cmd.exe")
-async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host, tmp_path):
+@pytest.mark.parametrize(
+    ("args", "refused_argument"),
+    [
+        (["--database", "postgres://host/db?user=a&mode=b"], "argument 2 contains '&'"),
+        # Expanded even inside quotes; two '%' may enclose a name across arguments.
+        (["--data", r"C:\Users\%USERNAME%\my data"], "argument 2 contains '%'"),
+        (["--low", "5%", "--high", "9%"], "argument 2 contains '%'"),
+        # Delayed expansion, where it is on, removes it.
+        (["--greeting", "hello!"], "argument 2 contains '!'"),
+    ],
+    ids=["metacharacter", "variable", "variable-across-arguments", "delayed-expansion"],
+)
+async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(
+    host, tmp_path, args, refused_argument
+):
     marker = tmp_path / "started"
     shim = tmp_path / "server.cmd"
     shim.write_text(f'@echo off\r\necho started> "{marker}"\r\n')
@@ -1113,7 +1201,7 @@ async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host,
                 "id": "shim",
                 "transport": "stdio",
                 "command": str(shim),
-                "args": ["--database", "postgres://host/db?user=a&mode=b"],
+                "args": args,
             }
         ),
         host,
@@ -1127,7 +1215,7 @@ async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host,
         await runner.close()
 
     assert str(refused.value) == (
-        "ValueError: MCP server not started: argument 2 contains '&', which cmd.exe interprets "
+        f"ValueError: MCP server not started: {refused_argument}, which cmd.exe interprets "
         "when Windows runs server.cmd; start the server's program directly or pass the value "
         "through an environment variable"
     )

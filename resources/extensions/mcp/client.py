@@ -15,8 +15,8 @@ import sys
 import threading
 import time
 import warnings
-from collections.abc import Callable, Coroutine
-from contextlib import AbstractAsyncContextManager, AsyncExitStack
+from collections.abc import Callable, Coroutine, Mapping
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, suppress
 from dataclasses import dataclass
 from http import HTTPStatus
 from pathlib import Path
@@ -37,6 +37,7 @@ from mcp.os.win32.utilities import get_windows_executable_command
 from mcp.shared.dispatcher import CallOptions
 from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 from mcp.shared.message import SessionMessage
+from mcp.shared.subscriptions import SUBSCRIPTION_ID_META_KEY
 
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
@@ -47,12 +48,15 @@ from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
 from ._tasks import (
+    TASKS_EXTENSION,
     ExtensionWire,
     LegacyWire,
     TaskEndedError,
     TaskHandle,
+    TaskRun,
     TasksExtension,
     TaskState,
+    TaskUnknownError,
     TaskWire,
     cancel_quietly,
     drive,
@@ -84,6 +88,8 @@ CONNECTION_CLOSE_TIMEOUT_SECONDS = 15
 CALL_STOP_SECONDS = 5
 # Automatic reconnects after an established connection was lost; later calls reconnect.
 MAX_RECONNECTS = 3
+# How often a task-backed Tool call resumes its server task after losing its connection.
+MAX_TASK_RESUMES = 3
 # Catalog change notifications within this window cause one catalog refresh.
 CATALOG_REFRESH_DELAY_SECONDS = 0.5
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
@@ -132,6 +138,35 @@ OPERATION_MODELS: dict[str, Any] = {
 }
 
 
+# The explicit task operations. A 2026-07-28 server's Tasks extension defines only
+# tasks/get and tasks/cancel; a 2025-11-25 server that declares tasks answers
+# tasks/get and tasks/result, and tasks/list and tasks/cancel when it declares them.
+TASK_OPERATIONS = frozenset({"tasks/get", "tasks/result", "tasks/list", "tasks/cancel"})
+
+
+def unsupported_operations(catalog: Mapping[str, Any]) -> frozenset[str]:
+    """The protocol operations the server whose *catalog* this is does not offer.
+
+    The negotiated protocol and the server's capabilities in the catalog decide;
+    a catalog without them (no connection yet) offers no task operation.
+    """
+    capabilities = catalog.get("capabilities")
+    if not isinstance(capabilities, Mapping):
+        return TASK_OPERATIONS
+    offered: set[str] = set()
+    if str(catalog.get("protocol_version") or "") >= DISCOVERY_PROTOCOL_VERSION:
+        extensions = capabilities.get("extensions")
+        if isinstance(extensions, Mapping) and TASKS_EXTENSION in extensions:
+            offered = {"tasks/get", "tasks/cancel"}
+    else:
+        tasks = capabilities.get("tasks")
+        if isinstance(tasks, Mapping):
+            offered = {"tasks/get", "tasks/result"} | {
+                f"tasks/{name}" for name in ("list", "cancel") if tasks.get(name) is not None
+            }
+    return TASK_OPERATIONS - offered
+
+
 def operation_schema(operation: str) -> dict[str, Any]:
     model = OPERATION_MODELS.get(operation)
     if model is not None:
@@ -166,24 +201,37 @@ def _batch_argument_problem(command: str, args: list[str]) -> str | None:
     """Why Windows would not pass *args* unchanged to *command*, or ``None``.
 
     Windows runs a ``.cmd`` or ``.bat`` file, such as ``npx.cmd``, through
-    cmd.exe, which interprets ``& | < > ^`` outside quotes and ends the command
-    at a line break; Python quotes arguments only for the program's own parser.
+    cmd.exe, which interprets ``& | < > ^`` outside quotes, ends the command at
+    a line break, and even inside quotes expands ``%NAME%`` (any two ``%``
+    characters may enclose a variable name) and, where delayed expansion is on,
+    ``!NAME!`` (a lone ``!`` disappears). Python quotes arguments only for the
+    program's own parser (BatBadBut, CVE-2024-24576).
     """
     executable = get_windows_executable_command(command)
     if not executable.lower().endswith((".cmd", ".bat")):
         return None
     quoted = False
+    # The argument with a '%' that a later '%' would close into a variable name.
+    opened: int | None = None
     for index, argument in enumerate(args, start=1):
         # The command line is each argument's quoted form joined by spaces.
         for character in subprocess.list2cmdline([argument]):
+            culprit = index
             if character == '"':
                 quoted = not quoted
-            elif character in "\r\n" or (not quoted and character in _BATCH_METACHARACTERS):
-                return (
-                    f"argument {index} contains {character!r}, which cmd.exe interprets "
-                    f"when Windows runs {Path(executable).name}; start the server's program "
-                    "directly or pass the value through an environment variable"
-                )
+                continue
+            if character == "%":
+                if opened is None:
+                    opened = index
+                    continue
+                culprit = opened
+            elif character not in "\r\n!" and (quoted or character not in _BATCH_METACHARACTERS):
+                continue
+            return (
+                f"argument {culprit} contains {character!r}, which cmd.exe interprets "
+                f"when Windows runs {Path(executable).name}; start the server's program "
+                "directly or pass the value through an environment variable"
+            )
     return None
 
 
@@ -199,6 +247,10 @@ class InvocationNotSentError(ValueError):
         super().__init__(message)
         self.denied = denied
         self.refused = refused
+
+
+class UnsupportedOperationError(InvocationNotSentError):
+    """An operation the server does not offer under the negotiated protocol; never sent."""
 
 
 class InvalidToolResultError(ValueError):
@@ -231,6 +283,10 @@ class _Call:
     retry: bool = False
     # The HTTP status of the last answer of 300 or more to a request of this call.
     http_status: int | None = None
+    # The server task a task-backed Tool call waits for, kept across a lost connection.
+    server_task: TaskRun | None = None
+    # Whether this call resumes *server_task* of an earlier call whose connection was lost.
+    resuming: bool = False
 
 
 # The call a task serves; transports carry it into the server requests of that call.
@@ -366,7 +422,8 @@ class ConnectionRunner:
     a bounded queue. A server request inside a call belongs to that call's Agent
     (``_attributed_context``). A connection that ends while calls run settles each
     of them as never sent or as unconfirmed; it never cancels its callers, and a
-    mutation is never automatically replayed. A lost connection reconnects.
+    mutation is never automatically replayed. A lost connection reconnects, and a
+    task-backed Tool call it interrupted resumes its server task there.
     """
 
     def __init__(
@@ -421,6 +478,8 @@ class ConnectionRunner:
         self._resource_subscriptions: set[str] = set()
         # Cancellations of server tasks whose calls stopped waiting.
         self._task_cancels: set[asyncio.Task[None]] = set()
+        # Cancellations of kept server tasks, each waiting for a connection to send it.
+        self._kept_cancels: set[asyncio.Task[None]] = set()
         self._catalog_stale = False
         self._transport_warned = False
         # The log level an Agent chose with logging/setLevel; until then requests
@@ -537,6 +596,9 @@ class ConnectionRunner:
                 )
             )
             return
+        if call.server_task is not None:
+            # The server keeps its task without this connection: the call resumes it.
+            call.server_task.kept = True
         reason = self._loss or (self.error if self.state == "failed" else None)
         if reason is None:
             if not final:
@@ -584,13 +646,16 @@ class ConnectionRunner:
 
         Raises ``InvocationNotSentError`` when nothing reached the server and
         ``ValueError`` when no result came back. A read that failed transiently or
-        lost its connection runs again, at most ``MAX_READ_RETRIES`` times.
+        lost its connection runs again, at most ``MAX_READ_RETRIES`` times; a Tool
+        call whose server task outlived its connection resumes that task.
         """
         for attempt in range(MAX_READ_RETRIES + 1):
             call = await self._submit(operation, arguments, context)
             try:
                 return await call.result
-            except ValueError:
+            except ValueError as error:
+                if call.server_task is not None and call.server_task.kept:
+                    return await self._resume(call, error)
                 if (
                     not call.retry
                     or operation not in READ_OPERATIONS
@@ -603,8 +668,68 @@ class ConnectionRunner:
             await _sleep(delay)
         raise AssertionError("Read retry loop must return or raise")
 
+    async def _resume(self, lost: _Call, error: ValueError) -> dict[str, Any]:
+        """Wait on the next connection for the server task of *lost*, whose connection ended.
+
+        A server keeps its task when a connection ends, so the call reads the same
+        task again once the connection is back, at most ``MAX_TASK_RESUMES`` times.
+        A server that no longer knows the task leaves the outcome unconfirmed. A
+        call that stops waiting before it resumed the task cancels it.
+        """
+        run = lost.server_task
+        assert run is not None
+        for attempt in range(1, MAX_TASK_RESUMES + 1):
+            self._events.record("task_resumed", {"task_id": run.state.task_id, "attempt": attempt})
+            try:
+                call = await self._submit(lost.operation, lost.arguments, lost.context, run)
+            except asyncio.CancelledError:
+                self._forget_kept(run)
+                raise
+            except InvocationNotSentError:
+                # No connection came back.
+                break
+            try:
+                return await call.result
+            except asyncio.CancelledError:
+                if run.kept:
+                    # Cancelled before the call resumed the task.
+                    self._forget_kept(run)
+                raise
+            except TaskUnknownError as unknown:
+                raise ValueError(
+                    f"{error}. After vBot reconnected, the MCP server no longer knew this "
+                    f"call's background work: {self.redact(str(unknown))}"
+                ) from None
+            except InvocationNotSentError:
+                # The resume never ran: refused, or its connection ended first.
+                if not call.retry:
+                    break
+            except ValueError as failed:
+                if not run.kept:
+                    # The server's account of the task, or a failure on the new connection.
+                    raise
+                error = failed
+        self._forget_kept(run)
+        raise error
+
+    def _forget_kept(self, run: TaskRun) -> None:
+        """Cancel the kept server task of a call that stopped waiting, once a connection is up."""
+
+        async def cancel() -> None:
+            # Best effort, like ``cancel_quietly``: the call's outcome is already settled.
+            with suppress(ValueError):
+                await self.invoke("tasks/cancel", {"taskId": run.state.task_id})
+
+        task = asyncio.create_task(cancel(), name=f"mcp-task-cancel:{self.id}")
+        self._kept_cancels.add(task)
+        task.add_done_callback(self._kept_cancels.discard)
+
     async def _submit(
-        self, operation: str, arguments: dict[str, Any], context: ToolContext | None
+        self,
+        operation: str,
+        arguments: dict[str, Any],
+        context: ToolContext | None,
+        resumed: TaskRun | None = None,
     ) -> _Call:
         owner = await self._connected()
         call = _Call(
@@ -615,6 +740,8 @@ class ConnectionRunner:
             asyncio.get_running_loop().create_future(),
             delivered=not self._tracks_delivery,
             owner=owner,
+            server_task=resumed,
+            resuming=resumed is not None,
         )
         try:
             # The queue belongs to the admitting connection: once that connection
@@ -1031,7 +1158,10 @@ class ConnectionRunner:
         # Each task runs in its own context copy: this marks only this call.
         _CURRENT_CALL.set(call)
         try:
-            value = await self._perform(call.operation, call.arguments, call.context)
+            if call.resuming:
+                value = await self._resume_task(call)
+            else:
+                value = await self._perform(call.operation, call.arguments, call.context)
         except asyncio.CancelledError:
             # By its caller (its result is cancelled), or by its connection's end.
             self._settle_interrupted(call)
@@ -1061,8 +1191,12 @@ class ConnectionRunner:
         self._events.record("request_failed", {"operation": call.operation, "error": safe})
         if call.result.done():
             return
-        if isinstance(error, InvalidToolResultError | TaskEndedError):
-            # The server's own account of the call, whatever happens to the connection.
+        if isinstance(
+            error,
+            InvalidToolResultError | TaskEndedError | TaskUnknownError | UnsupportedOperationError,
+        ):
+            # The server's own account of the call, or vBot's refusal to send it,
+            # whatever happens to the connection.
             call.result.set_exception(error)
             return
         owner = call.owner
@@ -1211,6 +1345,10 @@ class ConnectionRunner:
         if errors:
             paths = ["/".join(map(str, error.absolute_path)) or "arguments" for error in errors]
             raise ValueError(f"Invalid MCP operation arguments at: {', '.join(paths)}")
+        if operation in unsupported_operations(self.catalog):
+            raise UnsupportedOperationError(
+                f"{operation} is not supported by this connection's protocol"
+            )
         client = self._client()
         if context is not None:
             await self._notify_roots_changed()
@@ -1334,7 +1472,8 @@ class ConnectionRunner:
         )
         task = types.CreateTaskResult.model_validate(started).task
         session = self._client().session
-        result = await self._drive_task(LegacyWire(session), legacy_state(task))
+        run = TaskRun(legacy_state(task), legacy=True)
+        result = await self._drive_task(LegacyWire(session), run)
         if not result.is_error:
             # As ``call_tool`` does for a direct result.
             await session.validate_tool_result(arguments["name"], result)
@@ -1344,10 +1483,37 @@ class ConnectionRunner:
         self, handle: TaskHandle, context: ClaimContext
     ) -> types.CallToolResult:
         """Finish a task a 2026-07-28 server returned for a Tool call (Tasks extension)."""
-        return await self._drive_task(ExtensionWire(context.session), handle.state())
+        run = TaskRun(handle.state(), legacy=False)
+        return await self._drive_task(ExtensionWire(context.session), run)
 
-    async def _drive_task(self, wire: TaskWire, state: TaskState) -> types.CallToolResult:
-        """Run a server task to its end; each status change becomes a ``task_status`` event."""
+    async def _resume_task(self, call: _Call) -> dict[str, Any]:
+        """Continue on this connection the server task of a call whose connection was lost."""
+        run = call.server_task
+        assert run is not None
+        client = self._client()
+        if (client.protocol_version < DISCOVERY_PROTOCOL_VERSION) != run.legacy:
+            raise TaskUnknownError(f"it now speaks MCP protocol {client.protocol_version}")
+        if call.context is not None:
+            await self._notify_roots_changed()
+        session = client.session
+        wire: TaskWire = LegacyWire(session) if run.legacy else ExtensionWire(session)
+        result = await self._drive_task(wire, run, resumed=True)
+        if not result.is_error:
+            # As ``call_tool`` does for a direct result.
+            await session.validate_tool_result(call.arguments["name"], result)
+        return dump(result)
+
+    async def _drive_task(
+        self, wire: TaskWire, run: TaskRun, *, resumed: bool = False
+    ) -> types.CallToolResult:
+        """Run a server task to its end; each status change becomes a ``task_status`` event.
+
+        The task is kept with its call, so a lost connection does not end the wait;
+        *resumed* continues the task of a call whose connection was lost.
+        """
+        call = _CURRENT_CALL.get()
+        if call is not None and call.runner is self:
+            call.server_task = run
         last: tuple[str, str | None] | None = None
 
         def observe(state: TaskState) -> None:
@@ -1359,9 +1525,8 @@ class ConnectionRunner:
                     {"task_id": state.task_id, "status": state.status, "message": state.message},
                 )
 
-        return await drive(
-            wire, state, observe=observe, abandon=functools.partial(self._abandon_task, wire)
-        )
+        abandon = functools.partial(self._abandon_task, wire)
+        return await drive(wire, run, observe=observe, abandon=abandon, resumed=resumed)
 
     def _abandon_task(self, wire: TaskWire, task_id: str) -> None:
         """Cancel the server task of a call that stopped waiting, without blocking it."""
@@ -1421,24 +1586,24 @@ class ConnectionRunner:
         return await started
 
     async def _message(self, message: Any) -> None:
-        client = self.client
-        if (
-            isinstance(message, types.ResourceUpdatedNotification)
-            and client is not None
-            and client.protocol_version < DISCOVERY_PROTOCOL_VERSION
-        ):
-            # A legacy subscription's change; a listen stream records its own.
-            uri = str(message.params.uri)
-            self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
-        elif isinstance(message, types.ServerNotification):
-            self._events.record("notification", dump(message))
-            if isinstance(
+        """Record each server notification once, as its own kind of event."""
+        if isinstance(message, types.ServerNotification):
+            if _recorded_elsewhere(message):
+                return
+            if isinstance(message, types.ResourceUpdatedNotification):
+                # A legacy subscription's change.
+                uri = str(message.params.uri)
+                self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
+            elif isinstance(
                 message,
                 types.ToolListChangedNotification
                 | types.ResourceListChangedNotification
                 | types.PromptListChangedNotification,
             ):
+                self._events.record("catalog_changed", dump(message))
                 self._catalog_changed()
+            else:
+                self._events.record("notification", dump(message))
         elif isinstance(message, Exception):
             # A transport error that leaves the connection up, such as a line that
             # is not JSON on stdout; a transport that ends also closes its stream.
@@ -1476,7 +1641,6 @@ class ConnectionRunner:
             self._catalog_stale = False
             # Changes reported meanwhile join this refresh.
             await _sleep(CATALOG_REFRESH_DELAY_SECONDS)
-            self._events.record("catalog_changed", {"source": "notification"})
             try:
                 await self.invoke("catalog", {})
             except ValueError as error:
@@ -1559,6 +1723,19 @@ class ConnectionRunner:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
+
+
+def _recorded_elsewhere(message: types.ServerNotification) -> bool:
+    """Whether another handler records *message*: the SDK also hands it to ``_message``.
+
+    Log messages and the progress of vBot's requests have their callbacks; a
+    ``subscriptions/listen`` stream's events, stamped with its subscription id,
+    their watch (``_watch_catalog``, ``_watch_resource``).
+    """
+    if isinstance(message, types.LoggingMessageNotification | types.ProgressNotification):
+        return True
+    meta = getattr(getattr(message, "params", None), "meta", None)
+    return isinstance(meta, dict) and SUBSCRIPTION_ID_META_KEY in meta
 
 
 def _refusal(status: int, error: Exception) -> str:

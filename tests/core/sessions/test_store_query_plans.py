@@ -277,6 +277,7 @@ def _session_reads(address: SessionAddress, anchor: str) -> dict[str, Callable[[
         "history_snapshot": lambda r: _store_history.history_snapshot(r, address),
         "run_result": lambda r: _store_history.run_result(r, address, run_id="run-two")(),
         "run_messages": lambda r: _store_history.run_messages(r, address, "run-two"),
+        "run_records": lambda r: _store_history.run_records(r, address, None),
         "descriptor_sources": lambda r: _store_queries.descriptor_sources(r, [address])(),
     }
 

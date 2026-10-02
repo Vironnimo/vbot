@@ -215,6 +215,29 @@ class OwnedRunRecord:
 
 
 @dataclass(frozen=True)
+class SessionRunRecord:
+    """One Run the Session itself admitted, with its canonical completion facts.
+
+    ``status`` is ``running`` until the Run finishes; the completion fields are
+    ``None`` while it runs. ``timing_started_at`` is the measured start when the
+    Run reported one, else ``None``.
+    """
+
+    run_id: str
+    run_kind: str
+    status: str
+    started_at: str
+    completed_at: str | None
+    duration_ms: int | None
+    timing_started_at: str | None
+    completion_reason: str | None
+    iteration_count: int | None
+    changed_files: int | None
+    lines_added: int | None
+    lines_removed: int | None
+
+
+@dataclass(frozen=True)
 class SessionReadCursor:
     """Where a reader stopped: the next sequence and the entry just before it."""
 

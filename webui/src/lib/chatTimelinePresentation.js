@@ -42,10 +42,16 @@ export {
   backgroundBashToolStatusLabel,
   backgroundBashStatusDetails,
   backgroundBashDisplayResult,
+} from './chatTimelinePresentation/activity.js';
+export {
   isReflectionRunKind,
   reflectionTaskRows,
   reflectionElapsedLabel,
-} from './chatTimelinePresentation/activity.js';
+  reflectionHasChanges,
+  reflectionOutcomeLabel,
+  reflectionChangeItems,
+  reflectionUndoErrorText,
+} from './chatTimelinePresentation/reflections.js';
 export {
   runChangeStats,
   sessionChangeStats,
