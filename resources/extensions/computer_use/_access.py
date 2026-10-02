@@ -1,9 +1,9 @@
-"""Which applications an Agent may see and operate, per Session, and how it asks.
+"""Which applications an Agent may operate, and how it asks when the user wants that.
 
-The user grants applications to one Session through a pending input request.
-Each grant carries the tier of the application's category; grants and the
-Session's display choice expire together after a period without Computer Use
-calls in that Session. vBot's own applications are never grantable.
+By default an Agent allowed to use Computer Use operates every app. With the
+``ask_per_app`` setting the user approves apps per Session through a pending
+input request; approvals and the Session's display choice expire together
+after a period without Computer Use calls in that Session.
 """
 
 from __future__ import annotations
@@ -20,16 +20,7 @@ from core.utils.ids import new_id
 
 from .target import AppInfo, Display, WindowInfo
 
-TIERS = ("read", "click", "full")
-TIER_WORDS = {"read": "view only", "click": "click only", "full": "full control"}
-TIER_DETAILS = {
-    "read": "screenshots, no input",
-    "click": "clicks and scrolling, no typing or keys",
-    "full": "mouse and keyboard",
-}
-CATEGORY_TIERS = {"browser": "read", "terminal": "click", "ide": "click"}
-
-# Grants and the display choice end this long after the Session's last call.
+# Approvals and the display choice end this long after the Session's last call.
 GRANT_IDLE_SECONDS = 30 * 60
 # An access request nobody answers in time counts as declined.
 REQUEST_TIMEOUT_SECONDS = 300.0
@@ -39,42 +30,38 @@ RESPONSE_ACTIONS = ("accept", "decline", "cancel")
 type SessionKey = tuple[str | None, str, str]
 
 
-def category_tier(category: str) -> str:
-    return CATEGORY_TIERS.get(category, "full")
-
-
-def tier_allows(granted: str, needed: str) -> bool:
-    return TIERS.index(granted) >= TIERS.index(needed)
-
-
-def tier_text(tier: str) -> str:
-    return f"{TIER_WORDS[tier]}: {TIER_DETAILS[tier]}"
-
-
-@dataclass(frozen=True)
-class Grant:
-    app: AppInfo
-    tier: str
-
-
 @dataclass
 class SessionState:
-    """A Session's grants, display choice and the display its last screenshot showed."""
+    """A Session's approved apps, display choice and the display its last screenshot showed."""
 
-    grants: list[Grant] = field(default_factory=list)
+    grants: list[AppInfo] = field(default_factory=list)
     display: str = "auto"
     shown: Display | None = None
     last_used: float = 0.0
 
-    def grant_for(self, app: AppInfo) -> Grant | None:
-        return next((grant for grant in self.grants if grant.app.matches(app)), None)
+    def granted(self, app: AppInfo) -> bool:
+        return any(grant.matches(app) for grant in self.grants)
 
-    def add(self, app: AppInfo, tier: str) -> None:
-        self.grants = [grant for grant in self.grants if not grant.app.matches(app)]
-        self.grants.append(Grant(app, tier))
+    def add(self, app: AppInfo) -> None:
+        if not self.granted(app):
+            self.grants.append(app)
 
     def describe(self) -> str:
-        return ", ".join(f"{grant.app.name} ({TIER_WORDS[grant.tier]})" for grant in self.grants)
+        return ", ".join(grant.name for grant in self.grants)
+
+
+@dataclass(frozen=True)
+class Access:
+    """What one call may operate: every app, or only approved ones when *ask* is set."""
+
+    state: SessionState
+    ask: bool = False
+
+    def allows(self, app: AppInfo) -> bool:
+        return not self.ask or self.state.granted(app)
+
+    def window_visible(self, window: WindowInfo) -> bool:
+        return self.allows(window.app)
 
 
 class Sessions:
@@ -101,17 +88,6 @@ class Sessions:
 
     def clear(self) -> None:
         self._states.clear()
-
-
-def window_visible(state: SessionState, own_keys: frozenset[str]) -> Callable[[WindowInfo], bool]:
-    """Return whether a window's application is granted to *state* (at any tier)."""
-
-    def visible(window: WindowInfo) -> bool:
-        if window.app.keys & own_keys:
-            return False
-        return state.grant_for(window.app) is not None
-
-    return visible
 
 
 @dataclass(frozen=True)
@@ -174,16 +150,16 @@ def resolve_apps(names: Sequence[str], apps: Sequence[AppInfo]) -> Resolution:
     return Resolution(resolved, problems)
 
 
-def request_message(agent_name: str, grants: Sequence[Grant], reason: str | None) -> str:
+def request_message(agent_name: str, apps: Sequence[AppInfo], reason: str | None) -> str:
     """The text the user reads when deciding about an access request."""
     lines = [f'Agent "{agent_name}" asks to use these apps on the vBot server\'s desktop:']
-    lines.extend(f"- {grant.app.name}: {tier_text(grant.tier)}" for grant in grants)
+    lines.extend(f"- {app.name}" for app in apps)
     if reason:
         lines.append(f"Reason: {reason.strip()}")
     lines.append(
-        "The Agent moves the real mouse and keyboard while it works; other apps stay hidden "
-        "from it. Access ends 30 minutes after its last Computer Use action in this Session. "
-        "Accept to allow, or decline."
+        "The Agent moves the real mouse and keyboard while it works; apps you have not "
+        "approved stay hidden from it. Approval ends 30 minutes after its last Computer Use "
+        "action in this Session. Accept to allow, or decline."
     )
     return "\n".join(lines)
 
@@ -259,22 +235,15 @@ class AccessRequests:
 
 __all__ = [
     "ACCESS_REQUEST_KIND",
-    "CATEGORY_TIERS",
     "GRANT_IDLE_SECONDS",
     "REQUEST_TIMEOUT_SECONDS",
-    "TIERS",
-    "TIER_WORDS",
+    "Access",
     "AccessRequests",
-    "Grant",
     "Resolution",
     "SessionKey",
     "SessionState",
     "Sessions",
-    "category_tier",
     "request_message",
     "resolve_app",
     "resolve_apps",
-    "tier_allows",
-    "tier_text",
-    "window_visible",
 ]

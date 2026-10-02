@@ -116,10 +116,7 @@ async def test_a_target_that_becomes_unusable_refuses_calls(computer: Harness) -
 async def test_screenshot_states_the_frame_and_keeps_the_chosen_display(computer: Harness) -> None:
     context = computer.context_for("computer")
     result = await computer.call("computer", {"action": "screenshot"}, context)
-    assert model_text(result) == 'Screenshot of display 1 of 2 "Main": 1280x720 frame.' + (
-        " Hidden apps (gray, not granted): Notepad, Google Chrome, Windows Terminal, Slack, "
-        "vBot, File Explorer."
-    )
+    assert model_text(result) == 'Screenshot of display 1 of 2 "Main": 1280x720 frame.'
     assert [image.size for image in images(context)] == [(1280, 720)]
 
     context = computer.context_for("computer")
@@ -159,8 +156,7 @@ async def test_zoom_shows_a_region_at_physical_resolution_in_the_same_frame(
     assert "1568x500" in result["error"]["message"]
 
 
-async def grant_paint_on_the_wide_display(computer: Harness) -> None:
-    await computer.grant("Paint", "Notepad")
+async def paint_on_the_wide_display(computer: Harness) -> None:
     computer.target.front(PAINT)
     await computer.computer(action="screenshot")
     computer.target.pointer = (-2000, 500)
@@ -230,7 +226,7 @@ async def grant_paint_on_the_wide_display(computer: Harness) -> None:
 async def test_input_actions_map_frame_coordinates_and_return_a_screenshot(
     computer: Harness, arguments: dict, inputs: list
 ) -> None:
-    await grant_paint_on_the_wide_display(computer)
+    await paint_on_the_wide_display(computer)
     context = computer.context_for("computer")
     result = await computer.call("computer", arguments, context)
     assert result["ok"], result
@@ -241,7 +237,7 @@ async def test_input_actions_map_frame_coordinates_and_return_a_screenshot(
 
 
 async def test_mouse_down_and_cursor_position_return_no_screenshot(computer: Harness) -> None:
-    await grant_paint_on_the_wide_display(computer)
+    await paint_on_the_wide_display(computer)
     context = computer.context_for("computer")
     result = await computer.call("computer", {"action": "left_mouse_down"}, context)
     assert model_text(result) == "Done: left_mouse_down at the pointer."
@@ -287,7 +283,6 @@ async def test_wait_pauses_then_shows_the_screen(computer: Harness) -> None:
 async def test_unclear_actions_are_refused_before_input(
     computer: Harness, arguments: dict, message: str
 ) -> None:
-    await computer.grant("Notepad")
     await computer.computer(action="screenshot")
     computer.target.inputs.clear()
     result = await computer.computer(**arguments)
@@ -316,7 +311,6 @@ async def test_unclear_actions_are_refused_before_input(
 async def test_key_names_from_other_harnesses_press_canonical_keys(
     computer: Harness, text: str, chords: list[list[str]]
 ) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
     result = await computer.computer(action="key", text=text)
     assert result["ok"], result
@@ -326,7 +320,6 @@ async def test_key_names_from_other_harnesses_press_canonical_keys(
 async def test_unexpected_target_failure_says_whether_input_was_sent(
     computer: Harness,
 ) -> None:
-    await computer.grant("Notepad")
     computer.target.fail["type"] = computer_use.TargetError("The keyboard layout is missing.")
     result = await computer.computer(action="type", text="x")
     assert result["error"]["code"] == "computer_use_failed"

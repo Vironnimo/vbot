@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: "Operate desktop apps on the vBot server's Windows desktop with computer, computer_batch and computer_apps: get access, look, click, type and verify."
+description: "Operate desktop apps on the vBot server's Windows desktop with computer, computer_batch and computer_apps: find apps, look, click, type and verify."
 ---
 
 # Computer Use
@@ -8,12 +8,12 @@ description: "Operate desktop apps on the vBot server's Windows desktop with com
 computer moves the user's real mouse and keyboard on the desktop of the computer the vBot server runs on. It is slow and visible to the user, so use it only when nothing better fits:
 
 - Prefer a shell, files, an app's command line or an API when they can do the job.
-- For web pages, use the playwright-cli Skill if you have it. Browsers are view only for computer: you can read them in screenshots, but input into them is refused.
+- For web pages, prefer the playwright-cli Skill if you have it; it is faster and more reliable than clicking through a browser.
 
 ## Workflow
 
-1. computer_apps `{"action":"list"}` shows granted apps, displays and running apps; add `"query"` to search installed apps.
-2. computer_apps `{"action":"request","apps":["Notepad"],"reason":"..."}` asks the user and waits for the answer. Name every app the task needs in one request. If the user declines, do not ask again unless they tell you to.
+1. computer_apps `{"action":"list"}` shows the displays, the running apps and whether the user requires approval per app; add `"query"` to search installed apps.
+2. Only if list says the user approves each app: computer_apps `{"action":"request","apps":["Notepad"],"reason":"..."}` asks the user and waits for the answer. Name every app the task needs in one request. If the user declines, do not ask again unless they tell you to.
 3. computer_apps `{"action":"open","app":"Notepad"}` brings the app to the front, starting it if needed, and returns a screenshot.
 4. Act with computer, one action per call, or computer_batch for steps you can predict, such as click a field, type, press enter.
 5. Check the screenshot each result returns before the next step.
@@ -21,10 +21,9 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 ## Screenshots and coordinates
 
 - Coordinates are [x, y] in the latest screenshot, measured from its top-left corner. Take a new screenshot when the screen may have changed.
-- Gray boxes are apps without access. Request the app if you need it; input into a gray area is refused.
+- Gray boxes are apps the user has not approved, when the user requires approval per app. Request the app if you need it; input into a gray area is refused.
 - Use zoom with a region to read small text or check a small control before clicking it.
 - Set action_summary on input actions; the user sees it.
-- Terminals and code editors are click only: run commands and edit files with other Tools instead.
 
 ## Keys and text
 

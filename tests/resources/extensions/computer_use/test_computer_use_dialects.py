@@ -92,7 +92,6 @@ CLICK: tuple = ("click", 200, 150, "left", 1, [])
 async def test_unambiguous_dialects_run_as_the_canonical_call(
     computer: Harness, tool: str, arguments, inputs: list
 ) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
     result = await computer.call(tool, arguments)
     assert result["ok"], result
@@ -141,7 +140,6 @@ async def test_unambiguous_dialects_run_as_the_canonical_call(
 async def test_ambiguous_dialects_are_refused_with_the_corrected_call(
     computer: Harness, tool: str, arguments, message: str
 ) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
     result = await computer.call(tool, arguments)
     assert result["error"]["code"] == "invalid_arguments"
@@ -159,7 +157,6 @@ async def test_ambiguous_dialects_are_refused_with_the_corrected_call(
 async def test_apps_calls_accept_common_spellings(
     computer: Harness, arguments: dict, opened: list[str]
 ) -> None:
-    await computer.grant("Notepad")
     result = await computer.call("computer_apps", arguments)
     assert result["ok"], result
     assert computer.target.opened == opened

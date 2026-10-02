@@ -56,7 +56,6 @@ class AppInfo:
 
     name: str
     keys: frozenset[str]
-    category: str
     running: bool
     launchable: bool
 
@@ -103,10 +102,6 @@ class DesktopTarget(Protocol):
 
     def apps(self) -> list[AppInfo]:
         """Installed and running windowed applications; cached briefly."""
-        ...
-
-    def own_app_keys(self) -> frozenset[str]:
-        """Keys of vBot's own processes, which are never grantable."""
         ...
 
     def open(self, app: AppInfo) -> None:
