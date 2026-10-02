@@ -690,6 +690,9 @@ class ConnectionRunner:
                     logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
+                    # No response cache: every listing and read reaches the server (see the
+                    # MCP domain map, Compatibility boundary).
+                    cache=None,
                     # Offered on 2026-07-28 connections only: legacy tasks need no declaration.
                     extensions=[TasksExtension(self._resolve_task)],
                 )
@@ -1124,7 +1127,7 @@ class ConnectionRunner:
         items: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
         while True:
-            page = await method(cursor=cursor, cache_mode="refresh")
+            page = await method(cursor=cursor)
             # The page's own metadata; its items are kept once, in the catalog's list.
             pages.append(
                 page.model_dump(mode="json", by_alias=True, exclude_none=True, exclude={field})
@@ -1236,11 +1239,7 @@ class ConnectionRunner:
                 )
             )
         if operation == "resources/read":
-            return dump(
-                await client.read_resource(
-                    arguments["uri"], cache_mode="refresh", meta=self._request_meta()
-                )
-            )
+            return dump(await client.read_resource(arguments["uri"], meta=self._request_meta()))
         if operation == "prompts/get":
             return dump(
                 await client.get_prompt(
