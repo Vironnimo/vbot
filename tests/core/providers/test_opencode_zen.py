@@ -15,7 +15,6 @@ import respx
 from core.models.models import Model, ModelRegistry
 from core.providers import OpenCodeZenAdapter
 from core.providers.errors import (
-    CatalogEntrySkipped,
     ProviderAuthError,
     ProviderError,
     ProviderRateLimitError,
@@ -71,45 +70,41 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
         ("gemini-3.8-flash", "gemini"),
     ],
 )
-def test_catalog_keeps_reviewed_models_on_their_reviewed_wire(model_id: str, protocol: str) -> None:
-    model = OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
+def test_bundled_catalog_models_are_admitted_on_their_reviewed_wire(
+    model_id: str, protocol: str
+) -> None:
+    """The bundled protocol hints and the Chat rule route every listed Model."""
+    adapter = OpenCodeZenAdapter(zen_config(), "zen-secret", model_lookup=_bundled_lookup())
 
-    assert model.model_id == model_id
-    assert zen_adapter().wire_profile(model_id).protocol == protocol
+    profile = adapter.wire_profile(model_id)
 
-
-@pytest.mark.parametrize(
-    "model_id",
-    [
-        pytest.param("big-pickle", id="free-tier"),
-        pytest.param("longcat-2.5-preview-free", id="longcat-free-tier"),
-        pytest.param("fledge-alpha-free", id="fledge-free-tier"),
-        pytest.param("claude-opus-4-1", id="retired"),
-        pytest.param("future-model", id="unreviewed"),
-    ],
-)
-def test_catalog_skips_free_retired_and_unreviewed_models(model_id: str) -> None:
-    with pytest.raises(CatalogEntrySkipped):
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
+    assert (profile.protocol, profile.admission.state) == (protocol, "available")
 
 
 @pytest.mark.parametrize(
-    ("model_id", "stale_lookup", "streaming"),
+    ("model_id", "stale_entry_of", "streaming"),
     [
-        pytest.param("big-pickle", True, False, id="free-tier-send"),
-        pytest.param("longcat-2.5-preview-free", True, True, id="longcat-free-tier-stream"),
-        pytest.param("fledge-alpha-free", True, False, id="fledge-free-tier-send"),
-        pytest.param("claude-opus-4-1", True, True, id="retired-stream"),
-        pytest.param("openai/gpt-5.6-sol", False, False, id="unknown-alias-send"),
+        pytest.param("big-pickle", CHAT_MODEL, False, id="free-tier-send"),
+        pytest.param(
+            "longcat-2.5-preview-free", RESPONSES_MODEL, True, id="hinted-free-tier-stream"
+        ),
+        pytest.param("fledge-alpha-free", CHAT_MODEL, False, id="fledge-free-tier-send"),
+        pytest.param("claude-opus-4-1", MESSAGES_MODEL, True, id="hinted-retired-stream"),
+        pytest.param("future-model", CHAT_MODEL, True, id="no-protocol-info-stream"),
+        pytest.param("openai/gpt-5.6-sol", None, False, id="unknown-alias-send"),
     ],
 )
 @pytest.mark.asyncio
 async def test_unusable_selection_fails_before_network(
-    model_id: str, stale_lookup: bool, streaming: bool
+    model_id: str, stale_entry_of: str | None, streaming: bool
 ) -> None:
-    """A stale catalog entry or an unknown alias never guesses a wire protocol."""
-    if stale_lookup:
-        stale_model = replace(zen_model(CHAT_MODEL), model_id=model_id)
+    """A stale catalog entry or an unknown alias never guesses a wire protocol.
+
+    A protocol hint routes a free or retired Model but never admits it, and a
+    catalog Model with neither a hint nor a reviewed rule is refused.
+    """
+    if stale_entry_of is not None:
+        stale_model = replace(zen_model(stale_entry_of), model_id=model_id)
         adapter = OpenCodeZenAdapter(zen_config(), "key", model_lookup=lambda _: stale_model)
     else:
         adapter = zen_adapter()

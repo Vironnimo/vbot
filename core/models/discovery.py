@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,6 +36,7 @@ from core.models.models_dev import (
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
 from core.providers.adapter import ProviderAdapter
+from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.errors import CatalogEntrySkipped, NetworkError
 from core.providers.github_copilot import GitHubCopilotAdapter
@@ -53,6 +54,7 @@ from core.providers.openrouter import OpenRouterAdapter
 from core.providers.providers import ConnectionConfig, ProviderConfig
 from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.providers.wire_profiles import standalone_wire_binding
 from core.providers.xai import XAIAdapter
 from core.utils.errors import ProviderError, VBotError
 from core.utils.logging import get_logger
@@ -351,6 +353,9 @@ async def refresh_models(
             provider_config,
             catalog,
         )
+        projected_models = _admitted_models(
+            projected_models, normalized_models, provider_config, credential_connection
+        )
 
         output_path = models_dir / f"{provider_config.id}.json"
         existing_models = _read_existing_provider_models(output_path)
@@ -412,6 +417,55 @@ def _project_provider_models(
             _enrich_provider_model(data, provider_config.id, models_dev_id, wire_id, catalog)
         projected[wire_id] = data
     return projected
+
+
+def _admitted_models(
+    projected: dict[str, dict[str, Any]],
+    normalized_models: Mapping[str, Model],
+    provider_config: ProviderConfig,
+    connection: ConnectionConfig | None,
+) -> dict[str, dict[str, Any]]:
+    """Keep the Models the Provider's wire profile admits on this Connection.
+
+    Admission is judged on the projected Model: a rule may depend on a fact
+    enrichment just added (the models.dev protocol hint decides which OpenCode
+    Zen Models have a reviewed wire). A restricted or retired Model is not
+    written, so it never appears in the Model DB.
+    """
+
+    adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+    if adapter_class is None:
+        return projected
+
+    def projected_model(model_id: str) -> Model | None:
+        model = normalized_models.get(model_id)
+        data = projected.get(model_id)
+        if model is None or data is None:
+            return None
+        return replace(
+            model,
+            family=data.get("family") or model.family,
+            metadata=data.get("metadata") or model.metadata,
+        )
+
+    binding = standalone_wire_binding(
+        provider_id=provider_config.id,
+        connection_id=connection.id if connection is not None else "",
+        protocols=adapter_class.WIRE_PROTOCOLS,
+        model_lookup=projected_model,
+    )
+    admitted: dict[str, dict[str, Any]] = {}
+    for model_id, data in projected.items():
+        admission = binding.profile(model_id).admission
+        if admission.state == "available":
+            admitted[model_id] = data
+            continue
+        _LOGGER.debug(
+            "Skipping model during discovery for provider '%s': %s",
+            provider_config.id,
+            admission.message or f"{model_id} is {admission.state}",
+        )
+    return admitted
 
 
 def _provider_metadata_key(provider_id: str) -> str:

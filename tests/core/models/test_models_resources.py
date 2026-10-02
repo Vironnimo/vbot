@@ -438,7 +438,6 @@ def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
     for model in usable:
         assert set(model.connections) == {"api-key", "account"}
         # Discovery keeps only Models the wire profile admits.
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": model.model_id})
         assert _wire_profile(registry, "opencode-zen", model.model_id).admission.state == (
             "available"
         )

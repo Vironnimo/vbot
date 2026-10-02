@@ -39,7 +39,6 @@ from core.providers.anthropic_compatible import (
     AnthropicCompatibleAdapter,
 )
 from core.providers.errors import (
-    CatalogEntrySkipped,
     NetworkError,
     ProviderAuthError,
     ProviderError,
@@ -51,7 +50,7 @@ from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfi
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
-from core.providers.wire_profiles import WireBinding, standalone_wire_binding
+from core.providers.wire_profiles import WireBinding
 from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
@@ -230,24 +229,13 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        """Normalize one listed Model; skip a Model the wire profile does not admit."""
+        """Normalize one listed Model as a plain OpenAI-compatible entry.
 
-        model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
-        admission = (
-            standalone_wire_binding(
-                provider_id="opencode-zen",
-                connection_id="",
-                protocols=cls.WIRE_PROTOCOLS,
-                model_lookup=None,
-            )
-            .profile(model.model_id)
-            .admission
-        )
-        if admission.state != "available":
-            raise CatalogEntrySkipped(
-                admission.message or f"OpenCode Zen Model {model.model_id!r} is {admission.state}"
-            )
-        return model
+        Discovery drops a Model the wire profile does not admit once the
+        models.dev protocol hint is projected.
+        """
+
+        return OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
 
     @override
     def request_context_kwargs(

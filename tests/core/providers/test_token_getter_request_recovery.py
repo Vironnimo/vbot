@@ -278,6 +278,14 @@ WIRES = {
 }
 
 
+# OpenCode Zen routes these wires by the catalog protocol hint (models.dev package).
+_ZEN_NPM = {
+    "messages": "@ai-sdk/anthropic",
+    "responses": "@ai-sdk/openai",
+    "gemini_generate_content": "@ai-sdk/google",
+}
+
+
 def _model(wire: Wire) -> Model:
     metadata: dict[str, Any] = {}
     if wire.provider_id == "github-copilot":
@@ -288,6 +296,8 @@ def _model(wire: Wire) -> Model:
                 "streaming": True,
             }
         }
+    elif wire.provider_id == "opencode-zen" and wire.protocol in _ZEN_NPM:
+        metadata = {"opencode_zen": {"npm": _ZEN_NPM[wire.protocol]}}
     return Model(
         model_id=wire.model_id,
         name=wire.model_id,
