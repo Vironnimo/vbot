@@ -113,7 +113,6 @@ def _patch_server_update(monkeypatch: pytest.MonkeyPatch, install: Installation)
     """A running previous server that stops cleanly; the test decides every start."""
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
-    monkeypatch.setattr(worker, "quiesce", lambda *_args: None)
     monkeypatch.setattr(worker.processes, "stop", lambda _install, **_kwargs: _ok())
 
 
@@ -168,9 +167,7 @@ def test_no_restart_prepares_without_changing_the_active_pointer_or_server(
 
 
 @pytest.mark.parametrize("restart", [True, False])
-def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
-    tmp_path, monkeypatch, restart
-):
+def test_current_version_finishes_without_stop_snapshot_or_handoff(tmp_path, monkeypatch, restart):
     install = _install(tmp_path)
     operation = Operation(
         id="upd_current",
@@ -180,7 +177,7 @@ def test_current_version_finishes_without_maintenance_snapshot_or_handoff(
         handoff_ticket="ticket.json",
     )
     monkeypatch.setattr(worker, "stage_package", lambda *a, **kw: "rel_old")
-    monkeypatch.setattr(worker, "quiesce", lambda *a: pytest.fail("no maintenance or continuation"))
+    monkeypatch.setattr(worker, "wait_for_handoff", lambda *a: pytest.fail("no continuation"))
     monkeypatch.setattr(worker.processes, "target", lambda *a: pytest.fail("no server action"))
     worker.execute(install, operation)
     assert operation.phase == "completed"
@@ -196,7 +193,6 @@ def test_a_channel_publishing_the_active_version_completes_without_download(
     monkeypatch.setattr(
         worker, "stage_package", lambda *_args, **_kwargs: pytest.fail("must not stage")
     )
-    monkeypatch.setattr(worker, "quiesce", lambda *a: pytest.fail("no maintenance"))
     monkeypatch.setattr(worker.processes, "target", lambda _install: pytest.fail("must not target"))
 
     worker.execute(install, operation)
@@ -224,7 +220,7 @@ def test_stage_failure_leaves_the_prior_active_version_and_marks_the_operation_f
     assert load_operation(install, operation.id).phase == "failed"
 
 
-def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
+def test_a_busy_server_is_stopped_at_once_after_arming_the_agent_continuation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     install = _install(tmp_path)
@@ -238,22 +234,35 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
     sequence: list[str] = []
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
-    ready = iter((False, True))
 
-    def control(_install, method, _operation, **_extra):
+    def control(_install, method, _operation, **extra):
+        # The running server holds active Runs that would never finish. The update
+        # only arms the continuation; draining would ask about that work and wait.
+        if method != "update_continuation":
+            pytest.fail(f"the update must not wait for the server's work ({method})")
+        assert extra == {"handoff_ticket_id": "ticket-one"}
         sequence.append(method)
-        return {"safe_to_stop": next(ready)} if method == "maintenance_status" else {}
+        return {"bootstrap_job_id": "boot-one", "created": True}
 
     monkeypatch.setattr(worker, "control", control)
-    monkeypatch.setattr(worker, "wait_for_handoff", lambda *_args: "ticket-one")
-    monkeypatch.setattr(worker.time, "sleep", lambda _seconds: sequence.append("wait"))
+
+    def acknowledged(_install, _operation):
+        sequence.append("acknowledged")
+        return "ticket-one"
+
+    monkeypatch.setattr(worker, "wait_for_handoff", acknowledged)
+    monkeypatch.setattr(
+        worker.time, "sleep", lambda _seconds: pytest.fail("the update must not wait")
+    )
     monkeypatch.setattr(
         worker,
         "create_update_snapshot",
         lambda *_args, **_kwargs: sequence.append("snapshot"),
     )
 
-    def stop(_install, **_kwargs):
+    def stop(_install, **kwargs):
+        # A normal shutdown: it cancels the server's active Runs and queued work.
+        assert kwargs == {"initiator": "update"}
         sequence.append("stop")
         return _ok()
 
@@ -274,15 +283,21 @@ def test_busy_server_quiesces_before_stopping_after_waiting_for_idle(
     monkeypatch.setattr(Operation, "transition", record_transition)
     worker.execute(install, operation)
 
-    assert sequence.index("waiting_for_idle") < sequence.index("maintenance_begin")
-    assert sequence.index("update_continuation") < sequence.index("maintenance_begin")
-    assert sequence.index("wait") < sequence.index("stop")
-    # The snapshot is taken only once no server can write any more.
+    assert operation.phase == "completed"
+    # The continuation is armed only after the acknowledgement and before the
+    # stop, and the snapshot is taken only once no server can write any more.
+    first_stop = sequence.index("stopping")
+    assert sequence[first_stop - 2 : first_stop + 2] == [
+        "acknowledged",
+        "update_continuation",
+        "stopping",
+        "stop",
+    ]
     assert sequence.index("stop") < sequence.index("snapshot")
 
 
 @pytest.mark.parametrize("state", ["unresponsive", "foreign"])
-def test_a_server_the_update_cannot_drain_fails_it_before_anything_changes(
+def test_a_server_the_update_cannot_stop_normally_fails_it_before_anything_changes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
 ):
     install = _install(tmp_path)
@@ -294,7 +309,6 @@ def test_a_server_the_update_cannot_drain_fails_it_before_anything_changes(
     monkeypatch.setattr(worker, "stage_package", lambda *_args, **_kwargs: "rel_new")
     _target_data(monkeypatch, install)
     monkeypatch.setattr(worker.processes, "server_state", lambda _install, **_kwargs: state)
-    monkeypatch.setattr(worker, "quiesce", lambda *_args: pytest.fail("must not drain"))
     monkeypatch.setattr(worker.processes, "stop", lambda *_a, **_k: pytest.fail("must not stop"))
     monkeypatch.setattr(worker.processes, "start", lambda *_a, **_k: pytest.fail("must not start"))
     monkeypatch.setattr(
@@ -313,7 +327,7 @@ def test_a_server_the_update_cannot_drain_fails_it_before_anything_changes(
     assert saved.phase == "failed"
     assert saved.error
     assert install.version().name == "rel_old"
-    assert "maintenance_begin" not in calls
+    assert calls == []
 
 
 def test_a_stopped_server_is_neither_stopped_nor_started_by_the_update(
@@ -327,7 +341,6 @@ def test_a_stopped_server_is_neither_stopped_nor_started_by_the_update(
     calls: list[object] = []
     _patch_server_update(monkeypatch, install)
     monkeypatch.setattr(worker.processes, "server_state", lambda _install, **_kwargs: "absent")
-    monkeypatch.setattr(worker, "quiesce", lambda *_args: pytest.fail("nothing to drain"))
 
     def stop(_install, **_kwargs):
         calls.append("stop")
@@ -545,7 +558,6 @@ def test_an_interrupted_restore_needs_attention_with_the_repeat_command(
 
     monkeypatch.setattr(worker.processes, "start", start)
     monkeypatch.setattr(worker, "restore_update_snapshot", interrupted_restore)
-    monkeypatch.setattr(worker, "control", lambda *_args, **_kwargs: {})
     worker.run(install, operation.id)
 
     saved = load_operation(install, operation.id)
@@ -648,7 +660,6 @@ def test_post_pointer_normal_start_failure_needs_attention_without_data_restore(
     data_dir = _server_data(install)
     starts: list[tuple[str | None, bool]] = []
     _patch_server_update(monkeypatch, install)
-    monkeypatch.setattr(worker, "control", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
         worker,
         "restore_update_snapshot",
@@ -726,9 +737,9 @@ def test_recovery_after_an_interrupted_data_restore_never_starts_a_version(
 @pytest.mark.parametrize(
     ("candidate", "previous", "calls", "phase"),
     [
-        pytest.param("absent", "running", ["maintenance_end"], "rolled_back", id="old-survived"),
-        # A busy old server is released like an answering one, never duplicated.
-        pytest.param("absent", "unresponsive", ["maintenance_end"], "rolled_back", id="old-busy"),
+        pytest.param("absent", "running", [], "rolled_back", id="old-survived"),
+        # A busy old server keeps running like an answering one, never duplicated.
+        pytest.param("absent", "unresponsive", [], "rolled_back", id="old-busy"),
         pytest.param("absent", "absent", ["restart"], "rolled_back", id="old-stopped"),
         pytest.param(
             "running", "absent", ["stop", "restart"], "rolled_back", id="candidate-verifying"
