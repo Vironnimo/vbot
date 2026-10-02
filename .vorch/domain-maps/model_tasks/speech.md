@@ -197,7 +197,9 @@ before restoring the pinned source without dependencies. This avoids resolving t
 requirements from an already installed, same-version source distribution.
 
 `speech_worker.py` starts without importing vBot, loads SDKs only inside its
-child environment, reports `loading`/`synthesizing` phases and writes
+child environment (TTS environments run it on Python 3.12, so it keeps to 3.12
+syntax and standard library, which ruff and the commit hook check: PROJECT.md ->
+Development -> Python version), reports `loading`/`synthesizing` phases and writes
 mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS target
 while that target's load options (`device`) match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child
