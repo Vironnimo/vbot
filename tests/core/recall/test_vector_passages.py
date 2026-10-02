@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from core.chat import ChatMessage
@@ -11,10 +9,10 @@ from core.sessions import ChatSessionManager
 from tests.core.recall.recall_test_support import (
     ALL_ROLES,
     StubEmbeddings,
+    VectorBackendFactory,
     embed_documents,
     request,
     timestamp,
-    vector_backend,
 )
 from tests.core.sessions.history_fixtures import append_tool_fixture
 
@@ -22,7 +20,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_match_in_the_middle_of_a_long_session_anchors_at_its_passage(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     session = sessions.create("coder", session_id="mixed")
     session.append(ChatMessage.user("My car broke down on the highway", timestamp=timestamp(1)))
@@ -34,7 +32,7 @@ async def test_match_in_the_middle_of_a_long_session_anchors_at_its_passage(
     last = ChatMessage.user("I love bananas and fruit", timestamp=timestamp(5))
     session.append(last)
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("fruit", limit=2))
@@ -45,7 +43,7 @@ async def test_match_in_the_middle_of_a_long_session_anchors_at_its_passage(
 
 
 async def test_tool_output_and_recall_results_never_become_hits(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     session = sessions.create("coder", session_id="mixed")
     # Tool text carries the query's meaning; only the conversation may surface.
@@ -62,7 +60,7 @@ async def test_tool_output_and_recall_results_never_become_hits(
     user = ChatMessage.user("I bought some carrots", timestamp=timestamp(3))
     session.append(user)
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("fruit", roles=ALL_ROLES))
