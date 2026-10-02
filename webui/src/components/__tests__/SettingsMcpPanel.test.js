@@ -465,20 +465,41 @@ describe('MCP management surface', () => {
           message: 'test-owned-server-advice',
         },
         stderr_tail: ['test-owned-first-line', 'test-owned-last-line'],
-        missing_credentials: ['TEST_KEY'],
       },
+      // Imported without its credential: it waits, enabled or not, and its
+      // diagnosed problem is the waiting line itself.
+      ...[false, true].map((enabled) => ({
+        id: enabled ? 'files' : 'notes',
+        configuration: { ...structuredClone(original), enabled },
+        state: enabled ? 'failed' : 'disconnected',
+        error: enabled ? 'Missing MCP credential: FILES_TOKEN' : null,
+        problem: enabled
+          ? { code: 'credential_missing', credential: 'FILES_TOKEN' }
+          : null,
+        missing_credentials: ['FILES_TOKEN', 'TEST_KEY'],
+      })),
     ];
     component = mount(Panel, { target: document.body });
     await settle();
-    const row = document.querySelector('.mcp-connection__error');
+    const head = (id) =>
+      document.querySelector(`article[aria-label="${id}"] .s-entity__head`);
+    const row = head('example').querySelector('.mcp-connection__error');
     expect(row.textContent).toContain('Install Python 3');
     expect(row.textContent).not.toContain('test-owned-raw-error');
+    expect(head('example').textContent).toContain('Connection failed');
+    for (const id of ['files', 'notes']) {
+      expect(head(id).textContent).toContain('Needs setup');
+      expect(
+        head(id).querySelector('.mcp-connection__waiting').textContent.trim(),
+      ).toBe('Waiting for: FILES_TOKEN, TEST_KEY');
+      expect(head(id).querySelector('.mcp-connection__error')).toBeNull();
+      expect(head(id).textContent).not.toContain('Connection failed');
+    }
     const details = document.querySelector('article[aria-label="example"]');
     expect(details.querySelector('pre').textContent).toBe(
       'test-owned-first-line\ntest-owned-last-line',
     );
     expect(details.textContent).toContain('test-owned-raw-error');
-    expect(details.textContent).toContain('TEST_KEY');
     button('Reconnect').click();
     await settle();
     expect(rpc).toHaveBeenCalledWith('extensions.operation', {

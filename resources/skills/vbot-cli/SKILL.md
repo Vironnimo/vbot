@@ -30,7 +30,8 @@ For a focused question about a past conversation, use `session_search` and answe
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
-| Create or change an Extension, its Tools, hooks, Commands or pages | `references/extensions.md` |
+| Create or change an Extension, its Tools, hooks or Commands | `references/extensions.md` |
+| Give an Extension a page or its own Sessions | `references/extensions.md`, then `references/extension-pages.md` |
 | Use bundled Swarm or Computer Use, or inspect Extension connection UI | `references/extension-usage.md` |
 | MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
 | Channel setup (Telegram, Discord, Slack, Mattermost, WhatsApp), tokens and group access | `references/channels.md` |

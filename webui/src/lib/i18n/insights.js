@@ -187,6 +187,7 @@ export default Object.freeze({
   'statistics.subview.tools': 'Tools & skills',
   'statistics.granularity.label': 'Period',
   'statistics.granularity.day': 'Day',
+  'statistics.granularity.hour': 'Hour',
   'statistics.granularity.week': 'Week',
   'statistics.granularity.month': 'Month',
   'statistics.status.completed': 'Completed',
@@ -273,6 +274,17 @@ export default Object.freeze({
   'statistics.errors.byProvider': 'By Provider',
   'statistics.errors.byAgent': 'By Agent',
   'statistics.errors.byHour': 'By hour of day',
+  'statistics.errors.kindId': 'Recorded kind',
+  'statistics.errorKind.auth_error': 'Authentication failed',
+  'statistics.errorKind.config_error': 'Configuration error',
+  'statistics.errorKind.internal_error': 'Internal error',
+  'statistics.errorKind.network_error': 'Network error',
+  'statistics.errorKind.provider_error': 'Provider error',
+  'statistics.errorKind.provider_fatal': 'Request rejected by the Provider',
+  'statistics.errorKind.provider_overloaded': 'Provider overloaded',
+  'statistics.errorKind.rate_limit': 'Rate limit',
+  'statistics.errorKind.timeout': 'Timeout',
+  'statistics.errorKind.tool_iterations_exceeded': 'Tool step limit reached',
   'statistics.errors.scopeHint':
     'These are persisted Run errors; Tool failures are reported under Tools. Provider and Model attribution uses the last preceding Assistant Model step and is therefore a proxy.',
   'statistics.tools.totalCalls': 'Tool calls',
@@ -314,7 +326,6 @@ export default Object.freeze({
     'Showing the {shown} most recently active of {total} groups.',
   'statistics.extensions.groupSummary':
     '{participants} participants · {runs} Runs',
-  'statistics.extensions.groupFallback': 'Started {date} · {id}',
   'statistics.extensions.groupFallbackId': 'Group {id}',
   'statistics.extensions.participants': 'Participants',
   'statistics.extensions.participant': 'Participant',
@@ -468,6 +479,7 @@ export default Object.freeze({
   'statistics.change.down': 'Down',
   'statistics.change.flat': 'Unchanged',
   'statistics.change.new': 'new',
+  'statistics.change.noComparison': 'No earlier activity to compare with.',
   'statistics.change.points': '{value} pts',
   'statistics.change.previous': 'Previous period: {value}',
   'statistics.change.up': 'Up',
@@ -507,6 +519,7 @@ export default Object.freeze({
   'statistics.col.p95Approx': 'P95 ≈',
   'statistics.col.perMillion': 'Per 1M tokens',
   'statistics.col.retrospective': 'Priced today',
+  'statistics.col.runCost': 'Run cost',
   'statistics.col.role': 'Role',
   'statistics.col.run': 'Run',
   'statistics.col.sessionRecords': 'Session records',
@@ -596,6 +609,8 @@ export default Object.freeze({
   'statistics.overview.cacheDetail': '{tokens} read from cache',
   'statistics.overview.cost': 'Cost',
   'statistics.overview.costByOrigin': 'Cost by origin',
+  'statistics.overview.costByOriginHint':
+    'Every Model request in this period by who started it, including requests made outside any Run, such as speech recognition, search indexing and other background work. The Runs tab counts only requests made inside Runs, so its costs can be lower.',
   'statistics.overview.costDetail':
     '{reported} reported · {estimated} estimated',
   'statistics.overview.costHint':
@@ -606,7 +621,6 @@ export default Object.freeze({
   'statistics.overview.failureRate': '{rate} failed',
   'statistics.overview.insightLink': 'Open {tab}',
   'statistics.overview.insights': 'Worth a look',
-  'statistics.overview.noComparison': 'No earlier activity to compare with.',
   'statistics.overview.p90Cost': '90% at most {cost}',
   'statistics.overview.p90Duration': '90% within {duration}',
   'statistics.overview.runsDetail': '{completed} completed · {failed} failed',
@@ -643,6 +657,8 @@ export default Object.freeze({
   'statistics.runs.notable': 'Notable Runs',
   'statistics.runs.runCount': '{count} Runs',
   'statistics.runs.running': '{count} still running',
+  'statistics.runs.runCostHint':
+    'What the Runs that started in this period cost: the Model requests made inside them, retries included. Requests made outside any Run, such as speech recognition, search indexing and other background work, are not included, so this can be lower than Cost by origin on the Overview.',
   'statistics.runs.share': '{share} of Runs',
   'statistics.runs.stepsHint':
     'Model responses in the Run, including Thinking-only and Tool-call-only steps.',

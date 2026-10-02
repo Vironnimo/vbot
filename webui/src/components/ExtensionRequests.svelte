@@ -147,7 +147,11 @@
 
 {#if requests.length}
   <Banner variant="warn" role="status">
-    <span>{t('extensions.inputWaiting', { count: requests.length })}</span>
+    <span
+      >{requests.length === 1
+        ? t('extensions.inputWaitingOne')
+        : t('extensions.inputWaiting', { count: requests.length })}</span
+    >
     <Button variant="primary" onClick={() => review(requests[0])}
       >{t('extensions.reviewInput')}</Button
     >
@@ -277,6 +281,7 @@
                   {#if input.kind === 'select'}
                     <Dropdown
                       id={field.controlId}
+                      ariaLabelledby={field.labelId}
                       ariaDescribedby={field.describedBy}
                       value={drafts[input.key] ?? ''}
                       options={input.required

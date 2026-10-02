@@ -16,6 +16,7 @@ from PIL import Image
 
 from . import _win32, _win_apps
 from ._win_input import WindowsInput
+from ._win_overlay import ActivityOverlay
 from .target import AppInfo, Display, TargetError, WindowInfo
 
 _LOCKED = (
@@ -64,6 +65,7 @@ class WindowsTarget(WindowsInput):
         self._descriptions: dict[str, str | None] = {}
         self._own_integrity: int | None = None
         self._display_names: tuple[tuple[str, ...], dict[str, str]] = ((), {})
+        self._overlay = ActivityOverlay()
 
     def readiness(self) -> str | None:
         if sys.platform != "win32":
@@ -149,15 +151,22 @@ class WindowsTarget(WindowsInput):
         running = [resolver.window(handle)[0] for handle in self._app_windows()]
         return _win_apps.merge_apps(index.apps, running)
 
-    def own_app_keys(self) -> frozenset[str]:
-        return _win_apps.OWN_APP.keys
+    def set_activity(self, active: bool) -> None:
+        if active:
+            self._overlay.show()
+        else:
+            self._overlay.hide()
+
+    def close(self) -> None:
+        self._overlay.close()
 
     def open(self, app: AppInfo) -> None:
         _win32.enter_thread()
         resolver = self._resolver()
         for handle in self._app_windows():
-            window_app = resolver.window(handle)[0]
-            if window_app.category != "shell" and app.matches(window_app):
+            window_app, facts = resolver.window(handle)
+            shell = _win_apps.is_shell_surface(_win32.window_class(handle), facts.executable)
+            if not shell and app.matches(window_app):
                 self._activate(handle, app.name)
                 return
         target = self._launch_target(app)
@@ -226,7 +235,7 @@ class WindowsTarget(WindowsInput):
         index = self._start.index(wait=_FIRST_DISCOVERY_WAIT)
         entries = [entry for entry in index.apps if entry.keys & app.keys]
         entries.sort(key=lambda entry: entry.name != app.name)
-        if entries and _win_apps.OWN_KEY not in entries[0].keys:
+        if entries:
             return f"shell:AppsFolder\\{entries[0].app_id}"
         return next(
             (
@@ -263,7 +272,7 @@ class WindowsTarget(WindowsInput):
             if time.monotonic() >= deadline:
                 raise TargetError(
                     f"Windows did not bring {name} to the front. Ask the user to switch to it, "
-                    "or click its taskbar button if File Explorer is granted."
+                    "or click its taskbar button."
                 )
             self._pause(0.05)
 

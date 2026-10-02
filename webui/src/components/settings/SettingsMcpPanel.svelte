@@ -23,6 +23,7 @@
     mcpDraft,
     mcpCredentialNames,
     mcpProblemText,
+    mcpSetupNeeded,
   } from '$lib/mcpSettings.js';
   import { tooltip } from '$lib/tooltip.js';
 
@@ -282,7 +283,12 @@
   {:else}
     <div class="s-group mcp-connections">
       {#each state.connections as connection, index (connection.id)}
-        {@const appearance = status(connection)}
+        <!-- Missing credentials need the user first, whether or not the
+             connection is enabled; the waiting line names them. -->
+        {@const setup = mcpSetupNeeded(connection)}
+        {@const appearance = setup
+          ? { label: setup.hint, variant: 'warn' }
+          : status(connection)}
         {@const open = expanded.has(connection.id)}
         {@const description = connection.configuration.description ?? ''}
         <article class="mcp-connection s-entity" aria-label={connection.id}>
@@ -304,9 +310,14 @@
                   {description}
                 </div>
               {/if}
-              {#if connection.error}
+              {#if connection.error && !(setup && connection.problem?.code === 'credential_missing')}
                 <div class="s-row-desc mcp-connection__error">
                   {mcpProblemText(connection.problem) || connection.error}
+                </div>
+              {/if}
+              {#if setup}
+                <div class="s-row-desc mcp-connection__waiting">
+                  {setup.waitingFor}
                 </div>
               {/if}
             </div>
@@ -632,6 +643,7 @@
           >
             {#snippet children(field)}<Dropdown
                 id={field.controlId}
+                ariaLabelledby={field.labelId}
                 value={draft.transport}
                 options={transportOptions}
                 disabled={state.busy}
@@ -783,6 +795,7 @@
             >
               {#snippet children(field)}<Dropdown
                   id={field.controlId}
+                  ariaLabelledby={field.labelId}
                   value={draft.sampling}
                   options={samplingOptions}
                   disabled={state.busy}
@@ -797,6 +810,7 @@
             >
               {#snippet children(field)}<Dropdown
                   id={field.controlId}
+                  ariaLabelledby={field.labelId}
                   value={draft.roots}
                   options={rootsOptions}
                   disabled={state.busy}
@@ -992,6 +1006,7 @@
         >
           {#snippet children(field)}<Dropdown
               id={field.controlId}
+              ariaLabelledby={field.labelId}
               value={secretKey}
               options={mcpCredentialNames(secretConnection.configuration)}
               disabled={state.busy}

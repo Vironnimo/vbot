@@ -122,6 +122,19 @@
     color: var(--text-hi);
     font-weight: 600;
   }
+  /* The address and host render character by character: a font ligature
+     would draw the "--" of an xn-- host as one dash. */
+  .requested-url__address,
+  .requested-url__site {
+    font-variant-ligatures: none;
+    font-feature-settings:
+      'liga' 0,
+      'calt' 0;
+  }
+  .requested-url__site {
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
+  }
   .requested-url__open {
     text-decoration: none;
   }

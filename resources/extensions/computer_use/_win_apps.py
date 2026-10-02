@@ -1,4 +1,4 @@
-"""Application identity on Windows: keys, categories, Start-menu apps and launching.
+"""Application identity on Windows: keys, Start-menu apps and launching.
 
 An application is known by identity keys: its lowercased executable path,
 ``exe:<basename>`` (omitted for generic hosts such as ``python.exe`` that run
@@ -32,38 +32,10 @@ from .target import AppInfo, TargetError
 _LOGGER = logging.getLogger("vbot.extensions.computer_use")
 
 OWN_KEY = "vbot:self"
-OWN_APP = AppInfo("vBot", frozenset({OWN_KEY}), "other", running=True, launchable=False)
+OWN_APP = AppInfo("vBot", frozenset({OWN_KEY}), running=True, launchable=False)
 FILE_EXPLORER = "File Explorer"
 EXPLORER_APP_ID = "microsoft.windows.explorer"
 
-BROWSERS = frozenset(
-    f"{name}.exe"
-    for name in (
-        "chrome", "msedge", "firefox", "brave", "opera", "vivaldi", "iexplore", "arc",
-        "chromium", "thorium", "librewolf", "waterfox", "floorp", "zen", "palemoon", "yandex",
-    )
-)  # fmt: skip
-TERMINALS = frozenset(
-    f"{name}.exe"
-    for name in (
-        "windowsterminal", "wt", "openconsole", "cmd", "powershell", "pwsh", "conhost",
-        "wezterm-gui", "alacritty", "mintty", "putty", "kitty", "hyper", "tabby", "warp",
-        "conemu", "conemu64", "cmder", "mobaxterm", "termius", "ghostty", "wsl", "bash",
-        "powershell_ise",
-    )
-)  # fmt: skip
-IDES = frozenset(
-    f"{name}.exe"
-    for name in (
-        "code", "code - insiders", "codium", "cursor", "windsurf", "antigravity", "zed",
-        "devenv", "studio64", "idea64", "pycharm64", "rider64", "webstorm64", "clion64",
-        "goland64", "phpstorm64", "rubymine64", "datagrip64", "dataspell64", "rustrover64",
-        "aqua64", "fleet", "trae", "kiro", "positron", "eclipse", "netbeans64", "qtcreator",
-        "sublime_text",
-    )
-)  # fmt: skip
-# Package families whose executable the manifest may not reveal.
-_TERMINAL_PACKAGES = ("microsoft.windowsterminal", "microsoft.powershell")
 SHELL_CLASSES = frozenset({"Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW"})
 # Start, search and the flyouts the taskbar opens belong to the shell like the taskbar.
 SHELL_HOSTS = frozenset(
@@ -83,7 +55,6 @@ HELPER_PROCESSES = frozenset({"msedgewebview2.exe"})
 _UWP_HOST = "applicationframehost.exe"
 _UWP_FRAME, _UWP_CORE = "ApplicationFrameWindow", "Windows.UI.Core.CoreWindow"
 _VBOT_EXECUTABLE = re.compile(r"vbot(\.[a-z0-9]+)?\.exe")
-_TIER_RANK = {"browser": 0, "terminal": 1, "ide": 1}
 _DISCOVERY_PERIOD = 60.0
 _DISCOVERY_TIMEOUT = 30.0
 _DISCOVERY_SCRIPT = r"""
@@ -104,23 +75,6 @@ $json = ConvertTo-Json -InputObject @($rows) -Compress
 
 def executable_name(path: str) -> str:
     return path.replace("/", "\\").rsplit("\\", 1)[-1].lower()
-
-
-def category_for(executable: str, family: str | None = None) -> str:
-    """The access category of an app from its executable name (and package family)."""
-    name = executable.lower()
-    if name in BROWSERS:
-        return "browser"
-    if name in TERMINALS or (family and family.lower().startswith(_TERMINAL_PACKAGES)):
-        return "terminal"
-    if name in IDES:
-        return "ide"
-    return "other"
-
-
-def strictest(first: str, second: str) -> str:
-    """The category with the more restrictive tier; *first* on a tie."""
-    return second if _TIER_RANK.get(second, 2) < _TIER_RANK.get(first, 2) else first
 
 
 def identity_keys(path: str | None, family: str | None) -> frozenset[str]:
@@ -148,10 +102,17 @@ def hosted_process(frame_pid: int, children: Iterable[tuple[str, int]]) -> int:
     return frame_pid
 
 
-def explorer_app(windows_dir: str, category: str = "other") -> AppInfo:
+def is_shell_surface(class_name: str, executable: str) -> bool:
+    """The taskbar, the desktop, Start, search and the taskbar's flyouts."""
+    return executable in SHELL_HOSTS or (
+        class_name in SHELL_CLASSES and executable == "explorer.exe"
+    )
+
+
+def explorer_app(windows_dir: str) -> AppInfo:
     path = f"{windows_dir.rstrip(chr(92))}\\explorer.exe"
     keys = identity_keys(path, None) | {"exe:explorer.exe"}
-    return AppInfo(FILE_EXPLORER, keys, category, running=True, launchable=True)
+    return AppInfo(FILE_EXPLORER, keys, running=True, launchable=True)
 
 
 # Start menu
@@ -173,7 +134,6 @@ class StartApp:
     name: str
     app_id: str
     keys: frozenset[str]
-    category: str
     identity: str  # entries with one identity are one app; the best-ranked name wins
     rank: tuple[int, int, str]
 
@@ -192,20 +152,19 @@ def start_app(row: StartRow, windows_dir: str) -> StartApp | None:
         # Every Explorer shortcut (folders, the Explorer entry itself) is File Explorer.
         keys = explorer_app(windows_dir).keys
         rank = (0, 0, "") if app_id.lower() == EXPLORER_APP_ID else (1, rank[1], rank[2])
-        return StartApp(FILE_EXPLORER, app_id, keys, "other", "explorer", rank)
+        return StartApp(FILE_EXPLORER, app_id, keys, "explorer", rank)
     if is_vbot_executable(executable):
-        return StartApp(OWN_APP.name, app_id, OWN_APP.keys, "other", OWN_KEY, rank)
+        return StartApp(OWN_APP.name, app_id, OWN_APP.keys, OWN_KEY, rank)
     if row.family:
-        keys = identity_keys(None, row.family)
-        category, identity = category_for(row.executable, row.family), app_id.lower()
+        keys, identity = identity_keys(None, row.family), app_id.lower()
     elif executable.endswith(".msc"):  # consoles run in the Management Console
         keys = identity_keys(f"{windows_dir}\\System32\\mmc.exe", None)
-        category, identity = "other", lowered
+        identity = lowered
     elif executable.endswith(".exe"):
-        keys, category, identity = identity_keys(target, None), category_for(executable), lowered
+        keys, identity = identity_keys(target, None), lowered
     else:
         return None
-    return StartApp(name, app_id, keys, category, identity, rank)
+    return StartApp(name, app_id, keys, identity, rank)
 
 
 class StartIndex:
@@ -251,10 +210,7 @@ def merge_apps(start: Sequence[StartApp], running: Sequence[AppInfo]) -> list[Ap
     A running app matches by identity key, else by name: apps the user sees under
     one name are one app, so a grant by that name covers all of their windows.
     """
-    merged = [
-        AppInfo(app.name, app.keys, app.category, False, launchable=OWN_KEY not in app.keys)
-        for app in start
-    ]
+    merged = [AppInfo(app.name, app.keys, running=False, launchable=True) for app in start]
     for app in running:
         matches = [index for index, entry in enumerate(merged) if entry.matches(app)] or [
             index
@@ -265,10 +221,7 @@ def merge_apps(start: Sequence[StartApp], running: Sequence[AppInfo]) -> list[Ap
             merged.append(app)
         for index in matches:
             entry = merged[index]
-            category = strictest(entry.category, app.category)
-            merged[index] = replace(
-                entry, keys=entry.keys | app.keys, category=category, running=True
-            )
+            merged[index] = replace(entry, keys=entry.keys | app.keys, running=True)
     return sorted(merged, key=lambda app: app.name.casefold())
 
 
@@ -532,25 +485,20 @@ class AppResolver:
                 return self.window(owner, depth + 1)
         if facts.pid == os.getpid() or is_vbot_executable(facts.executable):
             return OWN_APP, facts
-        if facts.executable in SHELL_HOSTS or (
-            class_name in SHELL_CLASSES and facts.executable == "explorer.exe"
-        ):
-            return explorer_app(self._windows_dir, "shell"), facts
+        if is_shell_surface(class_name, facts.executable):
+            return explorer_app(self._windows_dir), facts
         if facts.executable == "explorer.exe":
             return explorer_app(self._windows_dir), facts
         return self.app(facts), facts
 
     def app(self, facts: ProcessFacts) -> AppInfo:
         keys = identity_keys(facts.path, facts.family)
-        category = category_for(facts.executable, facts.family)
         start = self._index.lookup(keys) if keys else None
         if start is not None:
-            return AppInfo(
-                start.name, keys | start.keys, strictest(start.category, category), True, True
-            )
+            return AppInfo(start.name, keys | start.keys, running=True, launchable=True)
         if not facts.path:
-            return AppInfo("Unknown app", keys, category, running=True, launchable=False)
+            return AppInfo("Unknown app", keys, running=True, launchable=False)
         if facts.path not in self._descriptions:
             self._descriptions[facts.path] = file_description(facts.path)
         name = self._descriptions[facts.path] or Path(facts.path).stem
-        return AppInfo(name, keys, category, running=True, launchable=facts.family is None)
+        return AppInfo(name, keys, running=True, launchable=facts.family is None)

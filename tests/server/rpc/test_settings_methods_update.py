@@ -627,7 +627,7 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
         (
             "settings.patch",
             _patch(_set('extensions.config["homeassistant"]["token"]', "must-not-be-stored")),
-            "vbot extensions homeassistant set token --stdin",
+            "vbot extensions set homeassistant token --stdin",
         ),
         ("settings.patch", _patch({"op": [], "path": "server.port", "value": 8420}), None),
         ("settings.patch", _patch({"op": {}, "path": "server.port", "value": 8420}), None),

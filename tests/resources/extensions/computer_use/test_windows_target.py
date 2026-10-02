@@ -1,19 +1,21 @@
 """Computer Use on Windows: the platform-independent rules of the Windows desktop target.
 
 Key and text planning, SendInput coordinates, app identity and categories, the
-Start-menu index and display naming. Nothing here sends input, takes screenshots
-or starts processes, so the suite runs on every platform.
+Start-menu index, display naming and the activity frame's glow. Nothing here sends
+input, takes screenshots, starts processes or opens windows, so the suite runs on
+every platform.
 """
 
 from __future__ import annotations
 
 import ctypes
+import itertools
 import logging
 import threading
 
 import pytest
 
-from resources.extensions.computer_use import _keys, _win_apps, _win_input
+from resources.extensions.computer_use import _keys, _win_apps, _win_input, _win_overlay
 from resources.extensions.computer_use._win32 import Monitor
 from resources.extensions.computer_use._win_apps import StartApps, StartIndex, StartRow
 from resources.extensions.computer_use.target import AppInfo
@@ -42,8 +44,8 @@ def start_rows() -> list[StartRow]:
     ]
 
 
-def running(name: str, path: str, category: str = "other") -> AppInfo:
-    return AppInfo(name, _win_apps.identity_keys(path, None), category, True, True)
+def running(name: str, path: str) -> AppInfo:
+    return AppInfo(name, _win_apps.identity_keys(path, None), True, True)
 
 
 def test_every_canonical_key_has_a_virtual_key():
@@ -89,37 +91,6 @@ def test_typed_text_presses_enter_once_per_line_break_and_tab_for_tabs():
     ]  # fmt: skip
     # Each character's UTF-16 code units, sent together.
     assert _win_input.text_units("ä😀") == [(0xE4,), (0xD83D, 0xDE00)]
-
-
-@pytest.mark.parametrize(
-    "executable,family,category",
-    [
-        ("chrome.exe", None, "browser"),
-        ("MSEdge.exe", None, "browser"),
-        ("Code.exe", None, "ide"),
-        ("devenv.exe", None, "ide"),
-        ("WindowsTerminal.exe", None, "terminal"),
-        ("pwsh.exe", None, "terminal"),
-        ("", f"{TERMINAL}", "terminal"),  # a packaged terminal whose manifest hides the exe
-        ("notepad.exe", None, "other"),
-        ("CalculatorApp.exe", CALCULATOR, "other"),
-    ],
-)
-def test_apps_are_categorized_by_executable_and_package(executable, family, category):
-    assert _win_apps.category_for(executable, family) == category
-
-
-@pytest.mark.parametrize(
-    "first,second,strictest",
-    [
-        ("other", "browser", "browser"),
-        ("terminal", "browser", "browser"),
-        ("ide", "other", "ide"),
-        ("ide", "terminal", "ide"),  # same tier: the first stays
-    ],
-)
-def test_the_more_restrictive_category_wins(first, second, strictest):
-    assert _win_apps.strictest(first, second) == strictest
 
 
 @pytest.mark.parametrize(
@@ -173,12 +144,10 @@ def test_start_index_lists_each_app_once_under_a_unique_name():
         "Visual Studio Code",
     ]  # fmt: skip
     assert apps["Visual Studio Code"].keys == {CODE.lower(), "exe:code.exe"}
-    assert apps["Visual Studio Code"].category == "ide"
     assert apps["File Explorer"].app_id == "Microsoft.Windows.Explorer"
     assert apps["File Explorer"].keys == {f"{WINDOWS.lower()}\\explorer.exe", "exe:explorer.exe"}
     assert apps["vBot"].keys == {_win_apps.OWN_KEY}
     assert apps["Calculator"].keys == {f"pkg:{CALCULATOR.lower()}"}
-    assert apps["Terminal"].category == "terminal"
     assert apps["Services"].keys == {f"{WINDOWS.lower()}\\system32\\mmc.exe"}
     assert apps["Tool"].keys == {"c:\\a\\tool.exe", "exe:tool.exe"}
     assert apps["Tool (2)"].keys == {"c:\\b\\tool.exe", "exe:tool.exe"}
@@ -222,7 +191,7 @@ def test_running_apps_merge_into_installed_apps_by_key_then_name():
         "c:\\python314\\python.exe",
         "c:\\project\\.venv\\scripts\\python.exe",
     }
-    assert by_name["vBot"].running and not by_name["vBot"].launchable
+    assert by_name["vBot"].running and by_name["vBot"].launchable
     assert by_name["Calculator"].launchable
 
 
@@ -289,6 +258,16 @@ def test_displays_are_ordered_primary_first_with_unique_names():
     ]
     assert (displays[0].width, displays[0].height, displays[0].scale_percent) == (2560, 1440, 125)
     assert (displays[1].left, displays[1].top, displays[1].scale_percent) == (-1920, 270, 100)
+
+
+@pytest.mark.parametrize("scale", [1.0, 2.0])
+def test_activity_glow_is_a_crisp_edge_line_fading_to_nothing_inward(scale):
+    profile = _win_overlay.glow_profile(scale)
+
+    assert profile[0] == profile[1] >= 200  # a solid line of at least two pixels
+    assert all(outer >= inner for outer, inner in itertools.pairwise(profile))
+    assert profile[-1] <= 2
+    assert 12 * scale <= len(profile) <= 20 * scale  # wider on scaled displays
 
 
 def _join_discovery() -> None:

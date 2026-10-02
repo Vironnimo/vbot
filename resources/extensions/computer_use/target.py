@@ -56,7 +56,6 @@ class AppInfo:
 
     name: str
     keys: frozenset[str]
-    category: str
     running: bool
     launchable: bool
 
@@ -105,10 +104,6 @@ class DesktopTarget(Protocol):
         """Installed and running windowed applications; cached briefly."""
         ...
 
-    def own_app_keys(self) -> frozenset[str]:
-        """Keys of vBot's own processes, which are never grantable."""
-        ...
-
     def open(self, app: AppInfo) -> None:
         """Bring a window of *app* to the front, launching the app if needed."""
         ...
@@ -141,4 +136,15 @@ class DesktopTarget(Protocol):
 
     def set_stop_event(self, event: threading.Event) -> None:
         """Input checks *event* between events and raises ``InputInterrupted``."""
+        ...
+
+    def set_activity(self, active: bool) -> None:
+        """Show or hide the on-screen sign that an Agent controls the computer.
+
+        Quick and safe from any thread; captures never contain the sign.
+        """
+        ...
+
+    def close(self) -> None:
+        """Remove the activity sign and release what the target holds besides input."""
         ...

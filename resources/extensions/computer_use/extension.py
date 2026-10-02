@@ -1,8 +1,8 @@
 """Computer Use: operate the server host's desktop with screenshots, mouse and keyboard.
 
 ``ComputerUseService`` owns the lifecycle, the Agent permission check, the
-per-Session app grants and access requests, call serialization on one desktop
-worker thread, stop control and result assembly. Platform work happens behind
+access mode with its per-Session approvals and requests, call serialization on
+one desktop worker thread, stop control and result assembly. Platform work happens behind
 ``DesktopTarget``; ``Desktop`` runs one call's work on the worker thread.
 """
 
@@ -14,7 +14,6 @@ import functools
 import sys
 import threading
 import time
-from collections import Counter
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -27,16 +26,13 @@ from core.tools.availability import resolve_tool_access
 from core.utils.ids import new_id
 
 from ._access import (
-    TIER_WORDS,
+    Access,
     AccessRequests,
-    Grant,
     Sessions,
     SessionState,
-    category_tier,
     request_message,
     resolve_app,
     resolve_apps,
-    tier_text,
 )
 from ._actions import Action, ActionError, parse_action
 from ._desktop import CallRefusedError, Desktop, request_call
@@ -68,17 +64,26 @@ STEP_SETTLE_SECONDS = 0.2
 OPEN_SETTLE_SECONDS = 1.5
 # A cached "not ready" is checked again at most this often.
 READINESS_RECHECK_SECONDS = 30.0
+# Desktop control lasts from the first call that takes the desktop until the Agent
+# releases it, its Run ends, or no call came for this long.
+CONTROL_IDLE_SECONDS = 120.0
 _LIST_LIMIT = 25
+ASK_SETTING = "ask_per_app"
+_USER_STOPS = ("control", "double_escape")
 _STOPPED_BY = {
     "control": "The user stopped Computer Use",
     "double_escape": "The user stopped Computer Use by pressing Esc twice",
     "run_cancel": "The Run was cancelled",
     "shutdown": "vBot is shutting down, which stopped Computer Use",
 }
+_STOPPED_ADVICE = (
+    "Computer Use stays off until the user's next message: do not try to operate the computer "
+    "again in this reply. Tell the user what you did and what is left."
+)
 
 
 class Hotkey(Protocol):
-    """The global double-Esc stop, armed only while a call runs."""
+    """The global double-Esc stop, armed while an Agent controls the desktop."""
 
     available: bool
 
@@ -137,7 +142,7 @@ def _apps_summary(arguments: dict[str, Any]) -> str | None:
 
 
 class ComputerUseService:
-    """Desktop access for Agents: permission, grants, serialization and stop control."""
+    """Desktop access for Agents: permission, approvals, serialization and stop control."""
 
     def __init__(self, api: ExtensionAPI) -> None:
         self.api = api
@@ -159,8 +164,15 @@ class ComputerUseService:
         self._stop = threading.Event()
         self._stopped = asyncio.Event()
         self._control_lock = threading.RLock()
+        # The running call that takes the desktop, and what stopped it.
         self._active: str | None = None
         self._stop_source: str | None = None
+        # Desktop control: shown by the frame, stoppable by the user while it lasts.
+        self._control_id: str | None = None
+        self._control_runs: set[str] = set()
+        self._control_timer: asyncio.TimerHandle | None = None
+        # Runs whose control the user stopped, mapped to how; refused until they end.
+        self._stopped_runs: dict[str, str] = {}
         self._control_revision = 0
         self._inputs_revision = 0
         # The Run whose left_mouse_down still holds the left button.
@@ -188,8 +200,9 @@ class ComputerUseService:
 
     async def close(self) -> None:
         self._closed = True
-        self.stop(source="shutdown")
+        self.interrupt(source="shutdown")
         self.access.cancel_all()
+        self._end_control()
         if self._hotkey is not None:
             self._hotkey.close()
         executor, target = self._executor, self._target
@@ -202,12 +215,21 @@ class ComputerUseService:
                     await asyncio.wait_for(release, 2)
                 except Exception:
                     self.api.logger.warning("Computer Use could not release input", exc_info=True)
+                try:
+                    target.close()
+                except Exception:
+                    self.api.logger.warning(
+                        "Computer Use could not close its target", exc_info=True
+                    )
             executor.shutdown(wait=False, cancel_futures=True)
         self.sessions.clear()
 
     async def run_end(self, context: Any, **_: Any) -> None:
-        """Release a mouse button the ending Run left pressed."""
-        run_id = getattr(context, "run_id", None)
+        """End the Run's desktop control and release a mouse button it left pressed."""
+        run_id = getattr(context, "run_id", None) or ""
+        with self._control_lock:
+            self._stopped_runs.pop(run_id, None)
+        self._release_control(run_id)
         if self._held_run is None or self._held_run != run_id or self._target is None:
             return
         async with self._lock:
@@ -269,8 +291,21 @@ class ComputerUseService:
 
     # Stop control
 
-    def stop(self, owner: object | None = None, *, source: str = "control") -> None:
-        """Stop the active call (only *owner*'s, when given); safe from any thread."""
+    def stop(self, control_id: object | None = None, *, source: str = "control") -> None:
+        """End desktop control as the user (only *control_id*'s, when given).
+
+        Interrupts the running call, hides the frame, and refuses further calls of the
+        Runs that held control until they end. Safe from any thread.
+        """
+        with self._control_lock:
+            current = self._control_id
+            if current is None or (control_id is not None and control_id != current):
+                return
+            self.interrupt(source=source)
+            self._end_control(stopped_by=source)
+
+    def interrupt(self, owner: object | None = None, *, source: str) -> None:
+        """Interrupt the running call (only *owner*'s, when given); safe from any thread."""
         with self._control_lock:
             active = self._active
             if active is None or self._stop_source is not None:
@@ -279,41 +314,36 @@ class ComputerUseService:
                 return
             self._stop_source = source
             self._stop.set()
-            if self._hotkey is not None:
-                self._hotkey.set_armed(None)
             loop, stopped = self._loop, self._stopped
             if loop is not None:
                 # A closed loop has nothing waiting any more.
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(stopped.set)
-            self.api.logger.debug("Computer Use call stopped (source=%s)", source)
-            self._control_changed(active)
+            self.api.logger.debug("Computer Use call interrupted (source=%s)", source)
+            self._control_changed()
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
         with self._control_lock:
-            if (
-                action == "stop"
-                and self._active is not None
-                and arguments.get("call_id") == self._active
-            ):
-                self.stop(source="control")
+            control_id = arguments.get("control_id")
+            if action == "stop" and control_id is not None:
+                self.stop(control_id, source="control")
             return {
                 "available": self.ready(),
-                "active": self._active is not None,
+                "active": self._control_id is not None,
                 "stopping": self._active is not None and self._stop_source is not None,
                 "hotkey_available": self._hotkey is not None and self._hotkey.available,
-                **({"call_id": self._active} if self._active is not None else {}),
+                **({"control_id": self._control_id} if self._control_id is not None else {}),
             }
 
-    def _control_changed(self, call_id: str) -> None:
+    def _control_changed(self) -> None:
         """Tell accessors that the ``control`` status changed; ``_control_lock`` is held."""
         host = self.host
         if self._closed or host is None or host.publish_change is None:
             return
         self._control_revision += 1
         try:
-            host.publish_change("control", [call_id], self._control_revision)
+            host.publish_change("control", ["control"], self._control_revision)
         except ValueError:
             # A retired registration invalidates every Extension surface itself.
             self.api.logger.debug("Computer Use change not published: registration retired")
@@ -332,11 +362,75 @@ class ComputerUseService:
     async def respond(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.access.respond(arguments.get("request_id"), arguments.get("response"))
 
+    # Desktop control
+
+    def _take_control(self, run_id: str) -> None:
+        """Start or join desktop control for *run_id*; ``_control_lock`` is held."""
+        if self._control_timer is not None:
+            self._control_timer.cancel()
+            self._control_timer = None
+        self._control_runs.add(run_id)
+        if self._control_id is not None:
+            return
+        self._control_id = new_id("ctl")
+        if self._hotkey is not None:
+            self._hotkey.set_armed(self._control_id)
+        if self._target is not None:
+            self._target.set_activity(True)
+        self.api.logger.debug("Computer Use desktop control began")
+
+    def _release_control(self, run_id: str) -> bool:
+        """End *run_id*'s part in desktop control; return whether it had one."""
+        with self._control_lock:
+            if run_id not in self._control_runs:
+                return False
+            self._control_runs.discard(run_id)
+            if not self._control_runs:
+                self._end_control()
+            return True
+
+    def _end_control(self, *, stopped_by: str | None = None) -> None:
+        """Hide the frame and disarm the stop; *stopped_by* refuses the Runs' later calls.
+
+        Safe from any thread; only the event loop cancels the idle timer, and a timer
+        that fires late finds its control ended.
+        """
+        with self._control_lock:
+            if stopped_by is not None:
+                for run_id in self._control_runs:
+                    self._stopped_runs[run_id] = stopped_by
+            self._control_runs.clear()
+            if self._control_id is None:
+                return
+            self._control_id = None
+            if self._hotkey is not None:
+                self._hotkey.set_armed(None)
+            if self._target is not None:
+                self._target.set_activity(False)
+            self.api.logger.debug("Computer Use desktop control ended (stopped_by=%s)", stopped_by)
+            self._control_changed()
+
+    def _call_done(self) -> None:
+        """Let desktop control lapse when no call follows within the idle time."""
+        control_id, loop = self._control_id, self._loop
+        if control_id is None or loop is None:
+            return
+        if self._control_timer is not None:
+            self._control_timer.cancel()
+
+        def lapse() -> None:
+            with self._control_lock:
+                if self._control_id == control_id and self._active is None:
+                    self._end_control()
+
+        self._control_timer = loop.call_later(CONTROL_IDLE_SECONDS, lapse)
+
     @asynccontextmanager
     async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
-        """Hold the desktop for one call: stoppable, with the hotkey armed."""
+        """Hold the desktop for one call under desktop control, interruptible."""
         async with self._lock:
-            owner = new_id("ctl")
+            owner = new_id("call")
+            run_id = context.run_id or ""
             self._loop = asyncio.get_running_loop()
             if self._hotkey is None:
                 # The global keyboard hook starts with the first call that needs it.
@@ -344,24 +438,32 @@ class ComputerUseService:
                 await asyncio.to_thread(hotkey.start)
                 self._hotkey = hotkey
             with self._control_lock:
+                stopped_by = self._stopped_runs.get(run_id)
+                if stopped_by is not None:
+                    how = {"double_escape": " by pressing Esc twice", "control": ""}
+                    raise CallRefusedError(
+                        "computer_use_interrupted",
+                        f"The user stopped Computer Use{how.get(stopped_by, '')}. Nothing was "
+                        f"done. {_STOPPED_ADVICE}",
+                    )
                 self._active, self._stop_source = owner, None
                 self._stop.clear()
                 self._stopped = asyncio.Event()
-                if self._hotkey is not None:
-                    self._hotkey.set_armed(owner)
-                self._control_changed(owner)
-            context.on_cancel(lambda: self.stop(owner, source="run_cancel"))
+                cancelled = context.is_cancelled() or context.was_cancelled_by_user()
+                if not cancelled:
+                    self._take_control(run_id)
+                self._control_changed()
+            context.on_cancel(lambda: self.interrupt(owner, source="run_cancel"))
             try:
-                if context.is_cancelled() or context.was_cancelled_by_user():
-                    self.stop(owner, source="run_cancel")
+                if cancelled:
+                    self.interrupt(owner, source="run_cancel")
                 yield
             finally:
                 with self._control_lock:
                     if self._active == owner:
-                        if self._hotkey is not None:
-                            self._hotkey.set_armed(None)
                         self._active = None
-                        self._control_changed(owner)
+                        self._control_changed()
+                self._call_done()
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
@@ -383,15 +485,16 @@ class ComputerUseService:
         self,
         context: ToolContext,
         tool: str,
-        work: Callable[[SessionState, Any, Desktop], Awaitable[str]],
+        work: Callable[[Access, Any, Desktop], Awaitable[str]],
     ) -> dict[str, Any]:
         """Run one Tool call: permission and Session checks, then *work*, as an envelope."""
         desktop: Desktop | None = None
         try:
             state, agent = await self._begin(context, tool)
             assert self._target is not None
-            desktop = Desktop(self._target, state, context)
-            content = await work(state, agent, desktop)
+            access = Access(state, ask=self.asks_per_app())
+            desktop = Desktop(self._target, access, context)
+            content = await work(access, agent, desktop)
         except ActionError as error:
             return self._failed(tool, "invalid_arguments", str(error))
         except CallRefusedError as refusal:
@@ -400,8 +503,7 @@ class ComputerUseService:
             return self._failed(
                 tool,
                 "computer_use_interrupted",
-                f"{self._stopped_text()}; held keys and buttons were released. Do not continue "
-                "operating the computer unless the user asks you to.",
+                f"{self._stopped_text()}; held keys and buttons were released. {_STOPPED_ADVICE}",
             )
         except TargetError as error:
             return self._failed(tool, error.code, _target_text(error, desktop))
@@ -415,6 +517,10 @@ class ComputerUseService:
             )
         self.api.logger.debug("Computer Use %s call succeeded", tool)
         return tool_success({"content": content})
+
+    def asks_per_app(self) -> bool:
+        """Whether the user approves each app per Session; read live from the settings."""
+        return self.api.get_config().get(ASK_SETTING) is True
 
     def _failed(self, tool: str, code: str, message: str) -> dict[str, Any]:
         self.api.logger.debug("Computer Use %s call failed (code=%s)", tool, code)
@@ -433,8 +539,7 @@ class ComputerUseService:
         if not context.session_id:
             raise CallRefusedError(
                 "computer_use_unavailable",
-                "Computer Use works only inside a Session, because app access is granted per "
-                "Session. Nothing was done.",
+                "Computer Use works only inside a Session. Nothing was done.",
             )
         try:
             agent = self.host.resolve_tool_agent(context)
@@ -469,7 +574,7 @@ class ComputerUseService:
         return self.sessions.use(key), agent
 
     async def computer(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+        async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             action = parse_action(arguments)
             async with self._active_call(context):
                 return await self._computer(context, desktop, action)
@@ -505,8 +610,7 @@ class ComputerUseService:
             raise TargetError(
                 f"{self._stopped_text()} during {action.describe()}"
                 + ("; it may have been partly sent" if sent else "")
-                + ". Held keys and buttons were released. Do not continue operating the "
-                "computer unless the user asks you to.",
+                + f". Held keys and buttons were released. {_STOPPED_ADVICE}",
                 "computer_use_interrupted",
             ) from None
         return "\n".join([*lines, *action.notes])
@@ -514,7 +618,7 @@ class ComputerUseService:
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
         done = await self._on_worker(desktop.act, action, frame)
         if action.name == "left_mouse_down":
-            self._held_run = context.run_id
+            self._held_run = context.run_id or ""
         elif action.name == "left_mouse_up":
             self._held_run = None
         return done
@@ -522,7 +626,7 @@ class ComputerUseService:
     async def computer_batch(
         self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+        async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             actions = []
             for number, item in enumerate(arguments["actions"], start=1):
                 try:
@@ -563,8 +667,7 @@ class ComputerUseService:
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
-                    "final screenshot. Do not continue operating the computer unless the user "
-                    "asks you to.\n" + "\n".join(lines),
+                    f"final screenshot. {_STOPPED_ADVICE}\n" + "\n".join(lines),
                     "computer_use_interrupted",
                 ) from None
             lines.append(await self._on_worker(desktop.screenshot))
@@ -587,18 +690,20 @@ class ComputerUseService:
     async def computer_apps(
         self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+        async def work(access: Access, agent: Any, desktop: Desktop) -> str:
             action = arguments.get("action")
             if action == "list":
                 return await self._on_worker(_listing, desktop, arguments.get("query"))
             if action == "request":
-                return await self._request(context, state, agent, arguments)
-            return await self._open(context, state, desktop, arguments.get("app"))
+                return await self._request(context, access, agent, arguments)
+            if action == "release":
+                return await self._release(context)
+            return await self._open(context, access, desktop, arguments.get("app"))
 
         return await self._handle(context, "computer_apps", work)
 
     async def _request(
-        self, context: ToolContext, state: SessionState, agent: Any, arguments: dict[str, Any]
+        self, context: ToolContext, access: Access, agent: Any, arguments: dict[str, Any]
     ) -> str:
         names = [name for name in arguments.get("apps") or [] if isinstance(name, str)]
         if not names:
@@ -606,37 +711,27 @@ class ComputerUseService:
                 'request needs "apps", for example {"action":"request","apps":["Notepad"],'
                 '"reason":"Write the meeting notes"}.'
             )
+        if not access.ask:
+            return (
+                "No approval is needed: you may operate every app. Bring one to the front with "
+                f'computer_apps {{"action":"open","app":"{names[0]}"}}.'
+            )
         assert self._target is not None
-        apps = await self._on_worker(self._target.apps)
-        own = await self._on_worker(self._target.own_app_keys)
-        resolution = resolve_apps(names, apps)
-        problems = list(resolution.problems)
-        wanted: list[Grant] = []
-        for app in resolution.apps:
-            if app.keys & own:
-                problems.append(f"{app.name} is part of vBot, which Computer Use never operates.")
-            else:
-                wanted.append(Grant(app, category_tier(app.category)))
-        notes = " ".join(problems)
-        if not wanted:
+        resolution = resolve_apps(names, await self._on_worker(self._target.apps))
+        notes = " ".join(resolution.problems)
+        if not resolution.apps:
             raise ActionError(f"{notes} Nothing was requested.")
-        new = [
-            grant
-            for grant in wanted
-            if (held := state.grant_for(grant.app)) is None or held.tier != grant.tier
-        ]
+        new = [app for app in resolution.apps if not access.state.granted(app)]
         if not new:
-            return f"Already granted in this Session: {state.describe()}. {notes}".strip()
+            return f"Already approved in this Session: {access.state.describe()}. {notes}".strip()
         message = request_message(str(agent.name), new, arguments.get("reason"))
         answer = await self._ask(context, message)
-        tiers = Counter(TIER_WORDS[grant.tier] for grant in new)
         self.api.logger.info(
-            "Computer Use access %s (apps=%d, tiers=%s)",
+            "Computer Use access %s (apps=%d)",
             "granted" if answer == "accept" else answer,
             len(new),
-            dict(tiers),
         )
-        listed = ", ".join(grant.app.name for grant in new)
+        listed = ", ".join(app.name for app in new)
         if answer == "timeout":
             raise CallRefusedError(
                 "access_declined",
@@ -650,16 +745,29 @@ class ComputerUseService:
                 "user how to proceed; do not request them again unless the user asks you to.",
             )
         state = self.sessions.use((context.project_id, context.agent_id, context.session_id))
-        for grant in new:
-            state.add(grant.app, grant.tier)
-        granted = "\n".join(f"- {grant.app.name}: {tier_text(grant.tier)}" for grant in new)
-        first = new[0].app.name
+        for app in new:
+            state.add(app)
         return (
-            f"The user granted access in this Session:\n{granted}\n"
+            f"The user approved {listed} in this Session.\n"
             + (f"{notes}\n" if notes else "")
             + f'Next: bring the app to the front with computer_apps {{"action":"open","app":'
-            f'"{first}"}}, or take a screenshot with computer {{"action":"screenshot"}}.'
+            f'"{new[0].name}"}}, or take a screenshot with computer {{"action":"screenshot"}}.'
         )
+
+    async def _release(self, context: ToolContext) -> str:
+        """Hand the desktop back: release a held button and end this Run's control."""
+        run_id = context.run_id or ""
+        async with self._lock:
+            if self._held_run == run_id and self._target is not None:
+                self._held_run = None
+                await self._on_worker(self._target.release_all)
+            released = self._release_control(run_id)
+        if released:
+            return (
+                "Released the computer: the user has it back. A later computer or "
+                "computer_batch call, or computer_apps open, takes it again."
+            )
+        return "You were not controlling the computer, so there was nothing to release."
 
     async def _ask(self, context: ToolContext, message: str) -> str:
         """Wait for the user's answer; a cancelled Run withdraws the request."""
@@ -685,23 +793,19 @@ class ComputerUseService:
                 "The Run was cancelled, so the access request was withdrawn. Nothing was granted.",
             ) from None
 
-    async def _open(
-        self, context: ToolContext, state: SessionState, desktop: Desktop, name: Any
-    ) -> str:
+    async def _open(self, context: ToolContext, access: Access, desktop: Desktop, name: Any) -> str:
         if not isinstance(name, str) or not name.strip():
             raise ActionError('open needs "app", for example {"action":"open","app":"Notepad"}.')
         assert self._target is not None
-        match = resolve_app(name, [grant.app for grant in state.grants])
+        match = resolve_app(name, await self._on_worker(self._target.apps))
         if isinstance(match, str):
-            known = resolve_app(name, await self._on_worker(self._target.apps))
-            if isinstance(known, AppInfo):
-                raise CallRefusedError(
-                    "access_required",
-                    f"{known.name} is not granted in this Session. Ask the user for it first "
-                    f"with {request_call(known.name)}.",
-                )
-            granted = f" Granted apps: {state.describe()}." if state.grants else ""
-            raise ActionError(f"{known}{granted}")
+            raise ActionError(match)
+        if not access.allows(match):
+            raise CallRefusedError(
+                "access_required",
+                f"The user has not approved {match.name} in this Session. Ask for it first "
+                f"with {request_call(match.name)}.",
+            )
         async with self._active_call(context):
             try:
                 desktop.input_started = True
@@ -710,7 +814,7 @@ class ComputerUseService:
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:
                 raise TargetError(
-                    f"{self._stopped_text()} while {match.name} was opening.",
+                    f"{self._stopped_text()} while {match.name} was opening. {_STOPPED_ADVICE}",
                     "computer_use_interrupted",
                 ) from None
         return f"Opened {match.name}.\n{shot}"
@@ -718,29 +822,27 @@ class ComputerUseService:
 
 def _listing(desktop: Desktop, query: Any) -> str:
     """The text of ``computer_apps list``; runs on the desktop worker thread."""
-    target, state = desktop.target, desktop.state
-    own = target.own_app_keys()
-    apps = [app for app in target.apps() if not app.keys & own]
-    if state.grants:
-        lines = [f"Granted in this Session: {state.describe()}."]
+    target, access = desktop.target, desktop.access
+    apps = target.apps()
+    if not access.ask:
+        lines = ["Access: you may operate every app; no approval is needed."]
+    elif access.state.grants:
+        lines = [
+            "Access: the user approves each app for this Session. Approved: "
+            f"{access.state.describe()}."
+        ]
     else:
         lines = [
-            "No apps are granted in this Session yet. Ask the user with "
-            'computer_apps {"action":"request","apps":["..."],"reason":"..."}.'
+            "Access: the user approves each app for this Session, and none is approved yet. "
+            'Ask with computer_apps {"action":"request","apps":["..."],"reason":"..."}.'
         ]
-    lines.append("Displays:\n" + describe_displays(target.displays(), state.shown))
+    lines.append("Displays:\n" + describe_displays(target.displays(), access.state.shown))
 
     def described(app: AppInfo) -> str:
-        grant = state.grant_for(app)
-        tier = grant.tier if grant is not None else category_tier(app.category)
-        return f"{app.name} ({TIER_WORDS[tier]})"
+        return app.name if access.allows(app) else f"{app.name} (not approved)"
 
     running = sorted({app.name: app for app in apps if app.running}.values(), key=_name)
-    lines.append(
-        "Running apps (access they get): "
-        + (", ".join(described(app) for app in running) or "none")
-        + "."
-    )
+    lines.append("Running apps: " + (", ".join(described(app) for app in running) or "none") + ".")
     if isinstance(query, str) and query.strip():
         text = query.strip().casefold()
         found = sorted(
@@ -794,8 +896,7 @@ def _batch_error(
     if isinstance(error, InputInterrupted):
         message = (
             f"{stopped} during action {number} of {len(actions)} ({action.describe()}).{skipped} "
-            "Held keys and buttons were released. Do not continue operating the computer "
-            f"unless the user asks you to.\n{ran}"
+            f"Held keys and buttons were released. {_STOPPED_ADVICE}\n{ran}"
         )
         return TargetError(message, "computer_use_interrupted")
     detail = str(error).rstrip()
@@ -809,22 +910,37 @@ def _batch_error(
 
 def register(api: ExtensionAPI) -> None:
     service = ComputerUseService(api)
+    api.register_settings(
+        [
+            {
+                "key": ASK_SETTING,
+                "type": "toggle",
+                "label": "Ask before each app",
+                "description": (
+                    "When on, an Agent asks you in the WebUI for each app it wants to use in a "
+                    "Session, and apps you have not approved are hidden from it. When off, every "
+                    "Agent allowed to use Computer Use operates all apps without asking."
+                ),
+                "default": False,
+            }
+        ]
+    )
     api.operations.startup.append(service.start)
     api.operations.pending_inputs = service.access.list
     api.operations.input_response_operation = "respond"
     api.operations.register(
         "control",
-        "Inspect or interrupt the active Computer Use call on the server host.",
+        "Inspect Computer Use's desktop control on the server host, or end it as the user.",
         {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["status", "stop"]},
-                "call_id": {"type": "string", "minLength": 1},
+                "control_id": {"type": "string", "minLength": 1},
             },
             "allOf": [
                 {
                     "if": {"properties": {"action": {"const": "stop"}}, "required": ["action"]},
-                    "then": {"required": ["call_id"]},
+                    "then": {"required": ["control_id"]},
                 }
             ],
             "additionalProperties": False,

@@ -19,7 +19,9 @@ once the task outlived its time-to-live, answers input requests through the
 connection's own callbacks (elicitation and sampling become the usual pending
 inputs), and returns the final ``CallToolResult``. A failed, cancelled or expired
 task raises ``TaskEndedError``. A caller that stops waiting (a cancelled Run, a
-connection that ends) has ``abandon`` cancel the task at the server. To an
+connection that closes) has ``abandon`` cancel the task at the server. A lost
+connection does not end the server's task: the caller marks its ``TaskRun`` as
+kept and drives the same task again (``resumed``) on the next connection. To an
 Agent a task-backed call is an ordinary Tool call.
 
 The extension wire uses only public SDK interfaces: the ``ResultClaim`` of
@@ -35,7 +37,7 @@ import contextlib
 import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, override
 
 import mcp.types as types
@@ -62,6 +64,10 @@ class TaskEndedError(ValueError):
     """The task behind a call ended without a Tool result: failed, cancelled or expired."""
 
 
+class TaskUnknownError(ValueError):
+    """After a reconnect, the server no longer knows the task a call waited for."""
+
+
 @dataclass(frozen=True)
 class TaskState:
     """A task as either protocol reports it; times in seconds."""
@@ -74,6 +80,22 @@ class TaskState:
     input_requests: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+
+
+@dataclass
+class TaskRun:
+    """One call's wait for a server task: what a new connection needs to resume it."""
+
+    state: TaskState
+    # Whether the task runs under protocol 2025-11-25 (``LegacyWire``), else the Tasks extension.
+    legacy: bool
+    # When the task was received (``_clock``); its time-to-live counts from here.
+    seen: float = field(default_factory=lambda: _clock())
+    # The answers given to its input requests, by the server's key.
+    answers: dict[str, types.InputResponse] = field(default_factory=dict)
+    # Set by the caller when the connection was lost: the call resumes the task on
+    # the next connection, so stopping this wait does not cancel it.
+    kept: bool = False
 
 
 class TaskHandle(types.Result):
@@ -271,29 +293,40 @@ def legacy_state(task: types.Task) -> TaskState:
 
 async def drive(
     wire: TaskWire,
-    state: TaskState,
+    run: TaskRun,
     *,
     observe: Callable[[TaskState], None],
     abandon: Callable[[str], None],
+    resumed: bool = False,
 ) -> types.CallToolResult:
-    """Run the task *state* describes to its end and return its Tool result.
+    """Run the task of *run* to its end and return its Tool result.
 
     *observe* sees every status read. A task this call stops waiting for before
     it ended is cancelled at the server, like a request the SDK abandons: on a
     failure here directly, on cancellation through *abandon*, which receives
-    its id because a cancelled caller cannot wait for the answer.
+    its id because a cancelled caller cannot wait for the answer. A kept run is
+    not cancelled.
+
+    *resumed*: *run* was kept when its connection was lost, and *wire* is a new
+    connection. The status is read again first; an error answer means the server
+    no longer knows the task (``TaskUnknownError``). Answers the server still
+    lists may not have reached it, so they are sent once more. The task keeps
+    its time-to-live from when it was first received.
     """
-    seen = _clock()
-    answered: set[str] = set()
-    observe(state)
+    resend = resumed
+    run.kept = False
     try:
+        if resumed:
+            run.state = await _status_again(wire, run.state.task_id)
+        observe(run.state)
         while True:
+            state = run.state
             if state.status == "cancelled":
                 raise TaskEndedError(
                     "The MCP server cancelled this call"
                     + (f": {state.message}" if state.message else "")
                 )
-            deadline = None if state.ttl is None else seen + state.ttl
+            deadline = None if state.ttl is None else run.seen + state.ttl
             if state.status in {"completed", "failed"}:
                 return await wire.finish(state, None)
             if state.status == "input_required" and not wire.answers_inputs:
@@ -302,7 +335,7 @@ async def drive(
                 if timeout > 0:
                     return await wire.finish(state, timeout)
             elif state.status == "input_required":
-                await _answer(wire, state, answered)
+                await _answer(wire, run, resend=resend)
             elif state.status != "working":
                 raise ValueError(f"The MCP server reported an unknown task status: {state.status}")
             if deadline is not None and _clock() >= deadline:
@@ -315,29 +348,50 @@ async def drive(
             )
             if deadline is not None:
                 wait = max(0.0, min(wait, deadline - _clock()))
+            resend = False
             await _sleep(wait)
-            state = await wire.status(state.task_id)
-            observe(state)
+            run.state = await wire.status(state.task_id)
+            observe(run.state)
     except asyncio.CancelledError:
-        if state.status not in TERMINAL_STATUSES:
-            abandon(state.task_id)
+        if run.state.status not in TERMINAL_STATUSES and not run.kept:
+            abandon(run.state.task_id)
+        raise
+    except TaskUnknownError:
         raise
     except Exception:
-        if state.status not in TERMINAL_STATUSES:
-            await cancel_quietly(wire, state.task_id)
+        if run.state.status not in TERMINAL_STATUSES and not run.kept:
+            await cancel_quietly(wire, run.state.task_id)
         raise
 
 
-async def _answer(wire: TaskWire, state: TaskState, answered: set[str]) -> None:
-    """Answer the input requests of *state* that were not answered yet.
+async def _status_again(wire: TaskWire, task_id: str) -> TaskState:
+    """The status of a kept task, read over a new connection."""
+    try:
+        return await wire.status(task_id)
+    except MCPError as error:
+        if error.code in {types.CONNECTION_CLOSED, types.REQUEST_TIMEOUT}:
+            # No answer came back: the new connection failed, not the task.
+            raise
+        raise TaskUnknownError(error.message) from None
+
+
+async def _answer(wire: TaskWire, run: TaskRun, *, resend: bool) -> None:
+    """Answer the input requests of the task's state that were not answered yet.
 
     A server lists a request until it processed the answer, so each key is
-    answered once. The requests run concurrently through the connection's
-    callbacks; a refused one (``ErrorData``) fails the call, as in a direct call.
+    answered once; with *resend*, the given answers it still lists are sent
+    again. The requests run concurrently through the connection's callbacks; a
+    refused one (``ErrorData``) fails the call, as in a direct call.
     """
+    state = run.state
+    listed = state.input_requests or {}
+    if resend:
+        again = {key: run.answers[key] for key in listed if key in run.answers}
+        if again:
+            await wire.answer(state.task_id, again)
     pending: dict[str, types.InputRequest] = {}
-    for key, request in (state.input_requests or {}).items():
-        if key in answered:
+    for key, request in listed.items():
+        if key in run.answers:
             continue
         try:
             pending[key] = _INPUT_REQUEST.validate_python(request, by_name=False)
@@ -366,7 +420,7 @@ async def _answer(wire: TaskWire, state: TaskState, answered: set[str]) -> None:
                 group.create_task(respond(key, request))
     except* MCPError as refused:
         raise refused.exceptions[0] from None
-    answered.update(responses)
+    run.answers.update(responses)
     await wire.answer(state.task_id, responses)
 
 

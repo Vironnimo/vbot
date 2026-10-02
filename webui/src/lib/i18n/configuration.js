@@ -1,6 +1,7 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',
+  'extensions.inputWaitingOne': 'An Extension request needs your response.',
   'extensions.reviewInput': 'Review request',
   'extensions.inputTitle': 'Request from {name}',
   'extensions.signInHelp':
@@ -61,7 +62,7 @@ export default Object.freeze({
   'settings.providers.opencode.removeKey': 'Remove shared key',
   'settings.pages.general': 'General',
   'settings.pages.generalDescription':
-    'Background activity, display, Session titles, notifications, time zone, and setup.',
+    'Display, Session titles, notifications, time zone, and setup.',
   'settings.pages.providersDescription':
     'Connect the services and local runtimes that supply your Models.',
   'settings.pages.voiceDescription':
@@ -410,21 +411,23 @@ export default Object.freeze({
   'settings.localModel.license': '{license} license',
   'settings.localModel.progress': '{completed} of {total}',
   'settings.localModel.progressLabel': 'Download progress',
-  'settings.activity.title': 'Background activity',
-  'settings.activity.empty': 'No background activity.',
-  'settings.activity.task.speech_to_text': 'Speech to text: {model}',
-  'settings.activity.task.text_to_speech': 'Text to speech: {model}',
-  'settings.activity.task.text_embedding': 'Conversation search: {model}',
-  'settings.activity.whatsapp': 'WhatsApp support: {channel}',
+  'settings.activity.downloading': 'Downloading {model}',
+  'settings.activity.installing': 'Installing {model}',
+  'settings.activity.installFailed': '{model} could not be installed',
+  'settings.activity.installed': '{model} is installed',
+  'settings.activity.restartToUse': 'Restart the vBot server to use it.',
+  'settings.activity.whatsappInstalling':
+    'Installing WhatsApp support for {channel}',
   'settings.activity.whatsappFailed':
-    'WhatsApp support could not be installed. Open the Channel to try again.',
-  'settings.activity.recallIndex': 'Conversation search index',
-  'settings.activity.indexing': 'Indexing conversations…',
-  'settings.activity.retrying':
-    'Indexing paused after a problem; it retries automatically.',
-  'settings.activity.downloadingModel': 'Downloading the model…',
-  'settings.activity.completed': 'Finished.',
-  'settings.activity.progressLabel': 'Progress of {title}',
+    'WhatsApp support for {channel} could not be installed',
+  'settings.activity.whatsappRetry': 'Open the Channel to try again.',
+  'settings.activity.whatsappInstalled':
+    'WhatsApp support for {channel} is installed',
+  'settings.activity.indexing': 'Indexing conversations for search',
+  'settings.activity.indexRetrying':
+    'Paused after a problem; it continues automatically.',
+  'settings.activity.indexFailed': 'Indexing conversations for search failed',
+  'settings.activity.indexed': 'All conversations are indexed for search',
   'settings.activity.open': 'Open',
   'settings.activity.cancel': 'Cancel',
   'settings.activity.dismiss': 'Dismiss',

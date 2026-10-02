@@ -12,6 +12,8 @@ import {
   compactionStrategyTooltip,
   costTooltip,
   durationColumns,
+  errorKindLabel,
+  errorKindTooltip,
   formatCost,
   formatDurationMs,
   formatPercent,
@@ -209,6 +211,28 @@ describe('statisticsView charts', () => {
     expect(formatSeriesDate('2026-09-01', 'month', 'en')).toBe('Sep 2026');
   });
 
+  it('keeps an hour series by the hour, labelled in the Settings time zone', () => {
+    const hours = [
+      { hour_start: '2026-09-07T22:00:00.000000Z', runs: 1 },
+      { hour_start: '2026-09-07T23:00:00.000000Z', runs: 2 },
+    ];
+    expect(rollupSeries(hours, 'hour')).toBe(hours);
+    expect(
+      trendColumns(hours, 'runs', 'hour').columns.map((column) => column.key),
+    ).toEqual(hours.map((row) => row.hour_start));
+    setApplicationTimeZone('Europe/Berlin');
+    try {
+      expect(formatSeriesDate(hours[1].hour_start, 'hour', 'en')).toBe(
+        '1:00 AM',
+      );
+      expect(
+        formatSeriesDate(hours[1].hour_start, 'hour', 'en', { long: true }),
+      ).toBe('Sep 8, 1:00 AM');
+    } finally {
+      setApplicationTimeZone('UTC');
+    }
+  });
+
   it('stacks Run durations by origin and spreads errors over the day', () => {
     const durations = durationColumns([
       { upper_ms: 10_000, by_origin: { automation: 1, user: 2 } },
@@ -395,6 +419,19 @@ describe('statisticsView labels and tooltips', () => {
       ],
     });
     expect(toolRejectionTooltip({ rejected: 0, top_codes: [] })).toBe('');
+  });
+
+  it('names recorded error kinds and keeps their ids readable', () => {
+    expect(errorKindLabel('rate_limit')).toBe('Rate limit');
+    expect(errorKindTooltip('provider_fatal')).toEqual({
+      title: 'Request rejected by the Provider',
+      rows: [{ label: 'Recorded kind', value: 'provider_fatal', mono: true }],
+    });
+    // A kind this WebUI does not know reads as its id in words.
+    expect(errorKindLabel('quota_exhausted')).toBe('Quota exhausted');
+    expect(errorKindTooltip('quota_exhausted').rows[0].value).toBe(
+      'quota_exhausted',
+    );
   });
 
   it('names Compaction strategies like Settings and keeps unknown ids raw', () => {

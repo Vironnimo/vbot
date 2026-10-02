@@ -82,7 +82,7 @@ describe('SettingsActivityPanel', () => {
       (row) => ({
         id: row.dataset.activity,
         title: row.querySelector('.s-row-label').textContent.trim(),
-        status: row.querySelector('.s-row-desc').textContent.trim(),
+        detail: row.querySelector('.s-row-desc')?.textContent.trim() ?? '',
         progress:
           row.querySelector('.progress-bar__text')?.textContent.trim() ?? '',
         buttons: [...row.querySelectorAll('button')].map((button) =>
@@ -92,13 +92,7 @@ describe('SettingsActivityPanel', () => {
     );
   }
 
-  it('says so when nothing runs', () => {
-    render({ activities: [] });
-
-    expect(document.body.textContent.trim()).toBe('No background activity.');
-  });
-
-  it('shows each activity with its progress and the actions it allows', async () => {
+  it('says what happens in each row, with its progress and the actions it allows', async () => {
     const opened = [];
     render({
       activities: [
@@ -116,6 +110,17 @@ describe('SettingsActivityPanel', () => {
         },
         EMBEDDING_RESTART,
         {
+          id: 'local_setup:local/chatterbox',
+          kind: 'local_model_install',
+          label: 'Chatterbox',
+          state: 'running',
+          phase: 'queued',
+          error: '',
+          message: '',
+          target: 'local/chatterbox',
+          task_type: 'text_to_speech',
+        },
+        {
           id: 'whatsapp_setup:wa',
           kind: 'whatsapp_setup',
           label: 'wa',
@@ -131,29 +136,36 @@ describe('SettingsActivityPanel', () => {
     expect(rows()).toEqual([
       {
         id: 'local_setup:local/parakeet',
-        title: 'Speech to text: Parakeet',
-        status: 'Downloading the model…',
+        title: 'Downloading Parakeet',
+        detail: '',
         progress: '512 MB of 1.1 GB',
         buttons: ['Open', 'Cancel'],
       },
       {
         id: 'recall_index',
-        title: 'Conversation search index',
-        status: 'Indexing conversations…',
+        title: 'Indexing conversations for search',
+        detail: '',
         progress: 'Indexed 1,200 of 5,000 passages · less than a minute left',
         buttons: ['Open'],
       },
       {
         id: 'local_setup:local/granite',
-        title: 'Conversation search: Granite',
-        status: 'Installed. Restart the vBot server to use it.',
+        title: 'Granite is installed',
+        detail: 'Restart the vBot server to use it.',
         progress: '',
         buttons: ['Open', 'Dismiss'],
       },
       {
+        id: 'local_setup:local/chatterbox',
+        title: 'Installing Chatterbox',
+        detail: 'Waiting for another installation to finish…',
+        progress: '',
+        buttons: ['Open', 'Cancel'],
+      },
+      {
         id: 'whatsapp_setup:wa',
-        title: 'WhatsApp support: wa',
-        status: 'Node.js is missing',
+        title: 'WhatsApp support for wa could not be installed',
+        detail: 'Node.js is missing',
         progress: '',
         buttons: ['Open', 'Dismiss'],
       },
@@ -183,7 +195,10 @@ describe('SettingsActivityPanel', () => {
     const onError = vi.fn();
     rpcMock.mockRejectedValue(new Error(''));
     render({ activities: [RECALL_FAILED], onError });
-    expect(rows()[0].status).toBe('Indexing failed.');
+    expect(rows()[0]).toMatchObject({
+      title: 'Indexing conversations for search failed',
+      detail: '',
+    });
 
     document.body.querySelectorAll('[data-activity] button')[1].click();
 

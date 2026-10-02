@@ -1,51 +1,26 @@
-// Background activity: the long-running server work Settings > General lists
-// in one place. The server publishes the list (`activity_status`); this file
-// turns each entry into what a row shows and which actions it offers.
+// What the server is working on in the background: downloads and
+// installations of local Models, WhatsApp support installations and large
+// Conversation search indexing passes. The server publishes the list
+// (`activity_status`); Settings > General shows it at the top while it has
+// entries. This file turns each entry into a row that says what happens.
 
 import { t, tOr } from '../i18n.js';
 import { describeDownloadProgress } from './localModels.js';
 import { countText, etaText, indexErrorText } from './recall.js';
 import { textOrEmpty } from './values.js';
 
-// Per task of a local Model installation: its row title and the Settings
-// section that manages it.
-const LOCAL_MODEL_TASKS = {
-  speech_to_text: {
-    title: (model) => t('settings.activity.task.speech_to_text', { model }),
-    section: 'speech_models',
-  },
-  text_to_speech: {
-    title: (model) => t('settings.activity.task.text_to_speech', { model }),
-    section: 'speech_models',
-  },
-  text_embedding: {
-    title: (model) => t('settings.activity.task.text_embedding', { model }),
-    section: 'recall',
-  },
+// The Settings section that manages each task's local Models.
+const SECTION_BY_TASK = {
+  speech_to_text: 'speech_models',
+  text_to_speech: 'speech_models',
+  text_embedding: 'recall',
 };
 
-function sectionFor(entry) {
-  if (entry.kind === 'whatsapp_setup') return 'channels';
-  if (entry.kind === 'recall_index') return 'recall';
-  return LOCAL_MODEL_TASKS[entry.task_type]?.section ?? '';
-}
-
-function titleFor(entry) {
-  if (entry.kind === 'whatsapp_setup') {
-    return t('settings.activity.whatsapp', { channel: entry.label });
-  }
-  if (entry.kind === 'recall_index') return t('settings.activity.recallIndex');
-  return LOCAL_MODEL_TASKS[entry.task_type]?.title(entry.label) ?? entry.label;
-}
-
-function progressFor(entry) {
-  const progress = entry.progress;
-  if (!progress) return null;
-  if (progress.unit === 'bytes') return describeDownloadProgress(progress);
-  const total = Number(progress.total);
+function itemProgress(entry) {
+  const total = Number(entry.progress?.total);
   if (!Number.isFinite(total) || total <= 0) return null;
   const completed = Math.min(
-    Math.max(Number(progress.completed) || 0, 0),
+    Math.max(Number(entry.progress.completed) || 0, 0),
     total,
   );
   const eta = etaText('indexing', entry.eta_seconds);
@@ -59,61 +34,117 @@ function progressFor(entry) {
   };
 }
 
-function runningText(entry) {
-  if (entry.kind === 'whatsapp_setup') {
-    return t('settings.channels.whatsapp.installing');
+function describeModelInstall(entry) {
+  const model = entry.label;
+  if (entry.state === 'running') {
+    const progress =
+      entry.phase === 'downloading'
+        ? describeDownloadProgress(entry.progress)
+        : null;
+    if (progress) {
+      return {
+        title: t('settings.activity.downloading', { model }),
+        detail: '',
+        progress,
+      };
+    }
+    return {
+      title: t('settings.activity.installing', { model }),
+      detail: tOr(
+        `settings.localModel.phase.${textOrEmpty(entry.phase)}`,
+        t('settings.localModel.phase.installing'),
+      ),
+    };
   }
-  if (entry.kind === 'recall_index') {
-    return entry.phase === 'retrying'
-      ? t('settings.activity.retrying')
-      : t('settings.activity.indexing');
+  if (entry.state === 'failed') {
+    return {
+      title: t('settings.activity.installFailed', { model }),
+      detail: tOr(
+        `settings.localModel.error.${textOrEmpty(entry.error)}`,
+        t('settings.localModel.error.install_failed'),
+      ),
+    };
   }
-  if (entry.phase === 'downloading' && entry.progress) {
-    return t('settings.activity.downloadingModel');
-  }
-  return tOr(
-    `settings.localModel.phase.${textOrEmpty(entry.phase)}`,
-    t('settings.localModel.phase.installing'),
-  );
+  return {
+    title: t('settings.activity.installed', { model }),
+    detail:
+      entry.state === 'action_required'
+        ? t('settings.activity.restartToUse')
+        : '',
+  };
 }
 
-function failureText(entry) {
-  if (entry.kind === 'recall_index') {
-    return indexErrorText({ code: entry.error });
+function describeWhatsAppSetup(entry) {
+  const channel = entry.label;
+  if (entry.state === 'running') {
+    return {
+      title: t('settings.activity.whatsappInstalling', { channel }),
+      detail: '',
+    };
   }
-  if (entry.kind === 'whatsapp_setup') {
-    return textOrEmpty(entry.message) || t('settings.activity.whatsappFailed');
+  if (entry.state === 'failed') {
+    return {
+      title: t('settings.activity.whatsappFailed', { channel }),
+      detail:
+        textOrEmpty(entry.message) || t('settings.activity.whatsappRetry'),
+    };
   }
-  return tOr(
-    `settings.localModel.error.${textOrEmpty(entry.error)}`,
-    t('settings.localModel.error.install_failed'),
-  );
+  return {
+    title: t('settings.activity.whatsappInstalled', { channel }),
+    detail: '',
+  };
 }
 
-function statusText(entry) {
-  if (entry.state === 'running') return runningText(entry);
-  if (entry.state === 'failed') return failureText(entry);
-  if (entry.state === 'action_required') {
-    return t('settings.localModel.state.restart_required');
+function describeRecallIndex(entry) {
+  if (entry.state === 'running') {
+    return {
+      title: t('settings.activity.indexing'),
+      detail:
+        entry.phase === 'retrying' ? t('settings.activity.indexRetrying') : '',
+      progress: itemProgress(entry),
+    };
   }
-  return t('settings.activity.completed');
+  if (entry.state === 'failed') {
+    const reason = indexErrorText({ code: entry.error });
+    // The generic reason only repeats the title.
+    const generic = t('settings.recall.indexError.generic');
+    return {
+      title: t('settings.activity.indexFailed'),
+      detail: reason === generic ? '' : reason,
+    };
+  }
+  return { title: t('settings.activity.indexed'), detail: '' };
+}
+
+function sectionFor(entry) {
+  if (entry.kind === 'whatsapp_setup') return 'channels';
+  if (entry.kind === 'recall_index') return 'recall';
+  return SECTION_BY_TASK[entry.task_type] ?? '';
 }
 
 /**
- * What one background activity row shows: `{ id, title, status, warn,
- * progress, section, cancelTarget, dismissible }`. `progress` is
- * `{ percent, text }` or null, `section` the Settings section that manages
- * the work ('' when none), and `cancelTarget` the local target a running
- * installation is cancelled through ('' when it cannot be cancelled here).
+ * One row: `{ id, title, detail, warn, progress, section, cancelTarget,
+ * dismissible }`. `title` says what happens ("Downloading Parakeet"),
+ * `detail` adds the phase or problem ('' when the title says it all),
+ * `progress` is `{ percent, text }` or null, `section` the Settings section
+ * that manages the work ('' when none), and `cancelTarget` the local target a
+ * running installation is cancelled through ('' when it cannot be cancelled).
  */
 export function describeBackgroundActivity(entry) {
   const running = entry.state === 'running';
+  const describe =
+    entry.kind === 'whatsapp_setup'
+      ? describeWhatsAppSetup
+      : entry.kind === 'recall_index'
+        ? describeRecallIndex
+        : describeModelInstall;
+  const { title, detail, progress = null } = describe(entry);
   return {
     id: entry.id,
-    title: titleFor(entry),
-    status: statusText(entry),
+    title,
+    detail,
     warn: entry.state === 'failed' || entry.state === 'action_required',
-    progress: running ? progressFor(entry) : null,
+    progress: running ? progress : null,
     section: sectionFor(entry),
     cancelTarget:
       running && entry.kind === 'local_model_install'

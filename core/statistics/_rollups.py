@@ -94,6 +94,33 @@ CREATE TABLE agg_runs (
 ) WITHOUT ROWID;
 CREATE INDEX agg_runs_start ON agg_runs(start_instant);
 CREATE INDEX agg_runs_origin ON agg_runs(origin, start_instant);
+CREATE TABLE agg_run_models (
+    session_key INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    model_key TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    failed_calls INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    estimated_input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    estimated_output_tokens INTEGER NOT NULL,
+    reasoning_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    cache_input_tokens INTEGER NOT NULL,
+    cache_calls INTEGER NOT NULL,
+    unreported_calls INTEGER NOT NULL,
+    reported_nusd INTEGER NOT NULL,
+    reported_calls INTEGER NOT NULL,
+    estimated_nusd INTEGER NOT NULL,
+    estimated_calls INTEGER NOT NULL,
+    unpriced_calls INTEGER NOT NULL,
+    retrospective_calls INTEGER NOT NULL,
+    uncached_nusd INTEGER NOT NULL,
+    uncached_calls INTEGER NOT NULL,
+    estimated_token_calls INTEGER NOT NULL,
+    PRIMARY KEY (session_key, run_id, model_key)
+) WITHOUT ROWID;
 CREATE TABLE agg_usage (
     hour INTEGER NOT NULL,
     unit_key INTEGER NOT NULL,
@@ -185,6 +212,7 @@ CREATE TABLE agg_cache_breaks (
 
 ROLLUP_TABLES = (
     "agg_runs",
+    "agg_run_models",
     "agg_usage",
     "agg_tools",
     "agg_tool_latency",
@@ -349,13 +377,15 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
         "ON u.project_id = a.project_id AND u.agent_id = a.agent_id "
         "AND u.session_id = a.session_id"
     )
-    connection.execute(
-        "DELETE FROM agg_runs WHERE session_key IN (SELECT session_key FROM temp.rollup_sessions)"
-    )
-    connection.execute(
-        "DELETE FROM agg_runs WHERE (session_key, run_id) IN "
-        "(SELECT session_key, run_id FROM temp.rollup_runs)"
-    )
+    for table in ("agg_runs", "agg_run_models"):
+        connection.execute(
+            f"DELETE FROM {table} WHERE session_key IN "
+            "(SELECT session_key FROM temp.rollup_sessions)"
+        )
+        connection.execute(
+            f"DELETE FROM {table} WHERE (session_key, run_id) IN "
+            "(SELECT session_key, run_id FROM temp.rollup_runs)"
+        )
     for table in _SESSION_CUBES:
         connection.execute(
             f"DELETE FROM {table} WHERE session_key IN "
@@ -483,26 +513,98 @@ _HOUR = f"r.instant / {MICROSECONDS_PER_HOUR}"
 _NUSD = "CAST(ROUND(c.cost_usd * 1000000000) AS INTEGER)"
 # Catalog-priced calls that report usage but no cache counter.
 _UNCACHED = "(c.cost_source = 2 AND c.input_tokens IS NOT NULL AND c.has_cache = 0)"
-# Per-call measures shared by Run and usage aggregation, over calls ``c``.
-_CALL_MEASURES = f"""
-    COUNT(*),
-    SUM(COALESCE(c.input_tokens, 0)),
-    SUM(CASE WHEN c.input_estimated = 1 THEN COALESCE(c.input_tokens, 0) ELSE 0 END),
-    SUM(COALESCE(c.output_tokens, 0)),
-    SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END),
-    SUM(CASE WHEN {REASONING_SQL} THEN c.reasoning_tokens ELSE 0 END),
-    SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END),
-    SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END),
-    SUM(CASE WHEN {CACHE_SQL} THEN c.input_tokens ELSE 0 END),
-    SUM({CACHE_SQL}),
-    SUM(CASE WHEN c.cost_source = 1 THEN {_NUSD} ELSE 0 END),
-    SUM(CASE WHEN c.cost_source = 2 THEN {_NUSD} ELSE 0 END),
-    SUM(c.cost_source = 0)
-"""
-# Positions in a per-Model and purpose row: key, run id, Model, has Model,
-# purpose, first use, failed calls, measures.
-_MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _FAILED, _MEASURES = 2, 3, 4, 5, 6, 7
-_INPUT = _MEASURES + 1
+# The usage measures of ``agg_usage`` and ``agg_run_models`` rows, in report
+# order. ``failed_calls`` is a column of ``agg_run_models`` only: usage rows
+# keep the request status instead.
+USAGE_MEASURES = (
+    "calls",
+    "failed_calls",
+    "input_tokens",
+    "estimated_input_tokens",
+    "output_tokens",
+    "estimated_output_tokens",
+    "reasoning_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cache_input_tokens",
+    "cache_calls",
+    "unreported_calls",
+    "reported_nusd",
+    "reported_calls",
+    "estimated_nusd",
+    "estimated_calls",
+    "unpriced_calls",
+    "retrospective_calls",
+    "uncached_nusd",
+    "uncached_calls",
+    "estimated_token_calls",
+)
+# Each measure's sum over calls ``c`` of requests ``r``.
+_MEASURE_SQL = {
+    "calls": "COUNT(*)",
+    "failed_calls": f"SUM({FAILED_STATUS_SQL})",
+    "input_tokens": "SUM(COALESCE(c.input_tokens, 0))",
+    "estimated_input_tokens": (
+        "SUM(CASE WHEN c.input_estimated = 1 THEN COALESCE(c.input_tokens, 0) ELSE 0 END)"
+    ),
+    "output_tokens": "SUM(COALESCE(c.output_tokens, 0))",
+    "estimated_output_tokens": (
+        "SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END)"
+    ),
+    "reasoning_tokens": f"SUM(CASE WHEN {REASONING_SQL} THEN c.reasoning_tokens ELSE 0 END)",
+    "cache_read_tokens": (
+        f"SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END)"
+    ),
+    "cache_write_tokens": (
+        f"SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)"
+    ),
+    "cache_input_tokens": f"SUM(CASE WHEN {CACHE_SQL} THEN c.input_tokens ELSE 0 END)",
+    "cache_calls": f"SUM({CACHE_SQL})",
+    "unreported_calls": "SUM(c.input_tokens IS NULL OR c.output_tokens IS NULL)",
+    "reported_nusd": f"SUM(CASE WHEN c.cost_source = 1 THEN {_NUSD} ELSE 0 END)",
+    "reported_calls": "SUM(c.cost_source = 1)",
+    "estimated_nusd": f"SUM(CASE WHEN c.cost_source = 2 THEN {_NUSD} ELSE 0 END)",
+    "estimated_calls": "SUM(c.cost_source = 2)",
+    "unpriced_calls": "SUM(c.cost_source = 0)",
+    "retrospective_calls": "SUM(c.cost_source = 2 AND c.retrospective = 1)",
+    "uncached_nusd": f"SUM(CASE WHEN {_UNCACHED} THEN {_NUSD} ELSE 0 END)",
+    "uncached_calls": f"SUM({_UNCACHED})",
+    "estimated_token_calls": (
+        "SUM((c.input_estimated = 1 OR c.output_estimated = 1) "
+        "AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL)"
+    ),
+    "reasoning_calls": f"SUM({REASONING_SQL})",
+}
+_USAGE_CUBE_MEASURES = (
+    *(name for name in USAGE_MEASURES if name != "failed_calls"),
+    "reasoning_calls",
+)
+# A per-Model and purpose row of a Run: key, run id, Model, has Model, purpose,
+# first use, then ``USAGE_MEASURES``.
+_MODEL_KEY, _HAS_MODEL, _PURPOSE, _FIRST_USE, _MEASURES = 2, 3, 4, 5, 6
+_MEASURE = {name: _MEASURES + position for position, name in enumerate(USAGE_MEASURES)}
+_RUN_MODEL_SQL = ", ".join(_MEASURE_SQL[name] for name in USAGE_MEASURES)
+# Saved usage has no request status, so it records no failed attempts.
+_SAVED_RUN_MODEL_SQL = ", ".join(
+    "0" if name == "failed_calls" else _MEASURE_SQL[name] for name in USAGE_MEASURES
+)
+# The request measures ``agg_runs`` keeps, in its column order.
+_RUN_MEASURES = (
+    "calls",
+    "failed_calls",
+    "input_tokens",
+    "estimated_input_tokens",
+    "output_tokens",
+    "estimated_output_tokens",
+    "reasoning_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cache_input_tokens",
+    "cache_calls",
+    "reported_nusd",
+    "estimated_nusd",
+    "unpriced_calls",
+)
 
 _RUN_COLUMNS = (
     "session_key, run_id, origin, run_kind, status, completion_reason, start_instant, "
@@ -513,7 +615,6 @@ _RUN_COLUMNS = (
     "cache_input_tokens, cache_calls, reported_nusd, estimated_nusd, unpriced_calls, "
     "primary_model, models, kinds, changed_files, lines_added, lines_removed"
 )
-_NO_CALLS = (0,) * 14
 
 
 def _recompute_runs(connection: sqlite3.Connection) -> None:
@@ -551,7 +652,7 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
         connection,
         f"""
         SELECT d.session_key, d.run_id, c.model_key, c.has_model, c.purpose, MIN(c.instant),
-            SUM({FAILED_STATUS_SQL}), {_CALL_MEASURES}
+            {_RUN_MODEL_SQL}
         FROM temp.rollup_runs d
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
         CROSS JOIN stat_usage_units u ON u.project_id = s.project_id
@@ -564,8 +665,8 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
     saved = _model_rows(
         connection,
         f"""
-        SELECT d.session_key, d.run_id, c.model_key, c.has_model, c.purpose, MIN(c.instant), 0,
-            {_CALL_MEASURES}
+        SELECT d.session_key, d.run_id, c.model_key, c.has_model, c.purpose, MIN(c.instant),
+            {_SAVED_RUN_MODEL_SQL}
         FROM temp.rollup_runs d
         CROSS JOIN stat_records r ON r.session_key = d.session_key AND r.run_id = d.run_id
         CROSS JOIN stat_calls c ON c.session_key = r.session_key AND c.seq = r.seq
@@ -573,6 +674,7 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
         """,
     )
     rows = []
+    model_rows: list[tuple[Any, ...]] = []
     for run in runs:
         key = (run[0], run[1])
         start_instant = run[6]
@@ -589,6 +691,7 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
         ) = steps.get(key, (0, 0, None, 0, 0, 0, 0, 0, 0))
         # Ledger requests are authoritative; saved usage covers Runs without any.
         models = ledger.get(key) or saved.get(key, [])
+        model_rows.extend(_run_model_rows(key, models))
         rows.append(
             (
                 *run[:9],
@@ -611,6 +714,11 @@ def _recompute_runs(connection: sqlite3.Connection) -> None:
         f"VALUES ({', '.join('?' for _column in _RUN_COLUMNS.split(','))})",
         rows,
     )
+    connection.executemany(
+        f"INSERT INTO agg_run_models (session_key, run_id, model_key, "
+        f"{', '.join(USAGE_MEASURES)}) VALUES ({', '.join('?' * (3 + len(USAGE_MEASURES)))})",
+        model_rows,
+    )
 
 
 def _model_rows(
@@ -628,27 +736,32 @@ def _run_usage(models: list[tuple[Any, ...]]) -> tuple[Any, ...]:
     The primary Model is the one with the most input tokens (ties by name);
     ``kinds`` lists the distinct request purposes by name.
     """
-    if not models:
-        return (*_NO_CALLS, None, "[]", "[]")
-    sums = [sum(row[index] for row in models) for index in range(_MEASURES, len(models[0]))]
-    failed = sum(row[_FAILED] for row in models)
+    sums = [sum(row[_MEASURE[name]] or 0 for row in models) for name in _RUN_MEASURES]
     first_use: dict[str, int] = {}
     inputs: dict[str, int] = {}
     for row in models:
         if row[_HAS_MODEL]:
             key = row[_MODEL_KEY]
             first_use[key] = min(first_use.get(key, row[_FIRST_USE]), row[_FIRST_USE])
-            inputs[key] = inputs.get(key, 0) + row[_INPUT]
+            inputs[key] = inputs.get(key, 0) + row[_MEASURE["input_tokens"]]
     primary = min(inputs, key=lambda key: (-inputs[key], key), default=None)
     ordered = sorted(first_use, key=lambda key: (first_use[key], key))
     return (
-        sums[0],
-        failed,
-        *sums[1:],
+        *sums,
         primary,
         json.dumps(ordered, separators=(",", ":")),
         json.dumps(sorted({row[_PURPOSE] for row in models}), separators=(",", ":")),
     )
+
+
+def _run_model_rows(key: tuple[int, str], models: list[tuple[Any, ...]]) -> list[tuple[Any, ...]]:
+    """The Run's ``agg_run_models`` rows: its request measures summed per Model key."""
+    by_model: dict[str, list[int]] = {}
+    for row in models:
+        sums = by_model.setdefault(row[_MODEL_KEY], [0] * len(USAGE_MEASURES))
+        for position in range(len(USAGE_MEASURES)):
+            sums[position] += row[_MEASURES + position] or 0
+    return [(*key, model, *sums) for model, sums in sorted(by_model.items())]
 
 
 def _recompute_tools(connection: sqlite3.Connection) -> None:
@@ -743,26 +856,12 @@ def _recompute_usage(connection: sqlite3.Connection) -> None:
     connection.execute(
         f"""
         INSERT INTO agg_usage (
-            hour, unit_key, origin, model_key, kind, status, calls, input_tokens,
-            estimated_input_tokens, output_tokens, estimated_output_tokens, reasoning_tokens,
-            cache_read_tokens, cache_write_tokens, cache_input_tokens, cache_calls,
-            reported_nusd, estimated_nusd, unpriced_calls, reasoning_calls, unreported_calls,
-            reported_calls, estimated_calls, retrospective_calls, uncached_nusd, uncached_calls,
-            estimated_token_calls
+            hour, unit_key, origin, model_key, kind, status, {", ".join(_USAGE_CUBE_MEASURES)}
         )
         SELECT {_HOUR} AS hour, r.session_key,
             {USAGE_ORIGIN_SQL} AS origin,
             c.model_key, c.purpose, r.status,
-            {_CALL_MEASURES},
-            SUM({REASONING_SQL}),
-            SUM(c.input_tokens IS NULL OR c.output_tokens IS NULL),
-            SUM(c.cost_source = 1),
-            SUM(c.cost_source = 2),
-            SUM(c.cost_source = 2 AND c.retrospective = 1),
-            SUM(CASE WHEN {_UNCACHED} THEN {_NUSD} ELSE 0 END),
-            SUM({_UNCACHED}),
-            SUM((c.input_estimated = 1 OR c.output_estimated = 1)
-                AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL)
+            {", ".join(_MEASURE_SQL[name] for name in _USAGE_CUBE_MEASURES)}
         FROM temp.rollup_units d
         CROSS JOIN stat_usage_units u ON u.session_key = d.unit_key
         CROSS JOIN stat_usage_records r ON r.session_key = d.unit_key

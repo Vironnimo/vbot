@@ -22,7 +22,7 @@ const ready = {
   active: true,
   stopping: false,
   hotkey_available: true,
-  call_id: 'test-owned-call',
+  control_id: 'test-owned-control',
 };
 // App's Extension invalidations: a change Computer Use published, another
 // Extension's change, and an invalidation without owner (reconnect, reload).
@@ -130,7 +130,7 @@ it('stops immediately and ignores a stale status response', async () => {
   await settle();
   expect(operation).toHaveBeenCalledWith('computer_use', 'control', {
     action: 'stop',
-    call_id: 'test-owned-call',
+    control_id: 'test-owned-control',
   });
   expect(document.querySelector('button')).toBeNull();
   stale(ready);
@@ -151,7 +151,7 @@ it('reads the status published while its stop request was in flight', async () =
   );
   button('Stop computer control').click();
   await settle();
-  // The call ended before the stop response arrived.
+  // Control ended before the stop response arrived.
   await invalidate(changed);
   expect(operation).toHaveBeenCalledTimes(2);
   stop({ ...ready, stopping: true });
@@ -160,7 +160,7 @@ it('reads the status published while its stop request was in flight', async () =
   expect(document.querySelector('button')).toBeNull();
 });
 
-it('disables Stop while the interrupted call drains and allows the next call', async () => {
+it('disables Stop while the interrupted call drains and allows the next control', async () => {
   operation.mockResolvedValue({ ...ready, stopping: true });
   mountControl();
   await settle();
@@ -168,14 +168,17 @@ it('disables Stop while the interrupted call drains and allows the next call', a
   operation.mockResolvedValue({ ...ready, active: false });
   await invalidate(changed);
   expect(document.querySelector('button')).toBeNull();
-  operation.mockResolvedValue({ ...ready, call_id: 'test-owned-next-call' });
+  operation.mockResolvedValue({
+    ...ready,
+    control_id: 'test-owned-next-control',
+  });
   await invalidate(changed);
   expect(button('Stop computer control').disabled).toBe(false);
   button('Stop computer control').click();
   await settle();
   expect(operation).toHaveBeenLastCalledWith('computer_use', 'control', {
     action: 'stop',
-    call_id: 'test-owned-next-call',
+    control_id: 'test-owned-next-control',
   });
 });
 
@@ -210,7 +213,7 @@ it('does not call missing extensions and discovers them on an owner-less invalid
   await invalidate(everything);
   expect(button('Stop computer control')).toBeDefined();
 
-  // Disabling Computer Use ends its call, so the control disappears.
+  // Disabling Computer Use ends its control, so the control disappears.
   list.mockResolvedValue({ extensions: [] });
   await invalidate(everything);
   expect(document.querySelector('button')).toBeNull();

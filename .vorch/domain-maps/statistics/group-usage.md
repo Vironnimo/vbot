@@ -1,30 +1,11 @@
-# Extension group usage projection
+# Extension group usage
 
-How `StatisticsService.group_usage` (the Extension API behind the Swarm UI's `swarms.usage`) restricts the index to one owner/group. It still runs on the pre-v3 report stack listed in `statistics.md` -> Report sections.
+How `StatisticsService.group_usage(owner_name, group_id, query)` (the Extension API `temporary_agents.usage` behind Swarm's `swarms.usage`) reports one owner group, optionally one participant (`query.participant_id`, the only accepted key).
 
-`group_usage` uses canonical Sessions Run-owner records and explicit Message Run ids
-to restrict the existing index and aggregators to one owner/group, optionally one
-participant. A group report returns participant breakdowns from the same indexed
-index read and Run slices; clients need no per-participant report fan-out. The
-read reconciles only the owner's Sessions and never prunes normal Statistics
-scopes; `materialize_run_slices` then copies each owned Run's rows, selected by
-explicit Run id through the `stat_records_run` index, into same-named temp tables
-keyed by slice so `GroupReportBuilder` aggregates them. Unrelated Sessions
-are never loaded, and Messages from other Runs in a reused Session are excluded by
-identity. The facade runs on the index database's worker pool and
-returns the existing usage, Tools, Compaction and Run projections without costs,
-account data or separate counters. With the recorder, usage selects the same
-explicit Session/Run identities from durable requests, including auxiliary work;
-group-level requests without Run membership remain only in global accounting.
-Durable group selection drives indexed reads from the requested Run slices,
-then recovers each selected record's source Session key before reading its call
-through the existing `(session_key, seq)` index. Unrelated request history is
-neither scanned nor temporarily indexed for each group or participant report
-(`test_statistics_accounting.py`).
-A slice without any exact ledger match keeps its saved Session usage, including
-after an Agent takeover. Durable attribution stays at the original address;
-there is no canonical address alias to link auxiliary requests across a takeover,
-and a Run id alone never supplies one.
-Generation checks and own-audit ingestion
-remain in force (`statistics.py`, `index.py`; `test_statistics_groups.py`,
-`tests/core/sessions/test_sessions_owner_managed.py`).
+Selection: canonical Sessions Run-owner records (`_owned_run_page`) list the owned Runs. The read reconciles only the owner's Sessions with their labelled summaries and never prunes normal Statistics scopes (`prune=False`). An owned Run counts only in the Session generation it was recorded in, so a reused Session is never treated as wholly owned and other Runs in it never count. `_group_usage.group_usage` joins the owned Runs (`temp.group_runs`) to `agg_runs` and `agg_run_models` by primary key; unrelated Sessions and requests are never scanned. An owned Run not yet in `agg_runs` (admitted, no record saved yet; `statistics.md` -> Run visibility) contributes nothing.
+
+Requests are exactly the owned Runs' own: ledger requests at the Run's Session address and Run id, including auxiliary work and failed attempts, else the usage saved in the Run's records (`statistics.md` -> Aggregate tier -> Run requests). Group-level requests without Run membership stay in global accounting only. After an Agent takeover, durable attribution stays at the original address; there is no canonical address alias, and a Run id alone never supplies one.
+
+Response: `{group_id, participant_id, participant_count, owned_run_count, activity, participants: [{participant_id, activity}]}`, one participant entry per participant with owned Runs, in first-seen order. An activity is `{runs: {total, <status>...}, model_steps, tool_calls, tool_rejected, tool_ms, compactions, errors, totals, models}`; `totals` has the report `Totals` shape (`statistics/report-sections.md`; token counts include their estimated parts) and `models` lists `{model, runs, ...Totals}` by cost, `model` being the `provider/model` key. The Swarm Usage page reads `activity.totals`, `activity.models` and `activity.tool_calls` (`resources/extensions/swarm/ui/pageModel.svelte.js`, `SwarmPage.svelte`).
+
+Tests: `test_statistics_groups.py` (owned-Run selection in reused Sessions, paging, participants, unrelated Sessions untouched, incremental equals rebuilt), `test_statistics_accounting.py` (durable requests of owned Runs), `tests/core/sessions/test_sessions_owner_managed.py`, `SwarmPage.usage.test.js`.

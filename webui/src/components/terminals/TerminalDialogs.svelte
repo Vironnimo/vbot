@@ -291,6 +291,7 @@
               {#snippet children(field)}
                 <Dropdown
                   id={field.controlId}
+                  ariaLabelledby={field.labelId}
                   value={selectedLaunchHistoryId}
                   options={launchHistoryOptions}
                   ariaLabel={t('terminals.historyLabel')}
@@ -400,6 +401,7 @@
             {#snippet children(field)}
               <Dropdown
                 id={field.controlId}
+                ariaLabelledby={field.labelId}
                 value={startGroupId}
                 options={[groupOptionAutomatic, ...groupOptions]}
                 ariaLabel={t('terminals.startGroupLabel')}

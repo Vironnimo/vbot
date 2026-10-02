@@ -1,7 +1,7 @@
 """Computer Use test support: an in-memory desktop, the registered Tools and call helpers.
 
 ``FakeTarget`` implements ``DesktopTarget`` with two displays, windows of
-several app categories and recorded input. ``Harness`` registers the
+several apps and recorded input. ``Harness`` registers the
 Extension like the runtime does and runs calls through production dispatch.
 """
 
@@ -43,16 +43,16 @@ BACKGROUND = (20, 20, 20)
 GRAY = (128, 128, 128)
 
 
-def app(name: str, category: str = "other", *, running: bool = True) -> AppInfo:
-    return AppInfo(name, frozenset({f"exe:{name.lower()}.exe"}), category, running, True)
+def app(name: str, *, running: bool = True) -> AppInfo:
+    return AppInfo(name, frozenset({f"exe:{name.lower()}.exe"}), running, True)
 
 
 NOTEPAD = app("Notepad")
-CHROME = app("Google Chrome", "browser")
-TERMINAL = app("Windows Terminal", "terminal")
+CHROME = app("Google Chrome")
+TERMINAL = app("Windows Terminal")
 SLACK = app("Slack")
 PAINT = app("Paint")
-EXPLORER = app("File Explorer", "shell")
+EXPLORER = app("File Explorer")
 VBOT = app("vBot")
 CALCULATOR = app("Calculator", running=False)
 CALC = app("LibreOffice Calc", running=False)
@@ -105,6 +105,9 @@ class FakeTarget:
     inputs: list[tuple[Any, ...]] = field(default_factory=list)
     opened: list[str] = field(default_factory=list)
     released: int = 0
+    # Each set_activity call: True shows the activity sign, False hides it.
+    activity: list[bool] = field(default_factory=list)
+    closed: bool = False
     stop_event: threading.Event | None = None
     # Called with each input record before it is recorded, on the worker thread.
     on_input: Callable[[tuple[Any, ...]], None] | None = None
@@ -140,9 +143,6 @@ class FakeTarget:
 
     def apps(self) -> list[AppInfo]:
         return list(self.apps_)
-
-    def own_app_keys(self) -> frozenset[str]:
-        return VBOT.keys
 
     def open(self, application: AppInfo) -> None:
         self.opened.append(application.name)
@@ -198,6 +198,12 @@ class FakeTarget:
 
     def set_stop_event(self, event: threading.Event) -> None:
         self.stop_event = event
+
+    def set_activity(self, active: bool) -> None:
+        self.activity.append(active)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeHotkey:
@@ -258,8 +264,12 @@ class Harness:
     async def computer(self, **arguments: Any) -> dict[str, Any]:
         return await self.call("computer", arguments)
 
+    def ask_per_app(self) -> None:
+        """Turn on the setting that makes the user approve each app per Session."""
+        self.api.config[computer_use.ASK_SETTING] = True
+
     async def grant(self, *names: str, answer: str = "accept") -> dict[str, Any]:
-        """Request *names* and answer the pending input as the user."""
+        """Request *names* in ask mode and answer the pending input as the user."""
         task = asyncio.ensure_future(
             self.call("computer_apps", {"action": "request", "apps": list(names), "reason": "Test"})
         )

@@ -1,15 +1,18 @@
-"""Report windows: hour-aligned bounds, the previous window and local calendar days.
+"""Report windows: hour-aligned bounds, the previous window and series buckets.
 
 A window is half-open: ``since`` (floored to the hour) is inside it and
 ``until`` (ceiled to the next hour) is not. Aggregates keyed by UTC hour and
 facts keyed by instant select with the same bounds, so every section of one
 report covers exactly the same time. Calendar days are local to an IANA zone;
 hours fold into the local date of their start, so a zone with a half-hour
-offset gets its day boundaries at the containing UTC hour.
+offset gets its day boundaries at the containing UTC hour. A window of at
+most ``HOUR_BUCKET_SPAN`` has hour buckets in its series, a longer or
+all-time window local days.
 """
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -20,6 +23,8 @@ from core.utils.timestamps import format_canonical_timestamp
 JsonObject = dict[str, object]
 
 _HOUR = timedelta(hours=1)
+# The longest window whose series have one point per hour instead of per day.
+HOUR_BUCKET_SPAN = timedelta(hours=48)
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 # Bounds of an open window side, beyond every stored instant and hour.
 _MIN = -(2**62)
@@ -108,15 +113,28 @@ class ReportWindow:
     def windowed(self) -> bool:
         return self.since is not None or self.until is not None
 
-    def previous(self) -> ReportWindow | None:
-        """The window of equal length that ends at ``since``; ``None`` without ``since``.
+    @property
+    def length(self) -> timedelta | None:
+        """The window's length; ``None`` without ``since``.
 
         Without ``until`` the window runs to the current hour's end.
         """
         if self.since is None:
             return None
         end = self.until if self.until is not None else ceil_hour(self.now)
-        length = max(end - self.since, timedelta(0))
+        return max(end - self.since, timedelta(0))
+
+    @property
+    def bucket(self) -> str:
+        """``"hour"`` for a window of at most ``HOUR_BUCKET_SPAN``, else ``"day"``."""
+        length = self.length
+        return "hour" if length is not None and length <= HOUR_BUCKET_SPAN else "day"
+
+    def previous(self) -> ReportWindow | None:
+        """The window of equal length that ends at ``since``; ``None`` without ``since``."""
+        length = self.length
+        if self.since is None or length is None:
+            return None
         return ReportWindow(self.since - length, self.since, self.zone, self.now)
 
     def echo(self) -> JsonObject:
@@ -124,10 +142,11 @@ class ReportWindow:
             "since": None if self.since is None else format_canonical_timestamp(self.since),
             "until": None if self.until is None else format_canonical_timestamp(self.until),
             "timezone": self.zone.key,
+            "bucket": self.bucket,
         }
 
     def series_hours(self, first_active: int | None, last_active: int | None) -> range | None:
-        """The inclusive hour range a day series covers; ``None`` for an empty series.
+        """The inclusive hour range a series covers; ``None`` for an empty series.
 
         An open start begins at the first active hour; an open end runs to the
         current hour, or a later active hour.
@@ -173,3 +192,35 @@ class LocalCalendar:
             (first + timedelta(days=offset)).isoformat()
             for offset in range((last - first).days + 1)
         ]
+
+
+class SeriesBuckets:
+    """The points of one report's time series: hours of a short window, else local days.
+
+    A day point is keyed ``date`` (local ISO date), an hour point
+    ``hour_start`` (canonical UTC timestamp of the hour). Every bucket from
+    the series start to its end is present, gaps included.
+    """
+
+    def __init__(self, window: ReportWindow, calendar: LocalCalendar) -> None:
+        self._window = window
+        self._calendar = calendar
+        self._hourly = window.bucket == "hour"
+        self._hour_keys: dict[int, str] = {}
+        self.field = "hour_start" if self._hourly else "date"
+
+    def keys(self, active: Collection[int]) -> list[str]:
+        """Every bucket key of the series around the ``active`` hour numbers, in order."""
+        hours = self._window.series_hours(min(active, default=None), max(active, default=None))
+        if not self._hourly:
+            return self._calendar.days(hours)
+        return [self.key(hour) for hour in hours or ()]
+
+    def key(self, hour: int) -> str:
+        """The key of the bucket holding hour number ``hour``."""
+        if not self._hourly:
+            return self._calendar.date(hour)
+        key = self._hour_keys.get(hour)
+        if key is None:
+            key = self._hour_keys[hour] = hour_timestamp(hour)
+        return key

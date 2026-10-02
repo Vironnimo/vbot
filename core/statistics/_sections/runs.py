@@ -2,7 +2,9 @@
 
 A Run belongs to the window it started in. Duration and cost percentiles are
 nearest-rank over finished Runs (running ones have no final duration or
-cost); averages cover every in-window Run.
+cost); averages cover every in-window Run. ``previous`` holds the outcome
+counts and user-Run duration percentiles of the window of equal length
+before, or ``None`` without one.
 """
 
 from __future__ import annotations
@@ -74,6 +76,19 @@ def build(context: ReportContext) -> JsonObject:
             "wait_p50_ms": percentile(sorted_values(run.duration_ms for run in cancelled), 50),
         },
         "errors": _errors(context),
+        "previous": _previous(context),
+    }
+
+
+def _previous(context: ReportContext) -> JsonObject | None:
+    """Outcome counts and user-Run duration percentiles of the previous window."""
+    window = context.window.previous()
+    if window is None:
+        return None
+    runs = load_runs(context, window)
+    return {
+        "totals": status_counts(runs),
+        "user": _durations([run for run in runs if run.origin == "user"]),
     }
 
 
@@ -144,19 +159,23 @@ def _duration_buckets(runs: Sequence[RunFact], origins: list[str]) -> list[JsonO
 
 
 def _daily(context: ReportContext, runs: Sequence[RunFact]) -> list[JsonObject]:
-    hours = [run.start_hour for run in runs]
-    span = context.window.series_hours(min(hours, default=None), max(hours, default=None))
-    days = {day: Counter[str]() for day in context.calendar.days(span)}
+    """Outcomes per series bucket (local day, or hour of a short window)."""
+    buckets = context.buckets
+    points = {key: Counter[str]() for key in buckets.keys({run.start_hour for run in runs})}
     for run in runs:
-        days[context.calendar.date(run.start_hour)][run.status] += 1
+        points[buckets.key(run.start_hour)][run.status] += 1
     return [
-        {"date": day, "runs": counts.total(), **{status: counts[status] for status in _OUTCOMES}}
-        for day, counts in days.items()
+        {
+            buckets.field: key,
+            "runs": counts.total(),
+            **{status: counts[status] for status in _OUTCOMES},
+        }
+        for key, counts in points.items()
     ]
 
 
 def _errors(context: ReportContext) -> JsonObject:
-    """Error records by kind, Provider, Model, Agent, local day and local hour.
+    """Error records by kind, Provider, Model, Agent, series bucket and local hour of day.
 
     An error is attributed to the Model of the latest Assistant step before it
     in its Session.
@@ -186,10 +205,10 @@ def _errors(context: ReportContext) -> JsonObject:
         by_agent[actor] += count
         hourly[hour] += count
         by_hour[context.calendar.local(hour)[1]] += count
-    span = context.window.series_hours(min(hourly, default=None), max(hourly, default=None))
-    daily = dict.fromkeys(context.calendar.days(span), 0)
+    buckets = context.buckets
+    daily = dict.fromkeys(buckets.keys(hourly), 0)
     for hour, count in hourly.items():
-        daily[context.calendar.date(hour)] += count
+        daily[buckets.key(hour)] += count
     failed = context.scalar(
         f"SELECT COALESCE(SUM({failed_calls_sql()}), 0) FROM agg_usage a "
         f"WHERE {context.hour_condition('a')}"
@@ -201,6 +220,6 @@ def _errors(context: ReportContext) -> JsonObject:
         "by_provider": count_entries(by_provider),
         "by_model": count_entries(by_model),
         "by_agent": count_entries(by_agent),
-        "daily": [{"date": day, "count": count} for day, count in daily.items()],
+        "daily": [{buckets.field: key, "count": count} for key, count in daily.items()],
         "by_hour": [{"hour": hour, "count": by_hour[hour]} for hour in range(24)],
     }

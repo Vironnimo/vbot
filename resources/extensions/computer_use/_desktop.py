@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from core.tools import ToolContext
 
-from ._access import TIER_WORDS, SessionState, tier_allows, window_visible
+from ._access import Access
 from ._actions import CLICKS, Action, Point
 from ._screens import (
     Frame,
@@ -27,14 +27,6 @@ from ._screens import (
     scaled,
 )
 from .target import DesktopTarget, Display, WindowInfo
-
-_TIER_RULES = {
-    "read": "screenshots and zoom work, but input is refused",
-    "click": (
-        "left clicks, double and triple clicks, scrolling and mouse moves without modifier "
-        "keys work; typing, keys, right and middle clicks, drags and modifier keys are refused"
-    ),
-}
 
 
 class CallRefusedError(Exception):
@@ -52,9 +44,10 @@ def request_call(app: str) -> str:
 class Desktop:
     """The desktop as one call of one Session sees it."""
 
-    def __init__(self, target: DesktopTarget, state: SessionState, context: ToolContext) -> None:
+    def __init__(self, target: DesktopTarget, access: Access, context: ToolContext) -> None:
         self.target = target
-        self.state = state
+        self.access = access
+        self.state = access.state
         self.context = context
         # Set right before the first input method runs: from then on, input may have been sent.
         self.input_started = False
@@ -83,8 +76,8 @@ class Desktop:
         return Frame.of(self._chosen(displays))
 
     def _chosen(self, displays: Sequence[Display]) -> Display:
-        visible = window_visible(self.state, self.target.own_app_keys())
-        return choose_display(displays, self.state.display, self.target.foreground(), visible)
+        foreground = self.target.foreground()
+        return choose_display(displays, self.state.display, foreground, self.access.window_visible)
 
     def _select(self, displays: Sequence[Display], value: str) -> None:
         if value.casefold() == "auto":
@@ -130,7 +123,7 @@ class Desktop:
             self._select(displays, display)
         chosen = self._chosen(displays)
         windows = self.target.windows()
-        visible = window_visible(self.state, self.target.own_app_keys())
+        visible = self.access.window_visible
         covered, hidden = mask(self.target.capture(chosen), display_area(chosen), windows, visible)
         frame = Frame.of(chosen)
         size = (frame.width, frame.height)
@@ -150,7 +143,7 @@ class Desktop:
             )
         text += "."
         if hidden:
-            text += f" Hidden apps (gray, not granted): {', '.join(hidden)}."
+            text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         foreground = self.target.foreground()
         if self.state.display != "auto" and foreground is not None and visible(foreground):
             holding = display_of_window(displays, foreground)
@@ -175,8 +168,7 @@ class Desktop:
                 area[3] - display.top,
             )
         )
-        visible = window_visible(self.state, self.target.own_app_keys())
-        covered, hidden = mask(crop, area, self.target.windows(), visible)
+        covered, hidden = mask(crop, area, self.target.windows(), self.access.window_visible)
         size = fit(covered.width, covered.height)
         if action.scale < 1:
             size = scaled(size, action.scale)
@@ -188,7 +180,7 @@ class Desktop:
             f'"{display.name}".'
         )
         if hidden:
-            text += f" Hidden apps (gray, not granted): {', '.join(hidden)}."
+            text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
 
     def cursor(self, frame: Frame) -> str:
@@ -261,57 +253,44 @@ class Desktop:
         return [at(action.point)]
 
     def _check_access(self, action: Action, frame: Frame, points: list[Point]) -> None:
-        """Refuse unless the foreground app and the app at each point allow *action*."""
-        if action.tier == "read":
+        """Refuse unless the foreground window and the window at each point take input."""
+        if not action.sends_input:
             return
-        own = self.target.own_app_keys()
         foreground = self.target.foreground()
         if foreground is None:
             if not points:
                 raise CallRefusedError(
                     "access_required",
-                    f"No app window is in the foreground, so {action.name} was not sent. Bring a "
-                    'granted app to the front with computer_apps {"action":"open","app":"..."}.',
+                    f"No app window is in the foreground, so {action.name} was not sent. Bring "
+                    'an app to the front with computer_apps {"action":"open","app":"..."}.',
                 )
         else:
-            self._allow(action, foreground, "The foreground window", own)
+            self._allow(action, foreground, "The foreground window")
         for point in points:
             shown = list(frame.to_frame(*point))
             window = self.target.window_at(*point)
             if window is None:
                 raise CallRefusedError(
                     "access_required",
-                    f"No app this Session may use is at {shown}, so {action.name} was not sent. "
-                    "Use coordinates on a granted app in the latest screenshot.",
+                    f"No app window is at {shown}, so {action.name} was not sent. Use "
+                    "coordinates on an app window in the latest screenshot.",
                 )
-            self._allow(action, window, f"The window at {shown}", own)
+            self._allow(action, window, f"The window at {shown}")
 
-    def _allow(self, action: Action, window: WindowInfo, where: str, own: frozenset[str]) -> None:
+    def _allow(self, action: Action, window: WindowInfo, where: str) -> None:
         app = window.app.name
-        foreground = where == "The foreground window"
-        bring = 'bring a granted app to the front with computer_apps {"action":"open","app":"..."}'
-        if window.app.keys & own:
-            raise CallRefusedError(
-                "access_required",
-                f"{where} belongs to vBot itself, which Computer Use never operates, so "
-                f"{action.name} was not sent." + (f" First {bring}." if foreground else ""),
+        if not self.access.allows(window.app):
+            bring = (
+                ', or bring an approved app to the front with computer_apps {"action":"open",'
+                '"app":"..."}'
+                if where == "The foreground window"
+                else ""
             )
-        grant = self.state.grant_for(window.app)
-        if grant is None:
-            bring = f", or {bring}" if foreground else ""
             raise CallRefusedError(
                 "access_required",
-                f"{where} belongs to {app}, which is not granted in this Session, so "
+                f"{where} belongs to {app}, which the user has not approved in this Session, so "
                 f"{action.name} was not sent. Ask the user for it with {request_call(app)}"
                 f"{bring}.",
-            )
-        if not tier_allows(grant.tier, action.tier):
-            held = " with modifier keys" if action.modifiers else ""
-            raise CallRefusedError(
-                "access_tier",
-                f"{where} belongs to {app}, which is {TIER_WORDS[grant.tier]} in this Session: "
-                f"{_TIER_RULES[grant.tier]}. {action.name}{held} was not sent. Do this step "
-                "another way, for example with other Tools, or ask the user to do it.",
             )
         if window.elevated:
             raise CallRefusedError(

@@ -248,6 +248,7 @@ describe('Dropdown', () => {
       target: document.body,
       props: {
         id: 'decorated-dropdown',
+        ariaLabelledby: 'decorated-label',
         value: 'beta',
         options: [
           {
@@ -270,6 +271,11 @@ describe('Dropdown', () => {
     flushSync();
 
     const trigger = document.querySelector('#decorated-dropdown');
+    // A visible label names the trigger together with its current value.
+    expect(trigger.getAttribute('aria-labelledby')).toBe(
+      'decorated-label decorated-dropdown',
+    );
+    expect(trigger.hasAttribute('aria-label')).toBe(false);
     expect(trigger.querySelector('.tab-indicator--running')).toBeTruthy();
     trigger.click();
     await vi.waitFor(() => {

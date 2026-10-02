@@ -495,8 +495,15 @@ def test_compaction_usage_and_context_are_counted_once(
     assert narrowed["diagnostics"]["compactions"]["context"]["average_steps_between"] == 1
     narrowed_kinds = _rows(narrowed["usage"], "kind")
     assert narrowed_kinds["chat"]["calls"] == 1
-    # The Run that started in the window still counts under every kind it used.
-    assert narrowed_kinds["compaction"]["calls"] == 0
+    # The Run started at BASE, before that window, so no kind counts it there.
+    assert narrowed_kinds["chat"]["runs"] == 0
+    assert "compaction" not in narrowed_kinds
+    # A Run that started in the window counts under every kind it used, even
+    # one without an in-window call.
+    early = service.report(until=BASE + timedelta(hours=1), sections=["usage"])
+    early_kinds = _rows(early["usage"], "kind")
+    assert (early_kinds["compaction"]["calls"], early_kinds["compaction"]["runs"]) == (1, 1)
+    assert (early_kinds["chat"]["calls"], early_kinds["chat"]["runs"]) == (0, 1)
 
 
 @pytest.mark.asyncio

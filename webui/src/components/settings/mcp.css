@@ -64,6 +64,12 @@
   color: var(--red);
   overflow-wrap: anywhere;
 }
+/* The credentials a connection waits for, like an Extension waiting for
+   its settings. */
+.mcp-connection__waiting {
+  color: var(--amber);
+  overflow-wrap: anywhere;
+}
 .mcp-facts {
   display: grid;
   gap: 4px;
@@ -180,11 +186,8 @@
 .mcp-quick-fill > .btn-secondary {
   margin-top: 24px;
 }
-/* Why a connection fails: missing credentials, the technical error and the
-   local server's last error output. */
-.mcp-diagnostics__missing {
-  color: var(--text-med);
-}
+/* Why a connection fails: the technical error and the local server's last
+   error output. */
 .mcp-diagnostics__output {
   margin: 0;
   max-height: 16em;

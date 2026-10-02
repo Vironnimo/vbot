@@ -109,6 +109,7 @@ const COMPOSED_KEYS = {
   'settings.recall.backends.*': 'tOr', // Recall backend id
   'settings.recall.indexError.*': 'tOr', // Recall index failure code
   'settings.webSearch.providers.*': 'tOr', // web search or fetch provider
+  'statistics.errorKind.*': 'tOr', // recorded Run error kind
   'statistics.origin.*': 'tOr', // Run origin
   'statistics.skills.origin.*': 'tOr', // Skill origin scope
   'statistics.status.*': 'tOr', // Run status

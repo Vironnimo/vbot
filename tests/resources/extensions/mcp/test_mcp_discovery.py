@@ -13,7 +13,8 @@ from core.extensions import ExtensionRecord, ExtensionRegistry
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
 from core.tools.availability import ToolAccess
 from core.tools.tools import ToolDefinitionProfileContext
-from resources.extensions.mcp.client import ConnectionRunner
+from resources.extensions.mcp._tasks import TASKS_EXTENSION
+from resources.extensions.mcp.client import TASK_OPERATIONS, ConnectionRunner
 from resources.extensions.mcp.extension import MCP_GUIDANCE, register, remote_tool_name
 from tests.core.prompts.prompts_test_support import _agent, _manager
 from tests.resources.extensions.mcp.mcp_test_support import (
@@ -177,6 +178,8 @@ async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
 @pytest.mark.asyncio
 async def test_search_and_describe_load_only_the_requested_definition(context_service, host):
     service, registry, runner, calls = context_service
+    # Metadata MCP itself reserves is no part of what describe shows.
+    runner.catalog["tools"][0]["_meta"] = {"io.modelcontextprotocol/ui": {"resourceUri": "ui://x"}}
     target = targets(
         await dispatch(registry, host, {"action": "search", "query": "inspection", "kind": "tool"})
     )[0]
@@ -340,18 +343,65 @@ async def test_search_without_kind_covers_application_items_and_points_to_operat
     assert "next" not in following["data"]
     assert len(listed) == 15
     assert not [target for target in listed if target.startswith(("operation:", "connection"))]
+    # This server declares no tasks, so no task operation is offered.
     assert browse["data"]["operations"] == (
-        "resource subscriptions, events, logging, tasks and more: "
-        '{"action":"search","kind":"operation"}'
+        'resource subscriptions, events, logging and more: {"action":"search","kind":"operation"}'
     )
     assert "operations" not in following["data"]
-    assert operations["data"]["matches"] == "1-10 of 13"
+    assert operations["data"]["matches"] == "1-9 of 9"
     assert all(target.startswith("operation:") for target in targets(operations))
     assert connection["data"]["matches"] == "1-1 of 1"
     assert subscription["data"]["matches"] == "none"
     assert subscription["data"]["operations"] == (
         '1 matches these words: {"action":"search","kind":"operation","query":"subscription"}'
     )
+    assert calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("protocol", "capabilities", "offered"),
+    [
+        ("2026-07-28", {"extensions": {TASKS_EXTENSION: {}}}, ["tasks/cancel", "tasks/get"]),
+        ("2026-07-28", {"tasks": {"list": {}, "cancel": {}}}, []),
+        (
+            "2025-11-25",
+            {"tasks": {"cancel": {}, "requests": {"tools": {"call": {}}}}},
+            ["tasks/cancel", "tasks/get", "tasks/result"],
+        ),
+        (
+            "2025-11-25",
+            {"tasks": {"list": {}, "cancel": {}}},
+            ["tasks/cancel", "tasks/get", "tasks/list", "tasks/result"],
+        ),
+    ],
+    ids=["tasks-extension", "no-tasks-extension", "legacy-tasks", "legacy-task-listing"],
+)
+async def test_only_the_task_operations_the_server_offers_are_listed_and_called(
+    context_service, host, protocol, capabilities, offered
+):
+    service, registry, runner, calls = context_service
+    runner.catalog.update(protocol_version=protocol, capabilities=capabilities)
+
+    listed = targets(
+        await dispatch(registry, host, {"action": "search", "kind": "operation", "query": "task"})
+    )
+    browse = await dispatch(registry, host, {"action": "search"})
+    refusals = {
+        operation: await dispatch(
+            registry, host, {"action": "call", "target": operation, "arguments": {"taskId": "t"}}
+        )
+        for operation in sorted(TASK_OPERATIONS - set(offered))
+    }
+
+    assert sorted(target.split(":")[1] for target in listed) == offered
+    assert (", tasks and more" in browse["data"]["operations"]) == bool(offered)
+    for operation, refusal in refusals.items():
+        assert model_text(refusal) == (
+            f"Error (mcp_operation_unsupported): {operation} is not supported by the protocol "
+            "this MCP connection uses, so nothing was run. List the operations it offers with "
+            '{"action":"search","kind":"operation"}.\nretryable: false'
+        )
     assert calls == []
 
 
@@ -557,8 +607,10 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
             )
             assert detail["ok"] and result["ok"]
             assert expected[kind] in result["data"]["content"]
-            # The SDK's structured copy of the returned value repeats the text.
+            # The SDK's structured copy of the returned value repeats the text, and the
+            # server information it stamps on every result is protocol metadata.
             assert "structuredContent" not in result["data"]
+            assert "_meta" not in result["data"]
         assert _definitions(registry) == before
     finally:
         await service.close()

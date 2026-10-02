@@ -105,11 +105,8 @@ export function usageCount(value) {
   return suffix ? `${number} ${suffix}` : number;
 }
 
+// Input plus output tokens of a Statistics Totals record; its counts include
+// their estimated parts.
 export function tokensUsed(counts) {
-  return usageCount(
-    counts?.measured_input_tokens +
-      counts?.measured_output_tokens +
-      counts?.estimated_input_tokens +
-      counts?.estimated_output_tokens,
-  );
+  return usageCount(counts?.input_tokens + counts?.output_tokens);
 }

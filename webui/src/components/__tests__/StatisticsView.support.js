@@ -76,7 +76,7 @@ function makeRunRow(overrides = {}) {
   };
 }
 
-/** Run outcome counts (`totals`, `runs`, `previous_runs`). */
+/** Run outcome counts (`totals`, `runs`, `previous_runs`, `previous.totals`). */
 function makeRunCounts(overrides = {}) {
   return {
     total: 10,
@@ -133,7 +133,7 @@ function makeOverviewSeries() {
   ];
 }
 
-/** Costs & tokens' day series: full Totals per day. */
+/** Costs & tokens' day series: full Totals and the Runs started per day. */
 function makeUsageSeries() {
   return [
     {
@@ -146,6 +146,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2,
         estimated_cost_usd: 3,
       }),
+      runs: 6,
     },
     {
       date: '2026-06-13',
@@ -157,6 +158,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2.5,
         estimated_cost_usd: 5,
       }),
+      runs: 4,
     },
   ];
 }
@@ -416,6 +418,15 @@ function makeRunsSection(overrides = {}) {
         count: hour === 9 ? 3 : 0,
       })),
     },
+    previous: {
+      totals: makeRunCounts({
+        total: 8,
+        completed: 6,
+        failed: 2,
+        cancelled: 0,
+      }),
+      user: { duration_p50_ms: 40_000, duration_p90_ms: 150_000 },
+    },
     ...overrides,
   };
 }
@@ -495,24 +506,28 @@ function makeSkillsSection(overrides = {}) {
 function makeExtensionActivity(overrides = {}) {
   return {
     sessions: 2,
-    runs: 3,
-    run_status: { completed: 2, failed: 1, cancelled: 0, interrupted: 0 },
+    runs: {
+      total: 3,
+      completed: 2,
+      failed: 1,
+      cancelled: 0,
+      interrupted: 0,
+      running: 0,
+    },
     errors: 1,
     tool_calls: 5,
-    model_calls: 3,
-    measured_input_tokens: 20_000,
-    measured_output_tokens: 2_000,
-    estimated_input_tokens: 0,
-    estimated_output_tokens: 0,
-    costs: {
+    totals: makeTotals({
       calls: 3,
+      input_tokens: 20_000,
+      output_tokens: 2_000,
+      estimated_input_tokens: 0,
+      estimated_output_tokens: 0,
       reported_calls: 2,
+      reported_cost_usd: 0.2,
       estimated_calls: 1,
-      unpriced_calls: 0,
-      retrospective_calls: 0,
-      reported_usd: 0.2,
-      estimated_usd: 0.1,
-    },
+      estimated_cost_usd: 0.1,
+      cost_usd: 0.3,
+    }),
     last_activity: '2026-06-12T09:00:00.000000Z',
     ...overrides,
   };
@@ -539,7 +554,9 @@ function makeExtensionsSection(overrides = {}) {
                 name: 'Scout',
                 model: 'prov/a',
                 session_id: 'swarm-session-1',
-                activity: makeExtensionActivity({ runs: 2 }),
+                activity: makeExtensionActivity({
+                  runs: { total: 2, completed: 2 },
+                }),
               },
             ],
           },

@@ -447,6 +447,21 @@ export function periodChange(
   return { direction, text, tone };
 }
 
+/**
+ * A KPI tile's change marker: `periodChange` with the previous value,
+ * formatted by `formatPrevious`, as its tooltip; null like `periodChange`.
+ */
+export function tileChange(current, previous, formatPrevious, options = {}) {
+  const result = periodChange(current, previous, options);
+  if (!result) return null;
+  return {
+    ...result,
+    tooltip: t('statistics.change.previous', {
+      value: formatPrevious(previous),
+    }),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Names and labels
 
@@ -519,6 +534,34 @@ export function modelCallKindLabel(kind) {
   return MODEL_CALL_KINDS.has(kind)
     ? t(`statistics.kind.${kind}`)
     : t('statistics.kind.other');
+}
+
+/** An id in words: `tool_iterations_exceeded` -> `Tool iterations exceeded`. */
+function humanizeId(id) {
+  const words = String(id ?? '')
+    .replace(/[_-]+/g, ' ')
+    .trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : EM_DASH;
+}
+
+/** A recorded Run error kind (`rate_limit`, `auth_error`, ...), translated;
+ *  a kind without a label reads as its id in words. */
+export function errorKindLabel(kind) {
+  return tOr(`statistics.errorKind.${kind}`, humanizeId(kind));
+}
+
+/** An error kind's name with its stored id as a secondary row. */
+export function errorKindTooltip(kind) {
+  return {
+    title: errorKindLabel(kind),
+    rows: [
+      {
+        label: t('statistics.errors.kindId'),
+        value: String(kind ?? ''),
+        mono: true,
+      },
+    ],
+  };
 }
 
 export function modelCallStatusLabel(status) {
@@ -710,41 +753,6 @@ export function costTooltip(totals, locale = 'en') {
   }
   if (rows.length === 0) return '';
   return { title: formatCostExact(totals.cost_usd, locale), rows };
-}
-
-/** An Extension activity's costs (`{ reported_usd, estimated_usd, ...calls }`)
- *  in the report's Totals shape, for costTooltip(); `cost_usd` is null while
- *  neither part is known. */
-export function activityCostTotals(costs) {
-  const reported = finite(costs?.reported_usd);
-  const estimated = finite(costs?.estimated_usd);
-  return {
-    cost_usd:
-      reported === null && estimated === null
-        ? null
-        : (reported ?? 0) + (estimated ?? 0),
-    reported_cost_usd: reported,
-    reported_calls: toFiniteNumber(costs?.reported_calls),
-    estimated_cost_usd: estimated,
-    estimated_calls: toFiniteNumber(costs?.estimated_calls),
-    unpriced_calls: toFiniteNumber(costs?.unpriced_calls),
-    retrospective_calls: toFiniteNumber(costs?.retrospective_calls),
-  };
-}
-
-/** Measured plus estimated tokens of an Extension activity, and the
- *  estimated part. */
-export function activityTokens(activity) {
-  const estimated =
-    toFiniteNumber(activity?.estimated_input_tokens) +
-    toFiniteNumber(activity?.estimated_output_tokens);
-  return {
-    total:
-      toFiniteNumber(activity?.measured_input_tokens) +
-      toFiniteNumber(activity?.measured_output_tokens) +
-      estimated,
-    estimated,
-  };
 }
 
 const COST_REASONS = Object.freeze({
@@ -1104,11 +1112,11 @@ function addValue(left, right) {
  * Daily series rows (`{ date, ...numbers }`, local calendar days from the
  * server, gaps already filled) summed into weeks (Monday first) or months.
  * Each period keeps the date of its first day; a field unknown on every day
- * of a period stays null.
+ * of a period stays null. Day and hour rows stay as they are.
  */
 export function rollupSeries(series, granularity = 'day') {
   const rows = Array.isArray(series) ? series : [];
-  if (granularity === 'day') return rows;
+  if (granularity === 'day' || granularity === 'hour') return rows;
   const periods = new Map();
   for (const row of rows) {
     const key = periodKey(row?.date, granularity);
@@ -1167,7 +1175,8 @@ export function trendSegments(metric) {
 /**
  * Chart columns of a series for one metric (`cost`, `tokens`, `runs`):
  * each period's total, its stacked segments, and the source row; plus the
- * axis maximum.
+ * axis maximum. A column's key is its date, or for `hour` its row's
+ * `hour_start` (the canonical UTC timestamp of the hour).
  */
 export function trendColumns(series, metric = 'cost', granularity = 'day') {
   const definition = TREND_METRICS[metric] ?? TREND_METRICS.cost;
@@ -1178,7 +1187,7 @@ export function trendColumns(series, metric = 'cost', granularity = 'day') {
     }));
     const segmentSum = segments.reduce((sum, entry) => sum + entry.value, 0);
     return {
-      key: row.date,
+      key: granularity === 'hour' ? row.hour_start : row.date,
       row,
       total: Math.max(toFiniteNumber(definition.total(row)), segmentSum),
       segments,
@@ -1230,15 +1239,25 @@ export function axisLabelIndices(length, count = 8) {
 
 const seriesDateFormats = new Map();
 
-/** A local calendar date key as an axis or table label: `Sep 3` for a day,
- *  the week's Monday for a week, `Sep 2026` for a month. `long` adds the
- *  year to days and weeks. */
+/** A series key as an axis or table label: a local calendar date as `Sep 3`
+ *  for a day, the week's Monday for a week, `Sep 2026` for a month (`long`
+ *  adds the year to days and weeks); an hour's UTC start timestamp as its
+ *  time in the Settings time zone, `9:00 AM` (`long` adds the date). */
 export function formatSeriesDate(
   dateKey,
   granularity = 'day',
   locale = 'en',
   { long = false } = {},
 ) {
+  if (granularity === 'hour') {
+    const hour = parseIso(dateKey);
+    if (hour === null) return String(dateKey ?? EM_DASH);
+    return formatDateTimeInApplicationZone(hour, locale, {
+      ...(long ? { month: 'short', day: 'numeric' } : {}),
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
   const day = parseDateKey(dateKey);
   if (day === null) return String(dateKey ?? EM_DASH);
   const options =

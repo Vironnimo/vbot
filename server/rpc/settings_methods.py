@@ -459,8 +459,8 @@ def _reject_secret_extension_path(
         return
     extension_name, field_name = values[2], values[3]
     raise SettingsPathError(
-        f"{rendered_path} is a secret; use 'vbot extensions {extension_name} "
-        f"set {field_name} --stdin'"
+        f"{rendered_path} is a secret; use 'vbot extensions set {extension_name} "
+        f"{field_name} --stdin'"
     )
 
 

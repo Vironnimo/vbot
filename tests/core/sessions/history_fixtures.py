@@ -1,7 +1,9 @@
 """Build relational test data from compact, readable conversation fixtures.
 
 Fixture summaries declare complete Runs: each one completes its admitted Run the
-way the Run manager does. Missing Tool declarations are supplied here so
+way the Run manager does. A segment without a summary stays a running Run.
+Every Run is admitted at the fixture's own time, never the wall clock, so
+time-windowed reads stay deterministic. Missing Tool declarations are supplied here so
 search/report tests can focus on the result they exercise, and Tool results
 carry the outcome facts Chat derives from their envelopes. This builder is
 test-only; production writes must already identify their Run and invocation.
@@ -104,7 +106,7 @@ def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
         summary = segment[-1] if segment[-1].role == "run_summary" else None
         run_id = summary.run_id if summary else new_id("run")
         assert run_id is not None
-        writer = session.start_run(run_id)
+        writer = _admit_segment(session, run_id, segment, summary)
         # Declare shorthand results on their preceding assistant Model step.
         parent_index = None
         for index, message in enumerate(segment):
@@ -150,6 +152,23 @@ def seed_history(session: ChatSession, messages: list[ChatMessage]) -> None:
             pending.append(message)
         _append_pending(writer, pending)
         offset = end
+
+
+def _admit_segment(
+    session: ChatSession, run_id: str, segment: list[ChatMessage], summary: ChatMessage | None
+) -> ChatSession:
+    """Admit a segment's Run at its recorded start, else at its first Message."""
+    started_at = (summary.timing or {}).get("started_at") if summary else None
+    session._store.admit_run(
+        session.address,
+        SessionRunAdmission(
+            run_id=run_id,
+            run_kind="user",
+            started_at=started_at or segment[0].timestamp,
+            expected_generation_id=session.generation_id,
+        ),
+    )
+    return session.for_run(run_id)
 
 
 def _append_pending(writer: ChatSession, pending: list[ChatMessage]) -> None:

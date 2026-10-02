@@ -39,7 +39,7 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     store = ContentStore(host)
     payload = {
         "content": [{"type": "text", "text": "test-owned-text-ä" * 2000}],
-        "_meta": {"keep": True},
+        "_meta": {"keep": True, "io.modelcontextprotocol/serverInfo": {"name": "test"}},
     }
     receipt, _ = await store.present(payload, context(host), "example")
     restored = ContentStore(host)
@@ -63,6 +63,8 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     # The view shows the text start and names the read that continues it; it holds no
     # file path: read is the only way to the saved payload.
     assert set(receipt) == {"result_id", "_meta", "note", "content"}
+    # Keys MCP reserves in _meta are protocol metadata; the server's own key stays.
+    assert receipt["_meta"] == {"keep": True}
     assert receipt["content"] == text[:RESULT_TEXT_CHARACTERS]
     assert json.dumps(continuation, separators=(",", ":")) in receipt["note"]
     assert f"first {RESULT_TEXT_CHARACTERS} of {len(text)} characters" in receipt["note"]
@@ -307,7 +309,6 @@ async def test_a_result_that_fails_its_output_schema_reads_as_the_servers_proble
             "Error (mcp_invalid_result): The MCP tool count ran, but its result does not match "
             "the output schema the tool declares: Invalid structured content returned by tool "
             "count: 'many' is not of type 'integer'. The result as received:\n"
-            '_meta: {"io.modelcontextprotocol/serverInfo":{"name":"schemas","version":""}}\n'
             'structuredContent: {"count":"many"}\ntest-owned-count\n\n'
             "The call ran, so repeating it runs it again. Check the received result before you "
             "rely on it, and tell the user that the MCP server example returned a result that "
