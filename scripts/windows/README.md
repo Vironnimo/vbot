@@ -63,7 +63,9 @@ Outputs include:
 - `artifacts/vbot-windows-x86_64-<shape>-runtime-inventory.json`: dependency names
   and exact versions for inspection.
 - `artifacts/vbot-release.json`: the version identity an updater compares with its
-  active version before downloading.
+  active version before downloading. The publishing workflows add the SHA-256
+  digest of every other release asset to it (`scripts/release_assets.py
+  --record-digests`).
 - `artifacts/release-public-key.txt`, and a sibling `.zip.sig` for signed builds.
 - After Inno compilation, `installers/vBot-<version>-windows-x86_64-<shape>.exe`.
 

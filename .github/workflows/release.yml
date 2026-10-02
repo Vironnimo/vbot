@@ -75,10 +75,11 @@ jobs:
           path: assets
           merge-multiple: true
 
-      - name: Validate complete release assets
+      # The installers verify their downloads against the digests vbot-release.json records.
+      - name: Validate complete release assets and record their digests
         run: >-
           python scripts/release_assets.py --dir assets --version "${RELEASE_VERSION}"
-          --revision "${GITHUB_SHA}" --channel release
+          --revision "${GITHUB_SHA}" --channel release --record-digests
 
       - name: Publish release with all verified installation assets
         env:
