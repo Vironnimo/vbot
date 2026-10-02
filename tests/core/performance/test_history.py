@@ -66,6 +66,7 @@ async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
             duration_ms=400.0,
             samples=samples,
             threads=(StallThread("performance_0", 150.0, samples),),
+            awaited_by=stack,
         )
     )
     await service._write_window("interval")  # noqa: SLF001 - end the window now.
@@ -88,6 +89,7 @@ async def test_windows_hold_only_their_own_changes_and_outlive_the_process(
     assert [len(stall["samples"]) for stall in first["stalls"]] == [3]
     # Other threads keep only their most frequent stack.
     assert [len(thread["samples"]) for thread in first["stalls"][0]["threads"]] == [1]
+    assert first["stalls"][0]["awaited_by"] == list(stack)
     window_op = second["metrics"]["test.op"]
     assert window_op["count"] == 1
     # Extremes the window did not move are bounded by its bucket (about 10%).

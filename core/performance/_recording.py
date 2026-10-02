@@ -227,6 +227,7 @@ class Recording:
                     "cpu_window_ms",
                     "loop_cpu_ms",
                     "samples",
+                    "awaited_by",
                     "threads",
                 )
             }

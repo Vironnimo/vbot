@@ -13,6 +13,11 @@ previous tick; the stall names those that used a noticeable share of CPU, which
 is how a thread holding the GIL shows up. Stack frames carry only code
 locations.
 
+Work that runs in a Task of its own shows only that Task's frames on the loop
+thread's stack. Once per stall, the first sample that finds the loop running a
+Task also captures the asyncio call graph and keeps the frames of the
+suspended Tasks awaiting it, which name the Run or service that started it.
+
 While running, the monitor also times cyclic garbage collections: each tick
 records the finished collections, and a stall reports how much of it was
 collection pause.
@@ -78,7 +83,10 @@ class StallRecord:
 
     ``cpu_window_ms`` is the stretch from the first sample to the resume over
     which ``loop_cpu_ms`` and the ``threads`` CPU were measured; all three are
-    empty where the platform reports no per-thread CPU time.
+    empty where the platform reports no per-thread CPU time. ``awaited_by``
+    holds the frames of the Tasks awaiting the Task the loop ran, innermost
+    first; it is empty when the loop ran no Task, nothing awaited it, or the
+    call graph could not be read.
     """
 
     started_perf: float
@@ -89,6 +97,7 @@ class StallRecord:
     cpu_window_ms: float | None = None
     loop_cpu_ms: float | None = None
     threads: tuple[StallThread, ...] = ()
+    awaited_by: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -98,6 +107,7 @@ class StallRecord:
             "cpu_window_ms": _rounded(self.cpu_window_ms),
             "loop_cpu_ms": _rounded(self.loop_cpu_ms),
             **_samples_dict(self.samples),
+            "awaited_by": list(self.awaited_by),
             "threads": [thread.to_dict() for thread in self.threads],
         }
 
@@ -127,6 +137,8 @@ class _StallCapture:
     # Per-thread CPU by thread ident, from the first CPU read on.
     cpu_started: float | None = None
     threads: dict[int, _ThreadCapture] = field(default_factory=dict)
+    # The awaiters of the Task the loop runs; None until a sample found one.
+    awaited_by: _RawStack | None = None
 
 
 class LoopMonitor:
@@ -303,7 +315,7 @@ class LoopMonitor:
                     started_at=datetime.now(UTC) - timedelta(seconds=overdue),
                     gc_total_s=gc_total_s,
                 )
-            self._sample(capture)
+            self._sample(capture, loop)
 
     def _finish_stall(self, capture: _StallCapture, resumed: float, gc_total_s: float) -> None:
         duration_ms = max(0.0, (resumed - capture.deadline) * 1000.0)
@@ -328,18 +340,21 @@ class LoopMonitor:
             cpu_window_ms=cpu_window_ms,
             loop_cpu_ms=loop_cpu_ms,
             threads=threads,
+            awaited_by=_render_raw(capture.awaited_by or ()),
         )
         try:
             self._on_stall(record)
         except Exception:
             _LOGGER.warning("Recording an Event Loop stall failed", exc_info=True)
 
-    def _sample(self, capture: _StallCapture) -> None:
+    def _sample(self, capture: _StallCapture, loop: asyncio.AbstractEventLoop) -> None:
         frames = sys._current_frames()  # noqa: SLF001 - sampling profiler access.
         thread_id = self._loop_thread_id
         frame = frames.get(thread_id) if thread_id is not None else None
         if frame is not None:
             _count_stack(capture.stacks, _raw_stack(frame), _MAX_DISTINCT_STACKS)
+        if capture.awaited_by is None:
+            capture.awaited_by = _awaiter_stack(loop)
         if self._read_cpu is not None:
             self._sample_threads(capture, frames)
 
@@ -416,6 +431,36 @@ def _raw_stack(frame: FrameType | None) -> _RawStack:
         raw.append((code.co_filename, frame.f_lineno, code.co_qualname))
         frame = frame.f_back
     return tuple(raw)
+
+
+def _awaiter_stack(loop: asyncio.AbstractEventLoop) -> _RawStack | None:
+    """Return the frames awaiting the Task ``loop`` runs; ``None`` while it runs none.
+
+    The running Task's own frames are on the loop thread's stack; the Tasks
+    awaiting it are suspended and appear only in its asyncio call graph. The
+    chain follows the first awaiter of each level, innermost first. Reading the
+    graph from another thread is not thread-safe, since the loop thread may
+    change it meanwhile: a failed read yields no frames rather than a guess.
+    """
+    try:
+        task = asyncio.current_task(loop)
+        if task is None:
+            return None
+        graph = asyncio.capture_call_graph(task)
+        raw: list[tuple[str, int | None, str]] = []
+        awaiters = graph.awaited_by if graph is not None else ()
+        while awaiters and len(raw) < _MAX_STACK_FRAMES:
+            awaiter = awaiters[0]
+            for entry in awaiter.call_stack:
+                frame = entry.frame
+                # A coroutine that finished meanwhile has no frame any more.
+                if frame is not None:
+                    code = frame.f_code
+                    raw.append((code.co_filename, frame.f_lineno, code.co_qualname))
+            awaiters = awaiter.awaited_by
+    except Exception:
+        return ()
+    return tuple(raw[:_MAX_STACK_FRAMES])
 
 
 def _render_raw(stack: _RawStack) -> tuple[str, ...]:

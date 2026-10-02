@@ -51,6 +51,7 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
                             "stack": ["core/x.py:10 work", "core/y.py:5 caller", "a", "b"],
                         },
                     ],
+                    "awaited_by": ["asyncio/tasks.py:1 gather", "core/r.py:7 run", "c", "d"],
                     "threads": [
                         {
                             "name": "performance_0",
@@ -96,6 +97,10 @@ def test_status_shows_slowest_metrics_gauges_stalls_and_recording(
         "    core/x.py:10 work",
         "    core/y.py:5 caller",
         "    a",
+        "  awaited by",
+        "    asyncio/tasks.py:1 gather",
+        "    core/r.py:7 run",
+        "    c",
         "  thread performance_0 cpu_ms=187.5/200.0",
         "    core/z.py:3 census",
     ]
