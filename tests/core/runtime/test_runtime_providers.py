@@ -249,7 +249,6 @@ def test_runtime_loads_opencode_zen_current_catalog_and_connection_allowlist(
     assert gemini.context_window == 1_048_576
     assert gemini.max_output_tokens == 65_536
     assert gemini.capabilities.input_modalities == ("text", "image", "video", "audio", "pdf")
-    assert gemini.metadata["opencode_zen"]["protocol"] == "gemini_generate_content"
     assert {model.model_id for model in models}.isdisjoint(
         {
             "big-pickle",

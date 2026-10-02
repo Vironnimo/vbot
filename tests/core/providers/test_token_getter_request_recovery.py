@@ -280,9 +280,7 @@ WIRES = {
 
 def _model(wire: Wire) -> Model:
     metadata: dict[str, Any] = {}
-    if wire.provider_id == "opencode-zen":
-        metadata = {"opencode_zen": {"protocol": wire.protocol}}
-    elif wire.provider_id == "github-copilot":
+    if wire.provider_id == "github-copilot":
         metadata = {
             "github_copilot": {
                 "family": wire.model_id,

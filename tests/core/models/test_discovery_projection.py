@@ -128,8 +128,6 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
     assert gemini["connections"] == ["api-key", "account"]
     assert (gemini["context_window"], gemini["max_output_tokens"]) == (1_048_576, 65_536)
     assert gemini["capabilities"]["input_modalities"] == modalities["input"]
-    assert gemini["metadata"]["opencode_zen"]["protocol"] == "gemini_generate_content"
-    assert written["claude-fable-5-1"]["metadata"]["opencode_zen"]["protocol"] == "messages"
 
 
 @respx.mock

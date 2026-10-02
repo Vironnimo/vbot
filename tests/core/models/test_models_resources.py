@@ -8,9 +8,12 @@ import pytest
 
 from core.models.models import Model, ModelRegistry
 from core.models.query import ModelQuery
+from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import resolve_reasoning_intent
+from core.providers.wire_profile import WireProfile
+from core.providers.wire_profiles import standalone_wire_binding
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 RESOURCES_DIR = PROJECT_ROOT / "resources"
@@ -37,6 +40,18 @@ def _profile(model: Model, *keys: str) -> dict[str, Any]:
         "unlisted_tool_calls": model.capabilities.unlisted_tool_calls,
     }
     return {key: facts[key] for key in keys}
+
+
+def _wire_profile(registry: ModelRegistry, provider_id: str, model_id: str) -> WireProfile:
+    """The bundled wire profile of one catalog Model on the Provider's first Connection."""
+
+    adapter = {"opencode-go": OpenCodeGoAdapter, "opencode-zen": OpenCodeZenAdapter}[provider_id]
+    return standalone_wire_binding(
+        provider_id=provider_id,
+        connection_id="api-key",
+        protocols=adapter.WIRE_PROTOCOLS,
+        model_lookup=lambda selected: registry.get(provider_id, selected),
+    ).profile(model_id)
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +235,7 @@ def test_ollama_cloud_deepseek_v41_verified_profile(registry: ModelRegistry) -> 
 
 
 def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> None:
-    """Protect the current endpoint protocol of every published id."""
+    """Protect the current wire of every published id (``resources/wire/opencode-go.json``)."""
 
     expected_by_protocol = {
         "responses": (
@@ -231,7 +246,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "muse-spark-1.2-contributor",
             "muse-spark-1.3-contributor",
         ),
-        "openai": (
+        "chat_completions": (
             "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
@@ -255,7 +270,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "space-bunny-free",
             "omen-alpha",
         ),
-        "anthropic": (
+        "messages": (
             "minimax-m2.5",
             "minimax-m3",
             "minimax-m2.7",
@@ -274,8 +289,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
     assert len(expected) == 36
 
     assert {
-        model_id: registry.get("opencode-go", model_id).metadata["opencode_go"]["protocol"]
-        for model_id in expected
+        model_id: _wire_profile(registry, "opencode-go", model_id).protocol for model_id in expected
     } == expected
     assert {model.model_id for model in registry.list_for_provider("opencode-go")} == set(expected)
 
@@ -300,26 +314,19 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
         ),
     }
 
+    profiles = {model_id: _wire_profile(registry, "opencode-go", model_id) for model_id in expected}
+
     assert {
-        model_id: registry.get("opencode-go", model_id).metadata["opencode_go"][
-            "reasoning_response_field"
-        ]
-        for model_id in expected
+        model_id: profile.response.reasoning_fields[0] for model_id, profile in profiles.items()
     } == expected
+    assert {profile.replay.history_field for profile in profiles.values()} == {"reasoning_content"}
 
 
-_GO_TOGGLE = {
-    "protocol": "openai",
-    "reasoning_response_field": "reasoning_content",
-    "thinking_control": "toggle",
-}
-_GO_TOGGLE_WITH_EFFORT = {**_GO_TOGGLE, "thinking_control": "toggle_with_effort"}
-_GO_GLM = {"protocol": "openai", "reasoning_response_field": "reasoning_content"}
 _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
 
 
 @pytest.mark.parametrize(
-    ("model_id", "expected", "metadata"),
+    ("model_id", "expected"),
     [
         pytest.param(
             "space-bunny-free",
@@ -329,7 +336,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "max_output_tokens": 524_288,
                 "reasoning": _FIVE_LEVELS,
             },
-            {**_GO_GLM, "minimum_reasoning_effort": "low"},
             id="space-bunny-free",
         ),
         pytest.param(
@@ -344,7 +350,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "reasoning": (True, "on_off", ()),
                 "reasoning_replay": None,
             },
-            _GO_TOGGLE,
             id="longcat-2.5-preview-free",
         ),
         *(
@@ -357,7 +362,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                     "reasoning": (True, "on_off", ()),
                     "reasoning_replay": None,
                 },
-                _GO_TOGGLE,
                 id=model_id,
             )
             for model_id in ("mimo-v2.6-flash", "mimo-v2.6-pro")
@@ -375,7 +379,6 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                     "vision": True,
                     "reasoning_replay": None,
                 },
-                _GO_TOGGLE_WITH_EFFORT,
                 id=model_id,
             )
             for model_id in ("deepseek-flash", "deepseek-v4.1-flash")
@@ -383,19 +386,17 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
         # GLM 5.2/5.3 pin full-history replay; GLM-5.3-Flash inherits it. Exact
         # vBot probes on 2026-09-02 showed persisted ``reasoning_content`` is
         # billed in a Tool continuation. No ``reasoning_request_format`` field.
-        pytest.param("glm-5.2", {"reasoning_replay": "full_history"}, _GO_GLM, id="glm-5.2"),
+        pytest.param("glm-5.2", {"reasoning_replay": "full_history"}, id="glm-5.2"),
         # Only GLM-5.3-Flash on this gateway silently dropped calls to Tools that a
         # System Reminder announced outside ``tools[]`` (vBot probes 2026-09-28).
         pytest.param(
             "glm-5.3",
             {"reasoning_replay": "full_history", "unlisted_tool_calls": True},
-            _GO_GLM,
             id="glm-5.3",
         ),
         pytest.param(
             "glm-5.3-flash",
             {"context_window": 1_000_000, "reasoning_replay": None, "unlisted_tool_calls": False},
-            _GO_GLM,
             id="glm-5.3-flash",
         ),
     ],
@@ -404,13 +405,11 @@ def test_opencode_go_gateway_profiles(
     registry: ModelRegistry,
     model_id: str,
     expected: dict[str, Any],
-    metadata: dict[str, str],
 ) -> None:
     model = registry.get("opencode-go", model_id)
 
     assert registry.provider_reasoning_replay("opencode-go") == "full_history"
     assert _profile(model, *expected) == expected
-    assert model.metadata["opencode_go"] == metadata
 
 
 def test_openrouter_space_bunny_gateway_facts(registry: ModelRegistry) -> None:
@@ -435,10 +434,10 @@ def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
     assert {model.model_id for model in usable}.isdisjoint(provider.catalog_exclusions)
     for model in usable:
         assert set(model.connections) == {"api-key", "account"}
-        reviewed = OpenCodeZenAdapter.normalize_catalog_entry({"id": model.model_id})
-        assert (
-            model.metadata["opencode_zen"]["protocol"]
-            == reviewed.metadata["opencode_zen"]["protocol"]
+        # Discovery keeps only Models the wire profile admits.
+        OpenCodeZenAdapter.normalize_catalog_entry({"id": model.model_id})
+        assert _wire_profile(registry, "opencode-zen", model.model_id).admission.state == (
+            "available"
         )
 
 
@@ -532,12 +531,13 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     ) == long_rates
 
     zen = registry.get("opencode-zen", model_id)
+    zen_wire = _wire_profile(registry, "opencode-zen", model_id)
     assert zen.connections == ("api-key", "account")
-    assert zen.metadata["opencode_zen"]["protocol"] == "responses"
+    assert zen_wire.protocol == "responses"
     assert zen.capabilities.reasoning.levels == model.capabilities.reasoning.levels
     assert zen.capabilities.tools is True
     if not supports_none:
-        assert zen.metadata["opencode_zen"]["minimum_reasoning_effort"] == "low"
+        assert zen_wire.reasoning.off == "low"
         assert zen.capabilities.json_mode is True
         assert zen.reasoning_replay == "none"
     openrouter = registry.get("openrouter", f"openai/{model_id}")

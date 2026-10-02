@@ -21,6 +21,8 @@ from core.providers.errors import (
     ProviderRateLimitError,
 )
 from core.providers.opencode_zen import _FREE_TIER_ACCESS_MESSAGE
+from core.providers.wire_observations import WireObservations
+from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 from core.utils.retry import caller_owns_retries
 
 from .opencode_zen_test_support import (
@@ -66,13 +68,14 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
         ("claude-sonnet-5-5", "messages"),
         ("glm-5.3-flash", "chat_completions"),
         ("qwen3.8-max", "chat_completions"),
-        ("gemini-3.8-flash", "gemini_generate_content"),
+        ("gemini-3.8-flash", "gemini"),
     ],
 )
-def test_catalog_records_the_reviewed_wire_protocol(model_id: str, protocol: str) -> None:
+def test_catalog_keeps_reviewed_models_on_their_reviewed_wire(model_id: str, protocol: str) -> None:
     model = OpenCodeZenAdapter.normalize_catalog_entry({"id": model_id}, {})
 
-    assert model.metadata["opencode_zen"]["protocol"] == protocol
+    assert model.model_id == model_id
+    assert zen_adapter().wire_profile(model_id).protocol == protocol
 
 
 @pytest.mark.parametrize(
@@ -207,6 +210,28 @@ async def test_each_model_uses_its_reviewed_wire_and_auth_header(
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
 
 
+@pytest.mark.asyncio
+async def test_messages_wire_reads_the_connection_binding_of_the_adapter() -> None:
+    """A fact learned on the Adapter's Connection also shapes its Messages wire."""
+    adapter = zen_adapter()
+    observations = WireObservations(None, save_delay=None)
+    profiles = WireProfiles(
+        files=bundled_wire_profile_files(),
+        protocol_support=lambda _provider_id: OpenCodeZenAdapter.WIRE_PROTOCOLS,
+        model_resolver=lambda _provider_id, model_id: zen_model(model_id),
+        report=lambda issue: None,
+        observations=observations,
+    )
+    adapter.bind_wire_profiles(profiles.bind("opencode-zen", "api-key"))
+    observations.record_rejected_parameter("opencode-zen", "api-key", MESSAGES_MODEL, "top_p")
+
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200, json=_MESSAGES_BODY))
+        await adapter.send(HELLO, model_id=MESSAGES_MODEL, top_p=0.5)
+
+    assert "top_p" not in json.loads(route.calls.last.request.content)
+
+
 @pytest.mark.parametrize(
     ("model_id", "selected_effort", "wire_effort"),
     [
@@ -243,7 +268,10 @@ async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort(
         assert adapter.reasoning_replay_policy(model_id) == "none"
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
     intent = adapter.describe_reasoning_render(
-        model_lookup=_bundled_lookup(), model_id=model_id, effort=selected_effort
+        model_lookup=_bundled_lookup(),
+        model_id=model_id,
+        effort=selected_effort,
+        provider_config=zen_config(),
     )
     assert intent.effort_level == wire_effort
 

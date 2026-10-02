@@ -3,8 +3,9 @@
 The shared Responses codec (:func:`build_responses_payload`) takes a request
 policy. A profile-driven Responses wire derives that policy from its wire
 profile and the catalog Model: the Tool, parallel-Tool and structured-output
-support the catalog reports (:func:`catalog_tool_support`), and the optional
-parameters the profile's ``request.allowed_parameters`` admits. Reasoning is not
+support the catalog reports (:func:`catalog_tool_support`; the request option
+``structured_outputs`` widens structured output to every Model), and the
+optional parameters the profile's ``request.allowed_parameters`` admits. Reasoning is not
 part of the policy: :func:`take_reasoning_renderer` consumes the caller's
 reasoning kwargs, the profile plans them, and its reasoning dialect renders the
 plan. :func:`drop_unsupported_request_kwargs` applies the same catalog and
@@ -73,14 +74,6 @@ class ProfileResponsesPolicy:
     supports_structured_outputs: bool
     supported_request_parameters: frozenset[str]
 
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return False
-
-    @property
-    def supports_explicit_none_effort(self) -> bool:
-        return False
-
     def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
         filtered = drop_unsupported_request_kwargs(
             kwargs,
@@ -94,10 +87,6 @@ class ProfileResponsesPolicy:
         for name in REASONING_PARAMETER_NAMES:
             filtered.pop(name, None)
         return filtered
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        del effort
-        return None
 
     def supports_request_parameter(self, parameter_name: str) -> bool:
         return parameter_name in self.supported_request_parameters
@@ -132,10 +121,18 @@ def catalog_tool_support(model: Model | None) -> CatalogToolSupport:
 
 
 def profile_responses_policy(profile: WireProfile, model: Model | None) -> ProfileResponsesPolicy:
-    """The request policy of ``model`` on a profile-driven Responses wire."""
+    """The request policy of ``model`` on a profile-driven Responses wire.
 
+    Tool support follows the catalog (:func:`catalog_tool_support`); the
+    request option ``structured_outputs: true`` declares structured output
+    for every Model of the wire, whatever the catalog's ``json_mode`` says.
+    """
+
+    support = catalog_tool_support(model)
+    if profile.request.options.get("structured_outputs") is True:
+        support["supports_structured_outputs"] = True
     return ProfileResponsesPolicy(
-        **catalog_tool_support(model),
+        **support,
         supported_request_parameters=_allowed_request_parameters(profile, model),
     )
 

@@ -16,7 +16,7 @@ from core.providers.github_copilot_responses import (
 )
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from core.utils.tokens import NATIVE_MEDIA_TOKEN_RESERVE
-from tests.core.providers.responses_test_support import responses_policy
+from tests.core.providers.responses_test_support import responses_policy, responses_reasoning
 
 _ENCRYPTED_INCLUDE = [REASONING_ENCRYPTED_CONTENT_INCLUDE]
 _HELLO = [{"role": "user", "content": "Hello"}]
@@ -29,6 +29,7 @@ def test_payload_carries_system_instructions_and_always_requests_encrypted_reaso
         [{"role": "system", "content": "Use concise answers."}, *_HELLO],
         model_id="gpt-5.4",
         policy=responses_policy(),
+        reasoning_renderer=responses_reasoning(),
     )
 
     # Reasoning-capable Models need the continuity bytes even without an effort.
@@ -44,8 +45,8 @@ def test_payload_maps_effort_and_tool_definitions_and_gates_structured_output() 
     payload = build_responses_payload(
         [{"role": "user", "content": "Return JSON"}],
         model_id="gpt-5.4",
-        policy=responses_policy(reasoning_efforts=["low"], structured_outputs=False),
-        thinking_effort="xhigh",
+        policy=responses_policy(structured_outputs=False),
+        reasoning_renderer=responses_reasoning("xhigh", levels=("low",)),
         tools=[
             {"name": "search", "description": "Search", "parameters": {"type": "object"}},
             # A blank top-level name defers to the nested function definition.
@@ -127,9 +128,9 @@ def test_payload_maps_effort_and_tool_definitions_and_gates_structured_output() 
             id="unsafe-fields-dropped",
         ),
         pytest.param(
-            {"reasoning_efforts": []},
+            {"reasoning_supported": False},
             {"temperature": 0.2, "top_p": 0.9, "max_tokens": 512},
-            # Without reasoning controls there is no encrypted continuity request.
+            # A Model without reasoning gets no encrypted continuity request.
             {"top_p": 0.9, "max_output_tokens": 512},
             id="partial-metadata-omits-temperature-and-include",
         ),
@@ -155,10 +156,13 @@ def test_payload_forwards_only_fields_the_policy_allows(
     request_kwargs: dict[str, Any],
     expected_fields: dict[str, Any],
 ) -> None:
+    overrides = dict(policy_overrides)
+    reasoning = responses_reasoning(supported=overrides.pop("reasoning_supported", True))
     payload = build_responses_payload(
         _HELLO,
         model_id="gpt-5.4",
-        policy=responses_policy(**policy_overrides),
+        policy=responses_policy(**overrides),
+        reasoning_renderer=reasoning,
         **request_kwargs,
     )
 
@@ -434,7 +438,12 @@ def _image_input(data: str) -> dict[str, str]:
 def test_payload_replays_conversation_as_responses_items(
     messages: list[dict[str, Any]], expected_input: list[dict[str, Any]]
 ) -> None:
-    payload = build_responses_payload(messages, model_id="gpt-5.4", policy=responses_policy())
+    payload = build_responses_payload(
+        messages,
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        reasoning_renderer=responses_reasoning(),
+    )
 
     assert payload["input"] == expected_input
 
@@ -456,6 +465,7 @@ def test_payload_maps_an_allowed_document_to_input_file() -> None:
         ],
         model_id="gpt-5.4",
         policy=responses_policy(),
+        reasoning_renderer=responses_reasoning(),
         document_media_types=frozenset({"application/pdf"}),
     )
 
@@ -488,6 +498,7 @@ def test_payload_rejects_media_the_endpoint_cannot_carry(media_block: dict[str, 
             [{"role": "user", "content": [media_block]}],
             model_id="gpt-5.4",
             policy=responses_policy(),
+            reasoning_renderer=responses_reasoning(),
         )
 
     assert caught.value.retryable is False
@@ -559,7 +570,10 @@ def test_estimate_budgets_everything_that_rides_on_the_wire(
         with_addition["messages"], tools=with_addition.get("tools")
     )
     payload = build_responses_payload(
-        with_addition["messages"], model_id="gpt-5.4", policy=responses_policy()
+        with_addition["messages"],
+        model_id="gpt-5.4",
+        policy=responses_policy(),
+        reasoning_renderer=responses_reasoning(),
     )
 
     assert estimated > estimate_responses_input_tokens(messages)

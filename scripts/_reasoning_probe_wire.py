@@ -144,16 +144,17 @@ def _build_exact_payload(
 ) -> dict[str, Any]:
     """Build the payload for the same model-selected wire used by ``send``."""
 
-    protocol_resolver = getattr(adapter, "_model_protocol", None)
-    protocol = protocol_resolver(model_id) if callable(protocol_resolver) else "openai"
+    protocol = adapter.wire_profile(model_id).protocol
     kwargs: dict[str, Any] = {
         "temperature": 1.0,
         "thinking_effort": effort,
     }
     if tools:
         kwargs["tools"] = tools
-    if protocol == "anthropic":
-        return dict(adapter._messages._build_payload(messages, model_id, **kwargs))
+    if protocol == "messages":
+        # A multi-wire Adapter delegates Messages to its inner Messages adapter.
+        messages_wire = getattr(adapter, "_messages", adapter)
+        return dict(messages_wire._build_payload(messages, model_id, **kwargs))
     if protocol == "responses":
         return dict(adapter._build_responses_payload(messages, model_id=model_id, **kwargs))
     return dict(adapter._build_payload(messages, model_id, **kwargs))

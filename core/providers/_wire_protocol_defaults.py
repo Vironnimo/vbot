@@ -57,7 +57,9 @@ _RAW_DEFAULTS: dict[str, dict[str, Any]] = {
         "media": {"types": _IMAGE_TYPES},
     },
     "gemini": {
-        "request": {"output_limit_field": None, "tool_schema": "omit_strict"},
+        # The Gemini codec moves the resolved output limit into
+        # ``generationConfig.maxOutputTokens``.
+        "request": {"output_limit_field": "max_output_tokens", "tool_schema": "omit_strict"},
         "reasoning": {"dialect": "gemini_thinking"},
         "replay": {"fidelity": "meta_only"},
         "media": {"types": _IMAGE_TYPES},

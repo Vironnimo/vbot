@@ -1,15 +1,12 @@
-"""Opencode zen gemini."""
+"""The OpenCode Zen Gemini ``generateContent`` codec."""
 
 from __future__ import annotations
 
 import copy
 import json
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from typing import Any
 
-from core.providers._opencode_zen_profiles import (
-    _ZEN_GEMINI_MEDIA_TYPES,
-)
 from core.providers.adapter import (
     TERMINAL_OUTCOME_CONTENT_FILTERED,
     TERMINAL_OUTCOME_ERROR,
@@ -26,6 +23,9 @@ from core.providers.adapter import (
 from core.providers.errors import (
     ProviderError,
 )
+
+ZEN_MAX_IMAGES_PER_REQUEST = 3_600
+"""Images Zen's Gemini wire accepts in one request."""
 
 
 def _replay_part(part: Mapping[str, Any]) -> dict[str, Any]:
@@ -44,7 +44,9 @@ def _replay_part(part: Mapping[str, Any]) -> dict[str, Any]:
     return replayed
 
 
-def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | None, int]:
+def _to_gemini_content(
+    message: Mapping[str, Any], media_types: Collection[str]
+) -> tuple[dict[str, Any] | None, int]:
     role = message.get("role")
     if role == "assistant":
         replay = message.get("reasoning_meta")
@@ -92,11 +94,13 @@ def _to_gemini_content(message: Mapping[str, Any]) -> tuple[dict[str, Any] | Non
         )
     if role != "user":
         return None, 0
-    user_parts, image_count = _to_gemini_user_parts(message.get("content", ""))
+    user_parts, image_count = _to_gemini_user_parts(message.get("content", ""), media_types)
     return {"role": "user", "parts": user_parts}, image_count
 
 
-def _to_gemini_user_parts(content: Any) -> tuple[list[dict[str, Any]], int]:
+def _to_gemini_user_parts(
+    content: Any, media_types: Collection[str]
+) -> tuple[list[dict[str, Any]], int]:
     if not isinstance(content, list):
         return [{"text": _content_text(content)}], 0
     parts: list[dict[str, Any]] = []
@@ -121,7 +125,7 @@ def _to_gemini_user_parts(content: Any) -> tuple[list[dict[str, Any]], int]:
                 "Gemini media blocks require string base64 and media_type fields",
                 retryable=False,
             )
-        if media_type not in _ZEN_GEMINI_MEDIA_TYPES:
+        if media_type not in media_types:
             raise ProviderError(f"Unsupported Gemini media type: {media_type}", retryable=False)
         parts.append({"inlineData": {"mimeType": media_type, "data": base64_data}})
         if media_type.startswith("image/"):

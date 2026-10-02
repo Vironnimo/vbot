@@ -49,35 +49,26 @@ CLOSED_TOOL = {
 _LEVELS: dict[str, tuple[str, ...]] = {
     "gpt-5.6-luna": ("none", "low", "medium", "high", "xhigh", "max"),
     "muse-spark-1.3-contributor": ("minimal", "low", "medium", "high", "xhigh"),
-    "grok-4.5": ("low", "medium", "high"),
+    "grok-4.6": ("low", "medium", "high", "xhigh"),
     "kimi-k3": ("low", "high", "max"),
 }
 
-# Independent ``metadata.opencode_go`` facts, mirroring the bundled overrides.
-# Test-owned so wire behavior stays pinned when the live catalog changes; Union
-# Alpha is a retired profile kept only as a Messages ``provider_default`` fixture.
-PROFILES: dict[str, dict[str, object]] = {
-    "union-alpha": {"protocol": "anthropic", "thinking_control": "provider_default"},
-    "minimax-m2.7": {"protocol": "anthropic"},
-    "minimax-m3": {"protocol": "anthropic"},
-    "deepseek-v4-flash": {"protocol": "openai"},
-    "glm-5.3": {"protocol": "openai", "reasoning_response_field": "reasoning_content"},
-    "kimi-k2.6": {
-        "protocol": "openai",
-        "reasoning_response_field": "reasoning",
-        "thinking_control": "toggle",
-        "thinking_keep": "all",
-    },
-    "kimi-k2.7-code": {"protocol": "openai", "thinking_control": "always_enabled"},
-    "kimi-k3": {
-        "minimum_reasoning_effort": "low",
-        "protocol": "openai",
-        "reasoning_response_field": "reasoning",
-    },
-    "gpt-5.6-luna": {"protocol": "responses"},
-    "muse-spark-1.3-contributor": {"protocol": "responses"},
-    "grok-4.5": {"minimum_reasoning_effort": "low", "protocol": "responses"},
-}
+# Test-owned catalog entries, so wire behavior stays pinned when the live catalog
+# changes. Routing and wire shaping come from the bundled wire profile
+# (``resources/wire/opencode-go.json``), whose rules name these ids.
+CATALOG_IDS = frozenset(
+    {
+        "minimax-m2.7",
+        "minimax-m3",
+        "deepseek-v4-flash",
+        "kimi-k2.6",
+        "kimi-k2.7-code",
+        "kimi-k3",
+        "gpt-5.6-luna",
+        "muse-spark-1.3-contributor",
+        "grok-4.6",
+    }
+)
 
 
 def go_model(
@@ -86,7 +77,7 @@ def go_model(
     context_window: int = 1_000_000,
     max_output_tokens: int = 131_072,
 ) -> Model:
-    """A Model carrying the test-owned OpenCode Go profile for ``model_id``."""
+    """The test-owned OpenCode Go catalog entry for ``model_id``."""
 
     levels = _LEVELS.get(model_id, ())
     return Model(
@@ -104,16 +95,15 @@ def go_model(
         ),
         context_window=context_window,
         max_output_tokens=max_output_tokens,
-        metadata={"opencode_go": PROFILES[model_id]} if model_id in PROFILES else {},
     )
 
 
-def profile_lookup(model_id: str) -> Model | None:
-    """Resolve the profiled Model for one bare, suffixed or vendor-prefixed id."""
+def catalog_lookup(model_id: str) -> Model | None:
+    """Resolve the catalog entry for one bare, suffixed or vendor-prefixed id."""
 
     bare = model_id.split("::", 1)[0]
     for candidate in (model_id, bare, bare.rsplit("/", 1)[-1]):
-        if candidate in PROFILES:
+        if candidate in CATALOG_IDS:
             return go_model(candidate)
     return None
 
@@ -143,7 +133,7 @@ def go_config(**changes: Any) -> ProviderConfig:
 
 
 def go_adapter(
-    model_lookup: Callable[[str], Model | None] = profile_lookup,
+    model_lookup: Callable[[str], Model | None] = catalog_lookup,
     **config_changes: Any,
 ) -> OpenCodeGoAdapter:
     return OpenCodeGoAdapter(go_config(**config_changes), API_KEY, model_lookup=model_lookup)

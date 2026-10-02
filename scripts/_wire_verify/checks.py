@@ -94,12 +94,28 @@ async def run_checks(
 
 # -- requests --------------------------------------------------------------------
 
+# Chat merges the Adapter's per-conversation request context into every request
+# (OpenCode Go refuses a request without its session header); the checks send
+# one fixed synthetic conversation identity.
+_AGENT_ID = "wire-verify"
+_SESSION_ID = "wire-verify"
+
+
+def _request_kwargs(adapter: ProviderAdapter, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    context = adapter.request_context_kwargs(agent_id=_AGENT_ID, session_id=_SESSION_ID)
+    return {**context, **kwargs}
+
 
 async def _send(
     adapter: ProviderAdapter, model_id: str, messages: list[dict[str, Any]], **kwargs: Any
 ) -> _Reply:
     started = time.monotonic()
-    raw = await adapter.send(messages, model_id=model_id, max_tokens=_OUTPUT_TOKENS, **kwargs)
+    raw = await adapter.send(
+        messages,
+        model_id=model_id,
+        max_tokens=_OUTPUT_TOKENS,
+        **_request_kwargs(adapter, kwargs),
+    )
     normalized = adapter.normalize_response(raw, model_id=model_id)
     usage = normalized.get("usage")
     reply = _Reply(
@@ -120,7 +136,10 @@ async def _stream(
     started = time.monotonic()
     reply = _Reply()
     async for delta in adapter.stream(
-        messages, model_id=model_id, max_tokens=_OUTPUT_TOKENS, **kwargs
+        messages,
+        model_id=model_id,
+        max_tokens=_OUTPUT_TOKENS,
+        **_request_kwargs(adapter, kwargs),
     ):
         kind = delta.get("type")
         if kind == "content_delta":

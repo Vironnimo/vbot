@@ -35,7 +35,10 @@ from tests.core.providers.openai_test_support import (
     codex_sse_response,
     jwt_with_account,
 )
-from tests.core.providers.responses_test_support import responses_policy
+from tests.core.providers.responses_test_support import (
+    responses_policy,
+    responses_reasoning,
+)
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 
@@ -204,6 +207,7 @@ async def _render_responses(messages: list[dict[str, Any]]) -> dict[str, Any]:
         messages,
         model_id="gpt-5.4",
         policy=responses_policy(),
+        reasoning_renderer=responses_reasoning(),
     )
 
 

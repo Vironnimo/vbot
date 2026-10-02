@@ -1,37 +1,38 @@
 {
-  "_comment": "Verified Zen profiles: GPT 6.1 Sol Responses minimum effort low, JSON schema support, and ignored historical Reasoning (2026-10-02); Space Bunny Chat minimum effort (2026-09-24), Qwen3.8 Max Chat binary thinking control (2026-09-28). Both Chat models return readable reasoning_content.",
+  "_comment": "Hand-authored OpenCode Zen Model facts. Wire decisions (each Model's wire, admission of free and retired Models, thinking controls, cheapest rung for none, response carrier, media) live in resources/wire/opencode-zen.json. GPT 6.1 Sol: JSON schema support and ignored historical Reasoning (verified 2026-10-02); it is a complete record so it stays usable when a refreshed catalog lacks it (listed live on 2026-10-02).",
   "models": {
     "gpt-6.1-sol": {
+      "name": "gpt-6.1-sol",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
       "reasoning_replay": "none",
       "capabilities": {
-        "json_mode": true
-      },
-      "metadata": {
-        "opencode_zen": {
-          "protocol": "responses",
-          "minimum_reasoning_effort": "low"
+        "vision": true,
+        "tools": true,
+        "json_mode": true,
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
         }
       }
     },
     "qwen3.8-max": {
-      "name": "Qwen3.8 Max",
-      "metadata": {
-        "opencode_zen": {
-          "protocol": "chat_completions",
-          "reasoning_response_field": "reasoning_content",
-          "thinking_control": "toggle"
-        }
-      }
+      "name": "Qwen3.8 Max"
     },
     "space-bunny-free": {
-      "name": "Space Bunny Free",
-      "metadata": {
-        "opencode_zen": {
-          "protocol": "chat_completions",
-          "reasoning_response_field": "reasoning_content",
-          "minimum_reasoning_effort": "low"
-        }
-      }
+      "name": "Space Bunny Free"
     }
   }
 }

@@ -290,6 +290,9 @@ def _describe_thinking_toggle(wire: ReasoningWire, intent: ReasoningIntent) -> R
 # -- thinking_toggle_with_effort ---------------------------------------------------
 # An active decision with a level is ``reasoning_effort: <level>``; one without
 # a level is the plain ``thinking`` switch, and off is ``thinking`` disabled.
+# With ``reasoning.options.switch_with_effort: true`` an active decision with a
+# level also carries the enabled ``thinking`` switch (wires whose effort does
+# not imply thinking).
 
 
 def _render_thinking_toggle_with_effort(
@@ -300,10 +303,10 @@ def _render_thinking_toggle_with_effort(
 ) -> None:
     del output_allowance
     if intent.kind in _ACTIVE_KINDS:
+        if intent.effort_level is None or wire.options.get("switch_with_effort") is True:
+            payload["thinking"] = _thinking_enabled(wire)
         if intent.effort_level is not None:
             payload["reasoning_effort"] = intent.effort_level
-        else:
-            payload["thinking"] = _thinking_enabled(wire)
     elif intent.kind == REASONING_INTENT_OFF:
         payload["thinking"] = {"type": "disabled"}
 
@@ -319,6 +322,26 @@ def _describe_thinking_toggle_with_effort(
     if intent.kind == REASONING_INTENT_OFF:
         return ReasoningIntent(REASONING_INTENT_OFF)
     return _SENDS_NOTHING
+
+
+# -- gemini_thinking ---------------------------------------------------------------
+# Gemini ``generationConfig.thinkingConfig: {includeThoughts: true, thinkingLevel}``.
+# Like ``reasoning_effort``, ``on``/``budget`` degrade to their snapped level and
+# a decision without a level sends nothing.
+
+
+def _render_gemini_thinking(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del wire, output_allowance
+    level = _effort_level(intent)
+    if level is None:
+        return
+    generation = payload.setdefault("generationConfig", {})
+    generation["thinkingConfig"] = {"includeThoughts": True, "thinkingLevel": level}
 
 
 # -- minimax_split ----------------------------------------------------------------
@@ -484,6 +507,9 @@ _DIALECTS: dict[str, _Dialect] = {
         _render_thinking_toggle_with_effort,
         _describe_thinking_toggle_with_effort,
         ("thinking", "reasoning_effort"),
+    ),
+    "gemini_thinking": _Dialect(
+        _render_gemini_thinking, _describe_reasoning_effort, ("generationConfig",)
     ),
     "minimax_split": _Dialect(_render_minimax_split, _describe_minimax_split, ("reasoning_split",)),
     "minimax_thinking": _Dialect(

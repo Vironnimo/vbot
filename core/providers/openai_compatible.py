@@ -9,7 +9,7 @@ provider-specific behavior can subclass this adapter."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, Self, override
+from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
 
@@ -98,18 +98,12 @@ from core.providers.providers import (
     resolve_request_output_limit,
 )
 from core.providers.reasoning import (
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
-    model_reasoning_budget_max,
-    model_reasoning_control,
     model_reasoning_supported,
     remove_reasoning_kwargs,
-    resolve_reasoning_intent,
     warn_effort_swallowed,
     warn_rejected_effort,
 )
@@ -151,9 +145,6 @@ __all__ = [
 
 _LOGGER = get_logger("providers.openai_compatible")
 
-_PROFILE_DESCRIBED_PROTOCOLS = frozenset({"chat_completions", "messages", "responses"})
-"""Protocols whose codecs render reasoning only from the wire profile's plan."""
-
 
 class OpenAICompatibleAdapter(ProviderAdapter):
     """Adapter for OpenAI-compatible API providers.
@@ -166,17 +157,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     Args:
         config: Immutable provider configuration.
         token_getter: Async callable that returns the current auth token.
-    """
-
-    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = True
-    """Whether every request carries exactly the wire profile's reasoning plan.
-
-    True when reasoning reaches the wire only as the profile's plan in its
-    dialect (Chat Completions :meth:`_apply_reasoning`, and the Messages and
-    Responses codecs of subclasses), so :meth:`describe_reasoning_render`
-    describes that plan. A subclass that still spells reasoning itself (Tool
-    toggles, other endpoints chosen per Model) sets it to False and keeps the
-    declared-control description until its wire is profile-driven.
     """
 
     def __init__(
@@ -351,11 +331,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         captured it and the declaration allows meta, otherwise the readable
         text — never both. The readable text rides in the wire profile's
         ``replay.history_field``; a wire without one never receives readable
-        reasoning.
+        reasoning. With ``replay.echo_empty_on_tool_calls`` a Tool-call turn
+        that carries no readable reasoning gets an empty carrier.
         """
         wire = _to_openai_assistant_message(message)
         fidelity = self.reasoning_replay_fidelity(model_id or "")
-        carrier = self.wire_profile(model_id or "").replay.history_field
+        replay = self.wire_profile(model_id or "").replay
+        carrier = replay.history_field
         if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY or carrier is None:
             # Strict/block-shaped wires never take a top-level readable field.
             return wire
@@ -368,15 +350,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 wire.pop(key, None)
             if readable:
                 wire[carrier] = reasoning
-            return wire
-
-        # ``meta_preferred``: meta supersedes duplicated plaintext (OpenRouter's
-        # documented contract); readable text stays the lossless fallback only
-        # when no meta was captured.
-        has_meta = any(key in wire for key in OPENAI_REASONING_META_KEYS)
-        if has_meta or not readable:
-            return wire
-        wire[carrier] = reasoning
+        elif readable and not any(key in wire for key in OPENAI_REASONING_META_KEYS):
+            # ``meta_preferred``: meta supersedes duplicated plaintext
+            # (OpenRouter's documented contract); readable text stays the
+            # lossless fallback only when no meta was captured.
+            wire[carrier] = reasoning
+        if replay.echo_empty_on_tool_calls and wire.get("tool_calls"):
+            # Some backends reject a historical Tool Call without the carrier,
+            # also when the Model produced no reasoning for it.
+            wire.setdefault(carrier, "")
         return wire
 
     def _format_message(
@@ -668,41 +650,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     ) -> ReasoningIntent:
         """Describe the reasoning a request with ``effort`` carries for ``model_id``.
 
-        A Model the catalog marks as non-reasoning reports ``off``. On Chat
-        Completions, Messages and Responses the Provider's wire profile plans
-        the effort exactly like the codec renders it, and its dialect reports
-        what the rendered request carries. Subclasses that spell reasoning
-        themselves (:attr:`DESCRIBES_REASONING_FROM_PROFILE`) and other
-        protocols keep the declared-control description against the profile's
-        ladder, reporting an ``on``/``budget`` intent as the effort level such
-        a wire sends.
+        A Model the catalog marks as non-reasoning reports ``off``. Otherwise
+        the Provider's wire profile plans the effort exactly like the codec of
+        the Model's protocol renders it, and its dialect reports what the
+        rendered request carries.
         """
 
         if model_reasoning_supported(model_lookup, model_id) is False:
             return ReasoningIntent(REASONING_INTENT_OFF)
-        profile = cls._standalone_wire_profile(
+        wire = cls._standalone_wire_profile(
             model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
-        )
-        wire = profile.reasoning
-        if (
-            profile.protocol in _PROFILE_DESCRIBED_PROTOCOLS
-            and cls.DESCRIBES_REASONING_FROM_PROFILE
-        ):
-            return describe_reasoning(wire, wire.plan(effort))
-        intent = resolve_reasoning_intent(
-            supported=model_reasoning_supported(model_lookup, model_id),
-            control=model_reasoning_control(model_lookup, model_id),
-            levels=wire.ladder or tuple(OPENAI_REASONING_EFFORTS),
-            effort=effort,
-            budget_max=model_reasoning_budget_max(model_lookup, model_id),
-            max_tokens=None,
-        )
-        if (
-            intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON)
-            and intent.effort_level is not None
-        ):
-            return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
-        return intent
+        ).reasoning
+        return describe_reasoning(wire, wire.plan(effort))
 
     def _classify_http_status(
         self,

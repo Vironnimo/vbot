@@ -140,8 +140,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         config: Immutable provider configuration.
         token_getter: Async callable that returns the current auth token.
         api_version: ``anthropic-version`` header value, when the endpoint needs one.
-        prompt_caching: Force prompt-cache breakpoints on (``True``) or off
-            (``False``); ``None`` follows the wire profile's ``prompt_cache``.
         extra_retryable_statuses: Provider-specific retryable HTTP statuses.
     """
 
@@ -159,7 +157,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         connection_mode: str | None = None,
         client: httpx.AsyncClient | None = None,
         api_version: str | None = None,
-        prompt_caching: bool | None = None,
         extra_retryable_statuses: frozenset[int] = frozenset(),
     ) -> None:
         self._config = config
@@ -168,7 +165,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         )
         self._auth_config = auth_config or config.connections[0].auth
         self._api_version = api_version
-        self._prompt_caching = prompt_caching
         self._extra_retryable_statuses: set[int] = set(extra_retryable_statuses)
         # ``connection_mode`` is accepted for parity with the unified
         # ``get_adapter`` call site but is not used by the Messages wire.
@@ -391,10 +387,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             )
         # Cache stable prefixes last, after every other payload mutation, so the
         # markers land on the final system/messages that go on the wire.
-        prompt_caching = self._prompt_caching
-        if prompt_caching is None:
-            prompt_caching = rules.prompt_cache == "anthropic_breakpoints"
-        if prompt_caching:
+        if rules.prompt_cache == "anthropic_breakpoints":
             _apply_prompt_caching(payload)
         return payload
 

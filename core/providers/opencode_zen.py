@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import replace
-from typing import TYPE_CHECKING, Any, ClassVar, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
@@ -19,6 +18,7 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers._opencode_zen_gemini import (
+    ZEN_MAX_IMAGES_PER_REQUEST,
     _apply_gemini_response_format,
     _content_text,
     _gemini_tool_choice,
@@ -28,26 +28,8 @@ from core.providers._opencode_zen_gemini import (
     _normalize_gemini_stream_chunk,
     _to_gemini_content,
 )
-from core.providers._opencode_zen_profiles import (
-    _AUTH_401_MARKERS,
-    _FREE_MODELS,
-    _KNOWN_PROTOCOLS,
-    _NON_AUTH_401_MARKERS,
-    _PERMANENT_429_MARKERS,
-    _PROTOCOL_BY_MODEL,
-    _RETIRED_MODELS,
-    _ZEN_GEMINI_MEDIA_TYPES,
-    _ZEN_INLINE_REQUEST_MAX_BYTES,
-    _ZEN_MAX_IMAGES_PER_REQUEST,
-    OPENCODE_ZEN_METADATA_KEY,
-    PROTOCOL_CHAT,
-    PROTOCOL_GEMINI,
-    PROTOCOL_MESSAGES,
-    PROTOCOL_METADATA_KEY,
-    PROTOCOL_RESPONSES,
-)
+from core.providers._responses_profile import take_reasoning_renderer
 from core.providers.adapter import (
-    IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     project_tool_result_content_fallbacks,
 )
@@ -61,42 +43,48 @@ from core.providers.errors import (
     NetworkError,
     ProviderAuthError,
     ProviderError,
+    ProviderRequestTooLargeError,
 )
-from core.providers.openai import OPENAI_RESPONSES_PROTOCOL, OpenAIAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.reasoning import (
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
-    ReasoningIntent,
-    closest_supported_effort,
-    model_reasoning_levels,
-    normalize_thinking_effort,
-)
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
+from core.providers.wire_profiles import WireBinding, standalone_wire_binding
 from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
-__all__ = [
-    "OPENCODE_ZEN_METADATA_KEY",
-    "OpenCodeZenAdapter",
-    "PROTOCOL_CHAT",
-    "PROTOCOL_GEMINI",
-    "PROTOCOL_MESSAGES",
-    "PROTOCOL_METADATA_KEY",
-    "PROTOCOL_RESPONSES",
-]
+__all__ = ["OpenCodeZenAdapter"]
 
 _FREE_TIER_ACCESS_MESSAGE = (
     "This OpenCode Zen free Model is only available inside OpenCode. "
     "Choose a supported Zen Model or an OpenCode Go Model. "
     "Another API key does not enable access to this Model from vBot."
 )
+
+# Zen returns allowance exhaustion with HTTP 429 and entitlement failures with
+# HTTP 401; these markers separate them from throttling and bad credentials.
+_PERMANENT_429_MARKERS = (
+    "freeusagelimiterror",
+    "gousagelimiterror",
+    "blackusagelimiterror",
+    "monthly limit",
+    "weekly limit",
+    "usage limit",
+    "quota exceeded",
+)
+
+_NON_AUTH_401_MARKERS = (
+    "creditserror",
+    "monthlylimiterror",
+    "userlimiterror",
+    "modelerror",
+)
+
+_AUTH_401_MARKERS = ("autherror", "invalid api key", "missing api key")
 
 
 def _classify_zen_status(
@@ -142,10 +130,6 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
         return f"{status_code} {response_body}".strip()
 
     @override
-    def wire_media_support(self, _model_id: str) -> frozenset[str]:
-        return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
-
-    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -162,10 +146,15 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
 
 
 class OpenCodeZenAdapter(OpenAIAdapter):
-    """Route OpenCode Zen Models across its four official wire protocols."""
+    """Route OpenCode Zen Models across its four official wire protocols.
 
-    # Reasoning is still spelled by this Adapter (not only by the wire profile).
-    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = False
+    The wire profile (``resources/wire/opencode-zen.json``) routes each Model
+    to Chat Completions or Responses (the inherited codecs), Anthropic Messages
+    (an inner Messages adapter sharing this Adapter's client and wire
+    profiles) or Gemini ``generateContent``, and admits only reviewed Models:
+    free Models are restricted to OpenCode itself and retired Models are
+    refused before any request.
+    """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = (
         "chat_completions",
@@ -220,9 +209,14 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             debug_recorder=debug_recorder,
             client=self._client,
             api_version=ANTHROPIC_VERSION,
-            prompt_caching=True,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
+        self._messages.bind_wire_profiles(self.wire)
+
+    @override
+    def bind_wire_profiles(self, binding: WireBinding) -> None:
+        super().bind_wire_profiles(binding)
+        self._messages.bind_wire_profiles(binding)
 
     @override
     async def aclose(self) -> None:
@@ -236,22 +230,24 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         raw: Mapping[str, Any],
         defaults: Mapping[str, Any] | None = None,
     ) -> Model:
-        raw_model_id = raw.get("id")
-        if isinstance(raw_model_id, str) and raw_model_id in _FREE_MODELS:
-            raise CatalogEntrySkipped(_FREE_TIER_ACCESS_MESSAGE)
-        if isinstance(raw_model_id, str) and raw_model_id in _RETIRED_MODELS:
-            raise CatalogEntrySkipped(f"OpenCode Zen Model {raw_model_id!r} is retired")
+        """Normalize one listed Model; skip a Model the wire profile does not admit."""
+
         model = OpenAICompatibleAdapter.normalize_catalog_entry(raw, defaults)
-        protocol = _PROTOCOL_BY_MODEL.get(model.model_id)
-        if protocol is None:
-            raise CatalogEntrySkipped(
-                f"OpenCode Zen Model {model.model_id!r} has no reviewed endpoint protocol"
+        admission = (
+            standalone_wire_binding(
+                provider_id="opencode-zen",
+                connection_id="",
+                protocols=cls.WIRE_PROTOCOLS,
+                model_lookup=None,
             )
-        profile: dict[str, Any] = {PROTOCOL_METADATA_KEY: protocol}
-        return replace(
-            model,
-            metadata={**model.metadata, OPENCODE_ZEN_METADATA_KEY: profile},
+            .profile(model.model_id)
+            .admission
         )
+        if admission.state != "available":
+            raise CatalogEntrySkipped(
+                admission.message or f"OpenCode Zen Model {model.model_id!r} is {admission.state}"
+            )
+        return model
 
     @override
     def request_context_kwargs(
@@ -266,17 +262,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         return {}
 
     @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        protocol = self._model_protocol(model_id)
-        if protocol == PROTOCOL_GEMINI:
-            return _ZEN_GEMINI_MEDIA_TYPES
-        if protocol == PROTOCOL_MESSAGES:
-            return self._messages.wire_media_support(model_id)
-        # Zen's format converters preserve images on Responses and Chat paths;
-        # they do not establish native PDF/audio/video forwarding there.
-        return IMAGE_WIRE_MEDIA_TYPES
-
-    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -284,10 +269,10 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        protocol = self._model_protocol(model_id)
-        if protocol == PROTOCOL_MESSAGES:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "messages":
             return await self._messages.send(messages, model_id=model_id, **kwargs)
-        if protocol == PROTOCOL_GEMINI:
+        if protocol == "gemini":
             return await self._send_gemini(messages, model_id=model_id, **kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
@@ -299,10 +284,10 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        protocol = self._model_protocol(model_id)
-        if protocol == PROTOCOL_MESSAGES:
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "messages":
             return self._messages.stream(messages, model_id=model_id, **kwargs)
-        if protocol == PROTOCOL_GEMINI:
+        if protocol == "gemini":
             return self._stream_gemini(messages, model_id=model_id, **kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
 
@@ -314,10 +299,10 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str | None = None,
     ) -> dict[str, Any]:
         if model_id is not None:
-            protocol = self._model_protocol(model_id)
-            if protocol == PROTOCOL_MESSAGES:
+            protocol = self.wire_profile(model_id).protocol
+            if protocol == "messages":
                 return self._messages.normalize_response(response, model_id=model_id)
-            if protocol == PROTOCOL_GEMINI:
+            if protocol == "gemini":
                 return _normalize_gemini_response(response)
             return super().normalize_response(response, model_id=model_id)
         if "candidates" in response or "promptFeedback" in response:
@@ -338,100 +323,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             status_code,
             detail=detail,
             response_headers=response_headers,
-        )
-
-    @override
-    def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
-        protocol = self._model_protocol(model_id)
-        policy: dict[str, Any] = {}
-        if protocol == PROTOCOL_RESPONSES:
-            policy["protocol"] = OPENAI_RESPONSES_PROTOCOL
-            minimum = self._profile_value(model_id, "minimum_reasoning_effort")
-            if minimum is not None:
-                policy["minimum_reasoning_effort"] = minimum
-        return policy
-
-    def _model_protocol(self, model_id: str) -> str:
-        upstream_id = model_id.split("::", 1)[0]
-        if upstream_id in _FREE_MODELS:
-            raise ProviderError(_FREE_TIER_ACCESS_MESSAGE, retryable=False)
-        if upstream_id in _RETIRED_MODELS:
-            raise ProviderError(f"OpenCode Zen Model {upstream_id!r} is retired", retryable=False)
-        protocol = self._profile_value(model_id, PROTOCOL_METADATA_KEY)
-        if protocol not in _KNOWN_PROTOCOLS:
-            raise ProviderError(
-                f"OpenCode Zen Model {model_id!r} has no reviewed wire protocol",
-                retryable=False,
-            )
-        return cast(str, protocol)
-
-    def _profile_value(self, model_id: str, key: str) -> Any:
-        if self._model_lookup is None:
-            return None
-        for candidate in _model_lookup_candidates(model_id):
-            model = self._model_lookup(candidate)
-            if model is None:
-                continue
-            profile = model.metadata.get(OPENCODE_ZEN_METADATA_KEY)
-            return profile.get(key) if isinstance(profile, Mapping) else None
-        return None
-
-    @override
-    def _apply_reasoning(
-        self,
-        payload: dict[str, Any],
-        request_kwargs: dict[str, Any],
-        model_id: str,
-    ) -> None:
-        selected = request_kwargs.get("thinking_effort") or request_kwargs.get("reasoning_effort")
-        if self._profile_value(model_id, "thinking_control") == "toggle":
-            request_kwargs.pop("thinking_effort", None)
-            request_kwargs.pop("reasoning_effort", None)
-            enabled = normalize_thinking_effort(selected) != "none"
-            payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
-            return
-        if normalize_thinking_effort(selected) == "none":
-            minimum = self._profile_value(model_id, "minimum_reasoning_effort")
-            if minimum in {"minimal", "low", "medium", "high", "xhigh", "max"}:
-                request_kwargs["thinking_effort"] = minimum
-        super()._apply_reasoning(payload, request_kwargs, model_id)
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        if model_lookup is not None:
-            for candidate in _model_lookup_candidates(model_id):
-                model = model_lookup(candidate)
-                if model is None:
-                    continue
-                profile = model.metadata.get(OPENCODE_ZEN_METADATA_KEY)
-                if isinstance(profile, Mapping) and profile.get("thinking_control") == "toggle":
-                    enabled = normalize_thinking_effort(effort) != "none"
-                    return ReasoningIntent(REASONING_INTENT_ON if enabled else REASONING_INTENT_OFF)
-                minimum = (
-                    profile.get("minimum_reasoning_effort")
-                    if isinstance(profile, Mapping)
-                    else None
-                )
-                if (
-                    normalize_thinking_effort(effort) == "none"
-                    and isinstance(minimum, str)
-                    and minimum in model.capabilities.reasoning.levels
-                ):
-                    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=minimum)
-                break
-        return super().describe_reasoning_render(
-            model_lookup=model_lookup,
-            model_id=model_id,
-            effort=effort,
-            provider_config=provider_config,
         )
 
     async def _gemini_headers(self) -> dict[str, str]:
@@ -539,7 +430,20 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         kwargs: Mapping[str, Any],
     ) -> dict[str, Any]:
+        """Render one Gemini ``generateContent`` request from the wire profile.
+
+        Raises:
+            ProviderError: (not retryable, nothing sent) when the profile does
+                not admit the Model, a media type or parameter is not carried,
+                or the request holds too many images.
+            ProviderRequestTooLargeError: when the request exceeds the profile's
+                request body limit.
+        """
+
+        self._refuse_unadmitted_model(model_id)
+        profile = self.wire_profile(model_id)
         request = {key: value for key, value in kwargs.items() if value is not None}
+        reasoning_renderer = take_reasoning_renderer(profile, request)
         self._apply_model_output_limit(request, model_id, messages)
         if model_ceiling := self._model_max_output_tokens(model_id):
             for output_key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):
@@ -568,13 +472,13 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 call_id = message.get("tool_call_id")
                 if isinstance(call_id, str) and call_id in tool_names:
                     projected_message = {**message, "name": tool_names[call_id]}
-            content, added_images = _to_gemini_content(projected_message)
+            content, added_images = _to_gemini_content(projected_message, profile.media.types)
             image_count += added_images
             if content is not None:
                 contents.append(content)
-        if image_count > _ZEN_MAX_IMAGES_PER_REQUEST:
+        if image_count > ZEN_MAX_IMAGES_PER_REQUEST:
             raise ProviderError(
-                f"Gemini accepts at most {_ZEN_MAX_IMAGES_PER_REQUEST} images per request",
+                f"Gemini accepts at most {ZEN_MAX_IMAGES_PER_REQUEST} images per request",
                 retryable=False,
             )
 
@@ -608,29 +512,6 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         elif stop is not None:
             raise ProviderError("Gemini stop must be a string or list of strings", retryable=False)
 
-        thinking_effort = request.pop("thinking_effort", None)
-        reasoning_effort = request.pop("reasoning_effort", None)
-        selected_effort = normalize_thinking_effort(
-            thinking_effort if thinking_effort is not None else reasoning_effort
-        )
-        if selected_effort:
-            levels = model_reasoning_levels(self._model_lookup, model_id) or (
-                "minimal",
-                "low",
-                "medium",
-                "high",
-            )
-            mapped = (
-                next((level for level in levels if level != "none"), None)
-                if selected_effort == "none"
-                else closest_supported_effort(selected_effort, levels)
-            )
-            if mapped is not None:
-                generation["thinkingConfig"] = {
-                    "includeThoughts": True,
-                    "thinkingLevel": mapped,
-                }
-
         response_format = request.pop("response_format", None)
         if response_format is not None:
             _apply_gemini_response_format(generation, response_format)
@@ -647,6 +528,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         request.pop("parallel_tool_calls", None)
         if generation:
             payload["generationConfig"] = generation
+        reasoning_renderer(payload)
         if request:
             unsupported = ", ".join(sorted(request))
             raise ProviderError(
@@ -654,19 +536,12 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 retryable=False,
             )
 
-        encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
-        if encoded_size > _ZEN_INLINE_REQUEST_MAX_BYTES:
-            raise ProviderError(
-                "OpenCode Zen Gemini inline request exceeds the documented 20 MB limit",
-                retryable=False,
-            )
+        limit = self.request_body_limit(model_id)
+        if limit is not None:
+            encoded_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+            if encoded_size > limit:
+                raise ProviderRequestTooLargeError(encoded_size, limit)
         return payload
-
-
-def _model_lookup_candidates(model_id: str) -> tuple[str, ...]:
-    without_connection = model_id.split("::", 1)[0]
-    candidates = [model_id, without_connection]
-    return tuple(dict.fromkeys(candidate for candidate in candidates if candidate))
 
 
 def _response_detail(response: httpx.Response) -> str:

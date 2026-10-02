@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock
@@ -21,6 +20,8 @@ from core.providers.opencode_go import (
     OpenCodeGoAdapter,
 )
 from core.providers.providers import AuthConfig
+from core.providers.wire_observations import WireObservations
+from core.providers.wire_profiles import WireProfiles, bundled_wire_profile_files
 
 from .opencode_go_test_support import (
     API_KEY,
@@ -32,11 +33,11 @@ from .opencode_go_test_support import (
     MESSAGES_URL,
     RESPONSES_COMPLETED,
     RESPONSES_URL,
+    catalog_lookup,
     go_adapter,
     go_config,
     go_model,
     go_request,
-    profile_lookup,
     success_response,
 )
 
@@ -75,7 +76,7 @@ def test_request_context_is_an_opaque_prompt_cache_affinity() -> None:
 @pytest.mark.parametrize(
     ("wire", "model_id"),
     [
-        pytest.param("messages", "union-alpha", id="messages"),
+        pytest.param("messages", MESSAGES_MODEL, id="messages"),
         pytest.param("chat", CHAT_MODEL, id="chat"),
         pytest.param("responses", "gpt-5.6-luna", id="responses"),
     ],
@@ -113,34 +114,41 @@ async def test_each_wire_follows_the_profile_and_carries_identification_and_affi
 
 
 @pytest.mark.asyncio
-async def test_unprofiled_model_takes_the_chat_wire_and_warns_once(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """An unknown id never guesses a native wire; the misroute risk is logged once per process."""
+async def test_unlisted_model_takes_the_chat_wire() -> None:
+    """An id the wire profile does not route never guesses a native wire."""
     model_id = f"unlisted-{uuid.uuid4().hex}"
-    profiled = False
 
-    def lookup(requested: str) -> Any:
-        # The Model data gains the protocol later, as a refreshed override would.
-        return profile_lookup("deepseek-v4-flash" if profiled else requested)
-
-    adapter = go_adapter(model_lookup=lookup)
-
-    with respx.mock, caplog.at_level(logging.INFO, logger="vbot.providers.opencode_go"):
+    with respx.mock:
         routes = _mock_all_wires(streaming=False)
-        for _ in range(3):
-            await adapter.send(HELLO, model_id=model_id)
-        profiled = True
-        await adapter.send(HELLO, model_id=model_id)
-        await adapter.send(HELLO, model_id=model_id)
+        await go_adapter().send(HELLO, model_id=model_id)
 
-    assert routes["chat"].call_count == 5
+    assert routes["chat"].call_count == 1
     assert not routes["messages"].called
     assert not routes["responses"].called
-    records = [record for record in caplog.records if model_id in record.getMessage()]
-    # One WARNING while the protocol is missing, one INFO once the Model data names it.
-    assert [record.levelno for record in records] == [logging.WARNING, logging.INFO]
-    assert "no metadata protocol" in records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_messages_wire_reads_the_connection_binding_of_the_adapter() -> None:
+    """A fact learned on the Adapter's Connection also shapes its Messages wire."""
+    observations = WireObservations(None, save_delay=None)
+    profiles = WireProfiles(
+        files=bundled_wire_profile_files(),
+        protocol_support=lambda _provider_id: OpenCodeGoAdapter.WIRE_PROTOCOLS,
+        model_resolver=lambda _provider_id, model_id: catalog_lookup(model_id),
+        report=lambda issue: None,
+        observations=observations,
+    )
+    adapter = go_adapter()
+    adapter.bind_wire_profiles(profiles.bind("opencode-go", "api-key"))
+    observations.record_rejected_parameter("opencode-go", "api-key", MESSAGES_MODEL, "top_p")
+
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(
+            return_value=success_response("messages", streaming=False)
+        )
+        await adapter.send(HELLO, model_id=MESSAGES_MODEL, top_p=0.5)
+
+    assert "top_p" not in json.loads(route.calls.last.request.content)
 
 
 @pytest.mark.asyncio
@@ -152,7 +160,7 @@ async def test_runtime_base_url_and_connection_reach_every_wire() -> None:
         API_KEY,
         runtime_url,
         AuthConfig(header="X-Runtime-Key", prefix="Key ", credential_key="RUNTIME_OPENCODE_GO_KEY"),
-        model_lookup=profile_lookup,
+        model_lookup=catalog_lookup,
     )
 
     with respx.mock:
@@ -239,7 +247,7 @@ _ALL_SHAPES = {**_CHAT_SHAPE, **_MESSAGES_SHAPE, **_RESPONSES_SHAPE}
     ("response", "model_id", "content"),
     [
         pytest.param(_ALL_SHAPES, "minimax-m2.7", "messages wire", id="messages-model"),
-        pytest.param(_ALL_SHAPES, "grok-4.5", "responses wire", id="responses-model"),
+        pytest.param(_ALL_SHAPES, "grok-4.6", "responses wire", id="responses-model"),
         pytest.param(_ALL_SHAPES, CHAT_MODEL, "chat wire", id="chat-model"),
         pytest.param(_ALL_SHAPES, None, "chat wire", id="choices-shape"),
         pytest.param(RESPONSES_COMPLETED, None, "Done", id="responses-shape"),

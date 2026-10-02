@@ -1,0 +1,242 @@
+{
+  "format_version": 1,
+  "_comment": "OpenCode Zen gateway. One credential reaches four wires; Zen's published Model table names each Model's wire, so rules route and admit every reviewed Model and a Model without a reviewed wire is refused. Free Models serve only OpenCode itself (FreeTierError) and retired Models are refused before sending; discovery skips both. Messages carries images and PDFs with prompt-cache breakpoints; Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
+  "defaults": {
+    "admission": {
+      "state": "restricted",
+      "message": "This OpenCode Zen Model has no reviewed wire protocol in vBot; choose a listed OpenCode Zen Model."
+    }
+  },
+  "protocols": {
+    "chat_completions": {
+      "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+    },
+    "messages": {
+      "request": {"prompt_cache": "anthropic_breakpoints"},
+      "media": {
+        "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+      }
+    },
+    "responses": {
+      "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
+      "reasoning": {"floor": ["low", "medium", "high", "xhigh"]}
+    },
+    "gemini": {
+      "reasoning": {"floor": ["minimal", "low", "medium", "high"], "off": "lowest"},
+      "media": {
+        "types": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/heic",
+          "image/heif",
+          "audio/wav",
+          "audio/mp3",
+          "audio/mpeg",
+          "audio/aiff",
+          "audio/aac",
+          "audio/ogg",
+          "audio/flac",
+          "video/mp4",
+          "video/mpeg",
+          "video/quicktime",
+          "video/avi",
+          "video/x-flv",
+          "video/mpg",
+          "video/webm",
+          "video/wmv",
+          "video/3gpp",
+          "application/pdf"
+        ],
+        "request_max_bytes": 20000000
+      }
+    }
+  },
+  "rules": [
+    {
+      "when": {
+        "ids": [
+          "deepseek-v4-flash",
+          "deepseek-v4-flash-vision-exp",
+          "deepseek-v4-pro",
+          "deepseek-v4.1-flash",
+          "glm-5",
+          "glm-5.1",
+          "glm-5.2",
+          "glm-5.3",
+          "glm-5.3-flash",
+          "kimi-k2.5",
+          "kimi-k2.6",
+          "kimi-k2.7-code",
+          "kimi-k3",
+          "minimax-m2.5",
+          "minimax-m2.7",
+          "minimax-m3",
+          "qwen3.8-max",
+          "space-bunny-free"
+        ]
+      },
+      "set": {
+        "protocol": "chat_completions",
+        "admission": {"state": "available", "message": null}
+      },
+      "note": "Zen's Model table serves these Models on Chat Completions (/chat/completions)."
+    },
+    {
+      "when": {
+        "ids": [
+          "claude-fable-5",
+          "claude-fable-5-1",
+          "claude-haiku-4-5",
+          "claude-opus-4-1",
+          "claude-opus-4-5",
+          "claude-opus-4-6",
+          "claude-opus-4-7",
+          "claude-opus-4-8",
+          "claude-opus-5",
+          "claude-opus-5-5",
+          "claude-sonnet-4",
+          "claude-sonnet-4-5",
+          "claude-sonnet-4-6",
+          "claude-sonnet-5",
+          "claude-sonnet-5-5",
+          "qwen3.5-plus",
+          "qwen3.6-plus",
+          "qwen3.7-max",
+          "qwen3.7-plus",
+          "qwen3.8-flash"
+        ]
+      },
+      "set": {
+        "protocol": "messages",
+        "admission": {"state": "available", "message": null}
+      },
+      "note": "Zen's Model table serves Claude and these Qwen Models on Anthropic Messages (/messages)."
+    },
+    {
+      "when": {
+        "ids": [
+          "gpt-5",
+          "gpt-5-codex",
+          "gpt-5-nano",
+          "gpt-5.1",
+          "gpt-5.1-codex",
+          "gpt-5.1-codex-max",
+          "gpt-5.1-codex-mini",
+          "gpt-5.2",
+          "gpt-5.2-codex",
+          "gpt-5.3-codex",
+          "gpt-5.3-codex-spark",
+          "gpt-5.4",
+          "gpt-5.4-mini",
+          "gpt-5.4-nano",
+          "gpt-5.4-pro",
+          "gpt-5.5",
+          "gpt-5.5-pro",
+          "gpt-5.6-luna",
+          "gpt-5.6-sol",
+          "gpt-5.6-terra",
+          "gpt-6-astra",
+          "gpt-6-luna",
+          "gpt-6-sol",
+          "gpt-6.1-sol",
+          "grok-4.5",
+          "grok-4.6",
+          "grok-4.7",
+          "grok-build-0.1",
+          "muse-spark-1.2",
+          "muse-spark-1.3"
+        ]
+      },
+      "set": {
+        "protocol": "responses",
+        "admission": {"state": "available", "message": null}
+      },
+      "note": "Zen's Model table serves GPT, Grok and Muse Spark Models on Responses (/responses)."
+    },
+    {
+      "when": {
+        "ids": [
+          "gemini-3-flash",
+          "gemini-3.1-pro",
+          "gemini-3.5-flash",
+          "gemini-3.5-flash-lite",
+          "gemini-3.6-flash",
+          "gemini-3.7-flash",
+          "gemini-3.8-flash"
+        ]
+      },
+      "set": {
+        "protocol": "gemini",
+        "admission": {"state": "available", "message": null}
+      },
+      "note": "Zen's Model table serves Gemini Models on Gemini generateContent (/models/{id}:generateContent)."
+    },
+    {
+      "when": {
+        "ids": [
+          "big-pickle",
+          "deepseek-v4-flash-free",
+          "fledge-alpha-free",
+          "jev-1.13-free",
+          "laguna-s-2.1-free",
+          "ling-3.0-flash-fin-free",
+          "ling-3.0-flash-free",
+          "longcat-2.5-preview-free",
+          "mimo-v2.5-free",
+          "mimo-v2.6-flash-free",
+          "muse-spark-1.2-contributor-free",
+          "muse-spark-1.3-contributor-free",
+          "nemotron-3-ultra-free",
+          "nemotron-3.5-lightning-free",
+          "north-mini-code-free"
+        ]
+      },
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "This OpenCode Zen free Model is only available inside OpenCode. Choose a supported Zen Model or an OpenCode Go Model. Another API key does not enable access to this Model from vBot."
+        }
+      },
+      "note": "Free Models answer every vBot request with FreeTierError (HTTP 403)."
+    },
+    {
+      "when": {
+        "ids": [
+          "claude-opus-4-1",
+          "claude-sonnet-4",
+          "glm-5",
+          "gpt-5-codex",
+          "gpt-5.1-codex",
+          "gpt-5.1-codex-max",
+          "gpt-5.1-codex-mini",
+          "gpt-5.2-codex",
+          "kimi-k2.5",
+          "minimax-m2.5"
+        ]
+      },
+      "set": {
+        "admission": {
+          "state": "retired",
+          "message": "This OpenCode Zen Model is retired; choose another OpenCode Zen Model."
+        }
+      },
+      "note": "Zen retired these Models; the listing may still name them."
+    },
+    {
+      "when": {"ids": ["qwen3.8-max"]},
+      "set": {
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled"},
+        "response": {
+          "reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]
+        }
+      },
+      "note": "Qwen3.8 Max on Chat switches thinking.type on or off, enabled by default, and answers with reasoning_content (verified 2026-09-28)."
+    },
+    {
+      "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},
+      "set": {"reasoning": {"off": "low"}},
+      "note": "These Models always reason; none asks for the cheapest rung, low (GPT 6.1 Sol verified 2026-10-02, Space Bunny 2026-09-24)."
+    }
+  ]
+}

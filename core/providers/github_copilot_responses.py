@@ -74,17 +74,17 @@ def build_responses_payload(
     *,
     model_id: str,
     policy: ResponsesRequestPolicy,
+    reasoning_renderer: Callable[[dict[str, Any]], None],
     stream: bool = False,
     document_media_types: frozenset[str] = frozenset(),
-    reasoning_renderer: Callable[[dict[str, Any]], None] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Build a stateless ``/responses`` request payload from canonical messages.
 
-    ``reasoning_renderer`` writes the reasoning fields of a wire whose
-    reasoning comes from its wire profile; the caller has already consumed the
-    reasoning kwargs. Without it, ``policy`` derives the reasoning fields from
-    the caller's effort.
+    ``policy`` filters Tools, structured output and optional parameters;
+    ``reasoning_renderer`` writes the reasoning fields (the wire profile's
+    reasoning plan in its dialect). The caller has already consumed the
+    reasoning kwargs.
     """
 
     wire_messages = normalize_tool_call_ids(messages, RESPONSES_TOOL_CALL_ID_PROFILE)
@@ -107,10 +107,7 @@ def build_responses_payload(
         request_kwargs,
         policy,
     )
-    if reasoning_renderer is None:
-        _apply_responses_reasoning(payload, request_kwargs, policy)
-    else:
-        reasoning_renderer(payload)
+    reasoning_renderer(payload)
     _apply_responses_text_format(payload, request_kwargs, policy)
     _apply_remaining_kwargs(payload, request_kwargs, policy)
     return payload
@@ -503,33 +500,6 @@ def _to_responses_function_tool(tool: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _apply_responses_reasoning(
-    payload: dict[str, Any],
-    request_kwargs: dict[str, Any],
-    policy: ResponsesRequestPolicy,
-) -> None:
-    reasoning = request_kwargs.pop("reasoning", None)
-    effort = request_kwargs.pop("reasoning_effort", None) or request_kwargs.pop(
-        "thinking_effort", None
-    )
-    include_reasoning = request_kwargs.pop("include_reasoning", None)
-    if not policy.allows_any_reasoning_controls:
-        return
-    if isinstance(reasoning, Mapping):
-        payload["reasoning"] = dict(reasoning)
-    else:
-        safe_effort = policy.closest_reasoning_effort(effort)
-        if safe_effort is not None and (
-            safe_effort != "none" or policy.supports_explicit_none_effort
-        ):
-            payload["reasoning"] = {"effort": safe_effort, "summary": "auto"}
-    # Reasoning-capable Responses wires always need encrypted continuity bytes on
-    # the next turn, including always-on Models that omit an effort object and
-    # tool-loop turns that only replay prior items. Gate only on capability.
-    if payload.get("reasoning") or include_reasoning is not False:
-        _append_include(payload, REASONING_ENCRYPTED_CONTENT_INCLUDE)
-
-
 def _apply_responses_text_format(
     payload: dict[str, Any],
     request_kwargs: dict[str, Any],
@@ -596,9 +566,3 @@ def _supports_responses_temperature(policy: ResponsesRequestPolicy) -> bool:
     """
 
     return policy.supports_request_parameter("temperature")
-
-
-def _append_include(payload: dict[str, Any], include_item: str) -> None:
-    include = payload.setdefault("include", [])
-    if isinstance(include, list) and include_item not in include:
-        include.append(include_item)

@@ -101,7 +101,9 @@ ReasoningDialect = Literal[
   ``{effort: "none"}`` or ``{enabled: false}``. No token budget is sent.
 - ``nous_reasoning``: ``reasoning: {enabled: true, effort}``.
 - ``thinking_toggle``: ``thinking: {type: enabled|disabled[, keep]}``.
-- ``thinking_toggle_with_effort``: the toggle plus ``reasoning_effort``.
+- ``thinking_toggle_with_effort``: ``reasoning_effort: <level>`` for an effort,
+  the toggle otherwise; ``reasoning.options.switch_with_effort`` sends the
+  enabled toggle with the effort too.
 - ``minimax_split``: ``reasoning_split: true``; no effort control.
 - ``minimax_thinking``: ``thinking: {type: adaptive|disabled}`` plus
   ``reasoning_split``.
@@ -112,7 +114,8 @@ ReasoningDialect = Literal[
 - ``responses_reasoning``: ``reasoning: {effort, summary}``; off is the
   ``none`` level. ``reasoning.options.context`` adds ``reasoning.context``, and
   a Model known to reason always gets the encrypted reasoning ``include``.
-- ``gemini_thinking``: ``generationConfig.thinkingConfig``.
+- ``gemini_thinking``: ``generationConfig.thinkingConfig: {includeThoughts,
+  thinkingLevel}``; a decision without a level sends nothing.
 - ``ollama_think``: native Ollama ``think``: the level for Models with a level
   ladder, otherwise ``true``; off is ``false``.
 """

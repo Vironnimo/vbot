@@ -297,8 +297,8 @@ class Model:
 
     * **Provider-scoped:** keys are provider ids (e.g.
       ``metadata.github_copilot.supported_endpoints``,
-      ``metadata.opencode_go.protocol``), so one provider's wire quirk never
-      pollutes the schema for every model.
+      ``metadata.opencode_go.reasoning_response_field``), so one provider's wire
+      quirk never pollutes the schema for every model.
     * **Small and immutable after load:** nested mappings/lists are frozen on
       construction (see ``__post_init__``); loaded ``Model`` instances never
       mutate.

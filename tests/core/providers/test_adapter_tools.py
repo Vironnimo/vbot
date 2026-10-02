@@ -42,14 +42,15 @@ from core.providers.wire_profiles import standalone_wire_binding
 from core.tools import tool_failure, tool_success
 
 from .adapter_test_support import TOKEN, bearer_config
-from .responses_test_support import responses_policy
+from .responses_test_support import responses_policy, responses_reasoning
 
 _DASH_UNDERSCORE_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 _ALPHANUMERIC_ID = re.compile(r"^[A-Za-z0-9]+$")
 _FOREIGN_ID = f"call|{'+/=' * 40}"
 
 
-_RESPONSES_POLICY = responses_policy(reasoning_efforts=())
+_RESPONSES_POLICY = responses_policy()
+_NO_REASONING = responses_reasoning(supported=False)
 
 
 # ---------------------------------------------------------------------------
@@ -453,7 +454,9 @@ def test_responses_replay_rewrites_foreign_call_ids_without_forging_item_ids(
     ]
     original = copy.deepcopy(messages)
 
-    payload = build_responses_payload(messages, model_id="test-model", policy=_RESPONSES_POLICY)
+    payload = build_responses_payload(
+        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
+    )
 
     replayed_reasoning, function_call, function_output = payload["input"]
     assert replayed_reasoning == reasoning_item
@@ -504,7 +507,9 @@ def test_responses_replay_neutralizes_readable_item_text_and_keeps_opaque_state(
     ]
     original = copy.deepcopy(messages)
 
-    payload = build_responses_payload(messages, model_id="test-model", policy=_RESPONSES_POLICY)
+    payload = build_responses_payload(
+        messages, model_id="test-model", policy=_RESPONSES_POLICY, reasoning_renderer=_NO_REASONING
+    )
 
     # Readable text cannot forge a reminder; encrypted content and ids replay verbatim.
     replayed_reasoning = reasoning(neutralized)
@@ -719,7 +724,10 @@ _RESULT_BATCH: list[dict[str, Any]] = [
 
 def test_responses_wire_sends_the_rendered_result_text() -> None:
     payload = build_responses_payload(
-        _RESULT_BATCH, model_id="test-model", policy=_RESPONSES_POLICY
+        _RESULT_BATCH,
+        model_id="test-model",
+        policy=_RESPONSES_POLICY,
+        reasoning_renderer=_NO_REASONING,
     )
 
     outputs = [

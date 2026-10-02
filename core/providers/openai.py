@@ -54,11 +54,7 @@ from core.providers._openai_constants import (
     DISCOVERY_REASONING_PARAMETER_NAMES,
     DISCOVERY_TOOL_PARAMETER_NAMES,
     OPENAI_API_KEY_WIRE_KEY,
-    OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
-    OPENAI_RESPONSES_PROTOCOL,
     OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS,
-    OPENAI_SUBSCRIPTION_REASONING_EFFORTS,
-    OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS,
     OPENAI_SUBSCRIPTION_WIRE_KEY,
     OPTIONAL_REQUEST_PARAMETER_NAMES,
     PROMPT_CACHE_AFFINITY_ID_KWARG,
@@ -71,10 +67,8 @@ from core.providers._openai_constants import (
     CodexWebSocketRoute,
 )
 from core.providers._openai_policy import (
-    OpenAISubscriptionResponsesPolicy,
     _normalize_catalog_raw,
     _optional_mapping,
-    _optional_string,
     _string_set,
     _subscription_capability_supported,
     _subscription_supported_parameters,
@@ -82,7 +76,6 @@ from core.providers._openai_policy import (
 from core.providers._responses_profile import (
     RESPONSES_DOCUMENT_TYPES,
     RESPONSES_REASONING_FIELDS,
-    catalog_tool_support,
     profile_responses_policy,
     take_reasoning_renderer,
 )
@@ -95,7 +88,6 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.github_copilot_responses import (
-    ResponsesRequestPolicy,
     ResponsesStreamState,
     build_responses_payload,
     estimate_responses_input_tokens,
@@ -105,9 +97,8 @@ from core.providers.github_copilot_responses import (
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
-from core.providers.reasoning import model_reasoning_levels
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
-from core.providers.wire_profile import Protocol, WireProfile
+from core.providers.wire_profile import Protocol
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -131,15 +122,10 @@ __all__ = [
     "DISCOVERY_REASONING_PARAMETER_NAMES",
     "DISCOVERY_TOOL_PARAMETER_NAMES",
     "OPENAI_API_KEY_WIRE_KEY",
-    "OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS",
-    "OPENAI_RESPONSES_PROTOCOL",
     "OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS",
-    "OPENAI_SUBSCRIPTION_REASONING_EFFORTS",
-    "OPENAI_SUBSCRIPTION_REQUEST_PARAMETERS",
     "OPENAI_SUBSCRIPTION_WIRE_KEY",
     "OPTIONAL_REQUEST_PARAMETER_NAMES",
     "OpenAIAdapter",
-    "OpenAISubscriptionResponsesPolicy",
     "PROMPT_CACHE_AFFINITY_ID_KWARG",
     "REASONING_PARAMETER_NAMES",
     "RESPONSES_POLICY_ENDPOINT",
@@ -158,9 +144,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     Platform ``/responses`` otherwise. Its reasoning is the profile's plan in
     the ``responses_reasoning`` dialect; optional parameters, media and the
     output limit follow the profile too.
-
-    A subclass that routes a Model to Responses itself (``_model_wire_policy``,
-    OpenCode Zen) keeps the declared Responses policy for that Model instead.
     """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "responses")
@@ -631,17 +614,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         stream: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        self._refuse_unadmitted_model(model_id)
         request_kwargs = dict(kwargs)
-        declared = self._declared_responses_policy(model_id)
-        profile: WireProfile | None = None
-        reasoning_renderer: Callable[[dict[str, Any]], None] | None = None
-        policy: ResponsesRequestPolicy
-        if declared is not None:
-            policy = declared
-        else:
-            profile = self.wire_profile(model_id)
-            policy = profile_responses_policy(profile, self._catalog_model(model_id))
-            reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
+        profile = self.wire_profile(model_id)
+        policy = profile_responses_policy(profile, self._catalog_model(model_id))
+        reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
         # A wire that takes no output-token field (Codex) is never budgeted
         # locally: the reserve would abort a still-valid request (it sits at the
         # same 80% line as Compaction, which never sees this pre-send path).
@@ -669,7 +646,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             self._ensure_required_instructions(payload)
-        if profile is not None and profile.request.parameters:
+        if profile.request.parameters:
             # Configured or learned parameter rules; the reasoning fields are
             # the dialect's own output.
             profile.request.shape_parameters(
@@ -690,50 +667,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     def _uses_responses(self, model_id: str) -> bool:
         """Whether ``model_id``'s requests speak Responses on this Connection."""
 
-        if self._declared_responses_policy(model_id) is not None:
-            return True
         return self.wire_profile(model_id).protocol == "responses"
-
-    def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
-        """Per-Model Responses routing of a subclass whose wire is not profile-driven.
-
-        OpenAI and xAI route by the wire profile and declare nothing here.
-        OpenCode Zen returns ``{"protocol": "responses"}`` (plus an optional
-        ``minimum_reasoning_effort``) for its Responses Models, which then keep
-        the declared policy of :meth:`_declared_responses_policy`.
-        """
-
-        del model_id
-        return {}
-
-    def _declared_responses_policy(self, model_id: str) -> OpenAISubscriptionResponsesPolicy | None:
-        """The declared Responses policy of a Model a subclass routes itself, else ``None``.
-
-        It snaps the effort onto the catalog ladder (``low..xhigh`` without
-        one), raises ``none`` to the declared minimum, sends an explicit
-        ``none`` when the ladder has that rung, and allows the Platform's
-        optional parameters.
-        """
-
-        declared = self._model_wire_policy(model_id)
-        if declared.get("protocol") != OPENAI_RESPONSES_PROTOCOL:
-            return None
-        model = self._catalog_model(model_id)
-        allowed_reasoning_efforts: frozenset[str] = frozenset()
-        if model is None or model.capabilities.reasoning.supported:
-            ladder = model_reasoning_levels(self._model_lookup, model_id)
-            allowed_reasoning_efforts = (
-                frozenset(ladder) if ladder is not None else OPENAI_SUBSCRIPTION_REASONING_EFFORTS
-            )
-        return OpenAISubscriptionResponsesPolicy(
-            allowed_reasoning_efforts=allowed_reasoning_efforts,
-            **catalog_tool_support(model),
-            minimum_reasoning_effort=(
-                _optional_string(declared.get("minimum_reasoning_effort")) or None
-            ),
-            supports_explicit_none_effort="none" in allowed_reasoning_efforts,
-            supported_request_parameters=OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
-        )
 
     def _catalog_model(self, model_id: str) -> Model | None:
         return self._model_lookup(model_id) if self._model_lookup is not None else None
@@ -741,8 +675,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     def _responses_document_types(self, model_id: str) -> frozenset[str]:
         """Document media the Responses wire carries as native ``input_file`` parts."""
 
-        if self._declared_responses_policy(model_id) is not None:
-            return RESPONSES_DOCUMENT_TYPES
         return self.wire_profile(model_id).media.types & RESPONSES_DOCUMENT_TYPES
 
     async def _run_platform_responses[T](
@@ -758,13 +690,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         A rejected optional parameter or reasoning effort becomes a learned
         wire fact, and the request is rebuilt and retried once per lesson (see
-        :func:`execute_learning_from_rejections`). A Model a subclass routes
-        itself keeps its declared policy, which learned facts cannot shape, so
-        it is attempted exactly once.
+        :func:`execute_learning_from_rejections`).
         """
 
-        if self._declared_responses_policy(model_id) is not None:
-            return await attempt()
         return await execute_learning_from_rejections(
             attempt,
             payload,
