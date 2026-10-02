@@ -615,6 +615,7 @@ def bootstrap(runtime: Runtime) -> None:
             storage=runtime._storage,
             terminal_manager=runtime._terminal_manager,
             reasoning_render_describer=runtime.describe_reasoning_render,
+            wire_profile_describer=runtime.describe_agent_wire_profile,
             automation_references=runtime._automation_references,
             snapshot_barrier=runtime._snapshot_barrier,
         )
@@ -687,6 +688,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.local_context_windows,
             runtime.describe_reasoning_render,
             runtime.timezone_name,
+            runtime.describe_agent_wire_profile,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right

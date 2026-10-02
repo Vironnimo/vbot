@@ -23,7 +23,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.messages import ChatMessage
-from core.chat.status_report import ReasoningIntent, status_session_facts
+from core.chat.status_report import ReasoningIntent, StatusWireProfile, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import (
     AgentResolutionError,
@@ -32,6 +32,7 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
+from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings.settings import SettingsValidationError
@@ -279,8 +280,8 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
 
 def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_path: Path) -> None:
     # A project run: the resolver and the Session lookup receive the Project and the Session
-    # (whose Agent overrides the report must reflect), and the Model
-    # registry, the Project store and the reasoning describer each feed their report line.
+    # (whose Agent overrides the report must reflect), and the Model registry, the Project
+    # store, the reasoning describer and the wire profile describer each feed their line.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
     sessions = _StubSessions([])
     described: list[tuple[str, str, str | None]] = []
@@ -295,6 +296,9 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         models=_StubModels(_make_model(name="GPT-5.2 Registry", recommended_temperature=1.0)),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
         reasoning_render_describer=describe_render,
+        wire_profile_describer=lambda agent: StatusWireProfile(
+            "openai:api-key", "verified", "2026-09-30", ObservedFacts()
+        ),
     )
 
     result = _dispatch(registry, tmp_path, project_id="vbot")
@@ -309,6 +313,7 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",
         "Temperature: 1 (model recommendation)",
+        "Wire profile: verified on 2026-09-30 (Connection openai:api-key)",
     ):
         assert line in text
 

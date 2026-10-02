@@ -12,12 +12,14 @@ from core.chat.errors import ChatSessionError
 from core.chat.status_report import (
     ReasoningRenderDescriber,
     StatusSessionFacts,
+    WireProfileDescriber,
     build_status_reply,
     resolve_reported_thinking_effort,
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
     resolve_status_temperature,
+    resolve_status_wire_profile,
 )
 from core.models.models import ModelRegistry
 from core.projects import (
@@ -194,6 +196,7 @@ def make_status_handler(
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
+    wire_profile_describer: WireProfileDescriber | None = None,
 ):
     """Create a status tool handler bound to runtime services."""
 
@@ -299,6 +302,7 @@ def make_status_handler(
                     model_details,
                 ),
                 timezone=_configured_zone(timezone_name_loader),
+                wire_profile=resolve_status_wire_profile(agent, wire_profile_describer),
             )
         except Exception:
             _LOGGER.error("Failed to build status tool reply", exc_info=True)
@@ -327,6 +331,7 @@ def register_status_tool(
     local_context_windows_loader: Callable[[], Mapping[str, Any]] | None = None,
     reasoning_render_describer: ReasoningRenderDescriber | None = None,
     timezone_name_loader: Callable[[], str] | None = None,
+    wire_profile_describer: WireProfileDescriber | None = None,
 ) -> None:
     """Register the status tool with a vBot tool registry."""
     registry.register(
@@ -345,6 +350,7 @@ def register_status_tool(
                 local_context_windows_loader,
                 reasoning_render_describer,
                 timezone_name_loader,
+                wire_profile_describer,
             )
         ),
         open_input_schema=True,

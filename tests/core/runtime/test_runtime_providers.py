@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -458,6 +459,35 @@ def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connect
     # Model-level overrides win over the Provider policy.
     assert cloud.reasoning_replay_policy("minimax-m3") == "none"
     assert cloud.reasoning_replay_policy("kimi-k2.6") == "current_run"
+
+
+@pytest.mark.parametrize(
+    ("model", "connection_id"),
+    [
+        pytest.param("openai/gpt-5.2", "openai:api-key", id="first-usable"),
+        pytest.param("openai/gpt-5.2::api-key:work", "openai:api-key:work", id="pinned"),
+        pytest.param("anthropic/claude-sonnet-4-6", None, id="no-usable-connection"),
+    ],
+)
+def test_status_describes_the_wire_profile_of_the_connection_chat_resolves(
+    shared_runtime: Runtime,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    connection_id: str | None,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-default")
+    monkeypatch.setenv("OPENAI_API_KEY__WORK", "sk-work")
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    described = shared_runtime.describe_agent_wire_profile(SimpleNamespace(model=model))
+
+    if connection_id is None:
+        assert described is None
+        return
+    assert described is not None
+    profile = shared_runtime.wire_profile("openai", "api-key", "gpt-5.2")
+    assert (described.connection_id, described.status) == (connection_id, profile.status)
+    assert described.learned.is_empty()
 
 
 @pytest.mark.asyncio
