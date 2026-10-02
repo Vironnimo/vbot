@@ -141,7 +141,7 @@ class _CompletionDeliveryCoordinator:
         if bucket.delivery_task is None or bucket.delivery_task.done():
             bucket.delivery_task = asyncio.create_task(
                 self._deliver(address, bucket),
-                name=f"completion-delivery:{address.agent_id}:{address.session_id}",
+                name=f"completion-delivery:{address.agent_id}",
             )
         return delivered
 

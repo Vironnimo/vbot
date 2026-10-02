@@ -86,7 +86,7 @@ class TelegramInboundBuffer:
 
         task = asyncio.create_task(
             self._flush_album(album_id),
-            name=f"telegram:{self._channel_id}:album:{album_id}",
+            name=f"telegram:{self._channel_id}:album",
         )
         self._album_tasks[album_id] = task
         self._tasks.add(task)
@@ -154,7 +154,7 @@ class TelegramInboundBuffer:
         )
         task = asyncio.create_task(
             self._flush_forward_comment_after_delay(conversation.chat_id),
-            name=f"telegram:{self._channel_id}:forward-comment:{conversation.chat_id}",
+            name=f"telegram:{self._channel_id}:forward-comment",
         )
         self._forward_comment_tasks[conversation.chat_id] = task
         self._tasks.add(task)

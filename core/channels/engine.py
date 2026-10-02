@@ -479,7 +479,7 @@ class ChannelConversationEngine:
         if worker is None or worker.done():
             worker = asyncio.create_task(
                 self._run_chat_queue(platform_target, queue),
-                name=f"channel:{self._config.id}:{platform_target}",
+                name=f"channel:{self._config.id}:chat-queue",
             )
             self._chat_workers[platform_target] = worker
         return True
