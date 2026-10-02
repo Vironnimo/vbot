@@ -25,14 +25,17 @@ A pass has two parts:
 The service checks every hour (the first check waits until startup settled)
 and runs a pass for each Identity Agent that can call ``skill`` and
 ``skill_manage``, whose last pass is ``librarian.interval_days`` old, and that
-has no active or queued Run. Passes run one at a time. ``run`` starts a pass at
-once regardless of the interval; it still waits for an idle Agent.
+has no active or queued Run. An Agent without a pass is due one interval after
+the first check that saw it, so a new or upgraded installation gets a full
+interval before its first pass. Passes run one at a time. ``run`` starts a pass
+at once regardless of the interval; it refuses while the Agent is not idle.
 
 Each Agent's state is the durable JSON document ``agents/<id>/librarian.json``:
-when the last pass ran, what it did (counts, the archive revisions of aging,
-the consolidation Session and Run) and the fingerprint of the last
-consolidation. The report of a pass is derived from the Skill history: the
-revisions aging recorded and the revisions of the consolidation Run.
+when the schedule first saw the Agent, when the last pass ran, what it did
+(counts, the archive revisions of aging, the consolidation Session and Run)
+and the fingerprint of the last consolidation. The report of a pass is derived
+from the Skill history: the revisions aging recorded and the revisions of the
+consolidation Run.
 
 Blocking reads and writes run on the ``librarian`` workers, never on the Event
 Loop; Skill writes hold the Agent lifecycle guard.
@@ -45,7 +48,7 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -137,7 +140,7 @@ _PASS_FIELDS = frozenset(
     }
 )
 LIBRARIAN_STATE_SHAPE = json_document(
-    {"last_pass", "consolidation_fingerprint"},
+    {"first_seen_at", "last_pass", "consolidation_fingerprint"},
     {"last_pass": json_object(_PASS_FIELDS)},
 )
 PassTrigger = Literal["schedule", "manual"]
@@ -222,13 +225,20 @@ class LibrarianPass:
 
 @dataclass(frozen=True)
 class LibrarianState:
-    """One Agent's Librarian state document."""
+    """One Agent's Librarian state document.
+
+    ``first_seen_at`` is when a scheduled check first saw the Agent; it dates
+    the first scheduled pass while ``last_pass`` is ``None``.
+    """
 
     last_pass: LibrarianPass | None = None
     consolidation_fingerprint: str | None = None
+    first_seen_at: str | None = None
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
+        if self.first_seen_at is not None:
+            document["first_seen_at"] = self.first_seen_at
         if self.last_pass is not None:
             document["last_pass"] = self.last_pass.to_dict()
         if self.consolidation_fingerprint is not None:
@@ -249,6 +259,9 @@ def _validate_state_document(data: Any) -> list[JsonDiagnostic]:
     if not validate_format_version(diagnostics, data, LIBRARIAN_STATE_FORMAT_VERSION):
         return diagnostics
     warn_unknown_keys(diagnostics, "$", data, LIBRARIAN_STATE_SHAPE.fields, "field")
+    first_seen = data.get("first_seen_at")
+    if first_seen is not None and not _is_timestamp(first_seen):
+        add_error(diagnostics, "$.first_seen_at", "must be an ISO 8601 timestamp")
     fingerprint = data.get("consolidation_fingerprint")
     if fingerprint is not None and not isinstance(fingerprint, str):
         add_error(diagnostics, "$.consolidation_fingerprint", "must be a string")
@@ -260,10 +273,7 @@ def _validate_state_document(data: Any) -> list[JsonDiagnostic]:
         return diagnostics
     warn_unknown_keys(diagnostics, "$.last_pass", last_pass, _PASS_FIELDS, "field")
     for key in ("started_at", "finished_at"):
-        value = last_pass.get(key)
-        try:
-            parse_timestamp(value if isinstance(value, str) else "")
-        except ValueError:
+        if not _is_timestamp(last_pass.get(key)):
             add_error(diagnostics, f"$.last_pass.{key}", "must be an ISO 8601 timestamp")
     if last_pass.get("trigger") not in _TRIGGERS:
         add_error(diagnostics, "$.last_pass.trigger", "must be schedule or manual")
@@ -287,6 +297,14 @@ def _validate_state_document(data: Any) -> list[JsonDiagnostic]:
         if value is not None and not isinstance(value, str):
             add_error(diagnostics, f"$.last_pass.{key}", "must be a string")
     return diagnostics
+
+
+def _is_timestamp(value: Any) -> bool:
+    try:
+        parse_timestamp(value if isinstance(value, str) else "")
+    except ValueError:
+        return False
+    return True
 
 
 LIBRARIAN_STATE_FORMAT = JsonDocumentFormat(
@@ -442,8 +460,10 @@ class LibrarianService:
         active = self._active.get(agent_id)
         last_pass = state.last_pass
         next_due = None
-        if settings["enabled"] and last_pass is not None:
-            next_due = _next_due(last_pass, settings["interval_days"])
+        if settings["enabled"]:
+            # Until a check sees the Agent, its first pass is about one interval away.
+            seen = state.first_seen_at or format_canonical_timestamp(self._clock())
+            next_due = _next_due(replace(state, first_seen_at=seen), settings["interval_days"])
         return {
             "agent_id": agent_id,
             "settings": dict(settings),
@@ -520,11 +540,13 @@ class LibrarianService:
             except LibrarianStateError as error:
                 _LOGGER.warning("Librarian skipped an Agent (agent=%s): %s", agent_id, error)
                 continue
-            if (
-                state.last_pass is not None
-                and parse_timestamp(_next_due(state.last_pass, settings["interval_days"]))
-                > self._clock()
-            ):
+            if state.last_pass is None and state.first_seen_at is None:
+                # The first pass comes one interval after the Agent was first seen.
+                seen = replace(state, first_seen_at=format_canonical_timestamp(self._clock()))
+                await _LIBRARIAN_WORKERS.run(self._write_state, agent_id, seen)
+                continue
+            due = _next_due(state, settings["interval_days"])
+            if due is not None and parse_timestamp(due) > self._clock():
                 continue
             try:
                 agent = await self._runtime.agent_resolver.resolve_agent_async(None, agent_id)
@@ -636,7 +658,11 @@ class LibrarianService:
         await _LIBRARIAN_WORKERS.run(
             self._write_state,
             agent_id,
-            LibrarianState(last_pass=finished, consolidation_fingerprint=fingerprint),
+            LibrarianState(
+                last_pass=finished,
+                consolidation_fingerprint=fingerprint,
+                first_seen_at=state.first_seen_at,
+            ),
         )
         _LOGGER.info(
             "Librarian pass completed (agent=%s trigger=%s archived=%d candidates=%d "
@@ -795,6 +821,7 @@ class LibrarianService:
         return LibrarianState(
             last_pass=None if last_pass is None else LibrarianPass.from_dict(last_pass),
             consolidation_fingerprint=data.get("consolidation_fingerprint"),
+            first_seen_at=data.get("first_seen_at"),
         )
 
     def _write_state(self, agent_id: str, state: LibrarianState) -> None:
@@ -860,9 +887,15 @@ def _fingerprint(latest_revisions: Mapping[str, int]) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _next_due(last_pass: LibrarianPass, interval_days: int) -> str:
-    finished = parse_timestamp(last_pass.finished_at)
-    return format_canonical_timestamp(finished + timedelta(days=interval_days))
+def _next_due(state: LibrarianState, interval_days: int) -> str | None:
+    """When the next scheduled pass is due, ``None`` before a check saw the Agent.
+
+    It is one interval after the last pass, or after the Agent was first seen.
+    """
+    since = state.last_pass.finished_at if state.last_pass is not None else state.first_seen_at
+    if since is None:
+        return None
+    return format_canonical_timestamp(parse_timestamp(since) + timedelta(days=interval_days))
 
 
 def _date(timestamp: str) -> str:

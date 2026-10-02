@@ -69,13 +69,13 @@ def test_librarian_status_reports_the_last_pass_and_how_to_undo_it(
         "Librarian of assistant",
         "scheduled passes: every 7 days; skills made in the background are archived after "
         "90 days unused; merging overlapping skills: on",
+        "next scheduled pass: 2026-10-07T10:02:00Z (when the agent is idle)",
         "last pass: 2026-09-30T10:02:00Z (scheduled)",
         "  archived 1 unused skills",
         "  merge: merged and fixed overlapping skills with the agent's model "
         "(3 skills it may change)",
         "  created 0, changed 1, merged away 1",
         "  session lib-1, run r-9",
-        "next scheduled pass: 2026-10-07T10:02:00Z (when the agent is idle)",
         "changes of the last pass: 2 revisions, newest first",
         "revision 9  2026-09-30T10:01:30Z  deploy-api  archived (merged into deploy-web) "
         "by librarian (session lib-1, run r-9)",

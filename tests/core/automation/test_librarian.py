@@ -132,6 +132,11 @@ class _Harness:
         path = self.storage.data_dir / "agents" / agent_id / "librarian.json"
         return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
 
+    def write_state(self, agent_id: str, fields: dict[str, Any]) -> None:
+        path = self.storage.data_dir / "agents" / agent_id / "librarian.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"format_version": 1, **fields}), encoding="utf-8")
+
     async def run_pass(self, agent_id: str = "main") -> dict[str, Any]:
         """Start a manual pass, wait for it, and return the status after it."""
         await self.service.run(agent_id)
@@ -351,13 +356,13 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
     with pytest.raises(AgentNotFoundError):
         await harness.service.run("ghost")
     harness.busy.clear()
-    (harness.storage.data_dir / "agents" / "main" / "librarian.json").write_text(
-        "{", encoding="utf-8"
-    )
     revisions = len(harness.authoring.history(root))
     harness.now += _LATER
-    with pytest.raises(LibrarianStateError):
-        await harness.service.run("main")
+    state = harness.storage.data_dir / "agents" / "main" / "librarian.json"
+    for broken in ("{", json.dumps({"format_version": 1, "first_seen_at": "soon"})):
+        state.write_text(broken, encoding="utf-8")
+        with pytest.raises(LibrarianStateError):
+            await harness.service.run("main")
     assert len(harness.authoring.history(root)) == revisions
 
 
@@ -368,7 +373,7 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
 ) -> None:
     harness.settings["consolidate"] = False
     harness.settings["enabled"] = enabled
-    for agent_id in ("due", "busy", "recent", "limited"):
+    for agent_id in ("due", "new", "busy", "recent", "limited"):
         harness.agents[agent_id] = harness.agent()
         harness.authoring.create(
             harness.home(agent_id), "old-review", _document("old-review"), writer=_REFLECTION
@@ -376,22 +381,18 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     harness.agents["limited"] = harness.agent(denied=("skill",))
     del harness.agents["main"]
     harness.busy.add("busy")
-    recent = harness.storage.data_dir / "agents" / "recent" / "librarian.json"
+    # A first pass is due one interval after a check first saw the Agent.
+    seen = format_canonical_timestamp(harness.now - timedelta(days=8))
+    for agent_id in ("due", "busy", "limited"):
+        harness.write_state(agent_id, {"first_seen_at": seen})
     passed = format_canonical_timestamp(harness.now - timedelta(days=1))
-    recent.write_text(
-        json.dumps(
-            {
-                "format_version": 1,
-                "last_pass": {
-                    "started_at": passed,
-                    "finished_at": passed,
-                    "trigger": "schedule",
-                    "consolidation": "disabled",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
+    recent = {
+        "started_at": passed,
+        "finished_at": passed,
+        "trigger": "schedule",
+        "consolidation": "disabled",
+    }
+    harness.write_state("recent", {"first_seen_at": seen, "last_pass": recent})
     delays: list[float] = []
     checked = asyncio.Event()
 
@@ -412,7 +413,17 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     assert delays == [FIRST_CHECK_DELAY_SECONDS, CHECK_INTERVAL_SECONDS]
     if enabled:
         assert harness.state("due")["last_pass"]["trigger"] == "schedule"
+        assert harness.state("due")["first_seen_at"] == seen
+        # A new Agent only gets seen; its first pass is one interval away.
+        assert harness.state("new") == {
+            "format_version": 1,
+            "first_seen_at": format_canonical_timestamp(harness.now),
+        }
+        status = await harness.service.status("new")
+        assert datetime.fromisoformat(status["next_due_at"]) == harness.now + timedelta(days=7)
+    else:
+        assert not (harness.storage.data_dir / "agents" / "new" / "librarian.json").exists()
     assert harness.changed == (["due"] if enabled else [])
-    for agent_id in ("busy", "recent", "limited", *(() if enabled else ("due",))):
+    for agent_id in ("new", "busy", "recent", "limited", *(() if enabled else ("due",))):
         assert "old-review" in harness.authoring.records(harness.home(agent_id))
-    assert not (harness.storage.data_dir / "agents" / "busy" / "librarian.json").exists()
+    assert "last_pass" not in harness.state("busy")

@@ -61,13 +61,13 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
         lines.append(
             f"a pass is running since {_string_or_default(data.get('running_since'), '?')}"
         )
+    if isinstance(data.get("next_due_at"), str):
+        lines.append(f"next scheduled pass: {data['next_due_at']} (when the agent is idle)")
     last_pass = data.get("last_pass")
     if not isinstance(last_pass, dict):
         lines.append("no pass has run yet")
         return lines
     lines.extend(_format_pass(last_pass))
-    if isinstance(data.get("next_due_at"), str):
-        lines.append(f"next scheduled pass: {data['next_due_at']} (when the agent is idle)")
     changes = data.get("changes")
     changes = (
         [item for item in changes if isinstance(item, dict)] if isinstance(changes, list) else []
