@@ -5,13 +5,15 @@ Builds the production Provider Runtime of a data directory (its Settings,
 ``.env`` credentials and OAuth logins), resolves the Model's wire profile
 WITHOUT any previously learned facts, and drives real requests through the
 Adapter: a plain send and stream, one stream per reasoning rung plus ``none``,
-optional sampling values, a Tool Call turn replayed into its continuation, and
+optional sampling values, a Tool Call turn replayed into its continuation, the
+input-token measurement of reasoning replay inside a Run and across Runs, and
 an image when the Model takes images. Rejections the wire learns from are
 retried and reported. The run prints measurements only (never prompts, keys or
 full responses) and the Model entry the evidence supports; ``--write`` merges
 that entry into ``resources/wire/<provider>.json``, or for a Custom Provider
 into ``providers.custom.<id>.wire.models`` of the data directory's Settings
-(a running vBot server applies that after a restart).
+(through ``provider.custom_save`` of a running vBot server, which applies it
+live and refuses it if the record changed meanwhile; directly otherwise).
 
 Usage:
     python scripts/verify_wire_profile.py --provider ID --model MODEL
@@ -27,7 +29,9 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -36,10 +40,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if sys.path[:1] != [str(PROJECT_ROOT)]:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from cli._server_target import probe_health, resolve_instance  # noqa: E402
+from cli.rpc_client import rpc_call  # noqa: E402
+from core.utils.errors import StorageError  # noqa: E402
 from scripts._wire_verify.checks import CHECKS, CheckResult, run_checks  # noqa: E402
 from scripts._wire_verify.environment import RESOURCES_DIR, open_target  # noqa: E402
 from scripts._wire_verify.proposal import (  # noqa: E402
+    RpcCall,
     propose_entry,
+    save_custom_provider_entry,
     write_custom_provider_entry,
     write_entry,
 )
@@ -101,17 +110,37 @@ async def _run(args: argparse.Namespace) -> int:
     print("proposed entry:", json.dumps(entry, indent=2, sort_keys=True))
     if args.write and entry:
         if target.custom:
-            written = write_custom_provider_entry(
-                target.storage, target.provider_id, target.model_id, entry
-            )
-            print(
-                f"wrote {written} in {target.storage.settings_path}; "
-                "restart a running vBot server to apply it"
-            )
+            call = _server_call(args.data_dir.expanduser())
+            if call is not None:
+                written = save_custom_provider_entry(
+                    call, target.provider_id, target.model_id, entry
+                )
+                print(f"saved {written} through the running server; it applies live")
+            else:
+                written = write_custom_provider_entry(
+                    target.storage, target.provider_id, target.model_id, entry
+                )
+                print(f"wrote {written} in {target.storage.settings_path}")
         else:
             path = write_entry(RESOURCES_DIR / "wire", target.provider_id, target.model_id, entry)
             print(f"wrote {path}")
     return 0 if all(result.status in ("ok", "skipped") for result in results) else 1
+
+
+def _server_call(data_dir: Path) -> RpcCall | None:
+    """Return an RPC caller for the vBot server of ``data_dir``, if one is running."""
+
+    instance = resolve_instance(data_dir=data_dir)
+    if not probe_health(instance).is_vbot:
+        return None
+
+    def call(method: str, params: dict[str, Any]) -> Mapping[str, Any]:
+        payload = rpc_call(instance, method, params)
+        if not payload.ok:
+            raise StorageError(payload.message)
+        return payload.data
+
+    return call
 
 
 def _print_result(result: CheckResult) -> None:

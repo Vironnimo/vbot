@@ -3,13 +3,16 @@
 Learned facts become explicit profile values (so the entry no longer depends
 on any learned-facts cache) and a clean run adds a ``verified`` record for the
 checked Connection. ``write_entry`` merges the entry into the bundled
-``resources/wire/<provider>.json`` file.
+``resources/wire/<provider>.json`` file; a Custom Provider's entry goes into its
+Settings wire block, through the running server when there is one
+(``save_custom_provider_entry``) or directly (``write_custom_provider_entry``).
 """
 
 from __future__ import annotations
 
+import copy
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,7 @@ from typing import Any
 from core.providers._wire_profile_files import WIRE_PROFILE_FORMAT_VERSION
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import WireProfile
+from core.settings.normalizers import CUSTOM_PROVIDER_FIELDS
 from core.storage.storage import StorageManager
 from core.utils.errors import StorageError
 from scripts._wire_verify.checks import CheckResult
@@ -79,22 +83,71 @@ def write_custom_provider_entry(
 ) -> str:
     """Merge ``entry`` into ``wire.models[model_id]`` of a Custom Provider's Settings.
 
-    Returns the Settings path written. Refuses a ``wire`` value that is not an
-    object instead of replacing it.
+    Writes the Settings file directly, for a data directory without a running
+    server. Returns the Settings path written.
     """
 
-    def update(record: dict[str, Any]) -> dict[str, Any]:
-        wire = record.get("wire")
-        if wire is not None and not isinstance(wire, Mapping):
-            raise StorageError(
-                f"providers.custom.{provider_id}.wire is not an object; "
-                "fix it before writing a verified entry"
-            )
-        document = dict(wire or {})
-        _merge_entry(document, model_id, entry)
-        return {**record, "wire": document}
+    storage.update_custom_provider_settings(
+        provider_id, lambda record: _with_entry(record, provider_id, model_id, entry)
+    )
+    return _entry_path(provider_id, model_id)
 
-    storage.update_custom_provider_settings(provider_id, update)
+
+RpcCall = Callable[[str, dict[str, Any]], Mapping[str, Any]]
+"""Call one server RPC method; raises on an error answer."""
+
+
+def save_custom_provider_entry(
+    call: RpcCall, provider_id: str, model_id: str, entry: Mapping[str, Any]
+) -> str:
+    """Merge ``entry`` into a Custom Provider's wire block through a running server.
+
+    ``provider.custom_save`` validates the block, applies it live, and refuses
+    the save when the record changed after it was listed. Returns the Settings
+    path written.
+    """
+
+    listing = call("provider.custom_list", {})
+    stored = next(
+        (
+            item
+            for item in listing.get("providers") or ()
+            if isinstance(item, Mapping) and item.get("id") == provider_id
+        ),
+        None,
+    )
+    if stored is None:
+        raise StorageError(f"Custom Provider '{provider_id}' does not exist")
+    record = {key: value for key, value in stored.items() if key in CUSTOM_PROVIDER_FIELDS}
+    params: dict[str, Any] = {
+        "provider": {"id": provider_id, **_with_entry(record, provider_id, model_id, entry)}
+    }
+    if isinstance(stored.get("revision"), str):
+        params["expected_revision"] = stored["revision"]
+    call("provider.custom_save", params)
+    return _entry_path(provider_id, model_id)
+
+
+def _with_entry(
+    record: Mapping[str, Any], provider_id: str, model_id: str, entry: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return ``record`` with ``entry`` merged into its wire block.
+
+    Refuses a ``wire`` value that is not an object instead of replacing it.
+    """
+
+    wire = record.get("wire")
+    if wire is not None and not isinstance(wire, Mapping):
+        raise StorageError(
+            f"providers.custom.{provider_id}.wire is not an object; "
+            "fix it before writing a verified entry"
+        )
+    document = copy.deepcopy(dict(wire or {}))
+    _merge_entry(document, model_id, entry)
+    return {**record, "wire": document}
+
+
+def _entry_path(provider_id: str, model_id: str) -> str:
     return f"providers.custom.{provider_id}.wire.models.{model_id.split('::', 1)[0]}"
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from core.storage.storage import StorageManager
 from scripts._wire_verify.checks import run_checks
 from scripts._wire_verify.proposal import (
     propose_entry,
+    save_custom_provider_entry,
     write_custom_provider_entry,
     write_entry,
 )
@@ -148,3 +150,21 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
     assert block.defaults["reasoning"]["dialect"] == "thinking_toggle"
     assert block.models["m"].verification is not None
     assert not (tmp_path / "local-ai.json").exists()
+
+    # With a running server the entry goes through provider.custom_save, based on
+    # the listed revision and without the listing's runtime fields.
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+        calls.append((method, params))
+        if method == "provider.custom_list":
+            listed = {"id": "local-ai", **record, "revision": "rev-1", "usable": True}
+            return {"providers": [listed]}
+        return {}
+
+    save_custom_provider_entry(call, "local-ai", "m2", custom_entry)
+    method, params = calls[-1]
+    assert method == "provider.custom_save"
+    assert params["expected_revision"] == "rev-1"
+    assert "usable" not in params["provider"]
+    assert set(params["provider"]["wire"]["models"]) == {"m", "m2"}
