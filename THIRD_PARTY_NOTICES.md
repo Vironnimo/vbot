@@ -11,7 +11,7 @@ are distributed in `resources/licenses/ripgrep.txt` and `resources/licenses/pcre
 ## Local speech models
 
 Optional local speech recognition downloads unmodified pretrained model weights
-at first use; vBot does not bundle them in its distribution:
+when you install a model; vBot does not bundle them in its distribution:
 
 - Qwen Team, [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf)
   and [Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf),
@@ -23,7 +23,8 @@ at first use; vBot does not bundle them in its distribution:
 
 The linked model cards provide upstream attribution and model documentation.
 
-Optional local TTS downloads [Qwen3-TTS CustomVoice](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice)
+Optional local TTS downloads [Qwen3-TTS CustomVoice 1.7B](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice)
+and [0.6B](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
 weights (Apache-2.0) and [Chatterbox Multilingual V3](https://huggingface.co/ResembleAI/chatterbox)
 weights (MIT). Their separately installed SDKs are [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
 (Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).

@@ -747,13 +747,17 @@ Start control to repeat observation, decision and action. Switching tabs or clos
 
 ### Local speech recognition
 
-Qwen3 ASR, Parakeet TDT v3 and Nemotron 3.5 ASR run on the **vBot server machine**, including when
+Qwen3 ASR (1.7B or 0.6B), Parakeet TDT v3 and Nemotron 3.5 ASR run on the **vBot server machine**, including when
 the WebUI or Desktop connects from another computer. They require no paid API
-or subscription. In **Settings → Voice → Speech models → Speech to text**, select
-a local speech-to-text engine and choose **Install**. Setup runs on the server
-and continues if you leave Settings. Its status shows environment checks,
-downloads, installation and verification; a failed setup offers **Try again**.
-Once verification succeeds, choose **Restart server**. This interrupts active
+or subscription. Each is its own Model: in **Settings → Voice → Speech models → Speech to text**,
+select one and choose **Install**; Settings shows its download size and license first.
+Setup runs on the server and continues if you leave Settings. The first local
+speech-to-text install prepares the speech engine (environment checks, downloads,
+installation and verification); every install then downloads the selected Model
+with a progress bar, so another local speech-to-text Model reuses the engine and
+downloads only its Model. A failed setup offers **Try again**. Once installed, the
+Model works offline. In a development checkout, setup installs the engine into the
+server's own Python and then asks you to **Restart server**. This interrupts active
 Runs, reconnects the interface and checks local speech availability again.
 
 In a packaged installation, setup creates a managed speech environment
@@ -771,32 +775,36 @@ from the normal server and Desktop dependencies; it does not install NeMo, vLLM,
 or the separate `qwen-asr` package. All three engines use native Transformers adapters.
 
 In **Settings → Voice → Speech models → Speech to text**, select
-**Qwen3 ASR (local)**, **Parakeet TDT v3 (local)**, or
+**Qwen3 ASR 1.7B (local)**, **Qwen3 ASR 0.6B (local)**, **Parakeet TDT v3 (local)**, or
 **Nemotron 3.5 ASR Streaming 0.6B (local)**; searching for **local** finds
-all three. Expand its options to choose device, precision,
-or a model directory. Qwen defaults to the 1.7B model, also offers 0.6B, and accepts
+all four. Expand its options to choose device, precision,
+or a model directory. Qwen accepts
 an optional language and vocabulary/context hint. Parakeet detects language
 automatically. Nemotron accepts an empty language for automatic detection or a
 code such as `de` / `de-DE` for German. Its native streaming engine reuses
 computed context inside each recording segment; the current Chat still returns
-the complete transcript after submission. You can also select an engine through the CLI:
+the complete transcript after submission. You can also select a Model through the CLI
+(the earlier ids `local/qwen3-asr` and `local/qwen3-tts` no longer exist; choose a Model again if one was saved):
 
 ```bash
-vbot task-model set speech_to_text local/qwen3-asr
+vbot task-model set speech_to_text local/qwen3-asr-1.7b
+vbot task-model set speech_to_text local/qwen3-asr-0.6b
 vbot task-model set speech_to_text local/parakeet
 vbot task-model set speech_to_text local/nemotron3.5-asr
 ```
 
-The first non-silent transcription downloads the selected public checkpoint from
-Hugging Face and loads it. This can take several minutes and needs disk space for
-model weights. Chat shows live download, model-loading and transcription phases
-with elapsed time above the composer and in the microphone tooltip. A cached
-model skips downloads; an already loaded model skips loading. Failures release
-the microphone for another attempt. The server's standard Hugging Face cache is reused (`HF_HOME` can
-relocate it). Complete model files are reused automatically without online update
-checks, including after unloading or restarting. Only missing files are downloaded;
-interrupted downloads resume their existing model revision. Alternatively, point
-**Model directory** at a complete compatible Transformers checkpoint on the server.
+Installing downloads exactly the files of one fixed revision of the public checkpoint
+from Hugging Face into the data directory and checks each file's SHA-256 before it is
+used. Setup first checks that the disk has room for the missing files plus 512 MB.
+Files that the server's Hugging Face cache already holds (`HF_HUB_CACHE` or `HF_HOME`,
+otherwise `~/.cache/huggingface/hub`) are reused instead of downloaded again, and
+**Try again** resumes an interrupted download. Transcription never downloads: Chat shows
+model-loading and transcription phases
+with elapsed time above the composer and in the microphone tooltip, and an already
+loaded model skips loading. Failures release
+the microphone for another attempt. You can also point
+**Model directory** at a complete Transformers checkpoint of the same engine on the server;
+it is then loaded instead of the installed Model.
 Recordings are processed by the local engine, without a transcription API call.
 
 After every server start, loading a local model takes a while. Chat, terminal
@@ -810,8 +818,8 @@ Local speech models stay loaded independently, so STT and TTS can remain ready
 at the same time. In **Settings → Voice → Speech models → Local speech memory**, each loaded
 model has its own **Unload from memory** button. Unloading STT leaves TTS loaded,
 even while TTS is generating audio. A model's button is disabled while that model
-is busy. Downloaded files stay on disk; the next use loads that model again.
-Changing an engine's model/device options replaces only its own cached model.
+is busy. The installed files stay on disk; the next use loads that model again.
+Changing a model's device, precision or directory replaces only its own cached model.
 Shutdown releases all models; inference failure releases only the failed engine.
 Loading and inference run outside the server Event Loop; cancelling a request
 waits for already-started inference to finish safely.
@@ -821,7 +829,7 @@ Long recordings are split into segments of at most 30 seconds, preferring a quie
 boundary and preserving every audio sample. Returned segment times describe these
 audio chunks, not word-level alignment. The current interface returns a completed
 transcript; it does not stream partial text or distinguish speakers. Desktop Voice
-allows up to ten minutes for a transcription response, including a first download.
+allows up to ten minutes for a transcription response, including loading the model.
 
 The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf),
 [Qwen3-ASR-0.6B-hf](https://huggingface.co/Qwen/Qwen3-ASR-0.6B-hf) (Apache-2.0),
@@ -832,21 +840,23 @@ The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-
 ### Local speech synthesis
 
 In **Settings → Voice → Speech models → Text to speech**, search
-for **local** and select **Qwen3-TTS (local)** or **Chatterbox Multilingual V3 (local)**.
-Choose **Install** for that engine. Setup continues across navigation, reports its
-phase and offers retry on failure. TTS becomes available immediately after
-verification; its isolated environment does not require a server restart.
+for **local** and select **Qwen3-TTS 1.7B (local)**, **Qwen3-TTS 0.6B (local)** or
+**Chatterbox Multilingual V3 (local)**. Choose **Install** for that voice model; Settings
+shows its download size and license first. Setup continues across navigation, reports its
+phase and the model download's progress, and offers retry on failure. Both Qwen3-TTS
+sizes share one engine installation and download only their own model. TTS becomes
+available as soon as setup finishes; its isolated environment does not require a
+server restart.
 
 Both engines support German and require no paid API. Qwen3-TTS offers nine preset
-voices, automatic or explicit language selection, and style instructions on its
-1.7B CustomVoice model; the smaller 0.6B CustomVoice model is also selectable.
+voices and automatic or explicit language selection on both CustomVoice sizes, and
+style instructions on the 1.7B model.
 Chatterbox explicitly uses the multilingual **V3** checkpoint, with language,
 expressiveness and guidance controls and the upstream built-in voice/watermark.
 No voice-cloning input is exposed by this integration.
 
 After saving the binding and options, enter a short text and choose **Generate
-voice preview**. The first request downloads weights into the Hugging Face cache,
-then loads the model and generates audio. Live status and elapsed time remain
+voice preview**. The first request loads the installed model, then generates audio. Live status and elapsed time remain
 visible; the audio player appears when the complete WAV is ready. The Agent's
 existing `text_to_speech` Tool uses the same saved engine and voice options.
 Local requests accept up to 5,000 characters and split longer passages within
@@ -861,9 +871,9 @@ not downgraded. Setup installs matching Torch/torchaudio builds and verifies
 imports and, on NVIDIA systems, GPU execution. Chatterbox currently uses upstream's
 Torch 2.6 / CUDA 12.6 combination; GPUs requiring a newer Torch are not supported
 by that recipe. Qwen uses Torch 2.11 / CUDA 12.8. CPU and Apple builds are selected
-on systems without a detected NVIDIA GPU. First downloads require internet access;
-Downloaded models are reused automatically without online update checks. Only
-missing files require internet access; there is no offline switch to configure.
+on systems without a detected NVIDIA GPU. Installation requires internet access and
+downloads, verifies and reuses cached model files as described for speech recognition;
+an installed voice runs offline, and there is no offline switch to configure.
 
 Model sources and licenses: [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)
 (Apache-2.0) and [Chatterbox](https://github.com/resemble-ai/chatterbox) (MIT).
