@@ -6,6 +6,7 @@ import argparse
 
 from cli._parser_common import (
     AREA_HELP,
+    LIBRARIAN_HELP,
     LOG_HELP,
     MEMORY_HELP,
     PROMPT_HELP,
@@ -532,6 +533,22 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     revert_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
     revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+
+
+def _add_librarian_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    librarian_parser = subparsers.add_parser(
+        "librarian",
+        help=AREA_HELP["librarian"],
+        description=AREA_HELP["librarian"],
+    )
+    commands = librarian_parser.add_subparsers(dest="command", required=True)
+    for command in ("status", "run"):
+        command_parser = _add_command_parser(
+            commands, command, LIBRARIAN_HELP[command], example=f"librarian {command} assistant"
+        )
+        command_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
 
 
 def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:

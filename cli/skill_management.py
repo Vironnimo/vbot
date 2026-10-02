@@ -250,7 +250,7 @@ def skill_history(
         )
     lines = [f"Skill history of {target}: {len(revisions)} revisions, newest first"]
     for revision in revisions:
-        lines.extend(_format_revision(revision))
+        lines.extend(format_skill_revision(revision))
     if len(revisions) >= limit:
         lines.append(f"older revisions: re-run with a larger --limit than {limit}")
     lines.append(f"undo with: vbot skill revert <revision>... --scope {scope}")
@@ -267,7 +267,7 @@ def skill_revert(instance: ServerInstance, scope: str, revisions: list[int]) -> 
     noun = "revisions" if len(revisions) > 1 else "revision"
     lines = [f"reverted {noun} {named} in {scope}"]
     for revision in _records(payload.data.get("revisions")):
-        lines.extend(_format_revision(revision))
+        lines.extend(format_skill_revision(revision))
     return CommandResult(ok=True, message="\n".join(lines), instance=instance)
 
 
@@ -583,7 +583,8 @@ def _archive_reason(entry: Mapping[str, Any]) -> str:
     return _ARCHIVE_REASON_TEXT.get(str(reason), "deleted")
 
 
-def _format_revision(revision: Mapping[str, Any]) -> list[str]:
+def format_skill_revision(revision: Mapping[str, Any]) -> list[str]:
+    """Render one Skill history revision: a header line and one line per file."""
     kind = revision.get("kind")
     if kind == "revert":
         reverted = revision.get("reverts")

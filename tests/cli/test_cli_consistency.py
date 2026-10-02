@@ -169,6 +169,7 @@ AREAS = [
     ("task-model", ["list"]),
     ("skill", ["list"]),
     ("memory", ["list", "a"]),
+    ("librarian", ["status", "a"]),
     ("extensions", ["list"]),
     ("cron", ["list"]),
     ("bootstrap", ["list"]),

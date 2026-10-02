@@ -39,6 +39,7 @@ from cli._dispatch_operations import (
     dispatch_config_command,
     dispatch_cron_command,
     dispatch_debug_command,
+    dispatch_librarian_command,
     dispatch_log_command,
     dispatch_memory_command,
     dispatch_performance_command,
@@ -387,6 +388,11 @@ def run(
 
     if args.area == "memory":
         result = dispatch_memory_command(args, instance)
+        print_management_command_result(result)
+        return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
+
+    if args.area == "librarian":
+        result = dispatch_librarian_command(args, instance)
         print_management_command_result(result)
         return SUCCESS_EXIT_CODE if result.ok else FAILURE_EXIT_CODE
 
