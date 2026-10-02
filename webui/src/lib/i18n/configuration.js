@@ -1,6 +1,7 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',
+  'extensions.inputWaitingOne': 'An Extension request needs your response.',
   'extensions.reviewInput': 'Review request',
   'extensions.inputTitle': 'Request from {name}',
   'extensions.signInHelp':

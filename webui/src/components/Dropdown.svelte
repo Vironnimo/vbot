@@ -22,6 +22,9 @@
     placeholder = t('dropdown.placeholder'),
     disabled = false,
     ariaLabel = '',
+    // The id of a visible label (FormField's labelId). The trigger is then
+    // named by that label and its current value instead of ariaLabel.
+    ariaLabelledby = undefined,
     ariaDescribedby = undefined,
     triggerClass = '',
     // Optional quick tooltip on the trigger (e.g. details of the selection).
@@ -426,7 +429,10 @@
     class="dropdown-trigger dropdown-primitive__trigger"
     type="button"
     {disabled}
-    aria-label={ariaLabel || placeholder}
+    aria-label={ariaLabelledby ? undefined : ariaLabel || placeholder}
+    aria-labelledby={ariaLabelledby
+      ? [ariaLabelledby, id].filter(Boolean).join(' ')
+      : undefined}
     aria-describedby={ariaDescribedby}
     aria-haspopup="listbox"
     aria-expanded={isOpen}

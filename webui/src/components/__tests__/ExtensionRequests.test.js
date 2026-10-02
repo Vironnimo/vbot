@@ -210,9 +210,7 @@ describe('Extension requests', () => {
       }),
     );
     expect(document.body.textContent).toContain(
-      t('extensions.inputWaiting', {
-        count: 1,
-      }),
+      t('extensions.inputWaitingOne'),
     );
     expect(dialog.textContent).toContain(
       t('extensions.inputTitle', { name: 'blender' }),
