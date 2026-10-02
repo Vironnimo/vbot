@@ -52,7 +52,10 @@ from core.utils.server_control import (
 DEFAULT_STARTUP_TIMEOUT_SECONDS = 60.0
 
 
-DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
+# A cooperative stop cancels active Runs (their cleanup alone may take 5 s), then
+# delivers pending results and closes every service and database. A kill before
+# that ends skips the rest of the teardown, so only a hung server is killed.
+DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 30.0
 
 
 # A busy server may need seconds to accept the shutdown request. Giving up early
