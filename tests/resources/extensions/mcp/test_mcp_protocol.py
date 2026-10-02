@@ -9,7 +9,7 @@ import socket
 import sys
 from dataclasses import replace
 
-import mcp_types as types
+import mcp.types as types
 import pytest
 import uvicorn
 from mcp.server import Server

@@ -19,7 +19,7 @@ from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import httpx2
-import mcp_types as types
+import mcp.types as types
 from jsonschema import Draft202012Validator
 from mcp import Client
 from mcp.client.auth import OAuthClientProvider
