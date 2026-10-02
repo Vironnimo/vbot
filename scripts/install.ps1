@@ -1,8 +1,9 @@
 # vBot installer for Windows.
 #
 # Downloads the signed vBot installer of the latest release, of a chosen release
-# (-Version) or of the newest main build (-Main), verifies it against the release
-# metadata and installs it per user. Installations update from the same channel.
+# (-Version) or of the newest main build (-Main), verifies it against the digest
+# its release identity records and installs it per user. Installations update
+# from the same channel.
 #   irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 # To pass options, download and run as a file, or:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1))) -Main
@@ -38,9 +39,13 @@ if ($Desktop -and $DesktopClient) {
 if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -notmatch '^v')) {
     $Version = "v$Version"
 }
+if (-not [string]::IsNullOrWhiteSpace($Version) -and ($Version -cnotmatch '^v[0-9A-Za-z][0-9A-Za-z._+-]*$')) {
+    throw "-Version needs a release version such as 0.2.0 or v0.2.0."
+}
 
-$ApiBase = "https://api.github.com/repos/Vironnimo/vbot"
-$ApiHeaders = @{ "User-Agent" = "vbot-installer"; "Accept" = "application/vnd.github+json" }
+# Release downloads, unlike the GitHub API, have no anonymous request limit.
+$ReleaseDownloads = "https://github.com/Vironnimo/vbot/releases"
+$ReleaseIdentityName = "vbot-release.json"
 
 trap {
     $message = $_.Exception.Message
@@ -87,23 +92,79 @@ function Test-IsElevated {
     )
 }
 
-function Get-OfficialRelease {
+function Get-ReleaseDownloadBase {
+    # Release assets download from <base>/<asset name>.
     param([string]$Tag, [bool]$MainBuild)
-    $uri = if ($MainBuild) {
-        "$ApiBase/releases/tags/main-build"
+    if ($MainBuild) { return "$ReleaseDownloads/download/main-build" }
+    if ([string]::IsNullOrWhiteSpace($Tag)) { return "$ReleaseDownloads/latest/download" }
+    return "$ReleaseDownloads/download/$Tag"
+}
+
+function Save-ReleaseDownload {
+    param([string]$Uri, [string]$OutFile)
+    $parsed = $null
+    if (
+        -not [System.Uri]::TryCreate($Uri, [System.UriKind]::Absolute, [ref]$parsed) -or
+        $parsed.Scheme -cne "https" -or
+        $parsed.Host -cne "github.com"
+    ) {
+        throw "$Uri is not an official HTTPS GitHub download URL."
     }
-    elseif ([string]::IsNullOrWhiteSpace($Tag)) {
-        "$ApiBase/releases/latest"
-    }
-    else {
-        "$ApiBase/releases/tags/$Tag"
-    }
+    $previousProgressPreference = $ProgressPreference
+    $ProgressPreference = "SilentlyContinue"
     try {
-        return Invoke-RestMethod -Uri $uri -Headers $ApiHeaders
+        Invoke-WebRequest -UseBasicParsing -Uri $parsed.AbsoluteUri -OutFile $OutFile
     }
-    catch {
-        throw "Could not query the official vBot release ($($_.Exception.Message))."
+    finally {
+        $ProgressPreference = $previousProgressPreference
     }
+}
+
+function Get-ReleaseIdentity {
+    # Every release publishes vbot-release.json beside its assets: the version
+    # and the SHA-256 digest of each other asset.
+    param([string]$Base, [string]$Release)
+    $path = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-release-{0}.json" -f $PID)
+    try {
+        try {
+            Save-ReleaseDownload -Uri "$Base/$ReleaseIdentityName" -OutFile $path
+        }
+        catch {
+            throw "Could not read $ReleaseIdentityName of $Release from $Base ($($_.Exception.Message)). The release does not exist, publishes no $ReleaseIdentityName, or GitHub cannot be reached."
+        }
+        try {
+            $identity = Get-Content -Raw -Encoding UTF8 -LiteralPath $path | ConvertFrom-Json
+        }
+        catch {
+            $identity = $null
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+    $valid = $identity -is [System.Management.Automation.PSCustomObject]
+    if ($valid) {
+        $schema = $identity.PSObject.Properties["schema_version"]
+        $version = $identity.PSObject.Properties["version"]
+        $valid = (
+            $null -ne $schema -and $schema.Value -eq 1 -and
+            $null -ne $version -and [string]$version.Value -cmatch '^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$'
+        )
+    }
+    if (-not $valid) {
+        throw "$Base/$ReleaseIdentityName is not a valid vBot release identity."
+    }
+    return $identity
+}
+
+function Get-RecordedDigest {
+    # The lowercase SHA-256 hex digest the identity records for one asset, or $null.
+    param($Identity, [string]$Name)
+    $assets = $Identity.PSObject.Properties["assets"]
+    if ($null -eq $assets -or $assets.Value -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+    $entry = $assets.Value.PSObject.Properties[$Name]
+    if ($null -eq $entry -or [string]$entry.Value -notmatch '^[0-9a-fA-F]{64}$') { return $null }
+    return ([string]$entry.Value).ToLowerInvariant()
 }
 
 function Get-ServerHealthUrl {
@@ -120,46 +181,30 @@ function Get-ServerHealthUrl {
 
 function Install-NativeRelease {
     param([string]$Tag, [string]$Shape, [bool]$MainBuild)
-    $release = Get-OfficialRelease -Tag $Tag -MainBuild $MainBuild
-    if ($null -eq $release -or [string]::IsNullOrWhiteSpace([string]$release.tag_name)) {
-        throw "The official release response did not identify a version."
-    }
-    # The installer carries the application version: vBot-<version>-windows-x86_64-<shape>.exe.
-    $pattern = '^vBot-(.+)-windows-x86_64-' + [regex]::Escape($Shape) + '\.exe$'
-    $asset = @($release.assets | Where-Object { [string]$_.name -cmatch $pattern })
-    if ($asset.Count -ne 1) {
-        throw "Release $($release.tag_name) publishes no single vBot $Shape installer for Windows."
-    }
-    $null = [string]$asset[0].name -cmatch $pattern
-    $releaseVersion = $Matches[1]
+    $base = Get-ReleaseDownloadBase -Tag $Tag -MainBuild $MainBuild
+    $release = if ($MainBuild) { "the newest main build" } elseif ([string]::IsNullOrWhiteSpace($Tag)) { "the latest release" } else { "release $Tag" }
+    $identity = Get-ReleaseIdentity -Base $base -Release $release
+    $releaseVersion = [string]$identity.version
+    # The installer carries the application version.
+    $name = "vBot-$releaseVersion-windows-x86_64-$Shape.exe"
     $label = if ($MainBuild) { "the newest main build ($releaseVersion)" } else { "vBot $releaseVersion" }
-    $digestText = [string]$asset[0].digest
-    if ($digestText -notmatch '^sha256:([0-9a-fA-F]{64})$') {
-        throw "The installer has no valid GitHub SHA-256 digest; refusing to run it."
+    $recordedDigest = Get-RecordedDigest -Identity $identity -Name $name
+    if ($null -eq $recordedDigest) {
+        throw "$ReleaseIdentityName of $release records no valid SHA-256 digest for $name, so the release does not publish this installer or predates recorded digests; refusing to run it."
     }
-    $expectedDigest = $Matches[1].ToUpperInvariant()
-    $assetUri = $null
-    if (
-        -not [System.Uri]::TryCreate([string]$asset[0].browser_download_url, [System.UriKind]::Absolute, [ref]$assetUri) -or
-        $assetUri.Scheme -cne "https" -or
-        $assetUri.Host -cne "github.com"
-    ) {
-        throw "The installer does not have an official HTTPS GitHub download URL."
-    }
+    $expectedDigest = $recordedDigest.ToUpperInvariant()
     $installer = Join-Path ([System.IO.Path]::GetTempPath()) ("vbot-{0}-{1}.exe" -f $releaseVersion, $PID)
     try {
         Write-Step "Downloading $label"
-        $previousProgressPreference = $ProgressPreference
-        $ProgressPreference = "SilentlyContinue"
         try {
-            Invoke-WebRequest -Uri $assetUri.AbsoluteUri -OutFile $installer -Headers $ApiHeaders
+            Save-ReleaseDownload -Uri "$base/$name" -OutFile $installer
         }
-        finally {
-            $ProgressPreference = $previousProgressPreference
+        catch {
+            throw "Could not download $base/$name ($($_.Exception.Message))."
         }
         $actualDigest = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
         if ($actualDigest -cne $expectedDigest) {
-            throw "The downloaded installer digest does not match the official release metadata."
+            throw "The downloaded installer does not match the SHA-256 digest in $ReleaseIdentityName. A newer build may have replaced the release files meanwhile (main builds are replaced in place); run the installer again."
         }
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
         if ($signature.Status -ne "NotSigned" -and $signature.Status -ne "Valid") {

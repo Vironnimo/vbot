@@ -1,4 +1,4 @@
-"""The Linux installer against a fake GitHub release and a fake package."""
+"""The Linux installer against fake GitHub release downloads and a fake package."""
 
 from __future__ import annotations
 
@@ -15,8 +15,9 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = PROJECT_ROOT / "scripts" / "install.sh"
-API = "https://api.github.com/repos/Vironnimo/vbot"
+DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"
 ASSET = "vbot-linux-aarch64-server.zip"
+IDENTITY = "vbot-release.json"
 
 pytestmark = pytest.mark.skipif(
     not sys.platform.startswith("linux") or shutil.which("python3") is None,
@@ -60,16 +61,18 @@ def _web_name(url: str) -> str:
     return re.sub(r"[/:]", "_", url.removeprefix("https://"))
 
 
-def _publish(web: Path, release: str, package: bytes, digest: str | None = None) -> None:
+def _publish(
+    web: Path, base: str, package: bytes, digest: str | None = None, *, identity: bool = True
+) -> None:
+    """Publish the package and the identity recording its digest (``""``: none)."""
     web.mkdir(exist_ok=True)
-    download = f"https://github.com/Vironnimo/vbot/releases/download/x/{ASSET}"
-    (web / _web_name(download)).write_bytes(package)
-    asset = {
-        "name": ASSET,
-        "browser_download_url": download,
-        "digest": f"sha256:{digest or hashlib.sha256(package).hexdigest()}",
-    }
-    (web / _web_name(f"{API}/{release}")).write_text(json.dumps({"assets": [asset]}), "utf-8")
+    (web / _web_name(f"{DOWNLOADS}/{base}/{ASSET}")).write_bytes(package)
+    recorded = hashlib.sha256(package).hexdigest() if digest is None else digest
+    assets = {ASSET: recorded} if recorded else {}
+    if identity:
+        (web / _web_name(f"{DOWNLOADS}/{base}/{IDENTITY}")).write_text(
+            json.dumps({"schema_version": 1, "version": "1.2.3", "assets": assets}), "utf-8"
+        )
 
 
 def _package(path: Path) -> bytes:
@@ -113,28 +116,47 @@ def _calls(environment: dict[str, str]) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "release", "channel", "autostart"),
+    ("arguments", "base", "channel", "autostart", "digest"),
     [
-        pytest.param((), "releases/latest", "release", True, id="release"),
+        pytest.param((), "latest/download", "release", True, None, id="release"),
         pytest.param(
-            ("--main", "--no-autostart"), "releases/tags/main-build", "main", False, id="main"
+            ("--main", "--no-autostart"), "download/main-build", "main", False, None, id="main"
+        ),
+        # A release whose identity records no digest installs over HTTPS only.
+        pytest.param(
+            ("--version", "v1.2.3", "--no-autostart"),
+            "download/v1.2.3",
+            "release",
+            False,
+            "",
+            id="version-without-digest",
         ),
     ],
 )
 def test_installer_installs_the_verified_package_links_the_command_and_starts_the_unit(
-    tmp_path: Path, arguments: tuple[str, ...], release: str, channel: str, autostart: bool
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    base: str,
+    channel: str,
+    autostart: bool,
+    digest: str | None,
 ) -> None:
     environment = _environment(tmp_path)
-    _publish(tmp_path / "web", release, _package(tmp_path / "package.zip"))
+    _publish(tmp_path / "web", base, _package(tmp_path / "package.zip"), digest)
 
     result = _install(environment, "--port", "8500", *arguments)
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert ("WARN" in result.stdout) == (digest == "")
     root = Path(environment["HOME"]) / ".local" / "share" / "vbot"
     link = Path(environment["HOME"]) / ".local" / "bin" / "vbot"
     assert link.is_symlink() and link.resolve() == root / "vbot"
     calls = _calls(environment)
-    assert calls[0] == f"curl {API}/{release}"
+    # Only release downloads, never the GitHub API.
+    assert [call for call in calls if call.startswith("curl")] == [
+        f"curl {DOWNLOADS}/{base}/{IDENTITY}",
+        f"curl {DOWNLOADS}/{base}/{ASSET}",
+    ]
     (install,) = [call for call in calls if call.startswith("install ")]
     assert f"--root {root} " in install and "--shape server" in install
     assert "--port 8500" in install and f"--channel {channel}" in install
@@ -157,16 +179,26 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
     assert _calls(environment) == calls
 
 
-def test_installer_refuses_a_package_that_does_not_match_its_published_digest(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    ("arguments", "digest", "identity", "message"),
+    [
+        pytest.param((), "0" * 64, True, "does not match the SHA256 digest", id="digest-mismatch"),
+        pytest.param((), None, False, f"Could not read {IDENTITY}", id="no-identity"),
+        # The tag becomes part of the release download URL.
+        pytest.param(("--version", "v1/../../x"), None, True, "--version needs", id="unsafe-tag"),
+    ],
+)
+def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identity(
+    tmp_path: Path, arguments: tuple[str, ...], digest: str | None, identity: bool, message: str
 ) -> None:
     environment = _environment(tmp_path)
-    _publish(tmp_path / "web", "releases/latest", _package(tmp_path / "package.zip"), "0" * 64)
+    package = _package(tmp_path / "package.zip")
+    _publish(tmp_path / "web", "latest/download", package, digest, identity=identity)
 
-    result = _install(environment)
+    result = _install(environment, *arguments)
 
     assert result.returncode == 1
-    assert "does not match its published SHA256 digest" in result.stderr
+    assert message in result.stderr
     assert not [call for call in _calls(environment) if not call.startswith("curl")]
     assert not (Path(environment["HOME"]) / ".local" / "share" / "vbot").exists()
 

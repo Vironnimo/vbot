@@ -55,7 +55,7 @@ Open a normal, non-elevated PowerShell and run:
 irm https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.ps1 | iex
 ```
 
-The Installer downloads the installer `vBot-<version>-windows-x86_64-<shape>.exe` of the latest release, checks that it comes from an HTTPS `github.com` URL, matches GitHub's published SHA-256 digest and carries no invalid Authenticode signature, and runs it silently. vBot is installed for your user account into `%LOCALAPPDATA%\Programs\vBot`; no Windows service is installed. The Installer registers the logon Autostart task, starts vBot and waits until the server answers its health check. It refuses to run from an elevated PowerShell, and it refuses an installation directory that already exists: update an existing installation with `vbot update` (or `vBot.exe update` in its directory) instead.
+The Installer reads the release identity `vbot-release.json` of the latest release, downloads the installer `vBot-<version>-windows-x86_64-<shape>.exe` of the version it names from the release's HTTPS `github.com` downloads, checks that it matches the SHA-256 digest the identity records and carries no invalid Authenticode signature, and runs it silently. vBot is installed for your user account into `%LOCALAPPDATA%\Programs\vBot`; no Windows service is installed. The Installer registers the logon Autostart task, starts vBot and waits until the server answers its health check. It refuses to run from an elevated PowerShell, and it refuses an installation directory that already exists: update an existing installation with `vbot update` (or `vBot.exe update` in its directory) instead.
 
 The application has its own `vBot.exe` tray. Click the tray icon to open vBot (Desktop, or the browser for the Server package) and right-click it for server, update and log actions. The icon shows whether the server is running, stopped or updating, or needs attention; **Status…** shows the version, server, data directory and update progress. Desktop is opened independently from the tray or with `vbot desktop`; closing it never stops the server. Open Desktop windows keep their version until reopened after an update. WebView may still use several Windows processes.
 
@@ -67,7 +67,7 @@ vBot runs on 64-bit Linux for ARM64 (aarch64) and x86-64, for example on a Raspb
 curl -fsSL https://raw.githubusercontent.com/Vironnimo/vbot/main/scripts/install.sh | bash
 ```
 
-The Installer needs only `curl` and `python3`; the package brings its own CPython 3.14. It downloads the server package `vbot-linux-<arch>-server.zip` of the latest release, checks it against its published SHA-256 digest, installs it into `~/.local/share/vbot` and links the `vbot` command to `~/.local/bin/vbot`. It then registers the systemd user unit `vbot.service`, enables login lingering with `sudo loginctl enable-linger` so that the server starts at boot without anyone logging in, and starts the server. When lingering cannot be enabled, the Installer warns and prints the command; until then the server starts only once you log in. If vBot is already installed in the selected directory, the Installer says so and points to `vbot update`.
+The Installer needs only `curl` and `python3`; the package brings its own CPython 3.14. It downloads the server package `vbot-linux-<arch>-server.zip` of the latest release, checks it against the SHA-256 digest its release identity `vbot-release.json` records, installs it into `~/.local/share/vbot` and links the `vbot` command to `~/.local/bin/vbot`. It then registers the systemd user unit `vbot.service`, enables login lingering with `sudo loginctl enable-linger` so that the server starts at boot without anyone logging in, and starts the server. When lingering cannot be enabled, the Installer warns and prints the command; until then the server starts only once you log in. If vBot is already installed in the selected directory, the Installer says so and points to `vbot update`.
 
 Linux packages contain the server only. Use the WebUI in a browser, or connect a Windows Desktop Client from another computer.
 
@@ -95,6 +95,8 @@ Every installation follows one update channel, which `vbot update` installs from
 - `main`: the newest main build. After every push to `main` that passes CI, the signed packages of that commit replace the previous ones on the rolling GitHub prerelease `main-build`. A main build is not a release: it carries unreleased changes, and `releases/latest` never points to it.
 
 Install the newest main build with `-Main` on Windows or `--main` on Linux; that installation then updates from main. An existing installation can switch channels (see [Updating](#updating)).
+
+The Installers and `vbot update` fetch only release files from `github.com` and never use the GitHub API, so its limit for anonymous requests does not affect computers behind a shared IP address. When a download does not match its recorded digest, run the Installer again: a newer main build replaces its files in place and may have done so meanwhile.
 
 ### Installer options
 

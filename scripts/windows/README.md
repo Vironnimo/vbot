@@ -109,10 +109,11 @@ nothing by itself. Two workflows call it in signed mode:
   release with every asset attached. The release tag must match the application
   version.
 
-A missing signing key blocks publication. The public PowerShell installer selects
-the exact installer name, requires GitHub's release-asset SHA-256 digest and an
-HTTPS `github.com` download URL, and rejects an invalid Authenticode signature
-before executing it.
+A missing signing key blocks publication. The public PowerShell installer reads
+`vbot-release.json` from the release downloads (never the GitHub API), derives
+the exact installer name from its version, requires the SHA-256 digest it records
+and an HTTPS `github.com` download URL, and rejects an invalid Authenticode
+signature before executing it.
 
 ## Installer and existing installations
 
