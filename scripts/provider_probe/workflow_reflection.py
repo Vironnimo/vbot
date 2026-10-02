@@ -1,10 +1,10 @@
-"""Provider Tool probe: Reflection review and ``/learn`` decisions in production rendering.
+"""Provider Tool probe: learning decisions of reviews, ``/learn`` and Librarian passes.
 
 Every attempt seeds a case's Memory, Skills and Session history into a
 disposable fixture Agent, renders the System Prompt and Tool definitions
-through production, sends the review brief or ``/learn`` instruction as a
-System Reminder note and runs the Model's Tool calls through the production
-executor. Expectations stay with the observer; only production context and the
+through production, sends the review brief, ``/learn`` instruction or Librarian
+brief as a System Reminder note and runs the Model's Tool calls through the
+production executor. Expectations stay with the observer; only production context and the
 case history reach the Model. Chat fork and cadence integration are tested
 separately.
 """
@@ -25,8 +25,9 @@ from scripts.provider_probe.learning_fixture import EvalWorker, tool_message_con
 from scripts.provider_probe.learning_scoring import CallObserver, score_attempt
 from scripts.provider_probe.learning_texts import TextPack, load_text_pack
 
-# Review Runs use production's REFLECTION_TOOL_ITERATION_LIMIT. /learn runs under
-# Chat's loop limit in production; the harness bounds its cost here instead.
+# Review Runs use production's REFLECTION_TOOL_ITERATION_LIMIT and Librarian passes
+# LIBRARIAN_TOOL_ITERATION_LIMIT. /learn runs under Chat's loop limit in production;
+# the harness bounds its cost here instead.
 LEARN_TOOL_ITERATION_LIMIT = 30
 MAX_REPETITIONS = 50
 # Chat's answers to Tool calls it refuses once a Run must finish
@@ -58,12 +59,12 @@ def _selected_pairs(args: argparse.Namespace) -> list[tuple[dict[str, Any], str]
         unknown = requested - {case["id"] for case in cases}
         if unknown:
             raise ValueError(f"Unknown reflection case: {', '.join(sorted(unknown))}")
+    scopes = set(args.reflection_scope)
     selected = [
         (case, scope)
         for case in cases
         for scope in case["expected"]
-        if (requested is None or case["id"] in requested)
-        and args.reflection_scope in ("all", scope)
+        if (requested is None or case["id"] in requested) and ("all" in scopes or scope in scopes)
     ]
     if not selected:
         raise ValueError("No matching reflection scenario")
@@ -78,6 +79,17 @@ def _add_usage(total: dict[str, Any], usage: Any) -> None:
             continue
         if isinstance(value, int | float):
             total[key] = total.get(key, 0) + value
+
+
+def _tool_iteration_limit(scope: str) -> int:
+    from core.automation.librarian import LIBRARIAN_TOOL_ITERATION_LIMIT
+    from core.automation.reflection import REFLECTION_TOOL_ITERATION_LIMIT
+
+    if scope == "learn":
+        return LEARN_TOOL_ITERATION_LIMIT
+    if scope == "librarian":
+        return LIBRARIAN_TOOL_ITERATION_LIMIT
+    return REFLECTION_TOOL_ITERATION_LIMIT
 
 
 def _sampling_kwargs(
@@ -236,7 +248,6 @@ async def _run_attempt(
     The Model's Tool use ends like a Chat Run's (``_ToolBudget``). Reaching
     the iteration limit or repeating a failed call is a violation.
     """
-    from core.automation.reflection import REFLECTION_TOOL_ITERATION_LIMIT
     from core.chat.wire_shaping import system_reminder_request_message
     from core.providers.adapter import terminal_outcome_from_response
 
@@ -263,17 +274,14 @@ async def _run_attempt(
     calls_log: list[dict[str, Any]] = []
     system_prompt = ""
     definitions: list[dict[str, Any]] = []
-    budget = _ToolBudget(
-        LEARN_TOOL_ITERATION_LIMIT if scope == "learn" else REFLECTION_TOOL_ITERATION_LIMIT,
-        worker.runtime.tools,
-    )
+    budget = _ToolBudget(_tool_iteration_limit(scope), worker.runtime.tools)
     try:
         async with asyncio.timeout(args.total_timeout):
             prepared = await worker.prepare(case, scope, attempt_id=attempt_id)
             system_prompt, definitions = prepared.system_prompt, prepared.definitions
             messages = list(prepared.messages)
             before = worker.state()
-            observer = CallObserver(case)
+            observer = CallObserver(case, scope)
             request_kwargs: dict[str, Any] = {
                 **_sampling_kwargs(args, models, prepared.agent_temperature),
                 **adapter.request_context_kwargs(agent_id="main", session_id=prepared.session_id),
@@ -351,7 +359,15 @@ async def _run_attempt(
                     break
             after = worker.state()
             attempt.update(
-                score_attempt(case, scope, before, after, observer, finished=attempt["finished"])
+                score_attempt(
+                    case,
+                    scope,
+                    before,
+                    after,
+                    observer,
+                    finished=attempt["finished"],
+                    reply=attempt["final_text"],
+                )
             )
             attempt["state"] = {"before": before, "after": after}
     except Exception as error:  # noqa: BLE001 - a crashed attempt stays in the report

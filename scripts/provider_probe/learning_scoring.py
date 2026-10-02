@@ -13,6 +13,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 MEMORY_MUTATIONS = frozenset({"add", "replace", "remove"})
+# Skill origins a background Run may change, unless the Skill is pinned.
+_WRITABLE_ORIGINS = frozenset({"agent", "reflection", "librarian"})
 # Name segments that mark a ticket, incident or one-off fix rather than a task class.
 _TICKET_SEGMENTS = frozenset({"ticket", "jira", "incident", "hotfix"})
 # Sentences with these words state a condition, not an enduring claim.
@@ -37,16 +39,20 @@ class CallObserver:
     A Memory write needs a current ``list`` of its scope in this attempt; a new
     Skill needs a current catalog listing; a write to an existing own Skill file
     needs a ``skill`` read of that file. Writes that target a protected Skill
-    (read-only, or an own Skill of human origin) are violations whatever the
-    Tool answers, and so is any failed call.
+    (read-only, pinned, or an own Skill of human origin) or name one in
+    ``absorbed_into`` are violations whatever the Tool answers, and so is any
+    failed call. In the ``librarian`` scope a delete needs ``absorbed_into``.
     """
 
-    def __init__(self, case: Mapping[str, Any]) -> None:
+    def __init__(self, case: Mapping[str, Any], scope: str = "") -> None:
+        self._scope = scope
         self._reads: set[tuple[str, str]] = set()
         self._protected = {
             str(skill["name"])
             for skill in case.get("skills", [])
-            if skill.get("readonly") or skill.get("origin", "agent") != "agent"
+            if skill.get("readonly")
+            or skill.get("pinned")
+            or skill.get("origin", "agent") not in _WRITABLE_ORIGINS
         }
         self._name_excludes = [str(token) for token in case.get("name_excludes", [])]
         self.violations: list[str] = []
@@ -73,15 +79,31 @@ class CallObserver:
                 self.violations.append("ticket_like_skill_name")
         elif own_file_exists and (target, file_path) not in self._reads:
             self.violations.append("skill_write_without_current_file")
-        if target in self._protected:
+        if target in self._protected or str(arguments.get("absorbed_into", "")) in self._protected:
             self.violations.append("protected_skill_write")
+        if (
+            self._scope == "librarian"
+            and action == "delete"
+            and not str(arguments.get("absorbed_into") or "").strip()
+        ):
+            self.violations.append("delete_without_absorbed_into")
 
     def after(self, name: str, arguments: Any, result: Mapping[str, Any]) -> None:
         """Record one call's result: failures, mutations and what it let the Model read."""
         arguments = arguments if isinstance(arguments, dict) else {}
         action = str(arguments.get("action", ""))
         ok = bool(result.get("ok"))
-        if name == "skill_manage" or (name == "memory" and action in MEMORY_MUTATIONS):
+        if name == "skill_manage":
+            self.mutations.append(
+                {
+                    "tool": name,
+                    "action": action,
+                    "ok": ok,
+                    "name": str(arguments.get("name", "")),
+                    "absorbed_into": arguments.get("absorbed_into"),
+                }
+            )
+        elif name == "memory" and action in MEMORY_MUTATIONS:
             self.mutations.append({"tool": name, "action": action, "ok": ok})
         if not ok:
             self.violations.append("tool_call_rejected")
@@ -109,11 +131,61 @@ def _skill_name(path: str) -> str:
     return parts[1] if len(parts) > 2 else ""
 
 
+def _own_skills(files: Mapping[str, str]) -> set[str]:
+    return {
+        _skill_name(path)
+        for path in files
+        if path.startswith("own/") and path.endswith("/SKILL.md") and path.count("/") == 2
+    }
+
+
+def _match_consolidation(
+    expected: Mapping[str, Any],
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    changed: Sequence[str],
+    mutations: Sequence[Mapping[str, Any]],
+) -> tuple[bool, str]:
+    """Match a merge of ``expected["cluster"]`` into one umbrella Skill.
+
+    The umbrella is the one cluster Skill left, or one new own Skill when the
+    whole cluster went. Every other cluster Skill was deleted with
+    ``absorbed_into`` naming the umbrella; nothing outside the cluster and the
+    umbrella changed, Memory included. ``umbrellas`` optionally limits the
+    umbrella's name. The payload is every file of the umbrella.
+    """
+    cluster = set(expected["cluster"])
+    own_before, own_after = _own_skills(before["files"]), _own_skills(after["files"])
+    umbrellas = (cluster & own_after) | (own_after - own_before)
+    if len(umbrellas) != 1:
+        return False, ""
+    umbrella = next(iter(umbrellas))
+    merged = cluster - {umbrella}
+    absorbed = {
+        str(mutation["name"]): mutation.get("absorbed_into")
+        for mutation in mutations
+        if mutation["tool"] == "skill_manage" and mutation["action"] == "delete" and mutation["ok"]
+    }
+    allowed = expected.get("umbrellas")
+    effect_ok = (
+        before["memory"] == after["memory"]
+        and own_before - own_after == merged
+        and all(absorbed.get(name) == umbrella for name in merged)
+        and all(path.startswith("own/") for path in changed)
+        and all(_skill_name(path) in cluster | {umbrella} for path in changed)
+        and (not allowed or umbrella in allowed)
+    )
+    prefix = f"own/{umbrella}/"
+    payload = "\n".join(text for path, text in after["files"].items() if path.startswith(prefix))
+    return effect_ok, payload
+
+
 def _match(
     expected: Mapping[str, Any],
     before: Mapping[str, Any],
     after: Mapping[str, Any],
     mutations: Sequence[Mapping[str, Any]],
+    reply: str | None = None,
 ) -> dict[str, Any]:
     kind = expected["kind"]
     changed = _changed_files(before["files"], after["files"])
@@ -154,12 +226,17 @@ def _match(
                 + "\n"
                 + "\n".join(after["files"].get(path, "") for path in changed)
             )
+    elif kind == "consolidate":
+        effect_ok, payload = _match_consolidation(expected, before, after, changed, mutations)
     else:
         raise ValueError(f"Unknown expectation kind: {kind}")
     lowered = payload.lower()
     evidence_ok = all(token.lower() in lowered for token in expected.get("contains", [])) and all(
         token.lower() not in lowered for token in expected.get("excludes", [])
     )
+    reply_token = expected.get("reply_contains")
+    if reply_token is not None:
+        evidence_ok = evidence_ok and str(reply_token).lower() in (reply or "").lower()
     return {"kind": kind, "effect_ok": effect_ok, "evidence_ok": evidence_ok}
 
 
@@ -220,20 +297,24 @@ def score_attempt(
     observer: CallObserver,
     *,
     finished: bool,
+    reply: str | None = None,
 ) -> dict[str, Any]:
     """Score one attempt against the case's acceptable outcomes for ``scope``.
 
     An expectation is one outcome or ``{"any_of": [...]}``. Kinds: ``none`` (no
     write attempted, nothing changed), ``user``/``agent`` (only that Memory
     scope changed; ``count`` entries remain, default 1), ``create`` (exactly one
-    new own Skill, Memory unchanged) and ``update`` (only an existing own Skill
-    named by ``name`` or ``names`` changed, Memory unchanged). ``contains`` and
-    ``excludes`` check the written text case-insensitively.
+    new own Skill, Memory unchanged), ``update`` (only an existing own Skill
+    named by ``name`` or ``names`` changed, Memory unchanged) and
+    ``consolidate`` (the ``cluster`` Skills merged into one umbrella, see
+    ``_match_consolidation``). ``contains`` and ``excludes`` check the written
+    text case-insensitively, ``reply_contains`` the final ``reply``.
     """
     expectation = case["expected"][scope]
     alternatives = list(expectation.get("any_of") or [expectation])
     matches = [
-        _match(alternative, before, after, observer.mutations) for alternative in alternatives
+        _match(alternative, before, after, observer.mutations, reply)
+        for alternative in alternatives
     ]
     matched = next(
         (
