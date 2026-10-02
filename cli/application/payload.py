@@ -33,7 +33,7 @@ def app_paths(shape: str) -> tuple[str, ...]:
 
 
 def _reject_link(path: Path, source: Path) -> None:
-    if path.is_symlink() or (hasattr(path, "is_junction") and path.is_junction()):
+    if path.is_symlink() or path.is_junction():
         raise PayloadError(f"source payload contains a link: {path.relative_to(source)}")
 
 

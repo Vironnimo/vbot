@@ -43,13 +43,13 @@ RUNTIME_DLL = f"python{PYTHON_VERSION.replace('.', '')}.dll"
 def _copy_tree(
     source: Path, destination: Path, *, excluded_root_entries: frozenset[str] = frozenset()
 ) -> None:
-    if source.is_symlink() or (hasattr(source, "is_junction") and source.is_junction()):
+    if source.is_symlink() or source.is_junction():
         raise BuildError(f"runtime payload contains a link: {source}")
     destination.mkdir(parents=True, exist_ok=True)
     for child in sorted(source.iterdir(), key=lambda item: item.name.casefold()):
         if child.name in excluded_root_entries:
             continue
-        if child.is_symlink() or (hasattr(child, "is_junction") and child.is_junction()):
+        if child.is_symlink() or child.is_junction():
             raise BuildError(f"runtime payload contains a link: {child}")
         target = destination / child.name
         if child.is_dir():

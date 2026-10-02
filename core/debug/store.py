@@ -251,7 +251,7 @@ class DebugTraceStore:
     def _clear(self) -> None:
         if self._traces_dir.is_symlink():
             self._traces_dir.unlink()
-        elif hasattr(self._traces_dir, "is_junction") and self._traces_dir.is_junction():
+        elif self._traces_dir.is_junction():
             self._traces_dir.rmdir()
         elif self._traces_dir.exists():
             if self._traces_dir.resolve().parent != self._debug_dir.resolve():

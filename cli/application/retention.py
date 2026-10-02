@@ -116,7 +116,7 @@ def _plain_directories(root: Path) -> list[Path]:
         if is_safe_id(path.name)
         and path.is_dir()
         and not path.is_symlink()
-        and not (hasattr(path, "is_junction") and path.is_junction())
+        and not path.is_junction()
     ]
 
 

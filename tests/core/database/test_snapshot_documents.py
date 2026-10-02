@@ -89,7 +89,6 @@ def test_a_document_copy_keeps_its_permissions(data_dir: Path) -> None:
     )
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink"), reason="symbolic links unavailable")
 def test_a_linked_document_is_not_a_member(data_dir: Path, tmp_path: Path) -> None:
     outside = tmp_path / "outside.json"
     outside.write_text("{}", encoding="utf-8")
