@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -94,6 +95,46 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
 
     assert [line.split(":")[0] for line in blocking] == ["core\\staged.py", "core/caller.py"]
     assert [line.split(":")[0] for line in in_progress] == ["core/wip.py", "core/wip.py"]
+
+
+@pytest.mark.parametrize(
+    ("path", "checked"),
+    [
+        ("core/model_tasks/speech_worker.py", True),
+        ("core/model_tasks/embedding_worker.py", True),
+        # It holds the mypy version and configuration.
+        ("pyproject.toml", True),
+        ("core/model_tasks/speech_local.py", False),
+    ],
+)
+def test_python_312_workers_are_type_checked_against_3_12_when_they_can_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, checked: bool
+) -> None:
+    # Managed model environments run the workers on Python 3.12, not on vBot's Python.
+    monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
+    commands: list[list[str]] = []
+    error = "core/model_tasks/speech_worker.py:9: error: Module has no attribute  [attr-defined]"
+
+    def run(command: list[str], cwd: Path) -> Any:
+        commands.append(command)
+        failed = "--python-version" in command
+        return subprocess.CompletedProcess(command, int(failed), error if failed else "", "")
+
+    monkeypatch.setattr(commit_check, "_run", run)
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    _write(tmp_path, path, FORMATTED if path.endswith(".py") else "")
+
+    results = commit_check.check_python(tmp_path, [path], set())
+
+    python_312 = [command for command in commands if "--python-version" in command]
+    if checked:
+        assert python_312 == [
+            [sys.executable, "-m", "mypy", "--python-version", "3.12"]
+            + list(commit_check.PYTHON_312_FILES)
+        ]
+        assert ("mypy 3.12", "FAIL", True, error) in results
+    else:
+        assert python_312 == []
 
 
 @pytest.mark.parametrize(
