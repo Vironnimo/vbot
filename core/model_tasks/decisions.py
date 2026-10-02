@@ -71,7 +71,7 @@ class DecisionService:
     def _target(self) -> str:
         if not self.available():
             raise DecisionError(
-                "Configure an available Decision model in Settings > Specialized Models.",
+                "Configure an available Decision model in Settings → Tools → Evaluation.",
                 code="not_configured",
             )
         return self._model_tasks.binding_for("decision").target

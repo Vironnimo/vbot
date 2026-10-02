@@ -114,7 +114,7 @@ def register_evaluate_tool(registry: ToolRegistry, service: DecisionService) -> 
         open_input_schema=True,
         argument_normalizer=_normalize_evaluate_arguments,
         ready=service.available,
-        readiness_hint="Configure an available Decision model in Settings > Specialized Models.",
+        readiness_hint="Configure an available Decision model in Settings → Tools → Evaluation.",
         result_schema={"type": "object", "required": ["model", "usage", "content"]},
         display=ToolDisplay(summary_builder=_summary),
     )

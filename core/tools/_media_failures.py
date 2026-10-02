@@ -75,12 +75,22 @@ def provider_detail(error: BaseException) -> str:
     return f"HTTP {status}: {text}" if text else f"HTTP {status}"
 
 
+#: The Settings page and section that show a media model's entry, as the WebUI
+#: names them; every entry not listed here sits with the media models on Tools.
+_SETTINGS_PLACES = {"Text to speech": "Voice → Speech models"}
+_MEDIA_MODELS_PLACE = "Tools → Images, video & music"
+
+
+def settings_place(setting: str) -> str:
+    """Where the user chooses the model of the Settings entry ``setting``."""
+    return f"Settings → {_SETTINGS_PLACES.get(setting, _MEDIA_MODELS_PLACE)}"
+
+
 def provider_failure_message(error: BaseException, *, task: str, setting: str) -> str:
     """Say what a failed media-model request means and what the Agent can do next.
 
     ``task`` names the provider's job in running text ("image-understanding");
-    ``setting`` is the Settings entry under Specialized Models ("Image
-    understanding").
+    ``setting`` is the model's Settings entry ("Image understanding").
     """
     detail = provider_detail(error)
     if _cause(error, (ProviderAuthError,)) is not None:
@@ -100,7 +110,7 @@ def provider_failure_message(error: BaseException, *, task: str, setting: str) -
     return (
         f"The {task} provider rejected the request ({detail}). If the reason concerns the "
         "request, change it; otherwise tell the user, who may need to choose another "
-        f"{setting} model in Settings under Specialized Models."
+        f"{setting} model in {settings_place(setting)}."
     )
 
 
@@ -108,5 +118,5 @@ def unavailable_message(error: BaseException, *, setting: str) -> str:
     """Say that the Settings entry for a media model needs the user's attention."""
     return (
         f"{setting} is not available ({provider_detail(error)}). Tell the user to choose a "
-        f"working {setting} model in Settings under Specialized Models."
+        f"working {setting} model in {settings_place(setting)}."
     )

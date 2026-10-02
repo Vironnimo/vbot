@@ -440,8 +440,8 @@ class LocalSpeechExecutor:
         if not definition.descriptor.can_execute():
             raise LocalSpeechError(
                 "Local speech recognition is not installed. "
-                "Open Settings → Tools & Media → Specialized Models, select a local "
-                "speech-to-text engine, and choose Install. "
+                "Open Settings → Voice → Speech models, select a local speech-to-text "
+                "engine under Speech to text, and choose Install. "
                 "Restart the server when setup has finished."
             )
         schema = TaskModelOptionSchema(
@@ -642,8 +642,8 @@ class LocalSpeechExecutor:
         state = self._states.get(local_id)
         if self._closed or state is None:
             raise LocalSpeechError(
-                "Local speech synthesis is unavailable. Open Settings → Tools & Media → "
-                "Specialized Models, select the local text-to-speech engine, and choose Install. "
+                "Local speech synthesis is unavailable. Open Settings → Voice → Speech models, "
+                "select the local text-to-speech engine under Text to speech, and choose Install. "
                 "Wait for setup to finish before retrying."
             )
         state.pending += 1
@@ -665,8 +665,8 @@ class LocalSpeechExecutor:
             or not definition.descriptor.can_execute()
         ):
             raise LocalSpeechError(
-                "Local speech synthesis is unavailable. Open Settings → Tools & Media → "
-                "Specialized Models, select the local text-to-speech engine, and choose Install. "
+                "Local speech synthesis is unavailable. Open Settings → Voice → Speech models, "
+                "select the local text-to-speech engine under Text to speech, and choose Install. "
                 "Wait for setup to finish before retrying."
             )
         if not 0 < len(text) <= 5000:

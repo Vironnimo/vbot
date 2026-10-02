@@ -274,8 +274,8 @@ def _provider_failure(
             failure(
                 "image_understanding_unavailable",
                 "Image understanding is not available (not configured). Tell the user to "
-                "choose a working Image understanding model in Settings under Specialized "
-                "Models.",
+                "choose a working Image understanding model in Settings → Tools → Images, "
+                "video & music.",
             ),
             id="unavailable",
         ),
@@ -347,7 +347,7 @@ def _provider_failure(
                 "The image-understanding provider rejected the request (HTTP 400: Bad "
                 "Request). If the reason concerns the request, change it; otherwise tell the "
                 "user, who may need to choose another Image understanding model in Settings "
-                "under Specialized Models.",
+                "→ Tools → Images, video & music.",
             ),
             id="request-rejected",
         ),

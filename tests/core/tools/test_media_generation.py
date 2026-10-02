@@ -224,7 +224,7 @@ async def test_video_failures_keep_request_fixes_and_reword_provider_refusals(
         "The video-generation provider rejected the request (HTTP 400: prompt rejected by "
         "safety filter). If the reason concerns the request, change it; otherwise "
         "tell the user, who may need to choose another Video generation model in Settings "
-        "under Specialized Models."
+        "→ Tools → Images, video & music."
     )
 
 

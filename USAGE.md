@@ -672,7 +672,7 @@ Settings centralizes validated runtime policy. Major areas include:
 - Compaction strategy, trigger, Model selection, and Agent, Project, or Session overrides
 - Conversation search (Recall): keyword search, optional search by meaning with its embedding Model, and the search index status with a rebuild
 - Web Search Provider configuration
-- Specialized Models for speech, decisions, and images
+- Specialized Models for speech (Voice page), images, video, music and decisions (Tools page)
 - Provider Connections, Accounts, credentials, enabled state, and local reachability
 - Channels and denied-chat discovery
 - trusted Extensions and Extension settings
@@ -715,7 +715,7 @@ Specialized bindings keep non-chat tasks independent from the Agent's primary Mo
 
 The `image_generation` Tool writes generated files into a caller-owned `image-gen/` directory. Identity Agents always use `<Workspace>/image-gen/`, including when Rooted in a Project; Project Config Agents use `<Project cwd>/image-gen/`. The Tool returns the absolute local paths, and Chat exposes referenced files through signed `/api/files/` URLs without keeping a second image copy in the data directory.
 
-Use Settings for target-specific option forms, or inspect and bind them through the CLI:
+In Settings, the speech and Live voice Models are on the Voice page, the embedding Model under Memory → Conversation search, the image, video and music Models under Tools → Images, video & music, and the Decision model under Tools → Evaluation. Use Settings for target-specific option forms, or inspect and bind them through the CLI:
 
 ```bash
 vbot task-model list
@@ -727,7 +727,7 @@ vbot task-model clear text_embedding
 
 ### Jev decisions and application control
 
-Configure an OpenRouter key, then select **Decision** in **Settings → Specialized Models**. Available targets include `typesafe/jev-1.13` and `~typesafe/jev-latest`; the latter follows upstream updates. If targets are missing, refresh the Model DB after configuring the key.
+Configure an OpenRouter key, then select a **Decision model** in **Settings → Tools → Evaluation**. Available targets include `typesafe/jev-1.13` and `~typesafe/jev-latest`; the latter follows upstream updates. If targets are missing, refresh the Model DB after configuring the key.
 
 Open **Jev** from the main navigation. Create a saved experiment or start from Support triage / Task requirements. Supply text or JSON and add focused questions: **Choice** selects a named option, **Score** rates ordered levels starting at zero, and **Noul** estimates yes on a zero-to-one scale. Explicit criteria help clarify meanings. Evaluate, inspect distributions/model/usage, compare history entries, or reuse a previous input. Every evaluation retains its own input and target. Confidence measures concentration of answers, not correctness; uncertain or missing evidence may produce intermediate values. This is not a deterministic field validator or a validated automatic LLM router.
 
@@ -749,7 +749,7 @@ Start control to repeat observation, decision and action. Switching tabs or clos
 
 Qwen3 ASR, Parakeet TDT v3 and Nemotron 3.5 ASR run on the **vBot server machine**, including when
 the WebUI or Desktop connects from another computer. They require no paid API
-or subscription. In **Settings -> Tools & Media -> Specialized Models**, select
+or subscription. In **Settings → Voice → Speech models → Speech to text**, select
 a local speech-to-text engine and choose **Install**. Setup runs on the server
 and continues if you leave Settings. Its status shows environment checks,
 downloads, installation and verification; a failed setup offers **Try again**.
@@ -770,7 +770,7 @@ otherwise CPU. CPU execution is available but can be slow. This extra is separat
 from the normal server and Desktop dependencies; it does not install NeMo, vLLM,
 or the separate `qwen-asr` package. All three engines use native Transformers adapters.
 
-In **Settings → Tools & Media → Specialized Models → Speech to text**, select
+In **Settings → Voice → Speech models → Speech to text**, select
 **Qwen3 ASR (local)**, **Parakeet TDT v3 (local)**, or
 **Nemotron 3.5 ASR Streaming 0.6B (local)**; searching for **local** finds
 all three. Expand its options to choose device, precision,
@@ -807,7 +807,7 @@ then loads it in the background after starting and whenever you change this
 binding. The model stays in memory until you unload it or stop the server.
 
 Local speech models stay loaded independently, so STT and TTS can remain ready
-at the same time. In **Specialized Models → Local speech memory**, each loaded
+at the same time. In **Settings → Voice → Speech models → Local speech memory**, each loaded
 model has its own **Unload from memory** button. Unloading STT leaves TTS loaded,
 even while TTS is generating audio. A model's button is disabled while that model
 is busy. Downloaded files stay on disk; the next use loads that model again.
@@ -831,7 +831,7 @@ The pretrained Models are [Qwen3-ASR-1.7B-hf](https://huggingface.co/Qwen/Qwen3-
 
 ### Local speech synthesis
 
-In **Settings -> Tools & Media -> Specialized Models -> Text to speech**, search
+In **Settings → Voice → Speech models → Text to speech**, search
 for **local** and select **Qwen3-TTS (local)** or **Chatterbox Multilingual V3 (local)**.
 Choose **Install** for that engine. Setup continues across navigation, reports its
 phase and offers retry on failure. TTS becomes available immediately after
@@ -873,7 +873,7 @@ See [Third-party notices](THIRD_PARTY_NOTICES.md#local-speech-models).
 
 The `web_fetch` Tool reads public pages, extracts document text, and shows image URLs to vision-capable Models. Long pages arrive as compact excerpts with saved references for further reading and searching. Those follow-up reads do not fetch again. References stay available to the same Agent in the same Session for 72 hours.
 
-Under **Settings → Tools & Media → Web Fetch**, choose **Direct (no service)** or opt into Firecrawl, Tavily, Exa, or Parallel. Direct fetching is the default and requires no extraction-service account. Optional services can improve results on blocked or JavaScript-heavy pages:
+Under **Settings → Tools → Web page reading**, choose **Direct (no service)** or opt into Firecrawl, Tavily, Exa, or Parallel. Direct fetching is the default and requires no extraction-service account. Optional services can improve results on blocked or JavaScript-heavy pages:
 
 - **Only when direct fetch fails** sends failed, blocked or unreadable pages to the selected service.
 - **Prefer this service** uses it first for page URLs and tries direct fetching if it fails.

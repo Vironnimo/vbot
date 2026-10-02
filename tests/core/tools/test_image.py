@@ -32,7 +32,7 @@ from tests.core.tools.tools_test_support import dispatch_as_executor
 _TEXT_ONLY_REFUSAL = (
     "The configured image model only generates from text, so it cannot use source_images. "
     "Remove source_images, or ask the user to choose an Image generation model that accepts "
-    "images in Settings under Specialized Models."
+    "images in Settings → Tools → Images, video & music."
 )
 
 
@@ -312,7 +312,7 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
                 "image_error",
                 "Image generation is not available (No task model configured for "
                 "image_generation). Tell the user to choose a working Image generation model "
-                "in Settings under Specialized Models.",
+                "in Settings → Tools → Images, video & music.",
             ),
             id="not-configured",
         ),
@@ -330,7 +330,7 @@ def _provider_failure(cause: Exception, status: int) -> ImageExecutionError:
                 "The image-generation provider rejected the request (HTTP 400: Invalid "
                 'background_hex_color "": expected a #RRGGBB value). If the reason concerns '
                 "the request, change it; otherwise tell the user, who may need to choose "
-                "another Image generation model in Settings under Specialized Models.",
+                "another Image generation model in Settings → Tools → Images, video & music.",
             ),
             id="provider-rejection",
         ),

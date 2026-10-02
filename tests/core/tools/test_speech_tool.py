@@ -186,7 +186,7 @@ def _auth_failure() -> SpeechExecutionError:
                 "code": "speech_error",
                 "message": "Text to speech is not available (No task model configured for "
                 "text_to_speech). Tell the user to choose a working Text to speech model in "
-                "Settings under Specialized Models.",
+                "Settings → Voice → Speech models.",
                 "retryable": False,
             },
             id="not-configured",

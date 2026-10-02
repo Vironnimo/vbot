@@ -343,7 +343,8 @@ def make_image_generation_handler(image_service: Any):
             return _invalid(
                 "The configured image model only generates from text, so it cannot use "
                 "source_images. Remove source_images, or ask the user to choose an Image "
-                "generation model that accepts images in Settings under Specialized Models."
+                "generation model that accepts images in Settings → Tools → Images, video & "
+                "music."
             )
 
         try:
