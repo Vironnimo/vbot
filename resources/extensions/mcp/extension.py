@@ -57,7 +57,14 @@ from ._discovery import (
     summarize,
     target_arguments,
 )
-from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
+from ._management import (
+    CONNECTIONS_RESOURCE,
+    JOBS_RESOURCE,
+    ManagementJobs,
+    check_connection,
+    invoke_for_agent,
+    register_management,
+)
 from ._oauth import forget_sign_in, sign_in_status
 from ._views import compact
 from .client import (
@@ -106,8 +113,9 @@ class MCPService:
         self.connections: dict[str, dict[str, Any]] = {}
         self.runners: dict[str, ConnectionRunner] = {}
         self.inputs = InputRequests(on_change=self._inputs_changed)
-        self._inputs_revision = 0
-        self.jobs = ManagementJobs(self.inputs)
+        # One revision for every change this service publishes to accessors.
+        self._revision = 0
+        self.jobs = ManagementJobs(self.inputs, on_finish=self._job_finished)
         # Serializes changes to the saved connections; held only while they change.
         self._lock = asyncio.Lock()
         # Per connection while in use: runner changes and the calls that select a runner.
@@ -149,16 +157,26 @@ class MCPService:
 
     def _inputs_changed(self, request_id: str) -> None:
         """Tell accessors that the pending inputs gained or lost *request_id*."""
+        self._changed(PENDING_INPUTS_RESOURCE, [request_id])
+
+    def _connection_changed(self, *identifiers: str) -> None:
+        """Tell accessors that what ``status`` reports for *identifiers* changed."""
+        self._changed(CONNECTIONS_RESOURCE, list(identifiers))
+
+    def _job_finished(self, job_id: str) -> None:
+        self._changed(JOBS_RESOURCE, [job_id])
+
+    def _changed(self, resource: str, ids: list[str]) -> None:
         host = self.host
         if self._closed or host is None or host.publish_change is None:
             return
-        self._inputs_revision += 1
+        self._revision += 1
         try:
-            host.publish_change(PENDING_INPUTS_RESOURCE, [request_id], self._inputs_revision)
+            host.publish_change(resource, ids, self._revision)
         except ValueError:
             # The registration retired for a reload or disable, which
             # invalidates every Extension surface itself.
-            self.api.logger.debug("Pending input change not published: registration retired")
+            self.api.logger.debug("MCP %s change not published: registration retired", resource)
 
     @asynccontextmanager
     async def _connection_lock(self, identifier: str) -> AsyncIterator[None]:
@@ -182,7 +200,12 @@ class MCPService:
         identifier = config["id"]
         if identifier not in self.runners:
             self.runners[identifier] = ConnectionRunner(
-                config, self._host(), self.inputs, self._publish, authorize=self._authorize
+                config,
+                self._host(),
+                self.inputs,
+                self._publish,
+                authorize=self._authorize,
+                on_change=lambda: self._connection_changed(identifier),
             )
             self._publish(self.runners[identifier], None)
         return self.runners[identifier]
@@ -203,6 +226,7 @@ class MCPService:
             return
         if catalog is not None:
             self.catalogs.record(runner.id, catalog_summary(catalog))
+            self._connection_changed(runner.id)
         parent = f"mcp_{runner.id}"
         about = self.connections.get(runner.id, runner.config).get("description")
         disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
@@ -622,6 +646,7 @@ class MCPService:
                 )
                 await self._stop(identifier)
                 self._runner(config)
+                self._connection_changed(identifier)
                 return {
                     "id": identifier,
                     "credential": arguments["key"],
@@ -632,6 +657,7 @@ class MCPService:
                     raise ValueError("MCP connection does not sign in with OAuth")
                 await self._stop(identifier)
                 forget_sign_in(self._host(), identifier)
+                self._connection_changed(identifier)
                 self.api.logger.info("MCP connection signed out (connection=%s)", identifier)
                 runner = self._runner(config)
                 if config["enabled"]:
@@ -794,7 +820,14 @@ class MCPService:
         if self.store is None:
             raise RuntimeError("MCP store was not initialized")
         await run_tool_worker(self.store.save, records)
+        changed = [
+            identifier
+            for identifier in {**self.connections, **records}
+            if self.connections.get(identifier) != records.get(identifier)
+        ]
         self.connections = records
+        if changed:
+            self._connection_changed(*changed)
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)

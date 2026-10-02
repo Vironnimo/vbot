@@ -355,6 +355,7 @@ class ConnectionRunner:
         publish: Any,
         *,
         authorize: Callable[[ToolContext], None] | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.host = host
@@ -362,7 +363,8 @@ class ConnectionRunner:
         self.publish = publish
         self._authorize = authorize
         self.id = config["id"]
-        self.state = "disconnected"
+        self._on_change = on_change
+        self._state = "disconnected"
         self.error: str | None = None
         self.client: Client | None = None
         self.catalog: dict[str, Any] = {}
@@ -379,7 +381,7 @@ class ConnectionRunner:
         # and whether its HTTP client does so instead of its write stream.
         self._tracks_delivery = False
         self._http_marks_delivery = False
-        self._events = ConnectionEvents(host, lambda: self.config)
+        self._events = ConnectionEvents(host, lambda: self.config, on_stderr=self._stderr_changed)
         self._requests = ServerRequests(
             self.id,
             host,
@@ -406,6 +408,23 @@ class ConnectionRunner:
         self._automatic = False
         self._reconnects = 0
         self._reconnect: asyncio.Task[None] | None = None
+
+    @property
+    def state(self) -> str:
+        """``disconnected``, ``connecting``, ``connected`` or ``failed``."""
+        return self._state
+
+    @state.setter
+    def state(self, value: str) -> None:
+        changed = value != self._state
+        self._state = value
+        if changed and self._on_change is not None:
+            self._on_change()
+
+    def _stderr_changed(self) -> None:
+        # A failed connection reports its stderr tail, which can still grow.
+        if self._state == "failed" and self._on_change is not None:
+            self._on_change()
 
     def start(self, *, automatic: bool = False) -> None:
         if self._task is not None and not self._task.done():

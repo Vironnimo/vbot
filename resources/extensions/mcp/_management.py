@@ -28,6 +28,12 @@ from .client import ConnectionRunner
 from .config import CONNECTION_SCHEMA
 from .interactions import InputRequests
 
+# The resources of the changes the service publishes to accessors
+# (``ExtensionHost.publish_change``): what ``list`` and ``status`` report for a
+# connection, and a management job that finished.
+CONNECTIONS_RESOURCE = "connections"
+JOBS_RESOURCE = "jobs"
+
 _DESCRIPTIONS = {
     "list": "List saved connections, live connection state, and effective Agent access.",
     "requests": (
@@ -140,10 +146,16 @@ def register_management(
 
 
 class ManagementJobs:
-    """Background management jobs; only the newest finished ones are kept."""
+    """Background management jobs; only the newest finished ones are kept.
 
-    def __init__(self, inputs: InputRequests) -> None:
+    *on_finish* receives the id of each job that finished, however it ended.
+    """
+
+    def __init__(
+        self, inputs: InputRequests, *, on_finish: Callable[[str], None] | None = None
+    ) -> None:
         self._inputs = inputs
+        self._on_finish = on_finish
         self._tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
 
     def start(self, coroutine: Coroutine[Any, Any, dict[str, Any]]) -> dict[str, Any]:
@@ -153,6 +165,9 @@ class ManagementJobs:
         identifier = new_id("job", claim=lambda candidate: candidate not in self._tasks)
         self._tasks[identifier] = asyncio.create_task(coroutine, name=f"mcp-job:{identifier}")
         self._tasks[identifier].add_done_callback(_observe)
+        if self._on_finish is not None:
+            on_finish = self._on_finish
+            self._tasks[identifier].add_done_callback(lambda _task: on_finish(identifier))
         return self.status(identifier)
 
     def status(self, identifier: str) -> dict[str, Any]:

@@ -291,3 +291,38 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
         assert "secret-sentinel" not in caplog.text
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_and_job_changes_reach_accessors_in_revision_order(host, monkeypatch):
+    changes: list[tuple[str, list[str], int]] = []
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    service, _registry = await start_service(
+        replace(host, publish_change=lambda *change: changes.append(change))
+    )
+    try:
+        await service.manage("save", {"connection": _CONNECTION})
+        runner = service.runners["example"]
+
+        async def invoke(operation, arguments, invocation_context=None):
+            return {"tools": []} if operation == "catalog" else {}
+
+        monkeypatch.setattr(runner, "invoke", invoke)
+        runner.state = "connected"
+        runner.state = "connected"
+        job = await service.manage("test", {"id": "example"})
+        assert (await service.jobs.wait(job["job_id"]))["state"] == "completed"
+    finally:
+        await service.close()
+    closed = len(changes)
+    runner.state = "failed"
+
+    # A saved connection, a new state (not a repeated one) and a finished job each
+    # tell accessors what to read again; a closed service publishes nothing.
+    assert [(resource, ids) for resource, ids, _revision in changes] == [
+        ("connections", ["example"]),
+        ("connections", ["example"]),
+        ("jobs", [job["job_id"]]),
+    ]
+    assert [revision for *_change, revision in changes] == [1, 2, 3]
+    assert len(changes) == closed
