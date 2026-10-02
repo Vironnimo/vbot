@@ -605,6 +605,10 @@ class Runtime:
     def background_skill_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         return self._skill_operations().background_protection(agent_id, names)
 
+    def shared_skill_names(self, owner_id: str) -> frozenset[str]:
+        """Name the Skills the Identity Agent ``owner_id`` shares with other Agents."""
+        return self._skill_operations().shared_skill_names(owner_id)
+
     def automation_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
         """Name the Skills the live automations of the Identity Agent ``agent_id`` trigger."""
         return self.automation_references.agent_triggered_skill_names(agent_id)
@@ -908,6 +912,7 @@ class Runtime:
                     lifecycle_guard=self.agents.lifecycle_guard,
                     on_changed=self._notify_skills_changed,
                     triggered_skill_names=self.automation_triggered_skill_names,
+                    shared_skill_names=self.shared_skill_names,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

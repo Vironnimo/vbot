@@ -75,8 +75,9 @@ SKILL_MANAGE_ABSORBED = (
 # Refusals of a background Run (no user present: a reflection review or the
 # Librarian). It changes only Skills an Agent created that the user has not
 # pinned, and never deletes a Skill that one of the Agent's live automations
-# triggers by name. The closing reply is where the Run reports what it could not change;
-# the review briefs ask for the same.
+# triggers by name or that the Agent shares with other Agents. The closing reply
+# is where the Run reports what it could not change; the review briefs ask for
+# the same.
 _LEAVE_IT = "Leave it as it is and name the needed change in your closing reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
     "Skill '{name}' is pinned by the user, so it cannot be changed in the background; "
@@ -93,6 +94,10 @@ SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
 SKILL_MANAGE_SHARED_REFUSAL = (
     "Skill '{name}' is shared with you by another Agent, so it cannot be changed in the "
     f"background; nothing changed. {_LEAVE_IT}"
+)
+SKILL_MANAGE_SHARED_OUT_REFUSAL = (
+    "Skill '{name}' is shared with other Agents, so it cannot be deleted in the background; "
+    f"nothing changed. {_LEAVE_IT}"
 )
 SKILL_MANAGE_SCHEDULED_REFUSAL = (
     "Skill '{name}' is used by one of your schedules, which loads it by its name, so it "
@@ -278,12 +283,15 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
+    shared_skill_names: Callable[[str], Collection[str]] | None = None,
 ) -> Callable[[ToolContext, JsonObject, Collection[str]], JsonObject]:
     """Return the direct Skill-management handler.
 
     The handler's third argument names the caller's Skills that its live
     automations trigger by name; a background Run never deletes one of them,
-    because the automation would then trigger nothing.
+    because the automation would then trigger nothing. Nor does it delete one
+    that ``shared_skill_names(agent_id)`` names: the caller shares it with other
+    Agents, whose shares would then name no Skill.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -355,6 +363,14 @@ def make_skill_manage_handler(
                 if writer.background and call.name in scheduled:
                     raise _RefusalError(
                         "skill_protected", SKILL_MANAGE_SCHEDULED_REFUSAL.format(name=call.name)
+                    )
+                if (
+                    writer.background
+                    and shared_skill_names is not None
+                    and call.name in shared_skill_names(context.agent_id)
+                ):
+                    raise _RefusalError(
+                        "skill_protected", SKILL_MANAGE_SHARED_OUT_REFUSAL.format(name=call.name)
                     )
                 _check_absorbed_into(call, own_root, writer)
             result, summary = _apply(authoring, target_root, call, writer)
@@ -1048,12 +1064,14 @@ def register_skill_manage_tool(
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
     triggered_skill_names: Callable[[str], Collection[str]] | None = None,
+    shared_skill_names: Callable[[str], Collection[str]] | None = None,
 ) -> None:
     """Register identity-only direct Skill management.
 
     ``triggered_skill_names(agent_id)`` names the Skills an Identity Agent's live
     automations trigger by name. It reads automation state, so it runs on the
-    Event Loop, before the write moves to a worker.
+    Event Loop, before the write moves to a worker. ``shared_skill_names(agent_id)``
+    names the Skills it shares with other Agents; it runs on the worker.
     """
     handler = make_skill_manage_handler(
         authoring,
@@ -1062,6 +1080,7 @@ def register_skill_manage_tool(
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
         on_changed=on_changed,
+        shared_skill_names=shared_skill_names,
     )
 
     def guarded_handler(

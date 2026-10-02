@@ -14,8 +14,9 @@ A pass has two parts:
    a conversation) is older than ``librarian.archive_after_days`` is archived
    with the reason ``inactive``. Changes by background Runs do not keep a Skill.
    A Skill that a live Bootstrap job, Cron job or Calendar action of the Agent
-   triggers by name is kept. Skills that the Agent or the user created are
-   never aged.
+   triggers by name is kept, and so is one the Agent shares with other Agents
+   (the user shared it; its receivers' use is not counted here). Skills that
+   the Agent or the user created are never aged.
 2. **Consolidation** (``librarian.consolidate``): when at least two Skills are
    candidates and the candidates changed since the last consolidation (their
    fingerprint: names and latest revision ids), one internal Run of kind
@@ -364,6 +365,14 @@ class _Library:
     fingerprint: str
 
 
+@dataclass(frozen=True)
+class _KeptSkills:
+    """Skills of the Agent that aging keeps: live automations trigger them, or it shares them."""
+
+    scheduled: frozenset[str]
+    shared: frozenset[str]
+
+
 @dataclass
 class _ActivePass:
     """A running pass and how far it got.
@@ -422,13 +431,15 @@ def librarian_candidates(
     *,
     usage: Mapping[str, SkillUse],
     scheduled: frozenset[str],
+    shared: frozenset[str] = frozenset(),
     records: Mapping[str, SkillRecord] | None = None,
 ) -> tuple[LibrarianCandidate, ...]:
     """Return the Skills of the home ``root`` that a Librarian pass may change.
 
     A candidate is a loadable, unpinned Skill that the Agent, a Reflection
-    review or an earlier pass created. ``usage`` is the Agent's Skill use by
-    name and ``scheduled`` the names live automations trigger. Blocking.
+    review or an earlier pass created and that the Agent does not share with
+    other Agents (``shared``). ``usage`` is the Agent's Skill use by name and
+    ``scheduled`` the names live automations trigger. Blocking.
     """
     if records is None:
         records = authoring.records(root)
@@ -436,7 +447,7 @@ def librarian_candidates(
     candidates: list[LibrarianCandidate] = []
     for name in sorted(records):
         record = records[name]
-        if record.pinned or record.origin not in BACKGROUND_WRITABLE_ORIGINS:
+        if record.pinned or record.origin not in BACKGROUND_WRITABLE_ORIGINS or name in shared:
             continue
         try:
             skill = registry.get(name)
@@ -472,6 +483,7 @@ class LibrarianService:
         skills_dir: Callable[[str], Path],
         skill_usage: Callable[[], Awaitable[Mapping[tuple[str, str], SkillUse]]],
         triggered_skill_names: Callable[[str], frozenset[str]],
+        shared_skill_names: Callable[[str], frozenset[str]],
         skills_changed: Callable[[str], None],
         status_changed: Callable[[], None] = lambda: None,
         clock: Callable[[], datetime] | None = None,
@@ -480,7 +492,8 @@ class LibrarianService:
 
         ``skill_usage`` reads every Agent's Skill use by ``(agent id, name)``;
         ``triggered_skill_names`` names the Skills an Agent's live automations
-        trigger. ``skills_changed`` runs after aging archived Skills of an Agent
+        trigger, and ``shared_skill_names`` (blocking) the Skills it shares with
+        other Agents. ``skills_changed`` runs after aging archived Skills of an Agent
         (consolidation writes report themselves through ``skill_manage``), and
         ``status_changed`` whenever a pass starts or ends.
         """
@@ -489,6 +502,7 @@ class LibrarianService:
         self._skills_dir = skills_dir
         self._skill_usage = skill_usage
         self._triggered_skill_names = triggered_skill_names
+        self._shared_skill_names = shared_skill_names
         self._skills_changed = skills_changed
         self._status_changed = status_changed
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -727,14 +741,16 @@ class LibrarianService:
         active.base = (await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)).settled()
         await self._write_progress(agent_id, active)
         settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
-        scheduled = self._triggered_skill_names(agent_id)
+        # Sharing is a user act, and live automations load Skills by name: both are kept.
+        kept = _KeptSkills(
+            scheduled=self._triggered_skill_names(agent_id),
+            shared=await _LIBRARIAN_WORKERS.run(self._shared_skill_names, agent_id),
+        )
         if active.usage is None:
             active.usage = await self._skill_usage()
         usage = {name: use for (owner, name), use in active.usage.items() if owner == agent_id}
         cutoff = self._clock() - timedelta(days=settings["archive_after_days"])
-        library = await _LIBRARIAN_WORKERS.run(
-            self._age_library, agent_id, usage, scheduled, cutoff
-        )
+        library = await _LIBRARIAN_WORKERS.run(self._age_library, agent_id, usage, kept, cutoff)
         active.archived = len(library.archived_names)
         active.archived_revisions = library.archived_revisions
         active.candidates = len(library.candidates)
@@ -758,7 +774,7 @@ class LibrarianService:
             error = await self._consolidate(agent_id, library, active)
             if active.consolidation == "ran":
                 fingerprint = await _LIBRARIAN_WORKERS.run(
-                    self._fingerprint_now, agent_id, usage, scheduled
+                    self._fingerprint_now, agent_id, usage, kept
                 )
         finished = await self._finish(agent_id, active, "completed", fingerprint, error)
         _LOGGER.info(
@@ -854,7 +870,7 @@ class LibrarianService:
         self,
         agent_id: str,
         usage: Mapping[str, SkillUse],
-        scheduled: frozenset[str],
+        kept: _KeptSkills,
         cutoff: datetime,
     ) -> _Library:
         """Archive the inactive Skills, then describe what consolidation may change."""
@@ -867,9 +883,9 @@ class LibrarianService:
             archived: list[str] = []
             revisions: list[int] = []
             for name, record in sorted(records.items()):
-                if name in scheduled or not _inactive(
-                    record, usage.get(name), changed.get(name), cutoff
-                ):
+                if name in kept.scheduled or name in kept.shared:
+                    continue
+                if not _inactive(record, usage.get(name), changed.get(name), cutoff):
                     continue
                 try:
                     result = self._authoring.delete(
@@ -890,7 +906,12 @@ class LibrarianService:
             if archived:
                 records = self._authoring.records(root)
             candidates = librarian_candidates(
-                self._authoring, root, usage=usage, scheduled=scheduled, records=records
+                self._authoring,
+                root,
+                usage=usage,
+                scheduled=kept.scheduled,
+                shared=kept.shared,
+                records=records,
             )
             return _Library(
                 tuple(archived),
@@ -900,7 +921,7 @@ class LibrarianService:
             )
 
     def _fingerprint_now(
-        self, agent_id: str, usage: Mapping[str, SkillUse], scheduled: frozenset[str]
+        self, agent_id: str, usage: Mapping[str, SkillUse], kept: _KeptSkills
     ) -> str:
         """Fingerprint the candidates as a consolidation Run left them."""
         with self._runtime.agents.lifecycle_guard():
@@ -908,7 +929,7 @@ class LibrarianService:
             if not root.is_dir():
                 return _fingerprint({})
             candidates = librarian_candidates(
-                self._authoring, root, usage=usage, scheduled=scheduled
+                self._authoring, root, usage=usage, scheduled=kept.scheduled, shared=kept.shared
             )
             return _fingerprint(self._latest_revisions(root, candidates))
 

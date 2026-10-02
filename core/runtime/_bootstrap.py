@@ -437,6 +437,7 @@ def bootstrap(runtime: Runtime) -> None:
             lifecycle_guard=runtime._agents.lifecycle_guard,
             on_changed=runtime._notify_skills_changed,
             triggered_skill_names=runtime.automation_triggered_skill_names,
+            shared_skill_names=runtime.shared_skill_names,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(
@@ -780,6 +781,7 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
         skills_dir=runtime.agent_skills_dir,
         skill_usage=usage.skill_usage_async,
         triggered_skill_names=automation.agent_triggered_skill_names,
+        shared_skill_names=runtime.shared_skill_names,
         skills_changed=skills_changed,
         # The Skill manager shows the Librarian; its observers reload on Skill changes.
         status_changed=runtime._notify_skills_changed,

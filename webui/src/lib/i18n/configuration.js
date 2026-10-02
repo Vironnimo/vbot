@@ -286,12 +286,12 @@ export default Object.freeze({
   'settings.librarian.archiveAfterDescription':
     'Days without use or change before a Skill made in the background is retired.',
   'settings.librarian.archiveAfterHelp':
-    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays. From 1 to 3650 days. Default: 90.',
+    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays, and so does a Skill the Agent shares with other Agents. From 1 to 3650 days. Default: 90.',
   'settings.librarian.consolidate': 'Merge overlapping Skills',
   'settings.librarian.consolidateDescription':
     'Each pass lets the Agent merge and correct the Skills it made.',
   'settings.librarian.consolidateHelp':
-    'After retiring unused Skills, a pass shows the Agent the unpinned Skills that it or a background review created. The Agent merges overlapping ones into one Skill and corrects outdated instructions. Merged Skills move to the archive.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run with the Agent’s own Model, so it uses tokens. Default: on.',
+    'After retiring unused Skills, a pass shows the Agent the unpinned Skills that it or a background review created and that it does not share with other Agents. The Agent merges overlapping ones into one Skill and corrects outdated instructions. Merged Skills move to the archive.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run with the Agent’s own Model, so it uses tokens. Default: on.',
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':

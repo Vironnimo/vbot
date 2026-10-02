@@ -72,6 +72,8 @@ class _Harness:
         self.usage_error: Exception | None = None
         self.usage_reads = 0
         self.scheduled: dict[str, frozenset[str]] = {}
+        # The Skills each Agent shares with other Agents.
+        self.shared: dict[str, frozenset[str]] = {}
         self.changed: list[str] = []
         self.announced = 0
         self.started: list[dict[str, Any]] = []
@@ -122,6 +124,7 @@ class _Harness:
             skills_dir=self.home,
             skill_usage=skill_usage,
             triggered_skill_names=lambda agent_id: self.scheduled.get(agent_id, frozenset()),
+            shared_skill_names=lambda agent_id: self.shared.get(agent_id, frozenset()),
             skills_changed=self.changed.append,
             status_changed=self.announce,
             clock=lambda: self.now,
@@ -203,6 +206,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         ("old-human", _HUMAN),
         ("used-recently", _REFLECTION),
         ("scheduled", _REFLECTION),
+        ("shared", _REFLECTION),
         ("reviewed-recently", _REFLECTION),
         ("edited-recently", _REFLECTION),
     ):
@@ -221,6 +225,8 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         ("other", "old-review"): SkillUse(last_activated=recent, count=1),
     }
     harness.scheduled = {"main": frozenset({"scheduled"})}
+    # Sharing is the user's choice; the receivers' use is not counted here.
+    harness.shared = {"main": frozenset({"shared"})}
     harness.settings["consolidate"] = False
 
     status = await harness.run_pass()
@@ -231,6 +237,7 @@ async def test_a_pass_archives_inactive_background_skills_and_reports_them(
         "old-human",
         "old-pinned",
         "scheduled",
+        "shared",
         "used-recently",
     ]
     assert [
@@ -273,6 +280,8 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     harness.authoring.create(root, "deploy-docs", _document("deploy-docs"), writer=_HUMAN)
     harness.authoring.create(root, "deploy-db", _document("deploy-db"), writer=_AGENT)
     harness.authoring.set_pinned(root, "deploy-db", True, writer=_HUMAN)
+    harness.authoring.create(root, "deploy-team", _document("deploy-team"), writer=_AGENT)
+    harness.shared = {"main": frozenset({"deploy-team"})}
     # Nothing is old enough to age.
     harness.now = datetime.now(UTC)
 
@@ -288,7 +297,9 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
         )
 
     harness.on_run = merge
-    candidates = librarian_candidates(harness.authoring, root, usage={}, scheduled=frozenset())
+    candidates = librarian_candidates(
+        harness.authoring, root, usage={}, scheduled=frozenset(), shared=harness.shared["main"]
+    )
 
     status = await harness.run_pass()
 
@@ -296,9 +307,11 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     assert started["message"] == librarian_brief(
         harness.storage, candidates, limit=LIBRARIAN_TOOL_ITERATION_LIMIT
     )
-    # Only unpinned Skills that the Agent or a background Run created are listed.
+    # Only unpinned Skills that the Agent or a background Run created and that it
+    # does not share are listed.
     assert "- deploy-web\n" in started["message"] and "- deploy-api\n" in started["message"]
-    assert "- deploy-docs" not in started["message"] and "- deploy-db" not in started["message"]
+    for kept in ("deploy-docs", "deploy-db", "deploy-team"):
+        assert f"- {kept}" not in started["message"]
     assert {
         key: started[key]
         for key in (
