@@ -303,11 +303,17 @@
   {/if}
 {/snippet}
 
+<!-- An error kind, Provider or Model; `unknown` when no Model step came
+     before the error. -->
 {#snippet errorKey(entry)}
-  <span
-    class="stats-name"
-    use:tooltip={{ text: entry.key, whenTruncated: true }}>{entry.key}</span
-  >
+  {#if entry.key === 'unknown'}
+    <span class="stats-muted">{t('common.unknown')}</span>
+  {:else}
+    <span
+      class="stats-name"
+      use:tooltip={{ text: entry.key, whenTruncated: true }}>{entry.key}</span
+    >
+  {/if}
 {/snippet}
 
 {#snippet errorAgent(entry)}

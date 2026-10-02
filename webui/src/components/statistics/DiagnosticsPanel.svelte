@@ -312,7 +312,7 @@
       label: t('statistics.col.models'),
       mono: true,
       sortable: false,
-      format: (row) => listText(row.models),
+      cell: modelsCell,
     },
     {
       id: 'agents',
@@ -345,22 +345,18 @@
     },
   ]);
 
-  // Entries of a Model or Agent list: plain strings or `{ key, count }`.
-  function listText(entries) {
-    return (Array.isArray(entries) ? entries : [])
-      .map((entry) =>
-        typeof entry === 'string'
-          ? entry
-          : `${entry?.key ?? entry?.model ?? entry?.agent_id ?? ''}${entry?.count != null ? ` (${formatInteger(entry.count, locale)})` : ''}`,
-      )
-      .filter(Boolean)
-      .join(', ');
-  }
+  // A failed hour lists its Models and Agents (`{ key, count }`, most
+  // failures first): the first few with their counts, the rest on hover or
+  // focus.
+  const BURST_ENTRIES_SHOWN = 3;
 
-  function entryKey(entry) {
-    return typeof entry === 'string'
-      ? entry
-      : (entry?.key ?? entry?.agent_id ?? '');
+  function moreEntriesTooltip(entries, label) {
+    return {
+      rows: entries.slice(BURST_ENTRIES_SHOWN).map((entry) => ({
+        label: label(entry.key),
+        value: formatInteger(entry.count, locale),
+      })),
+    };
   }
 </script>
 
@@ -383,13 +379,38 @@
   >
 {/snippet}
 
+{#snippet modelsCell(row)}
+  {@render burstEntries(row.models ?? [], burstModel, (key) => key)}
+{/snippet}
+
 {#snippet agentsCell(row)}
-  <span class="stats-badges">
-    {#each (row.agents ?? []).slice(0, 3) as entry, index (index)}
-      {@render agentName(entryKey(entry))}
+  {@render burstEntries(row.agents ?? [], agentName, agentFilterText)}
+{/snippet}
+
+{#snippet burstModel(key)}
+  <span
+    class="stats-id"
+    use:tooltip={{ text: key, mono: true, whenTruncated: true }}>{key}</span
+  >
+{/snippet}
+
+{#snippet burstEntries(entries, name, label)}
+  <span class="stats-stack">
+    {#each entries.slice(0, BURST_ENTRIES_SHOWN) as entry (entry.key)}
+      <span class="stats-count-entry"
+        >{@render name(entry.key)}
+        <span class="stats-muted">{formatInteger(entry.count, locale)}</span
+        ></span
+      >
     {/each}
-    {#if (row.agents ?? []).length > 3}
-      <span class="stats-muted">+{row.agents.length - 3}</span>
+    {#if entries.length > BURST_ENTRIES_SHOWN}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users reach the remaining entries here.) -->
+      <span
+        class="stats-muted"
+        tabindex="0"
+        use:tooltip={moreEntriesTooltip(entries, label)}
+        >+{entries.length - BURST_ENTRIES_SHOWN}</span
+      >
     {/if}
   </span>
 {/snippet}

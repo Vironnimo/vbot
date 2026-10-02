@@ -119,21 +119,26 @@
 
 <!-- One tooltip for the whole Agent cell: the Project and full address of a
      Project Agent, what an Extension's Sessions are, or a truncated name.
-     The name shortens; its badge never does. -->
+     The name shortens; its badge never does. Calls made outside any Session
+     have no Agent (an empty key). -->
 {#snippet agentName(agentId)}
-  {@const display = agentDisplay(agentId)}
-  <span class="stats-agent" use:tooltip={agentTooltip(agentId)}>
-    <span class="stats-agent__name">{display.name}</span>
-    {#if display.projectId}
-      <Badge class="stats-agent__badge" variant="info"
-        >{display.projectId}</Badge
-      >
-    {:else if display.extension}
-      <Badge class="stats-agent__badge" variant="neutral"
-        >{t('statistics.agent.extensionBadge')}</Badge
-      >
-    {/if}
-  </span>
+  {#if agentId}
+    {@const display = agentDisplay(agentId)}
+    <span class="stats-agent" use:tooltip={agentTooltip(agentId)}>
+      <span class="stats-agent__name">{display.name}</span>
+      {#if display.projectId}
+        <Badge class="stats-agent__badge" variant="info"
+          >{display.projectId}</Badge
+        >
+      {:else if display.extension}
+        <Badge class="stats-agent__badge" variant="neutral"
+          >{t('statistics.agent.extensionBadge')}</Badge
+        >
+      {/if}
+    </span>
+  {:else}
+    <span class="stats-muted">{t('statistics.cost.withoutSession')}</span>
+  {/if}
 {/snippet}
 
 <!-- A Session named by its title (id as a tooltip row), or by its id. -->

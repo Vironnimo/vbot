@@ -365,7 +365,7 @@ export default Object.freeze({
   'statistics.cost.reason.usage': 'Token usage unavailable',
   'statistics.cost.recent': 'Recent Model calls',
   'statistics.cost.recentHint':
-    'Up to 50 calls in this time range, newest first. Expand a call for its price source and Session.',
+    'Up to 50 calls in this time range, newest first. Hover or focus a cost for its price source and whether the token counts are estimated.',
   'statistics.cost.reported': 'Provider-reported cost',
   'statistics.cost.retrospective': 'Priced using today’s catalog',
   'statistics.cost.savedCatalog': 'Saved catalog estimate',

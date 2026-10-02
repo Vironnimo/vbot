@@ -271,6 +271,13 @@ describe('StatisticsView', () => {
     ).toBe('true');
     expect(breakdown().textContent).toContain('model-breakdown-sentinel');
 
+    // Calls made outside any Session are their own Agent row.
+    document.querySelector('#statistics-usage-dimension-tab-agent').click();
+    flushSync();
+    expect(breakdown().textContent).toContain(
+      t('statistics.cost.withoutSession'),
+    );
+
     document.querySelector('#statistics-usage-dimension-tab-project').click();
     flushSync();
     expect(breakdown().textContent).not.toContain('model-breakdown-sentinel');

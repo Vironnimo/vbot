@@ -228,13 +228,13 @@
       id: 'input_tokens',
       label: t('statistics.col.input'),
       align: 'end',
-      cell: inputCell,
+      cell: callTokensCell,
     },
     {
       id: 'output_tokens',
       label: t('statistics.col.output'),
       align: 'end',
-      cell: outputCell,
+      cell: callTokensCell,
     },
     {
       id: 'cost',
@@ -273,9 +273,7 @@
   ]);
 
   function breakdownFilterText(row) {
-    return activeDimension === 'agent'
-      ? agentFilterText(row.key)
-      : usageRowLabel(activeDimension, row.key);
+    return usageRowLabel(activeDimension, row.key);
   }
 </script>
 
@@ -308,6 +306,11 @@
 
 {#snippet tokensCell(row)}
   {@render tokenValue(totalTokens(row))}
+{/snippet}
+
+<!-- A call's own counts; whether they are estimated shows with its cost. -->
+{#snippet callTokensCell(row, column)}
+  {@render tokenValue(row[column.id])}
 {/snippet}
 
 {#snippet costCell(row)}
@@ -449,6 +452,7 @@
               row.model,
               modelCallKindLabel(row.kind),
               row.session_title,
+              row.session_id,
               agentFilterText(row.agent_id),
             ]
               .filter(Boolean)

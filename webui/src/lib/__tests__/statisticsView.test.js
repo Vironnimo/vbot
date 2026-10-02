@@ -248,6 +248,8 @@ describe('statisticsView labels and tooltips', () => {
     expect(shortGroupId('swr_0123456789abcdef')).toBe('abcdef');
     expect(shortGroupId(null)).toBe('');
     expect(usageRowLabel('project', '')).toBe('Outside a Project');
+    expect(usageRowLabel('agent', '')).toBe('Outside a Session');
+    expect(usageRowLabel('agent', 'extension:swarm')).toBe('swarm');
     expect(usageRowLabel('origin', 'automation')).toBe('Automation');
     expect(usageRowLabel('kind', 'chat')).toBe('Chat');
   });
@@ -306,7 +308,7 @@ describe('statisticsView labels and tooltips', () => {
     const catalog = callCostTooltip(
       {
         retrospective: true,
-        estimated_tokens: 40,
+        estimated_tokens: true,
         cost: {
           source: 'catalog',
           amount_usd: 0.0123,
@@ -322,7 +324,10 @@ describe('statisticsView labels and tooltips', () => {
     expect(byLabel(catalog).Input.value).toBe('$3.00 / 1M');
     expect(byLabel(catalog)['Price tiers'].value).toBe('2');
     expect(byLabel(catalog)['Price source'].value).toBe('models.dev');
-    expect(byLabel(catalog).Estimated.value).toBe('40');
+    expect(byLabel(catalog).Tokens).toMatchObject({
+      value: 'Estimated',
+      tone: 'warning',
+    });
     expect(
       callCostTooltip({ cost: { source: 'unknown', reason: 'missing_price' } }),
     ).toEqual({

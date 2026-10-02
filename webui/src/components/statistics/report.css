@@ -460,6 +460,15 @@
   font-size: var(--fs-label-sm);
 }
 
+/* A name with its count after it (a failed hour's Models and Agents). */
+.stats-view .stats-count-entry {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .stats-view .stats-badges {
   display: inline-flex;
   flex-wrap: wrap;

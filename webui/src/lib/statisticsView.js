@@ -597,7 +597,7 @@ export function usageRowLabel(dimension, key) {
     case 'kind':
       return modelCallKindLabel(key);
     case 'agent':
-      return agentFilterText(key);
+      return key ? agentFilterText(key) : t('statistics.cost.withoutSession');
     default:
       return key || EM_DASH;
   }
@@ -806,10 +806,10 @@ export function callCostTooltip(call, locale = 'en') {
     if (reason)
       rows.push({ label: t('statistics.cost.reason'), value: reason });
   }
-  if (toFiniteNumber(call?.estimated_tokens) > 0) {
+  if (call?.estimated_tokens === true) {
     rows.push({
-      label: t('statistics.tokens.estimatedPart'),
-      value: formatTokensExact(call.estimated_tokens, locale),
+      label: t('statistics.col.tokens'),
+      value: t('statistics.tokens.estimatedPart'),
       tone: 'warning',
     });
   }
