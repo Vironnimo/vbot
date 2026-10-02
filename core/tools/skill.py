@@ -12,6 +12,7 @@ from typing import Any
 
 from core.projects import ProjectNotFoundError
 from core.skills._packages import PackageError, excluded, package_path
+from core.skills.authoring import ArchivedSkill
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
@@ -54,6 +55,29 @@ SkillRegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 # into a skill directory after this run's registry was cached is picked up without
 # a restart — see the rescan-on-miss retry in the handler below.
 SkillRefresh = Callable[[], None | Awaitable[None]]
+
+# Finds the newest archived Skill of a name in the writable homes a call sees: the
+# identity Agent's own home (``None`` for other runs) and the global home. The
+# runtime wires this to ``Runtime.archived_skill``.
+ArchivedSkillResolver = Callable[[str | None, str], ArchivedSkill | None]
+
+# A name whose Skill was deleted into the archive. ``{date}`` is YYYY-MM-DD.
+SKILL_ARCHIVED_MESSAGE = (
+    "Skill '{name}' was {reason} on {date} and cannot be loaded. The user can restore it "
+    "in the Skill controls. Call skill without arguments to list the available Skills."
+)
+SKILL_ABSORBED_NOTE = (
+    "Skill '{name}' was merged into Skill '{target}' on {date}; these are the instructions "
+    "of '{target}'."
+)
+SKILL_ABSORBED_FILE_MESSAGE = (
+    "Skill '{name}' was merged into Skill '{target}' on {date} and has no files of its own "
+    "anymore. Load '{target}' with skill and read its files instead."
+)
+_ARCHIVE_REASONS = {
+    "deleted": "deleted",
+    "inactive": "retired after a long time without use",
+}
 
 SKILL_TOOL_NAME = "skill"
 SKILL_TOOL_DESCRIPTION = "List available Skills, load one Skill, or read one file from it."
@@ -255,7 +279,9 @@ def _missing_project_failure(project_id: str | None) -> JsonObject:
 
 
 def make_skill_handler(
-    resolve_registry: SkillRegistryResolver, refresh_skills: SkillRefresh
+    resolve_registry: SkillRegistryResolver,
+    refresh_skills: SkillRefresh,
+    resolve_archived: ArchivedSkillResolver | None = None,
 ) -> Any:
     """Return a skill handler that resolves its registry per call from the run.
 
@@ -266,6 +292,10 @@ def make_skill_handler(
     disk; the handler calls it once on a name miss and re-resolves, so a skill
     dropped into a skill directory after this run's registry was cached activates by
     name without a restart.
+
+    ``resolve_archived`` answers a remaining miss of a deleted (archived) name: a
+    Skill merged into one this call may load loads that one with a note; any other
+    archived name fails with when and why it was archived.
     """
 
     async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -336,6 +366,35 @@ def make_skill_handler(
             except ProjectNotFoundError:
                 return _missing_project_failure(context.skill_project_id)
             located = _locate_skill(skill_registry, requested, context.allowed_skills)
+        if located is None and resolve_archived is not None:
+            archived = await run_tool_worker(
+                resolve_archived, identity_agent_id, requested.strip().lstrip(_SKILL_NAME_MARKS)
+            )
+            if archived is not None:
+                target = archived.absorbed_into
+                date = archived.archived_at[:10]
+                loadable = target is not None and _is_loadable(
+                    skill_registry, target, context.allowed_skills
+                )
+                if target is not None and loadable and file_path is not None:
+                    return tool_failure(
+                        "skill_not_found",
+                        SKILL_ABSORBED_FILE_MESSAGE.format(
+                            name=archived.name, target=target, date=date
+                        ),
+                    )
+                if target is not None and loadable:
+                    notes.append(
+                        SKILL_ABSORBED_NOTE.format(name=archived.name, target=target, date=date)
+                    )
+                    located = (target, None)
+                elif archived.available:
+                    return tool_failure(
+                        "skill_not_found",
+                        SKILL_ARCHIVED_MESSAGE.format(
+                            name=archived.name, reason=_archive_reason(archived), date=date
+                        ),
+                    )
         if located is None:
             return tool_failure(
                 "skill_not_found",
@@ -438,6 +497,7 @@ def register_skill_tool(
     registry: ToolRegistry,
     resolve_registry: SkillRegistryResolver,
     refresh_skills: SkillRefresh,
+    resolve_archived: ArchivedSkillResolver | None = None,
 ) -> None:
     """Register the skill activation tool with a per-project registry resolver.
 
@@ -452,7 +512,7 @@ def register_skill_tool(
         SKILL_TOOL_NAME,
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
-        make_skill_handler(resolve_registry, refresh_skills),
+        make_skill_handler(resolve_registry, refresh_skills, resolve_archived),
         argument_normalizer=_normalize_skill_arguments,
         unadvertised_parameters=_SKILL_UNADVERTISED_PARAMETERS,
         family="skills",
@@ -743,6 +803,22 @@ def _locate_skill(
     except KeyError:
         return _resolve_skill_address(requested, _addressable_names(skill_registry, allowed_skills))
     return requested, None
+
+
+def _is_loadable(
+    skill_registry: SkillRegistry, name: str, allowed_skills: Sequence[str] | None
+) -> bool:
+    try:
+        skill_registry.get(name)
+    except KeyError:
+        return False
+    return _is_skill_allowed(skill_registry, name, allowed_skills)
+
+
+def _archive_reason(archived: ArchivedSkill) -> str:
+    if archived.reason == "absorbed" and archived.absorbed_into:
+        return f"merged into Skill '{archived.absorbed_into}'"
+    return _ARCHIVE_REASONS.get(archived.reason or "", "deleted")
 
 
 def _names_package_file(

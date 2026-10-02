@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from core.runs import RunExecutionOwner
+from core.runs import RunExecutionOwner, RunKind
 from core.tools._display_diff import (
     MAX_DISPLAY_DIFF_LINES,
     display_diff_line_count,
@@ -116,6 +116,9 @@ class ToolContext:
     # skills the run's catalog advertises. Kept separate from ``project_id`` so
     # skill resolution stays rooted-aware without changing subagent inheritance.
     skill_project_id: str | None = None
+    # Kind of the Run that dispatched this call, or ``None`` outside Runs (direct
+    # callers). ``core.runs.is_unattended_run_kind`` tells background Runs apart.
+    run_kind: RunKind | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None
     cancel_registration_hook: ToolCancelRegistrationHook | None = None
@@ -494,6 +497,8 @@ class ToolExecutionConfig:
     project_id: str | None = None
     # Effective skill project for this group; see ``ToolContext.skill_project_id``.
     skill_project_id: str | None = None
+    # Kind of the owning Run; see ``ToolContext.run_kind``.
+    run_kind: RunKind | None = None
     allowed_tools: Sequence[str] | None = None
     emit_hook: ToolEmitHook | None = None
     cancellation_hook: ToolCancellationHook | None = None

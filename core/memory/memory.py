@@ -235,13 +235,15 @@ class MemoryWriter:
     """Who changes Memory, recorded in the log line and the Memory history.
 
     ``actor`` is ``tool``, ``rpc`` or ``internal`` (direct in-process callers);
-    ``session_id``/``run_id`` name the Run of a Tool change.
+    ``session_id``/``run_id`` name the Run of a Tool change and ``run_kind``
+    its Run kind.
     """
 
     agent_id: str | None = None
     actor: str = "internal"
     session_id: str | None = None
     run_id: str | None = None
+    run_kind: str | None = None
 
 
 _INTERNAL_WRITER = MemoryWriter()
@@ -692,6 +694,7 @@ class FilePinnedMemoryBackend:
                 entries=after,
                 session_id=writer.session_id,
                 run_id=writer.run_id,
+                run_kind=writer.run_kind,
                 reverts=reverts,
             )
         except Exception as exc:  # never fail the change the history describes

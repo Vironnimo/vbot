@@ -78,6 +78,9 @@ export function activeSkillCount(projection) {
 
 export const LIBRARY_SCOPES = ['all', 'global', 'bundled', 'shared'];
 
+// The collection of deleted packages kept in the editable scopes' archives.
+export const ARCHIVED_COLLECTION = 'archived';
+
 export function matchesSkillScope(entry, scope) {
   if (scope === 'all') return true;
   if (scope === 'shared') return Boolean(entry.shared);
@@ -98,11 +101,16 @@ function libraryLabel(scope) {
 }
 
 /**
- * Sidebar collections: the library filters of the package list, then one
- * entry per Identity Agent and Project whose count is the Skills it currently
- * activates.
+ * Sidebar collections: the library filters of the package list and the
+ * archived packages, then one entry per Identity Agent and Project whose count
+ * is the Skills it currently activates.
  */
-export function skillCollections(entries, agents = [], projects = []) {
+export function skillCollections(
+  entries,
+  agents = [],
+  projects = [],
+  archived = [],
+) {
   return [
     ...LIBRARY_SCOPES.map((key) => ({
       key,
@@ -110,6 +118,12 @@ export function skillCollections(entries, agents = [], projects = []) {
       section: 'library',
       count: entries.filter((entry) => matchesSkillScope(entry, key)).length,
     })),
+    {
+      key: ARCHIVED_COLLECTION,
+      label: t('skills.library.archived'),
+      section: 'library',
+      count: archived.length,
+    },
     ...agents.map((agent) => ({
       key: `agent:${agent.id}`,
       id: agent.id,
@@ -164,6 +178,12 @@ export function skillCollectionText(collection) {
         subtitle: t('skills.subtitle.shared'),
         empty: t('skills.empty.shared'),
         emptyHelp: t('skills.empty.sharedHelp'),
+      };
+    case ARCHIVED_COLLECTION:
+      return {
+        subtitle: t('skills.subtitle.archived'),
+        empty: t('skills.empty.archived'),
+        emptyHelp: t('skills.empty.archivedHelp'),
       };
     default:
       return {
@@ -280,6 +300,8 @@ export function skillCollectionCountText(collection) {
     case 'projects':
       return t('skills.collectionCount.project', { count: collection.count });
     default:
-      return t('skills.collectionCount.library', { count: collection?.count });
+      return collection?.key === ARCHIVED_COLLECTION
+        ? t('skills.collectionCount.archived', { count: collection.count })
+        : t('skills.collectionCount.library', { count: collection?.count });
   }
 }

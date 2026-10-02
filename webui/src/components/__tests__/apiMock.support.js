@@ -73,6 +73,16 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
     inspectSkill: (id) => call('skill.inspect', { id }),
     setSkillDisabled: (name, disabled) =>
       call('skill.set_disabled', { name, disabled }),
+    setSkillPinned: (scope, name, pinned) =>
+      call('skill.set_pinned', { scope, name, pinned }),
+    skillHistory: (scope, name, limit) =>
+      call('skill.history', { scope, name, limit }),
+    revertSkillRevisions: (scope, revisions) =>
+      call('skill.revert', { scope, revisions }),
+    restoreSkill: (scope, archiveId) =>
+      call('skill.restore', { scope, archive_id: archiveId }),
+    purgeSkill: (scope, archiveId) =>
+      call('skill.purge', { scope, archive_id: archiveId }),
     shareSkill: (agentId, name, shared, receivers = []) =>
       call('skill.share', { agent_id: agentId, name, shared, receivers }),
     listChatCommands: (params = {}) => call('chat.commands', params),

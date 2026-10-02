@@ -68,7 +68,7 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | subagents.md | `core/subagents/` | Sub-agent coordinator, batch tracking, run linkage |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
-| skills.md | `core/skills/` | Skill loading/validation, scopes, Prompt-Epoch Catalog |
+| skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
 | automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics |
 | calendar.md | `core/calendar/` | Local events, recurrence, event-relative Agent actions, cron projection, calendar tool |
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |

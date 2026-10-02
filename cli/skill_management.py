@@ -207,7 +207,7 @@ def skill_update(
 
 
 def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool) -> CommandResult:
-    """Delete a Skill after explicit confirmation."""
+    """Delete a Skill into its scope's archive after explicit confirmation."""
 
     if not confirm:
         return CommandResult(
@@ -219,6 +219,106 @@ def skill_delete(instance: ServerInstance, scope: str, name: str, confirm: bool)
             instance=instance,
         )
     return _skill_write_result(instance, "skill.delete", {"scope": scope, "name": name})
+
+
+def skill_set_pinned(
+    instance: ServerInstance, scope: str, name: str, pinned: bool
+) -> CommandResult:
+    """Pin a Skill against background changes, or unpin it."""
+
+    return _skill_write_result(
+        instance, "skill.set_pinned", {"scope": scope, "name": name, "pinned": pinned}
+    )
+
+
+def skill_history(
+    instance: ServerInstance, scope: str, name: str | None, limit: int
+) -> CommandResult:
+    """Return the newest recorded Skill revisions of one scope (`skill.history` RPC)."""
+
+    params: dict[str, Any] = {"scope": scope, "limit": limit}
+    if name is not None:
+        params["name"] = name
+    payload = _rpc_call(instance, "skill.history", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    revisions = _records(payload.data.get("revisions"))
+    target = f"skill {name} in {scope}" if name is not None else scope
+    if not revisions:
+        return CommandResult(
+            ok=True, message=f"no Skill changes recorded for {target}", instance=instance
+        )
+    lines = [f"Skill history of {target}: {len(revisions)} revisions, newest first"]
+    for revision in revisions:
+        lines.extend(_format_revision(revision))
+    if len(revisions) >= limit:
+        lines.append(f"older revisions: re-run with a larger --limit than {limit}")
+    lines.append(f"undo with: vbot skill revert <revision>... --scope {scope}")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def skill_revert(instance: ServerInstance, scope: str, revisions: list[int]) -> CommandResult:
+    """Undo the changes of one or more Skill revisions, all or none (`skill.revert` RPC)."""
+
+    payload = _rpc_call(instance, "skill.revert", {"scope": scope, "revisions": revisions})
+    if not payload.ok:
+        return payload.to_command_result()
+    named = ", ".join(str(revision) for revision in revisions)
+    noun = "revisions" if len(revisions) > 1 else "revision"
+    lines = [f"reverted {noun} {named} in {scope}"]
+    for revision in _records(payload.data.get("revisions")):
+        lines.extend(_format_revision(revision))
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def skill_archived(instance: ServerInstance, scope: str) -> CommandResult:
+    """List the archived Skill packages of one scope (`skill.archived` RPC)."""
+
+    payload = _rpc_call(instance, "skill.archived", {"scope": scope})
+    if not payload.ok:
+        return payload.to_command_result()
+    archived = _records(payload.data.get("archived"))
+    if not archived:
+        return CommandResult(ok=True, message=f"no archived skills in {scope}", instance=instance)
+    lines = [f"archived skills in {scope}, newest first:"]
+    lines.extend(_format_archived(entry) for entry in archived)
+    lines.append(f"restore with: vbot skill restore <archive-id> --scope {scope}")
+    lines.append(f"delete permanently with: vbot skill purge <archive-id> --scope {scope} --yes")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+def skill_restore(instance: ServerInstance, scope: str, archive_id: str) -> CommandResult:
+    """Move an archived Skill back under its name (`skill.restore` RPC)."""
+
+    return _skill_write_result(
+        instance, "skill.restore", {"scope": scope, "archive_id": archive_id}
+    )
+
+
+def skill_purge(
+    instance: ServerInstance, scope: str, archive_id: str, confirm: bool
+) -> CommandResult:
+    """Permanently delete one archived Skill after explicit confirmation."""
+
+    if not confirm:
+        return CommandResult(
+            ok=False,
+            message=(
+                f"refusing to permanently delete archived skill {archive_id} from {scope} "
+                "without confirmation; re-run with --yes"
+            ),
+            instance=instance,
+        )
+    payload = _rpc_call(instance, "skill.purge", {"scope": scope, "archive_id": archive_id})
+    if not payload.ok:
+        return payload.to_command_result()
+    purged = payload.data.get("purged")
+    name = _string_or_default(purged.get("name") if isinstance(purged, dict) else None, "?")
+    return CommandResult(
+        ok=True,
+        message=f"permanently deleted archived skill {name} ({archive_id}) from {scope}",
+        instance=instance,
+    )
 
 
 def skill_write_file(
@@ -441,21 +541,89 @@ def skill_unshare(instance: ServerInstance, agent_id: str, name: str) -> Command
 
 
 def _skill_write_result(
-    instance: ServerInstance, method: str, params: dict[str, str]
+    instance: ServerInstance, method: str, params: Mapping[str, object]
 ) -> CommandResult:
-    payload = _rpc_call(instance, method, params)
+    payload = _rpc_call(instance, method, dict(params))
     if not payload.ok:
         return payload.to_command_result()
-    name = _string_or_default(payload.data.get("name"), params.get("name", "?"))
+    scope = _string_or_default(params.get("scope"), "?")
+    name = _string_or_default(payload.data.get("name"), _string_or_default(params.get("name"), "?"))
     operation = _string_or_default(payload.data.get("operation"), method.removeprefix("skill."))
     warnings = _string_list(payload.data.get("warnings"))
     warning_text = "; ".join(warnings) if warnings else "-"
-    return CommandResult(
-        ok=True,
-        message=(
-            f"{operation} skill {name}\nscope: {params.get('scope', '?')}\nwarnings: {warning_text}"
-        ),
-        instance=instance,
+    lines = [f"{operation} skill {name}", f"scope: {scope}", f"warnings: {warning_text}"]
+    archive_id = payload.data.get("archive_id")
+    if method == "skill.delete" and isinstance(archive_id, str):
+        lines.append(f"archived as {archive_id}")
+        lines.append(f"restore with: vbot skill restore {archive_id} --scope {scope}")
+    return CommandResult(ok=True, message="\n".join(lines), instance=instance)
+
+
+_REVISION_KIND_TEXT = {
+    "baseline": "history starts with the existing package",
+    "create": "created",
+    "change": "changed",
+    "external": "changed outside vBot",
+    "restore": "restored from the archive",
+    "pin": "pinned",
+    "unpin": "unpinned",
+}
+_ARCHIVE_REASON_TEXT = {"deleted": "deleted", "inactive": "retired after long disuse"}
+
+
+def _records(value: object) -> list[Mapping[str, Any]]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _archive_reason(entry: Mapping[str, Any]) -> str:
+    reason = entry.get("reason")
+    absorbed_into = entry.get("absorbed_into")
+    if reason == "absorbed" and isinstance(absorbed_into, str):
+        return f"merged into {absorbed_into}"
+    return _ARCHIVE_REASON_TEXT.get(str(reason), "deleted")
+
+
+def _format_revision(revision: Mapping[str, Any]) -> list[str]:
+    kind = revision.get("kind")
+    if kind == "revert":
+        reverted = revision.get("reverts")
+        targets = ", ".join(str(item) for item in reverted) if isinstance(reverted, list) else "?"
+        what = f"revert of revision {targets}"
+    elif kind == "archive":
+        what = f"archived ({_archive_reason(revision)})"
+    elif kind == "external" and revision.get("live") is False:
+        what = "removed outside vBot"
+    else:
+        what = _REVISION_KIND_TEXT.get(str(kind), str(kind))
+    header = (
+        f"revision {revision.get('id')}  {_string_or_default(revision.get('at'), '?')}  "
+        f"{_string_or_default(revision.get('skill'), '?')}  {what}"
+    )
+    actor = revision.get("actor")
+    if kind not in ("baseline", "external") and isinstance(actor, str):
+        header += f" by {actor}"
+    origin = [
+        f"{label} {revision[key]}"
+        for label, key in (("session", "session_id"), ("run", "run_id"))
+        if isinstance(revision.get(key), str)
+    ]
+    if origin:
+        header += f" ({', '.join(origin)})"
+    lines = [header]
+    for change in _records(revision.get("files")):
+        lines.append(
+            f"  {_string_or_default(change.get('change'), '?')} "
+            f"{_string_or_default(change.get('path'), '?')}"
+        )
+    return lines
+
+
+def _format_archived(entry: Mapping[str, Any]) -> str:
+    return (
+        f"- {_string_or_default(entry.get('archive_id'), '?')}  "
+        f"{_string_or_default(entry.get('name'), '?')}  "
+        f"archived {_string_or_default(entry.get('archived_at'), '?')} "
+        f"({_archive_reason(entry)}) by {_string_or_default(entry.get('archived_by'), '?')}"
     )
 
 
@@ -474,6 +642,14 @@ def _format_inventory(data: object) -> str:
         lines.append("skills:")
         for skill in skills:
             lines.append(_format_inventory_row(skill))
+    archived = _records(data.get("archived"))
+    if archived:
+        lines.append("")
+        lines.append("archived skills (restore with: vbot skill restore <archive-id> --scope ...):")
+        lines.extend(
+            f"{_format_archived(entry)}; scope: {_string_or_default(entry.get('scope'), '?')}"
+            for entry in archived
+        )
     stale_shared = data.get("stale_shared")
     if isinstance(stale_shared, list) and stale_shared:
         lines.append("")
@@ -510,6 +686,12 @@ def _format_inventory_row(skill: object) -> str:
         f"owner: {owner_id}",
         f"shared_with: {shared_with}",
     ]
+    if skill.get("editable_scope"):
+        details.append(f"created_by: {_string_or_default(skill.get('created_by'), 'unknown')}")
+        details.append(f"pinned: {'yes' if skill.get('pinned') else 'no'}")
+    if "uses" in skill:
+        last_used = _string_or_default(skill.get("last_used_at"), "never")
+        details.append(f"last_used: {last_used} ({skill.get('uses')} sessions)")
     missing = _string_list(skill.get("missing"))
     optional_missing = _string_list(skill.get("optional_missing"))
     if status == "unavailable" and missing:

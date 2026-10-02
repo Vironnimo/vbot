@@ -413,7 +413,12 @@ def bootstrap(runtime: Runtime) -> None:
                 "see vbot.skills warnings for details",
                 invalid_skill_count,
             )
-        register_skill_tool(runtime._tools, runtime.skills_for, runtime.reload_skills_async)
+        register_skill_tool(
+            runtime._tools,
+            runtime.skills_for,
+            runtime.reload_skills_async,
+            runtime.archived_skill,
+        )
         # The agent skill-authoring write core refuses the bundled skills root;
         # ``skill_manage`` writes only the calling agent's private home.
         runtime._skill_authoring = SkillAuthoringService(
@@ -445,6 +450,7 @@ def bootstrap(runtime: Runtime) -> None:
             resources_path=resources_path,
             logger=runtime.logger,
             reload_skills=runtime.reload_skills,
+            authoring=runtime._skill_authoring,
         )
         register_project_tool(
             runtime._tools,
