@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self, override
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
@@ -103,6 +103,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
+from core.providers.wire_profile import Protocol
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_structured_tokens
@@ -152,6 +153,8 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         config: Immutable provider configuration.
         token_getter: Async callable that returns the current auth token.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("messages",)
 
     def __init__(
         self,

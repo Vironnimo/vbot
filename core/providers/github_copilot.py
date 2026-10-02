@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 
 import httpx
 
@@ -53,10 +53,13 @@ from core.providers.openai_compatible import (
 )
 from core.providers.reasoning import THINKING_EFFORT_RANKS
 from core.providers.token_getter import OAuthRequestRecovery
+from core.providers.wire_profile import Protocol
 
 
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
 
     @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:

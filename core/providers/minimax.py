@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._chat_completions_catalog import (
@@ -32,6 +32,7 @@ from core.providers.reasoning import (
     resolve_reasoning_intent,
 )
 from core.providers.token_getter import TokenGetter
+from core.providers.wire_profile import Protocol
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -196,6 +197,8 @@ class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
 
 class MiniMaxAdapter(OpenAICompatibleAdapter):
     """MiniMax adapter for direct OpenAI and subscription Messages wires."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages")
 
     def __init__(
         self,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
 
@@ -76,6 +76,7 @@ from core.providers.reasoning import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import Protocol
 from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
@@ -162,6 +163,13 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
 
 class OpenCodeZenAdapter(OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = (
+        "chat_completions",
+        "messages",
+        "responses",
+        "gemini",
+    )
 
     @classmethod
     @override

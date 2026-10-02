@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -102,6 +102,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
 )
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
+from core.providers.wire_profile import Protocol
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
@@ -153,6 +154,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
       selects public ``/responses`` or the inherited ``/chat/completions``
       fallback.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "responses")
 
     def __init__(
         self,

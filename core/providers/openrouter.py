@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Any, cast, override
+from typing import Any, ClassVar, cast, override
 from urllib.parse import quote
 
 import httpx
@@ -101,6 +101,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
     resolve_reasoning_intent,
 )
+from core.providers.wire_profile import Protocol
 from core.settings.settings import parse_openrouter_routing
 from core.utils.retry import retry_async
 
@@ -160,6 +161,8 @@ def _effective_reasoning_effort(
 
 class OpenRouterAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with OpenRouter-specific behavior."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "responses")
 
     def __init__(
         self,

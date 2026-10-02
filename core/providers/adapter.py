@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast
 
 from core.models.models import Model
 from core.providers._tool_calls import (
@@ -50,6 +50,8 @@ from core.providers.reasoning import (
     model_reasoning_supported,
     resolve_reasoning_intent,
 )
+from core.providers.wire_profile import Protocol, WireProfile
+from core.providers.wire_profiles import standalone_profile_lookup
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
@@ -230,6 +232,11 @@ class ProviderAdapter(ABC):
     # subclasses (and test doubles) that do not call ``super().__init__()``.
     _debug_recorder: ProviderDebugRecorder | None = None
 
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions",)
+    """Wire protocols this Adapter implements; the first is its default."""
+
+    _wire_profile_for: Callable[[str], WireProfile] | None = None
+
     def __init__(
         self,
         model_lookup: ModelLookup | None = None,
@@ -258,6 +265,37 @@ class ProviderAdapter(ABC):
         """
         if self._debug_recorder is not None:
             self._debug_recorder.set_context(ctx)
+
+    # ------------------------------------------------------------------
+    # Wire profile
+    # ------------------------------------------------------------------
+
+    def bind_wire_profiles(self, profile_for: Callable[[str], WireProfile]) -> None:
+        """Bind the Runtime's profile lookup for this Adapter's Connection."""
+
+        self._wire_profile_for = profile_for
+
+    def wire_profile(self, model_id: str) -> WireProfile:
+        """Return the resolved wire profile for ``model_id`` on this Adapter's Connection.
+
+        The Runtime binds its shared lookup (bundled and Custom Provider data,
+        learned facts). An Adapter constructed directly resolves against the
+        bundled files and its own Model lookup on its first configured
+        Connection.
+        """
+
+        profile_for = self._wire_profile_for
+        if profile_for is None:
+            config = getattr(self, "_config", None)
+            connections = getattr(config, "connections", ()) or ()
+            profile_for = standalone_profile_lookup(
+                provider_id=str(getattr(config, "id", "") or ""),
+                connection_id=str(getattr(connections[0], "id", "")) if connections else "",
+                protocols=type(self).WIRE_PROTOCOLS,
+                model_lookup=getattr(self, "_model_lookup", None),
+            )
+            self._wire_profile_for = profile_for
+        return profile_for(model_id)
 
     # ------------------------------------------------------------------
     # History shaping policy

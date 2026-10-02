@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 from core.providers.github_copilot_responses import (
     REASONING_ENCRYPTED_CONTENT_INCLUDE,
@@ -18,6 +18,7 @@ from core.providers.reasoning import (
     model_reasoning_supported,
     normalize_thinking_effort,
 )
+from core.providers.wire_profile import Protocol
 
 XAI_RESPONSES_REQUEST_PARAMETERS = frozenset(
     {
@@ -48,6 +49,8 @@ class XAIResponsesPolicy(OpenAISubscriptionResponsesPolicy):
 
 class XAIAdapter(OpenAIAdapter):
     """Translate vBot requests to xAI's stateless ``/responses`` protocol."""
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("responses",)
 
     @classmethod
     @override

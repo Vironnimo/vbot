@@ -8,6 +8,7 @@ docstring of :mod:`core.providers.wire_profile` for the layer order.
 
 from __future__ import annotations
 
+import functools
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ from core.providers._wire_profile_files import (
     WireRule,
     child_node,
     is_opaque,
+    load_wire_profile_files,
 )
 from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
 from core.providers.reasoning import normalize_thinking_effort
@@ -41,10 +43,14 @@ from core.providers.wire_profile import (
     ResponseRules,
     WireProfile,
 )
+from core.utils.config import VBOT_ROOT
+from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.models.models import Model
     from core.providers.wire_observations import ObservedFacts
+
+_LOGGER = get_logger("providers.wire_profiles")
 
 ModelResolver = Callable[[str, str], "Model | None"]
 """``(provider_id, model_id) -> Model | None`` from the live Model DB."""
@@ -167,6 +173,51 @@ class WireProfiles:
             return self.resolve(provider_id, connection_id, model_id)
 
         return profile_for
+
+
+_reported_issues: set[str] = set()
+
+
+def log_wire_profile_issue(message: str) -> None:
+    """Log a wire profile data issue once per process."""
+
+    if message in _reported_issues:
+        return
+    _reported_issues.add(message)
+    _LOGGER.warning("Wire profile data issue: %s", message)
+
+
+@functools.cache
+def bundled_wire_profile_files() -> Mapping[str, WireProfileFile]:
+    """The wire profile files shipped in ``resources/wire`` (loaded once)."""
+
+    return MappingProxyType(
+        load_wire_profile_files(VBOT_ROOT / "resources", report=log_wire_profile_issue)
+    )
+
+
+def standalone_profile_lookup(
+    *,
+    provider_id: str,
+    connection_id: str,
+    protocols: Sequence[Protocol],
+    model_lookup: Callable[[str], Model | None] | None,
+) -> Callable[[str], WireProfile]:
+    """Profile lookup for an Adapter built outside a Runtime (tools, tests).
+
+    Uses the bundled files and the Adapter's own Model lookup; no observations.
+    """
+
+    def resolve_model(_provider_id: str, model_id: str) -> Model | None:
+        return model_lookup(model_id) if model_lookup is not None else None
+
+    profiles = WireProfiles(
+        files=bundled_wire_profile_files(),
+        protocol_support=lambda _provider_id: protocols,
+        model_resolver=resolve_model,
+        report=log_wire_profile_issue,
+    )
+    return profiles.bind(provider_id, connection_id)
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +616,9 @@ def _build_media(values: Mapping[str, Any]) -> MediaRules:
 
 
 __all__ = [
+    "bundled_wire_profile_files",
+    "log_wire_profile_issue",
+    "standalone_profile_lookup",
     "LAYER_CATALOG",
     "LAYER_FILE_CONNECTION",
     "LAYER_FILE_DEFAULTS",

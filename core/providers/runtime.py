@@ -36,6 +36,13 @@ from core.providers.token_getter import (
     TokenGetter,
 )
 from core.providers.token_store import TokenStore
+from core.providers.wire_observations import OBSERVATIONS_FILE_NAME, WireObservations
+from core.providers.wire_profile import Protocol, WireProfile
+from core.providers.wire_profiles import (
+    WireProfiles,
+    bundled_wire_profile_files,
+    log_wire_profile_issue,
+)
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
 from core.utils.retry import caller_owns_retries
@@ -74,6 +81,14 @@ class ProviderRuntime:
         self._catalog_refresh_lock: asyncio.Lock | None = None
         self.refresh_at: float | None = None
         self._connection_reachability: dict[str, bool] = {}
+        self._wire_observations = self._load_wire_observations(storage)
+        self._wire_profiles = WireProfiles(
+            files=bundled_wire_profile_files(),
+            protocol_support=self._adapter_protocols,
+            model_resolver=self._resolve_model,
+            report=log_wire_profile_issue,
+            observations=self._wire_observations,
+        )
 
     def rebind(
         self,
@@ -90,8 +105,25 @@ class ProviderRuntime:
         self._models = models
         self._credentials = credentials
         self._token_store = token_store
+        if storage.data_dir != self._storage.data_dir:
+            self._wire_observations.close()
+            self._wire_observations = self._load_wire_observations(storage)
+            self._wire_profiles.set_observations(self._wire_observations)
         self._storage = storage
         self._logger = logger
+
+    @property
+    def wire_observations(self) -> WireObservations:
+        """Wire facts learned from live traffic for every Provider of this Runtime."""
+        return self._wire_observations
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        """Return the resolved wire profile for one Model on one local Connection id."""
+        return self._wire_profiles.resolve(provider_id, connection_id, model_id)
+
+    def close_wire_observations(self) -> None:
+        """Write pending learned wire facts (called on Runtime shutdown)."""
+        self._wire_observations.close()
 
     def get_adapter(self, connection: ConnectionRef) -> ProviderAdapter:
         provider_id = connection.provider_id
@@ -143,6 +175,7 @@ class ProviderRuntime:
             connection_mode=connection_config.mode,
             **extra_kwargs,
         )
+        adapter.bind_wire_profiles(self._wire_profiles.bind(provider_id, connection_config.id))
         return cast(ProviderAdapter, adapter)
 
     def get_connection_token_getter(self, connection: ConnectionRef) -> TokenGetter:
@@ -361,6 +394,24 @@ class ProviderRuntime:
         return ProviderDebugRecorder(
             store=DebugTraceStore(self._storage.data_dir, trace_limit=trace_limit)
         )
+
+    @staticmethod
+    def _load_wire_observations(storage: StorageManager) -> WireObservations:
+        return WireObservations.load(storage.layout.artifacts / OBSERVATIONS_FILE_NAME)
+
+    def _adapter_protocols(self, provider_id: str) -> tuple[Protocol, ...] | None:
+        try:
+            provider_config = self._providers.get(provider_id)
+        except KeyError:
+            return None
+        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
+        return adapter_class.WIRE_PROTOCOLS if adapter_class is not None else None
+
+    def _resolve_model(self, provider_id: str, model_id: str) -> Model | None:
+        try:
+            return self._models.get(provider_id, model_id)
+        except KeyError:
+            return None
 
     def _model_lookup(self, provider_id: str) -> ModelLookup:
         def lookup(model_id: str) -> Model | None:

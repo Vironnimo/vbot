@@ -420,7 +420,7 @@ async def test_get_adapter_builds_the_bundled_adapter_for_each_api_key_connectio
     assert wired(adapter)
 
 
-def test_get_adapter_scopes_model_lookup_and_reasoning_replay_to_the_provider(
+def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connection(
     shared_runtime: Runtime, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-token")
@@ -434,6 +434,15 @@ def test_get_adapter_scopes_model_lookup_and_reasoning_replay_to_the_provider(
     )
     # An OpenRouter-only model id is invisible to the Anthropic adapter.
     assert lookup("anthropic/claude-sonnet-4") is None
+    profile = anthropic.wire_profile("claude-sonnet-4-6::api-key")
+    assert (profile.provider_id, profile.connection_id, profile.model_id) == (
+        "anthropic",
+        "api-key",
+        "claude-sonnet-4-6",
+    )
+    assert profile.protocol == "messages"
+    assert profile.known_model
+    assert anthropic.wire_profile("unknown-model").known_model is False
 
     cloud = shared_runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
     # The Provider-level policy applies to every model without a Model-level override.

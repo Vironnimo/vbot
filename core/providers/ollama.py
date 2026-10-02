@@ -34,7 +34,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self, override
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
@@ -104,6 +104,7 @@ from core.providers.reasoning import (
 )
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import Protocol
 from core.utils.retry import retry_async
 
 if TYPE_CHECKING:
@@ -141,6 +142,8 @@ class OllamaAdapter(ProviderAdapter):
             request carries ``options.num_ctx`` so Ollama loads the model
             with exactly that window instead of silently truncating.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("ollama_chat",)
 
     def __init__(
         self,

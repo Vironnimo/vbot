@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
 
@@ -48,6 +48,7 @@ from core.providers.reasoning import (
     remove_reasoning_kwargs,
 )
 from core.providers.token_getter import TokenGetter
+from core.providers.wire_profile import Protocol
 from core.utils.http_status import parse_retry_after
 from core.utils.log_conditions import LoggedConditions
 from core.utils.logging import get_logger
@@ -306,6 +307,8 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
     controls remain explicit per-Model facts because some gateway backends need
     a different request representation than the field they return.
     """
+
+    WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
 
     def __init__(
         self,
