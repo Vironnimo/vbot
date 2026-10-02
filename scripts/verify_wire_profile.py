@@ -9,7 +9,9 @@ optional sampling values, a Tool Call turn replayed into its continuation, and
 an image when the Model takes images. Rejections the wire learns from are
 retried and reported. The run prints measurements only (never prompts, keys or
 full responses) and the Model entry the evidence supports; ``--write`` merges
-that entry into ``resources/wire/<provider>.json``.
+that entry into ``resources/wire/<provider>.json``, or for a Custom Provider
+into ``providers.custom.<id>.wire.models`` of the data directory's Settings
+(a running vBot server applies that after a restart).
 
 Usage:
     python scripts/verify_wire_profile.py --provider ID --model MODEL
@@ -36,7 +38,11 @@ if sys.path[:1] != [str(PROJECT_ROOT)]:
 
 from scripts._wire_verify.checks import CHECKS, CheckResult, run_checks  # noqa: E402
 from scripts._wire_verify.environment import RESOURCES_DIR, open_target  # noqa: E402
-from scripts._wire_verify.proposal import propose_entry, write_entry  # noqa: E402
+from scripts._wire_verify.proposal import (  # noqa: E402
+    propose_entry,
+    write_custom_provider_entry,
+    write_entry,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,7 +68,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Merge the proposed entry into resources/wire/<provider>.json.",
+        help=(
+            "Merge the proposed entry into resources/wire/<provider>.json, or into "
+            "the Custom Provider's Settings wire block."
+        ),
     )
     return parser
 
@@ -91,8 +100,17 @@ async def _run(args: argparse.Namespace) -> int:
     print("learned:", json.dumps(_facts_summary(facts), sort_keys=True))
     print("proposed entry:", json.dumps(entry, indent=2, sort_keys=True))
     if args.write and entry:
-        path = write_entry(RESOURCES_DIR / "wire", target.provider_id, target.model_id, entry)
-        print(f"wrote {path}")
+        if target.custom:
+            written = write_custom_provider_entry(
+                target.storage, target.provider_id, target.model_id, entry
+            )
+            print(
+                f"wrote {written} in {target.storage.settings_path}; "
+                "restart a running vBot server to apply it"
+            )
+        else:
+            path = write_entry(RESOURCES_DIR / "wire", target.provider_id, target.model_id, entry)
+            print(f"wrote {path}")
     return 0 if all(result.status in ("ok", "skipped") for result in results) else 1
 
 
