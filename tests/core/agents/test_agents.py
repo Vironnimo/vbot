@@ -3,6 +3,7 @@
 import json
 import re
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -518,15 +519,33 @@ def test_agent_written_by_a_newer_vbot_is_refused_and_left_unchanged(store: Agen
     assert agent_path(store, "coder").read_text(encoding="utf-8") == original
 
 
-def test_invalid_agent_order_is_never_overwritten(store: AgentStore) -> None:
+@pytest.mark.parametrize(
+    ("original", "unreadable"),
+    [
+        ('{"format_version": 2, "revision": 9, "agent_ids": ["alpha", "beta"]}', False),
+        # An order that cannot even be checked is not missing.
+        ('{"format_version": 1, "revision": 9, "agent_ids": ["alpha", "beta"]}', True),
+    ],
+    ids=["newer-format", "unreadable"],
+)
+def test_invalid_agent_order_is_never_overwritten(
+    store: AgentStore,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    original: str,
+    unreadable: bool,
+) -> None:
     store.create("beta", "Beta Agent")
     store.create("alpha", "Alpha Agent")
     order_path = store.data_dir / "agents" / "order.json"
-    original = '{"format_version": 2, "revision": 9, "agent_ids": ["alpha", "beta"]}'
     order_path.write_text(original, encoding="utf-8")
+    if unreadable:
+        deny_access(order_path)
 
     listing = store.list_with_order()
+    assert {agent.id for agent in listing.agents} == {"alpha", "beta"}
     with pytest.raises(AgentError, match="Refusing to overwrite Agent order"):
         store.reorder(["alpha", "beta"], expected_revision=listing.order_revision)
 
+    monkeypatch.undo()
     assert order_path.read_text(encoding="utf-8") == original

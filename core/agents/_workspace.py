@@ -17,6 +17,7 @@ from core.agents._types import (
     AgentError,
     AgentRename,
 )
+from core.utils.file_status import exists_strict, is_dir_strict, is_file_strict
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
 
@@ -128,10 +129,11 @@ class _WorkspaceRelocation:
 
 
 def seed_workspace(template_dir: Path, workspace_path: Path) -> None:
+    """Add the template files a Workspace lacks; an existing file is never replaced."""
     workspace_path.mkdir(parents=True, exist_ok=True)
     for filename in WORKSPACE_TEMPLATE_FILES:
         target = workspace_path / filename
-        if target.exists():
+        if exists_strict(target):
             continue
         template = template_dir / filename
         try:
@@ -141,7 +143,11 @@ def seed_workspace(template_dir: Path, workspace_path: Path) -> None:
                 "Skipping unreadable Workspace template %s: %s", template, error
             )
             continue
-        target.write_text(template_content, encoding="utf-8")
+        try:
+            with target.open("x", encoding="utf-8") as stream:
+                stream.write(template_content)
+        except FileExistsError:
+            continue
 
 
 def relocate_workspace(
@@ -153,7 +159,9 @@ def relocate_workspace(
     copy_identity_files: bool,
 ) -> _WorkspaceRelocation:
     source = Path(agent.workspace)
-    destination_existed = destination.exists()
+    # Strict checks: a file that cannot be checked is never taken for missing,
+    # which would skip it, overwrite it without a backup, or delete it on rollback.
+    destination_existed = exists_strict(destination)
     destination.mkdir(parents=True, exist_ok=True)
     relocation = _WorkspaceRelocation(
         destination=destination,
@@ -163,10 +171,10 @@ def relocate_workspace(
         if copy_identity_files:
             for filename in WORKSPACE_IDENTITY_FILES:
                 source_file = source / filename
-                if not source_file.is_file():
+                if not is_file_strict(source_file):
                     continue
                 destination_file = destination / filename
-                if destination_file.exists():
+                if exists_strict(destination_file):
                     backup_dir = relocation.ensure_backup_dir(agent_dir)
                     shutil.copy2(destination_file, backup_dir / filename)
                     relocation.backed_up_files += (filename,)
@@ -181,7 +189,7 @@ def relocate_workspace(
                 relocation.copied_files += (filename,)
 
         soul_path = destination / "SOUL.md"
-        if not soul_path.exists():
+        if not exists_strict(soul_path):
             seed_workspace(template_dir, destination)
             relocation.created_files += ("SOUL.md",)
         return relocation
@@ -199,7 +207,7 @@ def _move_renamed_tree(agents_dir: Path, rename: AgentRename) -> bool:
     """
     target = agents_dir / rename.target_id
     staging = agents_dir / rename.staging_name if rename.staging_name else None
-    if staging is not None and staging.is_dir():
+    if staging is not None and is_dir_strict(staging):
         os.replace(staging, target)
         return True
     if has_id_entry(agents_dir, rename.source_id):
@@ -208,7 +216,7 @@ def _move_renamed_tree(agents_dir: Path, rename: AgentRename) -> bool:
             os.replace(source, staging)
             os.replace(staging, target)
             return True
-        if target.exists():
+        if exists_strict(target):
             raise AgentAlreadyExistsError(f"Agent already exists: {rename.target_id}")
         os.replace(source, target)
         return True

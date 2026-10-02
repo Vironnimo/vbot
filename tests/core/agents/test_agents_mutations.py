@@ -1,6 +1,7 @@
 """Agent updates and current-Session repair."""
 
 import re
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -268,10 +269,13 @@ def test_workspace_copy_preserves_sources_and_backs_up_destinations(
     assert Path(result.backup_dir, "SOUL.md").read_text(encoding="utf-8") == "old soul"
 
 
-def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
+@pytest.mark.parametrize("failure", ["agent-write", "unreadable-destination"])
+def test_workspace_copy_rolls_back_destination_when_the_move_fails(
     store: AgentStore,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    failure: str,
 ) -> None:
     agent = store.create("coder", "Coder Agent")
     source = Path(agent.workspace)
@@ -280,17 +284,22 @@ def test_workspace_copy_rolls_back_destination_when_agent_write_fails(
     destination.mkdir()
     (destination / "SOUL.md").write_text("destination soul", encoding="utf-8")
 
-    monkeypatch.setattr(
-        store, "_write_agent", lambda _agent: (_ for _ in ()).throw(OSError("disk"))
-    )
+    if failure == "agent-write":
+        monkeypatch.setattr(
+            store, "_write_agent", lambda _agent: (_ for _ in ()).throw(OSError("disk"))
+        )
+    else:
+        # Files that cannot be checked are not missing: none is replaced unsaved.
+        deny_access(destination)
 
-    with pytest.raises(OSError, match="disk"):
+    with pytest.raises(OSError, match="disk" if failure == "agent-write" else None):
         store.update_with_metadata(
             "coder",
             workspace=destination,
             copy_workspace_identity_files=True,
         )
 
+    monkeypatch.undo()
     assert (destination / "SOUL.md").read_text(encoding="utf-8") == "destination soul"
     assert persisted(store, "coder")["workspace"] == "agents/coder/workspace"
 
