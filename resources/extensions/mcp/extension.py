@@ -57,6 +57,7 @@ from ._discovery import (
     summarize,
     target_arguments,
 )
+from ._importer import ImportDraft, parse_setup
 from ._management import (
     CONNECTIONS_RESOURCE,
     JOBS_RESOURCE,
@@ -618,6 +619,8 @@ class MCPService:
             return await self.jobs.cancel(arguments["job_id"])
         if operation == "save":
             return await self._save(arguments["connection"])
+        if operation == "import":
+            return await self._import(arguments)
         identifier = arguments["id"]
         config = self._connection(identifier)
         if operation == "status":
@@ -751,7 +754,99 @@ class MCPService:
             ],
         }
 
-    async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
+    async def _import(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Preview the servers of setup text, or with ``apply`` save the chosen ones.
+
+        A preview stores nothing. Saving re-reads the text and never replaces a
+        saved connection. A connection that cannot work yet, with a credential
+        or a placeholder still to fill in, is saved disabled.
+        """
+        drafts = parse_setup(arguments["source"], arguments.get("ids"))
+        preview = [self._import_preview(draft) for draft in drafts]
+        if not arguments.get("apply"):
+            return {"servers": preview}
+        wanted = arguments.get("servers")
+        names = {draft.name for draft in drafts}
+        if wanted is not None and (unknown := sorted(set(wanted) - names)):
+            raise ValueError(f"No imported server is named {', '.join(unknown)}")
+        chosen = [
+            (draft, item)
+            for draft, item in zip(drafts, preview, strict=True)
+            if (draft.name in wanted if wanted is not None else item["selected"])
+        ]
+        if not chosen:
+            raise ValueError("Choose at least one server to import")
+        problems = [
+            f"{draft.name}: {draft.error or f'connection {draft.id} already exists'}"
+            for draft, item in chosen
+            if draft.error is not None or item["conflict"]
+        ]
+        if problems:
+            raise ValueError("Cannot import " + "; ".join(problems))
+        host = self._host()
+        imported = []
+        for draft, item in chosen:
+            for credential in draft.credentials:
+                if credential.state == "provided" and credential.value:
+                    host.set_credential(credential.name, credential.value)
+            connection = {**draft.connection, "enabled": item["enabled"]}
+            imported.append(await self._save(connection, replace=False))
+        stored = [
+            credential
+            for draft, _ in chosen
+            for credential in draft.credentials
+            if credential.state == "provided"
+        ]
+        self.api.logger.info(
+            "MCP connections imported (connections=%s credentials=%d)",
+            ",".join(draft.id for draft, _ in chosen),
+            len(stored),
+        )
+        return {"imported": imported}
+
+    def _import_preview(self, draft: ImportDraft) -> dict[str, Any]:
+        """What importing *draft* would save; credential values never leave the draft.
+
+        A credential is ``provided`` by the setup text, already ``set`` on the
+        vBot host, or ``missing``: it still needs a value.
+        """
+        host = self._host()
+        credentials = [
+            {
+                "name": credential.name,
+                "kind": credential.kind,
+                "target": credential.target,
+                "state": (
+                    credential.state
+                    if credential.state != "reference"
+                    else "set"
+                    if host.resolve_credential(credential.name)
+                    else "missing"
+                ),
+                "description": credential.description,
+            }
+            for credential in draft.credentials
+        ]
+        conflict = draft.id in self.connections
+        complete = all(item["state"] != "missing" for item in credentials)
+        return {
+            "name": draft.name,
+            "id": draft.id,
+            "connection": copy.deepcopy(draft.connection) or None,
+            "error": draft.error,
+            "conflict": conflict,
+            "selected": draft.error is None and not conflict and not draft.exposes_secret,
+            # Saved enabled only when it can work: no placeholder left in it
+            # (``unresolved``), not turned off by the setup text (``disabled``)
+            # and no credential missing.
+            "enabled": complete and not draft.unresolved and not draft.disabled,
+            "unresolved": draft.unresolved,
+            "disabled": draft.disabled,
+            "credentials": credentials,
+            "warnings": copy.deepcopy(draft.warnings),
+        }
+
+    async def _save(self, value: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
         config = validate_connection(value)
         identifier = config["id"]
         # The connection's lock spans the replacement of its runner; the saved
@@ -760,6 +855,8 @@ class MCPService:
         async with self._connection_lock(identifier):
             async with self._lock:
                 previous = self.connections.get(identifier)
+                if previous is not None and not replace:
+                    raise ValueError(f"MCP connection {identifier} already exists")
                 await self._store_connections({**self.connections, identifier: config})
             runner = self.runners.get(identifier)
             if (

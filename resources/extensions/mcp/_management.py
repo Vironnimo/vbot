@@ -24,6 +24,7 @@ from core.utils.ids import new_id
 
 from ._definitions import MAX_FINISHED_JOBS, MCP_OPERATIONS, MCP_PARAMETERS
 from ._discovery import operation_target, remote_tool_name
+from ._importer import MAX_SETUP_CHARACTERS
 from .client import ConnectionRunner
 from .config import CONNECTION_SCHEMA
 from .interactions import InputRequests
@@ -56,6 +57,10 @@ _DESCRIPTIONS = {
     ),
     "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
     "save": "Create or replace a complete connection; read status before replacing one.",
+    "import": (
+        "Preview connections from another client's MCP setup, a command line or a URL; "
+        "apply saves the selected ones."
+    ),
     "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
     "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
     "credential": "Set or clear a referenced credential and reset the client; use JSON stdin.",
@@ -85,6 +90,36 @@ _EXPLORE_PROPERTIES: dict[str, Any] = {
 }
 
 
+# ``contentMediaType`` marks ``source`` as a document: the CLI reads it from a
+# file or standard input instead of a shell argument.
+_IMPORT_PROPERTIES: dict[str, Any] = {
+    "source": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_SETUP_CHARACTERS,
+        "contentMediaType": "text/plain",
+        "description": (
+            "Setup text: an mcpServers, servers or mcp_servers configuration, a single "
+            "server object, claude mcp add or another command line, or a server URL."
+        ),
+    },
+    "apply": {
+        "type": "boolean",
+        "description": "Save the chosen servers; omit to preview without saving.",
+    },
+    "servers": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Names from the preview to save; omit to save the selected ones.",
+    },
+    "ids": {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "description": "Connection id per server name, replacing the proposed one.",
+    },
+}
+
+
 def register_management(
     api: ExtensionAPI, manage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ) -> None:
@@ -107,6 +142,7 @@ def register_management(
             base,
         ),
         "save": {"connection": CONNECTION_SCHEMA},
+        "import": _IMPORT_PROPERTIES,
         "events": {**base, "after": {"type": "integer", "minimum": 0}},
         "inspect": {
             **base,
@@ -130,6 +166,8 @@ def register_management(
             if name == "explore"
             else ["id"]
             if name == "inspect"
+            else ["source"]
+            if name == "import"
             else [key for key in properties if key not in {"after", "arguments"}]
         )
 
