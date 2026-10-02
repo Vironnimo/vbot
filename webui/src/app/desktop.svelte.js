@@ -390,8 +390,8 @@ export function createAppDesktop(context) {
   );
 
   // Starts the restart handoff once the page is ready for it. Only a restart
-  // the user asked for (`interactive`) reports a refusal; the Desktop's idle
-  // request stays silent, and the Desktop asks again later.
+  // the user asked for (`interactive`) reports a refusal; the Desktop's own
+  // request stays silent, and the Desktop then restarts on its own.
   const requestRestart = async ({ interactive = false } = {}) => {
     if (restartRequesting) return false;
     restartRequesting = true;

@@ -904,7 +904,7 @@ describe('Desktop application update', () => {
     expect(handler).toHaveBeenCalledOnce();
   });
 
-  it('acknowledges restart requests unless the handler declines them', () => {
+  it('acknowledges restart requests unless the handler reports them unhandled', () => {
     const page = eventWindow();
     const handler = vi.fn();
     const cleanup = onDesktopRestartRequest(handler);
@@ -914,19 +914,19 @@ describe('Desktop application update', () => {
         new CustomEvent('vbot-desktop-restart', { cancelable: true, detail }),
       );
 
-    expect(dispatch({ reason: 'idle' })).toBe(true);
+    expect(dispatch({ reason: 'update' })).toBe(true);
     // A restart request needs nothing from its detail to be handled.
     expect(dispatch(null)).toBe(true);
     handler.mockReturnValueOnce(false);
-    expect(dispatch({ reason: 'idle' })).toBe(false);
+    expect(dispatch({ reason: 'update' })).toBe(false);
     expect(handler.mock.calls).toEqual([
-      [{ reason: 'idle' }],
+      [{ reason: 'update' }],
       [{ reason: null }],
-      [{ reason: 'idle' }],
+      [{ reason: 'update' }],
     ]);
 
     cleanup();
-    expect(dispatch({ reason: 'idle' })).toBe(false);
+    expect(dispatch({ reason: 'update' })).toBe(false);
     expect(handler).toHaveBeenCalledTimes(3);
   });
 });

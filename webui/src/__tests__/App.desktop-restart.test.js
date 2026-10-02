@@ -63,12 +63,12 @@ function pushUpdate(detail) {
   flushSync();
 }
 
-// True when the page took the Desktop's idle request over.
-function requestIdleRestart() {
+// True when the page took the Desktop's restart request over.
+function requestUpdateRestart() {
   const handled = !window.dispatchEvent(
     new CustomEvent('vbot-desktop-restart', {
       cancelable: true,
-      detail: { reason: 'idle' },
+      detail: { reason: 'update' },
     }),
   );
   flushSync();
@@ -225,7 +225,7 @@ describe('App Desktop restart', () => {
           expect(api.getDesktopUpdate).not.toHaveBeenCalled();
         } else {
           // A browser leaves the Desktop's restart request unanswered.
-          expect(requestIdleRestart()).toBe(false);
+          expect(requestUpdateRestart()).toBe(false);
         }
       } finally {
         meta.remove();
@@ -329,40 +329,38 @@ describe('App Desktop restart', () => {
     [
       'edits that fail to save',
       () => editSettings(() => Promise.reject(new Error('save unavailable'))),
-      false,
+      true,
     ],
     ['a running Live voice call', startLiveCall, false],
     ['an unsaved new schedule', createCronDraft, false],
   ])(
-    'takes the idle restart request over with %s and restarts: %s',
-    async (_situation, arrange, restarts) => {
+    'takes the Desktop’s restart request over with %s and restarts without asking',
+    async (_situation, arrange, edits) => {
       installDesktop();
       await arrange();
 
-      expect(requestIdleRestart()).toBe(true);
-      await settle();
-      if (restarts) {
-        await waitForCondition(() =>
-          expect(api.restartDesktop).toHaveBeenCalledOnce(),
-        );
+      expect(requestUpdateRestart()).toBe(true);
+      await waitForCondition(() =>
+        expect(api.restartDesktop).toHaveBeenCalledOnce(),
+      );
+      if (edits) {
         expect(rpcInvocation('settings.update')).toBeLessThan(
           invocation(api.restartDesktop),
         );
-        expect(flushComposerMemory).toHaveBeenCalled();
-      } else {
-        expect(api.restartDesktop).not.toHaveBeenCalled();
       }
-      // The automatic path never asks.
+      expect(invocation(flushComposerMemory)).toBeLessThan(
+        invocation(api.restartDesktop),
+      );
       expect(document.querySelector('[role="dialog"]')).toBeNull();
     },
   );
 
   it.each([
-    ['within', AUTOSAVE_STILL_SAVING_MS - 1, 1],
-    ['after', AUTOSAVE_STILL_SAVING_MS, 0],
+    ['within', AUTOSAVE_STILL_SAVING_MS - 1, 0],
+    ['after', AUTOSAVE_STILL_SAVING_MS, 1],
   ])(
-    'restarts on an idle request only when pending edits save %s the time a navigation waits',
-    async (_when, saveMs, restarts) => {
+    'restarts on the Desktop’s request once pending edits save, waiting no longer than a navigation: edits saved %s that time',
+    async (_when, saveMs, restartedBeforeSave) => {
       installDesktop();
       let finishSave;
       await editSettings(
@@ -373,16 +371,17 @@ describe('App Desktop restart', () => {
         () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }),
       );
 
-      expect(requestIdleRestart()).toBe(true);
+      expect(requestUpdateRestart()).toBe(true);
       await vi.advanceTimersByTimeAsync(0);
       expect(finishSave).toBeTypeOf('function');
       await vi.advanceTimersByTimeAsync(saveMs);
+      expect(api.restartDesktop).toHaveBeenCalledTimes(restartedBeforeSave);
       finishSave();
       await vi.advanceTimersByTimeAsync(0);
       flushSync();
 
-      expect(api.restartDesktop).toHaveBeenCalledTimes(restarts);
-      // A declined request stays silent; the save it gave up on still lands.
+      expect(api.restartDesktop).toHaveBeenCalledOnce();
+      // The save the restart stopped waiting for still lands.
       expect(document.querySelector('[role="dialog"]')).toBeNull();
       expect(
         rpcMock.mock.calls.filter(([method]) => method === 'settings.update'),
@@ -392,7 +391,7 @@ describe('App Desktop restart', () => {
 
   it.each([
     ['the user’s restart', () => restartButton().click(), true],
-    ['an idle restart', requestIdleRestart, false],
+    ['the Desktop’s restart request', requestUpdateRestart, false],
   ])(
     'reports a refused restart only for %s',
     async (_request, request, reported) => {

@@ -15,9 +15,11 @@ Three pieces live here:
 - The escaped connection-screen HTML (:func:`build_connection_html`) — saved
   server list, add/connect form, and an inline probe error.
 - :class:`ConnectionController`, which holds the live pywebview ``Window`` and
-  drives connect/switch/reconnect: a successful probe navigates the window to
-  the server's WebUI via ``Window.load_url``; any failure renders the connection
-  screen inline via ``Window.load_html``.
+  drives the launch connect and server switches: a successful probe navigates
+  the window to the server's WebUI via ``Window.load_url``; any failure renders
+  the connection screen inline via ``Window.load_html``. The launch connect
+  waits for a server that does not answer yet (a server still starting after an
+  update or at login), showing a waiting state meanwhile.
 
 Target classification reuses ``probe_target`` / ``validate_host`` /
 ``validate_port`` from :mod:`desktop.main` rather than re-deriving them. pywebview
@@ -30,8 +32,9 @@ from __future__ import annotations
 import html
 import logging
 import threading
+import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import quote, urlencode
@@ -68,6 +71,16 @@ DESKTOP_SESSION_QUERY_PARAM = "desktop_session"
 # The WebUI opens this Session once it has loaded and removes both parameters.
 OPEN_AGENT_QUERY_PARAM = "open_agent"
 OPEN_SESSION_QUERY_PARAM = "open_session"
+LAUNCH_WAIT_SECONDS = 60.0
+"""How long the launch connect keeps trying a server that is unreachable."""
+LAUNCH_RETRY_SECONDS = 1.0
+"""How often a waiting launch connect starts another attempt."""
+# close() waits this long for a waiting launch connect to stop. It never touches
+# the window once ended, so a longer probe in flight may finish on its own.
+_LAUNCH_CLOSE_JOIN_SECONDS = 1.0
+_WAITING_BODY = (
+    "vBot Desktop connects as soon as the server answers. You can also choose another server below."
+)
 
 
 class WindowProtocol(Protocol):
@@ -158,6 +171,20 @@ class PreparedConnection:
         if self.error_body is not None:
             payload["error_body"] = self.error_body
         return payload
+
+
+@dataclass(eq=False)
+class _LaunchConnect:
+    """The launch connect while its outcome may still replace the window's content."""
+
+    target: DesktopTarget
+    label: str | None
+    open_session: SessionLink | None
+    location: str | None
+    started: float
+    # Set once the connection screen shows the waiting state.
+    waiting: bool = False
+    stop: threading.Event = field(default_factory=threading.Event)
 
 
 # -- Remembered-servers operations -------------------------------------------
@@ -272,14 +299,15 @@ def resolve_last_used(settings_file: Path | None = None) -> ServerEntry | None:
 
 
 class ConnectionController:
-    """Drive connect/switch/reconnect against one live pywebview window.
+    """Drive the launch connect and server switches on one live pywebview window.
 
     The controller owns no window at construction time — the entrypoint creates
-    the ``Window`` and hands it over via :meth:`attach_window` (the menu builder
-    and bridge are wired before the GUI loop exists, so the window arrives
-    later). Every public action funnels through :meth:`connect`, which probes the
-    target with the shared :func:`probe_target` and either navigates the window
-    to the WebUI on success or renders the connection screen inline on failure.
+    the ``Window`` and hands it over via :meth:`attach_window` (the bridge is
+    wired before the GUI loop exists, so the window arrives later). Every
+    connect probes the target with the shared :func:`probe_target`: the launch
+    connect (:meth:`launch_connect`, :meth:`auto_connect`) navigates the window
+    itself, a connect the user starts (:meth:`prepare_connect`) returns the
+    outcome for its calling document to apply.
     """
 
     def __init__(
@@ -288,10 +316,12 @@ class ConnectionController:
         settings_file: Path | None = None,
         window: WindowProtocol | None = None,
         probe: Callable[[DesktopTarget], DesktopProbeResult] = probe_target,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._settings_file = settings_file
         self._window = window
         self._probe = probe
+        self._clock = clock
         # WebView2 reuses this persistent profile across Desktop restarts. A
         # launch-specific document URL prevents a previously cached SPA entry
         # from selecting an obsolete content-hashed asset bundle after an update.
@@ -305,6 +335,13 @@ class ConnectionController:
         self._active_server_lock = threading.Lock()
         self._active_server_url: str | None = None
         self._active_target: tuple[str, int] | None = None
+        # The launch connect until its outcome is applied. A connect the user
+        # starts and close() end it under this lock, so a late launch outcome
+        # never replaces what the user chose. Never taken on the GUI thread.
+        self._launch_lock = threading.Lock()
+        self._launch: _LaunchConnect | None = None
+        self._launch_thread: threading.Thread | None = None
+        self._closed = False
 
     def attach_window(self, window: WindowProtocol) -> None:
         """Bind the live pywebview window the controller navigates."""
@@ -352,7 +389,7 @@ class ConnectionController:
 
     # -- Navigation ----------------------------------------------------------
 
-    def connect(
+    def launch_connect(
         self,
         host: str,
         port: int,
@@ -361,7 +398,7 @@ class ConnectionController:
         open_session: SessionLink | None = None,
         location: str | None = None,
     ) -> DesktopProbeResult:
-        """Probe a target and navigate the window to it, or to the error screen.
+        """Connect the window at launch, waiting for a server that is unreachable.
 
         On a successful probe the host/port are remembered (carrying ``label``)
         and marked last-used, and the window loads the WebUI with the
@@ -369,74 +406,63 @@ class ConnectionController:
         ``open_session`` parameters, so the WebUI opens that Session once loaded,
         and ``location`` (a URL fragment such as ``#settings``, restored after a
         Desktop restart) opens that place of the WebUI.
-        On any failure the window shows the connection screen with the failed
-        host/port prefilled and an inline error, so the user corrects the target
-        in place. Returns the probe result so callers/tests can assert the
-        outcome.
+
+        While the server is unreachable (still starting, for example), the
+        connection screen shows a waiting state for the target and a background
+        thread starts another attempt about every :data:`LAUNCH_RETRY_SECONDS`
+        for up to :data:`LAUNCH_WAIT_SECONDS`; a success then connects exactly as
+        a first one would. Any other failure, and an unreachable server at the
+        deadline, shows the connection screen with the failed host/port
+        prefilled and an inline error, so the user corrects the target in place.
+        A connect the user starts (:meth:`prepare_connect`) or :meth:`close` ends
+        the launch connect: its outcome then never replaces the window's content.
+
+        Returns the first attempt's result; ``server_unreachable`` means the
+        launch connect goes on waiting.
         """
 
-        prepared = self.prepare_connect(host, port, label)
-        if prepared.navigation_url is not None:
-            url = prepared.navigation_url
-            if open_session is not None:
-                url = _with_session_link(url, open_session)
-            if location is not None:
-                url = f"{url}{location}"
-            self._navigate_url(url)
-        else:
-            self._show_connection_screen(prepared.result)
-        return prepared.result
-
-    def prepare_connect(
-        self,
-        host: str,
-        port: int,
-        label: str | None = None,
-    ) -> PreparedConnection:
-        """Probe and persist a target without replacing the current document.
-
-        Successful attempts are remembered, marked last-used, and announced to
-        the active-server listener exactly like :meth:`connect`, but navigation
-        is returned as data. Failed attempts carry the existing inline error
-        copy. This is the bridge-safe seam: pywebview can deliver the payload to
-        JavaScript before that document applies the outcome.
-        """
-
-        target = self._build_target(host, port)
-        result = self._probe(target)
-
-        if result.status == PROBE_WEBUI_AVAILABLE:
-            self.add_server(target.host, target.port, label)
-            select_server(target.host, target.port, settings_file=self._settings_file)
-            logger.info("Desktop connecting to %s:%s", target.host, target.port)
-            with self._active_server_lock:
-                self._active_server_url = target.url
-                self._active_target = (target.host, target.port)
-            self._notify_active_server(target.url)
-            return PreparedConnection(
-                result=result,
-                navigation_url=_with_accessor_param(target.url, self._desktop_session_id),
+        launch = _LaunchConnect(
+            target=self._build_target(host, port),
+            label=label,
+            open_session=open_session,
+            location=location,
+            started=self._clock(),
+        )
+        with self._launch_lock:
+            self._end_launch_locked()
+            if not self._closed:
+                self._launch = launch
+        result = self._probe(launch.target)
+        with self._launch_lock:
+            if self._launch is not launch:
+                return result
+            if result.status != PROBE_SERVER_UNREACHABLE:
+                self._launch = None
+                self._finish_launch(launch, result)
+                return result
+            launch.waiting = True
+            logger.info(
+                "Desktop waiting for %s:%s to answer (timeout=%ds)",
+                launch.target.host,
+                launch.target.port,
+                LAUNCH_WAIT_SECONDS,
             )
+            self._show_connection_screen(probe_result=None, waiting_for=launch.target)
+            self._launch_thread = threading.Thread(
+                target=self._keep_trying,
+                args=(launch,),
+                name="vbot-desktop-launch-wait",
+                daemon=True,
+            )
+            self._launch_thread.start()
+        return result
 
-        logger.warning(
-            "Desktop connection to %s:%s failed (%s)",
-            host,
-            port,
-            result.status,
-        )
-        error_title, error_body = _connection_error_copy(result.status)
-        return PreparedConnection(
-            result=result,
-            error_title=error_title,
-            error_body=error_body,
-        )
+    def auto_connect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
+        """Launch entry point without a target: :meth:`launch_connect` to the last-used one.
 
-    def reconnect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
-        """Re-probe and reload the last-used target.
-
-        With nothing remembered, there is no target to retry — the connection
-        screen is shown with no inline error and ``None`` is returned (a given
-        ``open_session`` is dropped with it).
+        First run (nothing remembered) opens the connection screen with no
+        inline error and returns ``None`` (a given ``open_session`` is dropped
+        with it).
         """
 
         entry = self.resolve_last_used()
@@ -449,17 +475,39 @@ class ConnectionController:
                 )
             self.show_connection_screen()
             return None
-        return self.connect(entry.host, entry.port, entry.label, open_session=open_session)
+        return self.launch_connect(entry.host, entry.port, entry.label, open_session=open_session)
 
-    def auto_connect(self, *, open_session: SessionLink | None = None) -> DesktopProbeResult | None:
-        """Launch entry point: auto-connect to the last-used target.
+    def prepare_connect(
+        self,
+        host: str,
+        port: int,
+        label: str | None = None,
+    ) -> PreparedConnection:
+        """Probe and persist a target the user chose, without replacing the current document.
 
-        First run (nothing remembered) opens the connection screen and returns
-        ``None``; otherwise this is :meth:`reconnect` against the resolved
-        launch target.
+        One attempt, never waiting: successful attempts are remembered, marked
+        last-used, and announced to the active-server listener exactly like
+        :meth:`launch_connect`, but navigation is returned as data. Failed
+        attempts carry the existing inline error copy. This is the bridge-safe
+        seam: pywebview can deliver the payload to JavaScript before that
+        document applies the outcome. It ends the launch connect first, so the
+        user's choice wins.
         """
 
-        return self.reconnect(open_session=open_session)
+        self._end_launch("user_connect")
+        target = self._build_target(host, port)
+        return self._settle(target, self._probe(target), label)
+
+    def close(self) -> None:
+        """End the launch connect for good; the window is closing.
+
+        A launch connect that is still waiting stops without touching the window.
+        """
+
+        self._end_launch("closed")
+        thread = self._launch_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(_LAUNCH_CLOSE_JOIN_SECONDS)
 
     def is_active_server(self, host: str, port: int) -> bool:
         """Whether ``host:port`` is the server the window was last sent to."""
@@ -504,6 +552,111 @@ class ConnectionController:
             url=build_target_url(validated_host, validated_port),
         )
 
+    def _keep_trying(self, launch: _LaunchConnect) -> None:
+        """Try the launch target again until it answers, the deadline passes or it ends."""
+
+        deadline = launch.started + LAUNCH_WAIT_SECONDS
+        attempt_started = launch.started
+        try:
+            # An attempt can take the whole probe timeout; the next one still
+            # starts about a retry interval after the previous one started.
+            while not launch.stop.wait(
+                max(0.0, attempt_started + LAUNCH_RETRY_SECONDS - self._clock())
+            ):
+                attempt_started = self._clock()
+                result = self._probe(launch.target)
+                with self._launch_lock:
+                    if self._launch is not launch:
+                        return
+                    if result.status == PROBE_SERVER_UNREACHABLE and self._clock() < deadline:
+                        logger.debug(
+                            "Desktop launch target %s:%s is still unreachable",
+                            launch.target.host,
+                            launch.target.port,
+                        )
+                        continue
+                    self._launch = None
+                    self._finish_launch(launch, result)
+                    return
+        except Exception:
+            logger.exception(
+                "Desktop launch connect to %s:%s stopped unexpectedly",
+                launch.target.host,
+                launch.target.port,
+            )
+
+    def _finish_launch(self, launch: _LaunchConnect, result: DesktopProbeResult) -> None:
+        """Apply the launch connect's outcome to the window (under the launch lock)."""
+
+        waited = self._clock() - launch.started if launch.waiting else None
+        prepared = self._settle(launch.target, result, launch.label, waited=waited)
+        if prepared.navigation_url is None:
+            self._show_connection_screen(result)
+            return
+        url = prepared.navigation_url
+        if launch.open_session is not None:
+            url = _with_session_link(url, launch.open_session)
+        if launch.location is not None:
+            url = f"{url}{launch.location}"
+        self._navigate_url(url)
+
+    def _settle(
+        self,
+        target: DesktopTarget,
+        result: DesktopProbeResult,
+        label: str | None,
+        *,
+        waited: float | None = None,
+    ) -> PreparedConnection:
+        """Remember and announce a successful probe, or describe the failure inline."""
+
+        waited_note = "" if waited is None else f" (waited={waited:.0f}s)"
+        if result.status == PROBE_WEBUI_AVAILABLE:
+            self.add_server(target.host, target.port, label)
+            select_server(target.host, target.port, settings_file=self._settings_file)
+            logger.info("Desktop connecting to %s:%s%s", target.host, target.port, waited_note)
+            with self._active_server_lock:
+                self._active_server_url = target.url
+                self._active_target = (target.host, target.port)
+            self._notify_active_server(target.url)
+            return PreparedConnection(
+                result=result,
+                navigation_url=_with_accessor_param(target.url, self._desktop_session_id),
+            )
+
+        logger.warning(
+            "Desktop connection to %s:%s failed (%s)%s",
+            target.host,
+            target.port,
+            result.status,
+            waited_note,
+        )
+        error_title, error_body = _connection_error_copy(result.status)
+        return PreparedConnection(
+            result=result,
+            error_title=error_title,
+            error_body=error_body,
+        )
+
+    def _end_launch(self, reason: str) -> None:
+        with self._launch_lock:
+            if reason == "closed":
+                self._closed = True
+            launch = self._end_launch_locked()
+        if launch is not None and launch.waiting:
+            logger.info(
+                "Desktop stopped waiting for %s:%s (reason=%s)",
+                launch.target.host,
+                launch.target.port,
+                reason,
+            )
+
+    def _end_launch_locked(self) -> _LaunchConnect | None:
+        launch, self._launch = self._launch, None
+        if launch is not None:
+            launch.stop.set()
+        return launch
+
     def _navigate_url(self, url: str) -> None:
         window = self._require_window()
         window.load_url(url)
@@ -524,12 +677,18 @@ class ConnectionController:
         except Exception:
             logger.warning("Active-server listener failed for %s", url, exc_info=True)
 
-    def _show_connection_screen(self, probe_result: DesktopProbeResult | None) -> None:
+    def _show_connection_screen(
+        self,
+        probe_result: DesktopProbeResult | None,
+        *,
+        waiting_for: DesktopTarget | None = None,
+    ) -> None:
         window = self._require_window()
         window.load_html(
             build_connection_html(
                 servers=self.list_servers(),
                 probe_result=probe_result,
+                waiting_for=waiting_for,
             )
         )
 
@@ -545,21 +704,26 @@ class ConnectionController:
 def build_connection_html(
     servers: list[ServerEntry],
     probe_result: DesktopProbeResult | None = None,
+    *,
+    waiting_for: DesktopTarget | None = None,
 ) -> str:
     """Build the escaped interactive connection screen.
 
     Subsumes the four probe outcomes the old static fallback rendered: when
     ``probe_result`` is a failure its status drives an inline error banner and
     its host/port prefill the connect form, so the user fixes the target in
-    place. With ``probe_result`` ``None`` (first run / Switch…) no banner shows
-    and the form prefills with the default suggestion. The saved-server list
-    offers one-click reconnect to any remembered target. Every interpolated
-    value — labels, hosts, ports, error copy — is HTML-escaped.
+    place. ``waiting_for`` shows the launch connect's waiting state for that
+    target instead, which hides once the user connects to a server themselves.
+    With neither (first run) no banner shows and the form prefills with the
+    default suggestion. The saved-server list offers one-click reconnect to any
+    remembered target. Every interpolated value — labels, hosts, ports, error
+    copy — is HTML-escaped.
     """
 
     error_section = _render_error_section(probe_result)
+    waiting_section = _render_waiting_section(waiting_for)
     servers_section = _render_servers_section(servers)
-    prefill_host, prefill_port = _resolve_prefill(probe_result)
+    prefill_host, prefill_port = _resolve_prefill(probe_result, waiting_for)
 
     return f"""<!doctype html>
 <html lang="en">
@@ -624,6 +788,19 @@ def build_connection_html(
         color: #f3b1a4;
       }}
       .error p {{ margin: 0; color: #e7c8c0; }}
+      .waiting {{
+        margin: 0 0 1.5rem;
+        padding: 1rem 1.15rem;
+        border: 1px solid rgba(240, 164, 58, 0.5);
+        border-radius: 1rem;
+        background: rgba(240, 164, 58, 0.1);
+      }}
+      .waiting h2 {{
+        margin: 0 0 0.4rem;
+        font-size: 1.05rem;
+        color: #f0a43a;
+      }}
+      .waiting p {{ margin: 0; color: #e7d9c4; }}
       h2.section {{
         margin: 1.75rem 0 0.75rem;
         font-size: 0.8rem;
@@ -691,7 +868,7 @@ def build_connection_html(
       <p class="eyebrow">vBot Desktop</p>
       <h1>Connect to a server</h1>
       <p>Pick a saved server or enter the host and port of a running vBot server.</p>
-{error_section}
+{waiting_section}{error_section}
 {servers_section}
       <h2 class="section">Add a server</h2>
       <form id="connect-form" onsubmit="return false;">
@@ -727,6 +904,11 @@ def build_connection_html(
             "The native Desktop bridge is not ready. Close the window and start vBot Desktop again."
           );
           return;
+        }}
+        var waiting = document.getElementById("connection-waiting");
+        if (waiting) {{
+          // The user's own connect ends the launch wait.
+          waiting.hidden = true;
         }}
         try {{
           var result = await window.pywebview.api.connect(host, port);
@@ -784,6 +966,20 @@ def _render_error_section(probe_result: DesktopProbeResult | None) -> str:
     )
 
 
+def _render_waiting_section(waiting_for: DesktopTarget | None) -> str:
+    """Return the escaped waiting state of the launch connect, or nothing."""
+
+    if waiting_for is None:
+        return ""
+    title = f"Waiting for {waiting_for.host}:{waiting_for.port} …"
+    return (
+        '      <div id="connection-waiting" class="waiting" role="status">\n'
+        f"        <h2>{html.escape(title)}</h2>\n"
+        f"        <p>{html.escape(_WAITING_BODY)}</p>\n"
+        "      </div>\n"
+    )
+
+
 def _render_servers_section(servers: list[ServerEntry]) -> str:
     """Return the escaped saved-server list, or an empty-state line when none."""
 
@@ -809,17 +1005,22 @@ def _render_servers_section(servers: list[ServerEntry]) -> str:
     )
 
 
-def _resolve_prefill(probe_result: DesktopProbeResult | None) -> tuple[str, str]:
+def _resolve_prefill(
+    probe_result: DesktopProbeResult | None,
+    waiting_for: DesktopTarget | None = None,
+) -> tuple[str, str]:
     """Return the (host, port) strings to prefill the connect form.
 
     A failed probe prefills the offending host/port so the user can correct it
-    in place; otherwise the default suggestion is offered (never an
-    auto-connect target — just a hint).
+    in place, and a waiting launch connect its target; otherwise the default
+    suggestion is offered (never an auto-connect target — just a hint).
     """
 
     if probe_result is not None and probe_result.status != PROBE_WEBUI_AVAILABLE:
         target = probe_result.target
         return (target.host, str(target.port))
+    if waiting_for is not None:
+        return (waiting_for.host, str(waiting_for.port))
     return (_DEFAULT_HOST_PLACEHOLDER, str(_DEFAULT_PORT_PLACEHOLDER))
 
 

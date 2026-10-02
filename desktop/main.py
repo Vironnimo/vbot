@@ -376,9 +376,11 @@ def launch_desktop(
     straight to that target; with no flags the controller auto-connects to the
     last-used server, or shows the connection screen on first run. There is no
     silent localhost default — only a *deliberate* CLI override skips
-    auto-connect. The effective launch target (override else last-used) is
-    resolved once and used for both the window navigation and Voice's server
-    URL, so window and Voice always point at the same server.
+    auto-connect. Either launch connect keeps trying a server that is still
+    unreachable for a while, showing a waiting state. The effective launch
+    target (override else last-used) is resolved once and used for both the
+    window navigation and Voice's server URL, so window and Voice always point
+    at the same server.
 
     ``--open-session`` rides on the first navigation to the WebUI. A launch
     that finds a running Desktop hands it over with the activation instead
@@ -491,7 +493,6 @@ def _run_desktop(
             placement=lambda: (
                 window_state.placement(window_holder[0], settings_file) if window_holder else None
             ),
-            foreground=_windows.foreground_is_own_process,
             shell_busy=voice.is_busy,
             close_window=lambda: window_holder[0].destroy(),
         )
@@ -607,6 +608,8 @@ def _run_desktop(
     try:
         webview.start(**start_kwargs)
     finally:
+        # First, so a launch connect still waiting never retargets a closed Voice.
+        controller.close()
         if desktop_restart is not None:
             desktop_restart.close()
         live_hotkey.stop()
@@ -831,12 +834,14 @@ def _select_launch_entry(
 ) -> Callable[[], Any]:
     """Return the nullary visible-window entry callable and log the chosen branch.
 
-    An explicit CLI override connects straight to that target (the controller
-    remembers it as a side effect of a successful connect); otherwise the
-    controller auto-connects to last-used, or shows the connection screen on
-    first run. A ``session_link`` rides on that first connect only. The
-    callback is attached to pywebview's window ``shown`` event, so both
-    branches are wrapped in a zero-argument closure.
+    An explicit CLI override (or a restart successor's server) connects
+    straight to that target (the controller remembers it as a side effect of a
+    successful connect); otherwise the controller auto-connects to last-used,
+    or shows the connection screen on first run. Both launch connects wait for
+    a server that is still unreachable (``ConnectionController.launch_connect``).
+    A ``session_link`` rides on that first connect only. The callback is
+    attached to pywebview's window ``shown`` event, so both branches are
+    wrapped in a zero-argument closure.
     """
 
     if override is not None:
@@ -844,7 +849,9 @@ def _select_launch_entry(
         logger.info("Desktop starting; connecting to CLI override %s:%s", host, port)
 
         def connect_override() -> Any:
-            return controller.connect(host, port, open_session=session_link, location=location)
+            return controller.launch_connect(
+                host, port, open_session=session_link, location=location
+            )
 
         return connect_override
 

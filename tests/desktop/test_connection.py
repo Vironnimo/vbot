@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,7 +12,7 @@ from typing import Any
 import pytest
 
 from desktop import connection as desktop_connection
-from desktop.connection import ConnectionController, ServerEntry
+from desktop.connection import LAUNCH_WAIT_SECONDS, ConnectionController, ServerEntry
 from desktop.main import (
     PROBE_INVALID_TARGET,
     PROBE_NOT_VBOT_SERVER,
@@ -19,6 +21,7 @@ from desktop.main import (
     PROBE_WEBUI_UNAVAILABLE,
     DesktopProbeResult,
     DesktopTarget,
+    SessionLink,
     validate_host,
 )
 
@@ -43,12 +46,25 @@ class FakeWindow:
     def __init__(self) -> None:
         self.loaded_urls: list[str] = []
         self.loaded_html: list[str] = []
+        self._loaded = threading.Condition()
 
     def load_url(self, url: str) -> None:
-        self.loaded_urls.append(url)
+        with self._loaded:
+            self.loaded_urls.append(url)
+            self._loaded.notify_all()
 
     def load_html(self, content: str) -> None:
-        self.loaded_html.append(content)
+        with self._loaded:
+            self.loaded_html.append(content)
+            self._loaded.notify_all()
+
+    def wait_for_loads(self, count: int) -> None:
+        """Wait until the controller (or its launch wait thread) loaded ``count`` documents."""
+
+        with self._loaded:
+            assert self._loaded.wait_for(
+                lambda: len(self.loaded_urls) + len(self.loaded_html) >= count, timeout=5
+            )
 
 
 def probe_returning(status: str) -> Callable[[DesktopTarget], DesktopProbeResult]:
@@ -58,6 +74,52 @@ def probe_returning(status: str) -> Callable[[DesktopTarget], DesktopProbeResult
         return DesktopProbeResult(status=status, target=target)
 
     return _probe
+
+
+class ScriptedProbe:
+    """Answers each target from its script and lets one second pass per attempt.
+
+    The last status of a script repeats. ``meanwhile`` runs at the start of the
+    given attempt (counted over all targets), as if from another thread.
+    """
+
+    def __init__(
+        self,
+        scripts: dict[tuple[str, int], list[str]],
+        *,
+        seconds_per_attempt: float = 1.0,
+    ) -> None:
+        self.now = 0.0
+        self.scripts = {target: list(script) for target, script in scripts.items()}
+        self.seconds_per_attempt = seconds_per_attempt
+        self.probed: list[tuple[str, int]] = []
+        self.meanwhile: dict[int, Callable[[], None]] = {}
+
+    def clock(self) -> float:
+        return self.now
+
+    def __call__(self, target: DesktopTarget) -> DesktopProbeResult:
+        self.probed.append((target.host, target.port))
+        action = self.meanwhile.pop(len(self.probed), None)
+        if action is not None:
+            action()
+        self.now += self.seconds_per_attempt
+        script = self.scripts[(target.host, target.port)]
+        status = script.pop(0) if len(script) > 1 else script[0]
+        return DesktopProbeResult(status=status, target=target)
+
+
+def _waiting_state(page: str) -> str | None:
+    """Return the connection screen's waiting state markup, if it shows one."""
+
+    match = re.search(r'<div id="connection-waiting".*?</div>', page, re.DOTALL)
+    return match.group(0) if match else None
+
+
+def _connection_log_levels(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.levelname for record in caplog.records if record.name == "vbot.desktop.connection"
+    ]
 
 
 def _settings(tmp_path: Path, data: dict[str, Any] | None = None) -> Path:
@@ -88,6 +150,19 @@ def _controller(
         controller = ConnectionController(
             settings_file=settings_file, window=window, probe=probe_returning(status)
         )
+    return controller, window, settings_file
+
+
+def _scripted_controller(
+    tmp_path: Path, probe: ScriptedProbe
+) -> tuple[ConnectionController, FakeWindow, Path]:
+    """A controller whose probe and clock come from ``probe``: no attempt really waits."""
+
+    settings_file = _settings(tmp_path)
+    window = FakeWindow()
+    controller = ConnectionController(
+        settings_file=settings_file, window=window, probe=probe, clock=probe.clock
+    )
     return controller, window, settings_file
 
 
@@ -236,7 +311,10 @@ def test_select_server_writes_last_used(tmp_path: Path) -> None:
     assert _stored(settings_file)["last_used"] == {"host": "pi.lan", "port": 9000}
 
 
-# -- Controller: connect -------------------------------------------------------------
+# -- Controller: launch connect ------------------------------------------------------
+
+PI = ("pi.lan", 9000)
+NAS = ("nas.lan", 8420)
 
 
 def test_a_successful_connect_navigates_remembers_and_announces_the_server(
@@ -246,7 +324,7 @@ def test_a_successful_connect_navigates_remembers_and_announces_the_server(
     urls: list[str] = []
     controller.set_active_server_listener(urls.append)
 
-    result = controller.connect("pi.lan", 9000, "Pi")
+    result = controller.launch_connect("pi.lan", 9000, "Pi")
 
     assert result.status == PROBE_WEBUI_AVAILABLE
     assert window.loaded_urls == [PI_URL]
@@ -260,21 +338,33 @@ def test_a_successful_connect_navigates_remembers_and_announces_the_server(
 
 
 @pytest.mark.parametrize(
-    "status", [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_UNAVAILABLE, PROBE_NOT_VBOT_SERVER]
+    "script",
+    [
+        [PROBE_WEBUI_UNAVAILABLE],
+        [PROBE_NOT_VBOT_SERVER],
+        [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_UNAVAILABLE],
+    ],
+    ids=["webui-unavailable", "not-vbot", "webui-unavailable-while-waiting"],
 )
-def test_a_failed_connect_shows_the_error_inline_and_changes_nothing(
-    tmp_path: Path, status: str
+def test_a_launch_connect_shows_any_other_failure_inline_at_once_and_changes_nothing(
+    tmp_path: Path, script: list[str]
 ) -> None:
-    controller, window, settings_file = _controller(tmp_path, status)
+    # The server would answer later; only an unreachable one is waited for.
+    probe = ScriptedProbe({PI: [*script, PROBE_WEBUI_AVAILABLE]})
+    controller, window, settings_file = _scripted_controller(tmp_path, probe)
     urls: list[str] = []
     controller.set_active_server_listener(urls.append)
 
-    result = controller.connect("pi.lan", 9000)
+    result = controller.launch_connect("pi.lan", 9000)
+    window.wait_for_loads(len(script))
+    controller.close()
 
-    assert result.status == status
+    assert result.status == script[0]
+    assert probe.probed == [PI] * len(script)
     assert window.loaded_urls == []
-    [page] = window.loaded_html
+    page = window.loaded_html[-1]
     assert 'role="alert"' in page
+    assert _waiting_state(page) is None
     # Failed host/port are prefilled so the user fixes the target in place.
     assert 'value="pi.lan"' in page
     assert 'value="9000"' in page
@@ -283,10 +373,115 @@ def test_a_failed_connect_shows_the_error_inline_and_changes_nothing(
     assert controller.active_server_url() is None
 
 
+def test_a_launch_connect_waits_for_an_unreachable_server_and_connects_like_a_first_try(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    probe = ScriptedProbe(
+        {PI: [PROBE_SERVER_UNREACHABLE, PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_AVAILABLE]}
+    )
+    controller, window, settings_file = _scripted_controller(tmp_path, probe)
+    urls: list[str] = []
+    controller.set_active_server_listener(urls.append)
+
+    with caplog.at_level("INFO", logger="vbot.desktop.connection"):
+        result = controller.launch_connect(
+            "pi.lan",
+            9000,
+            "Pi",
+            open_session=SessionLink(agent="builder@project", session="session-1"),
+            location="#settings/desktop",
+        )
+        window.wait_for_loads(2)
+    controller.close()
+
+    assert result.status == PROBE_SERVER_UNREACHABLE
+    [waiting_page] = window.loaded_html
+    waiting = _waiting_state(waiting_page)
+    assert waiting is not None and 'role="status"' in waiting and "pi.lan:9000" in waiting
+    assert 'role="alert"' not in waiting_page
+    assert probe.probed == [PI] * 3
+    assert window.loaded_urls == [
+        f"{PI_URL}&open_agent=builder%40project&open_session=session-1#settings/desktop"
+    ]
+    stored = _stored(settings_file)
+    assert stored["servers"] == [{"host": "pi.lan", "port": 9000, "label": "Pi"}]
+    assert stored["last_used"] == {"host": "pi.lan", "port": 9000}
+    assert urls == ["http://pi.lan:9000/"]
+    assert controller.active_target() == PI
+    # One line when the wait starts and one when it ends, none per attempt.
+    assert _connection_log_levels(caplog) == ["INFO", "INFO"]
+
+
+def test_a_launch_connect_shows_the_unreachable_error_once_the_wait_runs_out(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    probe = ScriptedProbe(
+        {PI: [PROBE_SERVER_UNREACHABLE]}, seconds_per_attempt=LAUNCH_WAIT_SECONDS / 4
+    )
+    controller, window, settings_file = _scripted_controller(tmp_path, probe)
+    urls: list[str] = []
+    controller.set_active_server_listener(urls.append)
+
+    with caplog.at_level("INFO", logger="vbot.desktop.connection"):
+        controller.launch_connect("pi.lan", 9000)
+        window.wait_for_loads(2)
+    controller.close()
+
+    # Attempts at 0, 15, 30 and 45 s; the one ending at 60 s gives up.
+    assert probe.probed == [PI] * 4
+    waiting_page, error_page = window.loaded_html
+    assert _waiting_state(waiting_page) is not None
+    assert _waiting_state(error_page) is None
+    assert 'role="alert"' in error_page
+    assert 'value="pi.lan"' in error_page
+    assert window.loaded_urls == []
+    assert desktop_connection.list_servers(settings_file) == []
+    assert urls == []
+    assert _connection_log_levels(caplog) == ["INFO", "WARNING"]
+
+
+@pytest.mark.parametrize("user_status", [PROBE_WEBUI_AVAILABLE, PROBE_SERVER_UNREACHABLE])
+def test_a_user_connect_ends_a_launch_wait_and_is_never_overridden(
+    tmp_path: Path, user_status: str
+) -> None:
+    # The launch target answers on the attempt during which the user connects.
+    probe = ScriptedProbe(
+        {PI: [PROBE_SERVER_UNREACHABLE, PROBE_WEBUI_AVAILABLE], NAS: [user_status]}
+    )
+    controller, window, settings_file = _scripted_controller(tmp_path, probe)
+    urls: list[str] = []
+    controller.set_active_server_listener(urls.append)
+    user_choices: list[str] = []
+    user_connected = threading.Event()
+
+    def user_connects() -> None:
+        user_choices.append(controller.prepare_connect("nas.lan", 8420).result.status)
+        user_connected.set()
+
+    probe.meanwhile[2] = user_connects
+
+    controller.launch_connect("pi.lan", 9000)
+    assert user_connected.wait(5)
+    controller.close()
+
+    # The user's own connect tried once and never waited.
+    assert probe.probed == [PI, PI, NAS]
+    assert user_choices == [user_status]
+    # Only the waiting state was ever loaded; the user's page applies their outcome.
+    [waiting_page] = window.loaded_html
+    assert _waiting_state(waiting_page) is not None
+    assert window.loaded_urls == []
+    connected = user_status == PROBE_WEBUI_AVAILABLE
+    assert urls == (["http://nas.lan:8420/"] if connected else [])
+    assert controller.active_target() == (NAS if connected else None)
+    stored_last_used = desktop_connection.resolve_last_used(settings_file)
+    assert stored_last_used == (ServerEntry(*NAS) if connected else None)
+
+
 def test_an_invalid_host_renders_the_invalid_target_screen_without_io(tmp_path: Path) -> None:
     controller, window, _ = _controller(tmp_path, status=None)
 
-    result = controller.connect("http://pi.lan", 9000)
+    result = controller.launch_connect("http://pi.lan", 9000)
 
     assert result.status == PROBE_INVALID_TARGET
     assert window.loaded_urls == []
@@ -303,7 +498,7 @@ def test_connect_survives_active_server_listener_error(tmp_path: Path) -> None:
     controller.set_active_server_listener(boom)
 
     # A failing listener must never break the navigation that already succeeded.
-    assert controller.connect("pi.lan", 9000).status == PROBE_WEBUI_AVAILABLE
+    assert controller.launch_connect("pi.lan", 9000).status == PROBE_WEBUI_AVAILABLE
     assert window.loaded_urls == [PI_URL]
 
 
@@ -312,11 +507,11 @@ def test_a_controller_navigates_only_once_a_window_is_attached(tmp_path: Path) -
         settings_file=tmp_path / "settings.json", probe=probe_returning(PROBE_WEBUI_AVAILABLE)
     )
     with pytest.raises(RuntimeError):
-        controller.connect("pi.lan", 9000)
+        controller.launch_connect("pi.lan", 9000)
 
     window = FakeWindow()
     controller.attach_window(window)
-    controller.connect("pi.lan", 9000)
+    controller.launch_connect("pi.lan", 9000)
 
     assert window.loaded_urls == [PI_URL]
 
@@ -442,6 +637,7 @@ def test_first_run_auto_connect_shows_the_connection_screen_without_an_error(
     [page] = window.loaded_html
     # No probe ran: no error banner, and the default suggestion is only a prefill.
     assert 'role="alert"' not in page
+    assert _waiting_state(page) is None
     assert '<ul class="servers">' not in page
     assert "data-host=" not in page
     assert 'value="127.0.0.1"' in page
@@ -475,18 +671,24 @@ def test_connection_html_awaits_bridge_result_before_navigation() -> None:
     assert bridge_call in page
     assert navigation in page
     assert page.index(bridge_call) < page.index(navigation)
+    # The user's own connect hides a launch wait's waiting state first.
+    assert page.index("waiting.hidden = true") < page.index(bridge_call)
     assert ".textContent = title" in page
     assert ".textContent = body" in page
     assert "prefillConnectionTarget(host, port)" in page
     assert "innerHTML" not in page
 
 
-def test_connection_html_escapes_failed_host_in_error_and_prefill() -> None:
+@pytest.mark.parametrize("state", ["error", "waiting"])
+def test_connection_html_escapes_the_target_host_in_its_banner_and_prefill(state: str) -> None:
     malicious = '<script>alert("x")</script>'
     target = DesktopTarget(malicious, 9000, "")
-    page = desktop_connection.build_connection_html(
-        [], DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
-    )
+    if state == "error":
+        page = desktop_connection.build_connection_html(
+            [], DesktopProbeResult(status=PROBE_INVALID_TARGET, target=target)
+        )
+    else:
+        page = desktop_connection.build_connection_html([], waiting_for=target)
 
     assert malicious not in page
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in page

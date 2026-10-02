@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -107,10 +108,16 @@ def test_a_stale_or_malformed_request_starts_no_handoff(
 
 
 class FakePage:
-    def __init__(self, *, handles_restart: bool = False) -> None:
+    """A page that takes restart requests (like the WebUI) unless told otherwise.
+
+    ``then`` runs after a taken request, as the page's own ``restartDesktop``.
+    """
+
+    def __init__(self, *, handles_restart: bool = True) -> None:
         self.updates: list[dict[str, Any]] = []
         self.restart_requests = 0
         self.handles_restart = handles_restart
+        self.then: Callable[[], None] | None = None
 
     def publish_update(self, status: Mapping[str, Any]) -> None:
         self.updates.append(dict(status))
@@ -118,6 +125,8 @@ class FakePage:
     def request_restart(self, on_result: Callable[[bool], None]) -> None:
         self.restart_requests += 1
         on_result(self.handles_restart)
+        if self.handles_restart and self.then is not None:
+            self.then()
 
 
 class FakeProcess:
@@ -137,8 +146,8 @@ class Harness:
         self.contract = _contract(tmp_path)
         self.page = page or FakePage()
         self.now = 1000.0
-        self.foreground = False
-        self.busy = False
+        # Voice records or calibrates until then.
+        self.busy_until = 0.0
         self.closed = threading.Event()
         self.spawned: list[tuple[str, ...]] = []
         self.process = FakeProcess()
@@ -150,8 +159,7 @@ class Harness:
             active_server=lambda: ("pi.lan", 9000),
             location=lambda: "#chat",
             placement=lambda: WindowPlacement("normal", 1200, 800, 10, 20),
-            foreground=lambda: self.foreground,
-            shell_busy=lambda: self.busy,
+            shell_busy=lambda: self.now < self.busy_until,
             close_window=self.closed.set,
             spawn=self._spawn,
             clock=lambda: self.now,
@@ -184,8 +192,26 @@ class Harness:
         raise AssertionError(f"status never became {expected}: {self.page.updates}")
 
 
-def test_a_newer_active_version_makes_the_desktop_pending(tmp_path: Path) -> None:
-    harness = Harness(tmp_path)
+@pytest.fixture
+def harnesses(tmp_path: Path) -> Iterator[Callable[..., Harness]]:
+    """Create harnesses whose handoffs still waiting end with the test."""
+
+    created: list[Harness] = []
+
+    def create(**kwargs: Any) -> Harness:
+        harness = Harness(tmp_path, **kwargs)
+        created.append(harness)
+        return harness
+
+    yield create
+    for harness in created:
+        harness.restart.close()
+
+
+def test_a_newer_active_version_makes_the_desktop_pending(
+    harnesses: Callable[..., Harness],
+) -> None:
+    harness = harnesses()
 
     harness.restart.check()
     assert harness.restart.status() == {"pending": False, "restarting": False, "failed": False}
@@ -201,9 +227,9 @@ def test_a_newer_active_version_makes_the_desktop_pending(tmp_path: Path) -> Non
 
 
 def test_a_requested_restart_closes_the_window_only_after_the_successor_reports(
-    tmp_path: Path,
+    harnesses: Callable[..., Harness],
 ) -> None:
-    harness = Harness(tmp_path)
+    harness = harnesses()
     harness.activate("v2")
     harness.restart.check()
 
@@ -239,57 +265,82 @@ class ExpiringProcess(FakeProcess):
 
 
 @pytest.mark.parametrize("failure", ["exit-code", "timeout"])
-def test_a_failed_handoff_keeps_the_window_and_reports_the_failure(
-    tmp_path: Path, failure: str
+def test_a_failed_handoff_keeps_the_window_and_retries_after_a_growing_delay(
+    harnesses: Callable[..., Harness], failure: str
 ) -> None:
-    harness = Harness(tmp_path)
+    harness = harnesses()
     harness.activate("v2")
     harness.restart.check()
     harness.process = FakeProcess(1) if failure == "exit-code" else ExpiringProcess(harness)
 
-    harness.restart.restart()
-    harness.wait_for_status(restarting=False, failed=True)
+    for delay in (restart.FAILED_RETRY_SECONDS, 2 * restart.FAILED_RETRY_SECONDS):
+        harness.restart.restart()
+        harness.wait_for_status(restarting=False, failed=True)
 
-    assert not harness.closed.is_set()
-    assert not (harness.config / restart.RESTART_REQUEST_FILE_NAME).exists()
-    assert harness.restart.status() == {"pending": True, "restarting": False, "failed": True}
+        assert not harness.closed.is_set()
+        assert not (harness.config / restart.RESTART_REQUEST_FILE_NAME).exists()
+        assert harness.restart.status() == {"pending": True, "restarting": False, "failed": True}
+        asked = harness.page.restart_requests
+        harness.now += delay - 1
+        harness.restart.check()
+        assert harness.page.restart_requests == asked
+        harness.now += 1
+        harness.restart.check()
+        assert harness.page.restart_requests == asked + 1
 
 
 @pytest.mark.parametrize(
-    ("foreground", "busy", "page_handles", "requested", "restarted"),
+    ("handles", "restarts_itself", "restarts_after"),
     [
-        (False, False, False, True, True),
-        (False, False, True, True, False),
-        (True, False, False, False, False),
-        (False, True, False, False, False),
+        (False, False, 0.0),
+        (True, True, 0.0),
+        (True, False, restart.RESTART_GRACE_SECONDS),
     ],
-    ids=["idle-unhandled-page", "page-takes-it", "window-in-front", "voice-busy"],
+    ids=["unhandled-request", "page-restarts", "page-does-not-restart"],
 )
-def test_an_idle_desktop_restarts_when_neither_user_voice_nor_page_objects(
-    tmp_path: Path,
-    foreground: bool,
-    busy: bool,
-    page_handles: bool,
-    requested: bool,
-    restarted: bool,
+def test_a_pending_desktop_asks_the_page_once_and_restarts_right_away(
+    harnesses: Callable[..., Harness],
+    handles: bool,
+    restarts_itself: bool,
+    restarts_after: float,
 ) -> None:
-    harness = Harness(tmp_path, page=FakePage(handles_restart=page_handles))
+    harness = harnesses(page=FakePage(handles_restart=handles))
+    if restarts_itself:
+        harness.page.then = harness.restart.restart
     harness.activate("v2")
-    harness.restart.check()
-    harness.foreground, harness.busy = foreground, busy
 
-    harness.now += restart.IDLE_AFTER_SECONDS - 1
+    harness.restart.check()
+    assert harness.page.restart_requests == 1
+    if restarts_after:
+        harness.now += restarts_after - 1
+        harness.restart.check()
+        assert harness.restart.status()["restarting"] is False
+        harness.now += 1
+        harness.restart.check()
+
+    assert harness.restart.status()["restarting"] is True
+    assert harness.page.restart_requests == 1
+
+
+@pytest.mark.parametrize(
+    ("busy_for", "asked_after"),
+    [(5.0, 5.0), (math.inf, restart.RESTART_GRACE_SECONDS)],
+    ids=["voice-finishes", "voice-outlasts-the-grace"],
+)
+def test_voice_in_use_delays_the_restart_only_until_it_ends_or_the_grace_runs_out(
+    harnesses: Callable[..., Harness], busy_for: float, asked_after: float
+) -> None:
+    harness = harnesses()
+    harness.busy_until = harness.now + busy_for
+    harness.activate("v2")
+
+    harness.restart.check()
+    assert harness.restart.status()["pending"] is True
+    harness.now += asked_after - 1
     harness.restart.check()
     assert harness.page.restart_requests == 0
 
     harness.now += 1
     harness.restart.check()
 
-    assert harness.page.restart_requests == (1 if requested else 0)
-    if restarted:
-        harness.wait_for_status(restarting=True)
-    else:
-        assert harness.restart.status()["restarting"] is False
-    # A page that took the request is not asked again right away.
-    harness.restart.check()
-    assert harness.page.restart_requests == (1 if requested else 0)
+    assert harness.page.restart_requests == 1

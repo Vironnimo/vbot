@@ -16,10 +16,11 @@ Five window events carry them:
   ``preventDefault()``.
 - ``vbot-desktop-update``, ``detail`` ``{pending, restarting, failed}``: the
   Desktop's update restart status (see :mod:`desktop.restart`).
-- ``vbot-desktop-restart`` (cancelable), ``detail`` ``{reason: "idle"}``: the
-  Desktop would restart into a newer version now. A page that handles it calls
-  ``preventDefault()`` and then restarts through ``restartDesktop`` or declines;
-  an unhandled request lets the Desktop restart on its own.
+- ``vbot-desktop-restart`` (cancelable), ``detail`` ``{reason: "update"}``: the
+  Desktop restarts into a newly activated version now. A page that handles it
+  calls ``preventDefault()``, saves its edits and restarts through
+  ``restartDesktop``; the Desktop restarts on its own shortly after or, for an
+  unhandled request, at once.
 
 ``Window.evaluate_js`` blocks until the page answers and deadlocks on the GUI
 thread, so one daemon thread (``vbot-desktop-page-events``) delivers every push
@@ -225,7 +226,7 @@ class PageEventDispatcher:
             self._enqueue_locked(push)
 
     def request_restart(self, on_result: Callable[[bool], None]) -> None:
-        """Offer the page an idle restart; ``on_result`` learns whether the page took it.
+        """Ask the page to restart; ``on_result`` learns whether the page took it.
 
         Runs ``on_result`` on the delivery thread. Without an attached window, or
         when the page does not answer, the request counts as not taken.
@@ -359,7 +360,7 @@ class PageEventDispatcher:
 
     def _deliver_restart(self, window: Any, request: _RestartRequest) -> None:
         handled = (
-            self._evaluate(window, restart_request_script("idle")) is True
+            self._evaluate(window, restart_request_script("update")) is True
             if window is not None
             else False
         )
