@@ -1,15 +1,44 @@
-"""Provider Tool probe: workflow reflection."""
+"""Provider Tool probe: Reflection review and ``/learn`` decisions in production rendering.
+
+Every attempt seeds a case's Memory, Skills and Session history into a
+disposable fixture Agent, renders the System Prompt and Tool definitions
+through production, sends the review brief or ``/learn`` instruction as a
+System Reminder note and runs the Model's Tool calls through the production
+executor. Expectations stay with the observer; only production context and the
+case history reach the Model. Chat fork and cadence integration are tested
+separately.
+"""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
-from pathlib import Path
-from tempfile import TemporaryDirectory
+import time
+import uuid
+from collections.abc import Mapping
 from typing import Any
 
 from scripts.provider_probe.common import PROJECT_ROOT
+from scripts.provider_probe.learning_eval import ReflectionReport, format_pass_rate_table
+from scripts.provider_probe.learning_fixture import EvalWorker, tool_message_content
+from scripts.provider_probe.learning_scoring import CallObserver, score_attempt
+from scripts.provider_probe.learning_texts import TextPack, load_text_pack
+
+# Review Runs use production's REFLECTION_TOOL_ITERATION_LIMIT. /learn runs under
+# Chat's loop limit in production; the harness bounds its cost here instead.
+LEARN_TOOL_ITERATION_LIMIT = 30
+MAX_REPETITIONS = 50
+# Chat's answers to Tool calls it refuses once a Run must finish
+# (core/chat/_agentic_progression.py).
+_LIMIT_FAILURE = (
+    "The Run reached its limit of {limit} dispatched Tool iterations. This Tool was not "
+    "executed; provide the final answer without issuing another Tool Call."
+)
+_DISABLED_FAILURE = (
+    "Tool execution is disabled for the remainder of this Run. This Tool was not executed; "
+    "provide the final answer without issuing another Tool Call."
+)
 
 
 def _reflection_cases() -> list[dict[str, Any]]:
@@ -18,280 +47,389 @@ def _reflection_cases() -> list[dict[str, Any]]:
     return cases
 
 
-class _BundledFragments:
-    """Read prompt fragments from the bundled resources, as a fresh install does."""
-
-    def __init__(self, resources: Path) -> None:
-        self._resources = resources
-
-    def read_prompt_fragment(self, fragment_name: str) -> str:
-        return (self._resources / fragment_name).read_text(encoding="utf-8")
-
-
-async def _probe_reflection_case(
-    adapter: Any, args: argparse.Namespace, case: dict[str, Any], scope: str
-) -> dict[str, Any]:
-    """Evaluate decisions using production prose and real disposable Tool effects.
-
-    Only synthetic history and production context reach the Model; expectations
-    stay in the observer. Chat fork/cadence integration is tested separately.
-    """
-    from core.automation.reflection import REFLECTION_TOOL_RESTRICTIONS
-    from core.chat.wire_shaping import system_reminder_request_message
-    from core.memory.memory import MemoryScope, MemoryService, memory_block_definition
-    from core.prompts.briefs import learn_brief, reflection_brief
-    from core.prompts.prompts import _format_skill_catalog
-    from core.skills import SkillAuthoringService, SkillRegistry
-    from core.tools.memory import register_memory_tool
-    from core.tools.skill import register_skill_tool
-    from core.tools.skill_manage import register_skill_manage_tool
-    from core.tools.tools import ToolContext, ToolRegistry, tool_failure
-
-    resources = PROJECT_ROOT / "resources/prompts"
-    names = ("memory", "skill", "skill_manage")
-    allowed = names if scope == "learn" else REFLECTION_TOOL_RESTRICTIONS[scope]  # type: ignore[index]
-    with TemporaryDirectory(prefix="vbot-reflection-probe-") as temporary:
-        root = Path(temporary)
-        own, bundled = root / "skills", root / "bundled"
-        memory = MemoryService()
-        for memory_scope, entries in case.get("memory", {}).items():
-            for entry in entries:
-                memory.add_entry(root, memory_scope, entry)
-        for skill in case.get("skills", []):
-            home = bundled if skill.get("readonly") else own
-            path = home / skill["name"] / "SKILL.md"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(skill["content"], encoding="utf-8")
-
-        def skills() -> SkillRegistry:
-            return SkillRegistry.load(own, extra_dirs=[bundled], origins=["agent", "bundled"])
-
-        registry = ToolRegistry()
-        register_memory_tool(registry, memory)
-        register_skill_tool(registry, lambda *_args: skills(), lambda: None)
-        register_skill_manage_tool(
-            registry,
-            SkillAuthoringService(protected_roots=[bundled]),
-            lambda _agent: own,
-            lambda _agent: None,
-            resolve_external_skill_scope=lambda _agent, name, _project: (
-                "bundled" if (bundled / name / "SKILL.md").is_file() else None
-            ),
-        )
-        definitions = registry.provider_definitions(names)
-        if {tool["name"] for tool in definitions} != set(names):
-            raise RuntimeError("Reflection probe requires all three production Tool definitions")
-        catalog = _format_skill_catalog(skills().filter_allowed(["*"]))
-        memory_text = memory.read_prompt_files(root, "agent_user", memory_tool="memory")
-        if case.get("stale_memory_prompt"):
-            memory_text = "# Agent Memory\nNo entries yet.\n# User Profile\nNo entries yet."
-        system = "\n\n".join(
-            [
-                (memory_block_definition().default_text or "").replace(
-                    "{generated:memory_files}", memory_text
-                ),
-                (resources / "skills.md")
-                .read_text(encoding="utf-8")
-                .replace("{generated:skill_catalog}", catalog),
-                (resources / "skill_maintenance.md").read_text(encoding="utf-8"),
-            ]
-        )
-        fragments = _BundledFragments(resources)
-        brief = (
-            learn_brief(fragments, case["learn_request"])
-            if scope == "learn"
-            else reflection_brief(fragments, scope)  # type: ignore[arg-type]
-        )
-        messages = [
-            {"role": "system", "content": system},
-            *case["history"],
-            system_reminder_request_message(brief),
-        ]
-
-        memory_scopes: tuple[MemoryScope, ...] = ("user", "agent")
-
-        def snapshot() -> dict[str, Any]:
-            return {
-                "memory": {
-                    scope_name: [entry.content for entry in memory.list_entries(root, scope_name)]
-                    for scope_name in memory_scopes
-                },
-                "files": {
-                    path.relative_to(root).as_posix(): path.read_text(encoding="utf-8")
-                    for home in (own, bundled)
-                    for path in home.rglob("*")
-                    if path.is_file()
-                },
-            }
-
-        before = snapshot()
-        reads: set[tuple[str, str]] = set()
-        actions: list[dict[str, Any]] = []
-        violations: list[str] = []
-        finished = False
-        steps = 0
-        for step in range(12):
-            steps = step + 1
-            raw = await adapter.send(
-                messages,
-                model_id=args.model,
-                tools=definitions,
-                thinking_effort=args.thinking_effort,
-                max_tokens=args.max_tokens or 4000,
-            )
-            response = adapter.normalize_response(raw, model_id=args.model)
-            calls = response.get("tool_calls") or []
-            messages.append(
-                {
-                    "role": "assistant",
-                    **{
-                        key: response[key]
-                        for key in ("content", "tool_calls", "reasoning", "reasoning_meta")
-                        if key in response
-                    },
-                }
-            )
-            if not calls:
-                finished = bool(str(response.get("content") or "").strip())
-                break
-            for index, call in enumerate(calls):
-                name, arguments = call["name"], call["arguments"]
-                action = arguments.get("action", "")
-                target = (
-                    arguments.get("scope", "") if name == "memory" else arguments.get("name", "")
-                )
-                file_path = arguments.get("file_path", "SKILL.md")
-                mutation = (name == "memory" and action != "list") or name == "skill_manage"
-                if mutation:
-                    if name == "memory" and ("memory", target) not in reads:
-                        violations.append("memory_write_without_current_list")
-                    if name == "skill_manage":
-                        if action == "create" and ("skill", "catalog") not in reads:
-                            violations.append("create_without_current_catalog")
-                        if (own / target / file_path).is_file() and (
-                            target,
-                            file_path,
-                        ) not in reads:
-                            violations.append("skill_write_without_current_file")
-                context = ToolContext(
-                    agent_id="probe",
-                    session_id="probe-session",
-                    run_id="probe-run",
-                    tool_call_id=call["id"],
-                    tool_name=name,
-                    tool_call_index=index,
-                    workspace=root,
-                    vbot_root=root,
-                    data_root=root,
-                    cwd=root,
-                )
-                try:
-                    result = await registry.dispatch(context, arguments, allowed)
-                except Exception as error:
-                    result = tool_failure("probe_dispatch_rejected", type(error).__name__)
-                if not result["ok"]:
-                    violations.append("tool_call_rejected")
-                elif name == "memory" and action == "list":
-                    # A list without scope shows both scopes.
-                    reads.update(
-                        ("memory", item) for item in ((target,) if target else ("user", "agent"))
-                    )
-                elif name == "skill" and not arguments:
-                    reads.add(("skill", "catalog"))
-                elif name == "skill" and arguments.get("file_path"):
-                    reads.add((target, file_path))
-                if mutation:
-                    actions.append({"tool": name, "action": action, "ok": result["ok"]})
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": name,
-                        "tool_call_id": call["id"],
-                        "content": json.dumps(result),
-                    }
-                )
-        after = snapshot()
-        expected = case["expected"][scope]
-        kind = expected["kind"]
-        changed_files = {
-            path
-            for path in before["files"].keys() | after["files"].keys()
-            if before["files"].get(path) != after["files"].get(path)
-        }
-        if kind == "none":
-            effect_ok = before == after and not actions
-            payload = ""
-        elif kind in ("user", "agent"):
-            other = "agent" if kind == "user" else "user"
-            payload = "\n".join(after["memory"][kind])
-            effect_ok = (
-                not changed_files
-                and before["memory"][other] == after["memory"][other]
-                and len(after["memory"][kind]) == expected.get("count", 1)
-                and before["memory"][kind] != after["memory"][kind]
-            )
-        else:
-            payload = "\n".join(after["files"].get(path, "") for path in changed_files)
-            created = [
-                path
-                for path in changed_files
-                if path.endswith("/SKILL.md") and path not in before["files"]
-            ]
-            effect_ok = (
-                bool(changed_files)
-                and before["memory"] == after["memory"]
-                and all(path.startswith("skills/") for path in changed_files)
-            )
-            if kind == "create":
-                effect_ok = effect_ok and len(created) == 1
-            else:
-                effect_ok = effect_ok and changed_files == {
-                    "skills/" + expected["name"] + "/SKILL.md"
-                }
-        evidence_ok = all(
-            token.lower() in payload.lower() for token in expected.get("contains", [])
-        ) and all(token.lower() not in payload.lower() for token in expected.get("excludes", []))
-        return {
-            "case": case["id"],
-            "scope": scope,
-            "steps": steps,
-            "actions": actions,
-            "violations": violations,
-            "final_response_received": finished,
-            "effect_ok": effect_ok,
-            "evidence_ok": evidence_ok,
-            "passed": finished and effect_ok and evidence_ok and not violations,
-        }
-
-
-async def _probe_reflection_workflow(adapter: Any, args: argparse.Namespace) -> dict[str, Any]:
+def _selected_pairs(args: argparse.Namespace) -> list[tuple[dict[str, Any], str]]:
+    cases = _reflection_cases()
+    requested = (
+        None
+        if args.reflection_case == "all"
+        else {item.strip() for item in str(args.reflection_case).split(",") if item.strip()}
+    )
+    if requested is not None:
+        unknown = requested - {case["id"] for case in cases}
+        if unknown:
+            raise ValueError(f"Unknown reflection case: {', '.join(sorted(unknown))}")
     selected = [
         (case, scope)
-        for case in _reflection_cases()
+        for case in cases
         for scope in case["expected"]
-        if args.reflection_case in ("all", case["id"]) and args.reflection_scope in ("all", scope)
+        if (requested is None or case["id"] in requested)
+        and args.reflection_scope in ("all", scope)
     ]
     if not selected:
         raise ValueError("No matching reflection scenario")
-    slots = asyncio.Semaphore(3)
+    return selected
 
-    async def evaluate(case: dict[str, Any], scope: str) -> dict[str, Any]:
-        async with slots:
-            try:
-                async with asyncio.timeout(args.total_timeout):
-                    return await _probe_reflection_case(adapter, args, case, scope)
-            except Exception as error:  # noqa: BLE001 - retain other independent case results
-                return {
-                    "case": case["id"],
-                    "scope": scope,
-                    "passed": False,
-                    "error_type": type(error).__name__,
-                }
 
-    rows = await asyncio.gather(*(evaluate(case, scope) for case, scope in selected))
+def _add_usage(total: dict[str, Any], usage: Any) -> None:
+    if not isinstance(usage, Mapping):
+        return
+    for key, value in usage.items():
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            total[key] = total.get(key, 0) + value
+
+
+def _sampling_kwargs(
+    args: argparse.Namespace, models: Any, agent_temperature: float | None
+) -> dict[str, Any]:
+    """Resolve temperature and top_p like Chat does for the evaluated Model."""
+    if models is None:
+        return {}
+    from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
+
     return {
-        "scenario": "reflection_workflow",
-        "model": args.model,
-        "cases": rows,
-        "passed": all(row["passed"] for row in rows),
+        "temperature": resolve_request_temperature(
+            agent_temperature, models, args.provider, args.model
+        ),
+        "top_p": resolve_request_top_p(models, args.provider, args.model),
     }
+
+
+def _record_results(
+    step: int,
+    calls: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    calls_log: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> None:
+    """Log each call with its result and answer it with a Tool message."""
+    for call, result in zip(calls, results, strict=True):
+        calls_log.append(
+            {
+                "step": step,
+                "name": call.get("name"),
+                "arguments": call.get("arguments"),
+                "ok": bool(result.get("ok")),
+                "result": result,
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "name": call.get("name"),
+                "tool_call_id": call["id"],
+                "content": tool_message_content(result),
+            }
+        )
+
+
+class _ToolBudget:
+    """Chat's Tool budget of one Run, which ends a Model's Tool use like production.
+
+    A round of calls at the iteration limit fails unrun, and a round that
+    repeats an identical failed call ``MAX_IDENTICAL_FAILED_TOOL_CALLS`` times
+    asks for the final answer too; afterwards requests offer no Tools and calls
+    fail unrun. The second round of calls after that ends the Run.
+    """
+
+    def __init__(self, limit: int, registry: Any) -> None:
+        from core.chat._step_outcomes import _FailedToolCallCircuitBreaker
+
+        self.limit = limit
+        self.iterations = 0
+        self.finalization_reason: str | None = None
+        self._finalization_violations = 0
+        self._limit_reached = False
+        self._breaker = _FailedToolCallCircuitBreaker()
+        self._registry = registry
+
+    def refusal(self) -> dict[str, Any] | None:
+        """Start a round: the result refusing its calls unrun, or ``None`` to dispatch."""
+        from core.chat._step_outcomes import (
+            TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+            TOOL_ITERATION_LIMIT_FAILURE_CODE,
+        )
+        from core.tools import tool_failure
+
+        self._limit_reached = False
+        if self.finalization_reason is not None:
+            return tool_failure(
+                TOOL_FINALIZATION_DISABLED_FAILURE_CODE, _DISABLED_FAILURE, retryable=False
+            )
+        if self.iterations >= self.limit:
+            self._limit_reached = True
+            return tool_failure(
+                TOOL_ITERATION_LIMIT_FAILURE_CODE,
+                _LIMIT_FAILURE.format(limit=self.limit),
+                retryable=False,
+            )
+        self.iterations += 1
+        return None
+
+    def finish_round(
+        self,
+        calls: list[dict[str, Any]],
+        results: list[dict[str, Any]],
+        violations: list[str],
+    ) -> tuple[str | None, bool]:
+        """End a round: the finalization note to add, and whether the Run ends now."""
+        from core.chat._step_outcomes import (
+            MAX_IDENTICAL_FAILED_TOOL_CALLS,
+            MAX_TOOL_FINALIZATION_VIOLATIONS,
+            TOOL_FINALIZATION_NOTE,
+        )
+        from core.chat.messages import ChatMessage
+        from core.chat.messages import ToolCall as CanonicalToolCall
+        from core.tools.model_names import model_tool_name
+
+        reason: str | None = None
+        if self._limit_reached:
+            reason = f"the Run reached its limit of {self.limit} dispatched Tool iterations"
+            violations.append("tool_iteration_limit")
+        repeated = self._breaker.observe(
+            [
+                CanonicalToolCall(
+                    id=str(call["id"]),
+                    name=str(call.get("name")),
+                    arguments=call["arguments"] if isinstance(call.get("arguments"), dict) else {},
+                )
+                for call in calls
+            ],
+            [
+                ChatMessage.tool(
+                    tool_call_id=str(call["id"]),
+                    name=str(call.get("name")),
+                    content=tool_message_content(result),
+                )
+                for call, result in zip(calls, results, strict=True)
+            ],
+            self._registry,
+        )
+        if repeated is not None and reason is None:
+            reason = (
+                f"Tool {model_tool_name(repeated)!r} repeated the same failed Call "
+                f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
+            )
+            violations.append("repeated_failed_call")
+        if self.finalization_reason is not None:
+            self._finalization_violations += 1
+            if self._finalization_violations >= MAX_TOOL_FINALIZATION_VIOLATIONS:
+                return None, True
+        if reason is not None:
+            self.finalization_reason = reason
+            return TOOL_FINALIZATION_NOTE.format(reason=reason), False
+        return None, False
+
+
+async def _run_attempt(
+    worker: EvalWorker,
+    adapter: Any,
+    args: argparse.Namespace,
+    case: dict[str, Any],
+    scope: str,
+    repetition: int,
+    models: Any,
+) -> dict[str, Any]:
+    """Run one attempt; a crash is recorded on the attempt, never dropped.
+
+    The Model's Tool use ends like a Chat Run's (``_ToolBudget``). Reaching
+    the iteration limit or repeating a failed call is a violation.
+    """
+    from core.automation.reflection import REFLECTION_TOOL_ITERATION_LIMIT
+    from core.chat.wire_shaping import system_reminder_request_message
+    from core.providers.adapter import terminal_outcome_from_response
+
+    attempt_id = f"{case['id']}-{scope}-{repetition}-{uuid.uuid4().hex[:8]}"
+    started = time.monotonic()
+    attempt: dict[str, Any] = {
+        "case": case["id"],
+        "scope": scope,
+        "repetition": repetition,
+        "provider": args.provider,
+        "model": args.model,
+        "passed": False,
+        "effect_passed": False,
+        "finished": False,
+        "stopped_reason": None,
+        "error": None,
+        "violations": [],
+        "steps": 0,
+        "tool_iterations": 0,
+        "usage": {},
+        "final_text": None,
+    }
+    messages: list[dict[str, Any]] = []
+    calls_log: list[dict[str, Any]] = []
+    system_prompt = ""
+    definitions: list[dict[str, Any]] = []
+    budget = _ToolBudget(
+        LEARN_TOOL_ITERATION_LIMIT if scope == "learn" else REFLECTION_TOOL_ITERATION_LIMIT,
+        worker.runtime.tools,
+    )
+    try:
+        async with asyncio.timeout(args.total_timeout):
+            prepared = await worker.prepare(case, scope, attempt_id=attempt_id)
+            system_prompt, definitions = prepared.system_prompt, prepared.definitions
+            messages = list(prepared.messages)
+            before = worker.state()
+            observer = CallObserver(case)
+            request_kwargs: dict[str, Any] = {
+                **_sampling_kwargs(args, models, prepared.agent_temperature),
+                **adapter.request_context_kwargs(agent_id="main", session_id=prepared.session_id),
+            }
+            if args.max_tokens:
+                request_kwargs["max_tokens"] = args.max_tokens
+            while True:
+                attempt["steps"] += 1
+                raw = await adapter.send(
+                    messages,
+                    model_id=args.model,
+                    tools=[] if budget.finalization_reason else definitions,
+                    thinking_effort=args.thinking_effort,
+                    **request_kwargs,
+                )
+                response = adapter.normalize_response(raw, model_id=args.model)
+                _add_usage(attempt["usage"], response.get("usage"))
+                outcome = terminal_outcome_from_response(response)
+                calls = list(response.get("tool_calls") or [])
+                messages.append(
+                    {
+                        "role": "assistant",
+                        **{
+                            key: response[key]
+                            for key in ("content", "tool_calls", "reasoning", "reasoning_meta")
+                            if key in response
+                        },
+                    }
+                )
+                if not calls:
+                    text = response.get("content")
+                    attempt["final_text"] = text if isinstance(text, str) else None
+                    attempt["finished"] = outcome == "stop" and bool(str(text or "").strip())
+                    attempt["stopped_reason"] = "final_answer" if attempt["finished"] else outcome
+                    break
+                for index, call in enumerate(calls):
+                    call.setdefault("id", f"call-{attempt['steps']}-{index}")
+                notes: list[str] = []
+                refusal = budget.refusal()
+                if refusal is not None:
+                    results = [refusal] * len(calls)
+                else:
+                    for call in calls:
+                        arguments = call.get("arguments")
+                        target = arguments if isinstance(arguments, dict) else {}
+                        observer.before(
+                            str(call.get("name")),
+                            arguments,
+                            own_file_exists=call.get("name") == "skill_manage"
+                            and target.get("action") != "create"
+                            and worker.own_skill_file_exists(
+                                str(target.get("name") or ""),
+                                str(target.get("file_path") or "SKILL.md"),
+                            ),
+                        )
+                    results = await worker.dispatch(
+                        calls,
+                        prepared,
+                        restriction=prepared.restriction,
+                        denial_resolver=prepared.denial_resolver,
+                        notes=notes,
+                        iteration=budget.iterations,
+                    )
+                    for call, result in zip(calls, results, strict=True):
+                        observer.after(str(call.get("name")), call.get("arguments"), result)
+                _record_results(attempt["steps"], calls, results, calls_log, messages)
+                attempt["tool_iterations"] = budget.iterations
+                note, ended = budget.finish_round(calls, results, observer.violations)
+                if note is not None:
+                    notes.append(note)
+                if notes:
+                    messages.append(system_reminder_request_message(*notes))
+                if ended:
+                    attempt["stopped_reason"] = "tool_calls_after_finalization"
+                    break
+            after = worker.state()
+            attempt.update(
+                score_attempt(case, scope, before, after, observer, finished=attempt["finished"])
+            )
+            attempt["state"] = {"before": before, "after": after}
+    except Exception as error:  # noqa: BLE001 - a crashed attempt stays in the report
+        attempt["error"] = {"type": type(error).__name__, "message": str(error)[:2000]}
+        attempt["passed"] = False
+    attempt["duration_seconds"] = round(time.monotonic() - started, 3)
+    attempt["system_prompt"] = system_prompt
+    attempt["definitions"] = definitions
+    attempt["transcript"] = {
+        "messages": [message for message in messages if message.get("role") != "system"],
+        "calls": calls_log,
+    }
+    return attempt
+
+
+async def _probe_reflection_workflow(
+    adapter: Any, args: argparse.Namespace, *, models: Any = None
+) -> dict[str, Any]:
+    """Run every selected (case, scope) ``--repetitions`` times and report all attempts."""
+    import sys
+
+    repetitions = int(args.repetitions)
+    if not 1 <= repetitions <= MAX_REPETITIONS:
+        raise ValueError(f"--repetitions must be between 1 and {MAX_REPETITIONS}")
+    selected = _selected_pairs(args)
+    pack: TextPack | None = load_text_pack(args.text_pack) if args.text_pack else None
+    # Repetition-major order keeps denominators balanced if a run is interrupted.
+    jobs: asyncio.Queue[tuple[dict[str, Any], str, int]] = asyncio.Queue()
+    for repetition in range(1, repetitions + 1):
+        for case, scope in selected:
+            jobs.put_nowait((case, scope, repetition))
+    worker_count = max(1, min(int(args.reflection_workers), jobs.qsize()))
+    workers: list[EvalWorker] = []
+    report: ReflectionReport | None = None
+    try:
+        for _ in range(worker_count):
+            worker = EvalWorker(
+                agent_model=f"{args.provider}/{args.model}",
+                pack=pack,
+                thinking_effort=args.thinking_effort,
+            )
+            workers.append(worker)
+            worker.start()
+        applied = workers[0].applied
+        assert applied is not None
+        for warning in applied.warnings:
+            print(f"text pack warning: {warning}", file=sys.stderr)
+        report = ReflectionReport.start(
+            args,
+            applied=applied,
+            pack=pack,
+            selected=[(case["id"], scope) for case, scope in selected],
+            notes={case["id"]: case["note"] for case, _scope in selected if case.get("note")},
+        )
+
+        async def work(worker: EvalWorker) -> None:
+            assert report is not None
+            while True:
+                try:
+                    case, scope, repetition = jobs.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                attempt = await _run_attempt(worker, adapter, args, case, scope, repetition, models)
+                report.add(attempt)
+                print(
+                    f"{attempt['case']}/{attempt['scope']} #{repetition}: "
+                    f"{'pass' if attempt['passed'] else 'FAIL'}"
+                    + (f" ({attempt['error']['type']})" if attempt["error"] else "")
+                    + (f" {attempt['violations']}" if attempt["violations"] else ""),
+                    file=sys.stderr,
+                )
+
+        await asyncio.gather(*(work(worker) for worker in workers))
+    finally:
+        for worker in workers:
+            await worker.aclose()
+        if report is not None:
+            report.finish()
+    assert report is not None
+    print(format_pass_rate_table(report.document()), file=sys.stderr)
+    return report.result()
