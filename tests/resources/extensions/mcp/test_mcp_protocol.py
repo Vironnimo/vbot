@@ -16,11 +16,8 @@ from mcp.client.auth import OAuthFlowError
 from mcp.server import Server
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
-from resources.extensions.mcp.client import (
-    ConnectionRunner,
-    InvocationNotSentError,
-    sampling_messages,
-)
+from resources.extensions.mcp._callbacks import sampling_messages
+from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
 from tests.resources.extensions.mcp.mcp_test_support import context, runner_for, start_service

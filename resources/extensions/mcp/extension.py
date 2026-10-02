@@ -1,36 +1,30 @@
-"""Bundled MCP integration: connection management and ordinary vBot Tools."""
+"""Bundled MCP integration: connection management and ordinary vBot Tools.
+
+``MCPService`` owns the saved connections, one ``ConnectionRunner`` per
+connection, and the Tools each connection publishes: the connection Tool
+``mcp_<id>`` and one deferred follower per remote Tool. Finding and describing
+catalog items lives in ``_discovery``, the management surface in
+``_management``, and the protocol client in ``client``.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import copy
-import difflib
-import hashlib
 import json
-import re
-import uuid
 from collections import defaultdict
 from dataclasses import replace
-from pathlib import Path
 from typing import Any
-
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import best_match
 
 from core.extensions import ExtensionAPI
 from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
-from core.projects.address import parse_agent_address
 from core.tools.availability import resolve_tool_access
-from core.tools.call_syntax import normalize_call_arguments
-from core.tools.contracts import ToolContractError, compile_tool_contract
 from core.tools.tools import (
     ToolContext,
     run_tool_worker,
     tool_failure,
     tool_success,
 )
-from core.utils.config import VBOT_ROOT
-from core.utils.ids import new_id
 
 from ._arguments import browse_normalizer
 from ._catalog import CatalogSummaries, catalog_summary
@@ -42,18 +36,32 @@ from ._definitions import (
     MCP_OPERATION_DESCRIPTIONS,
     MCP_OPERATIONS,
     MCP_PARAMETERS,
-    SEARCH_MAX_LIMIT,
-    SEARCH_PAGE_CHARACTERS,
     SEARCH_PAGE_SIZE,
     SEARCH_SUMMARY_CHARACTERS,
     TARGET_FINGERPRINT_LENGTH,
     TOOL_NAME_HASH_LENGTH,
     TOOL_NAME_LABEL_LENGTH,
 )
-from ._views import argument_problem, compact, schema_summary
-from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError, operation_schema
-from .config import CONNECTION_SCHEMA, ConnectionStore, validate_connection
-from .content import ContentStore, pointer_part
+from ._discovery import (
+    catalog_entries,
+    describe_payload,
+    entry_operation,
+    invalid_target_arguments,
+    names_denied_tool,
+    noted,
+    remote_tool_name,
+    resolve,
+    search_entries,
+    search_page,
+    summarize,
+    target_arguments,
+    target_for,
+)
+from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
+from ._views import compact
+from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError
+from .config import ConnectionStore, validate_connection
+from .content import ContentStore
 from .interactions import InputRequests
 
 __all__ = [
@@ -74,97 +82,7 @@ __all__ = [
     "remote_tool_name",
 ]
 
-
-_TARGET_KINDS = ("tool", "resource", "template", "prompt", "operation")
-
-# What a search without kind covers: the application's own items.
-_APPLICATION_KINDS = ("tool", "resource", "template", "prompt")
-
-# The protocol operation a call of each application kind performs; an operation
-# target performs the operation it names.
-_KIND_OPERATIONS = {
-    "tool": "tools/call",
-    "resource": "resources/read",
-    "template": "resources/read",
-    "prompt": "prompts/get",
-}
-
-# The definition fields a target fingerprint covers: what the item does and how it
-# is called. Metadata a server can vary between listings (``_meta``, icons, a
-# resource's size or modification date) leaves the fingerprint unchanged.
-_FINGERPRINT_FIELDS = {
-    "tool": (
-        "name",
-        "title",
-        "description",
-        "inputSchema",
-        "outputSchema",
-        "annotations",
-        "execution",
-    ),
-    "resource": ("name", "title", "uri", "description", "mimeType"),
-    "template": ("name", "title", "uriTemplate", "description", "mimeType"),
-    "prompt": ("name", "title", "description", "arguments"),
-}
-
 _DETAIL_CHARACTERS = 300
-
-
-def remote_tool_name(connection: str, name: str) -> str:
-    label = re.sub(r"[^a-zA-Z0-9_]", "_", name)[:TOOL_NAME_LABEL_LENGTH]
-    digest = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
-    return f"mcp_{connection}_{label}_{digest}"
-
-
-def _parse_target(target: str) -> tuple[str | None, str, str | None]:
-    """Split ``kind:name:fingerprint``; kind and fingerprint may be absent."""
-    parts = target.split(":")
-    kind = parts[0].strip().casefold() if len(parts) > 1 else None
-    rest = parts[1:] if kind in _TARGET_KINDS else parts
-    if kind not in _TARGET_KINDS:
-        kind = None
-    fingerprint = None
-    if len(rest) > 1 and re.fullmatch(rf"[0-9a-f]{{{TARGET_FINGERPRINT_LENGTH}}}", rest[-1]):
-        fingerprint = rest[-1]
-        rest = rest[:-1]
-    return kind, ":".join(rest).strip(), fingerprint
-
-
-def _folded(name: str) -> str:
-    return re.sub(r"[\s_-]+", "_", name.strip().casefold())
-
-
-def _candidates(entries: list[dict[str, Any]], kind: str | None) -> list[dict[str, Any]]:
-    """The items a target of *kind* can name; the connection entry only by its full target."""
-    return [
-        entry
-        for entry in entries
-        if entry["kind"] != "connection" and (kind is None or entry["kind"] == kind)
-    ]
-
-
-def _item_names(entry: dict[str, Any]) -> set[str]:
-    """The names a target can use for *entry*: its name and a Resource's URI or template."""
-    definition = entry["definition"]
-    return {
-        value
-        for value in (entry["name"], definition.get("uri"), definition.get("uriTemplate"))
-        if isinstance(value, str)
-    }
-
-
-def _operation(entry: dict[str, Any]) -> str:
-    """The protocol operation a call of *entry* performs."""
-    operation: str = _KIND_OPERATIONS.get(entry["kind"], entry["name"])
-    return operation
-
-
-def _one_line(text: str, limit: int) -> str:
-    return " ".join(text.split())[:limit]
-
-
-def _plural(count: int, word: str) -> str:
-    return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
 class MCPService:
@@ -177,7 +95,7 @@ class MCPService:
         self.runners: dict[str, ConnectionRunner] = {}
         self.inputs = InputRequests(on_change=self._inputs_changed)
         self._inputs_revision = 0
-        self.jobs: dict[str, asyncio.Task[dict[str, Any]]] = {}
+        self.jobs = ManagementJobs(self.inputs)
         self._lock = asyncio.Lock()
         self._runner_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         # Per connection, the server title and Tool names its description shows.
@@ -210,9 +128,7 @@ class MCPService:
 
     async def close(self) -> None:
         self._closed = True
-        for task in self.jobs.values():
-            task.cancel()
-        await asyncio.gather(*self.jobs.values(), return_exceptions=True)
+        await self.jobs.close()
         await asyncio.gather(*(runner.close() for runner in self.runners.values()))
         self.runners.clear()
         await self.catalogs.close()
@@ -392,137 +308,6 @@ class MCPService:
             and (context.tool_denial_resolver is None or context.tool_denial_resolver(name) is None)
         )
 
-    @staticmethod
-    def _target(kind: str, name: str, definition: Any) -> str:
-        """``kind:name:fingerprint``; the fingerprint changes with the definition's meaning."""
-        fields = _FINGERPRINT_FIELDS.get(kind)
-        meaning = (
-            definition
-            if fields is None
-            else {field: definition[field] for field in fields if field in definition}
-        )
-        fingerprint = hashlib.sha256(
-            json.dumps(meaning, sort_keys=True, ensure_ascii=False).encode()
-        ).hexdigest()[:TARGET_FINGERPRINT_LENGTH]
-        return f"{kind}:{name}:{fingerprint}"
-
-    def _operation_target(self, operation: str) -> str:
-        return self._target("operation", operation, operation_schema(operation))
-
-    @staticmethod
-    def _summarize(entry: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "target": entry["target"],
-            "kind": entry["kind"],
-            "name": entry["name"],
-            "description": entry["description"][:SEARCH_SUMMARY_CHARACTERS],
-            "describe": {"action": "describe", "target": entry["target"]},
-        }
-
-    @staticmethod
-    def _search_entries(
-        entries: list[dict[str, Any]], query: str = "", kind: str | None = None
-    ) -> list[dict[str, Any]]:
-        words = set(query.casefold().split())
-        order = {
-            name: index
-            for index, name in enumerate(
-                ("tool", "resource", "template", "prompt", "connection", "operation")
-            )
-        }
-        kinds = (kind,) if kind else _APPLICATION_KINDS
-        scored = []
-        for entry in entries:
-            if entry["kind"] not in kinds:
-                continue
-            text = (entry["name"] + " " + entry["description"]).casefold()
-            score = sum(word in text for word in words)
-            if not words or score:
-                scored.append((-score, order[entry["kind"]], entry["name"], entry))
-        return [item[3] for item in sorted(scored, key=lambda item: item[:3])]
-
-    def _entries(
-        self, runner: ConnectionRunner, allowed: tuple[str, ...] | None
-    ) -> list[dict[str, Any]]:
-        """The connection's items; with *allowed*, only the remote Tools it contains."""
-        entries = []
-        for kind, field in (
-            ("tool", "tools"),
-            ("resource", "resources"),
-            ("template", "resource_templates"),
-            ("prompt", "prompts"),
-        ):
-            for definition in runner.catalog.get(field, []):
-                name = (
-                    definition.get("name") or definition.get("uri") or definition.get("uriTemplate")
-                )
-                if (
-                    kind == "tool"
-                    and allowed is not None
-                    and remote_tool_name(runner.id, name) not in allowed
-                ):
-                    continue
-                entries.append(
-                    {
-                        "kind": kind,
-                        "name": name,
-                        "target": self._target(kind, name, definition),
-                        "description": definition.get("description")
-                        or definition.get("title")
-                        or name,
-                        "definition": definition,
-                    }
-                )
-        entries.extend(
-            {
-                "kind": "operation",
-                "name": name,
-                "target": self._operation_target(name),
-                "description": description,
-                "definition": operation_schema(name),
-            }
-            for name, description in MCP_OPERATION_DESCRIPTIONS.items()
-        )
-        entries.append(
-            {
-                "kind": "connection",
-                "name": runner.id,
-                "target": "connection",
-                "description": "Connection details: server, capabilities and guidance.",
-                "definition": {
-                    key: value
-                    for key, value in runner.catalog.items()
-                    if key not in {"tools", "resources", "resource_templates", "prompts", "pages"}
-                },
-            }
-        )
-        return sorted(entries, key=lambda entry: (entry["kind"], entry["name"]))
-
-    @staticmethod
-    def _arguments_schema(entry: dict[str, Any]) -> dict[str, Any]:
-        if entry["kind"] == "tool":
-            return dict(entry["definition"]["inputSchema"])
-        if entry["kind"] == "operation":
-            return dict(entry["definition"])
-        if entry["kind"] == "template":
-            return operation_schema("resources/read")
-        if entry["kind"] == "prompt":
-            arguments = entry["definition"].get("arguments", [])
-            return {
-                "type": "object",
-                "properties": {
-                    argument["name"]: {
-                        "type": "string",
-                        "description": argument.get("description", ""),
-                    }
-                    for argument in arguments
-                },
-                "required": [
-                    argument["name"] for argument in arguments if argument.get("required")
-                ],
-            }
-        return {"type": "object", "properties": {}, "required": []}
-
     async def _browse(
         self, runner: ConnectionRunner, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
@@ -553,51 +338,24 @@ class MCPService:
                 )
             if f"mcp_{runner.id}" not in allowed:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
-        entries = self._entries(runner, allowed)
+        entries = catalog_entries(runner.id, runner.catalog, allowed)
         if action == "search":
-            return await self._search(runner, context, arguments, entries)
-        entry, note, failure = self._resolve(entries, arguments)
+            return self._search(runner, context, arguments, entries)
+        entry, note, failure = resolve(entries, arguments)
         if failure is not None:
-            if failure["error"]["code"] == "mcp_unknown_target" and self._names_denied_tool(
-                runner, arguments, allowed
+            if failure["error"]["code"] == "mcp_unknown_target" and names_denied_tool(
+                runner.id, runner.catalog, arguments["target"], allowed
             ):
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return failure
         assert entry is not None
         if action == "describe":
-            return await self._describe(runner, context, entry, note)
+            source = entry["name"] if entry["kind"] == "tool" else None
+            return await self._present(
+                runner, context, describe_payload(entry, note), source=source
+            )
         result = await self._call_target(runner, context, entry, arguments, allowed)
-        return result if note is None else self._noted(result, note)
-
-    def _names_denied_tool(
-        self, runner: ConnectionRunner, arguments: dict[str, Any], allowed: tuple[str, ...]
-    ) -> bool:
-        """Whether an unresolved target names a remote Tool this Agent may not use.
-
-        The connection Tool's description lists every remote Tool name, so such a
-        target is refused for its real cause instead of reading as unknown.
-        """
-        denied = [
-            entry
-            for entry in self._entries(runner, None)
-            if entry["kind"] == "tool" and remote_tool_name(runner.id, entry["name"]) not in allowed
-        ]
-        return len(self._lookup(denied, arguments["target"])[0]) == 1
-
-    @staticmethod
-    def _noted(result: dict[str, Any], note: str) -> dict[str, Any]:
-        """Add how the target was read to a call's own result or error."""
-        if not result["ok"]:
-            error = result["error"]
-            return {**result, "error": {**error, "message": f"{error['message']} {note}"}}
-        data = result["data"]
-        earlier = data.get("note")
-        if earlier is not None and not isinstance(earlier, str):
-            # A field of the remote result keeps its name and value.
-            return {**result, "data": {"target_note": note, **data}}
-        combined = f"{note} {earlier}" if earlier else note
-        rest = {key: value for key, value in data.items() if key != "note"}
-        return {**result, "data": {"note": combined, **rest}}
+        return result if note is None else noted(result, note)
 
     async def _read(
         self,
@@ -620,261 +378,37 @@ class MCPService:
         return tool_success(page)
 
     def _unreachable(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
-        detail = runner._redact(str(error))[:_DETAIL_CHARACTERS]
+        detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
         return tool_failure(
             "mcp_request_failed",
             MCP_MESSAGES["unreachable"].format(connection=runner.id, detail=detail),
             retryable=True,
         )
 
-    async def _search(
+    def _search(
         self,
         runner: ConnectionRunner,
         context: ToolContext,
         arguments: dict[str, Any],
         entries: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        assert self.content is not None
-        query = arguments.get("query", "")
-        kind = arguments.get("kind")
-        matches = self._search_entries(entries, query, kind)
-        offset = arguments.get("offset", 0)
-        requested = arguments.get("limit")
-        limit = SEARCH_PAGE_SIZE if requested is None else min(requested, SEARCH_MAX_LIMIT)
-        # A continuation repeats the search with the limit that was applied.
-        continued = arguments if requested is None else {**arguments, "limit": limit}
+        content = self.content
+        assert content is not None
+
+        def attach(payload: dict[str, Any]) -> str:
+            return content.attach(payload, context, runner.id)
+
         instructions = runner.catalog.get("instructions") or ""
-        prompts = [entry for entry in entries if entry["kind"] == "prompt"]
-        available = {
-            kind_name: sum(entry["kind"] == kind_name for entry in entries)
-            for kind_name in ("tool", "resource", "template", "prompt")
-        }
-        payload = {
-            "connection": runner.id,
-            "matches": [self._summarize(entry) for entry in matches],
-            "total": len(matches),
-            "available": available,
-            "server_guidance": {
-                "instructions": instructions,
-                "prompts": [self._summarize(entry) for entry in prompts],
-            },
-        }
-        if not context.result_payloads_available:
-            # Outside a Session nothing reads a saved result later: return everything.
-            return tool_success({"complete": True, "value": payload})
-        page = matches[offset : offset + limit]
-        lines = [
-            f"{entry['target']}: {_one_line(entry['description'], SEARCH_SUMMARY_CHARACTERS)}"
-            for entry in page
-        ]
-        while len(lines) > 1 and len("\n".join(lines)) > SEARCH_PAGE_CHARACTERS:
-            lines.pop()
-            page = page[: len(lines)]
-        view: dict[str, Any] = {
-            "connection": runner.id,
-            "available": ", ".join(
-                _plural(count, name) for name, count in available.items() if count
+        return tool_success(
+            search_page(
+                runner.id,
+                instructions,
+                entries,
+                arguments,
+                # Outside a Session nothing reads a saved result later: return everything.
+                attach if context.result_payloads_available else None,
             )
-            or "no tools, resources or prompts",
-        }
-        if page:
-            view["matches"] = f"{offset + 1}-{offset + len(page)} of {len(matches)}"
-        else:
-            view["matches"] = f"none after {offset} of {len(matches)}" if matches else "none"
-        if requested is not None and requested > limit:
-            view["limit"] = MCP_MESSAGES["search_limit"].format(requested=requested, applied=limit)
-        if offset + len(page) < len(matches):
-            view["next"] = {**continued, "offset": offset + len(page)}
-        elif offset and offset >= len(matches):
-            view["next"] = {**continued, "offset": 0}
-        if not matches and query.strip():
-            searched = f"{kind}s" if kind else "tools, resources, templates or prompts"
-            view["note"] = MCP_MESSAGES["no_matches"].format(searched=searched)
-            view["next"] = {"action": "search", "kind": "tool"}
-        if kind is None and not offset:
-            operations = self._operations_line(entries, query)
-            if operations:
-                view["operations"] = operations
-        sections = ["\n".join(lines)] if lines else []
-        if not query.strip() and not offset and kind is None:
-            if instructions:
-                shown = instructions[:GUIDANCE_PREVIEW_CHARACTERS]
-                sections.append(f"Server guidance (external, from the MCP server):\n{shown}")
-                if len(instructions) > GUIDANCE_PREVIEW_CHARACTERS:
-                    identifier = self.content.attach(payload, context, runner.id)
-                    view["guidance"] = MCP_MESSAGES["guidance_incomplete"]
-                    view["guidance_read"] = {
-                        "action": "read",
-                        "result_id": identifier,
-                        "pointer": "/server_guidance/instructions",
-                        "offset": GUIDANCE_PREVIEW_CHARACTERS,
-                    }
-            unlisted = [entry for entry in prompts if entry not in page]
-            if unlisted:
-                prompt_lines = [
-                    f"{entry['target']}: "
-                    f"{_one_line(entry['description'], SEARCH_SUMMARY_CHARACTERS)}"
-                    for entry in unlisted[:3]
-                ]
-                if len(unlisted) > 3:
-                    more = compact({"action": "search", "kind": "prompt"})
-                    prompt_lines.append(f"{len(unlisted) - 3} more: {more}")
-                sections.append("Prompts (server workflows):\n" + "\n".join(prompt_lines))
-        elif instructions:
-            view["server_guidance"] = f"shown by {compact({'action': 'search'})}"
-        if sections:
-            view["content"] = "\n\n".join(sections)
-        return tool_success(view)
-
-    def _operations_line(self, entries: list[dict[str, Any]], query: str) -> str | None:
-        """Point a search without kind to the protocol operations it leaves out."""
-        if not query.strip():
-            call = compact({"action": "search", "kind": "operation"})
-            return MCP_MESSAGES["operations"].format(call=call)
-        count = len(self._search_entries(entries, query, "operation"))
-        if not count:
-            return None
-        call = compact({"action": "search", "kind": "operation", "query": query.strip()})
-        return MCP_MESSAGES["operations_matching"].format(
-            count=count, verb="matches" if count == 1 else "match", call=call
         )
-
-    @staticmethod
-    def _lookup(
-        entries: list[dict[str, Any]], target: str
-    ) -> tuple[list[dict[str, Any]], str | None]:
-        """The items *target* names, and the fingerprint it carries after the name.
-
-        A full target from search matches exactly. A name, with or without its
-        kind, names the items it spells, ignoring case and separators.
-        """
-        exact = next((entry for entry in entries if entry["target"] == target), None)
-        if exact is not None:
-            return [exact], None
-        kind, name, fingerprint = _parse_target(target)
-        pool = _candidates(entries, kind)
-        named = [entry for entry in pool if name in _item_names(entry)]
-        if not named:
-            folded = _folded(name)
-            named = [
-                entry for entry in pool if folded in {_folded(item) for item in _item_names(entry)}
-            ]
-        return named, fingerprint
-
-    def _resolve(
-        self, entries: list[dict[str, Any]], arguments: dict[str, Any]
-    ) -> tuple[dict[str, Any] | None, str | None, dict[str, Any] | None]:
-        """Find the one item a describe or call names; never choose between several.
-
-        A fingerprint that does not match the item's current definition may come
-        from an earlier definition, so a call that can change something is refused
-        with the current target. Describe and reading calls use the current
-        definition and say so in a note.
-        """
-        target = arguments["target"]
-        named, fingerprint = self._lookup(entries, target)
-        if len(named) == 1:
-            entry = named[0]
-            current = entry["target"]
-            if fingerprint is None or current == f"{entry['kind']}:{entry['name']}:{fingerprint}":
-                return entry, None, None
-            if arguments["action"] == "describe" or _operation(entry) in READ_OPERATIONS:
-                return (
-                    entry,
-                    MCP_MESSAGES["target_current"].format(current=current, sent=target),
-                    None,
-                )
-            return (
-                None,
-                None,
-                tool_failure(
-                    "mcp_target_mismatch",
-                    MCP_MESSAGES["target_mismatch"].format(
-                        item=f"{entry['kind']} {entry['name']}",
-                        sent=target,
-                        target=current,
-                        describe=compact({"action": "describe", "target": current}),
-                    ),
-                ),
-            )
-        kind, name, _ = _parse_target(target)
-        shown = name[:80] or target[:80]
-        if len(named) > 1:
-            return (
-                None,
-                None,
-                tool_failure(
-                    "mcp_unknown_target",
-                    MCP_MESSAGES["target_ambiguous"].format(
-                        name=shown, targets=", ".join(entry["target"] for entry in named)
-                    ),
-                ),
-            )
-        return (
-            None,
-            None,
-            tool_failure(
-                "mcp_unknown_target", self._unknown(_candidates(entries, kind), kind, shown)
-            ),
-        )
-
-    @staticmethod
-    def _unknown(pool: list[dict[str, Any]], kind: str | None, name: str) -> str:
-        subject = f"No {kind}" if kind else "No tool, resource, prompt or operation"
-        message = f"{subject} named {name} is available on this connection, so nothing was run."
-        by_name = {entry["name"].casefold(): entry for entry in pool}
-        close = difflib.get_close_matches(name.casefold(), list(by_name), n=5, cutoff=0.6)
-        words = [word for word in re.split(r"[\s_./:-]+", name.casefold()) if len(word) > 2]
-        close += [
-            key
-            for key, entry in by_name.items()
-            if key not in close and words and any(word in key for word in words)
-        ][: max(0, 5 - len(close))]
-        candidates = [by_name[key]["target"] for key in close]
-        if len(candidates) == 1:
-            return (
-                f"{message} The closest is {candidates[0]}; if you mean it, repeat the call "
-                f'with "target":"{candidates[0]}".'
-            )
-        if candidates:
-            return (
-                f"{message} Close names: {', '.join(candidates)}. Repeat the call with the "
-                "target you mean."
-            )
-        query = " ".join(words) or name
-        return f"{message} Find it with {compact({'action': 'search', 'query': query[:60]})}."
-
-    async def _describe(
-        self,
-        runner: ConnectionRunner,
-        context: ToolContext,
-        entry: dict[str, Any],
-        note: str | None,
-    ) -> dict[str, Any]:
-        kind = entry["kind"]
-        payload: dict[str, Any] = {"target": entry["target"]}
-        if note is not None:
-            payload["note"] = note
-        if kind != "connection" and entry["description"] != entry["name"]:
-            payload["description"] = entry["description"]
-        hidden = {"name", "description", "inputSchema" if kind == "tool" else ""}
-        if kind == "prompt":
-            hidden.add("arguments")
-        details = (
-            {key: value for key, value in entry["definition"].items() if key not in hidden}
-            if kind != "operation"
-            else {}
-        )
-        if details:
-            payload["definition"] = details
-        if kind != "connection":
-            payload["arguments_schema"] = self._arguments_schema(entry)
-            payload["call"] = (
-                f'{{"action":"call","target":"{entry["target"]}","arguments":{{...}}}}'
-                " with arguments matching arguments_schema"
-            )
-        source = entry["name"] if kind == "tool" else None
-        return await self._present(runner, context, payload, source=source)
 
     async def _call_target(
         self,
@@ -886,36 +420,18 @@ class MCPService:
     ) -> dict[str, Any]:
         if entry["kind"] == "connection":
             return tool_failure("invalid_arguments", MCP_MESSAGES["call_invalid"])
-        source = entry["name"] if entry["kind"] == "tool" else None
-        schema = self._arguments_schema(entry)
-        inputs = arguments.get("arguments", {})
-        try:
-            contract = compile_tool_contract(
-                name="mcp_target", input_schema=schema, require_closed_input=False
-            )
-            inputs = (
-                normalize_call_arguments(contract, inputs, enum_fields=("level",))
-                if entry["kind"] == "operation" and entry["name"] == "logging/setLevel"
-                else contract.normalize_arguments(inputs)
-            )
-        except ToolContractError as repair_error:
-            return self._invalid_target_arguments(runner, entry, schema, str(repair_error))
-        error = best_match(Draft202012Validator(schema).iter_errors(inputs))
-        if error is not None:
-            pointer = "/arguments" + "".join(
-                "/" + pointer_part(str(part)) for part in error.absolute_path
-            )
-            problem = argument_problem(
-                str(error.validator), error.validator_value, error.schema, error.instance, pointer
-            )
-            return self._invalid_target_arguments(runner, entry, schema, problem)
-        if source is not None:
+        inputs, problem = target_arguments(entry, arguments.get("arguments", {}))
+        if problem is not None:
+            return invalid_target_arguments(entry, runner.redact(problem))
+        if entry["kind"] == "tool":
             registry = self.api.operations.tool_registry
             if registry is None:
                 raise RuntimeError("MCP Tools are not bound")
             return await registry.dispatch(
                 replace(
-                    context, tool_name=remote_tool_name(runner.id, source), input_contract=None
+                    context,
+                    tool_name=remote_tool_name(runner.id, entry["name"]),
+                    input_contract=None,
                 ),
                 inputs,
                 allowed,
@@ -924,21 +440,7 @@ class MCPService:
             inputs = {"uri": entry["definition"]["uri"]}
         elif entry["kind"] == "prompt":
             inputs = {"name": entry["name"], "arguments": inputs}
-        return await self._call(runner, context, _operation(entry), inputs)
-
-    @staticmethod
-    def _invalid_target_arguments(
-        runner: ConnectionRunner, entry: dict[str, Any], schema: dict[str, Any], problem: str
-    ) -> dict[str, Any]:
-        return tool_failure(
-            "mcp_invalid_arguments",
-            MCP_MESSAGES["target_invalid"].format(
-                item=f"{entry['kind']} {entry['name']}",
-                problem=runner._redact(problem)[:500],
-                summary=schema_summary(schema),
-                describe=compact({"action": "describe", "target": entry["target"]}),
-            ),
-        )
+        return await self._call(runner, context, entry_operation(entry), inputs)
 
     async def _call(
         self,
@@ -956,7 +458,7 @@ class MCPService:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return self._unreachable(runner, error)
         except ValueError as error:
-            detail = runner._redact(str(error))[:_DETAIL_CHARACTERS]
+            detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             if operation in READ_OPERATIONS:
                 return tool_failure(
                     "mcp_call_unconfirmed",
@@ -969,7 +471,7 @@ class MCPService:
         try:
             return await self._present(runner, context, payload, source=source)
         except (ValueError, OSError) as error:
-            detail = runner._safe_error(error)
+            detail = runner.safe_error(error)
             self.api.logger.warning(
                 "MCP result preparation failed (connection=%s): %s", runner.id, detail
             )
@@ -1015,14 +517,9 @@ class MCPService:
         if operation == "respond":
             return self.inputs.respond(arguments["request_id"], arguments["response"])
         if operation == "job":
-            return self._job_status(arguments["job_id"])
+            return self.jobs.status(arguments["job_id"])
         if operation == "cancel-job":
-            identifier = arguments["job_id"]
-            if identifier not in self.jobs:
-                raise ValueError("Unknown MCP management job")
-            self.jobs[identifier].cancel()
-            await asyncio.gather(self.jobs[identifier], return_exceptions=True)
-            return self._job_status(identifier)
+            return await self.jobs.cancel(arguments["job_id"])
         if operation == "save":
             return await self._save(arguments["connection"])
         identifier = arguments["id"]
@@ -1030,38 +527,7 @@ class MCPService:
         if operation == "status":
             return self._status(identifier)
         if operation == "inspect":
-            runner = self.runners.get(identifier)
-            catalog = runner.catalog if runner else {}
-            entries = [
-                {
-                    "kind": "tool",
-                    "name": item["name"],
-                    "description": item.get("description") or item.get("title") or item["name"],
-                    "target": self._target("tool", item["name"], item),
-                }
-                for item in catalog.get("tools", [])
-            ]
-            matches = self._search_entries(entries, arguments.get("query", ""))
-            offset = arguments.get("offset", 0)
-            return {
-                **self._status(identifier),
-                "catalog_available": bool(catalog),
-                "tools": [
-                    {**self._summarize(item), "description": item["description"]}
-                    for item in matches[offset : offset + SEARCH_PAGE_SIZE]
-                ],
-                "total": len(matches),
-                "offset": offset,
-                "previous_offset": max(0, offset - SEARCH_PAGE_SIZE) if offset else None,
-                "next_offset": offset + SEARCH_PAGE_SIZE
-                if offset + SEARCH_PAGE_SIZE < len(matches)
-                else None,
-                "instructions": catalog.get("instructions") or "",
-                "prompts": [
-                    {"name": item["name"], "description": item.get("description", "")}
-                    for item in catalog.get("prompts", [])
-                ],
-            }
+            return self._inspect(identifier, arguments)
         if operation in {"enable", "disable", "remove"}:
             return await self._mutate(operation, config)
         async with self._runner_locks[identifier]:
@@ -1106,9 +572,11 @@ class MCPService:
             if operation == "events":
                 return runner.events(arguments.get("after", 0))
             if operation == "test":
-                return self._start_job(self._test(runner))
+                return self.jobs.start(check_connection(runner))
             if operation in {"invoke", "explore"}:
-                return self._start_job(self._invoke_for_agent(runner, arguments))
+                return self.jobs.start(
+                    invoke_for_agent(self._host(), self.api.operations, runner, arguments)
+                )
         raise ValueError(f"Unknown MCP management operation: {operation}")
 
     def _status(self, identifier: str) -> dict[str, Any]:
@@ -1124,6 +592,41 @@ class MCPService:
             "configuration": copy.deepcopy(config),
             "pending_requests": [
                 item for item in self.inputs.list() if item["connection"] == identifier
+            ],
+        }
+
+    def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
+        runner = self.runners.get(identifier)
+        catalog = runner.catalog if runner else {}
+        entries = [
+            {
+                "kind": "tool",
+                "name": item["name"],
+                "description": item.get("description") or item.get("title") or item["name"],
+                "target": target_for("tool", item["name"], item),
+            }
+            for item in catalog.get("tools", [])
+        ]
+        matches = search_entries(entries, arguments.get("query", ""))
+        offset = arguments.get("offset", 0)
+        return {
+            **self._status(identifier),
+            "catalog_available": bool(catalog),
+            "tools": [
+                {**summarize(item), "description": item["description"]}
+                for item in matches[offset : offset + SEARCH_PAGE_SIZE]
+            ],
+            "total": len(matches),
+            "offset": offset,
+            "previous_offset": max(0, offset - SEARCH_PAGE_SIZE) if offset else None,
+            "next_offset": offset + SEARCH_PAGE_SIZE
+            if offset + SEARCH_PAGE_SIZE < len(matches)
+            else None,
+            "instructions": catalog.get("instructions") or "",
+            "prompts": [
+                {"name": item["name"], "description": item.get("description", "")}
+                for item in catalog.get("prompts", [])
             ],
         }
 
@@ -1190,114 +693,9 @@ class MCPService:
         finally:
             self.api.operations.replace_tools(identifier, [])
 
-    async def _test(self, runner: ConnectionRunner) -> dict[str, Any]:
-        catalog = await runner.invoke("catalog", {})
-        health = await runner.invoke("ping", {})
-        verified = list(dict.fromkeys(["catalog", health.get("verified", "ping")]))
-        return {"status": runner.status(), "catalog": catalog, "verified": verified}
-
-    async def _invoke_for_agent(
-        self, runner: ConnectionRunner, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        agent_id, project_id = parse_agent_address(arguments["agent"])
-        agent = self._host().resolve_agent(project_id, agent_id)
-        registry = self.api.operations.tool_registry
-        if registry is None:
-            raise RuntimeError("MCP Tools are not bound")
-        operation = arguments.get("operation")
-        if operation is not None:
-            await runner.invoke("catalog", {})
-        resolution = resolve_tool_access(
-            agent.tool_access,
-            registry.list_tools(),
-            agent.memory_prompt_mode,
-            workspace=agent.workspace,
-        )
-        inputs = arguments.get("arguments", {})
-        name = (
-            remote_tool_name(runner.id, inputs["name"])
-            if operation == "tools/call"
-            else f"mcp_{runner.id}"
-        )
-        if name not in resolution.allowed_tools:
-            raise ValueError("Agent Tool policy does not permit this MCP operation")
-        resolve_cwd = self._host().resolve_cwd
-        context = ToolContext(
-            agent_id=agent_id,
-            project_id=project_id,
-            session_id="mcp-management",
-            run_id="mcp-management",
-            tool_call_id=str(uuid.uuid4()),
-            tool_name=name,
-            tool_call_index=0,
-            workspace=Path(agent.workspace or runner.config.get("cwd") or self._host().data_dir),
-            cwd=resolve_cwd(project_id, agent_id) if resolve_cwd else None,
-            vbot_root=VBOT_ROOT,
-            data_root=self._host().data_dir,
-        )
-        handler_arguments = (
-            inputs.get("arguments", {})
-            if operation == "tools/call"
-            else (
-                {key: value for key, value in arguments.items() if key not in {"id", "agent"}}
-                if operation is None
-                else {
-                    "action": "call",
-                    "target": self._operation_target(operation),
-                    "arguments": inputs,
-                }
-            )
-        )
-        return await registry.dispatch(context, handler_arguments, resolution.allowed_tools)
-
-    def _start_job(self, coroutine: Any) -> dict[str, Any]:
-        completed = [identifier for identifier, task in self.jobs.items() if task.done()]
-        for identifier in completed[:-MAX_FINISHED_JOBS]:
-            self.jobs.pop(identifier)
-        identifier = new_id("job", claim=lambda candidate: candidate not in self.jobs)
-        self.jobs[identifier] = asyncio.create_task(coroutine, name=f"mcp-job:{identifier}")
-        self.jobs[identifier].add_done_callback(self._observe_job)
-        return self._job_status(identifier)
-
-    @staticmethod
-    def _observe_job(task: asyncio.Task[dict[str, Any]]) -> None:
-        if not task.cancelled():
-            task.exception()
-
-    def _job_status(self, identifier: str) -> dict[str, Any]:
-        task = self.jobs.get(identifier)
-        if task is None:
-            raise ValueError("Unknown MCP management job")
-        if not task.done():
-            return {"job_id": identifier, "state": "running", "requests": self.inputs.list()}
-        if task.cancelled():
-            return {"job_id": identifier, "state": "cancelled"}
-        error = task.exception()
-        if error is not None:
-            return {"job_id": identifier, "state": "failed", "error": str(error)}
-        result = task.result()
-        state = "failed" if result.get("ok") is False else "completed"
-        return {"job_id": identifier, "state": state, "result": result}
-
 
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "description"}
-
-
-# Management calls run outside a Session and return complete payloads inline,
-# so they have no saved result to read.
-_EXPLORE_PROPERTIES: dict[str, Any] = {
-    **{
-        key: value
-        for key, value in MCP_PARAMETERS["properties"].items()
-        if key not in {"result_id", "pointer", "fields"}
-    },
-    "action": {
-        **MCP_PARAMETERS["properties"]["action"],
-        "enum": ["search", "describe", "call"],
-        "description": "Search available items, describe one target, or call it.",
-    },
-}
 
 
 def register(api: ExtensionAPI) -> None:
@@ -1307,78 +705,4 @@ def register(api: ExtensionAPI) -> None:
     api.operations.input_response_operation = "respond"
     api.on_shutdown(service.close)
     api.register_prompt_block("mcp_guidance", default_text=MCP_GUIDANCE, requires_tool="mcp_*")
-    base = {"id": {"type": "string"}}
-    descriptions = {
-        "list": "List saved connections, live connection state, and effective Agent access.",
-        "requests": (
-            "List pending server inputs, including OAuth and elicitation; answer with respond."
-        ),
-        "status": "Read one connection's saved configuration, live state, and Agent access.",
-        "remove": "Remove a saved connection and stop its client and published Tools.",
-        "enable": "Enable a saved connection and start connecting; inspect status for readiness.",
-        "disable": "Disable a saved connection and stop its client and published Tools.",
-        "connect": "Start connecting an enabled connection; inspect status for readiness.",
-        "disconnect": "Close the current client without disabling the saved connection.",
-        "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
-        "save": "Create or replace a complete connection; read status before replacing one.",
-        "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
-        "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
-        "credential": "Set or clear a referenced credential and reset the client; use JSON stdin.",
-        "respond": "Answer one pending input from requests using JSON stdin.",
-        "job": "Read a management job's running, completed, failed, or cancelled state and result.",
-        "cancel-job": "Cancel a management job; remote effects already performed are not undone.",
-        "explore": (
-            "Search, describe, or call as an Agent; the job result holds the complete "
-            "payload. Inspect the returned job_id with job."
-        ),
-        "invoke": (
-            "Invoke an exact MCP operation as an Agent; inspect the returned job_id with job."
-        ),
-    }
-    schemas: dict[str, dict[str, Any]] = {
-        **{name: {} for name in ("list", "requests")},
-        **dict.fromkeys(
-            ("status", "remove", "enable", "disable", "connect", "disconnect", "test"), base
-        ),
-        "save": {"connection": CONNECTION_SCHEMA},
-        "events": {**base, "after": {"type": "integer", "minimum": 0}},
-        "inspect": {
-            **base,
-            "query": {"type": "string"},
-            "offset": {"type": "integer", "minimum": 0},
-        },
-        "credential": {**base, "key": {"type": "string"}, "value": {"type": "string"}},
-        "respond": {"request_id": {"type": "string"}, "response": {"type": "object"}},
-        **{name: {"job_id": {"type": "string"}} for name in ("job", "cancel-job")},
-        "explore": {**base, "agent": {"type": "string"}, **_EXPLORE_PROPERTIES},
-        "invoke": {
-            **base,
-            "agent": {"type": "string"},
-            "operation": {"enum": [*MCP_OPERATIONS, "tools/call"]},
-            "arguments": {"type": "object"},
-        },
-    }
-    for name, properties in schemas.items():
-        required = (
-            ["id", "agent", "action"]
-            if name == "explore"
-            else ["id"]
-            if name == "inspect"
-            else [key for key in properties if key not in {"after", "arguments"}]
-        )
-
-        async def handler(arguments: dict[str, Any], operation: str = name) -> dict[str, Any]:
-            return await service.manage(operation, arguments)
-
-        api.operations.register(
-            name,
-            descriptions[name],
-            {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-                "additionalProperties": False,
-            },
-            handler,
-            secret=name in {"credential", "respond"},
-        )
+    register_management(api, service.manage)

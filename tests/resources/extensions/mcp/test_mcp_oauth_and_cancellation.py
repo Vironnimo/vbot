@@ -9,7 +9,8 @@ import pytest
 from mcp.shared.auth import OAuthToken
 
 from resources.extensions.mcp import client as mcp_client
-from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError, OAuthStorage
+from resources.extensions.mcp._oauth import ConnectionOAuth, OAuthStorage
+from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
 from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
@@ -28,7 +29,7 @@ async def test_oauth_tokens_use_the_host_store_and_are_redacted(host):
     )
 
     loaded = await storage.get_tokens()
-    runner._record("log", {"text": "secret-access-sentinel"})
+    runner._events.record("log", {"text": "secret-access-sentinel"})
 
     assert loaded.access_token == token.access_token
     assert "secret-access-sentinel" not in json.dumps(runner.events())
@@ -53,7 +54,7 @@ def test_event_redaction_handles_json_escaping_without_corrupting_events(host, s
         InputRequests(),
         lambda *args: None,
     )
-    runner._record("log", {secret: [secret], "payload": {"text": "\n" + secret}})
+    runner._events.record("log", {secret: [secret], "payload": {"text": "\n" + secret}})
     payload = runner.events()["events"][0]["payload"]
     assert payload["[redacted]"] == ["[redacted]"]
     assert payload["payload"]["text"] == "\n[redacted]"
@@ -61,21 +62,21 @@ def test_event_redaction_handles_json_escaping_without_corrupting_events(host, s
 
 @pytest.mark.asyncio
 async def test_cancelled_oauth_does_not_leave_a_pending_request(host):
-    runner = ConnectionRunner(
+    inputs = InputRequests()
+    oauth = ConnectionOAuth(
         validate_connection({"id": "example", "transport": "http", "url": "https://example.com"}),
         host,
-        InputRequests(),
-        lambda *args: None,
+        inputs,
     )
-    task = asyncio.create_task(runner._oauth_callback())
+    task = asyncio.create_task(oauth.callback())
     await asyncio.sleep(0)
-    pending = runner.inputs.list()[0]
+    pending = inputs.list()[0]
 
-    runner.inputs.respond(pending["id"], {"action": "cancel"})
+    inputs.respond(pending["id"], {"action": "cancel"})
 
     with pytest.raises(ValueError):
         await task
-    assert runner.inputs.list() == []
+    assert inputs.list() == []
 
 
 @pytest.mark.asyncio

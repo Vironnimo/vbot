@@ -568,7 +568,7 @@ async def test_cli_explore_and_invoke_return_the_complete_payload_inline(context
     runner.catalog["instructions"] = "test-owned-guidance " * 500
 
     async def finished(job):
-        await service.jobs[job["job_id"]]
+        await service.jobs.wait(job["job_id"])
         return (await service.manage("job", {"job_id": job["job_id"]}))["result"]
 
     search = await finished(

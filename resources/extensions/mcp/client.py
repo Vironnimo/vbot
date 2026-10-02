@@ -3,35 +3,25 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import random
 import threading
 import time
-from collections import deque
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from dataclasses import asdict, dataclass, is_dataclass
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any, cast
-from urllib.parse import parse_qs, urlsplit
 
 import anyio
 import httpx2
 import mcp.types as types
 from jsonschema import Draft202012Validator
 from mcp import Client
-from mcp.client.auth import OAuthClientProvider, OAuthFlowError
+from mcp.client.auth import OAuthFlowError
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.auth import (
-    AuthorizationCodeResult,
-    OAuthClientInformationFull,
-    OAuthClientMetadata,
-    OAuthToken,
-)
 from mcp.shared.dispatcher import CallOptions
 from mcp.shared.exceptions import MCPError
 
@@ -39,9 +29,11 @@ from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
 
+from ._callbacks import ServerRequests
+from ._events import ConnectionEvents, dump
+from ._oauth import ConnectionOAuth
 from .interactions import InputRequests
 
-EVENT_HISTORY_LIMIT = 256
 CONNECTION_QUEUE_LIMIT = 64
 MAX_READ_RETRIES = 3
 READ_RETRY_BASE_SECONDS = 0.5
@@ -60,7 +52,6 @@ READ_OPERATIONS = frozenset(
 )
 CONNECTION_CLOSE_TIMEOUT_SECONDS = 15
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
-STDERR_CHUNK_SIZE = 4096
 _LOGGER = logging.getLogger("vbot.extensions.mcp")
 # Tests patch this seam instead of the process-wide ``asyncio.sleep``.
 _sleep = asyncio.sleep
@@ -100,38 +91,6 @@ def operation_schema(operation: str) -> dict[str, Any]:
         return dict(model.model_json_schema(by_alias=True))
     properties = {"after": {"type": "integer", "minimum": 0}} if operation == "events" else {}
     return {"type": "object", "properties": properties, "additionalProperties": False}
-
-
-def dump(value: Any) -> dict[str, Any]:
-    if hasattr(value, "model_dump"):
-        return dict(value.model_dump(mode="json", by_alias=True, exclude_none=True))
-    if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    if isinstance(value, dict):
-        return value
-    raise TypeError("MCP payload must be an object")
-
-
-class OAuthStorage:
-    def __init__(self, host: ExtensionHost, identifier: str) -> None:
-        self.host = host
-        self.prefix = f"VBOT_MCP_{identifier.upper()}_OAUTH"
-
-    async def get_tokens(self) -> OAuthToken | None:
-        raw = self.host.resolve_credential(f"{self.prefix}_TOKENS")
-        return OAuthToken.model_validate_json(raw) if raw else None
-
-    async def set_tokens(self, tokens: OAuthToken) -> None:
-        self.host.set_credential(f"{self.prefix}_TOKENS", tokens.model_dump_json(by_alias=True))
-
-    async def get_client_info(self) -> OAuthClientInformationFull | None:
-        raw = self.host.resolve_credential(f"{self.prefix}_CLIENT")
-        return OAuthClientInformationFull.model_validate_json(raw) if raw else None
-
-    async def set_client_info(self, client_info: OAuthClientInformationFull) -> None:
-        self.host.set_credential(
-            f"{self.prefix}_CLIENT", client_info.model_dump_json(by_alias=True)
-        )
 
 
 class InvocationNotSentError(ValueError):
@@ -184,11 +143,10 @@ class ConnectionRunner:
         self._active: asyncio.Task[dict[str, Any]] | None = None
         self._ready = asyncio.Event()
         self._closing = False
-        self._events: deque[dict[str, Any]] = deque(maxlen=EVENT_HISTORY_LIMIT)
-        self._sequence = 0
+        self._events = ConnectionEvents(host, lambda: self.config)
+        self._requests = ServerRequests(self.id, host, inputs, self._events, lambda: self.context)
         self._catalog_pages: dict[str, list[dict[str, Any]]] = {}
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
-        self._oauth_url: str | None = None
         self._log_level = "info"
         # A failing stretch spans lazy reconnects until one connection comes up.
         self._failures = 0
@@ -263,12 +221,16 @@ class ConnectionRunner:
         }
 
     def events(self, after: int = 0) -> dict[str, Any]:
-        first = self._events[0]["sequence"] if self._events else self._sequence + 1
-        return {
-            "events": [event for event in self._events if event["sequence"] > after],
-            "cursor": self._sequence,
-            "missed_events": max(0, first - after - 1),
-        }
+        """The connection's events after cursor *after*, with the count of dropped ones."""
+        return self._events.read(after)
+
+    def redact(self, message: str) -> str:
+        """*message* without the credentials of this connection."""
+        return self._events.redact(message)
+
+    def safe_error(self, error: BaseException) -> str:
+        """*error* as one line naming its type, without the credentials of this connection."""
+        return self._events.safe_error(error)
 
     async def invoke(
         self, operation: str, arguments: dict[str, Any], context: ToolContext | None = None
@@ -300,13 +262,13 @@ class ConnectionRunner:
                     transport,
                     read_timeout_seconds=self.config["timeout"],
                     mode="legacy" if self.config["transport"] == "sse" else "auto",
-                    sampling_callback=self._sample,
+                    sampling_callback=self._requests.sample,
                     sampling_capabilities=types.SamplingCapability(
                         tools=types.SamplingToolsCapability()
                     ),
-                    elicitation_callback=self._elicit,
-                    list_roots_callback=self._roots,
-                    logging_callback=self._log,
+                    elicitation_callback=self._requests.elicit,
+                    list_roots_callback=self._requests.roots,
+                    logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
                 )
@@ -330,8 +292,8 @@ class ConnectionRunner:
             raise
         except (Exception, BaseExceptionGroup) as error:
             self.state = "failed"
-            self.error = self._safe_error(error)
-            self._record("connection_failed", {"error": self.error})
+            self.error = self.safe_error(error)
+            self._events.record("connection_failed", {"error": self.error})
             expected = self._expected(error)
             self._log_failed(expected=expected)
             if not expected:
@@ -389,14 +351,20 @@ class ConnectionRunner:
             reader, writer = os.pipe()
             errors = stack.enter_context(os.fdopen(writer, "w", encoding="utf-8"))
             loop = asyncio.get_running_loop()
-            thread = threading.Thread(target=self._read_stderr, args=(reader, loop), daemon=True)
+            thread = threading.Thread(
+                target=self._events.drain_stderr, args=(reader, loop), daemon=True
+            )
             thread.start()
             return stdio_client(parameters, errlog=errors)
         headers = {
             key: self._credential(source)
             for key, source in self.config.get("credential_headers", {}).items()
         }
-        auth = self._oauth() if self.config.get("oauth") else None
+        auth = (
+            ConnectionOAuth(self.config, self.host, self.inputs).provider()
+            if self.config.get("oauth")
+            else None
+        )
         if self.config["transport"] == "sse":
             return sse_client(self.config["url"], headers=headers, auth=auth)
         http = await stack.enter_async_context(
@@ -414,39 +382,6 @@ class ConnectionRunner:
         if not value:
             raise ValueError(f"Missing MCP credential: {key}")
         return value
-
-    def _oauth(self) -> OAuthClientProvider:
-        return OAuthClientProvider(
-            self.config["url"],
-            OAuthClientMetadata(
-                client_name="vBot",
-                redirect_uris=[
-                    self.config.get("oauth_redirect_uri", "http://localhost:8765/callback")
-                ],
-                grant_types=["authorization_code", "refresh_token"],
-                response_types=["code"],
-                token_endpoint_auth_method="none",
-            ),
-            OAuthStorage(self.host, self.id),
-            redirect_handler=self._oauth_redirect,
-            callback_handler=self._oauth_callback,
-        )
-
-    async def _oauth_redirect(self, url: str) -> None:
-        self._oauth_url = url
-
-    async def _oauth_callback(self) -> AuthorizationCodeResult:
-        response = await self.inputs.request(self.id, "oauth", {"url": self._oauth_url})
-        query = parse_qs(urlsplit(response.get("redirect_url", "")).query)
-        if "code" not in query:
-            raise ValueError(
-                "OAuth response requires the complete redirected URL containing the code"
-            )
-        return AuthorizationCodeResult(
-            code=query["code"][0],
-            state=query.get("state", [None])[0],
-            iss=query.get("iss", [None])[0],
-        )
 
     async def _serve(self) -> None:
         while not self._closing:
@@ -487,8 +422,10 @@ class ConnectionRunner:
                 ):
                     raise
             except Exception as error:
-                safe = self._safe_error(error)
-                self._record("request_failed", {"operation": invocation.operation, "error": safe})
+                safe = self.safe_error(error)
+                self._events.record(
+                    "request_failed", {"operation": invocation.operation, "error": safe}
+                )
                 if not invocation.result.done():
                     invocation.result.set_exception(
                         ValueError(safe) if self._expected(error) else error
@@ -571,7 +508,7 @@ class ConnectionRunner:
                 if operation not in READ_OPERATIONS or not retryable or attempt == MAX_READ_RETRIES:
                     raise
                 delay = READ_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
-                self._record("read_retry", {"operation": operation, "attempt": attempt + 1})
+                self._events.record("read_retry", {"operation": operation, "attempt": attempt + 1})
                 await _sleep(delay)
         raise AssertionError("Read retry loop must return or raise")
 
@@ -705,112 +642,20 @@ class ConnectionRunner:
         if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
             await client.send_roots_list_changed()
 
-    async def _roots(self, context: Any) -> Any:
-        roots = []
-        if self.context is not None:
-            roots.append(
-                types.Root.model_validate({"uri": Path(self.context.effective_cwd).as_uri()})
-            )
-        return types.ListRootsResult(roots=roots)
-
-    async def _sample(self, context: Any, params: Any) -> Any:
-        if self.context is None:
-            return types.ErrorData(
-                code=types.INVALID_REQUEST, message="Sampling requires an active Agent invocation"
-            )
-        request = dump(params)
-        self._record(
-            "sampling_request",
-            {"request": request, "model_policy": "configured_agent", "additional_context": "none"},
-        )
-        messages = sampling_messages(request)
-        sample = await self.host.sample(
-            self.context,
-            {
-                "messages": messages,
-                "max_tokens": request["maxTokens"],
-                "temperature": request.get("temperature"),
-                "stop_sequences": request.get("stopSequences"),
-                "tool_choice": request.get("toolChoice", {}).get("mode"),
-                "tools": [
-                    {
-                        "name": tool["name"],
-                        "description": tool.get("description", tool["name"]),
-                        "parameters": tool["inputSchema"],
-                    }
-                    for tool in request.get("tools", [])
-                ],
-            },
-        )
-        self._record("sampling_usage", sample.get("usage", {}))
-        content = []
-        if sample.get("content"):
-            content.append({"type": "text", "text": sample["content"]})
-        for call in sample.get("tool_calls", []):
-            content.append(
-                {
-                    "type": "tool_use",
-                    "id": call["id"],
-                    "name": call["name"],
-                    "input": call["arguments"],
-                }
-            )
-        stop_reason = "toolUse" if sample.get("tool_calls") else "endTurn"
-        if sample.get("terminal_outcome") == "output_truncated":
-            stop_reason = "maxTokens"
-        result = {
-            "role": "assistant",
-            "model": sample["model"],
-            "content": content,
-            "stopReason": stop_reason,
-        }
-        if request.get("tools"):
-            return types.CreateMessageResultWithTools.model_validate(result)
-        result["content"] = content[0] if content else {"type": "text", "text": ""}
-        return types.CreateMessageResult.model_validate(result)
-
-    async def _elicit(self, context: Any, params: Any) -> Any:
-        session_id = self.context.session_id if self.context is not None else None
-        response = await self.inputs.request(self.id, "elicitation", dump(params), session_id)
-        return types.ElicitResult.model_validate(response)
-
-    async def _log(self, params: Any) -> None:
-        self._record("log", dump(params))
-
     async def _message(self, message: Any) -> None:
         if isinstance(message, types.ServerNotification):
-            self._record("notification", dump(message))
+            self._events.record("notification", dump(message))
         elif isinstance(message, Exception):
-            self.error = self._safe_error(message)
+            self.error = self.safe_error(message)
             self.state = "failed"
-            self._record("connection_failed", {"error": self.error})
+            self._events.record("connection_failed", {"error": self.error})
             if not self._closing:
                 self._log_failed(expected=self._expected(message))
             if self._task is not None:
                 self._task.cancel()
 
     async def _progress(self, progress: float, total: float | None, message: str | None) -> None:
-        self._record("progress", {"progress": progress, "total": total, "message": message})
-
-    def _record(self, kind: str, payload: Any) -> None:
-        secrets = sorted(self._secrets(), key=len, reverse=True)
-
-        def redact(value: Any) -> Any:
-            if isinstance(value, str):
-                for secret in secrets:
-                    value = value.replace(secret, "[redacted]")
-                return value
-            if isinstance(value, list):
-                return [redact(item) for item in value]
-            if isinstance(value, dict):
-                return {redact(key): redact(item) for key, item in value.items()}
-            return value
-
-        # Redact decoded strings: replacing inside serialized JSON misses escaped
-        # credentials and can corrupt escape sequences for short credentials.
-        safe_payload = redact(json.loads(json.dumps(payload, ensure_ascii=False, default=dump)))
-        self._sequence += 1
-        self._events.append({"sequence": self._sequence, "kind": kind, "payload": safe_payload})
+        self._events.record("progress", {"progress": progress, "total": total, "message": message})
 
     async def _watch_catalog(self) -> None:
         capabilities = self._client().server_capabilities
@@ -831,12 +676,12 @@ class ConnectionRunner:
                 prompts_list_changed=flags["prompts_list_changed"],
             ) as events:
                 async for event in events:
-                    self._record("catalog_changed", dump(event))
+                    self._events.record("catalog_changed", dump(event))
                     await self.invoke("catalog", {})
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self._record("subscription_failed", {"error": self._safe_error(error)})
+            self._events.record("subscription_failed", {"error": self.safe_error(error)})
 
     async def _watch_resource(self, uri: str, ready: asyncio.Future[None]) -> None:
         try:
@@ -844,111 +689,18 @@ class ConnectionRunner:
                 if not ready.done():
                     ready.set_result(None)
                 async for event in events:
-                    self._record("resource_changed", {"uri": uri, "event": dump(event)})
+                    self._events.record("resource_changed", {"uri": uri, "event": dump(event)})
         except asyncio.CancelledError:
             raise
         except Exception as error:
-            self._record("subscription_failed", {"uri": uri, "error": self._safe_error(error)})
+            self._events.record(
+                "subscription_failed", {"uri": uri, "error": self.safe_error(error)}
+            )
             if not ready.done():
-                ready.set_exception(ValueError(self._safe_error(error)))
-
-    def _safe_error(self, error: BaseException) -> str:
-        if isinstance(error, BaseExceptionGroup):
-            message = "; ".join(self._safe_error(item) for item in error.exceptions)
-        else:
-            message = f"{type(error).__name__}: {error}"
-        return self._redact(message)
-
-    def _secrets(self) -> list[str]:
-        keys = set(self.config.get("credential_environment", {}).values())
-        keys.update(self.config.get("credential_headers", {}).values())
-        secrets = [self.host.resolve_credential(key) for key in keys]
-        prefix = f"VBOT_MCP_{self.id.upper()}_OAUTH"
-        for suffix in ("TOKENS", "CLIENT"):
-            raw = self.host.resolve_credential(f"{prefix}_{suffix}")
-            if raw:
-                secrets.append(raw)
-                values = json.loads(raw)
-                secrets.extend(
-                    str(value)
-                    for key, value in values.items()
-                    if key in {"access_token", "refresh_token", "id_token", "client_secret"}
-                    and value
-                )
-        return [value for value in secrets if value]
-
-    def _redact(self, message: str) -> str:
-        for secret in sorted(self._secrets(), key=len, reverse=True):
-            message = message.replace(secret, "[redacted]")
-        return message
-
-    def _read_stderr(self, descriptor: int, loop: asyncio.AbstractEventLoop) -> None:
-        # Drain continuously so a verbose server cannot block its protocol pipe.
-        with os.fdopen(descriptor, "r", encoding="utf-8", errors="replace") as stream:
-            pending = ""
-            while chunk := stream.read(STDERR_CHUNK_SIZE):
-                pending += chunk
-                tail = max((len(secret) for secret in self._secrets()), default=0)
-                if len(pending) <= tail:
-                    continue
-                boundary = len(pending) - tail
-                for secret in self._secrets():
-                    start = pending.rfind(secret, 0, boundary + len(secret))
-                    if start >= 0 and start < boundary < start + len(secret):
-                        boundary = start
-                output, pending = pending[:boundary], pending[boundary:]
-                if output and not loop.is_closed():
-                    loop.call_soon_threadsafe(
-                        self._record, "stderr", {"text": self._redact(output)}
-                    )
-            if pending and not loop.is_closed():
-                loop.call_soon_threadsafe(self._record, "stderr", {"text": self._redact(pending)})
+                ready.set_exception(ValueError(self.safe_error(error)))
 
     @staticmethod
     def _expected(error: BaseException) -> bool:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
-
-
-def sampling_messages(request: dict[str, Any]) -> list[dict[str, Any]]:
-    """Map only the server's explicit sampling context, never Session history."""
-    messages: list[dict[str, Any]] = []
-    if request.get("systemPrompt"):
-        messages.append({"role": "system", "content": request["systemPrompt"]})
-    for message in request["messages"]:
-        blocks = (
-            message["content"] if isinstance(message["content"], list) else [message["content"]]
-        )
-        content = []
-        calls = []
-        results = []
-        for block in blocks:
-            kind = block["type"]
-            if kind == "text":
-                content.append({"type": "text", "text": block["text"]})
-            elif kind in {"image", "audio"}:
-                content.append(
-                    {"type": kind, "base64": block["data"], "media_type": block["mimeType"]}
-                )
-            elif kind == "tool_use":
-                calls.append(
-                    {"id": block["id"], "name": block["name"], "arguments": block["input"]}
-                )
-            elif kind == "tool_result":
-                results.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": block["toolUseId"],
-                        "content": json.dumps(block, ensure_ascii=False),
-                    }
-                )
-            else:
-                raise ValueError(f"Unsupported sampling content type: {kind}")
-        if content or calls:
-            entry = {"role": message["role"], "content": content}
-            if calls:
-                entry["tool_calls"] = calls
-            messages.append(entry)
-        messages.extend(results)
-    return messages
