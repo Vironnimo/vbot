@@ -246,15 +246,44 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         monkeypatch.setattr(harrier, "_command", commands)
         monkeypatch.setattr(harrier, "_packaged", lambda: True)
         monkeypatch.setattr(local_setup, "fetch_model_files", fetch)
+        # A completed environment based on a Python other than the server's, as
+        # left behind when vBot's Python changed: its recipe names no Python.
+        assert harrier.directory is not None
+        harrier.python.parent.mkdir(parents=True)
+        harrier.python.touch()
+        base = tmp_path / "base-python"
+        base.mkdir()
+        config = f"home = {base}\nversion_info = 3.1.4\n"
+        (harrier.directory / "pyvenv.cfg").write_text(config, encoding="utf-8")
+        (harrier.directory / "verified.json").write_text("{}\n", encoding="utf-8")
         assert harrier.status() == {
             "state": "missing",
             "phase": "checking",
-            "error": "python_missing",
+            "error": "python_changed",
         }
+        removals: list[tuple[Path, int]] = []
+        rmtree = local_setup.shutil.rmtree
+
+        def remove(path: Path, *args: Any, **kwargs: Any) -> None:
+            removals.append((Path(path), threading.get_ident()))
+            rmtree(path, *args, **kwargs)
+
+        monkeypatch.setattr(local_setup.shutil, "rmtree", remove)
 
         harrier.install()
         assert harrier._task is not None
         await harrier._task
+
+        # The environment was removed off the Event Loop, then created again on a
+        # uv-managed Python of the server's version: uv does not see the server's
+        # interpreter as its parent.
+        threads = [thread for path, thread in removals if path == harrier.directory]
+        assert threads and threading.get_ident() not in threads
+        assert not (harrier.directory / "pyvenv.cfg").exists()
+        venv = next(call for call in commands.calls if "venv" in call)
+        server = f"{sys.version_info.major}.{sys.version_info.minor}"
+        uv = [sys.executable, "-c", local_setup._UV]
+        assert venv == [*uv, "venv", "--python", server, "--managed-python", str(harrier.directory)]
 
         assert harrier.status()["state"] == "ready" and harrier.available()
         assert harrier.activity() == {"state": "completed"}
@@ -273,7 +302,7 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         # The pinned recipe goes into the managed environment only, never the server.
         installs = [call for call in commands.calls if "install" in call and "pip" in call]
         assert installs and all(
-            call[:3] == [sys.executable, "-m", "uv"]
+            call[:3] == [sys.executable, "-c", local_setup._UV]
             and call[call.index("--python") + 1] == str(harrier.python)
             for call in installs
         )

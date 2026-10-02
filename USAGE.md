@@ -865,8 +865,11 @@ Local requests accept up to 5,000 characters and split longer passages within
 that limit at sentence/word boundaries. STT and TTS models stay loaded independently;
 each model has its own **Unload from memory** button.
 
-The optional `local-tts` extra installs uv, which prepares managed Python 3.12
-and separate SDK environments under `<data-dir>/speech-engines/`. Fixed recipes
+The optional `local-tts` extra installs uv, which prepares separate managed SDK
+environments under `<data-dir>/speech-engines/`: Qwen3-TTS on the server's Python,
+Chatterbox on Python 3.13, the newest its dependencies support. After an update that
+changes an environment's Python, its target reads as not installed until you install it
+again. Fixed recipes
 in `pyproject.toml` install Qwen's SDK and a pinned official Chatterbox revision
 containing V3 (the PyPI 0.1.7 source predates V3). The server's STT packages are
 not downgraded. Setup installs matching Torch/torchaudio builds and verifies

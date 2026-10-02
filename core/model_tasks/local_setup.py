@@ -8,7 +8,12 @@ shows, a shared lock that serializes installations, the completion receipt
 (``verified.json``) and the subprocess runner that hides package-manager
 output. Subclasses supply the installation body and their environment check;
 :meth:`LocalSetup._install_recipe` creates a uv-managed child environment from
-a ``[tool.vbot.*]`` recipe in ``pyproject.toml``.
+the setup's ``[tool.vbot.*]`` recipe in ``pyproject.toml``.
+
+Every managed environment requires one Python ``major.minor``: the one its
+recipe names, else the server's own, so it follows vBot's Python without a
+pin of its own. An environment based on another Python reports
+``python_changed`` and is created again by the next installation.
 
 A setup may also own one pinned model (:mod:`core.model_tasks.model_files`):
 its files live in ``<models_dir>/<name>/<revision>`` with their own receipt,
@@ -49,6 +54,14 @@ UV_BOOTSTRAP_EXTRA = "local-tts"
 # Longest one package-manager or verification command may run. Model
 # downloads have no overall limit: their network reads time out instead.
 SETUP_TIMEOUT_S = 3600
+# The Python an environment requires when its recipe names none.
+SERVER_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
+# Runs the uv executable the server's Python provides, as ``python -m uv`` does,
+# but without naming that interpreter as uv's parent: uv prefers its parent over
+# ``--managed-python`` when the versions match, and an environment based on the
+# server's interpreter would depend on this release's runtime (or on a development
+# checkout's Python) instead of a uv-managed Python.
+_UV = "import subprocess, sys, uv; sys.exit(subprocess.call([uv.find_uv_bin(), *sys.argv[1:]]))"
 
 
 class LocalSetup:
@@ -59,6 +72,7 @@ class LocalSetup:
         *,
         name: str,
         directory: Path | None,
+        recipe: Sequence[str] = (),
         install_lock: asyncio.Lock | None = None,
         subject: str = "Local engine",
         logger: Any = None,
@@ -66,6 +80,9 @@ class LocalSetup:
         models_dir: Path | None = None,
     ) -> None:
         self.directory = directory
+        # Where this setup's recipe lives below ``[tool.vbot]``; empty for none.
+        self._recipe_section = tuple(recipe)
+        self._required_python: str | None = None
         self.model = model
         # Without a models directory a pinned model cannot be installed.
         self.model_directory = (
@@ -153,7 +170,12 @@ class LocalSetup:
         """Why the engine's environment cannot run, or ``""``."""
         if self.directory is None:
             return "environment_missing"
-        return environment_error(self.directory, self.python, self._python_version())
+        try:
+            python_version = self._python_version()
+        except OSError, ValueError, KeyError, StopIteration:
+            # This release's recipe cannot be read; installing fails the same way.
+            return "setup_unavailable"
+        return environment_error(self.directory, self.python, python_version)
 
     def _model_error(self) -> str:
         """Why the pinned model is not installed, or ``""`` (also without one)."""
@@ -168,11 +190,18 @@ class LocalSetup:
             return "environment_unreadable"
         return ""
 
-    def _python_version(self) -> str | None:
-        """The ``major.minor`` the environment's Python must have, or None for any."""
-        return None
+    def _python_version(self) -> str:
+        """The ``major.minor`` the environment's Python must have.
 
-    def _environment_needed(self) -> bool:
+        The recipe's ``python`` when it names one, else the server's. Read once:
+        a release's recipes do not change while it runs.
+        """
+        if self._required_python is None:
+            version = self._recipe(self._config()).get("python") if self._recipe_section else None
+            self._required_python = str(version or SERVER_PYTHON)
+        return self._required_python
+
+    async def _environment_needed(self) -> bool:
         """Remove an environment whose Python cannot serve; return whether one must be created.
 
         Its interpreter is gone, or the environment is based on a Python that no
@@ -184,7 +213,15 @@ class LocalSetup:
         if error not in {"python_missing", "python_changed"}:
             return False
         if self.directory.exists():
-            shutil.rmtree(self.directory)
+            # A Torch environment holds tens of thousands of files: remove them
+            # off the Event Loop, and finish even when the installation is
+            # cancelled, so no later installation starts in a half-removed tree.
+            removal = asyncio.ensure_future(asyncio.to_thread(shutil.rmtree, self.directory))
+            try:
+                await asyncio.shield(removal)
+            except asyncio.CancelledError:
+                await asyncio.wait([removal])
+                raise
         return True
 
     def install(self) -> dict[str, Any]:
@@ -313,6 +350,13 @@ class LocalSetup:
             if entry.is_dir() and entry != self.model_directory:
                 shutil.rmtree(entry, ignore_errors=True)
 
+    def _recipe(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
+        """This setup's recipe in *config*, the parsed ``pyproject.toml``."""
+        recipe: Mapping[str, Any] = config["tool"]["vbot"]
+        for key in self._recipe_section:
+            recipe = recipe[key]
+        return recipe
+
     def _config(self) -> dict[str, Any]:
         """Read this release's ``pyproject.toml``, the only source of recipes."""
         source = Path(__file__).resolve()
@@ -326,35 +370,41 @@ class LocalSetup:
             )
         return tomllib.loads(project.read_text(encoding="utf-8"))
 
-    async def _install_recipe(self, *section: str) -> str | None:
-        """Create or update this setup's uv-managed environment from a fixed recipe.
+    async def _install_recipe(self) -> str | None:
+        """Create or update this setup's uv-managed environment from its fixed recipe.
 
-        *section* addresses the recipe below ``[tool.vbot]`` in ``pyproject.toml``,
-        e.g. ``("local-tts", "chatterbox")``. A recipe names the Python version,
-        exact ``packages`` and optionally a ``torch`` version (installed first,
-        for CUDA when a GPU is present) and a pinned ``source`` archive that
-        replaces ``source-package``. The receipt is removed before anything,
-        even the recipe, is read; the caller verifies and writes it. Returns the
-        device the packages target, or ``None`` after a reported failure.
+        The recipe lists exact ``packages`` and optionally the ``python``
+        version (else the server's, :meth:`_python_version`), a ``torch``
+        version (installed first, for CUDA when a GPU is present) and a pinned
+        ``source`` archive that replaces ``source-package``. An environment
+        based on another Python is created again. The receipt is removed
+        before anything, even the recipe, is read; the caller verifies and
+        writes it. Returns the device the packages target, or ``None`` after a
+        reported failure.
         """
         assert self.directory is not None
         (self.directory / "verified.json").unlink(missing_ok=True)
         config = self._config()
-        recipe: Mapping[str, Any] = config["tool"]["vbot"]
-        for key in section:
-            recipe = recipe[key]
+        recipe = self._recipe(config)
         bootstrap = config["project"]["optional-dependencies"][UV_BOOTSTRAP_EXTRA]
         # Packaged roles ship uv. Development checkouts retain their existing
         # fixed bootstrap recipe, while immutable packaged roles are untouched.
         if not self._packaged() and await self._pip(bootstrap) != 0:
             self._fail("install_failed")
             return None
-        uv = [sys.executable, "-m", "uv"]
+        uv = [sys.executable, "-c", _UV]
         self._phase = "python"
         if (
-            self._environment_needed()
+            await self._environment_needed()
             and await self._command(
-                [*uv, "venv", "--python", recipe["python"], "--managed-python", str(self.directory)]
+                [
+                    *uv,
+                    "venv",
+                    "--python",
+                    self._python_version(),
+                    "--managed-python",
+                    str(self.directory),
+                ]
             )
             != 0
         ):
@@ -504,12 +554,13 @@ class LocalSetup:
             await asyncio.gather(self._task, return_exceptions=True)
 
 
-def environment_error(directory: Path, python: Path, python_version: str | None = None) -> str:
+def environment_error(directory: Path, python: Path, python_version: str) -> str:
     """Return why the managed environment in *directory* cannot run, or ``""``.
 
     The environment's ``pyvenv.cfg`` names the Python it is based on: when that
-    Python is gone (``python_missing``) or *python_version* (``major.minor``)
-    differs from it (``python_changed``), the environment must be created again.
+    Python is gone (``python_missing``) or its ``major.minor`` differs from the
+    required *python_version* (``python_changed``), the environment must be
+    created again.
     What cannot be read is ``environment_unreadable``, never missing: a missing
     Python lets setup delete the environment.
     """
@@ -521,7 +572,7 @@ def environment_error(directory: Path, python: Path, python_version: str | None 
             home, version = base
             if not is_dir_strict(home):
                 return "python_missing"
-            if python_version is not None and version != python_version:
+            if version != python_version:
                 return "python_changed"
         # This receipt proves that setup finished, not that the installed
         # packages or application source are identical to today's recipe.

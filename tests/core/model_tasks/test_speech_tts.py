@@ -238,13 +238,21 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
     assert len(host_installs) == (0 if packaged else 1)
     if host_installs:
         assert "uv==0.12.11" in host_installs[0]
-    assert any(cmd[:3] == [sys.executable, "-m", "uv"] for cmd in commands)
+    # uv runs without the server's interpreter as its parent, which it would
+    # otherwise prefer over a uv-managed Python of the same version.
+    uv = [cmd[3:] for cmd in commands if cmd[:3] == [sys.executable, "-c", local_setup._UV]]
+    assert uv and not any(cmd[:3] == [sys.executable, "-m", "uv"] for cmd in commands)
     assert commands[-1][:3] == [str(setup.python), "-I", "-B"]
     assert "--verify" in commands[-1]
-    for cmd in commands:
-        if "install" in cmd and "uv" in cmd:
+    for cmd in uv:
+        if "install" in cmd:
             assert cmd[cmd.index("--python") + 1] == str(setup.python)
     recipe = setup._config()["tool"]["vbot"]["local-tts"][engine]
+    # The environment runs on the recipe's Python, else on the server's.
+    server = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert [str(recipe.get("python", server)), "--managed-python"] in [
+        cmd[2:4] for cmd in uv if cmd[:2] == ["venv", "--python"]
+    ]
     package_stage = next(
         cmd for cmd in commands if "--only-binary=:all:" in cmd and recipe["packages"][0] in cmd
     )
