@@ -9,7 +9,9 @@
 # Safer: download it, read it, then run it.
 set -euo pipefail
 
-API_BASE="https://api.github.com/repos/Vironnimo/vbot"
+# Release downloads, unlike the GitHub API, have no anonymous request limit.
+DOWNLOADS="https://github.com/Vironnimo/vbot/releases"
+IDENTITY="vbot-release.json"
 # Updates verify every package against this key.
 RELEASE_PUBLIC_KEY="8gLB0IOKj1jlmhDxtNq3tRS1HgYwIv+tntzyVMiUiuQ="
 
@@ -76,6 +78,9 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$CHANNEL" = "main" ] && [ -n "$VERSION" ] && fail "Choose either --main or --version"
+case "$VERSION" in
+    .* | *[!A-Za-z0-9._+-]*) fail "--version needs a release tag such as v0.2.0" ;;
+esac
 case "$PORT" in
     "" | *[!0-9]*) fail "--port must be a number" ;;
 esac
@@ -97,43 +102,64 @@ if [ -f "$INSTALL_DIR/application.json" ]; then
 fi
 
 if [ "$CHANNEL" = "main" ]; then
-    RELEASE_URL="$API_BASE/releases/tags/main-build"
+    BASE="$DOWNLOADS/download/main-build"
+    RELEASE="the newest main build"
 elif [ -n "$VERSION" ]; then
-    RELEASE_URL="$API_BASE/releases/tags/$VERSION"
+    BASE="$DOWNLOADS/download/$VERSION"
+    RELEASE="release $VERSION"
 else
-    RELEASE_URL="$API_BASE/releases/latest"
+    BASE="$DOWNLOADS/latest/download"
+    RELEASE="the latest release"
 fi
 ASSET="vbot-${PLATFORM}-server.zip"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-status_line WORK "Looking up $ASSET"
-curl -fsSL -H "Accept: application/vnd.github+json" "$RELEASE_URL" -o "$WORK/release.json" \
-    || fail "Could not read the release at $RELEASE_URL"
-# Prints the download URL and the published SHA256 digest of the package.
-read -r ASSET_URL ASSET_SHA256 < <(python3 - "$WORK/release.json" "$ASSET" <<'PY'
-import json, sys
-release = json.load(open(sys.argv[1], encoding="utf-8"))
-for asset in release.get("assets", []):
-    if asset.get("name") == sys.argv[2]:
-        digest = asset.get("digest") or ""
-        print(asset["browser_download_url"], digest.removeprefix("sha256:") or "-")
-        break
-else:
-    print("- -")
+status_line WORK "Looking up $RELEASE"
+curl -fsSL "$BASE/$IDENTITY" -o "$WORK/$IDENTITY" \
+    || fail "Could not read $IDENTITY of $RELEASE from $BASE: the release does not exist, publishes no $IDENTITY, or GitHub cannot be reached"
+# The release identity names the version and records the SHA256 digest of each
+# asset; this prints the version and the package's digest, or - for none.
+FACTS="$(python3 - "$WORK/$IDENTITY" "$ASSET" <<'PY'
+import json, re, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        identity = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(1)
+if not isinstance(identity, dict) or identity.get("schema_version") != 1:
+    raise SystemExit(1)
+version = identity.get("version")
+assets = identity.get("assets")
+digest = assets.get(sys.argv[2]) if isinstance(assets, dict) else None
+if not isinstance(version, str) or not re.fullmatch(r"[0-9A-Za-z.+-]{1,64}", version):
+    raise SystemExit(1)
+if digest is not None and not (isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{64}", digest)):
+    raise SystemExit(1)
+print(version, digest.lower() if digest else "-")
 PY
-)
-[ "$ASSET_URL" != "-" ] || fail "The release has no package for $PLATFORM ($ASSET)"
+)" || fail "$BASE/$IDENTITY is not a valid vBot release identity"
+read -r RELEASE_VERSION ASSET_SHA256 <<<"$FACTS"
+ASSET_BASE="$BASE"
+if [ "$CHANNEL" = "release" ] && [ -z "$VERSION" ]; then
+    # Pin the tag the latest identity names: releases/latest can move to a newer
+    # release before the download, which would mix two releases.
+    [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || fail "$BASE/$IDENTITY names no valid release version"
+    ASSET_BASE="$DOWNLOADS/download/v$RELEASE_VERSION"
+fi
 
-status_line WORK "Downloading $ASSET"
-curl -fL --progress-bar "$ASSET_URL" -o "$WORK/$ASSET" || fail "The download failed"
+status_line WORK "Downloading $ASSET of vBot $RELEASE_VERSION"
+curl -fL --progress-bar "$ASSET_BASE/$ASSET" -o "$WORK/$ASSET" \
+    || fail "Could not download $ASSET_BASE/$ASSET: the release publishes no package for $PLATFORM, or GitHub cannot be reached"
 if [ "$ASSET_SHA256" != "-" ]; then
     ACTUAL="$(python3 -c 'import hashlib, sys; print(hashlib.file_digest(open(sys.argv[1], "rb"), "sha256").hexdigest())' "$WORK/$ASSET" 2>/dev/null \
         || sha256sum "$WORK/$ASSET" | cut -d " " -f 1)"
-    [ "$ACTUAL" = "$ASSET_SHA256" ] || fail "The downloaded package does not match its published SHA256 digest"
+    [ "$ACTUAL" = "$ASSET_SHA256" ] \
+        || fail "The downloaded package does not match the SHA256 digest in $IDENTITY. A newer build may have replaced the release files meanwhile (main builds are replaced in place); run the installer again"
 else
-    status_line WARN "The release publishes no digest for $ASSET; it was downloaded over HTTPS only"
+    status_line WARN "$IDENTITY records no digest for $ASSET; it was downloaded over HTTPS only"
 fi
 
 status_line WORK "Unpacking the package"

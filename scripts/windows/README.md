@@ -63,7 +63,9 @@ Outputs include:
 - `artifacts/vbot-windows-x86_64-<shape>-runtime-inventory.json`: dependency names
   and exact versions for inspection.
 - `artifacts/vbot-release.json`: the version identity an updater compares with its
-  active version before downloading.
+  active version before downloading. The publishing workflows add the SHA-256
+  digest of every other release asset to it (`scripts/release_assets.py
+  --record-digests`).
 - `artifacts/release-public-key.txt`, and a sibling `.zip.sig` for signed builds.
 - After Inno compilation, `installers/vBot-<version>-windows-x86_64-<shape>.exe`.
 
@@ -107,10 +109,11 @@ nothing by itself. Two workflows call it in signed mode:
   release with every asset attached. The release tag must match the application
   version.
 
-A missing signing key blocks publication. The public PowerShell installer selects
-the exact installer name, requires GitHub's release-asset SHA-256 digest and an
-HTTPS `github.com` download URL, and rejects an invalid Authenticode signature
-before executing it.
+A missing signing key blocks publication. The public PowerShell installer reads
+`vbot-release.json` from the release downloads (never the GitHub API), derives
+the release tag and the exact installer name from its version, requires the SHA-256 digest it records
+and an HTTPS `github.com` download URL, and rejects an invalid Authenticode
+signature before executing it.
 
 ## Installer and existing installations
 

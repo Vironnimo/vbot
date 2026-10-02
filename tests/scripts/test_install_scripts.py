@@ -80,9 +80,12 @@ def test_public_installers_parse_and_install_sh_help_is_side_effect_free() -> No
 _NATIVE_MODES = (
     "release",
     "main",
+    "version",
     "no-autostart",
     "desktop-client",
     "missing",
+    "no-digest",
+    "unsafe-version",
     "digest",
     "signature",
 )
@@ -96,13 +99,14 @@ def test_windows_installer_runs_only_the_verified_installer_of_the_selected_chan
         r"""param($Source, $Root, $Modes)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$ApiBase = "https://api.github.com/repos/Vironnimo/vbot"
-$ApiHeaders = @{}
+$ReleaseDownloads = "https://github.com/Vironnimo/vbot/releases"
+$ReleaseIdentityName = "vbot-release.json"
 $HostName = "127.0.0.1"
 $Port = 9134
 $ProgressPreference = "SilentlyContinue"
 $Functions = @(
-    "Get-OfficialRelease", "Get-ServerHealthUrl", "Install-NativeRelease"
+    "Get-ReleaseDownloadBase", "Save-ReleaseDownload", "Get-ReleaseIdentity",
+    "Get-RecordedDigest", "Get-ServerHealthUrl", "Install-NativeRelease"
 )
 """
         + _LOAD_INSTALLER_FUNCTIONS
@@ -115,21 +119,23 @@ $sha = [BitConverter]::ToString($hasher.ComputeHash($bytes)).Replace("-", "").To
 $hasher.Dispose()
 function Invoke-RestMethod {
     param($Uri, $Headers, $TimeoutSec)
-    if ($Uri -like "*/health") {
-        $script:healthCalls++
-        return [pscustomobject]@{status="ok"}
-    }
-    $script:releaseUri = $Uri
-    $assets = if ($Mode -eq "missing") { @() } else { @(
-        [pscustomobject]@{name="vbot-windows-x86_64-$Shape.zip"; digest="sha256:$sha"
-            browser_download_url="https://github.com/Vironnimo/vbot/releases/download/x/a.zip"},
-        [pscustomobject]@{name="vBot-1.2.3-windows-x86_64-$Shape.exe"; digest="sha256:$sha"
-            browser_download_url="https://github.com/Vironnimo/vbot/releases/download/x/vbot.exe"}
-    ) }
-    return [pscustomobject]@{tag_name="v1.2.3"; assets=$assets}
+    if ($Uri -notlike "*/health") { throw "unexpected request $Uri" }
+    $script:healthCalls++
+    return [pscustomobject]@{status="ok"}
 }
+# Serves the release downloads: the identity and the installer it names.
 function Invoke-WebRequest {
-    param($Uri, $OutFile, $Headers)
+    param($Uri, $OutFile, [switch]$UseBasicParsing)
+    $script:downloads += $Uri
+    if ($Uri -like "*/vbot-release.json") {
+        if ($Mode -eq "missing") { throw "404 Not Found" }
+        $assets = @{"vbot-windows-x86_64-$Shape.zip" = $sha}
+        if ($Mode -ne "no-digest") { $assets["vBot-1.2.3-windows-x86_64-$Shape.exe"] = $sha }
+        $version = if ($Mode -eq "unsafe-version") { "1.2.3-x" } else { "1.2.3" }
+        $identity = @{schema_version=1; version=$version; assets=$assets}
+        [IO.File]::WriteAllText($OutFile, (ConvertTo-Json -InputObject $identity -Depth 3))
+        return
+    }
     [IO.File]::WriteAllBytes($OutFile, $bytes)
 }
 function Get-AuthenticodeSignature {
@@ -164,13 +170,14 @@ foreach ($Mode in ($Modes -split ",")) {
     $DataDir = Join-Path $InstallDir "data"
     $NoAutostart = $Mode -eq "no-autostart"
     $Shape = if ($Mode -eq "desktop-client") { "desktop-client" } else { "server" }
-    $calls = @(); $statuses = @(); $healthCalls = 0; $trayStarts = 0; $releaseUri = $null
+    $calls = @(); $statuses = @(); $healthCalls = 0; $trayStarts = 0; $downloads = @()
     $failure = $null
-    try { Install-NativeRelease -Tag "" -Shape $Shape -MainBuild ($Mode -eq "main") }
+    $tag = if ($Mode -eq "version") { "v1.2.3" } else { "" }
+    try { Install-NativeRelease -Tag $tag -Shape $Shape -MainBuild ($Mode -eq "main") }
     catch { $failure = $_.Exception.Message }
     $results[$Mode] = @{ok=($null -eq $failure); error=$failure; calls=$calls
         statuses=$statuses; healthCalls=$healthCalls; trayStarts=$trayStarts
-        releaseUri=$releaseUri}
+        downloads=$downloads}
 }
 $results | ConvertTo-Json -Compress -Depth 5
 """,
@@ -180,14 +187,23 @@ $results | ConvertTo-Json -Compress -Depth 5
     )
 
     assert set(payloads) == set(_NATIVE_MODES)
-    api = "https://api.github.com/repos/Vironnimo/vbot/releases"
-    for mode in ("release", "main", "no-autostart", "desktop-client"):
+    # Only release downloads, never the GitHub API. The latest release's installer
+    # comes from the tag its identity names, so a release published meanwhile
+    # cannot mix in.
+    downloads = "https://github.com/Vironnimo/vbot/releases"
+    tagged = f"{downloads}/download/v1.2.3"
+    bases = {"main": (f"{downloads}/download/main-build",) * 2, "version": (tagged, tagged)}
+    for mode in ("release", "main", "version", "no-autostart", "desktop-client"):
         payload = payloads[mode]
         install_dir = tmp_path / "install with spaces" / mode
         assert payload["ok"] is True, mode
-        release_uri = f"{api}/tags/main-build" if mode == "main" else f"{api}/latest"
-        assert payload["releaseUri"] == release_uri, mode
-        starts = mode in {"release", "main"}
+        identity_base, installer_base = bases.get(mode, (f"{downloads}/latest/download", tagged))
+        shape = "desktop-client" if mode == "desktop-client" else "server"
+        assert payload["downloads"] == [
+            f"{identity_base}/vbot-release.json",
+            f"{installer_base}/vBot-1.2.3-windows-x86_64-{shape}.exe",
+        ], mode
+        starts = mode in {"release", "main", "version"}
         assert payload["calls"] == [
             "/VERYSILENT",
             "/SUPPRESSMSGBOXES",
@@ -204,10 +220,16 @@ $results | ConvertTo-Json -Compress -Depth 5
         (status,) = payload["statuses"]
         assert status.startswith("OK:"), mode
         assert ("main builds" if mode == "main" else "releases") in status, mode
-    assert "no single vBot server installer" in payloads["missing"]["error"]
-    assert "digest does not match" in payloads["digest"]["error"]
+    assert "vbot-release.json" in payloads["missing"]["error"]
+    assert "records no valid SHA-256 digest" in payloads["no-digest"]["error"]
+    # The version becomes the tag of the installer's download URL.
+    assert "names no valid release version" in payloads["unsafe-version"]["error"]
+    assert "does not match the SHA-256 digest" in payloads["digest"]["error"]
     assert "invalid Authenticode signature" in payloads["signature"]["error"]
-    for mode in ("missing", "digest", "signature"):
+    # Without a verified digest the installer is never downloaded or run.
+    for mode in ("missing", "no-digest", "unsafe-version"):
+        assert len(payloads[mode]["downloads"]) == 1, mode
+    for mode in ("missing", "no-digest", "unsafe-version", "digest", "signature"):
         assert payloads[mode]["calls"] == [], mode
 
 
@@ -245,6 +267,8 @@ ConvertTo-Json -InputObject $urls -Compress
             "-Main -Version 1.2.3",
             "-Version selects a specific release and cannot be combined with -Main.",
         ),
+        # The tag becomes part of the release download URL.
+        ("-Version 1.2.3/../x", "-Version needs a release version such as 0.2.0 or v0.2.0."),
     ],
 )
 def test_windows_installer_failure_returns_to_a_script_block_caller(
