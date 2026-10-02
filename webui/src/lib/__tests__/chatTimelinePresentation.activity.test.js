@@ -920,14 +920,14 @@ describe('Reflection rows', () => {
 
   it.each([
     [
-      'a later Memory change by a background review',
+      'a later Memory change by a background Reflection',
       {
         store: 'memory',
         scope: 'agent',
         text: 'Uses pytest.',
         later: { actor: 'tool', run_kind: 'memory_reflection' },
       },
-      'Nothing was undone: the Agent Memory entry “Uses pytest.” was changed again later by a background review',
+      'Nothing was undone: the Agent Memory entry “Uses pytest.” was changed again later by a background Reflection',
     ],
     [
       'a Skill edited outside vBot',

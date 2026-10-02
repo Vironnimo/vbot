@@ -90,7 +90,7 @@ _CANDIDATE = LibrarianCandidate(
 _CANDIDATE_TEXT = (
     "- deploy-vercel\n"
     "  Description: Deploy the web app to Vercel.\n"
-    "  Created by: a background review of a conversation\n"
+    "  Created by: a background reflection on a conversation\n"
     "  Created: 2026-05-01\n"
     "  Last changed: 2026-06-01\n"
     "  Last used: never\n"

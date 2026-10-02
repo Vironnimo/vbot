@@ -282,7 +282,7 @@ export default Object.freeze({
   'skills.details.archivedBy': 'Archived by',
   'skills.actor.human': 'You',
   'skills.actor.agent': 'An Agent',
-  'skills.actor.reflection': 'A background review',
+  'skills.actor.reflection': 'A background Reflection',
   'skills.actor.librarian': 'Skill maintenance',
   'skills.actor.external': 'Outside vBot',
   'skills.actor.unknown': 'Unknown',
@@ -295,9 +295,10 @@ export default Object.freeze({
   'skills.facts.neverUsed': 'Not used yet',
   'skills.pinned': 'Pinned',
   'skills.pin.label': 'Pin {name}',
-  'skills.pin.pinHint': 'Pin so background reviews leave this skill unchanged',
+  'skills.pin.pinHint':
+    'Pin so Reflection and Skill maintenance leave this skill unchanged',
   'skills.pin.unpinHint':
-    'Pinned: background reviews leave this skill unchanged. Select to unpin.',
+    'Pinned: Reflection and Skill maintenance leave this skill unchanged. Select to unpin.',
   'skills.pin.pinnedToast': 'Skill “{name}” pinned.',
   'skills.pin.unpinnedToast': 'Skill “{name}” unpinned.',
   'skills.pin.error': 'The pin could not be changed.',
@@ -336,7 +337,7 @@ export default Object.freeze({
   'skills.revert.error': 'The change could not be reverted.',
   'skills.librarian.title': 'Skill maintenance',
   'skills.librarian.help':
-    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that a background review or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
+    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that Reflection or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
   'skills.librarian.run': 'Run now',
   'skills.librarian.schedule': 'Schedule',
   'skills.librarian.daily': 'Every day while the Agent is idle',

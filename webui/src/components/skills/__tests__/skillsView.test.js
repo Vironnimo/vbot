@@ -977,7 +977,7 @@ describe('Skills manager', () => {
           el.querySelector('dd').textContent,
         ]),
       );
-    expect(facts().created).toBe('A background review');
+    expect(facts().created).toBe('A background Reflection');
     expect(facts().changed).toContain('You');
     expect(facts().used).toContain('3 sessions');
     expect(button('Pin deploy', detail).getAttribute('aria-pressed')).toBe(
@@ -1058,7 +1058,7 @@ describe('Skills manager', () => {
       'Recorded as found',
     ]);
     expect(texts('.skills-history__meta', items[0])[0]).toContain(
-      'A background review',
+      'A background Reflection',
     );
     expect(texts('.skills-history__files li', items[1])).toEqual([
       'Changed SKILL.md',

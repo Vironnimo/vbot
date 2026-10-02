@@ -122,7 +122,7 @@ LIBRARIAN_SKILL_MD_MAX_CHARS = 12000
 # Who created a candidate, in the words of the Agent the brief addresses.
 _LIBRARIAN_ORIGIN_TEXTS = {
     "agent": "you, during a conversation",
-    "reflection": "a background review of a conversation",
+    "reflection": "a background reflection on a conversation",
     "librarian": "an earlier Librarian pass",
 }
 
