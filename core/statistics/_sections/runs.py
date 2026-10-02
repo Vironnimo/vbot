@@ -2,7 +2,9 @@
 
 A Run belongs to the window it started in. Duration and cost percentiles are
 nearest-rank over finished Runs (running ones have no final duration or
-cost); averages cover every in-window Run.
+cost); averages cover every in-window Run. ``previous`` holds the outcome
+counts and user-Run duration percentiles of the window of equal length
+before, or ``None`` without one.
 """
 
 from __future__ import annotations
@@ -74,6 +76,19 @@ def build(context: ReportContext) -> JsonObject:
             "wait_p50_ms": percentile(sorted_values(run.duration_ms for run in cancelled), 50),
         },
         "errors": _errors(context),
+        "previous": _previous(context),
+    }
+
+
+def _previous(context: ReportContext) -> JsonObject | None:
+    """Outcome counts and user-Run duration percentiles of the previous window."""
+    window = context.window.previous()
+    if window is None:
+        return None
+    runs = load_runs(context, window)
+    return {
+        "totals": status_counts(runs),
+        "user": _durations([run for run in runs if run.origin == "user"]),
     }
 
 

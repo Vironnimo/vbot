@@ -20,9 +20,9 @@
     formatShare,
     formatTokens,
     insightLines,
-    periodChange,
     shareOf,
     statisticsTabLabel,
+    tileChange,
     tokenTooltip,
     totalTokens,
     usageRowLabel,
@@ -69,12 +69,7 @@
   }
 
   function change(current, before, format, options = {}) {
-    const result = periodChange(current, before, { ...options, locale });
-    if (!result) return null;
-    return {
-      ...result,
-      tooltip: t('statistics.change.previous', { value: format(before) }),
-    };
+    return tileChange(current, before, format, { ...options, locale });
   }
 
   const tiles = $derived([
@@ -306,7 +301,7 @@
     {/each}
   </div>
   {#if !previous && !previousRuns}
-    <p class="stats-note">{t('statistics.overview.noComparison')}</p>
+    <p class="stats-note">{t('statistics.change.noComparison')}</p>
   {/if}
 
   <TrendChart

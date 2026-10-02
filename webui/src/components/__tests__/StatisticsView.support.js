@@ -76,7 +76,7 @@ function makeRunRow(overrides = {}) {
   };
 }
 
-/** Run outcome counts (`totals`, `runs`, `previous_runs`). */
+/** Run outcome counts (`totals`, `runs`, `previous_runs`, `previous.totals`). */
 function makeRunCounts(overrides = {}) {
   return {
     total: 10,
@@ -415,6 +415,15 @@ function makeRunsSection(overrides = {}) {
         hour,
         count: hour === 9 ? 3 : 0,
       })),
+    },
+    previous: {
+      totals: makeRunCounts({
+        total: 8,
+        completed: 6,
+        failed: 2,
+        cancelled: 0,
+      }),
+      user: { duration_p50_ms: 40_000, duration_p90_ms: 150_000 },
     },
     ...overrides,
   };

@@ -1,6 +1,6 @@
 <script>
-  // Runs tab: how Runs ended, how long they took by origin and Agent, the
-  // notable Runs, and the errors they recorded.
+  // Runs tab: how Runs ended against the previous period, how long they
+  // took by origin and Agent, the notable Runs, and the errors they recorded.
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import DataTable from '../ui/DataTable.svelte';
@@ -19,10 +19,12 @@
     formatDecimal,
     formatDurationMs,
     formatInteger,
+    formatPercent,
     formatShare,
     hourColumns,
     originLabel,
     shareOf,
+    tileChange,
   } from '$lib/statisticsView.js';
   import {
     agentName,
@@ -45,6 +47,9 @@
   const userOrigin = $derived(
     (section.by_origin ?? []).find((row) => row.origin === 'user') ?? null,
   );
+  // The previous period of equal length; null for an all-time report.
+  const previous = $derived(section.previous ?? null);
+  const before = $derived(previous?.totals ?? {});
   const durations = $derived(durationColumns(section.duration_buckets));
   const hours = $derived(hourColumns(errors.by_hour));
 
@@ -59,10 +64,19 @@
     most_steps: { column: 'model_steps', direction: 'desc' },
   };
 
+  /** The change against the previous period; null without one. */
+  function change(current, earlier, format, options = {}) {
+    if (!previous) return null;
+    return tileChange(current, earlier, format, { ...options, locale });
+  }
+
+  const count = (value) => formatInteger(value, locale);
+
   const tiles = $derived([
     {
       label: t('statistics.overview.runs'),
       value: formatInteger(totals.total, locale),
+      change: change(totals.total, before.total, count),
       detail:
         (totals.running ?? 0) > 0
           ? t('statistics.runs.running', {
@@ -73,6 +87,12 @@
     {
       label: t('statistics.runs.completed'),
       value: formatShare(totals.completed, totals.total, locale),
+      change: change(
+        shareOf(totals.completed, totals.total),
+        shareOf(before.completed, before.total),
+        (value) => formatPercent(value, locale),
+        { kind: 'points' },
+      ),
       detail: t('statistics.runs.ofRuns', {
         count: formatInteger(totals.completed, locale),
         total: formatInteger(totals.total, locale),
@@ -81,9 +101,18 @@
     {
       label: t('statistics.runs.failed'),
       value: formatInteger(totals.failed, locale),
+      change: change(totals.failed, before.failed, count),
       detail: t('statistics.runs.share', {
         share: formatShare(totals.failed, totals.total, locale),
       }),
+      // A falling failure rate is good news; the count alone is not.
+      detailChange: change(
+        shareOf(totals.failed, totals.total),
+        shareOf(before.failed, before.total),
+        (value) =>
+          t('statistics.runs.share', { share: formatPercent(value, locale) }),
+        { kind: 'points', judge: 'lowerIsBetter' },
+      ),
       detailTooltip:
         (totals.interrupted ?? 0) > 0
           ? t('statistics.runs.interrupted', {
@@ -95,6 +124,7 @@
       label: t('statistics.runs.cancelled'),
       hint: t('statistics.runs.cancelledHint'),
       value: formatInteger(totals.cancelled, locale),
+      change: change(totals.cancelled, before.cancelled, count),
       detail: t('statistics.runs.cancelledDetail', {
         cost: formatCost(cancelled.cost_usd, locale),
         wait: formatDurationMs(cancelled.wait_p50_ms),
@@ -104,6 +134,11 @@
       label: t('statistics.runs.yourRuns'),
       hint: t('statistics.overview.typicalRunHint'),
       value: formatDurationMs(userOrigin?.duration_p50_ms),
+      change: change(
+        userOrigin?.duration_p50_ms,
+        previous?.user?.duration_p50_ms,
+        formatDurationMs,
+      ),
       detail: t('statistics.overview.p90Duration', {
         duration: formatDurationMs(userOrigin?.duration_p90_ms),
       }),
@@ -342,6 +377,9 @@
       {@render kpiTile(tile)}
     {/each}
   </div>
+  {#if !previous}
+    <p class="stats-note">{t('statistics.change.noComparison')}</p>
+  {/if}
 
   <section class="stats-block">
     <h3 class="stats-block__title">{t('statistics.runs.byOrigin')}</h3>

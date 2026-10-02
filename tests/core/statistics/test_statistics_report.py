@@ -305,6 +305,15 @@ async def test_runs_report_origins_nearest_rank_percentiles_and_run_rows(
     }
     assert [row["run_id"] for row in runs["costliest"][:3]] == ["u9", "u8", "u7"]
     assert runs["most_steps"][0]["run_id"] == "cron"
+    # An all-time report has nothing before it; a window starting an hour after
+    # these Runs compares with the span of equal length that holds them.
+    assert runs["previous"] is None
+    later = service.report(since=BASE + timedelta(hours=1), sections=["runs"])["runs"]
+    assert later["totals"]["total"] == 0
+    assert later["previous"] == {
+        "totals": runs["totals"],
+        "user": {"duration_p50_ms": 500, "duration_p90_ms": 900},
+    }
 
 
 @pytest.mark.asyncio

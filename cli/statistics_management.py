@@ -279,6 +279,17 @@ def _totals_lines(totals: Mapping[str, Any]) -> list[str]:
 def _format_runs(section: Section, window: object) -> str:
     lines = ["runs:", *_window_lines(window)]
     lines.append(f"runs: {_status_counts(section.get('totals'))}")
+    previous = section.get("previous")
+    if isinstance(previous, dict):
+        previous_user = _mapping(previous.get("user"))
+        lines.append(
+            "previous window of equal length: "
+            f"{_status_counts(previous.get('totals'))} "
+            f"user_duration_p50={_duration(previous_user.get('duration_p50_ms'))} "
+            f"user_duration_p90={_duration(previous_user.get('duration_p90_ms'))}"
+        )
+    else:
+        lines.append("previous window: none (all-time report; pass --since to compare)")
     cancelled = _mapping(section.get("cancelled"))
     lines.append(
         f"cancelled: runs={_int(cancelled.get('runs'))} "

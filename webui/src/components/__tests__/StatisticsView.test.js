@@ -95,7 +95,7 @@ describe('StatisticsView', () => {
     expect(failureChange.classList).toContain('stats-change--down');
     expect(failureChange.classList).toContain('stats-change--good');
     expect(document.body.textContent).not.toContain(
-      t('statistics.overview.noComparison'),
+      t('statistics.change.noComparison'),
     );
     // Where the cost comes from, the largest share first.
     expect(
@@ -135,6 +135,56 @@ describe('StatisticsView', () => {
     await waitForCondition(() => document.querySelector('.stats-limits'));
     expect(reportCalls()).toHaveLength(before);
     expect(document.querySelector('.stats-toolbar')).toBeNull();
+  });
+
+  it('compares the Runs tab with the previous period and names error kinds', async () => {
+    // Only a report with a start has a previous period.
+    rpcMock.mockImplementation(
+      routedRpc(undefined, (params) =>
+        params.since
+          ? makeReport(params.sections)
+          : makeReport(params.sections, {
+              runs: { ...makeReport(['runs']).runs, previous: null },
+            }),
+      ),
+    );
+    const navigation = createStandaloneNavigation(['runs']);
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    await waitForCondition(() => tileText('statistics.runs.failed'));
+
+    const marker = (key, row = '.stats-tile__value-row') =>
+      tileText(key).tile.querySelector(`${row} .stats-change`);
+    expect(marker('statistics.overview.runs').textContent).toContain('25.0%');
+    expect(marker('statistics.runs.completed').textContent).toContain(
+      '5.0 pts',
+    );
+    expect(marker('statistics.runs.cancelled').textContent).toContain('new');
+    // Counts are not judged; a falling failure rate is good news.
+    const failed = marker('statistics.runs.failed');
+    expect(failed.classList).toContain('stats-change--down');
+    expect(failed.classList).toContain('stats-change--neutral');
+    const failureRate = marker(
+      'statistics.runs.failed',
+      '.stats-tile__detail-row',
+    );
+    expect(failureRate.textContent).toContain('15.0 pts');
+    expect(failureRate.classList).toContain('stats-change--good');
+    expect(marker('statistics.runs.yourRuns').textContent).toContain('5.0%');
+    expect(panel().textContent).not.toContain(
+      t('statistics.change.noComparison'),
+    );
+    // Run cost covers only requests inside Runs; error kinds read as names.
+    expect(panel().textContent).toContain(t('statistics.col.runCost'));
+    expect(panel().textContent).toContain(t('statistics.errorKind.rate_limit'));
+
+    buttonNamed('statistics.range.all').click();
+    await waitForCondition(() =>
+      panel().textContent.includes(t('statistics.change.noComparison')),
+    );
+    expect(panel().querySelector('.stats-tiles .stats-change')).toBeNull();
   });
 
   it('shows a revisited tab from its cache while one request revalidates it', async () => {

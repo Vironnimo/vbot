@@ -447,6 +447,21 @@ export function periodChange(
   return { direction, text, tone };
 }
 
+/**
+ * A KPI tile's change marker: `periodChange` with the previous value,
+ * formatted by `formatPrevious`, as its tooltip; null like `periodChange`.
+ */
+export function tileChange(current, previous, formatPrevious, options = {}) {
+  const result = periodChange(current, previous, options);
+  if (!result) return null;
+  return {
+    ...result,
+    tooltip: t('statistics.change.previous', {
+      value: formatPrevious(previous),
+    }),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Names and labels
 
