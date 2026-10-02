@@ -17,6 +17,7 @@ from pathlib import Path
 from core.settings import is_valid_agent_id
 from core.storage.errors import StorageError
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict
 
 PROMPT_FRAGMENT_NAMES = frozenset(
     {
@@ -95,7 +96,13 @@ class PromptFragmentStore:
         written_paths: list[Path] = []
         for fragment_name in sorted(AGENT_PROMPT_FRAGMENT_NAMES):
             target_path = target_dir / fragment_name
-            if target_path.exists() and not overwrite:
+            try:
+                preserve = not overwrite and exists_strict(target_path)
+            except OSError as exc:
+                raise StorageError(
+                    f"Cannot inspect Agent prompt fragment {fragment_name}: {exc}"
+                ) from exc
+            if preserve:
                 continue
 
             content = self.read_prompt_fragment(fragment_name)
@@ -119,11 +126,10 @@ class PromptFragmentStore:
 
         safe_name = self._validate_agent_prompt_fragment_name(fragment_name)
         prompt_path = self.agent_prompts_dir(agent_id) / safe_name
-        if not prompt_path.exists():
-            return ""
-
         try:
             return prompt_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, NotADirectoryError):
+            return ""
         except OSError as exc:
             raise StorageError(f"Cannot read Agent prompt fragment {safe_name}: {exc}") from exc
 
@@ -137,10 +143,11 @@ class PromptFragmentStore:
         safe_name = self._validate_prompt_fragment_name(fragment_name)
         data_path = self.prompts_dir / safe_name
         resource_path = self.resource_prompts_dir / safe_name
-        prompt_path = data_path if data_path.exists() else resource_path
-
         try:
-            return prompt_path.read_text(encoding="utf-8")
+            try:
+                return data_path.read_text(encoding="utf-8")
+            except (FileNotFoundError, NotADirectoryError):
+                return resource_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise StorageError(f"Cannot read prompt fragment {safe_name}: {exc}") from exc
 

@@ -141,11 +141,10 @@ def read_env_file(env_path: str | Path) -> dict[str, str]:
     """Read and parse a dotenv-style file, returning raw string values."""
 
     path = Path(env_path)
-    if not path.exists():
-        return {}
-
     try:
         raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
     except (OSError, UnicodeError) as exc:
         _LOGGER.warning("Ignoring unreadable environment file %s: %s", path, exc)
         return {}

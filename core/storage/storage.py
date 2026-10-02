@@ -175,12 +175,12 @@ class StorageManager:
         self.ensure_directories()
         with self._settings_lock:
             env_path = self.data_dir / ".env"
+            # A file that exists but cannot be read is never replaced: rewriting it
+            # from nothing would drop every other credential.
             try:
-                lines = (
-                    split_env_lines(env_path.read_text(encoding="utf-8"))
-                    if env_path.exists()
-                    else []
-                )
+                lines = split_env_lines(env_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                lines = []
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
@@ -223,10 +223,10 @@ class StorageManager:
 
         with self._settings_lock:
             env_path = self.data_dir / ".env"
-            if not env_path.exists():
-                return False
             try:
                 lines = split_env_lines(env_path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return False
             except OSError as exc:
                 raise StorageError(f"Cannot read {env_path}: {exc}") from exc
 
