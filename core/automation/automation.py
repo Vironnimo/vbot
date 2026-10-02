@@ -708,9 +708,10 @@ def _optional_run_kwargs(
     return options
 
 
-def _optional_tool_access_kwargs(
+def _optional_tool_kwargs(
     restriction: Sequence[str] | None,
     denial_resolver: Callable[[str], str | None] | None,
+    max_tool_iterations: int | None,
 ) -> dict[str, Any]:
     """Omit unrestricted defaults so unrelated trigger call shapes stay stable."""
     options: dict[str, Any] = {}
@@ -718,6 +719,8 @@ def _optional_tool_access_kwargs(
         options["tool_restriction"] = restriction
     if denial_resolver is not None:
         options["tool_denial_resolver"] = denial_resolver
+    if max_tool_iterations is not None:
+        options["max_tool_iterations"] = max_tool_iterations
     return options
 
 
@@ -831,6 +834,7 @@ class TriggerService:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
+        max_tool_iterations: int | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
@@ -842,10 +846,13 @@ class TriggerService:
         ``project_id=None`` keeps today's global/identity behavior. A set
         ``project_id`` creates the auto-session under that project's anchor and
         scopes the Run to the project (cwd = repo, project files in the prompt).
+        ``max_tool_iterations`` narrows the Run's dispatched Tool-iteration limit
+        (``ChatLoop.start_run``); ``None`` keeps the loop's limit.
         """
-        tool_access_kwargs = _optional_tool_access_kwargs(
+        tool_kwargs = _optional_tool_kwargs(
             tool_restriction,
             tool_denial_resolver,
+            max_tool_iterations,
         )
         if session_id is None:
             try:
@@ -856,7 +863,7 @@ class TriggerService:
                         internal=True,
                         reply_surface=reply_surface,
                         project_id=project_id,
-                        **tool_access_kwargs,
+                        **tool_kwargs,
                         **_optional_run_kwargs(
                             input_persisted_hook,
                             contributes_to_agent_activity,
@@ -870,7 +877,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **tool_access_kwargs,
+                    **tool_kwargs,
                     **_optional_run_kwargs(
                         input_persisted_hook,
                         contributes_to_agent_activity,
@@ -891,7 +898,7 @@ class TriggerService:
                     internal=True,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **tool_access_kwargs,
+                    **tool_kwargs,
                     **_optional_run_kwargs(
                         input_persisted_hook,
                         contributes_to_agent_activity,
@@ -907,7 +914,7 @@ class TriggerService:
                     sender=sender,
                     reply_surface=reply_surface,
                     project_id=project_id,
-                    **tool_access_kwargs,
+                    **tool_kwargs,
                     **_optional_run_kwargs(
                         input_persisted_hook,
                         contributes_to_agent_activity,
@@ -926,7 +933,7 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **tool_access_kwargs,
+                            **tool_kwargs,
                             **_optional_run_kwargs(
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
@@ -942,7 +949,7 @@ class TriggerService:
                             internal=True,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **tool_access_kwargs,
+                            **tool_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
                                 input_persisted_hook,
@@ -960,7 +967,7 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **tool_access_kwargs,
+                            **tool_kwargs,
                             **_optional_run_kwargs(
                                 input_persisted_hook,
                                 contributes_to_agent_activity,
@@ -976,7 +983,7 @@ class TriggerService:
                             sender=sender,
                             reply_surface=reply_surface,
                             project_id=project_id,
-                            **tool_access_kwargs,
+                            **tool_kwargs,
                             waiting_work_admission=waiting_work_admission,
                             **_optional_run_kwargs(
                                 input_persisted_hook,
