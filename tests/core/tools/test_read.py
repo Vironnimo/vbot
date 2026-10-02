@@ -75,10 +75,13 @@ def test_register_read_tool_exposes_provider_schema_without_description_property
     dialect_display = registry.display_for_call(
         "read", {"file_path": "notes.txt", "start_line": 5, "end_line": 9}
     )
+    # A digit int() cannot read is no line number, not a crash.
+    unclear_display = registry.display_for_call("read", {"path": "notes.txt", "offset": "\u00b2"})
     assert ranged_display["facts"] == [{"kind": "line_range", "start": 170, "end": 280}]
     assert default_display["facts"] == []
     assert continued_display["facts"] == [{"kind": "line_range", "start": 170, "end": 179}]
     assert dialect_display["facts"] == [{"kind": "line_range", "start": 5, "end": 9}]
+    assert unclear_display["facts"] == []
     assert dialect_display["primary"][0]["value"] == "notes.txt"
 
 

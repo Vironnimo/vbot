@@ -366,13 +366,21 @@ def test_finished_job_cannot_resume(tmp_path: Path) -> None:
     assert f'{{"action":"delete","id":"{job_id}"}}' in message
 
 
-def test_invalid_schedule_lists_the_forms(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schedule", "whenever"),
+        # Digits int() cannot read are no epoch time or compact date.
+        ("run_at", "\u00b2" * 10),
+    ],
+)
+def test_invalid_schedule_lists_the_forms(tmp_path: Path, field: str, value: str) -> None:
     tool = cron_tool(tmp_path)
 
-    envelope, _text = tool.call({"action": "create", "prompt": PROMPT, "schedule": "whenever"})
+    envelope, _text = tool.call({"action": "create", "prompt": PROMPT, field: value})
 
     message = _error(envelope)["message"]
-    assert message.startswith('cron was not run: schedule "whenever" is not valid')
+    assert message.startswith(f'cron was not run: schedule "{value}" is not valid')
     assert '"0 9 * * 1-5"' in message and '"every 2h"' in message and '"in 30m"' in message
     assert tool.jobs() == []
 

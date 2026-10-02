@@ -170,6 +170,11 @@ def _split_supported_line_ending(line: str) -> tuple[str, str]:
     return line, ""
 
 
+def _is_gutter_number(text: str) -> bool:
+    # read writes gutters with ASCII digits; other digit characters are content.
+    return text.isascii() and text.isdigit()
+
+
 def line_number_gutter_candidates(
     text: str,
     *,
@@ -201,9 +206,9 @@ def line_number_gutter_candidates(
         line_number, colon, character = prefix.partition(":")
         if (
             not separator
-            or not line_number.isdigit()
+            or not _is_gutter_number(line_number)
             or int(line_number) < 1
-            or (colon and (not character.isdigit() or int(character) < 1))
+            or (colon and (not _is_gutter_number(character) or int(character) < 1))
             or (colon and not allow_continuations)
         ):
             return ()
@@ -245,9 +250,9 @@ def strip_line_number_gutters(text: str) -> str | None:
         line_number, colon, character = prefix.partition(":")
         if (
             separator
-            and line_number.isdigit()
+            and _is_gutter_number(line_number)
             and int(line_number) >= 1
-            and (not colon or (character.isdigit() and int(character) >= 1))
+            and (not colon or (_is_gutter_number(character) and int(character) >= 1))
         ):
             content = rest[1:] if rest.startswith(" ") else rest
             result_lines.append(content + ending)

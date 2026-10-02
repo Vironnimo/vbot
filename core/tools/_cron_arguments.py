@@ -702,7 +702,7 @@ def _moment_text(
     clock = _clock_text(text)
     if clock is not None:
         return clock
-    if not text.isdigit():
+    if not text.isdecimal():
         return _schedule_text(item, "once", key, problems)
     if len(text) in {10, 13}:
         return _epoch_text(key, int(text), problems, absolute, milliseconds=milliseconds)

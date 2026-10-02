@@ -477,7 +477,7 @@ def _normalize_search_arguments(arguments: Any, zone: _Zone = _UTC_ZONE) -> Json
             value = str(value)
         if field in {"query", "agent_id", "session_id"} and isinstance(value, str):
             value = value.strip()
-        if field == "limit" and isinstance(value, str) and value.strip().isdigit():
+        if field == "limit" and isinstance(value, str) and value.strip().isdecimal():
             value = int(value.strip())
         if field in normalized and normalized[field] != value:
             raise _SessionSearchError(

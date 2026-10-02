@@ -99,6 +99,8 @@ def test_invalid_values_name_the_field_and_the_expected_value(
         ("1|first\n3|third", {}, ()),
         ("1|first\nordinary second line", {}, ()),
         ("| name | id |\n| --- | --- |", {}, ()),
+        # read writes ASCII line numbers; other digits are file content.
+        ("1|first\n\u00b2|second", {}, ()),
     ],
 )
 def test_gutter_candidates_need_a_complete_numbered_block(
@@ -121,6 +123,7 @@ def test_gutter_candidates_need_a_complete_numbered_block(
         ("def foo():\n    return 1", None),
         ("echo hi | grep foo", None),
         ("x = a|b\nc = d|e", None),
+        ("1| a\n\u00b2| b", "a\n\u00b2| b"),
         ("", None),
         (None, None),
     ],

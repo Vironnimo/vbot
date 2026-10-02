@@ -248,6 +248,7 @@ async def test_line_pair_past_the_line_end_reads_as_a_line_range(
             "offset=-5 counts from the end, so end_line=9 cannot close it.",
         ),
         ({"lines": "four"}, 'lines="four" is not a line range.'),
+        ({"end_line": "\u00b2"}, 'end_line must be a line number counting from 1, not "\u00b2".'),
         (
             {"offset": "max-10"},
             'offset takes a line number, not "max-10": offset=10 starts at line 10, and '

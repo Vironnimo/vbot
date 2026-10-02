@@ -392,6 +392,10 @@ def test_cron_under_a_constant_offset_fires_at_the_moments_the_zone_means(
         "0 3 1 * *",  # the day before the 1st is no fixed day of the month
         "0 3 * 1 *",  # 03:00 on January 1st is December 31st in UTC
         "0 * * * 1",  # Monday's hours start on Sunday in UTC
+        # Digits int() cannot read name no hour, weekday or step to convert.
+        "0 \u00b2 * * *",
+        "0 3 * * \u00b2",
+        "0 3 * * */\u00b2",
     ],
 )
 def test_cron_whose_fires_cannot_follow_the_zone_is_refused(tmp_path: Path, schedule: str) -> None:

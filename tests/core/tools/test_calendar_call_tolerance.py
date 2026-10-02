@@ -240,6 +240,27 @@ class TestRepetition:
             stored = {**stored, "by_weekday": sorted(stored["by_weekday"])}
         assert kept == stored
 
+    @pytest.mark.parametrize(
+        ("rule", "reason"),
+        [
+            ("FREQ=DAILY;INTERVAL=abc", "rrule.interval must be an integer between 1 and 1000"),
+            (
+                {"freq": "daily", "count": "\u00b3"},
+                "rrule.count must be an integer between 1 and 10000",
+            ),
+        ],
+    )
+    def test_rule_number_that_is_no_whole_number_is_refused(
+        self, tool: CalendarTool, rule: Any, reason: str
+    ) -> None:
+        _, text = tool.call(
+            {"action": "create", "title": "R", "start": DENTIST_START, "rrule": rule}
+        )
+
+        assert _refused(text)
+        assert reason in text
+        assert tool.events() == []
+
     def test_top_level_rule_parts_are_folded_into_rrule(self, tool: CalendarTool) -> None:
         _, text = tool.call(
             {

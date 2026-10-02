@@ -507,7 +507,7 @@ def _display_line_number(value: object) -> int | None:
         return None
     if isinstance(value, int):
         return value if value >= 1 else None
-    if isinstance(value, str) and value.isdigit():
+    if isinstance(value, str) and value.isdecimal():
         parsed = int(value)
         return parsed if parsed >= 1 else None
     return None

@@ -113,6 +113,7 @@ async def test_search_can_restrict_query_to_one_past_session(tmp_path: Path) -> 
         {"query": "needle", "order": "oldest"},
         {"query": "needle", "limit": 0},
         {"query": "needle", "limit": "some"},
+        {"query": "needle", "limit": "\u00b2"},
         {"query": "needle", "page": 2},
         {"cursor": "opaque"},
         {"session_id": "past"},
