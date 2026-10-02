@@ -130,14 +130,14 @@ def choose_display(
     displays: Sequence[Display],
     selection: str,
     foreground: WindowInfo | None,
-    granted: Callable[[WindowInfo], bool],
+    visible: Callable[[WindowInfo], bool],
 ) -> Display:
-    """Return the display for *selection*; ``auto`` follows a granted foreground window."""
+    """Return the display for *selection*; ``auto`` follows a visible foreground window."""
     if selection != "auto":
         chosen = next((display for display in displays if display.id == selection), None)
         if chosen is not None:
             return chosen
-    if foreground is not None and granted(foreground):
+    if foreground is not None and visible(foreground):
         holding = display_of_window(displays, foreground)
         if holding is not None:
             return holding

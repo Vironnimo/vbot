@@ -40,18 +40,18 @@ ACTIONS = (
     "cursor_position",
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
-APPS_ACTIONS = ("list", "request", "open")
+APPS_ACTIONS = ("list", "open", "request")
 MAX_BATCH_ACTIONS = 30
 
 COMPUTER_DESCRIPTION = (
     "Operate the desktop of the computer the vBot server runs on (Windows) with "
-    "screenshots, mouse and keyboard. First get access with computer_apps: windows of "
-    "apps not granted in this Session appear as gray boxes, and input into them is "
-    "refused. Coordinates are pixels [x, y] in the latest screenshot of the current "
-    "display; every result states that frame's size. Input actions return a new "
-    "screenshot about half a second later. Use zoom to read small text, and "
-    "computer_batch for several predictable steps. This is the user's real mouse and "
-    "keyboard: the user can stop you with the Stop button or by pressing Esc twice."
+    "screenshots, mouse and keyboard. Coordinates are pixels [x, y] in the latest "
+    "screenshot of the current display; every result states that frame's size. Input "
+    "actions return a new screenshot about half a second later. Use zoom to read small "
+    "text, computer_batch for several predictable steps, and computer_apps to bring an "
+    "app to the front. If the user requires approval per app, apps not approved yet "
+    "appear as gray boxes and input into them is refused. This is the user's real mouse "
+    "and keyboard: the user can stop you with the Stop button or by pressing Esc twice."
 )
 
 COMPUTER_BATCH_DESCRIPTION = (
@@ -65,14 +65,13 @@ COMPUTER_BATCH_DESCRIPTION = (
 )
 
 COMPUTER_APPS_DESCRIPTION = (
-    "Get access to apps on the server's desktop for computer, and bring them to the "
-    "front. The user grants each app for the current Session; computer sees and operates "
-    "only granted apps. list shows the granted apps with their access, the displays and "
-    "the running apps; with query it also searches the installed apps. request asks the "
-    "user and waits for the answer: browsers are granted view only, terminals and code "
-    "editors click only (clicks and scrolling), all other apps full control. Grants end "
-    "30 minutes after the last Computer Use call in the Session. open brings a granted "
-    "app to the front, starting it if needed, and returns a screenshot."
+    "Find apps on the server's desktop and bring them to the front for computer. list "
+    "shows the displays, the running apps and whether the user requires approval per "
+    "app; with query it also searches the installed apps. open brings an app to the "
+    "front, starting it if needed, and returns a screenshot. request is needed only when "
+    "the user requires approval per app: it asks the user to approve apps for the current "
+    "Session and waits for the answer. Approvals end 30 minutes after the last Computer "
+    "Use call in the Session."
 )
 
 
@@ -205,11 +204,10 @@ COMPUTER_APPS_PARAMETERS: dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "request: app names as shown in the Start menu, such as Notepad or "
-                "LibreOffice Calc."
+                "request: app names as list shows them, such as Notepad or LibreOffice Calc."
             ),
         },
-        "app": {"type": "string", "description": "open: the name of a granted app."},
+        "app": {"type": "string", "description": "open: an app name as list shows it."},
         "reason": {
             "type": "string",
             "description": (
@@ -715,8 +713,8 @@ def normalize_batch(arguments: Any) -> Any:
 _APPS_ALIASES = {
     **dict.fromkeys(("launch", "start", "focus", "activate", "switch", "show"), "open"),
     **dict.fromkeys(("bringtofront", "openapp", "openapplication", "run"), "open"),
-    **dict.fromkeys(("grant", "requestaccess", "access", "ask", "allow"), "request"),
-    **dict.fromkeys(("ls", "status", "granted", "listapps", "search", "find"), "list"),
+    **dict.fromkeys(("grant", "approve", "requestaccess", "access", "ask", "allow"), "request"),
+    **dict.fromkeys(("ls", "status", "granted", "approved", "listapps", "search", "find"), "list"),
 }
 
 

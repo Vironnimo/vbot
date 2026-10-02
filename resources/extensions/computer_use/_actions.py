@@ -18,8 +18,6 @@ from ._tools import ACTIONS
 type Point = tuple[int, int]
 
 READ_ACTIONS = frozenset({"screenshot", "zoom", "cursor_position", "wait"})
-# Without modifier keys these need only click access.
-CLICK_ACTIONS = frozenset({"left_click", "double_click", "triple_click", "scroll", "mouse_move"})
 CLICKS = {
     "left_click": ("left", 1),
     "right_click": ("right", 1),
@@ -68,15 +66,6 @@ class Action:
     scale: float = 1.0
     display: str | None = None
     notes: tuple[str, ...] = ()
-
-    @property
-    def tier(self) -> str:
-        """The access tier the action needs: ``read``, ``click`` or ``full``."""
-        if self.name in READ_ACTIONS:
-            return "read"
-        if self.name in CLICK_ACTIONS and not self.modifiers:
-            return "click"
-        return "full"
 
     @property
     def sends_input(self) -> bool:

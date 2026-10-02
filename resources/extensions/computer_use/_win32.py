@@ -53,6 +53,10 @@ class _BitmapInfoHeader(ct.Structure):
     ]
 
 
+class _BlendFunction(ct.Structure):
+    _fields_ = [(name, ct.c_ubyte) for name in ("op", "flags", "alpha", "format")]
+
+
 class _Luid(ct.Structure):
     _fields_ = [("low", ct.c_uint32), ("high", ct.c_int32)]
 
@@ -118,6 +122,7 @@ _DWMWA_EXTENDED_FRAME_BOUNDS, _DWMWA_CLOAKED = 9, 14
 _GWL_STYLE, _GWL_EXSTYLE = -16, -20
 _GW_OWNER, _GA_ROOT = 4, 2
 _LWA_ALPHA = 0x2
+_ULW_ALPHA, _AC_SRC_ALPHA = 0x2, 0x1
 _SRCCOPY_CAPTUREBLT = 0x00CC0020 | 0x40000000
 _QDC_ONLY_ACTIVE_PATHS = 2
 _DPI = threading.local()
@@ -146,6 +151,7 @@ class _Api:
     version: Any
     enum_proc: Any
     monitor_proc: Any
+    window_proc: Any
 
 
 _HANDLE, _INT, _UINT32 = ct.c_void_p, ct.c_int, ct.c_uint32
@@ -205,6 +211,23 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
             ct.c_long,
         ),
         "DisplayConfigGetDeviceInfo": ([_HANDLE], ct.c_long),
+        "RegisterClassExW": ([_HANDLE], ct.c_uint16),
+        "CreateWindowExW": (
+            [_UINT32, ct.c_wchar_p, ct.c_wchar_p, _UINT32, *[_INT] * 4, *[_HANDLE] * 4],
+            _HANDLE,
+        ),
+        "DestroyWindow": ([_HANDLE], _INT),
+        "DefWindowProcW": ([_HANDLE, ct.c_uint, ct.c_size_t, ct.c_ssize_t], ct.c_ssize_t),
+        "GetMessageW": ([_HANDLE, _HANDLE, ct.c_uint, ct.c_uint], _INT),
+        "PeekMessageW": ([_HANDLE, _HANDLE, ct.c_uint, ct.c_uint, ct.c_uint], _INT),
+        "DispatchMessageW": ([_HANDLE], ct.c_ssize_t),
+        "PostThreadMessageW": ([_UINT32, ct.c_uint, ct.c_size_t, ct.c_ssize_t], _INT),
+        "UpdateLayeredWindow": (
+            [_HANDLE, _HANDLE, _HANDLE, _HANDLE, _HANDLE, _HANDLE, _UINT32, _HANDLE, _UINT32],
+            _INT,
+        ),
+        "SetWindowDisplayAffinity": ([_HANDLE, _UINT32], _INT),
+        "SetWindowPos": ([_HANDLE, _HANDLE, _INT, _INT, _INT, _INT, ct.c_uint], _INT),
     },
     "gdi32": {
         "CreateCompatibleDC": ([_HANDLE], _HANDLE),
@@ -212,6 +235,10 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         "SelectObject": ([_HANDLE, _HANDLE], _HANDLE),
         "BitBlt": ([_HANDLE, _INT, _INT, _INT, _INT, _HANDLE, _INT, _INT, _UINT32], _INT),
         "GetDIBits": ([_HANDLE, _HANDLE, ct.c_uint, ct.c_uint, _HANDLE, _HANDLE, ct.c_uint], _INT),
+        "CreateDIBSection": (
+            [_HANDLE, _HANDLE, ct.c_uint, ct.POINTER(ct.c_void_p), _HANDLE, _UINT32],
+            _HANDLE,
+        ),
         "DeleteObject": ([_HANDLE], _INT),
         "DeleteDC": ([_HANDLE], _INT),
     },
@@ -228,6 +255,7 @@ _SIGNATURES: dict[str, dict[str, tuple[list[Any], Any]]] = {
         "GetCurrentProcess": ([], _HANDLE),
         "GetCurrentThreadId": ([], _UINT32),
         "ProcessIdToSessionId": ([_UINT32, _P_UINT32], _INT),
+        "GetModuleHandleW": ([ct.c_wchar_p], _HANDLE),
     },
     "advapi32": {
         "OpenProcessToken": ([_HANDLE, _UINT32, ct.POINTER(ct.c_void_p)], _INT),
@@ -269,6 +297,9 @@ def api() -> _Api:
     bound.enum_proc = ct.WINFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_ssize_t)
     bound.monitor_proc = ct.WINFUNCTYPE(
         ct.c_int, ct.c_void_p, ct.c_void_p, ct.POINTER(Rect), ct.c_ssize_t
+    )
+    bound.window_proc = ct.WINFUNCTYPE(
+        ct.c_ssize_t, ct.c_void_p, ct.c_uint, ct.c_size_t, ct.c_ssize_t
     )
     return bound
 
@@ -434,6 +465,58 @@ def capture_bgrx(left: int, top: int, width: int, height: int) -> bytes:
         if memory:
             gdi32.DeleteDC(memory)
         user32.ReleaseDC(None, screen)
+
+
+def paint_layered(
+    handle: int, left: int, top: int, width: int, height: int, bgra: bytes, alpha: int
+) -> bool:
+    """Place a layered window and give it top-down premultiplied BGRA pixels and an opacity."""
+    bound = api()
+    user32, gdi32 = bound.user32, bound.gdi32
+    screen = user32.GetDC(None)
+    if not screen:
+        return False
+    memory = gdi32.CreateCompatibleDC(screen)
+    header = _BitmapInfoHeader(ct.sizeof(_BitmapInfoHeader), width, -height, 1, 32)
+    bits = ct.c_void_p()
+    bitmap = gdi32.CreateDIBSection(memory, ct.byref(header), 0, ct.byref(bits), None, 0)
+    try:
+        if not memory or not bitmap or not bits.value:
+            return False
+        ct.memmove(bits.value, bgra, width * height * 4)
+        previous = gdi32.SelectObject(memory, bitmap)
+        try:
+            return bool(
+                user32.UpdateLayeredWindow(
+                    handle,
+                    screen,
+                    ct.byref(Point(left, top)),
+                    ct.byref(Point(width, height)),  # SIZE shares POINT's layout
+                    memory,
+                    ct.byref(Point(0, 0)),
+                    0,
+                    ct.byref(_BlendFunction(0, 0, alpha, _AC_SRC_ALPHA)),
+                    _ULW_ALPHA,
+                )
+            )
+        finally:
+            gdi32.SelectObject(memory, previous)
+    finally:
+        if bitmap:
+            gdi32.DeleteObject(bitmap)
+        if memory:
+            gdi32.DeleteDC(memory)
+        user32.ReleaseDC(None, screen)
+
+
+def set_layered_opacity(handle: int, alpha: int) -> bool:
+    """Change only the opacity of a layered window that :func:`paint_layered` painted."""
+    blend = _BlendFunction(0, 0, alpha, _AC_SRC_ALPHA)
+    return bool(
+        api().user32.UpdateLayeredWindow(
+            handle, None, None, None, None, None, 0, ct.byref(blend), _ULW_ALPHA
+        )
+    )
 
 
 # Windows

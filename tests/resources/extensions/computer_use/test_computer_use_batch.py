@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,6 @@ CLICK = {"action": "left_click", "coordinate": [200, 150], "action_summary": "Fo
 
 
 async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
     context = computer.context_for("computer_batch")
     actions = [
@@ -58,14 +58,12 @@ async def test_batch_runs_in_order_and_returns_images_in_order(computer: Harness
 async def test_batch_adds_no_final_screenshot_after_one_or_without_input(
     computer: Harness, actions: list, count: int
 ) -> None:
-    await computer.grant("Notepad")
     context = computer.context_for("computer_batch")
     result = await computer.call("computer_batch", {"actions": actions}, context)
     assert result["ok"] and len(images(context)) == count
 
 
 async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: Harness) -> None:
-    await computer.grant("Notepad", "Paint")
     await computer.computer(action="screenshot")
     computer.target.inputs.clear()
 
@@ -83,7 +81,8 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
 
 
 async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Harness) -> None:
-    await computer.grant("Notepad")
+    slack = computer.target.windows_[3]
+    computer.target.windows_[3] = replace(slack, elevated=True)
     computer.target.inputs.clear()
     actions = [
         CLICK,
@@ -91,9 +90,9 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
         {"action": "type", "text": "x"},
     ]
     result = await computer.call("computer_batch", {"actions": actions})
-    assert result["error"]["code"] == "access_required"
+    assert result["error"]["code"] == "target_elevated"
     message = result["error"]["message"]
-    assert message.startswith("Action 2 of 3 (left_click) failed: The window at [800, 600] belongs")
+    assert message.startswith("Action 2 of 3 (left_click) failed: Slack runs as administrator")
     assert "The remaining 1 did not run.\nActions that ran" in message
     assert message.endswith("\n1. left_click at [200, 150]")
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
@@ -109,7 +108,6 @@ async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Har
 async def test_batch_with_an_invalid_action_runs_nothing(
     computer: Harness, bad: dict, message: str
 ) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
     result = await computer.call("computer_batch", {"actions": [CLICK, bad]})
     assert result["error"]["code"] == "invalid_arguments"
@@ -118,7 +116,6 @@ async def test_batch_with_an_invalid_action_runs_nothing(
 
 
 async def test_double_escape_interrupts_a_batch_between_input_events(computer: Harness) -> None:
-    await computer.grant("Notepad")
     computer.target.inputs.clear()
 
     def escape_on_typing(record: tuple) -> None:
@@ -137,10 +134,10 @@ async def test_double_escape_interrupts_a_batch_between_input_events(computer: H
     assert message.endswith("\n1. left_click at [200, 150]")
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
     assert computer.hotkey.armed is None
+    assert computer.target.activity == [True, False]  # a stop takes the sign down
 
 
 async def test_control_reports_and_stops_only_the_active_call(computer: Harness) -> None:
-    await computer.grant("Notepad")
     loop = asyncio.get_running_loop()
     seen: list[dict] = []
 
@@ -184,7 +181,6 @@ async def test_control_reports_and_stops_only_the_active_call(computer: Harness)
 
 
 async def test_run_cancellation_stops_the_call(computer: Harness) -> None:
-    await computer.grant("Notepad")
     callbacks: list = []
     context = computer.context_for("computer", cancel_registration_hook=callbacks.append)
 
@@ -199,10 +195,29 @@ async def test_run_cancellation_stops_the_call(computer: Harness) -> None:
 
 
 async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Harness) -> None:
-    await computer.grant("Notepad")
     computer.target.pointer = (200, 150)
     assert (await computer.computer(action="left_mouse_down"))["ok"]
     await computer.service.run_end(SimpleNamespace(run_id="other"))
     assert computer.target.released == 0
     await computer.service.run_end(SimpleNamespace(run_id="run"), outcome="completed")
     assert computer.target.released == 1
+
+
+async def test_the_activity_sign_lasts_from_the_first_call_to_the_end_of_the_run(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await computer.call("computer_apps", {"action": "list"})
+    assert computer.target.activity == []
+    await computer.computer(action="screenshot")
+    await computer.computer(action="type", text="x")
+    assert computer.target.activity == [True]
+    await computer.service.run_end(SimpleNamespace(run_id="other"))
+    assert computer.target.activity == [True]
+    await computer.service.run_end(SimpleNamespace(run_id="run"))
+    assert computer.target.activity == [True, False]
+
+    # A Run that stops calling loses the sign after the idle time.
+    monkeypatch.setattr(computer_use, "ACTIVITY_IDLE_SECONDS", 0)
+    await computer.computer(action="screenshot")
+    await asyncio.sleep(0.01)
+    assert computer.target.activity == [True, False, True, False]
