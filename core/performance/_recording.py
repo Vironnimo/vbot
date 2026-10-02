@@ -14,7 +14,7 @@ import json
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 
@@ -360,40 +360,20 @@ def write_recording(recording: Recording, directory: Path, *, keep: int) -> dict
 
 
 def list_recordings(directory: Path, *, limit: int) -> list[dict[str, Any]]:
-    """Return retained recordings newest first."""
+    """Return retained recordings newest first, in the order pruning keeps them."""
     entries: list[dict[str, Any]] = []
-    if not directory.is_dir():
-        return entries
-    for summary_path in directory.glob(f"{RECORDING_ID_PREFIX}_*{SUMMARY_SUFFIX}"):
-        recording_id = summary_path.name.removesuffix(SUMMARY_SUFFIX)
-        if not is_safe_id(recording_id):
-            continue
-        entry = _read_summary(summary_path, recording_id)
-        if entry is None:
-            continue
-        entry["trace_path"] = _public_path(directory / f"{recording_id}{TRACE_SUFFIX}")
-        entries.append(entry)
-    entries.sort(key=lambda entry: (entry["started_at"], entry["recording_id"]), reverse=True)
-    return entries[:limit]
+    for recording_id, _paths, entry in _newest_first(directory):
+        if len(entries) == limit:
+            break
+        if entry is not None:
+            entry["trace_path"] = _public_path(directory / f"{recording_id}{TRACE_SUFFIX}")
+            entries.append(entry)
+    return entries
 
 
 def prune_recordings(directory: Path, *, keep: int) -> None:
     """Delete every recording file pair beyond the newest ``keep`` recordings."""
-    groups: dict[str, list[Path]] = {}
-    try:
-        entries = list(directory.iterdir())
-    except OSError:
-        return
-    for path in entries:
-        recording_id = _recording_id_for(path.name)
-        if recording_id is not None:
-            groups.setdefault(recording_id, []).append(path)
-    ordered = sorted(
-        groups.items(),
-        key=lambda item: (max(_mtime_ns(path) for path in item[1]), item[0]),
-        reverse=True,
-    )
-    for recording_id, paths in ordered[keep:]:
+    for recording_id, paths, _entry in _newest_first(directory)[keep:]:
         for path in paths:
             try:
                 path.unlink(missing_ok=True)
@@ -402,6 +382,42 @@ def prune_recordings(directory: Path, *, keep: int) -> None:
                     "Could not delete a pruned performance recording file (recording=%s)",
                     recording_id,
                 )
+
+
+def _newest_first(directory: Path) -> list[tuple[str, list[Path], dict[str, Any] | None]]:
+    """Group the recording files of ``directory`` by recording, newest first.
+
+    A complete recording is placed by its summary's ``started_at``, so listing and
+    pruning agree and file times with a coarse resolution never decide the order.
+    Files without a readable summary (a trace still being written, or one left by
+    a crash) have no entry and are placed by their newest modification time, so a
+    concurrent write is never taken for the oldest recording.
+    """
+    groups: dict[str, list[Path]] = {}
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return []
+    for path in entries:
+        recording_id = _recording_id_for(path.name)
+        if recording_id is not None:
+            groups.setdefault(recording_id, []).append(path)
+    ranked: list[tuple[datetime, str, list[Path], dict[str, Any] | None]] = []
+    for recording_id, paths in groups.items():
+        summary_path = directory / f"{recording_id}{SUMMARY_SUFFIX}"
+        read = (
+            _read_summary(summary_path, recording_id)
+            if summary_path in paths and is_safe_id(recording_id)
+            else None
+        )
+        if read is None:
+            modified = max(_mtime_ns(path) for path in paths) / 1_000_000_000
+            ranked.append((datetime.fromtimestamp(modified, UTC), recording_id, paths, None))
+        else:
+            started_at, entry = read
+            ranked.append((started_at, recording_id, paths, entry))
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [(recording_id, paths, entry) for _, recording_id, paths, entry in ranked]
 
 
 def _write_trace(handle: BinaryIO, events: list[_Event]) -> None:
@@ -429,21 +445,35 @@ def _event_object(event: _Event) -> dict[str, Any]:
     return item
 
 
-def _read_summary(path: Path, recording_id: str) -> dict[str, Any] | None:
+def _read_summary(path: Path, recording_id: str) -> tuple[datetime, dict[str, Any]] | None:
+    """Return a summary's start instant and list entry, or ``None`` when unreadable."""
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except OSError, ValueError:
         document = None
+    started_at = None
     if (
-        not isinstance(document, dict)
-        or document.get("recording_id") != recording_id
-        or any(name not in document for name in _SUMMARY_FIELDS)
+        isinstance(document, dict)
+        and document.get("recording_id") == recording_id
+        and all(name in document for name in _SUMMARY_FIELDS)
     ):
+        started_at = _parse_instant(document["started_at"])
+    if started_at is None:
         _LOGGER.warning(
             "Skipped an unreadable performance recording summary (recording=%s)", recording_id
         )
         return None
-    return {name: document[name] for name in _SUMMARY_FIELDS}
+    return started_at, {name: document[name] for name in _SUMMARY_FIELDS}
+
+
+def _parse_instant(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def _recording_id_for(name: str) -> str | None:
