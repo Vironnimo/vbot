@@ -110,7 +110,8 @@ def test_mypy_errors_block_unless_in_unstaged_work_in_progress() -> None:
 def test_python_312_workers_are_type_checked_against_3_12_when_they_can_change(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, checked: bool
 ) -> None:
-    # Managed model environments run the workers on Python 3.12, not on vBot's Python.
+    # Managed model environments run the workers on Python 3.12, not on vBot's Python;
+    # their package's other modules run on vBot's Python and are not checked.
     monkeypatch.setattr(commit_check, "check_types", lambda *_arguments: [])
     commands: list[list[str]] = []
     error = "core/model_tasks/speech_worker.py:9: error: Module has no attribute  [attr-defined]"
@@ -129,7 +130,7 @@ def test_python_312_workers_are_type_checked_against_3_12_when_they_can_change(
     python_312 = [command for command in commands if "--python-version" in command]
     if checked:
         assert python_312 == [
-            [sys.executable, "-m", "mypy", "--python-version", "3.12"]
+            [sys.executable, "-m", "mypy", "--python-version", "3.12", "--follow-imports", "skip"]
             + list(commit_check.PYTHON_312_FILES)
         ]
         assert ("mypy 3.12", "FAIL", True, error) in results

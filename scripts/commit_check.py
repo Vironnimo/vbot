@@ -322,8 +322,22 @@ def check_types(
 
 
 def check_python_312(root: Path, staged: set[str], dirty: set[str]) -> list[StepResult]:
-    """Run mypy over ``PYTHON_312_FILES`` against Python 3.12's standard library."""
-    command = [sys.executable, "-m", "mypy", "--python-version", "3.12", *PYTHON_312_FILES]
+    """Run mypy over ``PYTHON_312_FILES`` against Python 3.12's standard library.
+
+    The workers import only the standard library. Repository imports are skipped:
+    mypy would otherwise parse their package, whose modules run on the server's
+    Python and may use newer syntax.
+    """
+    command = [
+        sys.executable,
+        "-m",
+        "mypy",
+        "--python-version",
+        "3.12",
+        "--follow-imports",
+        "skip",
+        *PYTHON_312_FILES,
+    ]
     return _mypy_results("mypy 3.12", _run(command, root), staged, dirty)
 
 
