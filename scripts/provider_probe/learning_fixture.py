@@ -6,7 +6,8 @@ are restored to their state after startup before every attempt. The System
 Prompt comes from production prompt assembly with the attempt's pinned Memory
 and Skill catalog, the Model is offered the Agent's full effective Tool
 definitions, and Tool calls run through the production Tool executor; a scope's
-Tool restriction applies only at dispatch, as in a Reflection review.
+Tool restriction and its denial answer apply only at dispatch, as in a
+Reflection review.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ class PreparedAttempt:
     definitions: list[dict[str, Any]]
     messages: list[dict[str, Any]]
     restriction: tuple[str, ...]
+    # Production's answer to a call outside a review's scope; ``None`` for /learn.
+    denial_resolver: Callable[[str], str | None] | None
     session_id: str
     run_id: str
     agent_temperature: float | None
@@ -243,7 +246,10 @@ class EvalWorker:
         self, case: Mapping[str, Any], scope: str, *, attempt_id: str
     ) -> PreparedAttempt:
         """Seed one attempt's state and build its first request like production."""
-        from core.automation.reflection import REFLECTION_TOOL_RESTRICTIONS
+        from core.automation.reflection import (
+            REFLECTION_TOOL_RESTRICTIONS,
+            _review_tool_denial_resolver,
+        )
         from core.chat._request_history import _prepare_request_messages
         from core.chat.messages import ChatMessage
         from core.chat.messages import ToolCall as CanonicalToolCall
@@ -289,14 +295,17 @@ class EvalWorker:
             skill_catalog=runtime.system_prompts.render_skill_catalog(agent, registry),
             effective_tool_definitions=definitions,
         )
-        restriction = (
-            LEARN_DISPATCH_TOOLS if scope == "learn" else tuple(REFLECTION_TOOL_RESTRICTIONS[scope])  # type: ignore[index]
-        )
+        if scope == "learn":
+            restriction, denial_resolver = LEARN_DISPATCH_TOOLS, None
+        else:
+            restriction = tuple(REFLECTION_TOOL_RESTRICTIONS[scope])  # type: ignore[index]
+            denial_resolver = _review_tool_denial_resolver(scope)  # type: ignore[arg-type]
         prepared = PreparedAttempt(
             system_prompt=system_prompt,
             definitions=definitions,
             messages=[],
             restriction=restriction,
+            denial_resolver=denial_resolver,
             session_id=f"eval-{attempt_id}",
             run_id=f"eval-{attempt_id}-run",
             agent_temperature=getattr(agent, "temperature", None),
@@ -361,18 +370,29 @@ class EvalWorker:
         prepared: PreparedAttempt,
         *,
         restriction: Sequence[str] | None,
+        denial_resolver: Callable[[str], str | None] | None = None,
         notes: list[str],
         iteration: int = 0,
     ) -> list[dict[str, Any]]:
         """Run Tool calls through the production executor and dispatch allowlist.
 
         ``restriction`` narrows dispatch like a Run's Tool restriction; ``None``
-        dispatches with the Agent's full allowlist. Tool notes go to ``notes``.
+        dispatches with the Agent's full allowlist. A call ``denial_resolver``
+        answers fails with that message without running, as Chat answers it
+        before dispatch. Tool notes go to ``notes``.
         """
         from core.chat.tool_dispatch import _dispatch_allowed_tools
-        from core.tools import ToolCall, ToolExecutionConfig, ToolExecutor
+        from core.tools import ToolCall, ToolExecutionConfig, ToolExecutor, tool_failure
         from core.tools.availability import agent_tool_settings
 
+        denied: dict[int, dict[str, Any]] = {}
+        for index, call in enumerate(calls):
+            message = denial_resolver(str(call["name"])) if denial_resolver else None
+            if message is not None:
+                denied[index] = tool_failure("tool_not_allowed", message)
+        runnable = [call for index, call in enumerate(calls) if index not in denied]
+        if not runnable:
+            return [denied[index] for index in range(len(calls))]
         runtime = self.runtime
         agent = self._agent()
         workspace = Path(agent.workspace)
@@ -394,15 +414,17 @@ class EvalWorker:
             skill_activation_hook=_activation_hook(prepared.activated),
             input_contracts=runtime.tools.contracts_for_provider_definitions(prepared.definitions),
         )
-        results: list[dict[str, Any]] = await ToolExecutor(runtime.tools).execute_many(
-            [
-                ToolCall(
-                    id=str(call["id"]),
-                    name=str(call["name"]),
-                    arguments=call.get("arguments"),
-                )
-                for call in calls
-            ],
-            config,
+        executed = iter(
+            await ToolExecutor(runtime.tools).execute_many(
+                [
+                    ToolCall(
+                        id=str(call["id"]),
+                        name=str(call["name"]),
+                        arguments=call.get("arguments"),
+                    )
+                    for call in runnable
+                ],
+                config,
+            )
         )
-        return results
+        return [denied[index] if index in denied else next(executed) for index in range(len(calls))]

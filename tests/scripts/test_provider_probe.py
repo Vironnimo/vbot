@@ -102,7 +102,7 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     assert learning_eval.main(["export-pack", str(pack)]) == 0
     (pack / "blocks" / "skill_maintenance.md").write_text("## Skill Maintenance\n\nCANDIDATE-BLOCK")
     (pack / "tools" / "memory" / "description.md").write_text("CANDIDATE-TOOL")
-    (pack / "briefs" / "memory.md").write_text("CANDIDATE-BRIEF")
+    (pack / "fragments" / "reflect-memory-closing.md").write_text("CANDIDATE-FRAGMENT")
     add = {"action": "add", "scope": "user", "content": "User prefers German responses."}
     adapter = ScriptedAdapter(
         _call("memory", {"action": "list", "scope": "user"}),
@@ -138,10 +138,10 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     assert code == 1
     assert "CANDIDATE-BLOCK" in first["messages"][0]["content"]
     assert tools["memory"]["description"] == "CANDIDATE-TOOL"
-    assert "CANDIDATE-BRIEF" in first["messages"][-1]["content"]
+    assert "CANDIDATE-FRAGMENT" in first["messages"][-1]["content"]
     assert sorted(report["run"]["text_pack"]["changed"]) == [
         "block:core:skill_maintenance",
-        "brief:memory",
+        "fragment:reflect-memory-closing.md",
         "tool:memory:description",
     ]
     assert [(row["passed"], row["effect_passed"]) for row in report["pass_rates"]] == [(1, 2)]

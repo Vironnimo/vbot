@@ -25,11 +25,20 @@ from scripts.provider_probe.learning_fixture import EvalWorker, tool_message_con
 from scripts.provider_probe.learning_scoring import CallObserver, score_attempt
 from scripts.provider_probe.learning_texts import TextPack, load_text_pack
 
-# Mirrors the planned per-Run Tool iteration limit of review Runs; a review that
-# needs more has lost its way. /learn keeps a generous safety budget instead.
-REVIEW_TOOL_ITERATION_LIMIT = 16
+# Review Runs use production's REFLECTION_TOOL_ITERATION_LIMIT. /learn runs under
+# Chat's loop limit in production; the harness bounds its cost here instead.
 LEARN_TOOL_ITERATION_LIMIT = 30
 MAX_REPETITIONS = 50
+# Chat's answers to Tool calls it refuses once a Run must finish
+# (core/chat/_agentic_progression.py).
+_LIMIT_FAILURE = (
+    "The Run reached its limit of {limit} dispatched Tool iterations. This Tool was not "
+    "executed; provide the final answer without issuing another Tool Call."
+)
+_DISABLED_FAILURE = (
+    "Tool execution is disabled for the remainder of this Run. This Tool was not executed; "
+    "provide the final answer without issuing another Tool Call."
+)
 
 
 def _reflection_cases() -> list[dict[str, Any]]:
@@ -87,6 +96,132 @@ def _sampling_kwargs(
     }
 
 
+def _record_results(
+    step: int,
+    calls: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    calls_log: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+) -> None:
+    """Log each call with its result and answer it with a Tool message."""
+    for call, result in zip(calls, results, strict=True):
+        calls_log.append(
+            {
+                "step": step,
+                "name": call.get("name"),
+                "arguments": call.get("arguments"),
+                "ok": bool(result.get("ok")),
+                "result": result,
+            }
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "name": call.get("name"),
+                "tool_call_id": call["id"],
+                "content": tool_message_content(result),
+            }
+        )
+
+
+class _ToolBudget:
+    """Chat's Tool budget of one Run, which ends a Model's Tool use like production.
+
+    A round of calls at the iteration limit fails unrun, and a round that
+    repeats an identical failed call ``MAX_IDENTICAL_FAILED_TOOL_CALLS`` times
+    asks for the final answer too; afterwards requests offer no Tools and calls
+    fail unrun. The second round of calls after that ends the Run.
+    """
+
+    def __init__(self, limit: int, registry: Any) -> None:
+        from core.chat._step_outcomes import _FailedToolCallCircuitBreaker
+
+        self.limit = limit
+        self.iterations = 0
+        self.finalization_reason: str | None = None
+        self._finalization_violations = 0
+        self._limit_reached = False
+        self._breaker = _FailedToolCallCircuitBreaker()
+        self._registry = registry
+
+    def refusal(self) -> dict[str, Any] | None:
+        """Start a round: the result refusing its calls unrun, or ``None`` to dispatch."""
+        from core.chat._step_outcomes import (
+            TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+            TOOL_ITERATION_LIMIT_FAILURE_CODE,
+        )
+        from core.tools import tool_failure
+
+        self._limit_reached = False
+        if self.finalization_reason is not None:
+            return tool_failure(
+                TOOL_FINALIZATION_DISABLED_FAILURE_CODE, _DISABLED_FAILURE, retryable=False
+            )
+        if self.iterations >= self.limit:
+            self._limit_reached = True
+            return tool_failure(
+                TOOL_ITERATION_LIMIT_FAILURE_CODE,
+                _LIMIT_FAILURE.format(limit=self.limit),
+                retryable=False,
+            )
+        self.iterations += 1
+        return None
+
+    def finish_round(
+        self,
+        calls: list[dict[str, Any]],
+        results: list[dict[str, Any]],
+        violations: list[str],
+    ) -> tuple[str | None, bool]:
+        """End a round: the finalization note to add, and whether the Run ends now."""
+        from core.chat._step_outcomes import (
+            MAX_IDENTICAL_FAILED_TOOL_CALLS,
+            MAX_TOOL_FINALIZATION_VIOLATIONS,
+            TOOL_FINALIZATION_NOTE,
+        )
+        from core.chat.messages import ChatMessage
+        from core.chat.messages import ToolCall as CanonicalToolCall
+        from core.tools.model_names import model_tool_name
+
+        reason: str | None = None
+        if self._limit_reached:
+            reason = f"the Run reached its limit of {self.limit} dispatched Tool iterations"
+            violations.append("tool_iteration_limit")
+        repeated = self._breaker.observe(
+            [
+                CanonicalToolCall(
+                    id=str(call["id"]),
+                    name=str(call.get("name")),
+                    arguments=call["arguments"] if isinstance(call.get("arguments"), dict) else {},
+                )
+                for call in calls
+            ],
+            [
+                ChatMessage.tool(
+                    tool_call_id=str(call["id"]),
+                    name=str(call.get("name")),
+                    content=tool_message_content(result),
+                )
+                for call, result in zip(calls, results, strict=True)
+            ],
+            self._registry,
+        )
+        if repeated is not None and reason is None:
+            reason = (
+                f"Tool {model_tool_name(repeated)!r} repeated the same failed Call "
+                f"{MAX_IDENTICAL_FAILED_TOOL_CALLS} times"
+            )
+            violations.append("repeated_failed_call")
+        if self.finalization_reason is not None:
+            self._finalization_violations += 1
+            if self._finalization_violations >= MAX_TOOL_FINALIZATION_VIOLATIONS:
+                return None, True
+        if reason is not None:
+            self.finalization_reason = reason
+            return TOOL_FINALIZATION_NOTE.format(reason=reason), False
+        return None, False
+
+
 async def _run_attempt(
     worker: EvalWorker,
     adapter: Any,
@@ -96,7 +231,12 @@ async def _run_attempt(
     repetition: int,
     models: Any,
 ) -> dict[str, Any]:
-    """Run one attempt; a crash is recorded on the attempt, never dropped."""
+    """Run one attempt; a crash is recorded on the attempt, never dropped.
+
+    The Model's Tool use ends like a Chat Run's (``_ToolBudget``). Reaching
+    the iteration limit or repeating a failed call is a violation.
+    """
+    from core.automation.reflection import REFLECTION_TOOL_ITERATION_LIMIT
     from core.chat.wire_shaping import system_reminder_request_message
     from core.providers.adapter import terminal_outcome_from_response
 
@@ -123,7 +263,10 @@ async def _run_attempt(
     calls_log: list[dict[str, Any]] = []
     system_prompt = ""
     definitions: list[dict[str, Any]] = []
-    limit = LEARN_TOOL_ITERATION_LIMIT if scope == "learn" else REVIEW_TOOL_ITERATION_LIMIT
+    budget = _ToolBudget(
+        LEARN_TOOL_ITERATION_LIMIT if scope == "learn" else REFLECTION_TOOL_ITERATION_LIMIT,
+        worker.runtime.tools,
+    )
     try:
         async with asyncio.timeout(args.total_timeout):
             prepared = await worker.prepare(case, scope, attempt_id=attempt_id)
@@ -142,7 +285,7 @@ async def _run_attempt(
                 raw = await adapter.send(
                     messages,
                     model_id=args.model,
-                    tools=definitions,
+                    tools=[] if budget.finalization_reason else definitions,
                     thinking_effort=args.thinking_effort,
                     **request_kwargs,
                 )
@@ -166,53 +309,46 @@ async def _run_attempt(
                     attempt["finished"] = outcome == "stop" and bool(str(text or "").strip())
                     attempt["stopped_reason"] = "final_answer" if attempt["finished"] else outcome
                     break
-                if attempt["tool_iterations"] >= limit:
-                    attempt["stopped_reason"] = "iteration_limit"
-                    break
-                attempt["tool_iterations"] += 1
                 for index, call in enumerate(calls):
                     call.setdefault("id", f"call-{attempt['steps']}-{index}")
-                    arguments = call.get("arguments")
-                    target = arguments if isinstance(arguments, dict) else {}
-                    observer.before(
-                        str(call.get("name")),
-                        arguments,
-                        own_file_exists=call.get("name") == "skill_manage"
-                        and target.get("action") != "create"
-                        and worker.own_skill_file_exists(
-                            str(target.get("name") or ""),
-                            str(target.get("file_path") or "SKILL.md"),
-                        ),
-                    )
                 notes: list[str] = []
-                results = await worker.dispatch(
-                    calls,
-                    prepared,
-                    restriction=prepared.restriction,
-                    notes=notes,
-                    iteration=attempt["tool_iterations"],
-                )
-                for call, result in zip(calls, results, strict=True):
-                    observer.after(str(call.get("name")), call.get("arguments"), result)
-                    calls_log.append(
-                        {
-                            "step": attempt["steps"],
-                            "name": call.get("name"),
-                            "arguments": call.get("arguments"),
-                            "ok": bool(result.get("ok")),
-                            "result": result,
-                        }
+                refusal = budget.refusal()
+                if refusal is not None:
+                    results = [refusal] * len(calls)
+                else:
+                    for call in calls:
+                        arguments = call.get("arguments")
+                        target = arguments if isinstance(arguments, dict) else {}
+                        observer.before(
+                            str(call.get("name")),
+                            arguments,
+                            own_file_exists=call.get("name") == "skill_manage"
+                            and target.get("action") != "create"
+                            and worker.own_skill_file_exists(
+                                str(target.get("name") or ""),
+                                str(target.get("file_path") or "SKILL.md"),
+                            ),
+                        )
+                    results = await worker.dispatch(
+                        calls,
+                        prepared,
+                        restriction=prepared.restriction,
+                        denial_resolver=prepared.denial_resolver,
+                        notes=notes,
+                        iteration=budget.iterations,
                     )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "name": call.get("name"),
-                            "tool_call_id": call["id"],
-                            "content": tool_message_content(result),
-                        }
-                    )
+                    for call, result in zip(calls, results, strict=True):
+                        observer.after(str(call.get("name")), call.get("arguments"), result)
+                _record_results(attempt["steps"], calls, results, calls_log, messages)
+                attempt["tool_iterations"] = budget.iterations
+                note, ended = budget.finish_round(calls, results, observer.violations)
+                if note is not None:
+                    notes.append(note)
                 if notes:
                     messages.append(system_reminder_request_message(*notes))
+                if ended:
+                    attempt["stopped_reason"] = "tool_calls_after_finalization"
+                    break
             after = worker.state()
             attempt.update(
                 score_attempt(case, scope, before, after, observer, finished=attempt["finished"])

@@ -8,11 +8,14 @@ Memory and Skill learning, so two arms of an A/B evaluation differ only in them:
 - the ``memory``, ``skill`` and ``skill_manage`` Tool descriptions
   (``tools/<name>/description.md``) and their parameter descriptions
   (``tools/<name>/parameters.json``, JSON-pointer path to text),
-- the review briefs per Reflection scope and the ``/learn`` base instruction
-  (``briefs/<scope>.md``).
+- every prompt fragment the Reflection review briefs and the ``/learn`` brief
+  are assembled from (``fragments/<name>``, the names in
+  ``core.prompts.briefs.BRIEF_FRAGMENT_NAMES``).
 
 ``export-pack`` writes the current texts of this checkout; ``--text-pack DIR``
-replaces exactly these texts in a run and nothing else.
+replaces exactly these texts in a run and nothing else. Production assembles
+the briefs from the run's fragments, so a pack changes brief wording, never
+brief composition.
 """
 
 from __future__ import annotations
@@ -29,7 +32,7 @@ from typing import Any
 
 from scripts.provider_probe.common import PROJECT_ROOT
 
-TEXT_PACK_FORMAT = 1
+TEXT_PACK_FORMAT = 2
 
 # Pack file stem -> System Prompt block id.
 BLOCK_TEXTS: dict[str, str] = {
@@ -38,8 +41,13 @@ BLOCK_TEXTS: dict[str, str] = {
     "skill_maintenance": "core:skill_maintenance",
 }
 TOOL_TEXTS: tuple[str, ...] = ("memory", "skill", "skill_manage")
-BRIEF_SCOPES: tuple[str, ...] = ("memory", "skill", "combined", "learn")
-REVIEW_SCOPES: tuple[str, ...] = ("memory", "skill", "combined")
+
+
+def brief_fragment_names() -> tuple[str, ...]:
+    """Return every prompt fragment production assembles the learning briefs from."""
+    from core.prompts.briefs import BRIEF_FRAGMENT_NAMES
+
+    return tuple(sorted(BRIEF_FRAGMENT_NAMES))
 
 
 @dataclass(frozen=True)
@@ -56,7 +64,7 @@ class LearningTexts:
 
     blocks: dict[str, str]
     tools: dict[str, ToolTexts]
-    briefs: dict[str, str]
+    fragments: dict[str, str]
 
     def items(self) -> Iterator[tuple[str, str]]:
         """Yield ``(text id, text)`` for every text, in a stable order."""
@@ -67,8 +75,8 @@ class LearningTexts:
             yield f"tool:{name}:description", texts.description
             for pointer in sorted(texts.parameters):
                 yield f"tool:{name}:{pointer}", texts.parameters[pointer]
-        for scope in BRIEF_SCOPES:
-            yield f"brief:{scope}", self.briefs[scope]
+        for name in sorted(self.fragments):
+            yield f"fragment:{name}", self.fragments[name]
 
     def digests(self) -> dict[str, str]:
         """Return a short SHA-256 per text id, so reports show which texts differ."""
@@ -83,7 +91,7 @@ class TextPack:
     manifest: dict[str, Any]
     blocks: dict[str, str]
     tools: dict[str, ToolTexts]
-    briefs: dict[str, str]
+    fragments: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -129,12 +137,9 @@ def current_texts(
 
     ``definitions`` are the Agent's provider Tool definitions, ``blocks`` the
     prompt block listing (``SystemPromptManager.list_blocks``) and
-    ``read_fragment`` the storage reader production uses for briefs
+    ``read_fragment`` the storage reader production assembles briefs from
     (``StorageManager.read_prompt_fragment``).
     """
-    from core.automation.reflection import REFLECT_FRAGMENT_NAMES
-    from core.chat._command_builtin import LEARN_FRAGMENT_NAME
-
     by_id = {str(block["id"]): block for block in blocks}
     block_texts: dict[str, str] = {}
     for block_id in BLOCK_TEXTS.values():
@@ -152,31 +157,39 @@ def current_texts(
             description=str(definition.get("description") or ""),
             parameters=dict(_description_paths(definition.get("parameters") or {})),
         )
-    fragments = {str(scope): name for scope, name in REFLECT_FRAGMENT_NAMES.items()}
-    fragments["learn"] = LEARN_FRAGMENT_NAME
-    briefs = {scope: str(read_fragment(fragments[scope])).strip() for scope in BRIEF_SCOPES}
-    return LearningTexts(blocks=block_texts, tools=tools, briefs=briefs)
+    fragments = {name: str(read_fragment(name)) for name in brief_fragment_names()}
+    return LearningTexts(blocks=block_texts, tools=tools, fragments=fragments)
+
+
+class _FragmentTexts:
+    """Serve brief fragments from a run's texts, as Storage serves fragment files."""
+
+    def __init__(self, fragments: Mapping[str, str]) -> None:
+        self._fragments = fragments
+
+    def read_prompt_fragment(self, fragment_name: str) -> str:
+        try:
+            return self._fragments[fragment_name]
+        except KeyError:
+            raise KeyError(f"No text for brief fragment {fragment_name}") from None
 
 
 def brief_text(scope: str, case: Mapping[str, Any], texts: LearningTexts) -> str:
     """Return the instruction the Model receives for one case in one scope.
 
-    This is the single seam between the harness and production brief assembly.
-    Today production reads prompt fragment files: a review uses the scope's
-    ``reflect*.md`` fragment as is (``ReflectionService._build_instruction``
-    without an extra instruction) and ``/learn`` appends the request to
-    ``learn.md`` (``_build_learn_prompt``). ``texts.briefs`` holds those
-    fragments, or a text pack's replacement. Once Reflection assembles briefs
-    in Python, this seam calls ``reflection_brief(scope)`` for the review
-    scopes and ``learn_brief(request)`` for ``learn`` instead, keeping text-pack
-    replacement of their texts.
+    This is the single seam between the harness and production brief assembly:
+    it calls production ``reflection_brief`` (a review without user focus, as
+    the cadence trigger starts it) or ``learn_brief`` with the case's request,
+    reading ``texts.fragments`` in place of Storage.
     """
-    from core.chat._command_builtin import _build_learn_prompt
+    from core.prompts.briefs import learn_brief, reflection_brief
 
-    base = texts.briefs[scope]
+    fragments = _FragmentTexts(texts.fragments)
     if scope == "learn":
-        return _build_learn_prompt(base, str(case.get("learn_request") or ""))
-    return base
+        return learn_brief(fragments, case.get("learn_request"))
+    if scope not in ("memory", "skill", "combined"):
+        raise ValueError(f"Unknown evaluation scope: {scope}")
+    return reflection_brief(fragments, scope)  # type: ignore[arg-type]
 
 
 def apply_tool_texts(
@@ -205,8 +218,6 @@ def _pack_files() -> Iterator[tuple[str, str]]:
     for name in TOOL_TEXTS:
         yield f"tools/{name}/description.md", "tool"
         yield f"tools/{name}/parameters.json", "parameters"
-    for scope in BRIEF_SCOPES:
-        yield f"briefs/{scope}.md", "brief"
 
 
 def checkout_commit() -> str | None:
@@ -237,15 +248,16 @@ def write_text_pack(texts: LearningTexts, directory: Path) -> Path:
             directory / "tools" / name / "parameters.json",
             json.dumps(tool_texts.parameters, indent=2, ensure_ascii=False) + "\n",
         )
-    for scope in BRIEF_SCOPES:
-        _write(directory / "briefs" / f"{scope}.md", texts.briefs[scope])
+    for name, text in texts.fragments.items():
+        _write(directory / "fragments" / name, text)
     manifest = {
         "format": TEXT_PACK_FORMAT,
         "exported_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "exported_from_commit": checkout_commit(),
         "notes": (
-            "Edit any file to build an A/B arm. briefs/learn.md is the /learn base "
-            "instruction; the harness appends each case's request like production. "
+            "Edit any file to build an A/B arm. fragments/ holds every prompt fragment "
+            "the review and /learn briefs are assembled from; production joins them per "
+            "scope (core/prompts/briefs.py) and appends each case's /learn request. "
             "Keep {generated:...} markers in the block texts."
         ),
         "texts": texts.digests(),
@@ -260,18 +272,27 @@ def _write(path: Path, text: str) -> None:
 
 
 def load_text_pack(directory: Path) -> TextPack:
-    """Read a text pack; every text file must be present."""
-    missing = [
-        relative for relative, _kind in _pack_files() if not (directory / relative).is_file()
-    ]
-    if missing:
-        raise ValueError(f"Text pack {directory} lacks: {', '.join(missing)}")
+    """Read a text pack; every block and Tool text file must be present.
+
+    Fragments are read as the pack holds them; merging decides which of them a
+    brief reads, since the fragment set follows the checkout.
+    """
     manifest_path = directory / "manifest.json"
     manifest = (
         json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
     )
     if manifest.get("format", TEXT_PACK_FORMAT) != TEXT_PACK_FORMAT:
-        raise ValueError(f"Unsupported text pack format: {manifest.get('format')!r}")
+        raise ValueError(
+            f"Unsupported text pack format {manifest.get('format')!r}; "
+            f"export a format {TEXT_PACK_FORMAT} pack with export-pack"
+        )
+    missing = [
+        relative for relative, _kind in _pack_files() if not (directory / relative).is_file()
+    ]
+    if not (directory / "fragments").is_dir():
+        missing.append("fragments/")
+    if missing:
+        raise ValueError(f"Text pack {directory} lacks: {', '.join(missing)}")
 
     def read(relative: str) -> str:
         return (directory / relative).read_text(encoding="utf-8")
@@ -287,8 +308,14 @@ def load_text_pack(directory: Path) -> TextPack:
         tools[name] = ToolTexts(
             description=read(f"tools/{name}/description.md").strip(), parameters=parameters
         )
-    briefs = {scope: read(f"briefs/{scope}.md").strip() for scope in BRIEF_SCOPES}
-    return TextPack(path=directory, manifest=manifest, blocks=blocks, tools=tools, briefs=briefs)
+    fragments = {
+        path.name: path.read_text(encoding="utf-8").strip()
+        for path in sorted((directory / "fragments").iterdir())
+        if path.is_file()
+    }
+    return TextPack(
+        path=directory, manifest=manifest, blocks=blocks, tools=tools, fragments=fragments
+    )
 
 
 def merge_text_pack(current: LearningTexts, pack: TextPack | None) -> AppliedTexts:
@@ -297,7 +324,9 @@ def merge_text_pack(current: LearningTexts, pack: TextPack | None) -> AppliedTex
     A pack text equal to the current one apart from surrounding whitespace keeps
     the current text, so a pack exported from this checkout reproduces it
     exactly. A parameter path the current schema lacks is ignored with a
-    warning; a current path the pack lacks keeps its production text.
+    warning; a current path the pack lacks keeps its production text. Fragments
+    follow the same rule: a pack fragment no brief reads is ignored, and a
+    fragment the pack lacks keeps its production text, each with a warning.
     """
     if pack is None:
         return AppliedTexts(current)
@@ -326,8 +355,16 @@ def merge_text_pack(current: LearningTexts, pack: TextPack | None) -> AppliedTex
         tools[name] = ToolTexts(
             description=pick(tool_texts.description, packed.description), parameters=parameters
         )
-    briefs = {scope: pick(text, pack.briefs[scope]) for scope, text in current.briefs.items()}
-    merged = LearningTexts(blocks=blocks, tools=tools, briefs=briefs)
+    fragments: dict[str, str] = {}
+    for name, text in current.fragments.items():
+        if name in pack.fragments:
+            fragments[name] = pick(text, pack.fragments[name])
+        else:
+            fragments[name] = text
+            warnings.append(f"fragment:{name} is not in the pack; production text kept")
+    for name in sorted(pack.fragments.keys() - current.fragments.keys()):
+        warnings.append(f"fragment:{name} is read by no brief; ignored")
+    merged = LearningTexts(blocks=blocks, tools=tools, fragments=fragments)
     before = current.digests()
     changed = [text_id for text_id, digest in merged.digests().items() if before[text_id] != digest]
     return AppliedTexts(merged, changed=changed, warnings=warnings)

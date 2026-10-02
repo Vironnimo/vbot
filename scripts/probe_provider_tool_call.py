@@ -149,7 +149,8 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "Replace the learning texts (Memory and Skill prompt blocks, memory/skill/"
-            "skill_manage Tool descriptions, review and /learn briefs) with a text pack."
+            "skill_manage Tool descriptions, review and /learn brief fragments) with a "
+            "text pack."
         ),
     )
     parser.add_argument("--recall-case", default="all")

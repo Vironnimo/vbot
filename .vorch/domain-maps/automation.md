@@ -86,10 +86,11 @@ The learning evaluation (`scripts/probe_provider_tool_call.py --scenario
 reflection_workflow`, cases in `tests/fixtures/reflection/cases.json`) runs reviews
 and `/learn` against a real Model in a disposable vBot through production prompt
 rendering and dispatch, repeats every attempt, scores stored effects and Tool use in
-code, and swaps learning texts through text packs. It builds briefs through
-`brief_text` in `scripts/provider_probe/learning_texts.py`: a change to review or
-`/learn` brief assembly updates that seam in the same change, or evaluations measure
-stale briefs.
+code, and swaps learning texts through text packs. Briefs come from production
+`reflection_brief`/`learn_brief` over the run's fragment texts, and review dispatch
+uses production's restriction, denial answer and `REFLECTION_TOOL_ITERATION_LIMIT`,
+so brief and review Run changes reach evaluations through their owners; a pack
+holds every fragment in `BRIEF_FRAGMENT_NAMES`.
 
 ```
 # export the current texts as a pack (edit a copy for a candidate arm)
