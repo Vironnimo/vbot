@@ -106,6 +106,21 @@ export function mcpCredentialNames(configuration) {
 // `resources/extensions/mcp/_management.py`).
 const LIVE_RESOURCES = new Set(['connections', 'jobs']);
 
+// A connection that references credentials without a value needs setup
+// before it can connect. Its row shows the same status and "Waiting for"
+// line as an Extension waiting for its settings; `null` when nothing is
+// missing.
+export function mcpSetupNeeded(connection) {
+  const missing = connection?.missing_credentials ?? [];
+  if (!missing.length) return null;
+  return {
+    hint: t('settings.extensions.waiting'),
+    waitingFor: t('settings.extensions.waitingFor', {
+      fields: missing.join(', '),
+    }),
+  };
+}
+
 // The advice for a failed connection's diagnosed `problem` (`status`
 // reports its `code` and details); a code this WebUI does not know shows
 // the Extension's own English advice.

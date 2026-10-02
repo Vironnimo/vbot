@@ -167,7 +167,6 @@ export default Object.freeze({
   'mcp.sseDeprecated': 'Deprecated in MCP',
   'mcp.sseHint':
     'Legacy SSE is deprecated in MCP. Choose Server URL (HTTP) unless the server only offers SSE.',
-  'mcp.missingCredentials': 'Credentials without a value: {names}.',
   'mcp.technicalDetails': 'Technical details',
   'mcp.serverOutput': 'Server output (last {count} lines)',
   'mcp.problemInstall':
