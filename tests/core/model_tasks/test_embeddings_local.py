@@ -246,15 +246,35 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         monkeypatch.setattr(harrier, "_command", commands)
         monkeypatch.setattr(harrier, "_packaged", lambda: True)
         monkeypatch.setattr(local_setup, "fetch_model_files", fetch)
+        # A completed environment based on a Python other than the server's, as
+        # left behind when vBot's Python changed: its recipe names no Python.
+        assert harrier.directory is not None
+        harrier.python.parent.mkdir(parents=True)
+        harrier.python.touch()
+        base = tmp_path / "base-python"
+        base.mkdir()
+        config = f"home = {base}\nversion_info = 3.1.4\n"
+        (harrier.directory / "pyvenv.cfg").write_text(config, encoding="utf-8")
+        (harrier.directory / "verified.json").write_text("{}\n", encoding="utf-8")
         assert harrier.status() == {
             "state": "missing",
             "phase": "checking",
-            "error": "python_missing",
+            "error": "python_changed",
         }
 
         harrier.install()
         assert harrier._task is not None
         await harrier._task
+
+        # The environment was created again on the server's Python.
+        assert not (harrier.directory / "pyvenv.cfg").exists()
+        venv = next(call for call in commands.calls if "venv" in call)
+        server = f"{sys.version_info.major}.{sys.version_info.minor}"
+        assert venv[venv.index("--python") + 1 :] == [
+            server,
+            "--managed-python",
+            str(harrier.directory),
+        ]
 
         assert harrier.status()["state"] == "ready" and harrier.available()
         assert harrier.activity() == {"state": "completed"}

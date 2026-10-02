@@ -111,13 +111,18 @@ module = [
 ignore_missing_imports = true
 
 # SDK stacks live in separate managed Python environments, never in the server.
+# An environment runs on the server's Python (major.minor) unless its recipe names
+# `python`; setup creates it again whenever its Python differs.
 [tool.vbot.local-tts.qwen3-tts]
-python = "3.12"
 packages = ["qwen-tts==0.1.1"]
 torch = "2.11.0"
 
 [tool.vbot.local-tts.chatterbox]
-python = "3.12"
+# Python 3.13, not the server's: chatterbox-tts depends on spacy-pkuseg, whose
+# wheels (1.0.1) stop at CPython 3.13. Move to the server's Python once it has
+# wheels there (chatterbox-tts 0.1.7 then requires torch>=2.9), together with the
+# speech worker's older-Python checks (PROJECT.md -> Development -> Python version).
+python = "3.13"
 packages = ["chatterbox-tts==0.1.7"]
 # PyPI 0.1.7 supplies dependencies; this pinned official source adds V3.
 source = "https://github.com/resemble-ai/chatterbox/archive/5de7a54aa4e5e2baadb0182dde554908b48b85c2.zip"
@@ -126,5 +131,4 @@ torch = "2.6.0"
 
 # The local embedding engine's environment, shared by every local embedding Model.
 [tool.vbot.local-embeddings.onnx]
-python = "3.12"
 packages = ["onnxruntime==1.26.0", "tokenizers==0.23.2", "numpy==2.5.2", "onnx==1.21.0"]

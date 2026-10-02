@@ -142,16 +142,18 @@ reaps the package subprocess. Raw package output stays private. Local execution 
 during installation, failure and the verified restart-required state. Development-checkout STT
 rechecks package metadata; managed STT/TTS require the environment interpreter, the base
 Python its `pyvenv.cfg` names (`python_missing` once that is gone, e.g. after the application
-was installed again), for STT the server's `major.minor` Python version (`python_changed`,
-because its worker imports vBot source), and a
+was installed again) with the `major.minor` the environment requires (`python_changed`
+otherwise; `model_tasks.md` -> Overview): for STT the server's (it has no recipe: its worker
+imports vBot source), for TTS its recipe's `python`, else also the server's. They also
+require a
 `verified.json` completion receipt, written atomically only after successful verification
 and removed before package changes. Every target also needs its Model receipt
 (`model_missing` otherwise). Setup removes and recreates an environment that fails one of
 these Python checks. A check that cannot read the interpreter, base Python, `pyvenv.cfg` or a
 receipt reports `environment_unreadable` instead (`local_setup.environment_error`), and setup
 never removes such an environment. Environment receipt contents are not runtime compatibility data:
-changed dependency declarations or worker source never invalidate a completed setup.
-A changed pinned revision does: the target is `model_missing` until installed again.
+changed dependency declarations or worker source never invalidate a completed setup;
+only a changed required Python does (above). A changed pinned revision does too: the target is `model_missing` until installed again.
 Actual SDK, device and Model failures are handled at execution. Status reads neither
 import ML runtimes nor start subprocesses, rewrite receipts or run setup. Explicit
 `task_model.status` checks report the selected local speech environment's concrete
@@ -186,8 +188,10 @@ Local TTS registrations are `local/qwen3-tts-1.7b` and `local/qwen3-tts-0.6b`
 (CustomVoice, preset voices/languages; style instructions only on 1.7B) and
 `local/chatterbox` (Multilingual V3, language, expressiveness/guidance). Their
 incompatible SDK dependencies are
-installed into managed Python 3.12 environments under the Runtime-injected
-`DataDirectoryLayout.speech_engines` root; both Qwen3-TTS sizes share one. `local-tts` installs only uv in the
+installed into managed environments under the Runtime-injected
+`DataDirectoryLayout.speech_engines` root; both Qwen3-TTS sizes share one. Qwen3-TTS runs on
+the server's Python; Chatterbox on Python 3.13, because its dependency `spacy-pkuseg` has no
+wheels for newer Pythons (`[tool.vbot.local-tts.chatterbox]` comment in `pyproject.toml`). `local-tts` installs only uv in the
 development-checkout server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
 matched Torch/audio packages inside the managed environment. Verification writes a completion
 receipt and never loads weights; once the target's Model is fetched, TTS is available
@@ -199,9 +203,9 @@ before restoring the pinned source without dependencies. This avoids resolving t
 requirements from an already installed, same-version source distribution.
 
 `speech_worker.py` starts without importing vBot, loads SDKs only inside its
-child environment (TTS environments run it on Python 3.12, so it keeps to 3.12
-syntax and standard library, which ruff and the commit hook check: PROJECT.md ->
-Development -> Python version), reports `loading`/`synthesizing` phases and writes
+child environment (every speech environment runs it, Chatterbox's on Python 3.13,
+so it keeps to 3.13 syntax and standard library, which ruff and the commit hook check:
+PROJECT.md -> Development -> Python version), reports `loading`/`synthesizing` phases and writes
 mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS target
 while that target's load options (`device`) match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child

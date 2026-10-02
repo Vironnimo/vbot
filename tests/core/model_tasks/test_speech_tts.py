@@ -245,6 +245,10 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
         if "install" in cmd and "uv" in cmd:
             assert cmd[cmd.index("--python") + 1] == str(setup.python)
     recipe = setup._config()["tool"]["vbot"]["local-tts"][engine]
+    # The environment runs on the recipe's Python, else on the server's.
+    venv = next(cmd for cmd in commands if "venv" in cmd)
+    server = f"{sys.version_info.major}.{sys.version_info.minor}"
+    assert venv[venv.index("--python") + 1] == recipe.get("python", server)
     package_stage = next(
         cmd for cmd in commands if "--only-binary=:all:" in cmd and recipe["packages"][0] in cmd
     )

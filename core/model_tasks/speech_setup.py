@@ -54,6 +54,9 @@ class LocalSpeechSetup(LocalSetup):
         super().__init__(
             name=name or engine or "stt",
             directory=directory,
+            # Managed STT has no recipe: its worker imports vBot's source and
+            # therefore runs on the server's Python.
+            recipe=("local-tts", engine) if engine else (),
             install_lock=install_lock,
             subject="Local speech",
             logger=_LOGGER,
@@ -100,13 +103,6 @@ class LocalSpeechSetup(LocalSetup):
         if self._server_stack is not None:
             return "" if _dependencies_available() else "dependencies_missing"
         return super()._environment_error()
-
-    @override
-    def _python_version(self) -> str | None:
-        # The managed STT worker imports vBot's source, which needs the server's Python.
-        if self.engine:
-            return None
-        return f"{sys.version_info.major}.{sys.version_info.minor}"
 
     @override
     async def _perform(self) -> None:
@@ -200,7 +196,7 @@ class LocalSpeechSetup(LocalSetup):
 
     async def _install_tts(self) -> bool:
         assert self.directory is not None
-        device = await self._install_recipe("local-tts", self.engine)
+        device = await self._install_recipe()
         if device is None:
             return False
         worker = Path(__file__).with_name("speech_worker.py")

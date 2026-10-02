@@ -584,24 +584,38 @@ def _environment(setup: LocalSpeechSetup, *, home: Path, version: str) -> None:
     setup._write_marker(setup.directory / "verified.json")
 
 
-@pytest.mark.parametrize("engine", ["", "qwen3-tts"])
-@pytest.mark.parametrize("base", ["current", "gone", "other version"])
+_SERVER_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
+
+
+@pytest.mark.parametrize(
+    ("engine", "recipe", "required"),
+    [
+        # Managed STT has no recipe: its worker imports vBot's source.
+        ("", None, _SERVER_PYTHON),
+        # A recipe without `python` follows the server's Python too.
+        ("qwen3-tts", {"packages": ["sdk==1"]}, _SERVER_PYTHON),
+        ("chatterbox", {"python": "3.9", "packages": ["sdk==1"]}, "3.9"),
+    ],
+)
+@pytest.mark.parametrize("base", ["required", "gone", "other version"])
 def test_managed_speech_needs_setup_again_when_its_python_cannot_serve(
-    tmp_path: Path, engine: str, base: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: str,
+    recipe: dict[str, Any] | None,
+    required: str,
+    base: str,
 ) -> None:
-    setup = LocalSpeechSetup(engine=engine, directory=tmp_path / "speech-engines" / "stt")
-    current = f"{sys.version_info.major}.{sys.version_info.minor}.0"
+    setup = LocalSpeechSetup(engine=engine, directory=tmp_path / "speech-engines" / "env")
+    if recipe is not None:
+        config = {"tool": {"vbot": {"local-tts": {engine: recipe}}}}
+        monkeypatch.setattr(setup, "_config", lambda: config)
     home = tmp_path / "python"
     if base != "gone":
         home.mkdir()
-    _environment(setup, home=home, version="3.1.0" if base == "other version" else current)
+    _environment(setup, home=home, version="3.1.0" if base == "other version" else f"{required}.7")
 
-    # STT runs vBot's source and needs the server's Python; TTS keeps its recipe's.
-    expected = {
-        "current": "",
-        "gone": "python_missing",
-        "other version": "" if engine else "python_changed",
-    }[base]
+    expected = {"required": "", "gone": "python_missing", "other version": "python_changed"}[base]
     assert setup.status()["error"] == expected
     assert setup.available() is (expected == "")
 
@@ -630,7 +644,10 @@ def test_completed_managed_speech_setup_survives_application_updates(
     # Neither changed requirements nor changed worker source is runtime evidence
     # that a completed environment stopped working. No metadata rewrite, import,
     # subprocess, or setup should be needed to use it after an update.
-    monkeypatch.setattr(setup, "_config", MagicMock(side_effect=AssertionError("recipe read")))
+    config = setup._config()
+    for recipe in config["tool"]["vbot"]["local-tts"].values():
+        recipe["packages"] = ["changed-sdk==2"]
+    monkeypatch.setattr(setup, "_config", lambda: config)
     monkeypatch.setattr(speech_setup, "__file__", str(tmp_path / "new-release" / "speech_setup.py"))
     monkeypatch.setattr(
         speech_setup, "_dependencies_available", MagicMock(side_effect=AssertionError("host probe"))

@@ -32,7 +32,7 @@ from threading import Lock, Timer
 from typing import Any, Protocol, override
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
-from core.model_tasks.local_setup import LocalSetup, environment_error
+from core.model_tasks.local_setup import LocalSetup
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
 from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
@@ -230,6 +230,7 @@ class LocalEmbeddingSetup(LocalSetup):
         super().__init__(
             name=model.id,
             directory=environment,
+            recipe=("local-embeddings", "onnx"),
             install_lock=install_lock,
             subject="Local embedding",
             logger=_LOGGER,
@@ -261,8 +262,8 @@ class LocalEmbeddingSetup(LocalSetup):
     async def _perform(self) -> None:
         assert self.directory is not None and self.model_directory is not None
         model = self.embedding_model
-        if environment_error(self.directory, self.python):
-            if await self._install_recipe("local-embeddings", "onnx") is None:
+        if self._environment_error():
+            if await self._install_recipe() is None:
                 return
             if await self._command([str(self.python), "-I", "-B", str(_WORKER), "--verify"]) != 0:
                 self._fail("verification_failed")
