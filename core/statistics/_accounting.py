@@ -6,9 +6,15 @@ import sqlite3
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
-from core.statistics._projection import CALL_COLUMNS, ProjectedRows, timestamp_instant
+from core.statistics._projection import (
+    CALL_COLUMNS,
+    CALL_TABLE_DEFINITION,
+    ProjectedRows,
+    timestamp_instant,
+)
 
 if TYPE_CHECKING:
+    from core.statistics._rollups import RollupChanges
     from core.usage import UsagePage, UsageRecord, UsageRecorder
 
 
@@ -37,9 +43,7 @@ CREATE TABLE stat_usage_records (
     status TEXT NOT NULL
 );
 CREATE INDEX stat_usage_records_run ON stat_usage_records(session_key, run_id);
-CREATE TABLE stat_usage_calls AS
-    SELECT {CALL_COLUMNS} FROM stat_calls WHERE 0;
-CREATE UNIQUE INDEX stat_usage_calls_key ON stat_usage_calls(session_key, seq);
+CREATE TABLE stat_usage_calls {CALL_TABLE_DEFINITION};
 CREATE INDEX stat_usage_calls_window ON stat_usage_calls(session_key, instant);
 CREATE INDEX stat_usage_calls_retrospective
     ON stat_usage_calls(model_key) WHERE retrospective = 1;
@@ -72,13 +76,17 @@ def _ledger_pages(recorder: UsageRecorder, revision: int) -> Iterator[UsagePage]
         yield page
 
 
-def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> None:
+def reconcile_usage(
+    connection: sqlite3.Connection, recorder: UsageRecorder, changes: RollupChanges
+) -> None:
     """Apply changed requests atomically; unchanged ledger snapshots write nothing.
 
     The projection continues from its revision while the recorder's
     ``ledger_id`` is unchanged, so a restart reads only newer changes. Another
     ledger id (a restore) or a watermark below the projected revision rebuilds
-    it from the whole ledger, streamed in bounded pages.
+    it from the whole ledger, streamed in bounded pages. ``changes`` learns the
+    units and Runs whose requests changed; a rebuild renumbers every unit, so
+    it rebuilds all aggregates.
     """
     previous = connection.execute("SELECT source_id, revision FROM stat_usage_state").fetchone()
     source_id = recorder.ledger_id
@@ -93,6 +101,8 @@ def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> 
         revision = 0
         pages = _ledger_pages(recorder, 0)
         latest, records = next(pages)
+    if previous is None or not same_source or rewound:
+        changes.rebuild = True
     if previous is not None and (not same_source or rewound):
         for table in (
             "stat_usage_state",
@@ -103,9 +113,9 @@ def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> 
             connection.execute(f"DELETE FROM {table}")
     elif same_source and latest == revision:
         return
-    _project_calls(connection, records)
+    _project_calls(connection, records, changes)
     for page in pages:
-        _project_calls(connection, page.records)
+        _project_calls(connection, page.records, changes)
         latest = page.revision
     connection.execute(
         "INSERT INTO stat_usage_state (source_id, revision) VALUES (?, ?) "
@@ -114,7 +124,9 @@ def reconcile_usage(connection: sqlite3.Connection, recorder: UsageRecorder) -> 
     )
 
 
-def _project_calls(connection: sqlite3.Connection, records: tuple[UsageRecord, ...]) -> None:
+def _project_calls(
+    connection: sqlite3.Connection, records: tuple[UsageRecord, ...], changes: RollupChanges
+) -> None:
     for record in records:
         address = (
             record.project_id or "",
@@ -146,12 +158,17 @@ def _project_calls(connection: sqlite3.Connection, records: tuple[UsageRecord, .
                     (record.session_title, unit_key),
                 )
         prior_call = connection.execute(
-            "SELECT session_key, seq FROM stat_usage_records WHERE call_id = ?", (record.id,)
+            "SELECT session_key, seq, run_id FROM stat_usage_records WHERE call_id = ?",
+            (record.id,),
         ).fetchone()
         if prior_call is not None:
+            # An updated call may have moved to another unit or Run.
+            changes.usage_call(int(prior_call[0]), prior_call[2])
             connection.execute(
-                "DELETE FROM stat_usage_calls WHERE session_key = ? AND seq = ?", prior_call
+                "DELETE FROM stat_usage_calls WHERE session_key = ? AND seq = ?",
+                (prior_call[0], prior_call[1]),
             )
+        changes.usage_call(unit_key, record.run_id)
         sequence = int(
             connection.execute(
                 "INSERT INTO stat_usage_records "

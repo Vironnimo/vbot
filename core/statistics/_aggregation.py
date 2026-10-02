@@ -20,11 +20,7 @@ from core.statistics._accumulators import ReportLedger
 from core.statistics._cache import load_cache_facts
 from core.statistics._call_scan import AccountingScan, account_model_runs, retained_run_durations
 from core.statistics._compactions import CompactionAccumulator
-from core.statistics._costs import (
-    CostAccumulator,
-    PricingLookup,
-    refresh_retrospective_costs,
-)
+from core.statistics._costs import CostAccumulator
 from core.statistics._errors import ErrorAccumulator
 from core.statistics._extensions import (
     EXTENSION_ACTOR_PREFIX,
@@ -93,13 +89,11 @@ class ReportBuilder:
         *,
         since: datetime | None,
         until: datetime | None,
-        pricing_lookup: PricingLookup | None = None,
         include_costs: bool = True,
         include_skills: bool = True,
     ) -> None:
         self._since = since
         self._until = until
-        self._pricing_lookup = pricing_lookup
         self._include_costs = include_costs
         self._include_skills = include_skills
 
@@ -223,9 +217,7 @@ class ReportBuilder:
         if isinstance(scan, AccountingScan):
             account_model_runs(scan, ledger, durations)
         if self._include_costs:
-            refresh_retrospective_costs(
-                connection, self._pricing_lookup, table=scan.table("stat_calls")
-            )
+            # Reconcile priced every retrospective call before this read.
             self._costs.load(
                 scan,
                 titles=titles,

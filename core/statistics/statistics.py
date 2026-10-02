@@ -104,7 +104,11 @@ class StatisticsService:
         self._import_session_usage()
         scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
         self._index.read(
-            self._sessions, scopes, lambda _view: None, usage_recorder=self._usage_recorder
+            self._sessions,
+            scopes,
+            lambda _view: None,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
 
     async def warm_index_async(self) -> None:
@@ -130,7 +134,7 @@ class StatisticsService:
         extension_sessions = self._extension_sessions()
 
         def consume(view: IndexView) -> ReportBuilder:
-            builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
+            builder = ReportBuilder(since=since, until=until)
             for scope in scopes:
                 builder.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
                 surviving: list[JsonObject] = []
@@ -158,6 +162,7 @@ class StatisticsService:
             _index_scopes(scopes, extension_sessions),
             consume,
             usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
         return builder.build(self._skill_inventory)
 
@@ -191,7 +196,11 @@ class StatisticsService:
             return total, runs
 
         total_runs, runs = self._index.read(
-            self._sessions, scopes, consume, usage_recorder=self._usage_recorder
+            self._sessions,
+            scopes,
+            consume,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
         return RunActivityReport(
             generated_at=datetime.now(UTC).isoformat(),
@@ -360,10 +369,11 @@ class StatisticsService:
 
         return self._index.read(
             self._sessions,
-            _owner_scopes(records, summaries),
+            _owner_scopes(records, owner_name, summaries, self._sessions.summary),
             consume,
             prune=False,
             usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
 
     def _import_session_usage(self) -> None:
@@ -427,6 +437,7 @@ class StatisticsService:
                         agent_id=owned.address.agent_id,
                         display_key=extension_actor_key(owned.owner_name),
                         summaries=(summary,),
+                        owner_name=owned.owner_name,
                     ),
                     key=ExtensionSliceKey(
                         owner_name=owned.owner_name,

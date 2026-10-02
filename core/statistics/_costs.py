@@ -122,26 +122,24 @@ class CostsSection:
     compactions: CostTotals
 
 
+# Every call table with the records table that carries its calls' Run ids.
+_CALL_TABLES = (("stat_calls", "stat_records"), ("stat_usage_calls", "stat_usage_records"))
+
+# One repriced call's owner: its Session key (or ledger unit key) and Run id.
+PricedCall = tuple[int, str | None]
+
+
 def refresh_retrospective_costs(
-    connection: sqlite3.Connection,
-    pricing_lookup: PricingLookup | None,
-    *,
-    table: str = "stat_calls",
-) -> None:
+    connection: sqlite3.Connection, pricing_lookup: PricingLookup | None
+) -> dict[str, set[PricedCall]]:
     """Price calls without a cost snapshot under the current catalog pricing.
 
-    Each Model's pricing is fingerprinted; unchanged pricing only prices calls
-    ingested since the last read, and changed pricing reprices that Model's
-    calls. An unchanged index with unchanged pricing performs no write.
+    Both call tables share one fingerprint per Model, so a Model's calls are
+    always priced alike. Unchanged pricing only prices calls ingested since the
+    last reconcile; changed pricing reprices that Model's calls everywhere. An
+    unchanged index with unchanged pricing performs no write. Returns, per call
+    table, the owners of the calls whose projected cost changed.
     """
-    models = [
-        str(row[0])
-        for row in connection.execute(
-            f"SELECT DISTINCT model_key FROM {table} WHERE retrospective = 1"
-        )
-    ]
-    if not models:
-        return
     fingerprints = {
         str(model): str(fingerprint)
         for model, fingerprint in connection.execute(
@@ -149,22 +147,49 @@ def refresh_retrospective_costs(
         )
     }
     unpriced = {
-        str(row[0])
-        for row in connection.execute(
-            f"SELECT DISTINCT model_key FROM {table} WHERE retrospective = 1 AND priced = 0"
-        )
+        table: {
+            str(row[0])
+            for row in connection.execute(
+                f"SELECT DISTINCT model_key FROM {table} WHERE retrospective = 1 AND priced = 0"
+            )
+        }
+        for table, _records in _CALL_TABLES
     }
-    for model in models:
+    touched: dict[str, set[PricedCall]] = {table: set() for table, _records in _CALL_TABLES}
+    # Every priced Model keeps a fingerprint, so these are all Models with
+    # retrospective calls, found without scanning the priced ones.
+    for model in sorted(set(fingerprints).union(*unpriced.values())):
         pricing = pricing_lookup(model) if pricing_lookup is not None else None
         fingerprint = "null" if pricing is None else compact_json(pricing.to_dict())
-        if fingerprints.get(model) != fingerprint:
-            _price_calls(connection, model, pricing, only_unpriced=False, table=table)
+        changed = fingerprints.get(model) != fingerprint
+        for table, records in _CALL_TABLES:
+            if changed or model in unpriced[table]:
+                touched[table] |= _price_calls(
+                    connection,
+                    model,
+                    pricing,
+                    only_unpriced=not changed,
+                    table=table,
+                    records=records,
+                )
+        if changed:
             connection.execute(
                 "INSERT OR REPLACE INTO stat_pricing (model_key, fingerprint) VALUES (?, ?)",
                 (model, fingerprint),
             )
-        elif model in unpriced:
-            _price_calls(connection, model, pricing, only_unpriced=True, table=table)
+    return touched
+
+
+def prune_pricing(connection: sqlite3.Connection) -> None:
+    """Forget the fingerprints of Models without retrospective calls left."""
+    connection.execute(
+        "DELETE FROM stat_pricing WHERE "
+        + " AND ".join(
+            f"NOT EXISTS (SELECT 1 FROM {table} "
+            "WHERE retrospective = 1 AND model_key = stat_pricing.model_key)"
+            for table, _records in _CALL_TABLES
+        )
+    )
 
 
 def _price_calls(
@@ -174,38 +199,47 @@ def _price_calls(
     *,
     only_unpriced: bool,
     table: str,
-) -> None:
-    condition = " AND priced = 0" if only_unpriced else ""
+    records: str,
+) -> set[PricedCall]:
+    condition = " AND c.priced = 0" if only_unpriced else ""
     cursor = connection.execute(
         f"""
-        SELECT session_key, seq, reported_cost_usd, input_tokens, output_tokens,
-            cache_read_tokens, cache_read_present, cache_write_tokens, cache_write_present,
-            reasoning_tokens, reasoning_present, price_estimated
-        FROM {table}
-        WHERE model_key = ? AND retrospective = 1{condition}
+        SELECT c.session_key, c.seq, r.run_id, c.priced, c.cost_json, c.reported_cost_usd,
+            c.input_tokens, c.output_tokens, c.cache_read_tokens, c.cache_read_present,
+            c.cache_write_tokens, c.cache_write_present, c.reasoning_tokens,
+            c.reasoning_present, c.price_estimated
+        FROM {table} c
+        LEFT JOIN {records} r ON r.session_key = c.session_key AND r.seq = c.seq
+        WHERE c.model_key = ? AND c.retrospective = 1{condition}
         """,
         (model,),
     )
+    touched: set[PricedCall] = set()
     updates: list[tuple[Any, ...]] = []
     for row in cursor.fetchall():
         cost = PricingInputs(
-            reported_cost_usd=row[2],
-            input_tokens=row[3],
-            output_tokens=row[4],
-            cache_read_tokens=row[5],
-            cache_read_present=bool(row[6]),
-            cache_write_tokens=row[7],
-            cache_write_present=bool(row[8]),
-            reasoning_tokens=row[9],
-            reasoning_present=bool(row[10]),
-            estimated=bool(row[11]),
+            reported_cost_usd=row[5],
+            input_tokens=row[6],
+            output_tokens=row[7],
+            cache_read_tokens=row[8],
+            cache_read_present=bool(row[9]),
+            cache_write_tokens=row[10],
+            cache_write_present=bool(row[11]),
+            reasoning_tokens=row[12],
+            reasoning_present=bool(row[13]),
+            estimated=bool(row[14]),
         ).price(pricing)
+        serialized = cost_json(cost)
+        if row[3] and serialized == row[4]:
+            continue
         source, amount = cost_source_class(cost)
-        updates.append((amount, source, cost_json(cost), row[0], row[1]))
+        updates.append((amount, source, serialized, row[0], row[1]))
+        touched.add((int(row[0]), row[2]))
         if len(updates) >= _PRICING_BATCH:
             _write_prices(connection, updates, table=table)
             updates = []
     _write_prices(connection, updates, table=table)
+    return touched
 
 
 def _write_prices(

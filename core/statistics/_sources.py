@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -79,6 +79,8 @@ class SessionSource(Protocol):
 
     def get(self, address: SessionAddress) -> ChatSession: ...
 
+    def summary(self, address: SessionAddress) -> JsonObject | None: ...
+
     def list_history_versions(
         self, addresses: Sequence[SessionAddress]
     ) -> dict[SessionAddress, tuple[str, int]]: ...
@@ -117,21 +119,28 @@ def extension_session_summary(owned: OwnedSessionSummary) -> JsonObject:
 
 def _owner_scopes(
     records: Sequence[OwnedRunRecord],
+    owner_name: str,
     summaries: Mapping[SessionAddress, JsonObject],
+    summary_of: Callable[[SessionAddress], JsonObject | None],
 ) -> tuple[StatisticsScope, ...]:
     """Group owned Run Sessions into index scopes.
 
-    ``summaries`` supplies the same labelled summaries the full report indexes,
-    so a group read never rewrites a shared index row with a thinner summary.
+    ``summaries`` supplies the same labelled summaries of the owner's Sessions
+    the full report indexes; other Sessions get their own listed summary. So a
+    group read describes every Session, its owner included, exactly like the
+    full report and never rewrites a shared index row differently.
     """
-    grouped: dict[tuple[str | None, str], list[JsonObject]] = {}
+    grouped: dict[tuple[str | None, str, bool], list[JsonObject]] = {}
     seen: set[SessionAddress] = set()
     for record in records:
-        if record.address in seen:
+        address = record.address
+        if address in seen:
             continue
-        seen.add(record.address)
-        grouped.setdefault((record.address.project_id, record.address.agent_id), []).append(
-            summaries.get(record.address, {"id": record.address.session_id})
+        seen.add(address)
+        owned = address in summaries
+        summary = summaries[address] if owned else summary_of(address)
+        grouped.setdefault((address.project_id, address.agent_id, owned), []).append(
+            summary if summary is not None else {"id": address.session_id}
         )
     return tuple(
         StatisticsScope(
@@ -139,6 +148,7 @@ def _owner_scopes(
             agent_id=agent_id,
             display_key=agent_id,
             summaries=tuple(summaries),
+            owner_name=owner_name if owned else None,
         )
-        for (project_id, agent_id), summaries in grouped.items()
+        for (project_id, agent_id, owned), summaries in grouped.items()
     )
