@@ -45,7 +45,8 @@ _RELOAD_WORKERS = BoundedWorkerPool(name="model-registry", max_workers=1)
 
 # Provider-layer files under ``models/`` are ``<provider>.json``; these siblings
 # are never provider files and are excluded from the provider-file glob loop.
-# ``*.raw.json`` is an inspection dump; ``*.overrides.json`` is a hand layer
+# ``*.raw.json`` is a legacy inspection dump that older refreshes wrote (a
+# refresh no longer copies it forward); ``*.overrides.json`` is a hand layer
 # applied during assembly (not its own provider file); the canonical files are
 # loaded by the dedicated canonical loader. The suffixes/classifier are public
 # so the offline validator shares one definition of "what is a provider file".
@@ -64,7 +65,7 @@ _REASONING_REPLAY_POLICIES = frozenset({"none", "current_run", "full_history"})
 def is_provider_file(file_name: str) -> bool:
     """Return whether ``file_name`` is a provider-layer ``<provider>.json``.
 
-    Excludes the inspection ``*.raw.json`` dump, the ``*.overrides.json`` hand
+    Excludes a legacy ``*.raw.json`` inspection dump, the ``*.overrides.json`` hand
     layer (applied during assembly, not its own provider file), the database
     ``manifest.json``, and the canonical ``models.json`` /
     ``models.overrides.json`` (loaded separately). Shared by the registry loader

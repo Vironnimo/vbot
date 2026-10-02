@@ -96,7 +96,9 @@ def test_newest_compatible_database_is_selected_as_a_complete_root(
     assert select_model_database_dir(resources_dir, runtime_models_dir) == expected
 
 
-def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -> None:
+def test_runtime_refresh_publishes_every_model_file_except_legacy_raw_dumps(
+    tmp_path: Path,
+) -> None:
     resources_dir = tmp_path / "resources"
     system_models_dir = resources_dir / "models"
     data_dir = tmp_path / "data"
@@ -121,7 +123,6 @@ def test_runtime_refresh_copies_and_publishes_every_model_file(tmp_path: Path) -
         "manifest.json",
         "openai.json",
         "openai.overrides.json",
-        "openai.raw.json",
     ]
 
 

@@ -210,7 +210,7 @@ async def refresh_models(
                 else None
             )
 
-        raw_payload, raw_models = await _fetch_raw_models(
+        raw_models = await _fetch_raw_models(
             url, build_headers, auth_recovery=request_auth_recovery()
         )
 
@@ -224,7 +224,7 @@ async def refresh_models(
             for params in supplementary_params:
                 supplementary_url = _append_query_params(url, params)
                 try:
-                    _, supplementary_models = await _fetch_raw_models(
+                    supplementary_models = await _fetch_raw_models(
                         supplementary_url, build_headers, auth_recovery=request_auth_recovery()
                     )
                 except (httpx.HTTPError, ProviderError, NetworkError, ValueError) as exc:
@@ -238,26 +238,11 @@ async def refresh_models(
                 for supplementary_model in supplementary_models:
                     model_id = supplementary_model.get("id")
                     if isinstance(model_id, str) and model_id not in seen_ids:
-                        # ``raw_models`` is the same list object held inside
-                        # ``raw_payload`` (see ``_fetch_raw_models``), so this
-                        # single append also extends the persisted raw payload.
                         raw_models.append(supplementary_model)
                         seen_ids.add(model_id)
 
         models_dir = resources_dir / "models"
         models_dir.mkdir(parents=True, exist_ok=True)
-
-        # The raw dump is written before normalization so a schema mismatch
-        # still leaves the payload on disk for inspection.
-        raw_output_path = models_dir / f"{provider_config.id}.raw.json"
-        raw_output_data: dict[str, Any] = {
-            "provider_id": provider_config.id,
-            "fetched_at": fetched_at,
-            "raw_response": raw_payload,
-        }
-        raw_output_path.write_text(
-            json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-        )
 
         catalog = models_dev_catalog
 
@@ -303,24 +288,18 @@ async def refresh_models(
         # listing endpoint omits (e.g. Ollama's POST /api/show for tool/vision/
         # thinking support and the context window). The adapter owns the
         # endpoints and the projection; discovery supplies POST plumbing with
-        # the same retry semantics as the catalog GET and records the raw
-        # responses. A failure degrades to the un-enriched catalog, never a
-        # failed refresh.
-        raw_enrichment_responses: list[dict[str, Any]] = []
+        # the same retry semantics as the catalog GET. A failure degrades to
+        # the un-enriched catalog, never a failed refresh.
         enrich_discovered_models = getattr(adapter_class, "enrich_discovered_models", None)
         if callable(enrich_discovered_models):
 
             async def _post_enrichment_json(endpoint: str, payload: dict[str, Any]) -> Any:
-                response_payload = await _post_json_payload(
+                return await _post_json_payload(
                     _join_url(base_url, endpoint),
                     build_headers,
                     payload,
                     auth_recovery=request_auth_recovery(),
                 )
-                raw_enrichment_responses.append(
-                    {"endpoint": endpoint, "request": payload, "response": response_payload}
-                )
-                return response_payload
 
             try:
                 enriched_models = await enrich_discovered_models(
@@ -334,31 +313,22 @@ async def refresh_models(
                 )
             else:
                 normalized_models.update(enriched_models)
-            if raw_enrichment_responses:
-                raw_output_data["raw_enrichment_responses"] = raw_enrichment_responses
-                raw_output_path.write_text(
-                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
 
         # A provider may expose dedicated task-capability catalogs (e.g. the
         # OpenRouter image API) whose typed per-model option schemas the
         # default models endpoint omits. The adapter owns those endpoints and
         # their projection into ``capabilities.task_options``; discovery only
-        # supplies the fetch plumbing and records the raw responses. A failure
-        # degrades to a catalog without task options, never a failed refresh.
-        raw_task_responses: dict[str, Any] = {}
+        # supplies the fetch plumbing. A failure degrades to a catalog without
+        # task options, never a failed refresh.
         discover_task_models = getattr(adapter_class, "discover_task_models", None)
         if callable(discover_task_models):
 
             async def _fetch_task_json(endpoint: str) -> Any:
-                payload = await _fetch_json_payload(
+                return await _fetch_json_payload(
                     _join_url(base_url, endpoint),
                     build_headers,
                     auth_recovery=request_auth_recovery(),
                 )
-                raw_task_responses[endpoint] = payload
-                return payload
 
             try:
                 task_models = await discover_task_models(normalized_models, _fetch_task_json)
@@ -370,15 +340,6 @@ async def refresh_models(
                 )
             else:
                 normalized_models.update(task_models)
-            if raw_task_responses:
-                # Rewrite the raw dump with the task-catalog responses so the
-                # safety net covers them too (a later wanted field is a
-                # projection edit, not a re-fetch).
-                raw_output_data["raw_task_responses"] = raw_task_responses
-                raw_output_path.write_text(
-                    json.dumps(raw_output_data, indent=2, sort_keys=True) + "\n",
-                    encoding="utf-8",
-                )
 
         # Refresh writes the PURE provider projection — NO override baking (that
         # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
@@ -592,7 +553,7 @@ async def _fetch_raw_models(
     headers: _HeaderSource,
     *,
     auth_recovery: OAuthRequestRecovery | None = None,
-) -> tuple[Any, list[Mapping[str, Any]]]:
+) -> list[Mapping[str, Any]]:
     payload = await _fetch_json_payload(url, headers, auth_recovery=auth_recovery)
 
     raw_models = _raw_models_from_payload(payload)
@@ -602,7 +563,7 @@ async def _fetch_raw_models(
     for raw_model in raw_models:
         if not isinstance(raw_model, dict):
             raise ValueError("Every raw model entry must be an object")
-    return payload, raw_models
+    return raw_models
 
 
 async def _fetch_json_payload(

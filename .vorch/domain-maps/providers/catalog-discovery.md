@@ -10,7 +10,7 @@ A discovery target is one Connection with an effective `models_endpoint`. By def
 
 RPC callers (`model.refresh_db` and the Debug `debug.model_probe`) resolve the discovery Connection and credential through `server/rpc/provider_access._discovery_credential`: it applies the credential policy above, honors an explicit Account suffix in an OAuth Connection id (otherwise the first usable Account), and points GitHub Copilot at the Account's exchanged API endpoint.
 
-An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models.
+An OpenAI-compatible Custom Provider participates without a separate discovery path: its implicit `default` Connection, optional Settings `models_endpoint`, Adapter selector, and credential resolver feed this same pipeline. Manual Custom Model facts are applied later by `ModelRegistry` and therefore override a discovered Model with the same wire id without deleting discovered-only Models. Only runtime-target refreshes discover Custom Providers; a system-target refresh skips them (`models.md`).
 
 ## Fetch and normalization
 
@@ -22,7 +22,7 @@ An OpenAI-compatible Custom Provider participates without a separate discovery p
 - `enrich_discovered_models(normalized_models, post_json)` supports bounded Provider detail calls after primary normalization; a per-Model enrichment failure keeps the conservative baseline.
 - `finalize_discovered_model(model, connection)` applies facts known only from Connection scope after baseline normalization and before optional enrichment. Keep the default identity implementation; override it when the same Adapter serves scopes with different durable facts, such as forcing every direct Ollama Cloud catalog entry remote.
 - `discover_task_models(normalized_models, fetch_json)` adds Provider task-capability feeds. A task-catalog failure degrades the task projection and does not fail the primary refresh.
-- Raw primary, supplementary, enrichment, and task responses are retained in refresh artifacts for later projection changes, while Runtime reads only normalized/assembled Model data.
+- Refresh writes only the normalized projection; raw primary, supplementary, enrichment, and task responses are not retained. Runtime reads only normalized/assembled Model data.
 
 Runtime and discovery use separate Adapter-selector maps: `_ADAPTER_MAP` constructs live chat Adapters; `_DISCOVERY_ADAPTER_MAP` selects static catalog behavior. A new Adapter selector that supports discovery must be registered in both places.
 

@@ -18,7 +18,6 @@ import pytest
 
 from core.models.models_dev import (
     MODELS_DEV_CATALOG_URL,
-    RAW_CATALOG_FILE_NAME,
     ModelsDevCatalog,
     ModelsDevError,
     auto_canonical_pointer,
@@ -228,12 +227,12 @@ async def test_canonical_refresh_writes_the_layer_and_seeds_overrides(
     result = await refresh_canonical_layer(tmp_path, catalog=catalog)
 
     canonical = json.loads((models_dir / "models.json").read_text(encoding="utf-8"))
-    raw = json.loads((models_dir / RAW_CATALOG_FILE_NAME).read_text(encoding="utf-8"))
     assert "deepseek/deepseek-v4-pro" in canonical["models"]
-    assert {"models", "providers"} <= set(raw)
-    assert (models_dir / "models.overrides.json").exists()
+    assert sorted(path.name for path in models_dir.iterdir()) == [
+        "models.json",
+        "models.overrides.json",
+    ]
     assert result["model_count"] == len(catalog.models)
-    assert result["raw_path"] == str(models_dir / RAW_CATALOG_FILE_NAME)
 
 
 @pytest.mark.asyncio

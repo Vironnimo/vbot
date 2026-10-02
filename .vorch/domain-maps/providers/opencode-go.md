@@ -196,7 +196,7 @@ Probes through the real Runtime Adapter (`opencode-go:api-key`, `/chat/completio
 
 ## Catalog Integrity
 
-The gateway's `/models` response is retained verbatim in `opencode-go.raw.json`, but the usable projection applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The full refresh returned 36 raw ids on 2026-09-10, while the official endpoint table names 28 current Models and all 28 were present. Extra ids are gateway availability, not current protocol documentation; the `omen-alpha` id has no verified protocol override.
+The usable projection of the gateway's `/models` response applies `ProviderConfig.catalog_exclusions`. `hy3-preview`, `mimo-v2-omni`, and `mimo-v2-pro` remain excluded legacy ids; current official `hy4-preview`, `mimo-v2.5`, and `mimo-v2.5-pro` are included. The full refresh returned 36 raw ids on 2026-09-10, while the official endpoint table names 28 current Models and all 28 were present. Extra ids are gateway availability, not current protocol documentation; the `omen-alpha` id has no verified protocol override.
 
 ## Prompt Caching
 

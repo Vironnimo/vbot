@@ -8,7 +8,7 @@ OpenCode Zen is a hosted gateway whose one Model namespace spans OpenAI Response
 - Adapter selector and owner: `opencode_zen` / `core/providers/opencode_zen.py::OpenCodeZenAdapter`
 - Connections: `opencode-zen:api-key` and `opencode-zen:account`
 - Discovery: public `GET https://opencode.ai/zen/v1/models`, normalized by `OpenCodeZenAdapter` and enriched from the models.dev `opencode` section
-- Generated inspection/projection: `resources/models/opencode-zen.raw.json` and `resources/models/opencode-zen.json`
+- Generated projection: `resources/models/opencode-zen.json`
 
 ## Connections and Authentication
 
@@ -45,7 +45,7 @@ An independent raw comparison likewise returned 48/48/235 without Tools and 91/9
 
 Canonical PNG/JPEG/GIF/WebP fixtures completed correctly. A native `text.format` JSON schema succeeded raw and through the actual Adapter after the Override corrected the generated `json_mode: false` flag to true. Raw Chat Completions was rejected with `ModelProtocolUnsupported`; the Chat-style `response_format` field was also rejected on Responses. The selected wire remains Responses. These checks do not establish maximum capacities, sampling efficacy, or cache behavior.
 
-Fledge returned HTTP 403 `FreeTierError` with the OpenCode-only free-tier restriction. Its id remains in the raw dump but joins the exact free-model rejection set and `catalog_exclusions`; stale selections fail before network I/O. Tests extend catalog admission, pre-network denial, bundled Responses effort rendering, and complete raw-id reconciliation on both Connections.
+Fledge returned HTTP 403 `FreeTierError` with the OpenCode-only free-tier restriction. Its id stays in the public catalog response but joins the exact free-model rejection set and `catalog_exclusions`; stale selections fail before network I/O. Tests extend catalog admission, pre-network denial, bundled Responses effort rendering, and the bundled snapshot serving every reviewed Model on both Connections.
 
 ### Qwen3.8 Max and LongCat catalog follow-up (2026-09-28)
 
@@ -93,7 +93,7 @@ OpenCode's gateway may fail over between upstream suppliers serving the same req
 
 - The public endpoint returns ids but no endpoint family or trustworthy capability/limit detail. Normalization therefore admits exact ids in the protocol table and fills context/output limits, modalities, family, Tool support, and reasoning controls from the exact models.dev `opencode` entry. The table may assign a best-effort route from a published upstream provider family before Zen adds an explicit endpoint-table row; such a route remains selectable and is checked with local wire tests. Other unknown ids remain in the raw response until a route can be assigned.
 - Retired Models are rejected by normalization and runtime routing and repeated in `catalog_exclusions`. This includes the retired Codex variants, `claude-sonnet-4`, `glm-5`, and the 2026-08-05 retirements `claude-opus-4-1`, `minimax-m2.5`, and `kimi-k2.5`. Stored selections are never silently retargeted.
-- Restricted free Models, including historical promotions and the current LongCat/MiMo/Nemotron/Muse/Ling ids, remain in the raw inspection response but are excluded from the usable projection. `space-bunny-free` is admitted after the live access check above. Runtime rejects stale selections of the restricted free Models before network I/O. `FreeTierError` is fatal access denial, never an authentication failure or a reason to renew a token. Tests cover both error name/type shapes on all four wires in streaming and non-streaming mode.
+- Restricted free Models, including historical promotions and the current LongCat/MiMo/Nemotron/Muse/Ling ids, remain in the public catalog response but are excluded from the usable projection. `space-bunny-free` is admitted after the live access check above. Runtime rejects stale selections of the restricted free Models before network I/O. `FreeTierError` is fatal access denial, never an authentication failure or a reason to renew a token. Tests cover both error name/type shapes on all four wires in streaming and non-streaming mode.
 - The 2026-09-22 endpoint reconciliation adds GPT 6 Astra, Claude Fable 5.1, Gemini 3.7/3.8 Flash, Grok 4.6/4.7, Muse Spark 1.2/1.3, Qwen3.8 Flash, DeepSeek V4.1 Flash/vision-exp, and GLM 5.3/Flash. The later catalog refresh also advertises `gpt-6-sol`, `gpt-6-luna`, and `claude-opus-5-5`. They are selectable on both Zen Connections: the models.dev `opencode` entries identify the GPT-6 pair with `@ai-sdk/openai` and Claude Opus 5.5 with `@ai-sdk/anthropic`; the protocol table assigns the existing Responses and Messages wires respectively. The published Zen endpoint table has not yet named these exact routes. Jev's `/systemone` structured-decision API is outside the chat Adapter and explicitly excluded. `test_models_resources.py` reconciles every raw id against the usable catalog and exclusions and checks both Connection projections; unknown routes cannot silently inherit Chat Completions.
 - Live synthetic `api-key` calls through the actual Adapter returned one Tool Call for `gpt-6-sol` and `gpt-6-luna` on Responses and for `claude-opus-5-5` on Messages. The `account` Connection uses the same routes, but lacked an authenticated live probe.
 

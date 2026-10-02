@@ -63,9 +63,9 @@ class _RejectIds:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_refresh_writes_the_raw_dump_and_a_pure_projection(tmp_path: Path) -> None:
-    """The raw dump keeps the whole response; the projection keeps only accepted
-    Models and no override. Overrides apply when the registry loads."""
+async def test_refresh_writes_only_a_pure_projection(tmp_path: Path) -> None:
+    """The projection keeps only accepted Models and no override; no raw
+    response dump is written. Overrides apply when the registry loads."""
 
     resources_dir = tmp_path / "resources"
     models_dir = resources_dir / "models"
@@ -107,11 +107,10 @@ async def test_refresh_writes_the_raw_dump_and_a_pure_projection(tmp_path: Path)
         "model_count": 2,
         "fetched_at": projection["fetched_at"],
     }
-    assert read_models_file(resources_dir, "simple.raw.json") == {
-        "provider_id": "simple",
-        "fetched_at": result["fetched_at"],
-        "raw_response": payload,
-    }
+    assert sorted(path.name for path in models_dir.iterdir()) == [
+        "simple.json",
+        "simple.overrides.json",
+    ]
     assert set(projection) == {"provider_id", "source", "fetched_at", "models"}
     assert (projection["provider_id"], projection["source"]) == ("simple", "discovery")
     assert set(projection["models"]) == {"model-a", "model-b"}
@@ -244,29 +243,21 @@ async def test_normalized_models_round_trip_through_the_written_catalog(
 @respx.mock
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter", "response", "expected_calls", "raw_dump_kept"),
+    ("adapter", "response", "expected_calls"),
     [
         pytest.param(
-            "openai_compatible", httpx.Response(200, text="not-json"), 1, False, id="invalid-json"
+            "openai_compatible", httpx.Response(200, text="not-json"), 1, id="invalid-json"
         ),
+        pytest.param("openai_compatible", httpx.Response(200, json={"items": []}), 1, id="no-list"),
+        pytest.param("openai_compatible", httpx.Response(404), 1, id="fatal-status"),
         pytest.param(
-            "openai_compatible", httpx.Response(200, json={"items": []}), 1, False, id="no-list"
+            "openai_compatible", httpx.Response(500), MAX_RETRIES + 1, id="retries-exhausted"
         ),
-        pytest.param("openai_compatible", httpx.Response(404), 1, False, id="fatal-status"),
-        pytest.param(
-            "openai_compatible",
-            httpx.Response(500),
-            MAX_RETRIES + 1,
-            False,
-            id="retries-exhausted",
-        ),
-        pytest.param("unknown_adapter", httpx.Response(200), 0, False, id="unknown-adapter"),
-        # The raw dump is written before normalization, so it survives for inspection.
+        pytest.param("unknown_adapter", httpx.Response(200), 0, id="unknown-adapter"),
         pytest.param(
             "stub",
             httpx.Response(200, json={"data": [{"id": "broken"}]}),
             1,
-            True,
             id="normalizer-error",
         ),
     ],
@@ -278,7 +269,6 @@ async def test_failed_refresh_raises_and_writes_no_projection(
     adapter: str,
     response: httpx.Response,
     expected_calls: int,
-    raw_dump_kept: bool,
 ) -> None:
     monkeypatch.setitem(discovery_module._DISCOVERY_ADAPTER_MAP, "stub", _StubAdapter)
     route = respx.get(SIMPLE_MODELS_URL).mock(return_value=response)
@@ -293,7 +283,6 @@ async def test_failed_refresh_raises_and_writes_no_projection(
     # The error names the Provider; callers log what they catch, discovery does not.
     assert [record for record in caplog.records if record.name == "vbot.models.discovery"] == []
     assert route.call_count == expected_calls
-    assert (resources_dir / "models" / "simple.raw.json").exists() is raw_dump_kept
     assert not (resources_dir / "models" / "simple.json").exists()
 
 
@@ -369,14 +358,11 @@ async def test_connection_refresh_replaces_only_its_own_catalog_entries(tmp_path
     )
 
     written = read_models_file(resources_dir, "openai.json")["models"]
-    raw = read_models_file(resources_dir, "openai.raw.json")["raw_response"]
     assert result["model_count"] == 2
     assert {model_id: data["connections"] for model_id, data in written.items()} == {
         "gpt-5.2": ["api-key"],
         "gpt-5-codex": ["subscription"],
     }
-    # A hidden entry stays inspectable in the raw dump only.
-    assert {entry["slug"] for entry in raw["models"]} == {"gpt-5-codex", "codex-auto-review"}
     registry = ModelRegistry.load(resources_dir)
     assert registry.get("openai", "gpt-5.2").connections == ("api-key",)
     assert registry.get("openai", "gpt-5-codex").connections == ("subscription",)

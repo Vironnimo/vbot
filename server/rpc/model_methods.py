@@ -341,6 +341,7 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
             database_refresh = begin_runtime_model_database_refresh(
                 system_resources_dir,
                 data_dir,
+                provider_ids=_existing_provider_ids(runtime),
             )
             refresh_resources_dir = database_refresh.resources_dir
         else:
@@ -352,18 +353,24 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
                 )
             database_refresh = begin_system_model_database_refresh(system_resources_dir)
             refresh_resources_dir = database_refresh.resources_dir
+        include_custom = target == _MODEL_REFRESH_TARGET_RUNTIME
         if "provider_id" in params:
             provider_id = _required_string(params, "provider_id")
             result = await _refresh_provider_model_db(
                 runtime,
                 provider_id,
                 refresh_resources_dir,
+                include_custom=include_custom,
             )
             scope = provider_id
             provider_count = 1
             model_count = _model_count(result)
         else:
-            result = await _refresh_global_model_db(runtime, refresh_resources_dir)
+            result = await _refresh_global_model_db(
+                runtime,
+                refresh_resources_dir,
+                include_custom=include_custom,
+            )
             scope = "all"
             provider_count = int(result.get("refreshed_count", 0))
             model_count = int(result.get("model_count", 0))
@@ -371,7 +378,7 @@ async def _refresh_model_db_admitted(state: Any, params: JsonObject) -> JsonObje
         # each entry Load ignores, so the refresh reports it once.
         invalid_entry_count = len(ModelRegistry.validate(refresh_resources_dir))
         database_refresh.commit()
-        _reload_runtime_model_registry(runtime, system_resources_dir)
+        await _reload_runtime_model_registry(runtime, system_resources_dir)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     finally:
@@ -421,11 +428,17 @@ async def _fetch_catalog_for_refresh() -> ModelsDevCatalog | None:
         return None
 
 
-async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObject:
+async def _refresh_global_model_db(
+    runtime: Any,
+    resources_dir: Path,
+    *,
+    include_custom: bool,
+) -> JsonObject:
     catalog = await _fetch_catalog_for_refresh()
     refreshed_providers: list[JsonObject] = []
     refresh_errors: list[JsonObject] = []
-    for provider_id in runtime.providers.list_ids():
+    provider_ids = _refresh_provider_ids(runtime, include_custom=include_custom)
+    for provider_id in provider_ids:
         provider = runtime.providers.get(provider_id)
         if not _provider_supports_refresh(provider):
             continue
@@ -440,7 +453,9 @@ async def _refresh_global_model_db(runtime: Any, resources_dir: Path) -> JsonObj
         refreshed_providers.extend(successes)
         refresh_errors.extend(errors)
 
-    canonical_result = await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
+    canonical_result = await _refresh_canonical_layer_if_possible(
+        catalog, resources_dir, runtime, provider_ids
+    )
     provider_count, model_count = _summarize_refreshed_providers(refreshed_providers)
     result: JsonObject = {
         "providers": refreshed_providers,
@@ -457,11 +472,13 @@ async def _refresh_canonical_layer_if_possible(
     catalog: ModelsDevCatalog | None,
     resources_dir: Path,
     runtime: Any,
+    provider_ids: list[str],
 ) -> JsonObject | None:
     """Project the canonical layer when a catalog is available; else ``None``.
 
-    Writes ``models.json`` + the raw dump + seeds ``models.overrides.json``.
-    Skipped (returns ``None``) when the catalog could not be fetched.
+    Writes ``models.json``, seeds ``models.overrides.json`` and reprices the
+    existing catalogs of ``provider_ids``. Skipped (returns ``None``) when the
+    catalog could not be fetched.
     """
 
     if catalog is None:
@@ -471,20 +488,55 @@ async def _refresh_canonical_layer_if_possible(
         catalog=catalog,
         provider_catalog_ids={
             provider_id: runtime.providers.get(provider_id).effective_models_dev_id()
-            for provider_id in runtime.providers.list_ids()
+            for provider_id in provider_ids
         },
     )
+
+
+def _refresh_provider_ids(runtime: Any, *, include_custom: bool) -> list[str]:
+    """Return the Providers one refresh covers.
+
+    Custom Providers exist only in this installation's Settings, so a system
+    refresh, which writes the shipped Model DB, leaves them out.
+    """
+
+    return [
+        provider_id
+        for provider_id in runtime.providers.list_ids()
+        if include_custom or not _is_custom_provider(runtime.providers.get(provider_id))
+    ]
+
+
+def _is_custom_provider(provider: Any) -> bool:
+    return bool(getattr(provider, "custom", False))
+
+
+def _existing_provider_ids(runtime: Any) -> set[str]:
+    """Return every Provider that currently exists, Custom Providers included.
+
+    Settings may hold a Custom Provider the registry skipped as invalid; its
+    catalog still belongs to an existing Provider.
+    """
+
+    return set(runtime.providers.list_ids()) | set(runtime.storage.load_custom_providers_settings())
 
 
 async def _refresh_provider_model_db(
     runtime: Any,
     provider_id: str,
     resources_dir: Path,
+    *,
+    include_custom: bool,
 ) -> JsonObject:
     try:
         provider = runtime.providers.get(provider_id)
     except KeyError as exc:
         raise RpcError(RPC_ERROR_DOMAIN, f"unknown provider: {provider_id}") from exc
+    if not include_custom and _is_custom_provider(provider):
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            f"Custom Provider '{provider_id}' can only be refreshed into the runtime Model DB",
+        )
     if not _provider_supports_refresh(provider):
         raise RpcError(
             RPC_ERROR_DOMAIN,
@@ -509,7 +561,12 @@ async def _refresh_provider_model_db(
             RPC_ERROR_DOMAIN,
             f"Provider credentials not found for provider '{provider_id}'",
         )
-    await _refresh_canonical_layer_if_possible(catalog, resources_dir, runtime)
+    await _refresh_canonical_layer_if_possible(
+        catalog,
+        resources_dir,
+        runtime,
+        _refresh_provider_ids(runtime, include_custom=include_custom),
+    )
     result = dict(successes[0])
     if errors:
         result["errors"] = errors
@@ -610,12 +667,13 @@ def _single_attempt_if(auto_refresh: bool) -> AbstractContextManager[None]:
     return caller_owns_retries() if auto_refresh else nullcontext()
 
 
-def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:
+async def _reload_runtime_model_registry(runtime: Any, system_resources_dir: Path) -> None:
     # Reload in place rather than rebinding ``runtime._models``: services that
     # captured the registry at construction (task-model targets for
     # speech/image/embeddings, the status display, the recall backend) hold the
     # same instance, so an in-place swap reaches all of them without re-wiring.
-    runtime.models.reload(
+    # The catalog files are read and assembled off the Event Loop.
+    await runtime.models.reload_async(
         system_resources_dir,
         runtime_models_dir=runtime.storage.layout.models,
         custom_providers=runtime.storage.load_custom_providers_settings(),

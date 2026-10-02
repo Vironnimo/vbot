@@ -205,18 +205,11 @@ def test_catalog_preserves_prompt_and_image_limits_as_runtime_policy() -> None:
     }
 
 
-def test_bundled_copilot_catalog_omits_hidden_and_retired_entries() -> None:
-    raw = json.loads(Path("resources/models/github-copilot.raw.json").read_text(encoding="utf-8"))
+def test_bundled_copilot_catalog_omits_retired_entries() -> None:
     generated = json.loads(Path("resources/models/github-copilot.json").read_text(encoding="utf-8"))
     provider = json.loads(
         Path("resources/providers/github-copilot.json").read_text(encoding="utf-8")
     )
-    hidden_ids = {
-        entry["id"]
-        for entry in raw["raw_response"]["data"]
-        if entry.get("model_picker_enabled") is False
-    }
     generated_ids = set(generated["models"])
 
-    assert generated_ids.isdisjoint(hidden_ids)
     assert generated_ids.isdisjoint(provider["catalog_exclusions"])

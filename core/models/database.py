@@ -1,16 +1,17 @@
 """Whole-root storage contract for the bundled and runtime Model DBs.
 
 Each Model DB is a complete ``models/`` directory: generated canonical and
-Provider projections, raw inspection dumps, and a snapshot of every bundled
-``*.overrides.json`` input. Load selects the newer schema-compatible generated
-catalog root as a whole, while the current bundled overrides remain the
-authoritative hand layer even when the runtime catalog is newer.
+Provider projections and a snapshot of every bundled ``*.overrides.json``
+input. Load selects the newer schema-compatible generated catalog root as a
+whole, while the current bundled overrides remain the authoritative hand layer
+even when the runtime catalog is newer.
 """
 
 from __future__ import annotations
 
 import json
 import shutil
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ from uuid import uuid4
 
 from core.storage.layout import DataDirectoryLayout
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict
 
 MODEL_DATABASE_DIRECTORY_NAME = "models"
 MODEL_DATABASE_MANIFEST_FILE_NAME = "manifest.json"
@@ -159,6 +161,8 @@ def select_model_database_dir(
 def begin_runtime_model_database_refresh(
     system_resources_dir: Path,
     data_dir: Path,
+    *,
+    provider_ids: Collection[str] | None = None,
 ) -> ModelDatabaseRefresh:
     """Create an isolated complete copy of the active Model DB for refresh.
 
@@ -166,6 +170,11 @@ def begin_runtime_model_database_refresh(
     and write its ``models/`` child. The caller validates the result and calls
     :meth:`ModelDatabaseRefresh.commit`; failure calls ``discard`` and
     leaves the previously active runtime root untouched.
+
+    ``provider_ids`` names every Provider that currently exists, Custom
+    Providers included. When given, the copy drops each generated
+    ``<provider>.json`` whose Provider is not among them, such as the catalog of
+    a deleted Custom Provider; a catalog the system Model DB ships is kept.
     """
 
     layout = DataDirectoryLayout(data_dir)
@@ -177,8 +186,10 @@ def begin_runtime_model_database_refresh(
     if active_models_dir is None:
         staging_models_dir.mkdir(parents=True)
     else:
-        shutil.copytree(active_models_dir, staging_models_dir)
+        shutil.copytree(active_models_dir, staging_models_dir, ignore=_skip_legacy_raw_dumps)
     _synchronize_bundled_overrides(system_resources_dir, staging_models_dir)
+    if provider_ids is not None:
+        _drop_orphan_provider_catalogs(staging_models_dir, system_resources_dir, provider_ids)
     return ModelDatabaseRefresh(
         resources_dir=staging_resources_dir,
         target_models_dir=runtime_models_dir,
@@ -196,7 +207,7 @@ def begin_system_model_database_refresh(system_resources_dir: Path) -> ModelData
     )
     staging_models_dir = staging_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
     if system_models_dir.is_dir():
-        shutil.copytree(system_models_dir, staging_models_dir)
+        shutil.copytree(system_models_dir, staging_models_dir, ignore=_skip_legacy_raw_dumps)
     else:
         staging_models_dir.mkdir(parents=True)
     return ModelDatabaseRefresh(
@@ -204,6 +215,39 @@ def begin_system_model_database_refresh(system_resources_dir: Path) -> ModelData
         target_models_dir=system_models_dir,
         source=MODEL_DATABASE_SOURCE_SYSTEM,
     )
+
+
+def _skip_legacy_raw_dumps(_directory: str, names: list[str]) -> set[str]:
+    """Leave out the ``*.raw.json`` inspection dumps older refreshes wrote.
+
+    Nothing reads them, so a refresh stops copying them forward and the root it
+    publishes no longer contains them.
+    """
+
+    # Imported here because ``core.models.models`` imports this module.
+    from core.models.models import RAW_FILE_SUFFIX
+
+    return {name for name in names if name.endswith(RAW_FILE_SUFFIX)}
+
+
+def _drop_orphan_provider_catalogs(
+    staging_models_dir: Path,
+    system_resources_dir: Path,
+    provider_ids: Collection[str],
+) -> None:
+    """Remove staged generated catalogs of Providers that no longer exist."""
+
+    # Imported here because ``core.models.models`` imports this module.
+    from core.models.models import is_provider_file
+
+    known_provider_ids = frozenset(provider_ids)
+    system_models_dir = system_resources_dir / MODEL_DATABASE_DIRECTORY_NAME
+    for catalog_path in staging_models_dir.glob("*.json"):
+        if not is_provider_file(catalog_path.name) or catalog_path.stem in known_provider_ids:
+            continue
+        if exists_strict(system_models_dir / catalog_path.name):
+            continue
+        catalog_path.unlink()
 
 
 def _synchronize_bundled_overrides(

@@ -113,7 +113,7 @@ class _ModelRegistry:
     def list_for_provider(self, _provider_id: str) -> list[Any]:
         return []
 
-    def reload(self, _resources_dir: Any, **_kwargs: Any) -> None:
+    async def reload_async(self, _resources_dir: Any, **_kwargs: Any) -> None:
         # ``model.refresh_db`` reloads the registry after writing layer files;
         # nothing here reads the reloaded catalog.
         pass

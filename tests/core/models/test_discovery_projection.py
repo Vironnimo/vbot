@@ -39,12 +39,6 @@ from .discovery_test_support import (
 )
 
 
-def _raw_ids(resources_dir: Path, provider_id: str, key: str = "id") -> set[str]:
-    raw = read_models_file(resources_dir, f"{provider_id}.raw.json")["raw_response"]
-    entries = raw["data"] if "data" in raw else raw["models"]
-    return {entry[key] for entry in entries}
-
-
 @respx.mock
 @pytest.mark.asyncio
 async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_path: Path) -> None:
@@ -136,7 +130,6 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
     assert gemini["capabilities"]["input_modalities"] == modalities["input"]
     assert gemini["metadata"]["opencode_zen"]["protocol"] == "gemini_generate_content"
     assert written["claude-fable-5-1"]["metadata"]["opencode_zen"]["protocol"] == "messages"
-    assert _raw_ids(resources_dir, "opencode-zen") == set(live_ids)
 
 
 @respx.mock
@@ -159,7 +152,6 @@ async def test_opencode_go_projects_its_catalog_without_excluded_models(tmp_path
     result = await refresh_models(config, API_KEY, resources_dir)
 
     assert result["model_count"] == 1
-    assert _raw_ids(resources_dir, "opencode-go") == {"deepseek/deepseek-r1", "broken-preview"}
     assert set(read_models_file(resources_dir, "opencode-go.json")["models"]) == {
         "deepseek/deepseek-r1"
     }
@@ -178,7 +170,7 @@ async def test_github_copilot_projects_selectable_models_and_their_metadata(
         (FIXTURES_DIR / "github_copilot_models_raw.json").read_text(encoding="utf-8")
     )
     selectable = {entry["id"] for entry in payload["data"]}
-    # Hidden, non-chat and websocket-only entries stay in the raw audit only.
+    # Hidden, non-chat and websocket-only entries are not projected.
     payload["data"] += [
         {
             "id": "hidden-chat",
@@ -207,7 +199,6 @@ async def test_github_copilot_projects_selectable_models_and_their_metadata(
     written = read_models_file(resources_dir, "github-copilot.json")["models"]
     assert result["model_count"] == len(selectable)
     assert set(written) == selectable
-    assert read_models_file(resources_dir, "github-copilot.raw.json")["raw_response"] == payload
     assert written["gpt-5-mini"]["metadata"]["github_copilot"] == {
         "family": "gpt-5-mini",
         "parallel_tool_calls": True,
@@ -281,7 +272,6 @@ async def test_nous_projects_agent_models_for_the_selected_connection(tmp_path: 
     assert set(written) == {"vendor/agent-model"}
     assert written["vendor/agent-model"]["connections"] == ["subscription"]
     assert written["vendor/agent-model"]["max_output_tokens"] == 32000
-    assert _raw_ids(resources_dir, "nous") == {"vendor/agent-model", "Hermes-4-70B"}
     assert route.calls.last.request.headers["authorization"] == "Bearer nous-oauth-jwt"
 
 
@@ -339,7 +329,6 @@ async def test_stepfun_direct_refresh_keeps_other_connection_memberships(tmp_pat
         "step-3.5-flash": ["step-plan"],
         "step-router-v1": ["step-plan"],
     }
-    assert _raw_ids(resources_dir, "stepfun") == set(live_ids)
     assert route.calls.last.request.headers["authorization"] == "Bearer direct-token"
 
 
@@ -513,7 +502,6 @@ async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
     registry = ModelRegistry.load(tmp_path / "resources")
     local = registry.get("ollama", "ministral-3:8b")
     cloud = registry.get("ollama", "kimi-k2.6:cloud")
-    raw = read_models_file(tmp_path / "resources", "ollama.raw.json")
     assert result["model_count"] == 2
     assert show_route.call_count == 2
     assert (local.capabilities.tools, local.capabilities.vision) == (True, True)
@@ -522,7 +510,6 @@ async def test_ollama_enriches_tags_through_api_show(tmp_path: Path) -> None:
     assert local.connections == ("local",)
     assert cloud.capabilities.reasoning.supported is True
     assert cloud.metadata["ollama"] == {"remote": True}
-    assert len(raw["raw_enrichment_responses"]) == 2
 
 
 @respx.mock
@@ -674,7 +661,6 @@ async def test_openrouter_merges_supplementary_and_task_catalogs(tmp_path: Path)
     result = await refresh_models(openrouter_config(), API_KEY, resources_dir)
 
     written = read_models_file(resources_dir, "openrouter.json")["models"]
-    raw = read_models_file(resources_dir, "openrouter.raw.json")
     assert result["model_count"] == 6
     assert set(written) == {
         "openai/gpt-4o",
@@ -684,14 +670,6 @@ async def test_openrouter_merges_supplementary_and_task_catalogs(tmp_path: Path)
         "recraft/recraft-v3",
         "future-lab/pixel-marvel",
     }
-    assert sorted(entry["id"] for entry in raw["raw_response"]["data"]) == [
-        "openai/gpt-4o",
-        "openai/gpt-4o-mini-tts",
-        "openai/gpt-audio",
-        "openai/whisper-1",
-        "recraft/recraft-v3",
-    ]
-    assert "/images/models" in raw["raw_task_responses"]
     recraft = written["recraft/recraft-v3"]
     assert recraft["name"] == "Recraft V3"
     assert recraft["capabilities"]["task_options"]["image_generation"] == {

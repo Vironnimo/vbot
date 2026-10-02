@@ -650,14 +650,14 @@ class StubModels:
                     matches.append((provider_id, model))
         return sorted(matches, key=lambda item: (item[0], item[1].model_id))
 
-    def reload(
+    async def reload_async(
         self,
         resources_dir: Path,
         *,
         runtime_models_dir: Path | None = None,
         custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
-        """Mirror ``ModelRegistry.reload``: swap contents in place from disk.
+        """Mirror ``ModelRegistry.reload_async``: swap contents in place from disk.
 
         Refresh writes new ``<provider>.json`` layer files; an in-place swap keeps
         this instance's identity so holders that captured it (the command
