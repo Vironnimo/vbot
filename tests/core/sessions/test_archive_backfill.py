@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import errno
 import json
 import os
 import shutil
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -61,29 +60,6 @@ def _touch(path: Path, when: datetime) -> None:
     os.utime(path, (when.timestamp(), when.timestamp()))
 
 
-def _refuse_access(monkeypatch: pytest.MonkeyPatch, locked: Path) -> None:
-    """Make ``locked`` unreadable the way a folder without read permission is.
-
-    Its own entry stays visible, but listing it fails, and so does every check
-    of a path inside it, as ``Path.is_dir`` and ``Path.is_file`` raise before
-    Python 3.14.
-    """
-
-    def refuse(method: str, inside_only: bool) -> None:
-        real = getattr(Path, method)
-
-        def guarded(self: Path, *args: Any, **kwargs: Any) -> Any:
-            if locked in self.parents or (not inside_only and self == locked):
-                raise PermissionError(errno.EACCES, "Access is denied", str(self))
-            return real(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, method, guarded)
-
-    refuse("iterdir", inside_only=False)
-    for method in ("stat", "is_dir", "is_file", "exists"):
-        refuse(method, inside_only=True)
-
-
 def _entries(manager: ChatSessionManager) -> dict[tuple[str, str], ArchiveEntry]:
     page = manager.archive_ledger.page(ArchiveEntryFilter(), limit=100)
     assert page.next_cursor is None
@@ -91,7 +67,10 @@ def _entries(manager: ChatSessionManager) -> dict[tuple[str, str], ArchiveEntry]
 
 
 def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
-    tmp_path: Path, current_session_store_template: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    current_session_store_template: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
 ) -> None:
     manager = _open(tmp_path, current_session_store_template)
     for agent_id, session_id in (
@@ -144,7 +123,7 @@ def test_migration_adopts_legacy_trees_and_the_sessions_their_archives_left(
     # Folders the migration cannot read stay as they are, outside any entry.
     for locked in ("agents/locked", "locked-files"):
         _write(archive / locked / "agent/agent.json", {"id": "locked"})
-        _refuse_access(monkeypatch, archive / locked)
+        deny_access(archive / locked)
     _touch(archive / "agents/deepseek", _BASE)
     # main's tree is newer than the pairing window after its only archived Session.
     _touch(archive / "agents/main", _BASE + timedelta(hours=1, minutes=16))
