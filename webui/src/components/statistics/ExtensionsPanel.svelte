@@ -30,17 +30,14 @@
   const extensions = $derived(section?.extensions ?? []);
 
   // Groups started before generated titles existed carry none; name them by
-  // start time and a short id so they stay distinguishable.
+  // a short id. Their start time already shows in the group's meta line.
   function groupLabel(group) {
-    if (group.title) return group.title;
-    const id = shortGroupId(group.group_id);
-    if (!group.started_at) {
-      return t('statistics.extensions.groupFallbackId', { id });
-    }
-    return t('statistics.extensions.groupFallback', {
-      date: formatDateTime(group.started_at, locale),
-      id,
-    });
+    return (
+      group.title ||
+      t('statistics.extensions.groupFallbackId', {
+        id: shortGroupId(group.group_id),
+      })
+    );
   }
 
   // Input plus output tokens of an activity's Totals, and the estimated part.
