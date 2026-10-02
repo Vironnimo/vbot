@@ -43,7 +43,12 @@
   const AUTO_SAVE_DEBOUNCE_MS = 800;
   const MAX_SAVE_ATTEMPTS = 3;
 
-  let { onToast = noop, onError = noop } = $props();
+  let {
+    onToast = noop,
+    onError = noop,
+    // The App's Extension invalidations, which keep the MCP connections live.
+    subscribeExtensionInvalidations = null,
+  } = $props();
   const uid = $props.id();
 
   let extensions = $state([]);
@@ -778,6 +783,8 @@
   <!-- The loaded MCP Extension contributes its connection manager as a
        sub-topic after the Extension list. -->
   {#if mcpLoaded}
-    <SettingsMcpPanel />
+    <SettingsMcpPanel
+      subscribeInvalidations={subscribeExtensionInvalidations}
+    />
   {/if}
 {/if}

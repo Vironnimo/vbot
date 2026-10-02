@@ -1053,6 +1053,7 @@
           {sessionsRefreshToken}
           initialScrollPosition={settingsScrollPosition}
           onScrollPositionChange={rememberSettingsScrollPosition}
+          subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         />
       {:else if activeViewId === 'logs'}
         <LogsView navigation={navigator.view('logs')} />

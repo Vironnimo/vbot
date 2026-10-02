@@ -41,7 +41,7 @@ from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
 
 from ._callbacks import ServerRequests
-from ._events import ConnectionEvents, dump
+from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
 from .interactions import InputRequests
@@ -355,6 +355,7 @@ class ConnectionRunner:
         publish: Any,
         *,
         authorize: Callable[[ToolContext], None] | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.host = host
@@ -362,7 +363,8 @@ class ConnectionRunner:
         self.publish = publish
         self._authorize = authorize
         self.id = config["id"]
-        self.state = "disconnected"
+        self._on_change = on_change
+        self._state = "disconnected"
         self.error: str | None = None
         self.client: Client | None = None
         self.catalog: dict[str, Any] = {}
@@ -379,7 +381,7 @@ class ConnectionRunner:
         # and whether its HTTP client does so instead of its write stream.
         self._tracks_delivery = False
         self._http_marks_delivery = False
-        self._events = ConnectionEvents(host, lambda: self.config)
+        self._events = ConnectionEvents(host, lambda: self.config, on_stderr=self._stderr_changed)
         self._requests = ServerRequests(
             self.id,
             host,
@@ -406,6 +408,23 @@ class ConnectionRunner:
         self._automatic = False
         self._reconnects = 0
         self._reconnect: asyncio.Task[None] | None = None
+
+    @property
+    def state(self) -> str:
+        """``disconnected``, ``connecting``, ``connected`` or ``failed``."""
+        return self._state
+
+    @state.setter
+    def state(self, value: str) -> None:
+        changed = value != self._state
+        self._state = value
+        if changed and self._on_change is not None:
+            self._on_change()
+
+    def _stderr_changed(self) -> None:
+        # A failed connection reports its stderr tail, which can still grow.
+        if self._state == "failed" and self._on_change is not None:
+            self._on_change()
 
     def start(self, *, automatic: bool = False) -> None:
         if self._task is not None and not self._task.done():
@@ -505,10 +524,13 @@ class ConnectionRunner:
         )
 
     def status(self) -> dict[str, Any]:
+        failed = self.state == "failed"
         return {
             "id": self.id,
             "state": self.state,
             "error": self.error,
+            "problem": self._events.problem if failed else None,
+            "stderr_tail": self._events.stderr_tail() if failed else [],
             "protocol_version": self.catalog.get("protocol_version"),
             "capabilities": self.catalog.get("capabilities", {}),
             "counts": {
@@ -663,6 +685,7 @@ class ConnectionRunner:
         except asyncio.CancelledError:
             raise
         except (Exception, BaseExceptionGroup) as error:
+            self._events.diagnose(error)
             expected = self._expected(error)
             if self._loss is None:
                 self.state = "failed"
@@ -727,6 +750,9 @@ class ConnectionRunner:
         self._lost_owner = owner
         self.state = "failed"
         self.error = f"Connection lost: {reason}"
+        # An earlier failure's cause no longer applies; the error that ends
+        # the connection's task, if any, is diagnosed next.
+        self._events.diagnose(None)
         self._ready.clear()
         self._events.record("connection_failed", {"error": self.error})
         self._log_failed(expected=True)
@@ -858,7 +884,7 @@ class ConnectionRunner:
     def _credential(self, key: str) -> str:
         value = self.host.resolve_credential(key)
         if not value:
-            raise ValueError(f"Missing MCP credential: {key}")
+            raise MissingCredentialError(key)
         return value
 
     def _http_failed(self, request: httpx2.Request, error: Exception) -> None:
@@ -875,6 +901,10 @@ class ConnectionRunner:
         status = response.status_code
         if request.method == "DELETE":
             return
+        if request.method == "POST" or self.config["transport"] == "sse":
+            # A failure diagnosis names this status; a server may refuse the
+            # optional GET stream of Streamable HTTP without harm.
+            self._events.observe_status(status)
         if (
             status == 404
             and request.headers.get(MCP_SESSION_ID)

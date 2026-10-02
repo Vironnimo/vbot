@@ -24,9 +24,16 @@ from core.utils.ids import new_id
 
 from ._definitions import MAX_FINISHED_JOBS, MCP_OPERATIONS, MCP_PARAMETERS
 from ._discovery import operation_target, remote_tool_name
+from ._importer import MAX_SETUP_CHARACTERS
 from .client import ConnectionRunner
 from .config import CONNECTION_SCHEMA
 from .interactions import InputRequests
+
+# The resources of the changes the service publishes to accessors
+# (``ExtensionHost.publish_change``): what ``list`` and ``status`` report for a
+# connection, and a management job that finished.
+CONNECTIONS_RESOURCE = "connections"
+JOBS_RESOURCE = "jobs"
 
 _DESCRIPTIONS = {
     "list": "List saved connections, live connection state, and effective Agent access.",
@@ -40,12 +47,20 @@ _DESCRIPTIONS = {
     "disable": "Disable a saved connection and stop its client and published Tools.",
     "connect": "Start connecting an enabled connection; inspect status for readiness.",
     "disconnect": "Close the current client without disabling the saved connection.",
+    "reconnect": (
+        "Close and restart an enabled connection, including a local server's process; "
+        "inspect status for readiness."
+    ),
     "reauthorize": (
         "Sign an OAuth connection out: delete its stored tokens and registered client, "
         "then reconnect an enabled connection, which starts a new sign-in."
     ),
     "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
     "save": "Create or replace a complete connection; read status before replacing one.",
+    "import": (
+        "Preview connections from another client's MCP setup, a command line or a URL; "
+        "apply saves the selected ones."
+    ),
     "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
     "inspect": "Read the cached Tool catalog and guidance without connecting or calling Tools.",
     "credential": "Set or clear a referenced credential and reset the client; use JSON stdin.",
@@ -75,6 +90,36 @@ _EXPLORE_PROPERTIES: dict[str, Any] = {
 }
 
 
+# ``contentMediaType`` marks ``source`` as a document: the CLI reads it from a
+# file or standard input instead of a shell argument.
+_IMPORT_PROPERTIES: dict[str, Any] = {
+    "source": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": MAX_SETUP_CHARACTERS,
+        "contentMediaType": "text/plain",
+        "description": (
+            "Setup text: an mcpServers, servers or mcp_servers configuration, a single "
+            "server object, claude mcp add or another command line, or a server URL."
+        ),
+    },
+    "apply": {
+        "type": "boolean",
+        "description": "Save the chosen servers; omit to preview without saving.",
+    },
+    "servers": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Names from the preview to save; omit to save the selected ones.",
+    },
+    "ids": {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "description": "Connection id per server name, replacing the proposed one.",
+    },
+}
+
+
 def register_management(
     api: ExtensionAPI, manage: Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 ) -> None:
@@ -90,12 +135,14 @@ def register_management(
                 "disable",
                 "connect",
                 "disconnect",
+                "reconnect",
                 "reauthorize",
                 "test",
             ),
             base,
         ),
         "save": {"connection": CONNECTION_SCHEMA},
+        "import": _IMPORT_PROPERTIES,
         "events": {**base, "after": {"type": "integer", "minimum": 0}},
         "inspect": {
             **base,
@@ -119,6 +166,8 @@ def register_management(
             if name == "explore"
             else ["id"]
             if name == "inspect"
+            else ["source"]
+            if name == "import"
             else [key for key in properties if key not in {"after", "arguments"}]
         )
 
@@ -140,10 +189,16 @@ def register_management(
 
 
 class ManagementJobs:
-    """Background management jobs; only the newest finished ones are kept."""
+    """Background management jobs; only the newest finished ones are kept.
 
-    def __init__(self, inputs: InputRequests) -> None:
+    *on_finish* receives the id of each job that finished, however it ended.
+    """
+
+    def __init__(
+        self, inputs: InputRequests, *, on_finish: Callable[[str], None] | None = None
+    ) -> None:
         self._inputs = inputs
+        self._on_finish = on_finish
         self._tasks: dict[str, asyncio.Task[dict[str, Any]]] = {}
 
     def start(self, coroutine: Coroutine[Any, Any, dict[str, Any]]) -> dict[str, Any]:
@@ -153,6 +208,9 @@ class ManagementJobs:
         identifier = new_id("job", claim=lambda candidate: candidate not in self._tasks)
         self._tasks[identifier] = asyncio.create_task(coroutine, name=f"mcp-job:{identifier}")
         self._tasks[identifier].add_done_callback(_observe)
+        if self._on_finish is not None:
+            on_finish = self._on_finish
+            self._tasks[identifier].add_done_callback(lambda _task: on_finish(identifier))
         return self.status(identifier)
 
     def status(self, identifier: str) -> dict[str, Any]:
