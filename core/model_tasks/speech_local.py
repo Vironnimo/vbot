@@ -49,7 +49,7 @@ from core.model_tasks.speech_types import (
 )
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
@@ -645,20 +645,9 @@ class LocalSpeechExecutor:
                 if state.preparing is not None:
                     state.preparing.cancel()
             self._close_task = asyncio.create_task(self._finish_close())
-        try:
-            await asyncio.shield(self._close_task)
-        except asyncio.CancelledError:
-            # Cleanup may still be waiting for the inference worker. Cancellation
-            # must never shut down its executor before the model can be unloaded.
-            while not self._close_task.done():
-                try:
-                    await asyncio.shield(self._close_task)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-            self._close_task.exception()
-            raise
+        # Cleanup may still be waiting for the inference worker. Cancellation
+        # must never shut down its executor before the model can be unloaded.
+        await settle_before_cancelling(self._close_task, on_late_failure=_log_close_failure)
 
     async def _finish_close(self) -> None:
         # Killing a process tree blocks, so it must not run on the Event Loop.
@@ -1092,6 +1081,11 @@ def _close_speech_process(process: subprocess.Popen[str]) -> None:
         process.stdin.close()
     if process.stdout:
         process.stdout.close()
+
+
+def _log_close_failure(error: BaseException) -> None:
+    """Report a shutdown failure that its cancelled caller no longer receives."""
+    _LOGGER.error("Local speech shutdown failed after its caller was cancelled", exc_info=error)
 
 
 def _audio_chunks(audio: bytes) -> Iterator[tuple[int, Any]]:

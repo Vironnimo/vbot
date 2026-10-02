@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ from core.extensions.extensions import (
 )
 from core.extensions.operations import ExtensionHost
 from core.storage import StorageManager
+from core.utils.workers import settle_before_cancelling
 
 
 class ExtensionRuntime:
@@ -196,25 +196,13 @@ class ExtensionRuntime:
 
     async def _finish_mutation(self, operation: Coroutine[Any, Any, None], *, name: str) -> None:
         """Keep the mutation lock until an admitted operation has settled."""
-        task = asyncio.create_task(operation)
-        try:
-            # Waiting leaves the admitted task running if its caller is cancelled,
-            # without transferring late failure reporting to asyncio's shield.
-            await asyncio.wait({task})
-            task.result()
-        except asyncio.CancelledError:
-            while not task.done():
-                with suppress(asyncio.CancelledError):
-                    await asyncio.wait({task})
-            if not task.cancelled():
-                error = task.exception()
-                if error is not None:
-                    self._logger.error(
-                        "Cancelled Extension mutation failed (operation=%s)",
-                        name,
-                        exc_info=(type(error), error, error.__traceback__),
-                    )
-            raise
+
+        def report(error: BaseException) -> None:
+            self._logger.error(
+                "Cancelled Extension mutation failed (operation=%s)", name, exc_info=error
+            )
+
+        await settle_before_cancelling(operation, on_late_failure=report)
 
     @staticmethod
     def _recall_backend_names(

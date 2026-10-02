@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
+from functools import partial
 from typing import Any
 
 from core.utils.logging import get_logger
+from core.utils.workers import settle_before_cancelling
 from server.rpc.errors import RpcError
 
 JsonObject = dict[str, Any]
@@ -25,32 +26,18 @@ def serialized_mutation(handler: MutationHandler, *, lock_attribute: str) -> Mut
             lock = asyncio.Lock()
             setattr(state, lock_attribute, lock)
         async with lock:
-            task = asyncio.ensure_future(handler(state, params))
-            try:
-                # Waiting never cancels the admitted task. Unlike a cancelled
-                # shield, it also leaves failure reporting to this RPC owner.
-                await asyncio.wait({task})
-                return task.result()
-            except asyncio.CancelledError:
-                # Keep the lock until refresh/publication catch up with any write,
-                # including when the caller requests cancellation more than once.
-                while not task.done():
-                    with suppress(asyncio.CancelledError):
-                        await asyncio.wait({task})
-                if not task.cancelled():
-                    error = task.exception()
-                    if isinstance(error, RpcError):
-                        _LOGGER.warning(
-                            "Cancelled RPC mutation rejected (handler=%s code=%s)",
-                            handler.__name__,
-                            error.code,
-                        )
-                    elif error is not None:
-                        _LOGGER.error(
-                            "Cancelled RPC mutation failed (handler=%s)",
-                            handler.__name__,
-                            exc_info=(type(error), error, error.__traceback__),
-                        )
-                raise
+            # Keep the lock until refresh/publication catch up with any write,
+            # including when the caller requests cancellation more than once.
+            return await settle_before_cancelling(
+                handler(state, params),
+                on_late_failure=partial(_log_cancelled_failure, handler.__name__),
+            )
 
     return run
+
+
+def _log_cancelled_failure(handler: str, error: BaseException) -> None:
+    if isinstance(error, RpcError):
+        _LOGGER.warning("Cancelled RPC mutation rejected (handler=%s code=%s)", handler, error.code)
+        return
+    _LOGGER.error("Cancelled RPC mutation failed (handler=%s)", handler, exc_info=error)

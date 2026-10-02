@@ -29,12 +29,16 @@ from time import perf_counter
 from typing import Any, TypeVar
 
 from core.performance.performance import measure, record_span, set_gauge
+from core.utils.errors import VBotError
+from core.utils.logging import get_logger
 
 _WorkerResult = TypeVar("_WorkerResult")
 _OrderedResult = TypeVar("_OrderedResult")
 _SettledResult = TypeVar("_SettledResult")
 # Admission waits shorter than this stay histogram-only in recordings.
 _WAIT_SPAN_MIN_MS = 1.0
+
+_LOGGER = get_logger("utils.workers")
 
 
 class BoundedWorkerPool:
@@ -118,7 +122,10 @@ class BoundedWorkerPool:
         loop = asyncio.get_running_loop()
         call = partial(function, *arguments, **keyword_arguments)
         # Settling first keeps a cancelled caller from releasing the semaphore early.
-        return await settle_before_cancelling(loop.run_in_executor(self._executor, call))
+        return await settle_before_cancelling(
+            loop.run_in_executor(self._executor, call),
+            on_late_failure=partial(_log_late_failure, _callable_name(function)),
+        )
 
     def _count_waiting(self, delta: int) -> None:
         with self._counts_lock:
@@ -184,7 +191,10 @@ class OrderedWorker:
 
     async def call_async(self, operation: Callable[[], _OrderedResult]) -> _OrderedResult:
         """Run *operation* after all earlier work without blocking the Event Loop."""
-        return await settle_before_cancelling(asyncio.wrap_future(self._submit(operation)))
+        return await settle_before_cancelling(
+            asyncio.wrap_future(self._submit(operation)),
+            on_late_failure=partial(_log_late_failure, _callable_name(operation)),
+        )
 
     def hand_off(self, operation: Callable[[], None], *, limit: int) -> bool:
         """Queue *operation* without waiting; ``False`` when *limit* hand-offs are pending.
@@ -222,29 +232,58 @@ class OrderedWorker:
         self._local.is_worker_thread = True
 
 
-async def settle_before_cancelling(work: Awaitable[_SettledResult]) -> _SettledResult:
+async def settle_before_cancelling(
+    work: Awaitable[_SettledResult],
+    *,
+    on_late_failure: Callable[[BaseException], None] | None = None,
+) -> _SettledResult:
     """Await *work*; when the caller is cancelled meanwhile, let *work* finish first.
 
     For work that mutates state and must not be seen as abandoned halfway, such
-    as a started worker call or an edit that saves and then updates memory. The
-    cancellation is re-raised once *work* has settled and wins over a late
-    failure of it; repeated cancellations keep waiting.
+    as a started worker call or an edit that saves and then updates memory.
+    Waiting never cancels *work*. The cancellation is re-raised once *work* has
+    settled and wins over a late failure of it; repeated cancellations keep
+    waiting. Nobody receives such a late failure, so it goes to
+    *on_late_failure*, which reports it in the owner's words. Without one it is
+    logged here: an expected ``VBotError`` at WARNING, anything else at ERROR
+    with its traceback.
     """
+    report = on_late_failure or partial(_log_late_failure, _work_name(work))
     future = asyncio.ensure_future(work)
     try:
-        return await asyncio.shield(future)
-    except asyncio.CancelledError as cancellation:
+        # Unlike a cancelled ``asyncio.shield``, which marks a late failure as
+        # retrieved without reporting it, waiting leaves the failure to this owner.
+        await asyncio.wait((future,))
+    except asyncio.CancelledError:
         while not future.done():
-            try:
-                await asyncio.shield(future)
-            except asyncio.CancelledError:
-                continue
-            except BaseException:
-                break
-        if future.done() and not future.cancelled():
-            with contextlib.suppress(BaseException):
-                future.exception()
-        raise cancellation
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait((future,))
+        if not future.cancelled() and (error := future.exception()) is not None:
+            report(error)
+        raise
+    return future.result()
+
+
+def _log_late_failure(work: str, error: BaseException) -> None:
+    if isinstance(error, VBotError):
+        _LOGGER.warning(
+            "Work failed after its caller was cancelled (work=%s error=%s)",
+            work,
+            type(error).__name__,
+        )
+        return
+    _LOGGER.error(
+        "Work failed after its caller was cancelled (work=%s error=%s)",
+        work,
+        type(error).__name__,
+        exc_info=error,
+    )
+
+
+def _work_name(work: Awaitable[Any]) -> str:
+    """Return the code name of *work* for logs; never its arguments or content."""
+    source: object = work.get_coro() if isinstance(work, asyncio.Task) else work
+    return getattr(source, "__qualname__", None) or type(work).__name__
 
 
 def _nothing() -> None:
