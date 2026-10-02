@@ -1,14 +1,16 @@
 """Standalone speech child entry point; imports vBot only for managed STT engines.
 
-The parent owns serialization, paths, timeouts and process lifetime. Libraries
-write diagnostics to stderr; stdout carries only bounded JSON control frames.
+The parent owns serialization, paths, timeouts and process lifetime, and
+installs every model before it starts a child: requests carry the model's
+directory as the ``model_path`` option, and the child never contacts the Hub.
+Libraries write diagnostics to stderr; stdout carries only bounded JSON
+control frames.
 """
 
 from __future__ import annotations
 
 import base64
 import importlib
-import io
 import json
 import os
 import re
@@ -16,54 +18,6 @@ import sys
 import wave
 from pathlib import Path
 from typing import Any
-
-
-def resolve_snapshot(repo: str, files: list[str], tqdm_class: Any) -> str:
-    """Reuse complete local files without HTTP; finish only missing downloads.
-
-    Kept in this standalone loader so the server's STT adapters and isolated
-    TTS SDK processes share one cache policy without importing vBot in the child.
-    Hub's local snapshot lookup alone does not prove that a download is complete.
-    """
-    hub = importlib.import_module("huggingface_hub")
-    missing = importlib.import_module("huggingface_hub.errors").LocalEntryNotFoundError
-    try:
-        cached = hub.snapshot_download(repo, local_files_only=True, allow_patterns=files)
-    except missing as error:
-        # Newer Hub versions expose the partial snapshot on this error; older
-        # SDK stacks return its directory and leave completeness to the caller.
-        cached = getattr(error, "snapshot_path", None)
-
-    def complete(source: str) -> bool:
-        return all(
-            (Path(source) / name).is_file() and (Path(source) / name).stat().st_size > 0
-            for name in files
-        )
-
-    if cached and complete(cached):
-        return str(cached)
-    # A partial snapshot must finish its existing revision, not combine it with
-    # whatever the remote main branch happens to point at today.
-    options = {"revision": Path(cached).name} if cached else {}
-    source = hub.snapshot_download(repo, allow_patterns=files, tqdm_class=tqdm_class, **options)
-    empty = [
-        name
-        for name in files
-        if (Path(source) / name).is_file() and (Path(source) / name).stat().st_size == 0
-    ]
-    if empty:
-        # Hub considers an existing blob cached even when it is empty. Repair
-        # only those files; valid weights must never be downloaded again.
-        source = hub.snapshot_download(
-            repo,
-            revision=Path(source).name,
-            allow_patterns=empty,
-            force_download=True,
-            tqdm_class=tqdm_class,
-        )
-    if not complete(source):
-        raise OSError("Incomplete speech model download")
-    return str(source)
 
 
 def sdk(engine: str) -> Any:
@@ -96,59 +50,9 @@ def load(engine: str, options: dict[str, Any], progress: Any) -> Any:
             if torch.cuda.is_available()
             else ("mps" if torch.backends.mps.is_available() else "cpu")
         )
-    hub_progress: Any = importlib.import_module("huggingface_hub.utils.tqdm")
-    tqdm = hub_progress.tqdm
-
-    class DownloadProgress(tqdm):  # type: ignore[valid-type,misc]
-        def __init__(self, *args, **kwargs):
-            self._bytes = kwargs.get("unit") == "B"
-            kwargs["file"] = io.StringIO()
-            super().__init__(*args, **kwargs)
-
-        def update(self, n=1):
-            if n > 0 and self._bytes:
-                progress("downloading")
-            return super().update(n)
-
-    # Transformers 4.x requires Hub < 1. Its snapshot bar counts files;
-    # the actual byte-transfer bars are created through this module instead.
-    # This override is confined to the dedicated child, never the vBot server.
-    hub_progress.tqdm = DownloadProgress
-
-    progress("checking_model")
-    if engine == "qwen3-tts":
-        source = resolve_snapshot(
-            options.get("model", "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"),
-            [
-                "config.json",
-                "generation_config.json",
-                "merges.txt",
-                "model.safetensors",
-                "preprocessor_config.json",
-                "tokenizer_config.json",
-                "vocab.json",
-                "speech_tokenizer/config.json",
-                "speech_tokenizer/configuration.json",
-                "speech_tokenizer/model.safetensors",
-                "speech_tokenizer/preprocessor_config.json",
-            ],
-            DownloadProgress,
-        )
-    else:
-        source = resolve_snapshot(
-            "ResembleAI/chatterbox",
-            [
-                "ve.pt",
-                "t3_mtl23ls_v3.safetensors",
-                "s3gen.pt",
-                "grapheme_mtl_merged_expanded_v1.json",
-                "conds.pt",
-                "Cangjie5_TC.json",
-            ],
-            DownloadProgress,
-        )
-    # SDK internals may probe the Hub even when given local paths. All required
-    # files now exist, so keep this dedicated child offline for loading/inference.
+    source = options["model_path"]
+    # SDK internals may probe the Hub even when given local paths. The installed
+    # model holds every required file, so keep this child offline.
     os.environ["HF_HUB_OFFLINE"] = "1"
     constants: Any = importlib.import_module("huggingface_hub.constants")
     constants.HF_HUB_OFFLINE = True

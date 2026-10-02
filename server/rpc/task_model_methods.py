@@ -187,24 +187,14 @@ async def _task_model_patch_options(state: Any, params: JsonObject) -> JsonObjec
     return {"model_tasks": model_tasks}
 
 
-def _local_speech_setup_status(state: Any, params: JsonObject) -> JsonObject:
-    setup = _speech_setup(state, params)
-    return {
-        **setup.status(),
-        "restart_available": state.request_restart is not None,
-    }
-
-
-def _local_speech_setup_install(state: Any, params: JsonObject) -> JsonObject:
-    setup = _speech_setup(state, params)
-    return {
-        **setup.install(),
-        "restart_available": state.request_restart is not None,
-    }
-
-
 def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
-    setup = _speech_setup(state, params)
+    """Restart the server once a development checkout's STT packages need it."""
+    try:
+        setup = state.runtime.speech.local_setup_for(
+            _local_target(params, "speech.local_setup_restart")
+        )
+    except ValueError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
     if setup.status()["state"] != "restart_required":
         return {"state": "failed", "error": "setup_not_finished"}
     if state.request_restart is None:
@@ -216,7 +206,7 @@ def _local_speech_setup_restart(state: Any, params: JsonObject) -> JsonObject:
         return {"state": "failed", "error": "restart_unavailable"}
     _LOGGER.info(
         "Server restart requested (reason=local_speech_setup target=%s actor=rpc)",
-        params.get("target") or "default",
+        params["target"],
     )
     return {"state": "restarting"}
 
@@ -305,26 +295,11 @@ async def _local_unload(state: Any, params: JsonObject) -> JsonObject:
     return {**_local_memory_status(state, {}), "released": result["released"]}
 
 
-def _speech_setup(state: Any, params: JsonObject) -> Any:
-    _reject_unsupported(params, {"target"}, "speech.local_setup")
-    target = params.get("target", "")
-    if not isinstance(target, str):
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, "target must be a string")
-    if not target:
-        return state.runtime.speech.local_setup
-    try:
-        return state.runtime.speech.local_setup_for(target)
-    except ValueError as error:
-        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
-
-
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered task-model RPC handlers."""
     return {
         "speech.local_memory_status": _local_speech_memory_status,
         "speech.local_unload": _local_speech_unload,
-        "speech.local_setup_status": _local_speech_setup_status,
-        "speech.local_setup_install": _local_speech_setup_install,
         "speech.local_setup_restart": _local_speech_setup_restart,
         "speech.prepare_transcription": _speech_prepare_transcription,
         "task_model.settings": _task_model_settings,

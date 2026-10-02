@@ -14,9 +14,10 @@ from unittest.mock import AsyncMock, Mock
 import numpy as np
 import pytest
 
-from core.model_tasks import speech_worker
+from core.model_tasks import local_setup, speech_worker
 from core.model_tasks.constants import TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
+from core.model_tasks.model_files import ModelFilesError, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
     _PROGRESS,
@@ -25,6 +26,7 @@ from core.model_tasks.speech_local import (
     SpeechEngineDefinition,
     _TtsEngine,
 )
+from core.model_tasks.speech_models import SPEECH_MODELS
 from core.model_tasks.speech_setup import LocalSpeechSetup
 from core.model_tasks.speech_types import SpeechProgress, SpeechSynthesisResult
 
@@ -32,7 +34,9 @@ from core.model_tasks.speech_types import SpeechProgress, SpeechSynthesisResult
 @pytest.mark.asyncio
 async def test_installations_share_a_queue_and_cancel_waiting_jobs(tmp_path, monkeypatch):
     executor = LocalSpeechExecutor(engines_dir=tmp_path)
-    first, second = executor.tts_setups.values()
+    first, second = (
+        executor.setup_for(target) for target in ("local/qwen3-tts-1.7b", "local/chatterbox")
+    )
     entered = asyncio.Event()
     release = asyncio.Event()
 
@@ -55,25 +59,92 @@ async def test_installations_share_a_queue_and_cancel_waiting_jobs(tmp_path, mon
     await executor.aclose()
 
 
+class _Fetch:
+    """Fake model download: reports half the bytes, then all, or fails with *error*."""
+
+    def __init__(self) -> None:
+        self.error = ""
+        self.models: list[PinnedModel] = []
+        self.seen: list[dict] = []
+        self.setup: LocalSpeechSetup | None = None
+
+    def __call__(self, model, directory, *, progress, cancelled) -> None:
+        self.models.append(model)
+        directory.mkdir(parents=True, exist_ok=True)
+        progress(model.download_bytes // 2)
+        if self.setup is not None:
+            self.seen.append(self.setup.status())
+        if self.error:
+            raise ModelFilesError(self.error)
+        progress(model.download_bytes)
+
+
 @pytest.mark.asyncio
-async def test_tts_catalog_is_lazy_and_each_setup_has_its_own_availability(tmp_path):
+async def test_tts_sizes_share_their_environment_and_install_their_own_model(tmp_path, monkeypatch):
     executor = LocalSpeechExecutor(engines_dir=tmp_path)
     try:
-        for name in ("qwen3-tts", "chatterbox"):
+        for name in ("qwen3-tts-1.7b", "qwen3-tts-0.6b", "chatterbox"):
             target = executor._definitions[name].descriptor
             assert target.task_types == (TASK_TEXT_TO_SPEECH,)
             assert not target.can_execute()
-        setup = executor.setup_for("local/qwen3-tts")
-        setup.python.parent.mkdir(parents=True)
-        setup.python.touch()
-        setup._write_marker(setup.directory / "verified.json")
-        assert executor._definitions["qwen3-tts"].descriptor.can_execute()
-        assert not executor._definitions["chatterbox"].descriptor.can_execute()
-        setup._state = "installing"
-        assert not executor._definitions["qwen3-tts"].descriptor.can_execute()
-        with pytest.raises(ValueError):
-            executor.setup_for("local/../../escape")
-        assert executor.setup_for("local/parakeet") is executor.setup
+        large = executor.setup_for("local/qwen3-tts-1.7b")
+        small = executor.setup_for("local/qwen3-tts-0.6b")
+        commands = []
+
+        async def command(arguments, **kwargs):
+            commands.append(list(arguments))
+            if "venv" in arguments:
+                large.python.parent.mkdir(parents=True)
+                large.python.touch()
+            return 0
+
+        fetch = _Fetch()
+        fetch.setup = large
+        for setup in (large, small):
+            monkeypatch.setattr(setup, "_command", command)
+            monkeypatch.setattr(setup, "_packaged", lambda: True)
+        monkeypatch.setattr(local_setup, "fetch_model_files", fetch)
+        assert large.status()["error"] == "python_missing"
+
+        large.install()
+        await large._task
+
+        status = large.status()
+        assert status["state"] == "ready" and not status["error"] and "progress" not in status
+        assert executor._definitions["qwen3-tts-1.7b"].descriptor.can_execute()
+        model = SPEECH_MODELS["qwen3-tts-1.7b"]
+        total = model.download_bytes
+        assert fetch.models == [model]
+        assert fetch.seen == [
+            {
+                "state": "installing",
+                "phase": "downloading",
+                "error": "",
+                "progress": {"completed": total // 2, "total": total},
+            }
+        ]
+        receipt = json.loads((large.model_directory / "verified.json").read_text())
+        assert receipt == {"repo": model.repo, "revision": model.revision}
+        # The other size reuses the environment and reports only its missing model.
+        assert small.status()["error"] == "model_missing"
+        assert not executor._definitions["qwen3-tts-0.6b"].descriptor.can_execute()
+        environment_commands = len(commands)
+        fetch.error = "checksum_mismatch"
+        fetch.setup = small
+        small.install()
+        await small._task
+
+        assert len(commands) == environment_commands
+        assert small.status() == {
+            "state": "failed",
+            "phase": "downloading",
+            "error": "checksum_mismatch",
+        }
+        assert not (small.model_directory / "verified.json").exists()
+        assert not executor._definitions["qwen3-tts-0.6b"].descriptor.can_execute()
+        assert executor._definitions["qwen3-tts-1.7b"].descriptor.can_execute()
+        large._state = "installing"
+        assert not executor._definitions["qwen3-tts-1.7b"].descriptor.can_execute()
     finally:
         await executor.aclose()
 
@@ -181,7 +252,7 @@ async def test_managed_setup_never_installs_sdk_in_server_and_verifies_before_re
 
 
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
-def test_worker_uses_complete_cache_and_keeps_sdk_loading_offline(monkeypatch, engine):
+def test_worker_loads_the_installed_model_offline(monkeypatch, engine):
     calls = []
     cls = SimpleNamespace(
         from_local=Mock(return_value="model"), from_pretrained=Mock(return_value="model")
@@ -195,149 +266,27 @@ def test_worker_uses_complete_cache_and_keeps_sdk_loading_offline(monkeypatch, e
     tokenizer = SimpleNamespace()
     modules = {
         "torch": torch,
-        "huggingface_hub.utils.tqdm": SimpleNamespace(tqdm=object),
         "huggingface_hub.constants": constants,
         "chatterbox.models.tokenizers.tokenizer": tokenizer,
     }
-    snapshot = Mock(return_value="cached")
     monkeypatch.setenv("HF_HUB_OFFLINE", "0")
     monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
-    monkeypatch.setattr(speech_worker, "resolve_snapshot", snapshot)
     monkeypatch.setattr(speech_worker, "sdk", lambda _name: cls)
-    assert speech_worker.load(engine, {}, calls.append) == "model"
+    assert speech_worker.load(engine, {"model_path": "installed"}, calls.append) == "model"
     assert constants.HF_HUB_OFFLINE
     if engine == "chatterbox":
-        cls.from_local.assert_called_once_with("cached", device="cpu", t3_model="v3")
-        assert "t3_mtl23ls_v3.safetensors" in snapshot.call_args.args[1]
+        cls.from_local.assert_called_once_with("installed", device="cpu", t3_model="v3")
         assert Path(
             tokenizer.hf_hub_download(
                 repo_id="ResembleAI/chatterbox", filename="Cangjie5_TC.json", cache_dir="ignored"
             )
-        ) == Path("cached/Cangjie5_TC.json")
+        ) == Path("installed/Cangjie5_TC.json")
         with pytest.raises(ValueError):
             tokenizer.hf_hub_download(repo_id="other", filename="other")
     else:
+        assert cls.from_pretrained.call_args.args == ("installed",)
         assert cls.from_pretrained.call_args.kwargs["local_files_only"] is True
-        assert "speech_tokenizer/model.safetensors" in snapshot.call_args.args[1]
-    assert calls == ["checking_model", "loading"]
-
-
-def test_disabled_download_bars_still_report_real_transfer(monkeypatch):
-    phases = []
-
-    class DisabledBar:
-        def __init__(self, **kwargs):
-            pass
-
-        def update(self, n):
-            return None
-
-    bars = SimpleNamespace(tqdm=DisabledBar)
-
-    def snapshot(*args, **kwargs):
-        bar = bars.tqdm(unit="B", disable=True)
-        bar.update(0)
-        bar.update(128)
-        bars.tqdm(unit="files", disable=True).update(1)
-        return "cached"
-
-    modules = {
-        "torch": SimpleNamespace(),
-        "huggingface_hub.utils.tqdm": bars,
-        "huggingface_hub.constants": SimpleNamespace(),
-        "chatterbox.models.tokenizers.tokenizer": SimpleNamespace(),
-    }
-    monkeypatch.setenv("HF_HUB_OFFLINE", "0")
-    monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
-    monkeypatch.setattr(speech_worker, "resolve_snapshot", snapshot)
-    monkeypatch.setattr(speech_worker, "sdk", lambda _name: SimpleNamespace(from_local=Mock()))
-    speech_worker.load("chatterbox", {"device": "cpu"}, phases.append)
-    assert phases == ["checking_model", "downloading", "loading"]
-
-
-@pytest.mark.parametrize(
-    "initial", ["complete", "missing", "partial", "partial_error", "empty_file"]
-)
-def test_snapshot_reuses_local_files_and_finishes_only_missing_revision(
-    tmp_path, monkeypatch, initial
-):
-    source = tmp_path / ("a" * 40)
-    source.mkdir()
-    files = ["config.json", "model.safetensors", "tokenizer/config.json"]
-    sentinel = b"existing weights"
-    if initial != "missing":
-        (source / "model.safetensors").write_bytes(sentinel)
-    if initial in ("complete", "empty_file"):
-        for name in files:
-            path = source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists():
-                path.write_bytes(b"asset")
-    if initial == "empty_file":
-        (source / "config.json").write_bytes(b"")
-
-    class MissingError(Exception):
-        pass
-
-    calls = []
-
-    def download(repo, **kwargs):
-        calls.append(kwargs)
-        assert kwargs["allow_patterns"] == (
-            ["config.json"] if kwargs.get("force_download") else files
-        )
-        if kwargs.get("local_files_only"):
-            if initial == "partial_error" and len(calls) == 1:
-                error = MissingError()
-                error.snapshot_path = str(source)
-                raise error
-            if initial == "missing" and len(calls) == 1:
-                raise MissingError()
-            return str(source)
-        assert kwargs.get("revision") == (source.name if initial != "missing" else None)
-        for name in kwargs["allow_patterns"]:
-            path = source / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not path.exists() or kwargs.get("force_download"):
-                path.write_bytes(b"downloaded")
-        return str(source)
-
-    modules = {
-        "huggingface_hub": SimpleNamespace(snapshot_download=download),
-        "huggingface_hub.errors": SimpleNamespace(LocalEntryNotFoundError=MissingError),
-    }
-    monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
-    for _ in range(2):
-        assert speech_worker.resolve_snapshot("owner/model", files, object) == str(source)
-    assert sum(not call.get("local_files_only") for call in calls) == (
-        0 if initial == "complete" else (2 if initial == "empty_file" else 1)
-    )
-    if initial != "missing":
-        assert (source / "model.safetensors").read_bytes() == sentinel
-
-
-def test_incomplete_download_and_unrelated_cache_errors_are_not_treated_as_ready(
-    tmp_path, monkeypatch
-):
-    class MissingError(Exception):
-        pass
-
-    download = Mock(return_value=str(tmp_path))
-    modules = {
-        "huggingface_hub": SimpleNamespace(snapshot_download=download),
-        "huggingface_hub.errors": SimpleNamespace(LocalEntryNotFoundError=MissingError),
-    }
-    monkeypatch.setattr(speech_worker.importlib, "import_module", modules.__getitem__)
-    with pytest.raises(OSError):
-        speech_worker.resolve_snapshot("owner/model", ["required.file"], object)
-    assert download.call_count == 2
-    download.reset_mock(side_effect=True)
-    download.side_effect = PermissionError()
-    with pytest.raises(PermissionError):
-        speech_worker.resolve_snapshot("owner/model", ["required.file"], object)
-    download.assert_called_once_with(
-        "owner/model", local_files_only=True, allow_patterns=["required.file"]
-    )
+    assert calls == ["loading"]
 
 
 @pytest.mark.parametrize("engine", ["qwen3-tts", "chatterbox"])
