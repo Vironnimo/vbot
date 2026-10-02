@@ -12,6 +12,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 ## Evaluation rules
 
 - Run at least three repetitions per (case, scope); weak Models carry the signal.
+- Run the arms on `--provider opencode-go --model deepseek-v4.1-flash` and `--provider ollama-cloud --connection ollama-cloud:api-key --model glm-5.3-flash` (user decision 2026-10-02: on opencode-go only that Model; `--connection` defaults to `opencode-go:api-key`).
 - Compare arms only with equal attempt counts per (case, scope); never drop an attempt from one arm. A crashed attempt stays in the report with its error and counts as a failure.
 - Scoring is code only, no LLM judge. Every attempt is a Provider request loop: do not run the full matrix casually.
 
@@ -40,7 +41,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 
 An attempt passes when the Model finished with a final answer, its effect matched one acceptable outcome (`effect_passed`) and no violation occurred:
 
-- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. Calls of one Model turn are checked before any of them runs.
+- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. A Memory change without `scope` needs both scopes listed; a `patch` of SKILL.md also counts a plain load of the Skill (status `loaded`) as its read. Calls of one Model turn are checked before any of them runs.
 - `tool_call_rejected`: any failed result of a dispatched call, out-of-scope denials included.
 - `tool_iteration_limit`, `repeated_failed_call`: Tool use ended by the iteration limit or the failed-call breaker.
 - `protected_skill_write`: any `skill_manage` call naming a read-only or human-origin Skill, whatever the result. Production refuses such a review write (`skill_protected`), so it also counts as `tool_call_rejected`.
