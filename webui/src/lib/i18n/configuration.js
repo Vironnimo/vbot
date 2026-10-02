@@ -277,7 +277,7 @@ export default Object.freeze({
   'settings.librarian.enabledDescription':
     'The Librarian tidies up the Skills each Agent made for itself.',
   'settings.librarian.enabledHelp':
-    'From time to time, the Librarian goes through the Skills of one Agent. It retires Skills that background reviews made and that went unused for a long time, and it lets the Agent merge overlapping Skills. Pinned Skills and Skills you created are never changed.\n\nA pass starts only while the Agent has no active or queued Run, and only for Agents that can use the skill and skill_manage Tools. Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
+    'From time to time, the Librarian goes through the Skills of one Agent. It retires Skills that background reviews made and that went unused for a long time, and it lets the Agent merge overlapping Skills. Pinned Skills and Skills you created are never changed.\n\nA pass starts only while the Agent has no active or queued Run, and only for Agents that can use the skill and skill_manage Tools and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
   'settings.librarian.interval': 'Maintenance interval',
   'settings.librarian.intervalDescription':
     'Days between scheduled passes of one Agent.',
@@ -292,7 +292,11 @@ export default Object.freeze({
   'settings.librarian.consolidateDescription':
     'Each pass lets the Agent merge and correct the Skills it made.',
   'settings.librarian.consolidateHelp':
-    'After retiring unused Skills, a pass shows the Agent the unpinned Skills that it or a background review created and that it does not share with other Agents. The Agent merges overlapping ones into one Skill and corrects outdated instructions. Merged Skills move to the archive.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run with the Agent’s own Model, so it uses tokens. Default: on.',
+    'After retiring unused Skills, a pass shows the Agent the unpinned Skills that it or a background review created and that it does not share with other Agents. The Agent merges overlapping ones into one Skill and corrects outdated instructions. Merged Skills move to the archive.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run in its own Session with the Librarian model, so it uses tokens. Default: on.',
+  'settings.librarian.model': 'Librarian model',
+  'settings.librarian.modelHelp':
+    'The Model of the merge step. Agent Model (default) uses each Agent’s own Model with its temperature, thinking effort and fallback Models. Any other Model runs with its own defaults and without fallback Models.\n\nIt applies only to Librarian passes, which run in their own Session; the Agent’s conversations and Reflection are not affected.',
+  'settings.librarian.agentModel': 'Agent Model (default)',
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':

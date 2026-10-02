@@ -336,12 +336,12 @@ export default Object.freeze({
   'skills.revert.error': 'The change could not be reverted.',
   'skills.librarian.title': 'Skill maintenance',
   'skills.librarian.help':
-    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that a background review or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule.',
+    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that a background review or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
   'skills.librarian.run': 'Run now',
   'skills.librarian.schedule': 'Schedule',
   'skills.librarian.daily': 'Every day while the Agent is idle',
   'skills.librarian.everyDays': 'Every {days} days while the Agent is idle',
-  'skills.librarian.scheduleOff': 'Off; Run now still works',
+  'skills.librarian.scheduleOff': 'Off in Settings; Run now still works',
   'skills.librarian.next': 'Next pass',
   'skills.librarian.due': 'Due; starts once the Agent is idle',
   'skills.librarian.now': 'Now',
@@ -372,6 +372,8 @@ export default Object.freeze({
   'skills.librarian.openArchived': 'Show {name} in Archived',
   'skills.librarian.unavailable':
     'This Agent cannot use the skill and skill_manage Tools, so its Skills are not maintained.',
+  'skills.librarian.agentOff':
+    'Skill maintenance is off for this Agent, so its Skills are not maintained. Its Librarian switch under Agents → Context & Memory turns it on.',
   'skills.librarian.alreadyRunning': 'A pass is running.',
   'skills.librarian.busy':
     'Skill maintenance starts only while the Agent is idle and no other pass of it runs. Try again later.',
@@ -414,6 +416,11 @@ export default Object.freeze({
   'agents.form.toolAccessHelp':
     'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
   'agents.form.customSystemPrompt': 'Custom system prompt',
+  'agents.form.librarian': 'Librarian',
+  'agents.form.librarianDescription':
+    'Lets Skill maintenance tidy up the Skills this Agent made for itself.',
+  'agents.form.librarianHelp':
+    'While this is on, Librarian passes retire this Agent’s unused Skills that Reflection or an earlier pass made, and let the Agent merge overlapping Skills. Pinned Skills and Skills you created are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',

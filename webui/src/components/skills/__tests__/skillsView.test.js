@@ -1101,7 +1101,7 @@ describe('Skills manager', () => {
     expect(calls('skill.history').length).toBeGreaterThan(historyReads);
   });
 
-  it('shows an Agent’s last Librarian pass, links its changes, reverts them together and starts a pass', async () => {
+  it('shows an Agent’s last Librarian pass, links its changes, reverts them together, starts a pass and names why another Agent gets none', async () => {
     const change = (id, skill, kind, extra = {}) => ({
       id,
       at: `2026-09-30T10:0${id - 6}:00.000000Z`,
@@ -1132,6 +1132,7 @@ describe('Skills manager', () => {
         consolidate: true,
       },
       available: true,
+      unscheduled_reason: null,
       running: false,
       running_since: null,
       last_pass: {
@@ -1155,11 +1156,17 @@ describe('Skills manager', () => {
         change(7, 'stale', 'archive', { reason: 'inactive' }),
       ],
     };
+    let otherStatus = {};
     rpcMock.mockImplementation(async (method, params) => {
       if (method === 'librarian.status' && params.agent_id === 'main')
         return mainStatus;
       if (method === 'librarian.status')
-        return { ...mainStatus, agent_id: params.agent_id, last_pass: null };
+        return {
+          ...mainStatus,
+          agent_id: params.agent_id,
+          last_pass: null,
+          ...otherStatus,
+        };
       if (method === 'librarian.run' && params.agent_id === 'main')
         return {
           ...mainStatus,
@@ -1271,6 +1278,32 @@ describe('Skills manager', () => {
       title: t('skills.librarian.busy'),
       variant: 'warn',
     });
+
+    // An Agent without scheduled passes shows the one reason the status
+    // names; the Agent's own switch and missing Tools also block Run now.
+    const offInSettings = [['Schedule', t('skills.librarian.scheduleOff')]];
+    for (const [reason, note, shownFacts] of [
+      ['agent_disabled', t('skills.librarian.agentOff'), []],
+      ['skill_tools_unavailable', t('skills.librarian.unavailable'), []],
+      ['schedule_disabled', null, offInSettings],
+    ]) {
+      otherStatus = {
+        settings: { ...mainStatus.settings, enabled: false },
+        available: reason === 'schedule_disabled',
+        unscheduled_reason: reason,
+        next_due_at: null,
+      };
+      collection('Main');
+      await settle();
+      collection('Reviewer');
+      await settle();
+      expect(texts('.skills-librarian .skills-page-note')).toEqual([
+        ...(note ? [note] : []),
+        t('skills.librarian.never'),
+      ]);
+      expect(facts()).toEqual(shownFacts);
+      expect(button('Run now', section()).disabled).toBe(note !== null);
+    }
   });
 
   it('lists archived Skills newest first and restores or permanently deletes them from their menu', async () => {

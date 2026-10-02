@@ -52,6 +52,7 @@ const EDITABLE_AGENT_FIELDS = Object.freeze([
   'tools',
   'custom_system_prompt_enabled',
   'compaction_policy',
+  'librarian_enabled',
 ]);
 
 const AGENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -88,6 +89,8 @@ export function createAgentFormValues(agent = {}) {
     compaction_policy: isPlainObject(raw.compaction_policy)
       ? normalizeCompactionPolicy(raw.compaction_policy)
       : null,
+    // Librarian passes curate the Agent's own Skills unless switched off.
+    librarian_enabled: agent.librarian_enabled !== false,
   };
 }
 
@@ -197,6 +200,7 @@ function normalizeValues(values = {}) {
     compaction_policy: isPlainObject(values.compaction_policy)
       ? normalizeCompactionPolicy(values.compaction_policy)
       : null,
+    librarian_enabled: values.librarian_enabled !== false,
   };
 }
 
@@ -239,6 +243,7 @@ function buildAgentPayload(normalized, temperature, options = {}) {
     excluded_skills: normalized.excluded_skills,
     custom_system_prompt_enabled: normalized.custom_system_prompt_enabled,
     compaction_policy: normalized.compaction_policy,
+    librarian_enabled: normalized.librarian_enabled,
   };
 
   if (normalized.name || options.includeEmptyName) {
