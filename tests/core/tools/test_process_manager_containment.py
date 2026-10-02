@@ -22,7 +22,11 @@ import pytest
 
 from core.tools.process_manager import ProcessManager
 from core.utils import processes as process_utils
-from core.utils.processes import guarded_process_launch, subprocess_creation_flags
+from core.utils.processes import (
+    GuardedProcessLaunch,
+    guarded_process_launch,
+    subprocess_creation_flags,
+)
 from tests.core.tools.process_manager_test_support import AGENT_A, spawn
 from tests.core.tools.process_manager_test_support import (
     manager as manager,
@@ -206,9 +210,33 @@ def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     assert launch.pass_fds == pass_fds
 
 
+# Runs the guardian as a kernel without pidfd_open would (before Linux 5.3, or
+# under a seccomp filter that denies it): it then waits for its child through a
+# reaper thread instead of a pidfd.
+_WITHOUT_PIDFD = (
+    "import errno, os, runpy, sys\n"
+    "def pidfd_open(*_arguments):\n"
+    "    raise OSError(errno.ENOSYS, os.strerror(errno.ENOSYS))\n"
+    "os.pidfd_open = pidfd_open\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+CHILD_WAITS = pytest.mark.parametrize("child_wait", ["pidfd", "reaper-thread"])
+
+
+def guardian_argv(launch: GuardedProcessLaunch, child_wait: str) -> list[str]:
+    """The guardian's argv, waiting for its child the given way."""
+    argv = list(launch.argv)
+    if child_wait == "reaper-thread":
+        # Before the guardian script, after the interpreter options.
+        argv[6:6] = ["-c", _WITHOUT_PIDFD]
+    return argv
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
+@CHILD_WAITS
 def test_guardian_kills_child_group_when_server_pipe_closes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, child_wait: str
 ) -> None:
     read_fd, write_fd = os.pipe()
     pid_path = tmp_path / "child.pid"
@@ -222,7 +250,10 @@ def test_guardian_kills_child_group_when_server_pipe_closes(
     monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
     launch = guarded_process_launch([sys.executable, "-c", child_code], env=environment)
     guardian = subprocess.Popen(
-        launch.argv, env=environment, pass_fds=launch.pass_fds, start_new_session=True
+        guardian_argv(launch, child_wait),
+        env=environment,
+        pass_fds=launch.pass_fds,
+        start_new_session=True,
     )
     os.close(read_fd)
     try:
@@ -243,6 +274,44 @@ def test_guardian_kills_child_group_when_server_pipe_closes(
             kill_process_group(guardian.pid, 9)
         with contextlib.suppress(OSError):
             os.close(write_fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
+@CHILD_WAITS
+def test_guardian_reports_the_child_exit_as_it_happens(
+    monkeypatch: pytest.MonkeyPatch, child_wait: str
+) -> None:
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    # The child prints when it ends, then dies of SIGTERM.
+    ending = (
+        "import os, signal, time; "
+        "os.write(1, repr(time.monotonic()).encode()); "
+        "os.kill(os.getpid(), signal.SIGTERM)"
+    )
+    launch = guarded_process_launch([sys.executable, "-I", "-S", "-c", ending], env=os.environ)
+    delays: list[float] = []
+    try:
+        # A short command must not wait for a later check of the child (a 0.2 s
+        # poll before). Up to three runs keep a load spike from failing the test.
+        for _attempt in range(3):
+            guardian = subprocess.Popen(
+                guardian_argv(launch, child_wait),
+                stdout=subprocess.PIPE,
+                pass_fds=launch.pass_fds,
+                start_new_session=True,
+            )
+            ended, _ = guardian.communicate(timeout=10)
+            delays.append(time.monotonic() - float(ended))
+            # A child killed by signal N exits as a shell reports it: 128 + N.
+            assert guardian.returncode == 128 + signal.SIGTERM
+            if delays[-1] < 0.1:
+                break
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert min(delays) < 0.1, delays
 
 
 # Prints the working directory and the environment the process was started with.
