@@ -48,6 +48,7 @@ from core.skills._revert import (
     RevertActor,
     RevertConflictError,
     RevertError,
+    RevertIncompleteError,
     check_revert,
     revert_revisions,
 )
@@ -119,6 +120,17 @@ class SkillRevertConflictError(SkillAuthoringError):
         self.revision = revision
         self.later = later
         self.skill_name = skill_name
+
+
+class SkillRevertIncompleteError(SkillAuthoringError):
+    """A revert failed while changing packages and could not undo every step.
+
+    ``skill_names`` names the Skills whose packages may be left part-way.
+    """
+
+    def __init__(self, message: str, *, skill_names: Sequence[str]) -> None:
+        super().__init__(message)
+        self.skill_names = tuple(skill_names)
 
 
 @dataclass(frozen=True)
@@ -735,7 +747,11 @@ class SkillAuthoringService:
         pin or presence of that Skill (``SkillRevertConflictError`` names it), when
         an earlier text is not stored, or when an archived package was purged. A
         later revision in *related* (an earlier revert of the same change) never
-        blocks.
+        blocks. A failure while changing packages takes the steps back and
+        raises :class:`SkillAuthoringError`, or :class:`SkillRevertIncompleteError`
+        when a step cannot be taken back. Once every package changed, each named
+        revision records one ``revert`` revision; the list is shorter when the
+        history cannot record them all.
         """
         with self._write_lock:
             history = self._revert_history(target_root, writer)
@@ -1075,6 +1091,10 @@ def _revert_errors() -> Iterator[None]:
             later=conflict.later,
             skill_name=conflict.skill,
         ) from conflict
+    except RevertIncompleteError as incomplete:
+        raise SkillRevertIncompleteError(
+            str(incomplete), skill_names=incomplete.skills
+        ) from incomplete
     except RevertError as error:
         raise SkillAuthoringError(str(error)) from error
     except OSError as error:
@@ -1336,6 +1356,7 @@ __all__ = [
     "SkillProtectedError",
     "SkillRecord",
     "SkillRevertConflictError",
+    "SkillRevertIncompleteError",
     "SkillRevision",
     "SkillWriteResult",
     "SkillWriter",

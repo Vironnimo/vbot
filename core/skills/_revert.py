@@ -53,6 +53,17 @@ class RevertConflictError(RevertError):
         self.skill = skill
 
 
+class RevertIncompleteError(RevertError):
+    """A revert failed while changing packages and could not undo every step.
+
+    ``skills`` names the Skills whose packages may be left part-way.
+    """
+
+    def __init__(self, message: str, skills: Sequence[str]) -> None:
+        super().__init__(message)
+        self.skills = tuple(skills)
+
+
 @dataclass(frozen=True)
 class RevertActor:
     actor: str
@@ -106,8 +117,10 @@ def revert_revisions(
 ) -> list[SkillRevision]:
     """Revert *revision_ids* in the home *root*; return the recorded revisions.
 
-    A later revision in *related* does not block the revert. The caller holds
-    the authoring write lock.
+    A later revision in *related* does not block the revert. Each named
+    revision records one ``revert`` revision once every package changed; when
+    the history cannot record them all, the packages changed all the same and
+    the list is shorter. The caller holds the authoring write lock.
     """
     steps = _plan(history, root, revision_ids, related)
     _execute(root, history.archive_root, steps)
@@ -333,10 +346,11 @@ def _execute(root: Path, archive_root: Path, steps: list[_Step]) -> None:
             except OSError:
                 failed.append(skill)
         if failed:
-            names = ", ".join(sorted(set(failed)))
-            raise RevertError(
+            skills = sorted(set(failed))
+            raise RevertIncompleteError(
                 f"The revert failed and could not be undone completely ({error}). "
-                f"Check Skill {names}."
+                f"Check Skill {', '.join(skills)}.",
+                skills,
             ) from error
         raise RevertError(f"The revert failed and nothing was changed: {error}") from error
 
