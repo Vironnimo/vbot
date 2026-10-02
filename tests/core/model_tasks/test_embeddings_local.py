@@ -26,6 +26,7 @@ from core.model_tasks.embeddings_local import (
     LocalEmbeddingUnavailableError,
     _WorkerProcess,
     builtin_local_embedding_models,
+    default_threads,
 )
 from core.model_tasks.model_files import ModelFilesError
 
@@ -389,3 +390,20 @@ def test_worker_wire_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
         "op": "embed",
         "texts": ["ab", "Grüße"],
     }
+
+
+@pytest.mark.parametrize(
+    ("physical", "usable", "threads"),
+    [(6, 12, 5), (6, 3, 2), (1, 1, 1), (None, 8, 3)],
+    ids=["all-cpus", "affinity", "single-core", "unknown-physical-cores"],
+)
+def test_automatic_threads_keep_one_usable_core_free(
+    monkeypatch: pytest.MonkeyPatch, physical: int | None, usable: int, threads: int
+) -> None:
+    psutil = SimpleNamespace(cpu_count=lambda logical=True: usable if logical else physical)
+    monkeypatch.setitem(sys.modules, "psutil", psutil)
+    monkeypatch.setattr(os, "cpu_count", lambda: usable)
+    # The serving child inherits the server's CPU affinity.
+    monkeypatch.setattr(os, "process_cpu_count", lambda: usable)
+
+    assert default_threads() == threads
