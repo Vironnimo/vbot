@@ -41,11 +41,17 @@ def _reviewed_agent(tmp_path: Path) -> tuple[Any, Path]:
 
 @pytest.mark.asyncio
 async def test_learning_changes_lists_a_runs_changes_and_undo_takes_them_back(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     state, agent_dir = _reviewed_agent(tmp_path)
 
     listed = await rpc_result(state, "learning.changes", agent_id="coder", run_id=REVIEW)
+    # A Run still running cannot be undone yet.
+    with monkeypatch.context() as patch:
+        patch.setattr(state.runtime.chat_run_manager, "is_running", lambda run_id: True)
+        running = await rpc_error(state, "learning.undo", agent_id="coder", run_id=REVIEW)
+    assert (running["code"], running["data"]) == ("active_run", {"run_id": REVIEW})
+    assert resource_changes(state) == []
     undone = await rpc_result(state, "learning.undo", agent_id="coder", run_id=REVIEW)
 
     assert listed["summary"] == {"memory": 1, "skills": 1, "undone": False}

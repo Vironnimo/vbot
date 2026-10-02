@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import errno
+import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import core.memory.memory as memory_module
+import core.skills._revert as skill_revert_module
 from core.automation import (
     LearningChanges,
+    LearningRunActiveError,
     LearningUndoConflictError,
     LearningUndoFailedError,
 )
@@ -37,8 +43,12 @@ class _Agent:
         self.home = agents / AGENT_ID / "skills"
         self.memory = MemoryService(history_root=agents)
         self.skills = SkillAuthoringService()
+        self.running: set[str] = set()
         self.learning = LearningChanges(
-            memory=self.memory, skills=self.skills, skill_home=lambda agent_id: self.home
+            memory=self.memory,
+            skills=self.skills,
+            skill_home=lambda agent_id: self.home,
+            run_active=self.running.__contains__,
         )
 
     def files(self) -> dict[str, bytes]:
@@ -149,11 +159,44 @@ def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
     }
 
 
+def test_the_changes_of_a_run_are_its_net_effect(agent: _Agent) -> None:
+    tidy = MemoryWriter(agent_id=AGENT_ID, actor="tool", run_id="run-tidy", run_kind="reflection")
+    tidy_skills = SkillWriter(actor="reflection", run_id="run-tidy", run_kind="reflection")
+    # The User Memory changes cancel out, and so does the pytest wording.
+    agent.memory.add_entry(agent.workspace, "user", "Temp note.", writer=tidy)
+    agent.memory.replace_matching(
+        agent.workspace, "agent", "pytest", "Uses pytest daily.", writer=tidy
+    )
+    agent.memory.replace_matching(agent.workspace, "agent", "daily", "Uses pytest.", writer=tidy)
+    agent.memory.remove_matching(agent.workspace, "user", "Temp note.", writer=tidy)
+    agent.memory.add_entry(agent.workspace, "agent", "Draft.", writer=tidy)
+    agent.memory.replace_matching(agent.workspace, "agent", "Draft", "Uses uv.", writer=tidy)
+    agent.skills.edit(agent.home, "notes", skill_document("notes", "# Tidy\n"), writer=tidy_skills)
+
+    changes = agent.learning.of_run(AGENT_ID, "run-tidy")
+
+    assert [(c.store, c.kind, c.text or c.skill) for c in changes.changes] == [
+        ("memory", "added", "Uses uv."),
+        ("skill", "changed", "notes"),
+    ]
+    assert changes.summary.to_dict() == {"memory": 1, "skills": 1, "undone": False}
+    result = agent.learning.undo(AGENT_ID, "run-tidy", workspace=agent.workspace, actor="rpc")
+    assert result.changes.summary.to_dict() == {"memory": 1, "skills": 1, "undone": True}
+    assert agent.entries() == {"user": [], "agent": ["Uses pytest."]}
+
+
 def test_undo_takes_back_every_change_of_the_run_as_a_person(agent: _Agent) -> None:
     before = agent.skill_files()
     review(agent)
     agent.memory.add_entry(agent.workspace, "agent", "Unrelated.", writer=OTHER_MEMORY)
+    files = agent.files()
+    agent.running.add(REVIEW)
 
+    # A Run still running may change more, so it cannot be undone yet.
+    with pytest.raises(LearningRunActiveError, match="still running"):
+        agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
+    assert agent.files() == files
+    agent.running.clear()
     result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
 
     assert (result.memory_changed, result.skills_changed) == (True, True)
@@ -249,25 +292,84 @@ def test_undo_refuses_when_a_later_change_touched_a_change_of_the_run(
     assert not [r for r in agent.skills.recorded_revisions(agent.home) if r.kind == "revert"]
 
 
-def test_an_undo_that_fails_while_writing_restores_the_skills_and_can_run_again(
-    agent: _Agent, monkeypatch: pytest.MonkeyPatch
+def _fail_the_memory_revert(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise MemoryError("disk full")
+
+    patch.setattr(agent.memory, "revert", fail)
+
+
+def _fail_memory_writes_after_the_first(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
+    # USER.md is reverted, then writing MEMORY.md and restoring USER.md fail.
+    write = memory_module.atomic_write_bytes
+    writes: list[Path] = []
+
+    def atomic_write_bytes(path: Path, data: bytes, **kwargs: Any) -> None:
+        writes.append(path)
+        if len(writes) > 1:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        write(path, data, **kwargs)
+
+    patch.setattr(memory_module, "atomic_write_bytes", atomic_write_bytes)
+
+
+def _fail_skill_writes(patch: pytest.MonkeyPatch, agent: _Agent) -> None:
+    # The Skill revert fails and cannot take its own steps back either.
+    def atomic_write_bytes(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    patch.setattr(skill_revert_module, "atomic_write_bytes", atomic_write_bytes)
+
+
+@pytest.mark.parametrize(
+    ("break_writes", "message", "user_memory_undone"),
+    [
+        pytest.param(
+            _fail_the_memory_revert,
+            "The undo failed and nothing was changed: disk full",
+            False,
+            id="memory-write-fails",
+        ),
+        pytest.param(
+            _fail_memory_writes_after_the_first,
+            r"The undo stopped part-way: the User Memory changes were undone, the other Memory "
+            r"changes were not \(.*No space left on device\)\. The Skill changes were not "
+            r"undone\. Undo again to finish\.",
+            True,
+            id="memory-left-part-way",
+        ),
+        pytest.param(
+            _fail_skill_writes,
+            r"The undo failed part-way\. The revert failed and could not be undone completely "
+            r"\(.*No space left on device\)\. Check Skill notes\. The Memory changes were "
+            r"not undone\.",
+            False,
+            id="skill-steps-not-taken-back",
+        ),
+    ],
+)
+def test_an_undo_that_fails_while_writing_says_what_changed_and_can_run_again(
+    agent: _Agent,
+    monkeypatch: pytest.MonkeyPatch,
+    break_writes: Callable[[pytest.MonkeyPatch, _Agent], None],
+    message: str,
+    user_memory_undone: bool,
 ) -> None:
     review(agent)
-    files = agent.files()
+    skill_files = agent.skill_files()
+    entries = agent.entries()
 
     with monkeypatch.context() as patch:
-
-        def fail(*args: object, **kwargs: object) -> None:
-            raise MemoryError("disk full")
-
-        patch.setattr(agent.memory, "revert", fail)
-        with pytest.raises(LearningUndoFailedError, match="nothing was changed: disk full"):
+        break_writes(patch, agent)
+        with pytest.raises(LearningUndoFailedError) as failed:
             agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
 
-    assert agent.files() == files
+    assert re.fullmatch(message, str(failed.value))
+    assert agent.skill_files() == skill_files
+    assert agent.entries() == ({**entries, "user": []} if user_memory_undone else entries)
     assert agent.learning.of_run(AGENT_ID, REVIEW).summary.undone is False
-    # The reverts of the failed attempt and their restore belong to the review
-    # itself, so they never block a later undo.
+    # What the failed attempt left recorded belongs to the review itself, so it
+    # never blocks undoing the rest.
     result = agent.learning.undo(AGENT_ID, REVIEW, workspace=agent.workspace, actor="rpc")
     assert result.changes.summary.undone is True
     assert not (agent.home / "deploy").exists()

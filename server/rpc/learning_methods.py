@@ -6,7 +6,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from core.automation import LearningUndoConflictError, LearningUndoFailedError
+from core.automation import (
+    LearningRunActiveError,
+    LearningUndoConflictError,
+    LearningUndoFailedError,
+)
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_MEMORIES, RESOURCE_KIND_SKILLS
 from server.rpc._mutations import MutationHandler, serialized_mutation
@@ -14,6 +18,7 @@ from server.rpc.agent_refs import _agent_reference_lock
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import (
+    RPC_ERROR_ACTIVE_RUN,
     RPC_ERROR_INVALID_REQUEST,
     RPC_ERROR_LEARNING_UNDO_CONFLICT,
     RpcError,
@@ -73,6 +78,8 @@ async def _learning_undo(state: Any, params: JsonObject) -> JsonObject:
                 actor="rpc",
             )
         )
+    except LearningRunActiveError as exc:
+        raise RpcError(RPC_ERROR_ACTIVE_RUN, str(exc), data={"run_id": exc.run_id}) from exc
     except LearningUndoConflictError as exc:
         raise RpcError(RPC_ERROR_LEARNING_UNDO_CONFLICT, str(exc), data=exc.to_dict()) from exc
     except LearningUndoFailedError as exc:

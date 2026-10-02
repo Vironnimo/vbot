@@ -511,10 +511,12 @@ def bootstrap(runtime: Runtime) -> None:
         # What a Run changed in Memory and the Agent's own Skills, and its undo.
         assert runtime._memory_service is not None
         assert runtime._skill_authoring is not None
+        assert runtime._chat_run_manager is not None
         runtime._learning_changes = LearningChanges(
             memory=runtime._memory_service,
             skills=runtime._skill_authoring,
             skill_home=runtime.agent_skills_dir,
+            run_active=runtime._chat_run_manager.is_running,
         )
         runtime._session_title_service = SessionTitleService(
             runtime, usage_recorder=runtime._usage_recorder

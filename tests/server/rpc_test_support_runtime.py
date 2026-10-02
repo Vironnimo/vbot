@@ -452,6 +452,7 @@ class StubRuntime:
             memory=self.memory,
             skills=self.skill_authoring,
             skill_home=lambda agent_id: self.storage.layout.agents / agent_id / "skills",
+            run_active=lambda run_id: self.chat_run_manager.is_running(run_id),
         )
         self.projects = StubProjects()
         tmp_path.mkdir(parents=True, exist_ok=True)

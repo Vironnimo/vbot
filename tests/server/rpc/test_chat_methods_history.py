@@ -88,6 +88,7 @@ def history(tmp_path: Path) -> Iterator[_History]:
                 memory=memory,
                 skills=SkillAuthoringService(),
                 skill_home=lambda agent_id: tmp_path / "agents" / agent_id / "skills",
+                run_active=lambda run_id: False,
             ),
         ),
         chat_runs=ChatRunManager(persistence=sessions),
