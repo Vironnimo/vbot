@@ -418,6 +418,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.skills_for,
             runtime.reload_skills_async,
             runtime.archived_skill,
+            runtime.background_skill_protection,
         )
         # The agent skill-authoring write core refuses the bundled skills root;
         # ``skill_manage`` writes only the calling agent's private home.

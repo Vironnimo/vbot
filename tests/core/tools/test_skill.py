@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from core.runs import RunKind
 from core.skills import ArchivedSkill, SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
@@ -602,6 +603,49 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
     }
     display = tool.tools.display_for_call(SKILL_TOOL_NAME, arguments, result=result)
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
+
+
+@pytest.mark.parametrize(
+    ("run_kind", "listed"),
+    [
+        pytest.param(
+            RunKind.SKILL_REFLECTION,
+            "Your own skills:\n- mine: Mine.\n- pinned: Pinned. (read-only here: pinned by the "
+            "user)\n- shared: Shared. (read-only here: shared by another Agent)",
+            id="background",
+        ),
+        pytest.param(
+            RunKind.USER,
+            "Your own skills:\n- mine: Mine.\n- pinned: Pinned.\n- shared: Shared.",
+            id="attended",
+        ),
+    ],
+)
+def test_background_lists_mark_own_skills_the_run_cannot_change(
+    tmp_path: Path, run_kind: RunKind, listed: str
+) -> None:
+    for name in ("mine", "pinned", "shared"):
+        write_skill(
+            tmp_path / "agent",
+            name,
+            f"---\nname: {name}\ndescription: {name.title()}.\n---\n\nBody.\n",
+        )
+    asked: list[tuple[str, list[str]]] = []
+
+    def protection(agent_id: str, names: list[str]) -> dict[str, str]:
+        asked.append((agent_id, names))
+        return {"pinned": "pinned", "shared": "shared"}
+
+    tool = SkillTool(
+        tmp_path,
+        SkillRegistry.load(tmp_path / "agent", origins=["agent"]),
+        protection=protection,
+    )
+
+    result = tool.call({}, run_kind=run_kind)
+
+    assert result["data"]["content"] == listed
+    assert asked == ([("coder", ["mine", "pinned", "shared"])] if run_kind != RunKind.USER else [])
 
 
 def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:

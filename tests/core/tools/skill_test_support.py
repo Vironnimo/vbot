@@ -7,6 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
+from core.runs import RunKind
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_TOOL_NAME,
@@ -15,7 +16,7 @@ from core.tools import (
     ToolSkillActivationHook,
     register_skill_tool,
 )
-from core.tools.skill import ArchivedSkillResolver
+from core.tools.skill import ArchivedSkillResolver, BackgroundProtectionResolver
 
 RegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 
@@ -29,6 +30,7 @@ class SkillTool:
         registry: SkillRegistry | RegistryResolver,
         refresh: Callable[[], None] = lambda: None,
         archived: ArchivedSkillResolver | None = None,
+        protection: BackgroundProtectionResolver | None = None,
     ) -> None:
         self.workspace = workspace
         resolver = (
@@ -37,7 +39,7 @@ class SkillTool:
             else registry
         )
         self.tools = ToolRegistry()
-        register_skill_tool(self.tools, resolver, refresh, archived)
+        register_skill_tool(self.tools, resolver, refresh, archived, protection)
 
     def details(self, arguments: dict[str, object], result: dict[str, Any]) -> list[Any]:
         """Return the detail blocks the user sees for one call."""
@@ -53,6 +55,7 @@ class SkillTool:
         activation_hook: ToolSkillActivationHook | None = None,
         project_id: str | None = None,
         allowed_skills: list[str] | None = None,
+        run_kind: RunKind | None = None,
     ) -> dict[str, Any]:
         context = ToolContext(
             agent_id="coder",
@@ -69,6 +72,7 @@ class SkillTool:
             skill_project_id=project_id,
             skill_activation_hook=activation_hook,
             allowed_skills=["*"] if allowed_skills is None else allowed_skills,
+            run_kind=run_kind,
         )
         result = asyncio.run(self.tools.dispatch(context, arguments, [SKILL_TOOL_NAME]))
         return cast(dict[str, Any], result)
