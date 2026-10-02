@@ -80,10 +80,15 @@ SKILL_MANAGE_ABSORBED = (
     "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
     "kept in the archive, where the user can restore it."
 )
-# Notes after a merge: the deleted Skill's shares and the automations that loaded
-# it now use the Skill that absorbed it, so nobody has to change them by hand.
+# After a merge: the deleted Skill's shares and the automations that loaded it
+# now use the Skill that absorbed it, so nobody has to change them by hand. One
+# that could not be changed still names the deleted Skill and finds nothing, so
+# the Agent passes it on to the user.
 SKILL_MANAGE_FOLLOWED_NOTE = "These now use Skill '{target}' in place of '{name}': {items}."
-SKILL_MANAGE_NOT_FOLLOWED_NOTE = "These could not be changed and still use '{name}': {items}."
+SKILL_MANAGE_NOT_FOLLOWED_WARNING = (
+    "These could not be changed and still name '{name}', which no longer exists: {items}. "
+    "Name them in your reply so the user can change them to '{target}'."
+)
 _REFERENCE_LABELS = {
     "shared": "the share with Agent '{name}'",
     "bootstrap": "Bootstrap job '{name}'",
@@ -1181,7 +1186,7 @@ def _note_followed(
     planned: list[SkillReference],
     failed: tuple[SkillReference, ...],
 ) -> None:
-    """Add the merge's notes: what now uses ``target``, and what still uses ``name``."""
+    """Add what now uses ``target`` (a note), and what still names ``name`` (a warning)."""
     lines = [result["data"]["content"]]
     moved = [reference for reference in planned if reference not in failed]
     if moved:
@@ -1190,7 +1195,8 @@ def _note_followed(
         lines.append(f"Note: {note}")
     if failed:
         items = "; ".join(_reference_label(reference) for reference in failed)
-        lines.append(f"Note: {SKILL_MANAGE_NOT_FOLLOWED_NOTE.format(name=name, items=items)}")
+        warning = SKILL_MANAGE_NOT_FOLLOWED_WARNING.format(name=name, target=target, items=items)
+        lines.append(f"Warning: {warning}")
     result["data"]["content"] = "\n".join(lines)
 
 

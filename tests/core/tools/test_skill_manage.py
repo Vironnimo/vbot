@@ -362,6 +362,16 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "Leave it as it is and name the needed change in your reply.",
             id="pinned-skill",
         ),
+        # Without its history, whether the user pinned the Skill is unknown.
+        pytest.param(
+            "unreadable",
+            {"action": "patch", "name": "demo", "old_string": "# Demo", "new_string": "# New"},
+            "skill_protected",
+            "The history of Skill 'demo' cannot be read, so whether the user pinned it is "
+            "unknown and you cannot change it; nothing changed. Leave it as it is and name "
+            "the needed change in your reply.",
+            id="unreadable-history",
+        ),
         pytest.param(
             "agent",
             {"action": "delete", "name": "demo"},
@@ -375,13 +385,24 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     ],
 )
 def test_background_reviews_refuse_skills_they_may_not_change(
-    tmp_path: Path, setup: str, arguments: dict[str, object], code: str, message: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup: str,
+    arguments: dict[str, object],
+    code: str,
+    message: str,
 ) -> None:
     harness = _Harness(tmp_path)
     home = harness.home("main")
     harness.create()
     if setup == "pinned":
         harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
+    if setup == "unreadable":
+
+        def unreadable(*_args: object, **_kwargs: object) -> None:
+            raise OSError("history locked")
+
+        monkeypatch.setattr(skill_history_module.SkillHistory, "observe", unreadable)
     before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
 
     result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
@@ -818,7 +839,9 @@ def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
             "kept in the archive, where the user can restore it.\n"
             "Note: These now use Skill 'new' in place of 'old': the share with Agent 'Coder'; "
             "Bootstrap job 'Warm up'.\n"
-            "Note: These could not be changed and still use 'old': Cron job 'Daily report'.",
+            "Warning: These could not be changed and still name 'old', which no longer "
+            "exists: Cron job 'Daily report'. Name them in your reply so the user can change "
+            "them to 'new'.",
             id="absorbed",
         ),
         pytest.param(
