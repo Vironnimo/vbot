@@ -481,18 +481,7 @@ class ReflectionService:
 
     def _callable_dimensions(self, agent: Any) -> tuple[bool, bool]:
         """Whether ``agent`` can call every Tool of the memory and skill dimensions."""
-        callable_tools = set(
-            resolve_tool_access(
-                agent.tool_access,
-                self._runtime.tools.list_tools(),
-                agent.memory_prompt_mode,
-                workspace=agent.workspace or "",
-            ).allowed_tools
-        )
-        return (
-            callable_tools.issuperset(MEMORY_REFLECTION_TOOL_RESTRICTION),
-            callable_tools.issuperset(SKILL_REFLECTION_TOOL_RESTRICTION),
-        )
+        return callable_review_dimensions(agent, self._runtime.tools.list_tools())
 
     def reset_counters(
         self,
@@ -520,6 +509,44 @@ class ReflectionService:
         sessions.mutate_metadata(address, update)
 
 
+def callable_review_dimensions(agent: Any, tools: Sequence[Any]) -> tuple[bool, bool]:
+    """Whether ``agent`` can call every Tool of the memory and of the skill dimension.
+
+    ``agent`` is the effective Agent, so Project ceilings and Tool Access Policy
+    denials apply; ``tools`` are the registered Tools. The skill dimension is
+    also what a Librarian pass needs. Resolves policy in memory, so it is safe on
+    the Event Loop.
+    """
+    callable_tools = set(
+        resolve_tool_access(
+            agent.tool_access,
+            tools,
+            agent.memory_prompt_mode,
+            workspace=agent.workspace or "",
+        ).allowed_tools
+    )
+    return (
+        callable_tools.issuperset(MEMORY_REFLECTION_TOOL_RESTRICTION),
+        callable_tools.issuperset(SKILL_REFLECTION_TOOL_RESTRICTION),
+    )
+
+
+def tool_denial_resolver(allowed: Sequence[str], message: str) -> Callable[[str], str | None]:
+    """Deny every Tool outside ``allowed`` with ``message`` naming the allowed Tools.
+
+    ``message`` has the fields ``tool`` (the called Tool) and ``tools`` (the
+    allowed ones), both as the Model names them.
+    """
+    tools = _tool_list(allowed)
+
+    def resolve(tool_name: str) -> str | None:
+        if tool_name in allowed:
+            return None
+        return message.format(tool=f"`{model_tool_name(tool_name)}`", tools=tools)
+
+    return resolve
+
+
 def _scope_of(*, memory: bool, skill: bool) -> ReflectionScope | None:
     """Return the review scope covering exactly the given dimensions."""
     if memory and skill:
@@ -538,17 +565,7 @@ def _scope_dimensions(scope: ReflectionScope) -> tuple[bool, bool]:
 
 def _review_tool_denial_resolver(scope: ReflectionScope) -> Callable[[str], str | None]:
     """Deny every Tool outside the scope with a result naming the scope's Tools."""
-    allowed = REFLECTION_TOOL_RESTRICTIONS[scope]
-    tools = _tool_list(allowed)
-
-    def resolve(tool_name: str) -> str | None:
-        if tool_name in allowed:
-            return None
-        return REVIEW_TOOL_DENIAL_MESSAGE.format(
-            tool=f"`{model_tool_name(tool_name)}`", tools=tools
-        )
-
-    return resolve
+    return tool_denial_resolver(REFLECTION_TOOL_RESTRICTIONS[scope], REVIEW_TOOL_DENIAL_MESSAGE)
 
 
 def _tool_list(names: Sequence[str]) -> str:

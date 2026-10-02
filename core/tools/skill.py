@@ -17,9 +17,9 @@ from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
     SkillRegistry,
-    _scan_skill_resources,
     format_skill_activation_context,
     format_skill_catalog_entries,
+    scan_skill_resources,
 )
 from core.tools._read_text import ReadPosition, render_text_window
 from core.tools.arguments import optional_int
@@ -581,7 +581,7 @@ def load_skill_content(
     body, partial = _skill_instructions_window(skill_name, skill_file, ReadPosition(1))
     if partial:
         body = f"{SKILL_PARTIAL_INSTRUCTIONS_NOTE}\n\n{body}"
-    resources = _scan_skill_resources(skill_directory)
+    resources = scan_skill_resources(skill_directory)
     presented_resources = [_present_resource_path(resource, directory) for resource in resources]
     environment_access = ""
     if env_keys:
