@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
@@ -201,7 +201,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> AnthropicCompatibleAdapter:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

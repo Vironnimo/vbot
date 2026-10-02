@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Self
 
 import httpx
 
@@ -64,7 +64,7 @@ class RpcClient:
     def close(self) -> None:
         self._client.close()
 
-    def __enter__(self) -> RpcClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc: object) -> None:

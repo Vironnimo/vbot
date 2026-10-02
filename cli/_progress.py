@@ -10,7 +10,7 @@ import threading
 import time
 from contextvars import ContextVar
 from types import TracebackType
-from typing import Any, Literal, TextIO, cast
+from typing import Any, Literal, Self, TextIO, cast
 
 from cli.formatting import output_mode
 
@@ -98,7 +98,7 @@ class ProgressPrinter:
         self._active: tuple[str, float] | None = None
         self._thread = threading.Thread(target=self._heartbeat, daemon=True)
 
-    def __enter__(self) -> ProgressPrinter:
+    def __enter__(self) -> Self:
         self._thread.start()
         return self
 

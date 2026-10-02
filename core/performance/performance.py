@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Self
 
 from core.performance._heap import HeapCensus, census_result, take_census
 from core.performance._history import (
@@ -186,7 +186,7 @@ class Measurement:
         self._span: Any = None
         self._keep = True
 
-    def __enter__(self) -> Measurement:
+    def __enter__(self) -> Self:
         started = perf_counter()
         self._started = started
         if self._track is not None:

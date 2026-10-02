@@ -34,7 +34,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
@@ -204,7 +204,7 @@ class OllamaAdapter(ProviderAdapter):
         """Close the HTTP client and release resources."""
         await self._client.aclose()
 
-    async def __aenter__(self) -> OllamaAdapter:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
