@@ -159,11 +159,12 @@ Resolve contradictions explicitly. Prefer the evidence appropriate to the claim:
 
 Put each fact in its durable owner:
 
-- Adapter code for wire serialization, normalization, routing, fidelity, and Provider mechanics.
+- Adapter code for wire serialization, normalization, routing, and Provider mechanics.
 - Bundled Provider config for stable Connection-wide defaults and endpoint/auth facts.
-- Provider/Model override files for verified durable facts omitted or misstated by generated feeds, including per-Model Reasoning Replay and gateway limits.
+- The Provider's wire file `resources/wire/<provider>.json` for every wire decision: protocol, Reasoning control and off spelling, response and replay carriers, replay scope and fidelity, media types, listing announced Tools, parameter rules, admission.
+- Provider/Model override files for verified durable catalog facts omitted or misstated by generated feeds (names, gateway limits, Reasoning ladders); never wire decisions.
 - Generated Model catalogs only through their refresh pipeline; never hand-edit them. After compatibility changes, refresh the complete tracked Model DB by default: the refresh already selects only usable Providers and Connections, and the resulting files must form one coherent snapshot. Use a Provider-scoped refresh only for an explicitly scoped diagnostic, never as the final catalog refresh for a completed compatibility change.
-- Per-Model override/profile data for every documented or discovered id whose endpoint, Reasoning control, or carrier differs from the safe default. Reconcile this set whenever the catalog changes, and protect the complete current endpoint matrix with a regression test so a new Model cannot silently take the fallback wire.
+- Per-Model wire-file rules for every documented or discovered id whose endpoint, Reasoning control, or carrier differs from the safe default. Reconcile this set whenever the catalog changes, and protect the complete current endpoint matrix with a regression test so a new Model cannot silently take the fallback wire.
 - Focused unit tests for exact request fields, response carriers, policy precedence, normalization, and limits.
 - Provider-specific reference for dated Provider/Model observations, endpoint decisions, exceptions, and remaining unknowns.
 - This reference for the generic verification method; never copy the whole workflow into one Provider's reference.
