@@ -19,6 +19,7 @@ import gc
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import batched
 from time import perf_counter
 from typing import Any
 
@@ -48,8 +49,8 @@ def take_census() -> HeapCensus:
     by_type: Counter[type] = Counter()
     while listed:
         objects = listed.pop(0)
-        for start in range(0, len(objects), _COUNT_SLICE):
-            by_type.update(map(type, objects[start : start + _COUNT_SLICE]))
+        for chunk in batched(objects, _COUNT_SLICE, strict=False):
+            by_type.update(map(type, chunk))
         # Drop the references at once so the objects can be freed again.
         del objects
     types: Counter[str] = Counter()

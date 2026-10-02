@@ -9,6 +9,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
+from itertools import batched
 from typing import TYPE_CHECKING, Any
 
 from core.attachments import AttachmentStore
@@ -590,10 +591,7 @@ class DiscordChannelAdapter(ChannelAdapter):
             if normalized_message is not None
             else []
         )
-        file_batches = [
-            files[start : start + _DISCORD_FILE_BATCH_LIMIT]
-            for start in range(0, len(files), _DISCORD_FILE_BATCH_LIMIT)
-        ]
+        file_batches = list(batched(files, _DISCORD_FILE_BATCH_LIMIT, strict=False))
         send_count = max(len(chunks), len(file_batches))
         for index in range(send_count):
             try:
@@ -601,7 +599,7 @@ class DiscordChannelAdapter(ChannelAdapter):
                     self._send_payload,
                     target,
                     chunks[index] if index < len(chunks) else None,
-                    file_batches[index] if index < len(file_batches) else [],
+                    file_batches[index] if index < len(file_batches) else (),
                     reference=reference if index == 0 else None,
                 )
             except ChannelError as error:
@@ -613,7 +611,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         self,
         target: Any,
         content: str | None,
-        files: list[FileData],
+        files: Sequence[FileData],
         *,
         reference: Any | None,
     ) -> None:

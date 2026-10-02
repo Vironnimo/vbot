@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
+from itertools import batched
 from typing import Any, cast
 
 from core.attachments import AttachmentStore
@@ -235,8 +236,7 @@ class TelegramTransport:
             if not partition:
                 continue
 
-            for start in range(0, len(partition), 10):
-                batch = partition[start : start + 10]
+            for batch in batched(partition, 10, strict=False):
                 await self._send_homogeneous_batch(
                     bot,
                     chat_id,
@@ -251,7 +251,7 @@ class TelegramTransport:
         self,
         bot: Any,
         chat_id: int,
-        files: list[FileData],
+        files: Sequence[FileData],
         *,
         caption: str | None,
         is_image: bool,
