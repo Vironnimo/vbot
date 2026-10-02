@@ -36,6 +36,7 @@ def _model(
     control: str | None = None,
     levels: tuple[str, ...] = (),
     budget_max: int | None = None,
+    mandatory: bool = False,
     family: str = "",
     metadata: Mapping[str, Any] | None = None,
 ) -> Model:
@@ -47,7 +48,11 @@ def _model(
             tools=True,
             json_mode=False,
             reasoning=ReasoningCapabilities(
-                supported=supported, control=control, levels=levels, budget_max=budget_max
+                supported=supported,
+                control=control,
+                levels=levels,
+                budget_max=budget_max,
+                mandatory=mandatory,
             ),
         ),
         context_window=100_000,
@@ -139,7 +144,9 @@ def test_a_document_without_the_supported_format_is_rejected(document: Any) -> N
 
 
 def test_layers_apply_in_order_and_record_their_provenance() -> None:
-    model = _model("m", control="levels", levels=("low", "high"), metadata={"acme": {}})
+    model = _model(
+        "m", control="levels", levels=("low", "high"), mandatory=True, metadata={"acme": {}}
+    )
     profiles, issues = _profiles(
         {
             "format_version": 1,
@@ -179,6 +186,8 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
     assert profile.reasoning.control == "levels"
     assert profile.source_of("reasoning.control") == "catalog"
     assert profile.reasoning.ladder == ("low", "high")
+    assert profile.reasoning.mandatory is True
+    assert profile.source_of("reasoning.mandatory") == "catalog"
     assert profile.replay.scope == "current_run"
     assert profile.source_of("replay.scope") == "rule[0]"
     # Observations beat rules and catalog, never Model entries.

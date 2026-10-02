@@ -161,6 +161,7 @@ async def test_owner_catalog_projects_registry_metadata_until_the_registration_r
                 "control": reasoning.control,
                 "levels": list(reasoning.levels),
                 "budget_max": reasoning.budget_max,
+                "mandatory": reasoning.mandatory,
             },
         }
     assert any(model_id.startswith("openai/") for model_id in models)

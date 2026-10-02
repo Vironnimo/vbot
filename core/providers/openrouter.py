@@ -16,7 +16,6 @@ import httpx
 from core.models.models import (
     Capabilities,
     Model,
-    ReasoningCapabilities,
 )
 from core.providers._chat_completions_catalog import (
     _parse_optional_int,
@@ -37,6 +36,7 @@ from core.providers._openrouter_catalog import (
     _image_catalog_model,
     _normalize_image_parameters,
     _normalize_video_options,
+    _openrouter_reasoning,
     _openrouter_runtime_metadata,
     _openrouter_task_types,
     _passthrough_from_detail,
@@ -680,12 +680,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                     "response_format" in supported_parameters
                     or "structured_outputs" in supported_parameters
                 ),
-                reasoning=ReasoningCapabilities(
-                    supported=(
-                        "reasoning" in supported_parameters
-                        or "include_reasoning" in supported_parameters
-                    ),
-                ),
+                reasoning=_openrouter_reasoning(supported_parameters, raw.get("reasoning")),
                 input_modalities=tuple(input_modalities),
                 output_modalities=tuple(output_modalities),
                 supported_parameters=tuple(supported_parameters),

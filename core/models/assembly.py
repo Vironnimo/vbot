@@ -110,7 +110,7 @@ Rules (:func:`merge_layers`):
   (``supported``, ``control``, ``levels``, ``budget_max``) is ONE unit taken
   wholesale from the highest layer that defines any of those keys, so a ladder
   never mixes layers (a higher ``{"supported": true}`` without a ladder does not
-  inherit a lower ladder). Every other reasoning fact merges per
+  inherit a lower ladder). Every other reasoning fact (``mandatory``) merges per
   field, so a provider fact survives under an inherited canonical ladder.
 * ``metadata`` is merged per Provider key, then per field:
   ``metadata.<key>.<field>`` is taken from the highest layer that defines it. A

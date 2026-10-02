@@ -15,7 +15,7 @@ import pytest
 import respx
 
 from core.models.discovery import refresh_models
-from core.models.models import ModelRegistry
+from core.models.models import ModelRegistry, ReasoningCapabilities
 from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.models.query import ModelQuery
 from core.providers.providers import ProviderConfig
@@ -134,30 +134,26 @@ async def test_a_ladder_the_provider_reports_survives_the_canonical_join(tmp_pat
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_field(
+async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_facts(
     tmp_path: Path,
 ) -> None:
     resources_dir = tmp_path / "resources"
     catalog = fixture_models_dev_catalog()
     await refresh_canonical_layer(resources_dir, catalog=catalog)
     mock_openrouter_image_catalog()
+    deviating = raw_openrouter_model(
+        model_id="deepseek/deepseek-v4-pro",
+        name="DeepSeek V4 Pro",
+        input_modalities=["text"],
+        supported_parameters=["tools", "reasoning"],
+    )
+    # models.dev publishes no ladder for this one, so it inherits the canonical record.
+    inheriting = raw_openrouter_model(model_id="deepseek/deepseek-r1", name="DeepSeek R1")
+    for raw in (deviating, inheriting):
+        raw["reasoning"] = {"mandatory": True}
+    gemini = raw_openrouter_model(model_id="google/gemini-2.5-flash", name="Gemini 2.5 Flash")
     respx.get(OPENROUTER_MODELS_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    raw_openrouter_model(
-                        model_id="deepseek/deepseek-v4-pro",
-                        name="DeepSeek V4 Pro",
-                        input_modalities=["text"],
-                        supported_parameters=["tools", "reasoning"],
-                    ),
-                    raw_openrouter_model(
-                        model_id="google/gemini-2.5-flash", name="Gemini 2.5 Flash"
-                    ),
-                ]
-            },
-        )
+        return_value=httpx.Response(200, json={"data": [deviating, inheriting, gemini]})
     )
 
     await refresh_models(openrouter_config(), API_KEY, resources_dir, models_dev_catalog=catalog)
@@ -173,12 +169,18 @@ async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_field
     assert "reasoning_response_field" not in (
         written["google/gemini-2.5-flash"].get("metadata", {}).get("openrouter", {})
     )
-    deepseek = ModelRegistry.load(resources_dir).get("openrouter", "deepseek/deepseek-v4-pro")
-    assert (deepseek.capabilities.reasoning.control, deepseek.capabilities.reasoning.levels) == (
-        "levels",
-        ("high", "xhigh"),
+    # The inheriting Model drops only its bare flag; the reported fact stays.
+    assert written["deepseek/deepseek-r1"]["capabilities"]["reasoning"] == {"mandatory": True}
+    registry = ModelRegistry.load(resources_dir)
+    deepseek = registry.get("openrouter", "deepseek/deepseek-v4-pro")
+    assert deepseek.capabilities.reasoning == ReasoningCapabilities(
+        supported=True, control="levels", levels=("high", "xhigh"), mandatory=True
     )
     assert deepseek.metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+    # ... and merges under the inherited canonical reasoning.
+    assert registry.get(
+        "openrouter", "deepseek/deepseek-r1"
+    ).capabilities.reasoning == ReasoningCapabilities(supported=True, mandatory=True)
 
 
 @respx.mock

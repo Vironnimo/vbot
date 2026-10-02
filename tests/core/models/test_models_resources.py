@@ -421,6 +421,7 @@ def test_openrouter_space_bunny_gateway_facts(registry: ModelRegistry) -> None:
         "max_output_tokens": 524_288,
         "reasoning": _FIVE_LEVELS,
     }
+    assert router.capabilities.reasoning.mandatory is True
     assert router.metadata["openrouter"]["reasoning_mandatory"] is True
 
 

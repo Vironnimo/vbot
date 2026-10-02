@@ -606,6 +606,7 @@ class ExtensionHostFactory:
                                 "control": model.capabilities.reasoning.control,
                                 "levels": list(model.capabilities.reasoning.levels),
                                 "budget_max": model.capabilities.reasoning.budget_max,
+                                "mandatory": model.capabilities.reasoning.mandatory,
                             },
                         },
                     }

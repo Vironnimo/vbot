@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -232,6 +232,26 @@ def _embedding_catalog_pricing(
     )
 
 
+def _openrouter_reasoning(
+    supported_parameters: Sequence[str], reasoning: Any
+) -> ReasoningCapabilities:
+    """Project a chat Model's reasoning facts.
+
+    ``supported`` follows the reasoning request parameters the Model accepts;
+    ``mandatory`` follows the reported ``reasoning.mandatory`` (the Model always
+    reasons and rejects a request that disables reasoning).
+    """
+
+    supported = "reasoning" in supported_parameters or "include_reasoning" in supported_parameters
+    return ReasoningCapabilities(
+        supported=supported, mandatory=supported and _reasoning_is_mandatory(reasoning)
+    )
+
+
+def _reasoning_is_mandatory(reasoning: Any) -> bool:
+    return isinstance(reasoning, Mapping) and reasoning.get("mandatory") is True
+
+
 def _openrouter_runtime_metadata(
     architecture: Mapping[str, Any], reasoning: Any
 ) -> Mapping[str, Any]:
@@ -239,7 +259,7 @@ def _openrouter_runtime_metadata(
     modality = architecture.get("modality")
     if isinstance(modality, str) and modality:
         metadata["modality"] = modality
-    if isinstance(reasoning, Mapping) and reasoning.get("mandatory") is True:
+    if _reasoning_is_mandatory(reasoning):
         metadata["reasoning_mandatory"] = True
     return {"openrouter": metadata} if metadata else {}
 

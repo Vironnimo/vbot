@@ -131,6 +131,8 @@ class ReasoningCapabilities:
       ``THINKING_EFFORT_ORDER``), empty otherwise.
     * ``budget_max`` — the maximum thinking-token budget for
       ``control == "budget"``, ``None`` otherwise.
+    * ``mandatory`` — the provider always reasons and rejects a request that
+      turns reasoning off; only meaningful when ``supported`` is ``True``.
 
     The fields are ordered so existing ``ReasoningCapabilities(supported=...)``
     construction sites keep working unchanged.
@@ -140,6 +142,7 @@ class ReasoningCapabilities:
     control: str | None = None
     levels: tuple[str, ...] = ()
     budget_max: int | None = None
+    mandatory: bool = False
 
 
 @dataclass(frozen=True)
@@ -890,11 +893,15 @@ def _model_from_record(
 
     caps = _required_field(record, "capabilities")
     reasoning_data = _required_field(record, "capabilities", "reasoning")
+    supported = _required_field(record, "capabilities", "reasoning", "supported")
     reasoning = ReasoningCapabilities(
-        supported=_required_field(record, "capabilities", "reasoning", "supported"),
+        supported=supported,
         control=reasoning_data.get("control"),
         levels=tuple(reasoning_data.get("levels", ())),
         budget_max=reasoning_data.get("budget_max"),
+        mandatory=_coerce_reasoning_mandatory(
+            reasoning_data.get("mandatory"), supported=supported, report=report
+        ),
     )
     capabilities = Capabilities(
         vision=_required_field(record, "capabilities", "vision"),
@@ -978,6 +985,27 @@ def _coerce_reasoning_replay(value: Any) -> str | None:
         return value
     allowed = ", ".join(sorted(_REASONING_REPLAY_POLICIES))
     raise ValueError(f"reasoning_replay must be one of: {allowed}")
+
+
+def _coerce_reasoning_mandatory(
+    value: Any, *, supported: Any, report: ModelDataIssueReport
+) -> bool:
+    """Validate the optional ``capabilities.reasoning.mandatory`` fact.
+
+    Absent means optional reasoning. A non-boolean value, or ``true`` on a Model
+    whose reasoning is not supported, is reported and treated as ``False`` so
+    one bad fact never hides the Model.
+    """
+
+    if value is None or value is False:
+        return False
+    if value is not True:
+        report(f"capabilities.reasoning.mandatory is not a boolean ({value!r}); ignoring")
+        return False
+    if supported is not True:
+        report("capabilities.reasoning.mandatory is true but reasoning is not supported; ignoring")
+        return False
+    return True
 
 
 def _coerce_recommended_temperature(value: Any, report: ModelDataIssueReport) -> float | None:

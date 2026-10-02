@@ -109,6 +109,7 @@ def test_direct_construction_leaves_optional_facts_unset() -> None:
     assert model.capabilities.reasoning.control is None
     assert model.capabilities.reasoning.levels == ()
     assert model.capabilities.reasoning.budget_max is None
+    assert model.capabilities.reasoning.mandatory is False
     assert model.capabilities.supported_parameters == ()
     assert model.capabilities.supported_voices == ()
     assert model.capabilities.unlisted_tool_calls is True
@@ -325,6 +326,9 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
             )
         ),
         "minimal": _record(capabilities=_capabilities(reasoning={"supported": True})),
+        "mandatory": _record(
+            capabilities=_capabilities(reasoning={"supported": True, "mandatory": True})
+        ),
         "family": _record(family="gpt-5.2"),
         "connections": _record(connections=["api-key"]),
         "metadata": _record(
@@ -368,6 +372,7 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
             "budget", capabilities=reasoning(supported=True, control="budget", budget_max=32000)
         ),
         "minimal": _model("minimal", capabilities=reasoning(supported=True)),
+        "mandatory": _model("mandatory", capabilities=reasoning(supported=True, mandatory=True)),
         "family": _model("family", family="gpt-5.2"),
         "connections": _model("connections", connections=("api-key",)),
         "metadata": _model(
@@ -412,38 +417,64 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
     assert type(upper.recommended_top_p) is float
 
 
+_SAMPLING_FIELDS = ["recommended_temperature", "recommended_top_p"]
+_MANDATORY_FIELD = ["capabilities.reasoning.mandatory"]
+
+
 @pytest.mark.parametrize(
-    ("temperature", "top_p", "warning"),
+    ("changes", "warning", "warned_fields"),
     [
-        (2.1, 1.1, "outside"),
-        (True, True, "not a number"),
-        (math.nan, math.nan, "not finite"),
+        pytest.param(
+            {"recommended_temperature": 2.1, "recommended_top_p": 1.1},
+            "outside",
+            _SAMPLING_FIELDS,
+            id="sampling-out-of-range",
+        ),
+        pytest.param(
+            {"recommended_temperature": True, "recommended_top_p": True},
+            "not a number",
+            _SAMPLING_FIELDS,
+            id="sampling-bool",
+        ),
+        pytest.param(
+            {"recommended_temperature": math.nan, "recommended_top_p": math.nan},
+            "not finite",
+            _SAMPLING_FIELDS,
+            id="sampling-nan",
+        ),
+        pytest.param(
+            {"capabilities": _capabilities(reasoning={"supported": True, "mandatory": "yes"})},
+            "not a boolean",
+            _MANDATORY_FIELD,
+            id="mandatory-not-a-boolean",
+        ),
+        pytest.param(
+            {"capabilities": _capabilities(reasoning={"supported": False, "mandatory": True})},
+            "not supported",
+            _MANDATORY_FIELD,
+            id="mandatory-without-reasoning",
+        ),
     ],
-    ids=["out-of-range", "bool", "nan"],
 )
-def test_invalid_recommended_sampling_is_ignored_without_hiding_the_model(
+def test_invalid_optional_facts_are_ignored_without_hiding_the_model(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
-    temperature: object,
-    top_p: object,
+    changes: dict[str, Any],
     warning: str,
+    warned_fields: list[str],
 ) -> None:
-    _write_catalog(
-        tmp_path,
-        "p",
-        {"m": _record(recommended_temperature=temperature, recommended_top_p=top_p)},
-    )
+    _write_catalog(tmp_path, "p", {"m": _record(**changes)})
 
     with caplog.at_level(logging.WARNING, logger="vbot.models"):
         model = ModelRegistry.load(tmp_path).get("p", "m")
 
     assert (model.recommended_temperature, model.recommended_top_p) == (None, None)
-    warned_fields = [
+    assert model.capabilities.reasoning.mandatory is False
+    assert [
         record.getMessage().split()[0]
         for record in caplog.records
         if warning in record.getMessage()
-    ]
-    assert warned_fields == ["recommended_temperature", "recommended_top_p"]
+    ] == warned_fields
 
 
 # ---------------------------------------------------------------------------

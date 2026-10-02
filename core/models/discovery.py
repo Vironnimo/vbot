@@ -454,8 +454,8 @@ def _enrich_provider_model(
       so it is not a reported fact and must not shadow the canonical ladder (the
       assembly takes the control description as one unit).
 
-    Reasoning facts outside the control description are always kept: they are
-    adapter facts that no models.dev or canonical source carries.
+    Reasoning facts outside the control description (``mandatory``) are always
+    kept: they are adapter facts that no models.dev or canonical source carries.
     """
 
     pointer = auto_canonical_pointer(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
@@ -890,12 +890,12 @@ def _model_to_data(model: Model | Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _reasoning_to_data(reasoning: ReasoningCapabilities) -> dict[str, Any]:
-    """Serialize the typed reasoning block, omitting unset control fields.
+    """Serialize the typed reasoning block, omitting unset optional fields.
 
-    ``control``/``levels``/``budget_max`` are emitted only when present so the
-    on-disk form stays minimal — a model with no projected ladder serializes
-    back to the bare ``{"supported": bool}`` shape, matching "absent when not
-    supported (or not yet known)".
+    ``control``/``levels``/``budget_max`` are emitted only when present and
+    ``mandatory`` only when true, so the on-disk form stays minimal — a model
+    with no projected ladder serializes back to the bare ``{"supported": bool}``
+    shape, matching "absent when not supported (or not yet known)".
     """
 
     data: dict[str, Any] = {"supported": reasoning.supported}
@@ -905,6 +905,8 @@ def _reasoning_to_data(reasoning: ReasoningCapabilities) -> dict[str, Any]:
         data["levels"] = list(reasoning.levels)
     if reasoning.budget_max is not None:
         data["budget_max"] = reasoning.budget_max
+    if reasoning.mandatory:
+        data["mandatory"] = True
     return data
 
 
