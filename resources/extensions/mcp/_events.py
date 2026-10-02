@@ -121,6 +121,8 @@ class ConnectionEvents:
         config = self._config()
         keys = set(config.get("credential_environment", {}).values())
         keys.update(config.get("credential_headers", {}).values())
+        if config.get("oauth_client_secret"):
+            keys.add(config["oauth_client_secret"])
         secrets = [self._host.resolve_credential(key) for key in keys]
         secrets.extend(oauth_secrets(self._host, config["id"]))
         return [value for value in secrets if value]
