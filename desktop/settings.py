@@ -35,7 +35,6 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
-from contextlib import suppress
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, TypeGuard
 
@@ -158,25 +157,22 @@ def _write_settings_unlocked(settings: dict[str, Any], resolved_path: Path) -> N
     payload = json.dumps(settings, indent=2, sort_keys=True) + "\n"
 
     for attempt in range(_IO_RETRY_ATTEMPTS):
-        temporary_path: Path | None = None
         try:
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
+            # Leaving the block removes the temporary file unless it replaced the settings.
             with tempfile.NamedTemporaryFile(
                 "w",
                 encoding="utf-8",
                 dir=resolved_path.parent,
-                delete=False,
+                delete_on_close=False,
                 prefix=f".{resolved_path.name}.",
                 suffix=".tmp",
             ) as temporary_file:
-                temporary_path = Path(temporary_file.name)
                 temporary_file.write(payload)
-            temporary_path.replace(resolved_path)
+                temporary_file.close()
+                Path(temporary_file.name).replace(resolved_path)
             return
         except OSError:
-            if temporary_path is not None:
-                with suppress(OSError):
-                    temporary_path.unlink(missing_ok=True)
             if attempt < _IO_RETRY_ATTEMPTS - 1:
                 time.sleep(_IO_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
                 continue

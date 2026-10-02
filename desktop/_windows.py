@@ -468,26 +468,23 @@ def _claim_after_predecessor(
 def _write_activation_request(path: Path, request: Mapping[str, Any], *, created_at: float) -> None:
     """Write the request for the running instance in one atomic replace."""
 
-    temporary_path: Path | None = None
     try:
         payload = json.dumps({"created_at": created_at, "request": dict(request)})
         path.parent.mkdir(parents=True, exist_ok=True)
+        # Leaving the block removes the temporary file unless it replaced *path*.
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
             dir=path.parent,
-            delete=False,
+            delete_on_close=False,
             prefix=f".{path.name}.",
             suffix=".tmp",
         ) as temporary_file:
-            temporary_path = Path(temporary_file.name)
             temporary_file.write(payload)
-        temporary_path.replace(path)
+            temporary_file.close()
+            Path(temporary_file.name).replace(path)
     except (OSError, TypeError, ValueError):
         logger.warning("The request for the running Desktop could not be written", exc_info=True)
-        if temporary_path is not None:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink(missing_ok=True)
 
 
 def _take_activation_request(path: Path, *, now: float) -> ActivationRequest | None:

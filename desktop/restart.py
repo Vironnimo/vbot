@@ -180,23 +180,18 @@ def write_restart_request(
         }
     path = Path(config_directory) / RESTART_REQUEST_FILE_NAME
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            delete=False,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-        ) as temporary_file:
-            temporary_path = Path(temporary_file.name)
-            temporary_file.write(json.dumps(document))
-        temporary_path.replace(path)
-    finally:
-        if temporary_path is not None:
-            with contextlib.suppress(OSError):
-                temporary_path.unlink(missing_ok=True)
+    # Leaving the block removes the temporary file unless it replaced *path*.
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        delete_on_close=False,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as temporary_file:
+        temporary_file.write(json.dumps(document))
+        temporary_file.close()
+        Path(temporary_file.name).replace(path)
 
 
 def discard_restart_request(config_directory: Path, nonce: str) -> None:
