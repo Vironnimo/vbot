@@ -100,6 +100,8 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 **Model-facing paths:** Render separators as `/` when vBot authors a known filesystem-path value for Model context (System Prompt, attachment note, Tool result, delivery note). Leave `pathlib.Path`, native OS calls, persisted values, incoming arguments, and arbitrary text unchanged; no global replacement.
 
+**Filesystem checks:** Since Python 3.14, `Path.exists`, `is_dir` and `is_file` return `False` when the check itself fails (permission or I/O error, an unresponsive share or cloud-file provider), so an entry that cannot be checked reads as missing. Where that answer decides about data (seeding, overwriting, deleting, restoring, adopting), use `exists_strict`, `is_dir_strict`, `is_file_strict` or `stat_or_none` from `core/utils/file_status.py`, which raise the `OSError` instead, or open the file and treat only `FileNotFoundError` as missing; an entry that cannot be checked is unavailable, never absent. The same module classifies unfollowed `lstat` results: `is_link_status` (symbolic links and junctions, for walking, moving and removing trees without following links) and `is_reparse_point` (every Windows reparse point, for package verification); do not add local copies.
+
 ## Development
 
 **Setup:** Python 3.14 (Python version below), Node.js for WebUI (Node.js >=22 plus npm on the server for optional WhatsApp Channels); editable install with dev extras:
@@ -143,6 +145,8 @@ Backend: pytest with `--import-mode=importlib`; frontend: Vitest, optionally jsd
 **Home isolation:** The root `tests/conftest.py` gives every test an empty home directory (`HOME` and `USERPROFILE`, `XDG_CONFIG_HOME` unset), so `Path.home()` and `~` never reach the real home, its `~/.vbot` data or its Git configuration. A value computed from the home at import time, such as `core.storage.storage.DEFAULT_DATA_DIR`, still names the real home: tests pass an explicit data directory.
 
 **Disk syncs:** The root `tests/conftest.py` skips the disk syncs that protect data only against power loss: for the whole session, the database kernel opens every database with `synchronous=OFF` (the test seam `core.database.database.SYNCHRONOUS_OVERRIDE`) and `os.fsync` does nothing. A test that observes the production syncs (SQLite `synchronous` levels, `os.fsync` calls) carries the `durable` marker, which restores them for that test.
+
+**Unreadable files:** The `deny_access(path)` fixture of `tests/core/conftest.py` simulates an entry that exists but cannot be checked or read, the same way on Windows and Linux: listing a denied folder, and `stat` or a reading open of a path inside it (or of a denied file), raise `PermissionError`, while `os.path.exists`/`isdir`/`isfile` answer `False` for them as Python 3.14 does; writes still succeed, so a regression that takes the entry for missing overwrites it visibly. `monkeypatch.undo()` lifts the denial before the test inspects the result.
 
 **Running tests and checks:** Call the tools directly; their configuration lives in `pyproject.toml` (pytest, Ruff, mypy) and `webui/package.json` (scripts). What to test and run: `AGENTS.md` -> Testing.
 ```bash

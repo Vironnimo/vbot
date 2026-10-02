@@ -147,7 +147,9 @@ because its worker imports vBot source), and a
 `verified.json` completion receipt, written atomically only after successful verification
 and removed before package changes. Every target also needs its Model receipt
 (`model_missing` otherwise). Setup removes and recreates an environment that fails one of
-these Python checks. Environment receipt contents are not runtime compatibility data:
+these Python checks. A check that cannot read the interpreter, base Python, `pyvenv.cfg` or a
+receipt reports `environment_unreadable` instead (`local_setup.environment_error`), and setup
+never removes such an environment. Environment receipt contents are not runtime compatibility data:
 changed dependency declarations or worker source never invalidate a completed setup.
 A changed pinned revision does: the target is `model_missing` until installed again.
 Actual SDK, device and Model failures are handled at execution. Status reads neither

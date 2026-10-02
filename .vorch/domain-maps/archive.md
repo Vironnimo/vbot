@@ -79,7 +79,7 @@ How long an `archived` entry rests before the retention sweep purges it: the set
 
 ## Recovery
 
-`recover()` runs in bootstrap after a pending Agent rename settled and before Channels, Cron and Runs start, in safe startup modes too (`_recovery.py`, `runtime.md`). Every step is idempotent; a step or an entry whose recovery fails is logged and retried at the next start, and a folder under `archive/` that cannot be read is skipped with a WARNING: neither startup nor safe mode fails because of the archive folder. Order: archived Sessions without membership, then the unsettled entries, then payloads without a row (after settling, because an undone archive may leave one). Recovery never moves files that are live again back into a payload: they may hold new data.
+`recover()` runs in bootstrap after a pending Agent rename settled and before Channels, Cron and Runs start, in safe startup modes too (`_recovery.py`, `runtime.md`). Every step is idempotent; a step or an entry whose recovery fails is logged and retried at the next start, and a folder under `archive/` that cannot be read is skipped with a WARNING: neither startup nor safe mode fails because of the archive folder. A payload, source or folder that cannot be checked counts as such a failure, never as missing, so recovery neither moves nor removes anything on that answer. Order: archived Sessions without membership, then the unsettled entries, then payloads without a row (after settling, because an undone archive may leave one). Recovery never moves files that are live again back into a payload: they may hold new data.
 
 | Found | Action |
 |---|---|
