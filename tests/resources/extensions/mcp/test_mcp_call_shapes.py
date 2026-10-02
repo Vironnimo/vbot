@@ -7,6 +7,7 @@ import json
 import pytest
 
 from core.tools.contracts import ToolContractError
+from resources.extensions.mcp._tasks import TaskEndedError
 from resources.extensions.mcp.client import InvocationNotSentError
 from tests.resources.extensions.mcp.mcp_test_support import (
     context,
@@ -466,20 +467,42 @@ UNKNOWN_OUTCOME = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "operation,arguments,expected",
+    "operation,arguments,error,expected",
     [
         (
             "ping",
             {},
-            "This read returned no result and changed nothing; try it once more, and tell the "
-            "user if it keeps failing.\nretryable: true",
+            ValueError,
+            "mcp_call_unconfirmed): test-owned-timeout. This read returned no result and "
+            "changed nothing; try it once more, and tell the user if it keeps failing."
+            "\nretryable: true",
         ),
-        ("logging/setLevel", {"level": "debug"}, UNKNOWN_OUTCOME),
-        ("tools/call", {"value": "sentinel"}, UNKNOWN_OUTCOME),
+        (
+            "logging/setLevel",
+            {"level": "debug"},
+            ValueError,
+            f"mcp_call_unconfirmed): test-owned-timeout. {UNKNOWN_OUTCOME}",
+        ),
+        (
+            "tools/call",
+            {"value": "sentinel"},
+            ValueError,
+            f"mcp_call_unconfirmed): test-owned-timeout. {UNKNOWN_OUTCOME}",
+        ),
+        (
+            "tools/call",
+            {"value": "sentinel"},
+            TaskEndedError,
+            "mcp_task_ended): test-owned-timeout. The MCP server ran this call in the "
+            "background, and it ended without a result. Work it did before it ended may "
+            "remain: before you repeat a call that changes something, check the application's "
+            "current state. A call that only reads is safe to repeat.",
+        ),
     ],
+    ids=["read", "operation", "tool", "task-ended"],
 )
-async def test_unconfirmed_calls_are_not_repeated_and_say_whether_repeating_is_safe(
-    context_service, host, monkeypatch, operation, arguments, expected
+async def test_calls_without_a_result_are_not_repeated_and_say_whether_repeating_is_safe(
+    context_service, host, monkeypatch, operation, arguments, error, expected
 ):
     service, registry, runner, calls = context_service
     target = (
@@ -490,30 +513,54 @@ async def test_unconfirmed_calls_are_not_repeated_and_say_whether_repeating_is_s
 
     async def timeout(*args):
         calls.append(args)
-        raise ValueError("test-owned-timeout")
+        raise error("test-owned-timeout")
 
     monkeypatch.setattr(runner, "invoke", timeout)
     result = await dispatch(
         registry, host, {"action": "call", "target": target, "arguments": arguments}
     )
 
-    assert model_text(result) == f"Error (mcp_call_unconfirmed): test-owned-timeout. {expected}"
+    assert model_text(result) == f"Error ({expected}"
     assert len(calls) == 1
 
 
 @pytest.mark.asyncio
-async def test_unreachable_connection_on_discovery_invites_one_retry(
-    context_service, host, monkeypatch
+@pytest.mark.parametrize(
+    ("refused", "expected"),
+    [
+        (
+            None,
+            "mcp_request_failed): The MCP connection example is not available "
+            "(test-owned-connection-error), so nothing was run. The next call reconnects: try "
+            "once more, and if it fails again, tell the user that the MCP server example "
+            "cannot be reached.\nretryable: true",
+        ),
+        (
+            403,
+            "mcp_request_refused): The MCP server example refused this request "
+            "(test-owned-connection-error), so nothing was run. If the refusal concerns the "
+            "call, correct it and send it again; otherwise tell the user that the MCP server "
+            "example refuses it.\nretryable: false",
+        ),
+        (
+            429,
+            "mcp_request_refused): The MCP server example refused this request because it "
+            "receives too many (test-owned-connection-error), so nothing was run. Wait a "
+            "moment, then send it again.\nretryable: true",
+        ),
+    ],
+    ids=["unreachable", "refused", "rate-limited"],
+)
+async def test_a_request_that_never_ran_says_why(
+    context_service, host, monkeypatch, refused, expected
 ):
     service, registry, runner, calls = context_service
     runner.state = "failed"
 
-    async def unreachable(*args):
-        raise InvocationNotSentError("test-owned-connection-error")
+    async def not_sent(*args):
+        raise InvocationNotSentError("test-owned-connection-error", refused=refused)
 
-    monkeypatch.setattr(runner, "invoke", unreachable)
+    monkeypatch.setattr(runner, "invoke", not_sent)
     result = await dispatch(registry, host, {"action": "search"})
 
-    assert result["error"]["code"] == "mcp_request_failed"
-    assert result["error"]["retryable"] is True
-    assert "(test-owned-connection-error), so nothing was run" in result["error"]["message"]
+    assert model_text(result) == f"Error ({expected}"

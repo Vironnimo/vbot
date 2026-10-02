@@ -8,7 +8,9 @@ import logging
 import re
 import socket
 import sys
+import warnings
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import override
 from urllib.parse import urlparse
@@ -21,15 +23,18 @@ import pytest
 import uvicorn
 from mcp.client.auth import OAuthFlowError
 from mcp.server import Server
+from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, ResourceUpdated
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
+from core.utils.timestamps import parse_canonical_timestamp
+from resources.extensions.mcp import _tasks
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._callbacks import sampling_messages
 from resources.extensions.mcp._network import DestinationGuard
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
-from resources.extensions.mcp.interactions import InputRequests
+from resources.extensions.mcp.interactions import INPUT_REQUEST_TTL_SECONDS, InputRequests
 from tests.resources.extensions.mcp.mcp_test_support import (
     StreamServer,
     context,
@@ -38,11 +43,12 @@ from tests.resources.extensions.mcp.mcp_test_support import (
 )
 
 # A minimal stdio server: it answers the handshake, one plain Tool and one Tool that
-# requires the task protocol, whose result it hands out through tasks/result. It
-# also writes a line that is neither UTF-8 nor JSON.
+# requires the task protocol, whose task completes at its first status read and hands
+# out its result through tasks/result. It also writes a line that is neither UTF-8
+# nor JSON.
 _STDIO_SERVER = """import json
 import sys
-task = {"taskId": "task-sentinel", "status": "completed", "ttl": 1000,
+task = {"taskId": "task-sentinel", "status": "working", "ttl": 60000, "pollInterval": 100,
     "createdAt": "2026-01-01T00:00:00Z", "lastUpdatedAt": "2026-01-01T00:00:00Z"}
 for line in sys.stdin:
     request = json.loads(line)
@@ -66,6 +72,8 @@ for line in sys.stdin:
         result = {"content": [{"type": "text", "text": params["arguments"]["value"]}]}
     elif method == "tools/call" and "task" in params:
         result = {"task": task}
+    elif method == "tasks/get" and params.get("taskId") == "task-sentinel":
+        result = {**task, "status": "completed"}
     elif method == "tasks/result" and params.get("taskId") == "task-sentinel":
         result = {"content": [{"type": "text", "text": "payload-sentinel"}],
             "structuredContent": {"nested": [1, 2, 3]}, "_meta": {"preserved": True}}
@@ -79,7 +87,15 @@ for line in sys.stdin:
 
 
 @pytest.mark.asyncio
-async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(host, tmp_path):
+async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(
+    host, tmp_path, monkeypatch
+):
+    polls = []
+
+    async def poll(seconds):
+        polls.append(seconds)
+
+    monkeypatch.setattr(_tasks, "_sleep", poll)
     script = tmp_path / "server.py"
     script.write_text(_STDIO_SERVER)
     runner = ConnectionRunner(
@@ -95,14 +111,17 @@ async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(ho
             echoed = await runner.invoke(
                 "tools/call", {"name": "echo", "arguments": {"value": "wire-sentinel"}}
             )
-            # A Tool that requires tasks is started as a task; its handle stays usable.
-            started = await runner.invoke("tools/call", {"name": "long", "arguments": {}})
-            result = await runner.invoke("tasks/result", {"taskId": started["task"]["taskId"]})
+            # A Tool that requires tasks runs as one and returns the task's result.
+            result = await runner.invoke("tools/call", {"name": "long", "arguments": {}})
+            # The explicit task operations reach the same task.
+            payload = await runner.invoke("tasks/result", {"taskId": "task-sentinel"})
         assert echoed["content"][0]["text"] == "wire-sentinel"
         assert [event["kind"] for event in runner.events()["events"]].count("transport_error") == 1
-        assert result["content"][0]["text"] == "payload-sentinel"
-        assert result["structuredContent"] == {"nested": [1, 2, 3]}
-        assert result["_meta"] == {"preserved": True}
+        assert polls == [0.1]
+        for answer in (result, payload):
+            assert answer["content"][0]["text"] == "payload-sentinel"
+            assert answer["structuredContent"] == {"nested": [1, 2, 3]}
+            assert answer["_meta"] == {"preserved": True}
     finally:
         await runner.close()
     assert runner.state == "disconnected"
@@ -149,40 +168,71 @@ async def test_http_transports(host, server, transport):
         await _stop_sse_shutdown_watcher()
 
 
-class _ExpiringSessions:
-    """ASGI middleware that ends sessions the way a restarted legacy server does."""
+class _HTTPFaults:
+    """ASGI middleware that ends sessions the way a restarted legacy server does.
+
+    It also refuses the next POST of each method in ``refuse`` with that HTTP status
+    and a JSON-RPC error, without passing it on.
+    """
 
     def __init__(self, app):
         self.app = app
         self.expired: set[bytes] = set()
         self.current: bytes | None = None
+        self.refuse: dict[str, int] = {}
+        self.passed: list[str] = []
 
     async def __call__(self, scope, receive, send):
         session = dict(scope.get("headers", [])).get(b"mcp-session-id")
         if session is not None:
             self.current = session
             if session in self.expired:
-                body = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32600, "message": "Session not found"},
-                }
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 404,
-                        "headers": [(b"content-type", b"application/json")],
-                    }
-                )
-                await send({"type": "http.response.body", "body": json.dumps(body).encode()})
+                await self._error(send, 404, None, "Session not found")
                 return
-        await self.app(scope, receive, send)
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+        messages = [await receive()]
+        while messages[-1].get("more_body"):
+            messages.append(await receive())
+        message = json.loads(b"".join(item.get("body", b"") for item in messages))
+        status = self.refuse.pop(message.get("method"), None)
+        if status is not None:
+            await self._error(send, status, message.get("id"), "test-owned-refusal")
+            return
+        self.passed.append(message.get("method"))
+
+        async def replay():
+            return messages.pop(0) if messages else await receive()
+
+        await self.app(scope, replay, send)
+
+    @staticmethod
+    async def _error(send, status, request_id, text):
+        body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": text}}
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": json.dumps(body).encode()})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["tools/call", "resources/read"])
-async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
-    host, server, monkeypatch, operation
+@pytest.mark.parametrize(
+    ("operation", "fault"),
+    [
+        ("tools/call", "ended"),
+        ("resources/read", "ended"),
+        ("tools/call", 403),
+        ("resources/read", 429),
+    ],
+    ids=["ended-call", "ended-read", "refused-call", "rate-limited-read"],
+)
+async def test_an_unprocessed_http_request_is_not_run_and_only_a_read_runs_again(
+    host, server, monkeypatch, operation, fault
 ):
     from mcp import Client
 
@@ -198,7 +248,7 @@ async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    sessions = _ExpiringSessions(server.streamable_http_app())
+    sessions = _HTTPFaults(server.streamable_http_app())
     http_server = uvicorn.Server(
         uvicorn.Config(sessions, log_config=None, access_log=False, timeout_graceful_shutdown=1)
     )
@@ -220,6 +270,28 @@ async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
                 await asyncio.sleep(0)
             await runner.invoke("tools/call", echo)
             assert sessions.current is not None
+            session = sessions.current
+            if fault == 403:
+                # Refused unprocessed: never sent, and the connection stays.
+                sessions.refuse["tools/call"] = 403
+                with pytest.raises(InvocationNotSentError) as refused:
+                    await runner.invoke("tools/call", echo, context(host))
+                assert str(refused.value) == "HTTP 403 Forbidden: test-owned-refusal"
+                assert refused.value.refused == 403
+                assert sessions.passed.count("tools/call") == 1
+            elif fault == 429:
+                # A read the server refused for its rate runs again.
+                sessions.refuse["resources/read"] = 429
+                result = await runner.invoke("resources/read", {"uri": "test://scene"})
+                assert result["contents"][0]["text"] == "test-owned-scene"
+                kinds = [event["kind"] for event in runner.events()["events"]]
+                assert kinds.count("read_retry") == 1
+            if fault != "ended":
+                assert sessions.current == session
+                assert "connection_failed" not in [
+                    event["kind"] for event in runner.events()["events"]
+                ]
+                return
             sessions.expired.add(sessions.current)
             if operation == "tools/call":
                 # Refused without being processed: reported as never sent, not repeated.
@@ -726,6 +798,8 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
     )
     await asyncio.sleep(0)
     pending = inputs.list()[0]
+    remaining = parse_canonical_timestamp(pending["expires_at"]) - datetime.now(UTC)
+    assert INPUT_REQUEST_TTL_SECONDS - 10 <= remaining.total_seconds() <= INPUT_REQUEST_TTL_SECONDS
     with pytest.raises(ValueError):
         inputs.respond(pending["id"], {"action": "accept", "content": {}})
     inputs.respond(pending["id"], {"action": "accept", "content": {"name": "answer"}})
@@ -795,13 +869,18 @@ async def test_a_call_waits_for_its_connection_only_until_the_timeout(
 @pytest.mark.asyncio
 async def test_unanswered_server_requests_expire_but_a_sign_in_keeps_its_own_deadline(host):
     inputs = InputRequests(ttl=0)
-    sign_in = asyncio.create_task(inputs.request("example", "oauth", {"url": "test-owned"}))
+    sign_in = asyncio.create_task(
+        inputs.request("example", "oauth", {"url": "test-owned"}, expires_in=600)
+    )
     try:
         elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
         sampled = await inputs.request("example", "sampling", {"message": "test-owned"})
 
         assert elicited == sampled == {"action": "cancel"}
         assert [item["kind"] for item in inputs.list()] == ["oauth"]
+        # Listed with the deadline its caller keeps.
+        remaining = parse_canonical_timestamp(inputs.list()[0]["expires_at"]) - datetime.now(UTC)
+        assert 590 <= remaining.total_seconds() <= 600
     finally:
         sign_in.cancel()
         await asyncio.gather(sign_in, return_exceptions=True)
@@ -918,6 +997,106 @@ async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(h
                 await asyncio.sleep(0)
         # Republished once: refreshes that find the same catalog publish nothing.
         assert published == [["add"], ["add", "added"]]
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True], ids=["listen", "legacy-subscribe"])
+async def test_resource_subscriptions_outlive_a_reconnect_until_unsubscribed(
+    host, monkeypatch, legacy
+):
+    bus = InMemorySubscriptionBus()
+    listen = ListenHandler(bus)
+    # The server's subscribe and unsubscribe requests, in order; legacy sessions to notify.
+    requests: list[tuple[str, str]] = []
+    sessions = []
+
+    async def listened(server_context, params):
+        for uri in params.notifications.resource_subscriptions or ():
+            requests.append(("subscribe", uri))
+        try:
+            return await listen(server_context, params)
+        finally:
+            for uri in params.notifications.resource_subscriptions or ():
+                requests.append(("unsubscribe", uri))
+
+    async def subscribe(server_context, params):
+        requests.append(("subscribe", str(params.uri)))
+        sessions.append(server_context.session)
+        return types.EmptyResult()
+
+    async def unsubscribe(server_context, params):
+        requests.append(("unsubscribe", str(params.uri)))
+        return types.EmptyResult()
+
+    async def list_resources(server_context, params):
+        return types.ListResourcesResult(resources=[])
+
+    async def list_templates(server_context, params):
+        return types.ListResourceTemplatesResult(resource_templates=[])
+
+    async def change():
+        if legacy:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", MCPDeprecationWarning)
+                await sessions[-1].send_resource_updated("test://watched")
+        else:
+            await bus.publish(ResourceUpdated(uri="test://watched"))
+
+    def changes():
+        return [
+            event["payload"]["uri"]
+            for event in runner.events()["events"]
+            if event["kind"] == "resource_changed"
+        ]
+
+    async def sleep(delay):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", MCPDeprecationWarning)
+        server = Server(
+            "watch",
+            on_list_resources=list_resources,
+            on_list_resource_templates=list_templates,
+            on_subscribe_resource=subscribe if legacy else None,
+            on_unsubscribe_resource=unsubscribe if legacy else None,
+            on_subscriptions_listen=None if legacy else listened,
+        )
+    stream = StreamServer(server)
+    runner = runner_for(host, stream, monkeypatch)
+    if legacy:
+        runner.config["transport"] = "sse"
+    try:
+        async with asyncio.timeout(10):
+            await runner.invoke("resources/subscribe", {"uri": "test://watched"})
+            await change()
+            while changes() != ["test://watched"]:
+                await asyncio.sleep(0)
+            # The new session subscribes again, before the connection serves calls.
+            await stream.kill()
+            while requests.count(("subscribe", "test://watched")) < 2:
+                await asyncio.sleep(0)
+            await change()
+            while changes() != ["test://watched"] * 2:
+                await asyncio.sleep(0)
+            await runner.invoke("resources/unsubscribe", {"uri": "test://watched"})
+            while requests[-1] != ("unsubscribe", "test://watched"):
+                await asyncio.sleep(0)
+            await stream.kill()
+            while stream.connections < 3:
+                await asyncio.sleep(0)
+            await runner.invoke("resources/subscribe", {"uri": "test://other"})
+        assert stream.connections == 3
+        assert requests == [
+            ("subscribe", "test://watched"),
+            *([] if legacy else [("unsubscribe", "test://watched")]),
+            ("subscribe", "test://watched"),
+            ("unsubscribe", "test://watched"),
+            ("subscribe", "test://other"),
+        ]
     finally:
         await runner.close()
 
