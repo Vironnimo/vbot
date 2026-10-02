@@ -33,6 +33,7 @@ from core.projects.projects import (
 )
 from core.projects.resolver import (
     AGENT_OVERRIDE_FIELDS,
+    MODEL_DEFAULTS_FIELD,
     AgentOverrides,
     AgentResolutionError,
     AgentResolver,
@@ -53,6 +54,7 @@ from core.projects.store import ArchivedProjectPayload, ProjectStore
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
+    "MODEL_DEFAULTS_FIELD",
     "PROJECT_FORMAT_VERSION",
     "AgentOverrides",
     "AgentResolutionError",

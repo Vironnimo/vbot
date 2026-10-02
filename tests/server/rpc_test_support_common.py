@@ -394,7 +394,7 @@ class StubAgentResolver:
         if session_id is None:
             return agent
         overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-        return replace(agent, **overrides.as_dict())
+        return replace(agent, **overrides.agent_changes())
 
     async def resolve_agent_async(
         self, project_id: str | None, agent_id: str, **options: Any
@@ -457,8 +457,9 @@ class StubAgentResolver:
         }
         if session_id is not None:
             overrides = self.session_overrides(SessionAddress(project_id, agent_id, session_id))
-            for name, value in overrides.as_dict().items():
-                effective[name] = {"value": value, "source": "session"}
+            for name, value in overrides.agent_changes().items():
+                if name in effective:
+                    effective[name] = {"value": value, "source": "session"}
         return effective
 
 
