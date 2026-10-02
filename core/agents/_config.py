@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+    DEFAULT_LIBRARIAN_ENABLED,
     Agent,
     AgentError,
     AgentRename,
@@ -107,6 +108,7 @@ _AGENT_CONFIG_FIELDS = frozenset(
         "excluded_skills",
         "fallback_models",
         "id",
+        "librarian_enabled",
         "memory_prompt_mode",
         "model",
         "name",
@@ -301,6 +303,10 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         data["custom_system_prompt_enabled"], bool
     ):
         add_error(diagnostics, "$.custom_system_prompt_enabled", "must be a boolean")
+    if data.get("librarian_enabled") is not None and not isinstance(
+        data["librarian_enabled"], bool
+    ):
+        add_error(diagnostics, "$.librarian_enabled", "must be a boolean")
     validate_optional_compaction_policy(
         diagnostics, data.get("compaction_policy"), "$.compaction_policy"
     )
@@ -566,6 +572,7 @@ def _agent_from_dict(
     timestamp_default = utc_now_timestamp()
     temperature = data.get("temperature")
     memory_prompt_mode = data.get("memory_prompt_mode")
+    librarian_enabled = data.get("librarian_enabled")
     return Agent(
         id=agent_id,
         name=data.get("name") or agent_id,
@@ -595,6 +602,9 @@ def _agent_from_dict(
             dict(data["compaction_policy"])
             if isinstance(data.get("compaction_policy"), dict)
             else None
+        ),
+        librarian_enabled=(
+            DEFAULT_LIBRARIAN_ENABLED if librarian_enabled is None else bool(librarian_enabled)
         ),
         current_session_id=data.get("current_session_id") or "",
         created_at=data.get("created_at") or timestamp_default,

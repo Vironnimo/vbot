@@ -208,6 +208,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         "excluded_skills": list(getattr(agent, "excluded_skills", ()) or ()),
         "tools": dict(getattr(agent, "tools", {})),
         "custom_system_prompt_enabled": bool(agent.custom_system_prompt_enabled),
+        "librarian_enabled": getattr(agent, "librarian_enabled", True) is not False,
         "compaction_policy": dict(agent_policy) if agent_policy is not None else None,
         "effective_compaction_policy": effective_compaction_policy(
             None, agent_policy, _global_compaction_policy_loader(state)

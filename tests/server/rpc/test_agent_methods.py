@@ -65,7 +65,9 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
 
     [listed] = (await rpc_result(state, "agent.list"))["agents"]
     created = await rpc_result(state, "agent.create", id="writer")
-    updated = await rpc_result(state, "agent.update", id="writer", name="Updated Writer")
+    updated = await rpc_result(
+        state, "agent.update", id="writer", name="Updated Writer", librarian_enabled=False
+    )
     deleted = await rpc_result(state, "agent.delete", id="writer")
 
     assert listed["current_session_id"] == "current-one"
@@ -75,10 +77,11 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     assert created["id"] == "writer"
     assert created["name"] == "writer"
     assert created["custom_system_prompt_enabled"] is False
+    assert created["librarian_enabled"] is True
     assert created["memory_prompt_mode"] == "agent_user"
     assert created["tools"] == {}
     assert created["excluded_skills"] == []
-    assert updated["name"] == "Updated Writer"
+    assert (updated["name"], updated["librarian_enabled"]) == ("Updated Writer", False)
     assert deleted["agent_id"] == "writer"
     # The remaining Agents ride on the response; each change is a bare reload signal.
     assert [agent["id"] for agent in deleted["remaining_agents"]] == ["coder"]
@@ -343,6 +346,7 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             {"id": "coder", "custom_system_prompt_enabled": "yes"},
             "custom_system_prompt_enabled",
         ),
+        ("agent.update", {"id": "coder", "librarian_enabled": None}, "librarian_enabled"),
         ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
     ],
 )
