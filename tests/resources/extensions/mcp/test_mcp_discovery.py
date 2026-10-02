@@ -532,6 +532,12 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
         assert catalog["instructions"] == "test-owned-server-instructions"
         assert [tool["name"] for tool in catalog["tools"]] == ["echo"]
         assert len(catalog["resource_templates"]) == 1
+        # Each listing keeps its pages' metadata; the items are kept once, in the lists.
+        assert {field: len(pages) for field, pages in catalog["pages"].items()} == dict.fromkeys(
+            ("tools", "resources", "resource_templates", "prompts"), 1
+        )
+        listed = {"tools", "resources", "resourceTemplates", "prompts"}
+        assert all(listed.isdisjoint(page) for pages in catalog["pages"].values() for page in pages)
         assert "test-owned-server-instructions" in first["data"]["content"]
         before = _definitions(registry)
         expected = {

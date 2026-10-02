@@ -479,7 +479,10 @@ class ConnectionRunner:
         self._catalog_pages[field] = []
         while True:
             page = await method(cursor=cursor, cache_mode="refresh")
-            self._catalog_pages[field].append(dump(page))
+            # The page's own metadata; its items are kept once, in the catalog's list.
+            self._catalog_pages[field].append(
+                page.model_dump(mode="json", by_alias=True, exclude_none=True, exclude={field})
+            )
             items.extend(dump(item) for item in getattr(page, field))
             cursor = page.next_cursor
             if cursor is None:
