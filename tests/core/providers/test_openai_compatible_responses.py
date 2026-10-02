@@ -18,10 +18,7 @@ from core.providers.errors import (
     ProviderRateLimitError,
     ProviderTimeoutError,
 )
-from core.providers.openai_compatible import (
-    REASONING_RESPONSE_FIELD_METADATA_KEY,
-    OpenAICompatibleAdapter,
-)
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 
 from .openai_compatible_test_support import (
     MODEL_ID,
@@ -146,7 +143,7 @@ def test_normalize_response_reads_the_first_non_empty_reasoning_alias(aliases, e
 
 
 def _reasoning_field_model(provider_key: str, field: str):
-    return catalog_model(metadata={provider_key: {REASONING_RESPONSE_FIELD_METADATA_KEY: field}})
+    return catalog_model(metadata={provider_key: {"reasoning_response_field": field}})
 
 
 @pytest.mark.parametrize(

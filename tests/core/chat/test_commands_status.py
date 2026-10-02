@@ -591,8 +591,9 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
         assert describe is not None
         return describe(*args)
 
+    agent = _make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort=effort)
     reported = resolve_reported_thinking_effort(
-        agent=_make_agent(model="ollama-cloud/glm-5.3-flash", thinking_effort=effort),
+        agent=agent,
         models=cast(ModelRegistry, object()),
         model_details=StatusModelDetails(
             context_window=1_048_576,
@@ -604,7 +605,8 @@ def test_reported_thinking_effort_prefers_the_adapter_description(
     )
 
     assert reported == expected
-    assert calls == ([] if describe is None else [("ollama-cloud", "glm-5.3-flash", effort)])
+    # The describer resolves the Agent's Provider, Connection and Model itself.
+    assert calls == ([] if describe is None else [(agent,)])
 
 
 def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:

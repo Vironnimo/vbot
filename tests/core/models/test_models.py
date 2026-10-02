@@ -112,14 +112,12 @@ def test_direct_construction_leaves_optional_facts_unset() -> None:
     assert model.capabilities.reasoning.mandatory is False
     assert model.capabilities.supported_parameters == ()
     assert model.capabilities.supported_voices == ()
-    assert model.capabilities.unlisted_tool_calls is True
     assert (model.context_window, model.max_output_tokens) == (None, None)
     assert model.family == ""
     assert model.metadata == {}
     assert model.connections == ()
     assert model.connection_context_windows == {}
     assert (model.recommended_temperature, model.recommended_top_p) == (None, None)
-    assert model.reasoning_replay is None
     assert model.pricing is None
 
 
@@ -345,7 +343,10 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 supported_voices=["af_sky", "af_aoede", "af_bella"],
             )
         ),
-        "unlisted-tool-calls": _record(capabilities=_capabilities(unlisted_tool_calls=False)),
+        # Wire decisions are no Model DB facts: retired keys load as unknown fields.
+        "retired-wire-keys": _record(
+            capabilities=_capabilities(unlisted_tool_calls=False), reasoning_replay="none"
+        ),
         "null-limits": _record(context_window=None, max_output_tokens=None),
         "absent-limits": {
             key: value
@@ -395,10 +396,7 @@ def test_load_projects_every_record_fact(tmp_path: Path) -> None:
                 supported_voices=("af_aoede", "af_bella", "af_sky"),
             ),
         ),
-        "unlisted-tool-calls": _model(
-            "unlisted-tool-calls",
-            capabilities=replace(_PLAIN_CAPABILITIES, unlisted_tool_calls=False),
-        ),
+        "retired-wire-keys": _model("retired-wire-keys"),
         "null-limits": _model("null-limits", context_window=None, max_output_tokens=None),
         "absent-limits": _model("absent-limits", context_window=None, max_output_tokens=None),
         "sampling-upper-bounds": _model(
@@ -516,25 +514,6 @@ def test_invalid_optional_facts_are_ignored_without_hiding_the_model(
             id="override-entry-not-an-object",
         ),
         pytest.param(
-            {
-                "healthy.overrides.json": {
-                    "reasoning_replay": "conservative",
-                    "models": {"model-a": {"name": "Hidden"}},
-                }
-            },
-            ["healthy.overrides.json", "reasoning_replay must be one of"],
-            id="invalid-provider-replay-rejects-the-override-file",
-        ),
-        pytest.param(
-            {
-                "healthy.overrides.json": {
-                    "models": {"model-b": _record("B", reasoning_replay="conservative")}
-                }
-            },
-            ["healthy/model-b", "reasoning_replay must be one of"],
-            id="invalid-model-replay-drops-only-that-model",
-        ),
-        pytest.param(
             {"models.json": '{"models":'},
             ["models.json"],
             id="corrupt-canonical-file",
@@ -566,7 +545,6 @@ def test_invalid_model_db_files_are_skipped_with_a_warning(
         (provider_id, model.model_id, model.name)
         for provider_id, model in registry.query(ModelQuery())
     ] == [("healthy", "model-a", "Generated")]
-    assert registry.provider_reasoning_replay("healthy") is None
     for warning in warnings:
         assert warning in caplog.text
     assert issues == [record.getMessage() for record in caplog.records]
@@ -681,38 +659,29 @@ def test_cache_serves_one_instance_until_invalidated(tmp_path: Path) -> None:
 def test_reload_swaps_contents_in_place_and_repoints_the_cache(tmp_path: Path) -> None:
     """Holders that captured the registry see the new catalog without re-wiring."""
 
-    def write(name: str, provider_replay: str, model_replay: str) -> None:
-        reasoning = _capabilities(reasoning={"supported": True})
+    def write(name: str, override_name: str) -> None:
         _write_catalog(
             tmp_path,
             "provider",
-            {
-                model_id: _record(name, capabilities=reasoning)
-                for model_id in ("inherited", "overridden")
-            },
+            {model_id: _record(name) for model_id in ("inherited", "overridden")},
         )
         _write_json(
             tmp_path / "models" / "provider.overrides.json",
-            {
-                "reasoning_replay": provider_replay,
-                "models": {"overridden": {"reasoning_replay": model_replay}},
-            },
+            {"models": {"overridden": {"name": override_name}}},
         )
 
-    write("Original", "current_run", "full_history")
+    write("Original", "Original override")
     registry = ModelRegistry.load(tmp_path)
 
-    assert registry.provider_reasoning_replay("provider") == "current_run"
-    assert registry.get("provider", "inherited").reasoning_replay is None
-    assert registry.get("provider", "overridden").reasoning_replay == "full_history"
+    assert registry.get("provider", "inherited").name == "Original"
+    assert registry.get("provider", "overridden").name == "Original override"
 
-    write("Updated", "full_history", "none")
+    write("Updated", "Updated override")
     ModelRegistry.invalidate(tmp_path)
     registry.reload(tmp_path)
 
     assert registry.get("provider", "inherited").name == "Updated"
-    assert registry.provider_reasoning_replay("provider") == "full_history"
-    assert registry.get("provider", "overridden").reasoning_replay == "none"
+    assert registry.get("provider", "overridden").name == "Updated override"
     assert ModelRegistry.load(tmp_path) is registry
 
 
@@ -773,7 +742,7 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
 
     def blocked_assemble(cls: Any, *args: Any) -> Any:
         result = assemble(cls, *args)
-        if result[0][("test_provider", "model-a")].name == "Stale":
+        if result[("test_provider", "model-a")].name == "Stale":
             stale_assembled.set()
             assert release_stale.wait(timeout=5)
         elif newer_async:
@@ -789,7 +758,7 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
         _write_catalog(tmp_path, "test_provider", {"model-a": _record("Latest")})
         _write_json(
             models_dir / "test_provider.overrides.json",
-            {"reasoning_replay": "current_run", "models": {}},
+            {"models": {"model-a": {"family": "latest-family"}}},
         )
         if newer_async:
             latest_reload = asyncio.create_task(registry.reload_async(tmp_path))
@@ -810,7 +779,7 @@ async def test_newer_reload_supersedes_an_in_flight_assembly(
             assert await asyncio.wait_for(stale_reload, timeout=5) is False
 
         assert registry.get("test_provider", "model-a").name == "Latest"
-        assert registry.provider_reasoning_replay("test_provider") == "current_run"
+        assert registry.get("test_provider", "model-a").family == "latest-family"
         assert ModelRegistry.load(tmp_path) is registry
     finally:
         release_stale.set()

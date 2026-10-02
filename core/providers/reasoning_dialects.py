@@ -5,8 +5,10 @@ reasoning (a :class:`ReasoningIntent`). A dialect only spells that decision:
 :func:`render_reasoning` writes the request fields, and
 :func:`describe_reasoning` reports the decision the rendered request actually
 carries, so ``/status`` and the swallowed-effort diagnostics describe exactly
-what was sent. A dialect that cannot express part of an intent (for example a
-budget on an effort-only wire) degrades it, and its description says so.
+what was sent. :func:`describe_profile_reasoning` is that description for one
+resolved wire profile and Agent effort. A dialect that cannot express part of an
+intent (for example a budget on an effort-only wire) degrades it, and its
+description says so.
 :func:`dialect_request_fields` names the request fields a dialect writes, so a
 codec can keep caller-supplied copies of them away from a Model that cannot
 reason.
@@ -28,10 +30,15 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     ReasoningIntent,
 )
-from core.providers.wire_profile import ReasoningDialect, ReasoningWire
+from core.providers.wire_profile import ReasoningDialect, ReasoningWire, WireProfile
 from core.utils.logging import get_logger
 
-__all__ = ["describe_reasoning", "dialect_request_fields", "render_reasoning"]
+__all__ = [
+    "describe_profile_reasoning",
+    "describe_reasoning",
+    "dialect_request_fields",
+    "render_reasoning",
+]
 
 _LOGGER = get_logger("providers.reasoning_dialects")
 
@@ -68,6 +75,20 @@ def describe_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> Reasonin
     """Return the reasoning decision a request rendered from ``intent`` carries."""
 
     return _dialect(wire.dialect).describe(wire, intent)
+
+
+def describe_profile_reasoning(profile: WireProfile, effort: str | None) -> ReasoningIntent:
+    """Return the reasoning decision a request with ``effort`` carries under ``profile``.
+
+    A known Model whose profile says it does not reason reports ``off``; any
+    other Model reports what its profile plans for ``effort``, spelled and
+    degraded by the profile's dialect exactly like the request render.
+    """
+
+    wire = profile.reasoning
+    if profile.known_model and wire.supported is False:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    return describe_reasoning(wire, wire.plan(effort))
 
 
 def dialect_request_fields(dialect: ReasoningDialect) -> tuple[str, ...]:

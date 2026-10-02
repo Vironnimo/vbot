@@ -6,7 +6,6 @@ import asyncio
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -28,7 +27,8 @@ from core.providers.providers import (
     model_is_local,
     resolve_effective_context_window,
 )
-from core.providers.reasoning import ReasoningIntent, ReasoningReplayPolicy
+from core.providers.reasoning import ReasoningIntent
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.token_getter import (
     COPILOT_API_ENDPOINT_EXTRA_KEY,
     OAuthTokenGetter,
@@ -153,12 +153,6 @@ class ProviderRuntime:
         provider_id = connection.provider_id
         connection_id = connection.connection_id
         provider_config = self._providers.get(provider_id)
-        replay_override = self._models.provider_reasoning_replay(provider_id)
-        if replay_override is not None:
-            provider_config = replace(
-                provider_config,
-                reasoning_replay=cast(ReasoningReplayPolicy, replay_override),
-            )
         connection_config, account_id = self._connection_config(
             provider_config,
             connection_id,
@@ -233,23 +227,17 @@ class ProviderRuntime:
         return {} if token is None else dict(token.extra)
 
     def describe_reasoning_render(
-        self,
-        provider_id: str,
-        model_id: str,
-        effort: str | None,
-    ) -> ReasoningIntent | None:
-        try:
-            provider_config = self._providers.get(provider_id)
-        except KeyError:
-            return None
-        adapter_class = ADAPTER_TYPES.get(provider_config.adapter)
-        if adapter_class is None:
-            return None
-        return adapter_class.describe_reasoning_render(
-            model_lookup=self._model_lookup(provider_id),
-            provider_config=provider_config,
-            model_id=model_id,
-            effort=effort,
+        self, provider_id: str, connection_id: str, model_id: str, effort: str | None
+    ) -> ReasoningIntent:
+        """Return the reasoning decision a request with ``effort`` carries.
+
+        Describes the wire profile requests use for the Model on one local
+        Connection id, learned facts included, exactly like
+        :meth:`ProviderAdapter.describe_reasoning_render` on that Connection's
+        Adapter.
+        """
+        return describe_profile_reasoning(
+            self._wire_profiles.resolve(provider_id, connection_id, model_id), effort
         )
 
     @asynccontextmanager

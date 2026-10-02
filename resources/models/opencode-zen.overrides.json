@@ -1,11 +1,10 @@
 {
-  "_comment": "Hand-authored OpenCode Zen Model facts. Wire decisions (each Model's wire, admission of free and retired Models, thinking controls, cheapest rung for none, response carrier, media) live in resources/wire/opencode-zen.json. GPT 6.1 Sol: JSON schema support and ignored historical Reasoning (verified 2026-10-02); it is a complete record so it stays usable when a refreshed catalog lacks it (listed live on 2026-10-02).",
+  "_comment": "Hand-authored OpenCode Zen Model facts. Wire decisions (each Model's wire, admission of free and retired Models, thinking controls, cheapest rung for none, response carrier, replay scope, media) live in resources/wire/opencode-zen.json. GPT 6.1 Sol: JSON schema support (verified 2026-10-02); it is a complete record so it stays usable when a refreshed catalog lacks it (listed live on 2026-10-02).",
   "models": {
     "gpt-6.1-sol": {
       "name": "gpt-6.1-sol",
       "context_window": 1050000,
       "max_output_tokens": 128000,
-      "reasoning_replay": "none",
       "capabilities": {
         "vision": true,
         "tools": true,

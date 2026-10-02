@@ -594,8 +594,9 @@ def _assert_payload_fields(payload: dict, expected: dict) -> None:
             id="on-off-floor-does-not-fit",
         ),
         pytest.param(
-            claude_model(control="levels", anthropic_metadata={"requires_adaptive_thinking": True}),
-            {"thinking_effort": "none"},
+            # The wire profile lists the adaptive-only Claude Models by id.
+            claude_model(control="levels"),
+            {"thinking_effort": "none", "model_id": "claude-opus-4-7"},
             {"thinking": ABSENT},
             id="adaptive-required-off",
         ),

@@ -22,9 +22,9 @@
       "note": "The catalog marks Models whose API removed sampling parameters; they are never sent."
     },
     {
-      "when": {"metadata": {"requires_adaptive_thinking": true}},
+      "when": {"ids": ["claude-fable-5", "claude-opus-4-7"]},
       "set": {"reasoning": {"off": "omit"}},
-      "note": "Adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
+      "note": "These adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
     }
   ]
 }

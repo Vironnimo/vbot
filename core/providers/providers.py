@@ -22,10 +22,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_POLICY,
-    ReasoningReplayPolicy,
-)
 from core.utils.errors import ConfigError, ProviderError
 
 _LOGGER = logging.getLogger("vbot.providers")
@@ -322,10 +318,6 @@ class ProviderConfig:
             all the way to the global floor. Distinct from ``defaults`` (which
             holds request-shaping params like ``max_tokens``). Consumed by
             :func:`resolve_context_window`.
-        reasoning_replay: Effective Provider-level native Reasoning replay
-            policy. Runtime overlays the optional value from the Provider's
-            Model-DB Override file; direct construction uses the system
-            ``full_history`` default.
     """
 
     id: str
@@ -340,7 +332,6 @@ class ProviderConfig:
     context_window: int | None = None
     catalog_exclusions: frozenset[str] = frozenset()
     custom: bool = False
-    reasoning_replay: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY
 
     def effective_models_dev_id(self) -> str:
         """Return the models.dev provider key for this provider.

@@ -648,7 +648,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             # a fake fact; the read-side default chain fills it at use time.
             context_window=_parse_optional_int(raw.get("context_length")) or None,
             max_output_tokens=_parse_optional_int(top_provider.get("max_completion_tokens")),
-            metadata=_openrouter_runtime_metadata(architecture, raw.get("reasoning")),
+            metadata=_openrouter_runtime_metadata(architecture),
             pricing=_embedding_catalog_pricing(model_id, raw, output_modalities),
         )
 

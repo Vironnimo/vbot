@@ -267,12 +267,7 @@ async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort(
         assert payload["text"]["format"] == response_format
         assert adapter.reasoning_replay_policy(model_id) == "none"
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
-    intent = adapter.describe_reasoning_render(
-        model_lookup=_bundled_lookup(),
-        model_id=model_id,
-        effort=selected_effort,
-        provider_config=zen_config(),
-    )
+    intent = adapter.describe_reasoning_render(model_id, selected_effort)
     assert intent.effort_level == wire_effort
 
 
@@ -316,12 +311,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     assert payload.get("thinking") == thinking
     normalized = adapter.normalize_response(response, model_id=model_id)
     assert normalized["reasoning"] == "worked"
-    description = adapter.describe_reasoning_render(
-        model_lookup=lookup,
-        model_id=model_id,
-        effort=selected_effort,
-        provider_config=zen_config(),
-    )
+    description = adapter.describe_reasoning_render(model_id, selected_effort)
     assert (description.kind, description.effort_level) == intent
 
 

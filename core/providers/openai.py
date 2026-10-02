@@ -698,7 +698,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             payload,
             rebuild=rebuild,
             sent_effort=lambda: (
-                self._describe_reasoning(model_id, selected_effort or None).effort_level
+                self.describe_reasoning_render(model_id, selected_effort or None).effort_level
             ),
             wire=self.wire,
             model_id=model_id,

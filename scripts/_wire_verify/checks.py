@@ -23,7 +23,6 @@ from core.providers.reasoning import (
     ReasoningIntent,
     normalize_thinking_effort,
 )
-from core.providers.reasoning_dialects import describe_reasoning
 
 CHECKS: tuple[str, ...] = ("send", "stream", "efforts", "sampling", "tool_replay", "image")
 """Every check, in run order."""
@@ -198,7 +197,8 @@ async def _check_efforts(adapter: ProviderAdapter, model_id: str) -> list[CheckR
     results: list[CheckResult] = []
     for effort in efforts:
         name = f"effort:{effort}"
-        decision = describe_reasoning(wire, wire.plan(effort))
+        # Described per rung: a learned rejection changes the decision for later rungs.
+        decision = adapter.describe_reasoning_render(model_id, effort)
         try:
             reply = await _stream(adapter, model_id, _PROMPT, thinking_effort=effort)
         except ProviderError as error:
@@ -206,8 +206,6 @@ async def _check_efforts(adapter: ProviderAdapter, model_id: str) -> list[CheckR
             continue
         facts = {"sent": _decision_label(decision), **_reply_facts(reply)}
         results.append(CheckResult(name, *_judge_effort(effort, decision, reply), facts))
-        # A learned rejection changes the ladder for the remaining rungs.
-        wire = adapter.wire_profile(model_id).reasoning
     return results
 
 

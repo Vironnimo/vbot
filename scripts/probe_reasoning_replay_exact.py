@@ -7,8 +7,9 @@ wire shapes vBot uses in production:
 - ``ProviderRegistry.load(resources)`` — the real provider config
   (base_url, defaults, auth header from ``resources/providers/<id>.json``)
 - ``ModelRegistry.load(resources)`` — the real model DB including the
-  bundled overrides (``reasoning_response_field``, ``reasoning_replay``,
-  ``recommended_temperature``, ``recommended_top_p``)
+  bundled overrides (``recommended_temperature``, ``recommended_top_p``)
+- The bundled wire profiles (``resources/wire/<provider>.json``) — the
+  reasoning carriers and the replay scope the Adapter resolves per Model
 - The real Provider adapter and selected Connection, including refresh-capable
   OAuth credentials, with its ``send()`` / ``normalize_response()`` /
   ``_format_assistant_message()`` pipeline

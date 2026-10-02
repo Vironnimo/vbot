@@ -39,9 +39,6 @@ _MODEL_DATA_ERRORS = (AttributeError, KeyError, OSError, TypeError, UnicodeError
 # ``reload_async`` reads and assembles the catalog files here, off the Event Loop.
 _RELOAD_WORKERS = BoundedWorkerPool(name="model-registry", max_workers=1)
 
-_REASONING_REPLAY_POLICIES = frozenset({"none", "current_run", "full_history"})
-
-
 MODEL_TASK_ORDER = (
     "chat",
     "text_output",
@@ -133,12 +130,6 @@ class Capabilities:
     OpenRouter image API) or hand-authored in ``<provider>.overrides.json``
     for providers whose APIs publish nothing (OpenAI native). It is frozen on
     construction and merged wholesale as one ``capabilities`` sub-field at load.
-
-    ``unlisted_tool_calls`` says whether the route returns calls to Tool names
-    that are not in the request's ``tools[]`` (Tools announced by a System
-    Reminder). Absent means supported; an override sets ``false`` for the exact
-    Provider/Model entry where calls to unlisted names were observed to be
-    dropped.
     """
 
     vision: bool
@@ -151,7 +142,6 @@ class Capabilities:
     supported_voices: tuple[str, ...] = ()
     task_types: tuple[str, ...] = ()
     task_options: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
-    unlisted_tool_calls: bool = True
 
     def __post_init__(self) -> None:
         input_modalities = _normalize_string_tuple(self.input_modalities)
@@ -302,8 +292,10 @@ class Model:
     * **Small and immutable after load:** nested mappings/lists are frozen on
       construction (see ``__post_init__``); loaded ``Model`` instances never
       mutate.
-    * **Wire facts only — never raw payloads, provider policy text, credentials,
-      or secrets.** Mirrors today's ``metadata.github_copilot`` usage.
+    * **Provider-reported facts only — never hand-authored wire decisions, raw
+      payloads, provider policy text, credentials, or secrets.** Wire decisions
+      (protocol, carriers, replay scope, media, listed Tools) live in the
+      Provider's wire profile file (``resources/wire/<provider>.json``).
     """
 
     model_id: str
@@ -319,7 +311,6 @@ class Model:
     )
     recommended_temperature: float | None = None
     recommended_top_p: float | None = None
-    reasoning_replay: str | None = None
     pricing: TokenPricing | None = None
 
     def __post_init__(self) -> None:
@@ -352,7 +343,6 @@ class _AssembledCatalog:
     """One reload's assembled contents, ready to swap into a registry."""
 
     models: dict[tuple[str, str], Model]
-    provider_reasoning_replay: dict[str, str]
     cache_key: tuple[Path, Path | None] | None
 
 
@@ -371,13 +361,8 @@ class ModelRegistry:
 
     _cache: ClassVar[dict[tuple[Path, Path | None], ModelRegistry]] = {}
 
-    def __init__(
-        self,
-        models: dict[tuple[str, str], Model],
-        provider_reasoning_replay: Mapping[str, str] | None = None,
-    ) -> None:
+    def __init__(self, models: dict[tuple[str, str], Model]) -> None:
         self._models = models
-        self._provider_reasoning_replay = dict(provider_reasoning_replay or {})
         self._reload_lock = threading.Lock()
         self._reload_generation = 0
 
@@ -420,13 +405,13 @@ class ModelRegistry:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
         if custom_providers is not None:
-            return cls(*cls._assemble_models(resolved, resolved_runtime, custom_providers))
+            return cls(cls._assemble_models(resolved, resolved_runtime, custom_providers))
 
         cache_key = (resolved, resolved_runtime)
         if cache_key in cls._cache:
             return cls._cache[cache_key]
 
-        registry = cls(*cls._assemble_models(resolved, resolved_runtime, {}))
+        registry = cls(cls._assemble_models(resolved, resolved_runtime, {}))
         cls._cache[cache_key] = registry
         return registry
 
@@ -507,14 +492,9 @@ class ModelRegistry:
     ) -> _AssembledCatalog:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
-        models, provider_reasoning_replay = cls._assemble_models(
-            resolved,
-            resolved_runtime,
-            custom_providers or {},
-        )
+        models = cls._assemble_models(resolved, resolved_runtime, custom_providers or {})
         return _AssembledCatalog(
             models=models,
-            provider_reasoning_replay=provider_reasoning_replay,
             cache_key=(resolved, resolved_runtime) if custom_providers is None else None,
         )
 
@@ -522,12 +502,8 @@ class ModelRegistry:
         with self._reload_lock:
             if generation != self._reload_generation:
                 return False
-            changed = (
-                assembled.models != self._models
-                or assembled.provider_reasoning_replay != self._provider_reasoning_replay
-            )
+            changed = assembled.models != self._models
             self._models = assembled.models
-            self._provider_reasoning_replay = assembled.provider_reasoning_replay
             if assembled.cache_key is not None:
                 type(self)._cache[assembled.cache_key] = self
             return changed
@@ -539,7 +515,7 @@ class ModelRegistry:
         runtime_models_dir: Path | None,
         custom_providers: Mapping[str, Mapping[str, Any]],
         report: ModelDataIssueReport = log_model_data_issue,
-    ) -> tuple[dict[tuple[str, str], Model], dict[str, str]]:
+    ) -> dict[tuple[str, str], Model]:
         """Assemble every effective model from the on-disk layers (no cache).
 
         Each generated catalog comes from the system root under ``resources_dir``
@@ -561,7 +537,6 @@ class ModelRegistry:
         provider_sources: dict[str, Path] = {}
         override_layers: dict[str, dict[str, Any]] = {}
         override_sources: dict[str, Path] = {}
-        provider_reasoning_replay: dict[str, str] = {}
 
         for json_file in files.providers:
             try:
@@ -586,16 +561,12 @@ class ModelRegistry:
             if overrides_file.name == CANONICAL_OVERRIDES_FILE_NAME:
                 continue
             try:
-                provider_id, override_models, replay_policy = cls._read_override_file(
-                    overrides_file
-                )
+                provider_id, override_models = cls._read_override_file(overrides_file)
             except _MODEL_DATA_ERRORS as exc:
                 report(f"Ignoring invalid Model DB override file '{overrides_file}': {exc}")
                 continue
             override_layers[provider_id] = override_models
             override_sources[provider_id] = overrides_file
-            if replay_policy is not None:
-                provider_reasoning_replay[provider_id] = replay_policy
             provider_layers.setdefault(provider_id, {})
 
         for provider_id, provider_models in sorted(provider_layers.items()):
@@ -671,7 +642,7 @@ class ModelRegistry:
                         f"Settings: {_describe_model_data_error(exc)}"
                     )
 
-        return models, provider_reasoning_replay
+        return models
 
     @staticmethod
     def _custom_model_record(model: Mapping[str, Any]) -> dict[str, Any]:
@@ -713,7 +684,7 @@ class ModelRegistry:
         return provider_id, provider_models
 
     @staticmethod
-    def _read_override_file(path: Path) -> tuple[str, dict[str, Any], str | None]:
+    def _read_override_file(path: Path) -> tuple[str, dict[str, Any]]:
         """Read and validate one optional Provider override layer."""
 
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -725,8 +696,7 @@ class ModelRegistry:
         override_models = data.get("models", {})
         if not isinstance(override_models, dict):
             raise ValueError("'models' must be an object")
-        replay_policy = _coerce_reasoning_replay(data.get("reasoning_replay"))
-        return provider_id, override_models, replay_policy
+        return provider_id, override_models
 
     @classmethod
     def invalidate(
@@ -763,11 +733,6 @@ class ModelRegistry:
         if key not in self._models:
             raise KeyError(f"Model not found: {provider_id}/{model_id}")
         return self._models[key]
-
-    def provider_reasoning_replay(self, provider_id: str) -> str | None:
-        """Return the Provider-level hand replay policy, or ``None`` when absent."""
-
-        return self._provider_reasoning_replay.get(provider_id)
 
     def list_for_provider(self, provider_id: str) -> list[Model]:
         """Return all models for a given provider, sorted by model_id.
@@ -848,7 +813,6 @@ def _model_from_record(
         supported_voices=tuple(caps.get("supported_voices", ())),
         task_types=tuple(caps.get("task_types", ())),
         task_options=caps.get("task_options", {}),
-        unlisted_tool_calls=caps.get("unlisted_tool_calls", True),
     )
     return Model(
         model_id=model_id,
@@ -865,7 +829,6 @@ def _model_from_record(
             report,
         ),
         recommended_top_p=_coerce_recommended_top_p(record.get("recommended_top_p"), report),
-        reasoning_replay=_coerce_reasoning_replay(record.get("reasoning_replay")),
         pricing=TokenPricing.from_dict(record.get("pricing")),
     )
 
@@ -908,17 +871,6 @@ def _freeze_connection_context_windows(value: Any) -> Mapping[str, int]:
             raise ValueError("connection_context_windows values must be positive integers")
         windows[connection_id] = context_window
     return MappingProxyType(windows)
-
-
-def _coerce_reasoning_replay(value: Any) -> str | None:
-    """Validate an optional Model-DB native Reasoning replay policy."""
-
-    if value is None:
-        return None
-    if isinstance(value, str) and value in _REASONING_REPLAY_POLICIES:
-        return value
-    allowed = ", ".join(sorted(_REASONING_REPLAY_POLICIES))
-    raise ValueError(f"reasoning_replay must be one of: {allowed}")
 
 
 def _coerce_reasoning_mandatory(

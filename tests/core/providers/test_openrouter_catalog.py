@@ -57,7 +57,7 @@ def test_catalog_entry_maps_all_openrouter_fields() -> None:
         ),
         context_window=128000,
         max_output_tokens=64000,
-        metadata={"openrouter": {"modality": "text+image->text", "reasoning_mandatory": True}},
+        metadata={"openrouter": {"modality": "text+image->text"}},
     )
 
 

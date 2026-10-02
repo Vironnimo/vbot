@@ -253,6 +253,13 @@ async def _execute_status(
     wire_profile = await _COMMAND_WORKERS.run(
         resolve_status_wire_profile, agent, wire_profile_describer
     )
+    actual_thinking_effort = await _COMMAND_WORKERS.run(
+        resolve_reported_thinking_effort,
+        agent=agent,
+        models=models,
+        model_details=model_details,
+        describe_render=reasoning_render_describer,
+    )
     text = build_status_reply(
         agent,
         status_session,
@@ -260,12 +267,7 @@ async def _execute_status(
         started_at,
         model_details.display_name,
         activity,
-        actual_thinking_effort=resolve_reported_thinking_effort(
-            agent=agent,
-            models=models,
-            model_details=model_details,
-            describe_render=reasoning_render_describer,
-        ),
+        actual_thinking_effort=actual_thinking_effort,
         project_label=resolve_status_project_label(projects, context.project_id),
         temperature_status=resolve_status_temperature(
             agent.temperature if agent is not None else None,

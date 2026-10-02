@@ -17,7 +17,6 @@ from core.attachments.images import ImageConverter
 from core.chat.block_resolver import ContentBlockResolver
 from core.chat.messages import ChatMessage
 from core.providers.errors import ProviderRequestTooLargeError
-from core.providers.ollama import OllamaCloudAdapter
 from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import (
     REASONING_INTENT_DEFAULT,
@@ -38,7 +37,6 @@ from tests.core.providers.ollama_test_support import (
     bundled_cloud_adapter,
     cloud_adapter,
     cloud_sse,
-    model_lookup,
     sent_body,
 )
 
@@ -168,15 +166,7 @@ async def test_reasoning_effort_renders_only_confirmed_cloud_vocabulary(
     payload = sent_body(route)
     assert payload.get("reasoning_effort") == wire_effort
     assert ("reasoning_effort" in payload) is (wire_effort is not None)
-    assert (
-        OllamaCloudAdapter.describe_reasoning_render(
-            model_lookup=model_lookup,
-            model_id=model_id,
-            effort=effort,
-            provider_config=CLOUD_CONFIG,
-        )
-        == described
-    )
+    assert adapter.describe_reasoning_render(model_id, effort) == described
     await adapter.aclose()
 
 

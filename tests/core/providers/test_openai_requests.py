@@ -495,9 +495,7 @@ async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
     assert "top_p" not in payload
     assert all(tool["strict"] is False for tool in payload["tools"])
     assert adapter.reasoning_replay_policy(model_id) == "full_history"
-    intent = OpenAIAdapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=model_id, effort=effort, provider_config=subscription_config()
-    )
+    intent = adapter.describe_reasoning_render(model_id, effort)
     assert intent.effort_level == expected
 
 

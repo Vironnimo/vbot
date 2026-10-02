@@ -8,6 +8,7 @@ import pytest
 
 from core.models.models import Model, ModelRegistry
 from core.models.query import ModelQuery
+from core.providers.ollama import OllamaCloudAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import ProviderRegistry
@@ -26,7 +27,9 @@ def registry() -> ModelRegistry:
     return ModelRegistry.load(RESOURCES_DIR, custom_providers={})
 
 
-def _profile(model: Model, *keys: str) -> dict[str, Any]:
+def _profile(model: Model, *keys: str, wire: WireProfile | None = None) -> dict[str, Any]:
+    """The requested Model facts, plus the wire decisions of ``wire`` when given."""
+
     reasoning = model.capabilities.reasoning
     facts = {
         "name": model.name,
@@ -36,16 +39,21 @@ def _profile(model: Model, *keys: str) -> dict[str, Any]:
         "vision": model.capabilities.vision,
         "input_modalities": model.capabilities.input_modalities,
         "reasoning": (reasoning.supported, reasoning.control, reasoning.levels),
-        "reasoning_replay": model.reasoning_replay,
-        "unlisted_tool_calls": model.capabilities.unlisted_tool_calls,
     }
+    if wire is not None:
+        facts["replay_scope"] = wire.replay.scope
+        facts["list_announced_tools"] = wire.request.list_announced_tools
     return {key: facts[key] for key in keys}
 
 
 def _wire_profile(registry: ModelRegistry, provider_id: str, model_id: str) -> WireProfile:
     """The bundled wire profile of one catalog Model on the Provider's first Connection."""
 
-    adapter = {"opencode-go": OpenCodeGoAdapter, "opencode-zen": OpenCodeZenAdapter}[provider_id]
+    adapter = {
+        "ollama-cloud": OllamaCloudAdapter,
+        "opencode-go": OpenCodeGoAdapter,
+        "opencode-zen": OpenCodeZenAdapter,
+    }[provider_id]
     return standalone_wire_binding(
         provider_id=provider_id,
         connection_id="api-key",
@@ -128,23 +136,23 @@ def test_ollama_cloud_catalog_is_separate_and_entirely_remote(registry: ModelReg
 
 # Streaming token accounting on /v1/chat/completions (billed-input deltas in
 # vBot's real request shapes, visible-content control per variant):
-# - None inherits Provider full_history: the ``reasoning`` carrier is billed in
+# - full_history (the wire default): the ``reasoning`` carrier is billed in
 #   both scopes. DeepSeek cross-Run replay is conditional: a Tool-free
 #   follow-up ignores history, one carrying Tools bills the whole history.
 # - current_run: in-run replayed reasoning is billed, cross-run is stripped.
 # - none: the carrier is stripped in both scopes (zero delta, positive control).
 _OLLAMA_CLOUD_REPLAY = {
-    "deepseek-v4.1-flash": None,
-    "deepseek-v4-pro:0813": None,
+    "deepseek-v4.1-flash": "full_history",
+    "deepseek-v4-pro:0813": "full_history",
     "gemma4:31b": "none",
-    "glm-5.2": None,
-    "glm-5.3": None,
-    "glm-5.3-flash": None,
+    "glm-5.2": "full_history",
+    "glm-5.3": "full_history",
+    "glm-5.3-flash": "full_history",
     "gpt-oss:120b": "none",
     "gpt-oss:20b": "none",
     "kimi-k2.6": "current_run",
     "kimi-k2.7-code": "current_run",
-    "kimi-k3": None,
+    "kimi-k3": "full_history",
     "minimax-m2.7": "none",
     "minimax-m3": "none",
     "nemotron-3-nano:30b": "none",
@@ -154,9 +162,8 @@ _OLLAMA_CLOUD_REPLAY = {
 
 
 def test_ollama_cloud_reasoning_replay_policies(registry: ModelRegistry) -> None:
-    assert registry.provider_reasoning_replay("ollama-cloud") == "full_history"
     assert {
-        model_id: registry.get("ollama-cloud", model_id).reasoning_replay
+        model_id: _wire_profile(registry, "ollama-cloud", model_id).replay.scope
         for model_id in _OLLAMA_CLOUD_REPLAY
     } == _OLLAMA_CLOUD_REPLAY
 
@@ -167,12 +174,15 @@ def test_ollama_cloud_models_emit_reasoning_as_their_response_carrier(
     """The earlier ``reasoning_content``/``reasoning_details`` profiles were wrong:
     those fields are stripped even in-run on this wire."""
 
-    assert {
-        model_id: registry.get("ollama-cloud", model_id).metadata["ollama_cloud"][
-            "reasoning_response_field"
-        ]
+    carriers = {
+        model_id: _wire_profile(registry, "ollama-cloud", model_id)
         for model_id in _OLLAMA_CLOUD_REPLAY
-    } == dict.fromkeys(_OLLAMA_CLOUD_REPLAY, "reasoning")
+    }
+
+    assert {
+        model_id: (wire.replay.history_field, wire.response.reasoning_fields[0])
+        for model_id, wire in carriers.items()
+    } == dict.fromkeys(_OLLAMA_CLOUD_REPLAY, ("reasoning", "reasoning"))
 
 
 def test_ollama_cloud_gateway_output_limits(registry: ModelRegistry) -> None:
@@ -225,8 +235,9 @@ def test_ollama_cloud_deepseek_v41_verified_profile(registry: ModelRegistry) -> 
     assert model.recommended_temperature == 1.0
     assert model.recommended_top_p == 0.95
     assert model.metadata["ollama"]["remote"] is True
-    assert model.metadata["ollama_cloud"]["reasoning_response_field"] == "reasoning"
-    assert model.reasoning_replay is None
+    wire = _wire_profile(registry, "ollama-cloud", "deepseek-v4.1-flash")
+    assert (wire.replay.scope, wire.replay.history_field) == ("full_history", "reasoning")
+    assert wire.media.types == {"image/jpeg", "image/png", "image/webp"}
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +359,7 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                 "vision": True,
                 "input_modalities": ("text", "image"),
                 "reasoning": (True, "on_off", ()),
-                "reasoning_replay": None,
+                "replay_scope": "full_history",
             },
             id="longcat-2.5-preview-free",
         ),
@@ -360,7 +371,7 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                     "max_output_tokens": 131_072,
                     "tools": True,
                     "reasoning": (True, "on_off", ()),
-                    "reasoning_replay": None,
+                    "replay_scope": "full_history",
                 },
                 id=model_id,
             )
@@ -377,26 +388,30 @@ _FIVE_LEVELS = (True, "levels", ("low", "medium", "high", "xhigh", "max"))
                     "tools": True,
                     "input_modalities": ("text", "image"),
                     "vision": True,
-                    "reasoning_replay": None,
+                    "replay_scope": "full_history",
                 },
                 id=model_id,
             )
             for model_id in ("deepseek-flash", "deepseek-v4.1-flash")
         ),
-        # GLM 5.2/5.3 pin full-history replay; GLM-5.3-Flash inherits it. Exact
-        # vBot probes on 2026-09-02 showed persisted ``reasoning_content`` is
-        # billed in a Tool continuation. No ``reasoning_request_format`` field.
-        pytest.param("glm-5.2", {"reasoning_replay": "full_history"}, id="glm-5.2"),
+        # Every Go Model replays full history. Exact vBot probes on 2026-09-02
+        # showed persisted ``reasoning_content`` of GLM 5.2/5.3 is billed in a
+        # Tool continuation. No ``reasoning_request_format`` field.
+        pytest.param("glm-5.2", {"replay_scope": "full_history"}, id="glm-5.2"),
         # Only GLM-5.3-Flash on this gateway silently dropped calls to Tools that a
         # System Reminder announced outside ``tools[]`` (vBot probes 2026-09-28).
         pytest.param(
             "glm-5.3",
-            {"reasoning_replay": "full_history", "unlisted_tool_calls": True},
+            {"replay_scope": "full_history", "list_announced_tools": False},
             id="glm-5.3",
         ),
         pytest.param(
             "glm-5.3-flash",
-            {"context_window": 1_000_000, "reasoning_replay": None, "unlisted_tool_calls": False},
+            {
+                "context_window": 1_000_000,
+                "replay_scope": "full_history",
+                "list_announced_tools": True,
+            },
             id="glm-5.3-flash",
         ),
     ],
@@ -407,9 +422,9 @@ def test_opencode_go_gateway_profiles(
     expected: dict[str, Any],
 ) -> None:
     model = registry.get("opencode-go", model_id)
+    wire = _wire_profile(registry, "opencode-go", model_id)
 
-    assert registry.provider_reasoning_replay("opencode-go") == "full_history"
-    assert _profile(model, *expected) == expected
+    assert _profile(model, *expected, wire=wire) == expected
 
 
 def test_openrouter_space_bunny_gateway_facts(registry: ModelRegistry) -> None:
@@ -421,7 +436,6 @@ def test_openrouter_space_bunny_gateway_facts(registry: ModelRegistry) -> None:
         "reasoning": _FIVE_LEVELS,
     }
     assert router.capabilities.reasoning.mandatory is True
-    assert router.metadata["openrouter"]["reasoning_mandatory"] is True
 
 
 def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
@@ -539,7 +553,7 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     if not supports_none:
         assert zen_wire.reasoning.off == "low"
         assert zen.capabilities.json_mode is True
-        assert zen.reasoning_replay == "none"
+        assert zen_wire.replay.scope == "none"
     openrouter = registry.get("openrouter", f"openai/{model_id}")
     assert openrouter.connections == ("api-key",)
     assert openrouter.capabilities.tools is True

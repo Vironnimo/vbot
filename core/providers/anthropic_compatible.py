@@ -82,13 +82,9 @@ from core.providers.providers import (
     resolve_request_output_limit,
 )
 from core.providers.reasoning import (
-    REASONING_INTENT_OFF,
-    ReasoningIntent,
-    model_reasoning_supported,
     remove_reasoning_kwargs,
 )
 from core.providers.reasoning_dialects import (
-    describe_reasoning,
     dialect_request_fields,
     render_reasoning,
 )
@@ -169,11 +165,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         # ``connection_mode`` is accepted for parity with the unified
         # ``get_adapter`` call site but is not used by the Messages wire.
         del connection_mode
-        super().__init__(
-            model_lookup=model_lookup,
-            debug_recorder=debug_recorder,
-            reasoning_replay_default=config.reasoning_replay,
-        )
+        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._owns_client = client is None
         self._client = client or build_async_client(
             base_url=base_url or config.base_url,
@@ -391,9 +383,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             _apply_prompt_caching(payload)
         return payload
 
-    def _model_reasoning_supported(self, model_id: str) -> bool | None:
-        return model_reasoning_supported(self._model_lookup, model_id)
-
     def _classify_http_status(
         self,
         status_code: int,
@@ -445,33 +434,6 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             payload,
             output_allowance=max_tokens,
         )
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the reasoning a request with ``effort`` carries for ``model_id``.
-
-        A Model the catalog or wire profile marks as non-reasoning reports
-        ``off``; otherwise the Provider's wire profile plans the effort exactly
-        like :meth:`_apply_reasoning`, and its dialect reports what the rendered
-        request carries.
-        """
-
-        if model_reasoning_supported(model_lookup, model_id) is False:
-            return ReasoningIntent(REASONING_INTENT_OFF)
-        wire = cls._standalone_wire_profile(
-            model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
-        ).reasoning
-        if wire.supported is False:
-            return ReasoningIntent(REASONING_INTENT_OFF)
-        return describe_reasoning(wire, wire.plan(effort))
 
     def _resolve_max_tokens(
         self,

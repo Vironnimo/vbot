@@ -21,6 +21,7 @@ from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
 from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.runtime import ADAPTER_TYPES
 from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
@@ -335,10 +336,6 @@ def test_runtime_loads_stepfun_models_with_connection_limits(shared_runtime: Run
     assert models["step-3.7-flash"].capabilities.input_modalities == ("text", "image", "video")
     assert models["step-router-v1"].connections == ("step-plan",)
     assert models["step-router-v1"].max_output_tokens == 250000
-    assert models["step-router-v1"].metadata["stepfun"]["routes_between"] == (
-        "deepseek-v4-pro",
-        "step-3.7-flash",
-    )
 
 
 # Adapter internals are read directly: the Runtime's contract is what it hands
@@ -452,10 +449,10 @@ def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connect
     assert shared_runtime.learned_wire_facts("anthropic", "api-key", "claude-sonnet-4-6").is_empty()
 
     cloud = shared_runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
-    # The Provider-level policy applies to every model without a Model-level override.
+    # The wire file's default scope applies to every Model no rule narrows.
     assert cloud.reasoning_replay_policy("unprofiled-model") == "full_history"
     assert cloud.reasoning_replay_policy("glm-5.2") == "full_history"
-    # Model-level overrides win over the Provider policy.
+    # Rules narrow exact Models.
     assert cloud.reasoning_replay_policy("minimax-m3") == "none"
     assert cloud.reasoning_replay_policy("kimi-k2.6") == "current_run"
 
@@ -478,15 +475,19 @@ def test_status_describes_the_wire_profile_of_the_connection_chat_resolves(
     monkeypatch.setenv("OPENAI_API_KEY__WORK", "sk-work")
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    described = shared_runtime.describe_agent_wire_profile(SimpleNamespace(model=model))
+    agent = SimpleNamespace(model=model, thinking_effort="high")
+    described = shared_runtime.describe_agent_wire_profile(agent)
+    reasoning = shared_runtime.describe_agent_reasoning_render(agent)
 
     if connection_id is None:
-        assert described is None
+        assert (described, reasoning) == (None, None)
         return
     assert described is not None
     profile = shared_runtime.wire_profile("openai", "api-key", "gpt-5.2")
     assert (described.connection_id, described.status) == (connection_id, profile.status)
     assert described.learned.is_empty()
+    # The thinking-effort report describes the same Connection's profile.
+    assert reasoning == describe_profile_reasoning(profile, "high")
 
 
 @pytest.mark.asyncio

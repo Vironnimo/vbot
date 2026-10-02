@@ -214,7 +214,7 @@ def test_catalog_is_exact_and_carries_current_capabilities() -> None:
     assert multimodal.capabilities.reasoning.levels == ("low", "medium", "high")
     assert multimodal.capabilities.tools is True
     assert multimodal.capabilities.json_mode is True
-    assert multimodal.metadata["stepfun"]["prompt_cache"] == "automatic"
+    assert multimodal.metadata == {}
     assert optimized.capabilities.reasoning.levels == ("low", "high")
 
     with pytest.raises(CatalogEntrySkipped):

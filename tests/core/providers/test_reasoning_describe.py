@@ -1,10 +1,12 @@
-"""Tests for the adapter render descriptions behind /status thinking-effort.
+"""Tests for the render descriptions behind /status thinking-effort.
 
-``ProviderAdapter.describe_reasoning_render`` is the wire-truthful seam
-``/status`` reports from: each adapter describes what a request with the
-selected effort would actually carry. Each row pins a describe result against a
-render contract that the adapter's request tests pin on the wire; Ollama Cloud's
-description is checked against its sent body in ``test_ollama_cloud.py``.
+``describe_profile_reasoning`` is the wire-truthful seam ``/status`` reports
+from, behind both ``ProviderAdapter.describe_reasoning_render`` and the
+Runtime's description of an Agent's selection: it describes what a request with
+the selected effort would actually carry on the resolved wire profile. Each row
+pins a description against a render contract that the Adapter's request tests
+pin on the wire; Ollama Cloud's description is checked against its sent body in
+``test_ollama_cloud.py``.
 """
 
 from __future__ import annotations
@@ -36,15 +38,16 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     ReasoningIntent,
 )
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.stepfun import StepFunAdapter
+from core.providers.wire_profiles import standalone_wire_binding
 from core.providers.xai import XAIAdapter
-
-from .adapter_test_support import bearer_config
 
 
 def _model(
     model_id: str,
     *,
+    supported: bool = True,
     control: str | None = REASONING_CONTROL_ON_OFF,
     levels: tuple[str, ...] = (),
     budget_max: int | None = None,
@@ -58,8 +61,8 @@ def _model(
             tools=True,
             json_mode=False,
             reasoning=ReasoningCapabilities(
-                supported=True,
-                control=control,
+                supported=supported,
+                control=control if supported else None,
                 levels=levels,
                 budget_max=budget_max,
             ),
@@ -75,12 +78,13 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
 
 
 @pytest.mark.parametrize(
-    ("adapter_class", "record", "effort", "expected"),
+    ("adapter_class", "provider_id", "record", "effort", "expected"),
     [
         # The generic wire sends the snapped effort even for an on_off Model, and
         # without a feed ladder it snaps against its low/medium/high floor.
         pytest.param(
             OpenAICompatibleAdapter,
+            "",
             _ON_OFF,
             "xhigh",
             ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
@@ -89,6 +93,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         # The generic wire has no budget field: a budget intent renders the level.
         pytest.param(
             OpenAICompatibleAdapter,
+            "",
             _BUDGET_100K,
             "medium",
             ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="medium"),
@@ -98,6 +103,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         # on_off Model's ladder lacks: nothing is sent.
         pytest.param(
             OpenAICompatibleAdapter,
+            "",
             _ON_OFF,
             "none",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
@@ -106,6 +112,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         # The native ``think`` control is a boolean for on_off Models.
         pytest.param(
             OllamaAdapter,
+            "ollama",
             _ON_OFF,
             "high",
             ReasoningIntent(REASONING_INTENT_ON),
@@ -113,6 +120,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         ),
         pytest.param(
             OllamaAdapter,
+            "ollama",
             _model(
                 "gpt-oss:20b", control=REASONING_CONTROL_LEVELS, levels=("low", "medium", "high")
             ),
@@ -120,37 +128,24 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
             ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
             id="native-ollama-levels",
         ),
-        # A native-budget wire reports the rendered token budget.
+        # A known Model that does not reason renders reasoning off; an unknown
+        # Model's off selection sends nothing.
         pytest.param(
-            ProviderAdapter,
-            _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_max=32_000),
+            OpenAICompatibleAdapter,
+            "",
+            _model("plain-model", supported=False),
             "high",
-            ReasoningIntent(REASONING_INTENT_BUDGET, budget_tokens=24_000),
-            id="base-budget-tokens",
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="known-non-reasoning-model-is-off",
         ),
-    ],
-)
-def test_describe_reasoning_render_reports_what_the_wire_carries(
-    adapter_class: type[ProviderAdapter],
-    record: Model,
-    effort: str,
-    expected: ReasoningIntent,
-) -> None:
-    def model_lookup(model_id: str) -> Model | None:
-        return record if model_id == record.model_id else None
-
-    intent = adapter_class.describe_reasoning_render(
-        model_lookup=model_lookup,
-        model_id=record.model_id,
-        effort=effort,
-    )
-
-    assert intent == expected
-
-
-@pytest.mark.parametrize(
-    ("adapter_class", "provider_id", "record", "effort", "expected"),
-    [
+        pytest.param(
+            OpenAICompatibleAdapter,
+            "",
+            None,
+            "none",
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="unknown-model-off-sends-nothing",
+        ),
         # M3's render is the binary adaptive switch; no level is sent.
         pytest.param(
             MiniMaxAdapter,
@@ -195,15 +190,23 @@ def test_describe_reasoning_render_reports_what_the_wire_carries(
             ReasoningIntent(REASONING_INTENT_DEFAULT),
             id="stepfun-flash-sends-nothing",
         ),
+        # A native-budget wire reports the rendered token budget.
+        pytest.param(
+            AnthropicAdapter,
+            "anthropic",
+            _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_max=32_000),
+            "high",
+            ReasoningIntent(REASONING_INTENT_BUDGET, budget_tokens=24_000),
+            id="anthropic-budget-tokens",
+        ),
         # Adaptive-only Claude Models cannot disable thinking: off sends nothing.
         pytest.param(
             AnthropicAdapter,
             "anthropic",
             _model(
-                "claude-adaptive-only",
+                "claude-opus-4-7",
                 control=REASONING_CONTROL_LEVELS,
                 levels=("low", "medium", "high"),
-                metadata={"anthropic": {"requires_adaptive_thinking": True}},
             ),
             "none",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
@@ -272,21 +275,19 @@ def test_describe_reasoning_render_reports_what_the_wire_carries(
         ),
     ],
 )
-def test_profile_driven_wires_describe_the_providers_wire_profile(
+def test_described_reasoning_matches_what_the_wire_profile_renders(
     adapter_class: type[ProviderAdapter],
     provider_id: str,
-    record: Model,
+    record: Model | None,
     effort: str,
     expected: ReasoningIntent,
 ) -> None:
-    def model_lookup(model_id: str) -> Model | None:
-        return record if model_id == record.model_id else None
-
-    intent = adapter_class.describe_reasoning_render(
-        model_lookup=model_lookup,
-        model_id=record.model_id,
-        effort=effort,
-        provider_config=bearer_config(provider_id),
+    model_id = record.model_id if record is not None else "unknown-model"
+    binding = standalone_wire_binding(
+        provider_id=provider_id,
+        connection_id="api-key" if provider_id else "",
+        protocols=adapter_class.WIRE_PROTOCOLS,
+        model_lookup=lambda candidate: record if candidate == model_id else None,
     )
 
-    assert intent == expected
+    assert describe_profile_reasoning(binding.profile(model_id), effort) == expected

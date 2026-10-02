@@ -234,13 +234,9 @@ async def _with_discovered_ollama_models(
     }
 
     models: dict[tuple[str, str], Model] = {}
-    replay: dict[str, str] = {}
     for provider_id in providers.list_ids():
         for model in bundled.list_for_provider(provider_id):
             models[(provider_id, model.model_id)] = model
-        policy = bundled.provider_reasoning_replay(provider_id)
-        if policy is not None:
-            replay[provider_id] = policy
     for model_id, model in discovered.items():
         models.setdefault((OLLAMA_PROVIDER_ID, model_id), model)
-    return ModelRegistry(models, replay)
+    return ModelRegistry(models)

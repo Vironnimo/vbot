@@ -86,13 +86,6 @@ class NousAdapter(OpenAICompatibleAdapter):
         )
 
     @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Declare no native media until the Portal wire documents multipart content."""
-
-        del model_id
-        return frozenset()
-
-    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],

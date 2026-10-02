@@ -237,6 +237,11 @@
       "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung, low (GPT 6.1 Sol verified 2026-10-02, Space Bunny 2026-09-24)."
+    },
+    {
+      "when": {"ids": ["gpt-6.1-sol"]},
+      "set": {"replay": {"scope": "none"}},
+      "note": "GPT 6.1 Sol ignores historical Reasoning (verified 2026-10-02), so none is replayed."
     }
   ]
 }

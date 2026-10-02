@@ -23,9 +23,7 @@ from .opencode_go_test_support import (
     RESPONSES_MODEL,
     RESPONSES_URL,
     bundled_go,
-    catalog_lookup,
     go_adapter,
-    go_config,
     go_request,
     success_response,
 )
@@ -73,7 +71,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     wire_effort: str | None,
     intent: tuple[str, str | None],
 ) -> None:
-    adapter, lookup, config = bundled_go()
+    adapter, _, config = bundled_go()
 
     with respx.mock:
         route = respx.post(f"{config.base_url}/chat/completions").mock(
@@ -88,9 +86,7 @@ async def test_bundled_chat_models_render_their_reasoning_controls(
     assert payload["model"] == model_id
     assert payload.get("thinking") == thinking
     assert payload.get("reasoning_effort") == wire_effort
-    description = adapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=model_id, effort=effort, provider_config=config
-    )
+    description = adapter.describe_reasoning_render(model_id, effort)
     assert (description.kind, description.effort_level) == intent
     assert adapter.reasoning_replay_policy(model_id) == REASONING_REPLAY_FULL_HISTORY
     assert adapter.reasoning_replay_fidelity(model_id) == REASONING_REPLAY_FIDELITY_READABLE_ONLY
@@ -125,9 +121,7 @@ async def test_profile_thinking_controls_replace_the_effort_ladder(
     payload = _sent_payload(route)
     assert payload.get("thinking") == thinking
     assert "reasoning_effort" not in payload
-    description = adapter.describe_reasoning_render(
-        model_lookup=catalog_lookup, model_id=model_id, effort=effort, provider_config=go_config()
-    )
+    description = adapter.describe_reasoning_render(model_id, effort)
     assert description.kind == intent_kind
 
 

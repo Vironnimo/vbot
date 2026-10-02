@@ -252,15 +252,11 @@ def _reasoning_is_mandatory(reasoning: Any) -> bool:
     return isinstance(reasoning, Mapping) and reasoning.get("mandatory") is True
 
 
-def _openrouter_runtime_metadata(
-    architecture: Mapping[str, Any], reasoning: Any
-) -> Mapping[str, Any]:
+def _openrouter_runtime_metadata(architecture: Mapping[str, Any]) -> Mapping[str, Any]:
     metadata: dict[str, Any] = {}
     modality = architecture.get("modality")
     if isinstance(modality, str) and modality:
         metadata["modality"] = modality
-    if _reasoning_is_mandatory(reasoning):
-        metadata["reasoning_mandatory"] = True
     return {"openrouter": metadata} if metadata else {}
 
 

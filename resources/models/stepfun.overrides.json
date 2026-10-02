@@ -25,13 +25,7 @@
       "connections": [
         "direct-api",
         "step-plan"
-      ],
-      "metadata": {
-        "stepfun": {
-          "prompt_cache": "automatic",
-          "prompt_cache_min_tokens": 256
-        }
-      }
+      ]
     },
     "step-3.5-flash-2603": {
       "canonical": "stepfun/step-3.5-flash-2603",
@@ -62,13 +56,7 @@
       "connections": [
         "direct-api",
         "step-plan"
-      ],
-      "metadata": {
-        "stepfun": {
-          "prompt_cache": "automatic",
-          "prompt_cache_min_tokens": 256
-        }
-      }
+      ]
     },
     "step-3.7-flash": {
       "canonical": "stepfun/step-3.7-flash",
@@ -100,13 +88,7 @@
       "connections": [
         "direct-api",
         "step-plan"
-      ],
-      "metadata": {
-        "stepfun": {
-          "prompt_cache": "automatic",
-          "prompt_cache_min_tokens": 256
-        }
-      }
+      ]
     },
     "step-router-v1": {
       "capabilities": {
@@ -147,16 +129,6 @@
       ],
       "context_window": 256000,
       "max_output_tokens": 250000,
-      "metadata": {
-        "stepfun": {
-          "prompt_cache": "automatic",
-          "prompt_cache_min_tokens": 256,
-          "routes_between": [
-            "deepseek-v4-pro",
-            "step-3.7-flash"
-          ]
-        }
-      },
       "name": "Step Router V1 (Step Plan routing)"
     }
   }

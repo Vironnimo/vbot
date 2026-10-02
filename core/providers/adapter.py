@@ -38,16 +38,11 @@ from core.providers._tool_result_text import (
     tool_result_text,
 )
 from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_POLICY,
     ReasoningIntent,
     ReasoningReplayFidelity,
     ReasoningReplayPolicy,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
-    model_reasoning_supported,
-    resolve_reasoning_intent,
 )
+from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.wire_profile import Protocol, WireProfile
 from core.providers.wire_profiles import WireBinding, standalone_wire_binding
 from core.utils.errors import ProviderError
@@ -240,12 +235,10 @@ class ProviderAdapter(ABC):
         self,
         model_lookup: ModelLookup | None = None,
         debug_recorder: ProviderDebugRecorder | None = None,
-        reasoning_replay_default: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY,
     ) -> None:
-        """Store model policy lookup, Provider replay default, and debug recorder."""
+        """Store the Model lookup and debug recorder."""
         self._model_lookup = model_lookup
         self._debug_recorder = debug_recorder
-        self._reasoning_replay_default = reasoning_replay_default
 
     # ------------------------------------------------------------------
     # Debug hooks
@@ -301,39 +294,6 @@ class ProviderAdapter(ABC):
         return self.wire.profile(model_id)
 
     @classmethod
-    def _standalone_wire_profile(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        provider_config: ProviderConfig | None,
-        model_id: str,
-    ) -> WireProfile:
-        """Resolve ``model_id``'s profile without an Adapter instance.
-
-        For class-level descriptions such as :meth:`describe_reasoning_render`:
-        the bundled profile data, without learned facts, on the Provider's
-        first configured Connection the Model may run on (the first configured
-        Connection when the Model is unknown or allowed nowhere).
-        """
-
-        connections = getattr(provider_config, "connections", ()) or ()
-        model = model_lookup(model_id.split("::", 1)[0]) if model_lookup is not None else None
-        connection_id = next(
-            (
-                str(connection.id)
-                for connection in connections
-                if model is None or model.allows_connection(str(connection.id))
-            ),
-            str(getattr(connections[0], "id", "")) if connections else "",
-        )
-        return standalone_wire_binding(
-            provider_id=str(getattr(provider_config, "id", "") or ""),
-            connection_id=connection_id,
-            protocols=cls.WIRE_PROTOCOLS,
-            model_lookup=model_lookup,
-        ).profile(model_id)
-
-    @classmethod
     def _standalone_wire_binding(
         cls,
         config: ProviderConfig | None,
@@ -386,18 +346,12 @@ class ProviderAdapter(ABC):
 
         The chat layer queries this once per request build and shapes the
         request history accordingly; adapters must not re-implement
-        history-wide reasoning strips on top of it. The effective precedence is
-        Model Override, then Provider Override, then the system
-        ``full_history`` default. ``model_id`` is part of the contract because
-        one Provider can explicitly narrow an individual older Model without
+        history-wide reasoning strips on top of it. ``model_id`` is part of the
+        contract because one Provider can narrow an individual Model without
         reducing every other Model on the same Adapter. The wire profile's
-        ``replay.scope`` decides; the Provider-level default applies only where
-        no profile layer set a scope.
+        ``replay.scope`` decides.
         """
-        profile = self.wire_profile(model_id)
-        if profile.source_of("replay.scope") is not None:
-            return profile.replay.scope
-        return getattr(self, "_reasoning_replay_default", DEFAULT_REASONING_REPLAY_POLICY)
+        return self.wire_profile(model_id).replay.scope
 
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Return which class of reasoning state this wire carries back.
@@ -412,43 +366,29 @@ class ProviderAdapter(ABC):
         """
         return self.wire_profile(model_id).replay.fidelity
 
+    def list_announced_tools(self, model_id: str) -> bool:
+        """Return whether Tools announced mid-Session must also join the request's Tool list.
+
+        True for a route that drops calls to Tool names outside the request's
+        ``tools[]``: the chat layer then lists each Tool a System Reminder
+        announces. The wire profile's ``request.list_announced_tools`` decides.
+        """
+        return self.wire_profile(model_id).request.list_announced_tools
+
     # ------------------------------------------------------------------
     # Reasoning render description
     # ------------------------------------------------------------------
 
-    @classmethod
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Return the provider-neutral intent this wire renders for (model, effort).
+    def describe_reasoning_render(self, model_id: str, effort: str | None) -> ReasoningIntent:
+        """Return the provider-neutral reasoning decision a request with ``effort`` carries.
 
-        ``/status`` asks this instead of re-deriving the report from the
-        declared Model control, so the reported line matches what a request
-        with the selected effort would actually carry. The default resolves
-        the shared intent against the Model's declared control and ladder —
-        the semantics of a wire whose render follows the declaration (binary
-        thinking toggles, native token budgets). Wires whose render deviates
-        from the declaration override this; wires rendered from the wire
-        profile describe the profile's plan in its reasoning dialect.
-
-        ``provider_config`` names the Provider whose wire profile such an
-        override resolves; the default render ignores it.
+        Describes this Adapter's resolved wire profile for ``model_id``: a
+        known Model that does not reason reports ``off``; otherwise the
+        profile plans ``effort`` exactly like the request render and its
+        reasoning dialect reports what the rendered request carries.
         """
 
-        del provider_config
-        return resolve_reasoning_intent(
-            supported=model_reasoning_supported(model_lookup, model_id),
-            control=model_reasoning_control(model_lookup, model_id),
-            levels=model_reasoning_levels(model_lookup, model_id) or (),
-            effort=effort,
-            budget_max=model_reasoning_budget_max(model_lookup, model_id),
-            max_tokens=None,
-        )
+        return describe_profile_reasoning(self.wire_profile(model_id), effort)
 
     # ------------------------------------------------------------------
     # Wire media capability

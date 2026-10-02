@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "Direct Ollama Cloud on its OpenAI-compatible /v1/chat/completions wire. Reasoning controls go only to Models the catalog marks as reasoning; the effort vocabulary is none|low|medium|high|max (vBot xhigh is spelled max) and off is the explicit 'none' effort even for on/off thinkers. Readable reasoning replays as text in the Model's own response field. Bodies above 16 MiB are rejected (verified 2026-09-11).",
+  "_comment": "Direct Ollama Cloud on its OpenAI-compatible /v1/chat/completions wire. Reasoning controls go only to Models the catalog marks as reasoning; the effort vocabulary is none|low|medium|high|max (vBot xhigh is spelled max) and off is the explicit 'none' effort even for on/off thinkers. Readable reasoning replays as text in the Model's own response field; the reviewed Cloud Models answer and replay in reasoning (audited 2026-09-02). Replay scope is full_history except where live replay audits showed a Model ignores earlier Reasoning across Runs (current_run) or always (none). Bodies above 16 MiB are rejected (verified 2026-09-11).",
   "defaults": {
     "reasoning": {
       "supported": false,
@@ -8,7 +8,7 @@
       "effort_map": {"xhigh": "max"},
       "off": "none"
     },
-    "replay": {"fidelity": "readable_only", "echo_response_field": true},
+    "replay": {"scope": "full_history", "fidelity": "readable_only", "echo_response_field": true},
     "media": {
       "types": ["image/jpeg", "image/png", "image/gif", "image/webp"],
       "request_max_bytes": 16777216
@@ -26,9 +26,59 @@
       "note": "The catalog names the Model's verified readable reasoning field; replay returns it there."
     },
     {
-      "when": {"metadata": {"image_media_types": ["image/jpeg", "image/png", "image/webp"]}},
+      "when": {
+        "ids": [
+          "deepseek-v4-pro:0813",
+          "deepseek-v4.1-flash",
+          "gemma4:31b",
+          "glm-5.2",
+          "glm-5.3",
+          "glm-5.3-flash",
+          "gpt-oss:120b",
+          "gpt-oss:20b",
+          "kimi-k2.6",
+          "kimi-k2.7-code",
+          "kimi-k3",
+          "minimax-m2.7",
+          "minimax-m3",
+          "nemotron-3-nano:30b",
+          "nemotron-3-super",
+          "nemotron-3-ultra"
+        ]
+      },
+      "set": {
+        "response": {
+          "reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]
+        },
+        "replay": {"history_field": "reasoning"}
+      },
+      "note": "These Cloud Models answer with readable reasoning and replay it there, whatever field the upstream catalog names."
+    },
+    {
+      "when": {"ids": ["kimi-k2.6", "kimi-k2.7-code"]},
+      "set": {"replay": {"scope": "current_run"}},
+      "note": "Earlier Reasoning is consumed only within the same Run on this gateway."
+    },
+    {
+      "when": {
+        "ids": [
+          "gemma4:31b",
+          "gpt-oss:120b",
+          "gpt-oss:20b",
+          "minimax-m2.7",
+          "minimax-m3",
+          "nemotron-3-nano:30b",
+          "nemotron-3-super",
+          "nemotron-3-ultra"
+        ]
+      },
+      "set": {"replay": {"scope": "none"}},
+      "note": "Earlier Reasoning is ignored on this gateway, so it is not replayed."
+    },
+    {
+      "when": {"ids": ["deepseek-v4.1-flash"]},
       "set": {"media": {"types": ["image/jpeg", "image/png", "image/webp"]}},
-      "note": "Models whose catalog lists verified Cloud image formats carry only those."
+      "note": "DeepSeek V4.1 Flash carries JPEG, PNG and WebP images only."
     }
   ]
 }

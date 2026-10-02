@@ -43,7 +43,6 @@ from core.providers._chat_completions_constants import (
     OPENAI_TOOL_FINISH_REASONS,
     OUTPUT_LIMIT_PARAMETER_NAMES,
     REASONING_PARAMETER_NAMES,
-    REASONING_RESPONSE_FIELD_METADATA_KEY,
     SSE_DONE_MARKER,
 )
 from core.providers._chat_completions_stream import (
@@ -102,13 +101,11 @@ from core.providers.reasoning import (
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
-    model_reasoning_supported,
     remove_reasoning_kwargs,
     warn_effort_swallowed,
     warn_rejected_effort,
 )
 from core.providers.reasoning_dialects import (
-    describe_reasoning,
     dialect_request_fields,
     render_reasoning,
 )
@@ -139,7 +136,6 @@ __all__ = [
     "OUTPUT_LIMIT_PARAMETER_NAMES",
     "OpenAICompatibleAdapter",
     "REASONING_PARAMETER_NAMES",
-    "REASONING_RESPONSE_FIELD_METADATA_KEY",
     "SSE_DONE_MARKER",
 ]
 
@@ -176,11 +172,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
         self._auth_config = auth_config or config.connections[0].auth
         self._connection_mode = connection_mode
-        super().__init__(
-            model_lookup=model_lookup,
-            debug_recorder=debug_recorder,
-            reasoning_replay_default=config.reasoning_replay,
-        )
+        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._client = build_async_client(
             base_url=base_url or config.base_url,
             debug_recorder=debug_recorder,
@@ -456,7 +448,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             payload[key] = thaw_json(value)
         if rules.output_limit_collapse and rules.output_limit_field is not None:
             _collapse_output_limit(payload, rules.output_limit_field)
-        described = self._describe_reasoning(model_id, selected_effort or None)
+        described = self.describe_reasoning_render(model_id, selected_effort or None)
         if rules.parameters:
             rules.shape_parameters(
                 payload,
@@ -591,15 +583,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return context_window
         return None
 
-    def _model_reasoning_supported(self, model_id: str) -> bool | None:
-        return model_reasoning_supported(self._model_lookup, model_id)
-
-    def _describe_reasoning(self, model_id: str, effort: str | None) -> ReasoningIntent:
-        """The reasoning decision a request with ``effort`` carries on this wire."""
-
-        wire = self.wire_profile(model_id).reasoning
-        return describe_reasoning(wire, wire.plan(effort))
-
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -637,31 +620,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Spell a planned reasoning intent in the profile's reasoning dialect."""
 
         render_reasoning(wire, intent, payload)
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the reasoning a request with ``effort`` carries for ``model_id``.
-
-        A Model the catalog marks as non-reasoning reports ``off``. Otherwise
-        the Provider's wire profile plans the effort exactly like the codec of
-        the Model's protocol renders it, and its dialect reports what the
-        rendered request carries.
-        """
-
-        if model_reasoning_supported(model_lookup, model_id) is False:
-            return ReasoningIntent(REASONING_INTENT_OFF)
-        wire = cls._standalone_wire_profile(
-            model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
-        ).reasoning
-        return describe_reasoning(wire, wire.plan(effort))
 
     def _classify_http_status(
         self,
@@ -728,7 +686,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             # The swallowed-effort signal judges what this request actually
             # renders (catalog support, ladder snapping, dialect), not the raw
             # selection: a catalog non-reasoning Model has its effort stripped.
-            return self._describe_reasoning(model_id, selected_effort or None)
+            return self.describe_reasoning_render(model_id, selected_effort or None)
 
         payload = self._build_payload(messages, model_id, **kwargs)
 
@@ -904,7 +862,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             payload,
             rebuild=build_stream_payload,
             sent_effort=lambda: (
-                self._describe_reasoning(model_id, selected_effort or None).effort_level
+                self.describe_reasoning_render(model_id, selected_effort or None).effort_level
             ),
             wire=self.wire,
             model_id=model_id,

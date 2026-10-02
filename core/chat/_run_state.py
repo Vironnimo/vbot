@@ -206,7 +206,7 @@ class _ModelTarget:
     chunk_timeout_seconds: float | None
     max_image_bytes: int | None = None
     # Whether the route returns calls to Tools outside the request's Tool list
-    # (Model capability ``unlisted_tool_calls``).
+    # (the Adapter's ``list_announced_tools`` is false).
     unlisted_tool_calls: bool = True
 
 

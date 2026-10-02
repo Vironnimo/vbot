@@ -31,6 +31,7 @@ from core.projects import (
     ProjectStore,
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
+    RuntimeAgent,
 )
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
@@ -289,10 +290,10 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
     # registry, the Project store and the reasoning describer each feed their report line.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
     sessions = _StubSessions([])
-    described: list[tuple[str, str, str | None]] = []
+    described: list[tuple[str, str | None]] = []
 
-    def describe_render(provider_id: str, model_id: str, effort: str | None) -> ReasoningIntent:
-        described.append((provider_id, model_id, effort))
+    def describe_render(agent: RuntimeAgent) -> ReasoningIntent:
+        described.append((agent.model, agent.thinking_effort))
         return ReasoningIntent("effort", effort_level="max")
 
     registry = _registry(
@@ -308,7 +309,7 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
     text = result["data"]["text"]
     assert resolver.calls == [("vbot", "coder", "session-one")]
     assert sessions.calls == [("coder", "session-one", "vbot")]
-    assert described == [("openai", "gpt-5.2", "xhigh")]
+    assert described == [("openai/gpt-5.2", "xhigh")]
     for line in (
         "Project: vBot (vbot)",
         "Model display name: GPT-5.2 Registry",

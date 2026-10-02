@@ -465,8 +465,6 @@ class _Resolution:
             }
         if isinstance(interleaved, str) and interleaved:
             partial["replay"] = {"history_field": interleaved}
-        if model.reasoning_replay is not None:
-            partial.setdefault("replay", {})["scope"] = model.reasoning_replay
         _merge_into(self.values, partial, _CATALOG_SCHEMA, "", LAYER_CATALOG, self.provenance)
 
     def _apply_observed(self, facts: ObservedFacts) -> None:

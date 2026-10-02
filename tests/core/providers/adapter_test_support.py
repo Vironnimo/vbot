@@ -31,6 +31,10 @@ class AdapterHookDefaults:
     def set_debug_context(self, context: Any) -> None:
         del context
 
+    def list_announced_tools(self, model_id: str) -> bool:
+        del model_id
+        return False
+
 
 def bind_connection[A: ProviderAdapter](
     adapter: A,
@@ -88,7 +92,6 @@ def catalog_model(
     context_window: int | None = None,
     max_output_tokens: int | None = None,
     metadata: Mapping[str, Any] | None = None,
-    reasoning_replay: str | None = None,
 ) -> Model:
     """A Tool-capable, non-reasoning catalog Model carrying the given wire facts."""
 
@@ -105,5 +108,4 @@ def catalog_model(
         context_window=context_window,
         max_output_tokens=max_output_tokens,
         metadata=dict(metadata or {}),
-        reasoning_replay=reasoning_replay,
     )

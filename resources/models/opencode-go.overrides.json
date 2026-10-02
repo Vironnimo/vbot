@@ -1,6 +1,5 @@
 {
-  "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions (each Model's wire, response carrier, thinking controls, cheapest rung for none, replay fidelity, media) live in resources/wire/opencode-go.json. Verified MiMo V2.6 Flash/Pro on 2026-09-22: binary thinking, readable-only full_history replay, 131072 output ceiling. Provider full_history is intentional, including where an upstream preserved-thinking contract is stronger than a particular gateway measurement. GLM 5.1, MiniMax M2.5, Omen Alpha and Kimi K2.6 are complete records so they stay usable when a refreshed catalog lacks them (all four listed live on 2026-10-02). Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
-  "reasoning_replay": "full_history",
+  "_comment": "Hand-authored OpenCode Go Model facts. Wire decisions (each Model's wire, response carrier, thinking controls, cheapest rung for none, replay scope and fidelity, listed Tools, media) live in resources/wire/opencode-go.json. Verified MiMo V2.6 Flash/Pro on 2026-09-22: binary thinking, readable-only full_history replay, 131072 output ceiling. GLM 5.1, MiniMax M2.5, Omen Alpha and Kimi K2.6 are complete records so they stay usable when a refreshed catalog lacks them (all four listed live on 2026-10-02). Earlier model-specific evidence and gateway divergences remain in providers/opencode-go.md. Go publishes a monthly DeepSeek ZDR agreement through 2026-09-30 (read 2026-09-22).",
   "models": {
     "deepseek-flash": {
       "name": "DeepSeek V4.1 Flash",
@@ -56,7 +55,6 @@
       }
     },
     "glm-5.2": {
-      "reasoning_replay": "full_history",
       "capabilities": {
         "reasoning": {
           "control": "levels",
@@ -66,14 +64,6 @@
           ],
           "supported": true
         }
-      }
-    },
-    "glm-5.3": {
-      "reasoning_replay": "full_history"
-    },
-    "glm-5.3-flash": {
-      "capabilities": {
-        "unlisted_tool_calls": false
       }
     },
     "kimi-k2.6": {

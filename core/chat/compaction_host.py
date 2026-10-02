@@ -24,7 +24,6 @@ from core.chat.continuation import (
 from core.chat.events import _close_adapter
 from core.chat.messages import ChatMessage, JsonObject
 from core.chat.model_resolution import (
-    _model_accepts_unlisted_tool_calls,
     _model_input_modalities_for_target,
     _resolve_agent_connection,
     _split_agent_model,
@@ -247,11 +246,7 @@ class ChatCompactionHost:
                 skill_registry=skill_registry,
                 skill_catalog=skill_catalog,
                 session_messages_override=messages,
-                list_announced_tools=not _model_accepts_unlisted_tool_calls(
-                    self._dependencies,
-                    provider_id,
-                    model_id,
-                ),
+                list_announced_tools=adapter.list_announced_tools(model_id),
             )
             state = await self._requests.build_request_state(agent, session, inputs=inputs)
             return ManualCompactionRequest(

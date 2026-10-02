@@ -60,11 +60,11 @@ _WIRE_STATUS_TEXT = {
     "inferred": "inferred from defaults, unverified",
 }
 
-# Runtime-wired seam: ``(provider_id, model_id, effort)`` -> the provider-neutral
-# intent the target adapter would render, or ``None`` when it cannot resolve.
-# The runtime answers it from the adapter class without constructing an
-# instance, so no credentials or HTTP are involved.
-ReasoningRenderDescriber = Callable[[str, str, str | None], ReasoningIntent | None]
+# Runtime-wired seam: Agent -> the provider-neutral reasoning decision a request
+# with its thinking effort carries on the Connection its Model resolves to, or
+# ``None`` when the Model cannot resolve to one. Resolving the Connection reads
+# credential state, so callers run it off the Event Loop.
+ReasoningRenderDescriber = Callable[[RuntimeAgent], ReasoningIntent | None]
 _STATUS_TIME_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
 _CACHE_PERCENT_SCALE = 100
 _CACHE_HIT_RATE_DECIMALS = 1
@@ -314,26 +314,24 @@ def resolve_reported_thinking_effort(
 ) -> str | None:
     """Resolve the reported "Actual model thinking effort" — wire truth first.
 
-    Prefers the adapter's own render description
-    (:meth:`ProviderAdapter.describe_reasoning_render`, wired by the runtime):
-    what a request with the selected effort would actually carry. When no
-    describer is wired, or it cannot resolve the provider/model, falls back to
-    the declared-control rendering (:func:`resolve_actual_thinking_effort`).
+    Prefers the wire profile's render description of the Connection the
+    Agent's Model resolves to (wired by the runtime): what a request with the
+    selected effort would actually carry. When no describer is wired, or the
+    Model cannot resolve to a Connection, falls back to the declared-control
+    rendering (:func:`resolve_actual_thinking_effort`).
     """
     if agent is None or models is None:
         return None
     if describe_render is not None:
-        provider_id, model_id = _parse_registry_model_key(agent.model)
-        if provider_id and model_id:
-            try:
-                intent = describe_render(provider_id, model_id, agent.thinking_effort)
-            except Exception:
-                _LOGGER.warning(
-                    "Failed to describe reasoning render for %s", agent.model, exc_info=True
-                )
-                intent = None
-            if intent is not None:
-                return _render_actual_thinking_effort(intent)
+        try:
+            intent = describe_render(agent)
+        except Exception:
+            _LOGGER.warning(
+                "Failed to describe reasoning render for %s", agent.model, exc_info=True
+            )
+            intent = None
+        if intent is not None:
+            return _render_actual_thinking_effort(intent)
     return resolve_actual_thinking_effort(
         agent.thinking_effort,
         model_details.reasoning_levels,

@@ -129,12 +129,6 @@ class StepFunAdapter(OpenAICompatibleAdapter):
             ),
             context_window=STEPFUN_CONTEXT_WINDOW,
             max_output_tokens=policy.max_output_tokens,
-            metadata={
-                "stepfun": {
-                    "prompt_cache": "automatic",
-                    "prompt_cache_min_tokens": 256,
-                }
-            },
         )
 
     @override

@@ -87,12 +87,9 @@ from core.providers.adapter import (
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_INTENT_OFF,
     REASONING_REPLAY_FIDELITY_META_ONLY,
-    ReasoningIntent,
-    model_reasoning_supported,
 )
-from core.providers.reasoning_dialects import describe_reasoning, render_reasoning
+from core.providers.reasoning_dialects import render_reasoning
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
@@ -153,11 +150,7 @@ class OllamaAdapter(ProviderAdapter):
         self._auth_config = auth_config or config.connections[0].auth
         self._local_context_resolver = local_context_resolver
         self._connection_mode = connection_mode or OLLAMA_LOCAL_MODE
-        super().__init__(
-            model_lookup=model_lookup,
-            debug_recorder=debug_recorder,
-            reasoning_replay_default=config.reasoning_replay,
-        )
+        super().__init__(model_lookup=model_lookup, debug_recorder=debug_recorder)
         self._base_url = base_url or config.base_url
         self._client = build_async_client(
             base_url=self._base_url,
@@ -412,30 +405,6 @@ class OllamaAdapter(ProviderAdapter):
         if self._local_context_resolver is None:
             return None
         return self._local_context_resolver(model_id)
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the ``think`` control a request with ``effort`` carries.
-
-        A Model the catalog marks as non-reasoning reports ``off``; otherwise
-        the Provider's wire profile plans the effort exactly like
-        :meth:`_build_payload` and the ``think`` dialect reports what is sent.
-        """
-
-        if model_reasoning_supported(model_lookup, model_id) is False:
-            return ReasoningIntent(REASONING_INTENT_OFF)
-        wire = cls._standalone_wire_profile(
-            model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
-        ).reasoning
-        return describe_reasoning(wire, wire.plan(effort))
 
     # ------------------------------------------------------------------
     # Response normalization

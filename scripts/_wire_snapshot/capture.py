@@ -178,14 +178,12 @@ class _ProviderCapture:
             "vision": capabilities.vision,
             "json_mode": capabilities.json_mode,
             "reasoning": capabilities.reasoning,
-            "unlisted_tool_calls": capabilities.unlisted_tool_calls,
             "connections": model.connections,
             "context_window": model.context_window,
             "connection_context_windows": model.connection_context_windows,
             "max_output_tokens": model.max_output_tokens,
             "recommended_temperature": model.recommended_temperature,
             "recommended_top_p": model.recommended_top_p,
-            "reasoning_replay": model.reasoning_replay,
             "pricing": model.pricing,
             "family": model.family,
         }
@@ -287,9 +285,6 @@ class _ModelCapture:
             _effort_label(effort): self._describe(effort) for effort in EFFORTS
         }
         record["effective_context_window"] = self._effective_context_window()
-        record["unlisted_tool_calls"] = (
-            self._model.capabilities.unlisted_tool_calls if self._model else None
-        )
 
         for effort in EFFORTS:
             for mode in MODES:
@@ -377,7 +372,7 @@ class _ModelCapture:
     def _describe(self, effort: str | None) -> Any:
         try:
             intent = self._environment.runtime.describe_reasoning_render(
-                self._provider_id, self._model_id, effort
+                self._provider_id, self._connection_id, self._model_id, effort
             )
         except Exception as error:
             return {"error": self._masker.error(error)}
@@ -511,6 +506,7 @@ def _declarations(adapter: ProviderAdapter, model_id: str, masker: Masker) -> di
         "wire_media_support": adapter.wire_media_support,
         "image_size_limit": adapter.image_size_limit,
         "request_body_limit": adapter.request_body_limit,
+        "list_announced_tools": adapter.list_announced_tools,
     }
     for name, probe in probes.items():
         try:
