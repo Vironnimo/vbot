@@ -164,6 +164,9 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
 class OpenCodeZenAdapter(OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols."""
 
+    # Reasoning is still spelled by this Adapter (not only by the wire profile).
+    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = False
+
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = (
         "chat_completions",
         "messages",

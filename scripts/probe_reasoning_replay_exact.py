@@ -134,9 +134,9 @@ async def _run_exact_probe(
     policy: str | None,
     effort: str,
 ) -> None:
-    # Determine the wire carrier field the adapter's model profile uses.
+    # Determine the wire carrier field the Model's wire profile replays into.
     try:
-        carrier_field = adapter._reasoning_response_field(model_id) or "reasoning_content"
+        carrier_field = adapter.wire_profile(model_id).replay.history_field or "reasoning_content"
     except Exception:
         carrier_field = "reasoning_content"
     effective_policy = adapter.reasoning_replay_policy(model_id)

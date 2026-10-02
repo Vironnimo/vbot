@@ -59,6 +59,9 @@ from core.providers.wire_profile import Protocol
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
 
+    # Reasoning is still spelled by this Adapter (not only by the wire profile).
+    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = False
+
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages", "responses")
 
     @override

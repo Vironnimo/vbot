@@ -64,7 +64,8 @@ _RAW_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     "ollama_chat": {
         "request": {"output_limit_field": None, "tool_schema": "omit_strict"},
-        "reasoning": {"dialect": "ollama_think"},
+        "reasoning": {"dialect": "ollama_think", "floor": ["low", "medium", "high"]},
+        "response": {"reasoning_fields": ["thinking"]},
         "replay": {"fidelity": "readable_only", "history_field": "thinking"},
         "media": {"types": _IMAGE_TYPES},
     },

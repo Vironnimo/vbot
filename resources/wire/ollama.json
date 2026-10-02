@@ -1,0 +1,14 @@
+{
+  "format_version": 1,
+  "_comment": "Ollama native /api/chat. Ollama rejects think on Models that cannot reason, so the control is sent only to Models the catalog marks as reasoning.",
+  "defaults": {
+    "reasoning": {"supported": false}
+  },
+  "rules": [
+    {
+      "when": {"prefix": "gpt-oss:"},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "GPT-OSS ignores Boolean think and cannot disable its trace, so off sends nothing."
+    }
+  ]
+}

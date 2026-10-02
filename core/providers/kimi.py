@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, ClassVar, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import ModelLookup
@@ -143,6 +143,9 @@ KIMI_MODEL_FACTS: dict[str, dict[str, Any]] = {
 
 class KimiAdapter(OpenAICompatibleAdapter):
     """Apply Kimi's strict per-Model reasoning and multimodal contracts."""
+
+    # Reasoning is still spelled by this Adapter (not only by the wire profile).
+    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = False
 
     def __init__(
         self,

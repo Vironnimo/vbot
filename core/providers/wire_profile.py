@@ -82,7 +82,6 @@ ReasoningDialect = Literal[
     "thinking_toggle_with_effort",
     "minimax_split",
     "minimax_thinking",
-    "mistral_effort",
     "anthropic_thinking",
     "responses_reasoning",
     "gemini_thinking",
@@ -101,14 +100,14 @@ ReasoningDialect = Literal[
 - ``minimax_split``: ``reasoning_split: true``; no effort control.
 - ``minimax_thinking``: ``thinking: {type: adaptive|disabled}`` plus
   ``reasoning_split``.
-- ``mistral_effort``: ``reasoning_effort: high|none``.
 - ``anthropic_thinking``: ``thinking`` adaptive with ``output_config.effort``
   for effort ladders, ``enabled`` with ``budget_tokens`` for budgets,
   ``disabled`` for off.
 - ``responses_reasoning``: ``reasoning: {effort, summary}`` and the encrypted
   reasoning ``include``.
 - ``gemini_thinking``: ``generationConfig.thinkingConfig``.
-- ``ollama_think``: ``think: true|false|<level>``.
+- ``ollama_think``: native Ollama ``think``: the level for Models with a level
+  ladder, otherwise ``true``; off is ``false``.
 """
 
 REASONING_DIALECTS: tuple[ReasoningDialect, ...] = (
@@ -120,7 +119,6 @@ REASONING_DIALECTS: tuple[ReasoningDialect, ...] = (
     "thinking_toggle_with_effort",
     "minimax_split",
     "minimax_thinking",
-    "mistral_effort",
     "anthropic_thinking",
     "responses_reasoning",
     "gemini_thinking",
@@ -174,6 +172,8 @@ OFF_RENDERS: tuple[str, ...] = ("auto", "omit", "enabled", "lowest")
 - ``auto``: an ``off`` decision the dialect spells natively (``effort_level``
   ``"none"`` when the effective ladder has a ``none`` rung and the Model is known
   to reason); ``lowest`` instead when the Model's reasoning is mandatory.
+- ``none``: an ``off`` decision spelled as the ``none`` effort level, whatever
+  the ladder or control (wires whose explicit off is that level for every Model).
 - ``omit``: no reasoning field; the Provider default applies.
 - ``enabled``: reasoning stays on (always-on Models).
 - ``lowest``: the lowest active rung of the ladder.
@@ -286,8 +286,9 @@ class ReasoningWire:
     ``mandatory`` mirror the catalog capability (overridable by explicit profile
     data). ``levels`` is an explicit wire ladder that beats the catalog ladder;
     ``floor`` is used only when neither exists. ``effort_map`` maps an Agent
-    effort directly to a wire level and bypasses snapping; ``snap`` breaks ties
-    between equally distant rungs.
+    effort to a wire value; a mapped effort level that a known ladder
+    (explicit or catalog levels) lacks snaps onto that ladder, any other mapped
+    value is sent as is. ``snap`` breaks ties between equally distant rungs.
     """
 
     dialect: ReasoningDialect = "none"
@@ -327,7 +328,9 @@ class ReasoningWire:
         - No effort selected: ``unset`` (``omit`` -> ``default``, ``enabled`` ->
           ``on``, a level -> as if that effort were selected).
         - Effort ``none``: ``off`` (see :data:`OFF_RENDERS`).
-        - ``effort_map`` entry: ``effort`` at the mapped wire value, unsnapped.
+        - ``effort_map`` entry: ``effort`` at the mapped wire value; a mapped
+          effort level missing from a known (explicit or catalog) ladder snaps
+          onto that ladder first.
         - ``on_off`` control: ``on`` carrying the snapped level.
         - ``budget`` control: ``budget`` with the budget rule, or ``on`` when no
           budget fits the output allowance.
@@ -349,6 +352,12 @@ class ReasoningWire:
             return self._plan_off(ladder)
         mapped = self.effort_map.get(normalized)
         if mapped is not None:
+            known = self.levels if self.levels is not None else self.catalog_levels
+            if known and mapped not in known and mapped in THINKING_EFFORT_RANKS:
+                snapped_map = snap_effort(mapped, known, prefer=self.snap)
+                if snapped_map is None:
+                    return ReasoningIntent(REASONING_INTENT_DEFAULT)
+                mapped = snapped_map
             return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=mapped)
         snapped = snap_effort(normalized, ladder, prefer=self.snap)
         if self.control == "on_off":
@@ -382,6 +391,8 @@ class ReasoningWire:
             # unknown Model may reject the ``none`` value outright.
             level = "none" if "none" in ladder and self.supported is True else None
             return ReasoningIntent(REASONING_INTENT_OFF, effort_level=level)
+        if render == "none":
+            return ReasoningIntent(REASONING_INTENT_OFF, effort_level="none")
         if render == "omit":
             return ReasoningIntent(REASONING_INTENT_DEFAULT)
         if render == "enabled":

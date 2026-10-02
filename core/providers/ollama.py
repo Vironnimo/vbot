@@ -38,10 +38,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
-from core.models.models import (
-    REASONING_CONTROL_LEVELS,
-    Model,
-)
+from core.models.models import Model
 from core.providers._http_shared import (
     build_async_client,
     classify_http_status,
@@ -54,7 +51,6 @@ from core.providers._http_shared import (
 from core.providers._ollama_catalog import (
     _capability_names,
     _enrich_from_show,
-    _is_gpt_oss_model,
     _ollama_capabilities,
     _positive_int,
 )
@@ -68,8 +64,6 @@ from core.providers._ollama_constants import (
     CHAT_ENDPOINT,
     LOCAL_METADATA_FIELD,
     OLLAMA_CLOUD_MODE,
-    OLLAMA_CLOUD_REASONING_EFFORTS,
-    OLLAMA_EFFORT_FLOOR,
     OLLAMA_GPT_OSS_EFFORTS,
     OLLAMA_LOCAL_MODE,
     OLLAMA_METADATA_KEY,
@@ -80,28 +74,25 @@ from core.providers._ollama_wire import (
     _build_error_detail,
     _extract_ollama_tool_calls,
     _extract_ollama_usage,
+    _find_ollama_reasoning,
     _normalize_ollama_done_reason,
     _ollama_openai_base_url,
     _ollama_stream_tool_calls,
     _to_ollama_messages,
 )
 from core.providers.adapter import (
-    IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     ProviderAdapter,
 )
 from core.providers.errors import NetworkError, ProviderError
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.reasoning import (
-    REASONING_INTENT_DEFAULT,
-    REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
-    model_reasoning_budget_max,
-    model_reasoning_control,
-    model_reasoning_levels,
+    REASONING_REPLAY_FIDELITY_META_ONLY,
+    ReasoningIntent,
     model_reasoning_supported,
-    resolve_reasoning_intent,
 )
+from core.providers.reasoning_dialects import describe_reasoning, render_reasoning
 from core.providers.token_getter import StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import Protocol
@@ -114,8 +105,6 @@ __all__ = [
     "CHAT_ENDPOINT",
     "LOCAL_METADATA_FIELD",
     "OLLAMA_CLOUD_MODE",
-    "OLLAMA_CLOUD_REASONING_EFFORTS",
-    "OLLAMA_EFFORT_FLOOR",
     "OLLAMA_GPT_OSS_EFFORTS",
     "OLLAMA_LOCAL_MODE",
     "OLLAMA_METADATA_KEY",
@@ -214,16 +203,6 @@ class OllamaAdapter(ProviderAdapter):
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         await self.aclose()
-
-    # ------------------------------------------------------------------
-    # Wire media capability
-    # ------------------------------------------------------------------
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """The Ollama chat wire carries base64 images (per-message ``images`` list)."""
-        del model_id
-        return IMAGE_WIRE_MEDIA_TYPES
 
     # ------------------------------------------------------------------
     # Catalog discovery
@@ -361,17 +340,30 @@ class OllamaAdapter(ProviderAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """Build the native ``/api/chat`` request payload."""
+        """Build the native ``/api/chat`` request payload from the Model's wire profile.
+
+        Readable reasoning replays under the profile's ``replay.history_field``
+        (never on a ``meta_only`` wire), the planned reasoning decision is
+        spelled in the profile's dialect, and sampling plus the output limit
+        ride under ``options`` shaped by the profile's request rules.
+        """
 
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        profile = self.wire_profile(model_id)
+        rules = profile.request
+        history_field = (
+            None
+            if profile.replay.fidelity == REASONING_REPLAY_FIDELITY_META_ONLY
+            else profile.replay.history_field
+        )
         payload: dict[str, Any] = {
             "model": model_id,
-            "messages": _to_ollama_messages(messages),
+            "messages": _to_ollama_messages(messages, history_field=history_field),
         }
 
         tools = request_kwargs.pop("tools", None)
         if tools:
-            rendered_tools = render_tool_definitions(tools, profile="omit_strict")
+            rendered_tools = render_tool_definitions(tools, profile=rules.tool_schema)
             payload["tools"] = [
                 {
                     "type": "function",
@@ -384,15 +376,27 @@ class OllamaAdapter(ProviderAdapter):
                 for tool in rendered_tools
             ]
 
-        self._apply_reasoning(payload, request_kwargs, model_id)
+        wire = profile.reasoning
+        intent = wire.plan(request_kwargs.pop("thinking_effort", ""))
+        render_reasoning(wire, intent, payload)
 
         options: dict[str, Any] = {}
         merged_defaults = dict(self._config.defaults or {})
         merged_defaults.update(request_kwargs)
+        if merged_defaults.get("max_tokens") is None and rules.output_limit_default is not None:
+            merged_defaults["max_tokens"] = rules.output_limit_default
         for kwarg_name, option_name in _OPTION_KWARG_MAP.items():
             value = merged_defaults.get(kwarg_name)
             if value is not None:
                 options[option_name] = value
+        num_predict = options.get("num_predict")
+        if (
+            rules.output_limit_cap is not None
+            and isinstance(num_predict, int)
+            and not isinstance(num_predict, bool)
+        ):
+            options["num_predict"] = min(num_predict, rules.output_limit_cap)
+        rules.shape_parameters(options, reasoning_active=intent.requests_reasoning)
 
         enforced_context = self._resolve_enforced_context(model_id)
         if enforced_context is not None:
@@ -409,46 +413,29 @@ class OllamaAdapter(ProviderAdapter):
             return None
         return self._local_context_resolver(model_id)
 
-    def _apply_reasoning(
-        self,
-        payload: dict[str, Any],
-        request_kwargs: dict[str, Any],
+    @classmethod
+    @override
+    def describe_reasoning_render(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
         model_id: str,
-    ) -> None:
-        """Render the shared reasoning intent onto the Model's Ollama ``think`` control.
+        effort: str | None,
+        provider_config: ProviderConfig | None = None,
+    ) -> ReasoningIntent:
+        """Describe the ``think`` control a request with ``effort`` carries.
 
-        The toggle is only sent when the catalog positively marks the model as
-        thinking-capable — Ollama rejects ``think`` on models that cannot
-        reason, so unknown support means the field stays absent. Model metadata
-        chooses Boolean or level control; GPT-OSS is the level-only special case
-        that cannot accept Boolean off.
+        A Model the catalog marks as non-reasoning reports ``off``; otherwise
+        the Provider's wire profile plans the effort exactly like
+        :meth:`_build_payload` and the ``think`` dialect reports what is sent.
         """
 
-        thinking_effort = request_kwargs.pop("thinking_effort", "")
-        supported = model_reasoning_supported(self._model_lookup, model_id)
-        if supported is not True:
-            return
-        intent = resolve_reasoning_intent(
-            supported=supported,
-            control=model_reasoning_control(self._model_lookup, model_id),
-            levels=model_reasoning_levels(self._model_lookup, model_id) or OLLAMA_EFFORT_FLOOR,
-            effort=thinking_effort,
-            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
-            max_tokens=None,
-        )
-        if intent.kind == REASONING_INTENT_DEFAULT:
-            return
-        if model_reasoning_control(self._model_lookup, model_id) == REASONING_CONTROL_LEVELS:
-            if intent.kind == REASONING_INTENT_EFFORT and intent.effort_level is not None:
-                payload["think"] = intent.effort_level
-            elif intent.kind == REASONING_INTENT_OFF and not _is_gpt_oss_model(model_id):
-                # Direct Cloud Models may expose an effort ladder through
-                # models.dev while still accepting Ollama's documented Boolean
-                # off switch. GPT-OSS is the exception: it ignores Booleans and
-                # cannot disable its trace.
-                payload["think"] = False
-            return
-        payload["think"] = intent.kind != REASONING_INTENT_OFF
+        if model_reasoning_supported(model_lookup, model_id) is False:
+            return ReasoningIntent(REASONING_INTENT_OFF)
+        wire = cls._standalone_wire_profile(
+            model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
+        ).reasoning
+        return describe_reasoning(wire, wire.plan(effort))
 
     # ------------------------------------------------------------------
     # Response normalization
@@ -458,18 +445,21 @@ class OllamaAdapter(ProviderAdapter):
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
-        """Normalize an Ollama ``/api/chat`` response to canonical assistant fields."""
+        """Normalize an Ollama ``/api/chat`` response to canonical assistant fields.
 
-        del model_id
+        Readable reasoning is read from the wire profile's
+        ``response.reasoning_fields`` in priority order.
+        """
+
         message = response.get("message")
         if not isinstance(message, dict):
             message = {}
         content = message.get("content")
-        thinking = message.get("thinking")
+        found = _find_ollama_reasoning(message, self._reasoning_fields(model_id))
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) and content else None,
-            "reasoning": thinking if isinstance(thinking, str) and thinking else None,
+            "reasoning": found[1] if found is not None else None,
             "reasoning_meta": None,
             "tool_calls": _extract_ollama_tool_calls(message.get("tool_calls")),
         }
@@ -480,6 +470,11 @@ class OllamaAdapter(ProviderAdapter):
         if usage is not None:
             normalized["usage"] = usage
         return normalized
+
+    def _reasoning_fields(self, model_id: str | None) -> tuple[str, ...]:
+        """The readable reasoning fields of ``model_id``'s wire, in priority order."""
+
+        return self.wire_profile(model_id or "").response.reasoning_fields
 
     # ------------------------------------------------------------------
     # send() — non-streaming
@@ -501,6 +496,7 @@ class OllamaAdapter(ProviderAdapter):
 
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = False
+        reasoning_fields = self._reasoning_fields(model_id)
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
@@ -516,7 +512,16 @@ class OllamaAdapter(ProviderAdapter):
                     detail=detail,
                     response_headers=response.headers,
                 )
-            return dict(decode_response_json(response, "Ollama provider"))
+            parsed = dict(decode_response_json(response, "Ollama provider"))
+            message = parsed.get("message")
+            found = (
+                _find_ollama_reasoning(message, reasoning_fields)
+                if isinstance(message, Mapping)
+                else None
+            )
+            if found is not None:
+                self.wire.observe_reasoning_field(model_id, found[0])
+            return parsed
 
         return await retry_async(_do_request)
 
@@ -563,6 +568,8 @@ class OllamaAdapter(ProviderAdapter):
             wrap_transport_error=self._wrap_transport_error,
         )
 
+        reasoning_fields = self._reasoning_fields(model_id)
+        observed_reasoning_field = False
         has_tool_calls = False
         tool_call_count = 0
         seen_done = False
@@ -579,9 +586,12 @@ class OllamaAdapter(ProviderAdapter):
 
                 message = parsed.get("message")
                 if isinstance(message, dict):
-                    thinking = message.get("thinking")
-                    if isinstance(thinking, str) and thinking:
-                        yield {"type": "reasoning_delta", "text": thinking}
+                    found = _find_ollama_reasoning(message, reasoning_fields)
+                    if found is not None:
+                        if not observed_reasoning_field:
+                            self.wire.observe_reasoning_field(model_id, found[0])
+                            observed_reasoning_field = True
+                        yield {"type": "reasoning_delta", "text": found[1]}
                     content = message.get("content")
                     if isinstance(content, str) and content:
                         yield {"type": "content_delta", "text": content}

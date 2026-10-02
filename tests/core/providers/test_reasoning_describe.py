@@ -26,6 +26,7 @@ from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
+    REASONING_INTENT_DEFAULT,
     REASONING_INTENT_EFFORT,
     REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
@@ -83,12 +84,14 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
             ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="medium"),
             id="generic-budget-degrades-to-level",
         ),
+        # The generic wire spells off only as the ``none`` effort, which an
+        # on_off Model's ladder lacks: nothing is sent.
         pytest.param(
             OpenAICompatibleAdapter,
             _ON_OFF,
             "none",
-            ReasoningIntent(REASONING_INTENT_OFF),
-            id="generic-none-is-off",
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="generic-on-off-none-sends-nothing",
         ),
         # OpenRouter toggles ``reasoning.enabled``; the effort never reaches it.
         pytest.param(

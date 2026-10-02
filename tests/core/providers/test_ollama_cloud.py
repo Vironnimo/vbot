@@ -114,6 +114,13 @@ _OFF = ReasoningIntent(REASONING_INTENT_OFF)
             id="xhigh-normalizes-to-max",
         ),
         pytest.param(
+            "gpt-oss:20b",
+            "xhigh",
+            "high",
+            ReasoningIntent(_EFFORT, effort_level="high"),
+            id="xhigh-snaps-onto-a-ladder-without-max",
+        ),
+        pytest.param(
             "thinking-model",
             "high",
             "high",
@@ -121,13 +128,19 @@ _OFF = ReasoningIntent(REASONING_INTENT_OFF)
             id="on-off-model-sends-level",
         ),
         pytest.param(
-            "thinking-model", "none", "none", _OFF, id="explicit-off-switch-for-on-off-model"
+            "thinking-model",
+            "none",
+            "none",
+            ReasoningIntent(REASONING_INTENT_OFF, effort_level="none"),
+            id="explicit-off-switch-for-on-off-model",
         ),
         pytest.param("plain-model", "high", None, _OFF, id="non-thinking-model"),
-        # The description of an unconfirmed Model is not pinned: it still reports
-        # the effort although the wire omits it until the catalog confirms support.
         pytest.param(
-            "new-unenriched-model", "high", None, None, id="unknown-support-until-catalog"
+            "new-unenriched-model",
+            "high",
+            None,
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="unknown-support-until-catalog",
         ),
         pytest.param(
             "minimax-m3",
@@ -141,7 +154,7 @@ _OFF = ReasoningIntent(REASONING_INTENT_OFF)
 @respx.mock
 @pytest.mark.asyncio
 async def test_reasoning_effort_renders_only_confirmed_cloud_vocabulary(
-    model_id: str, effort: str, wire_effort: str | None, described: ReasoningIntent | None
+    model_id: str, effort: str, wire_effort: str | None, described: ReasoningIntent
 ) -> None:
     """The sent effort and the ``/status`` description of the same selection agree."""
 
@@ -155,16 +168,15 @@ async def test_reasoning_effort_renders_only_confirmed_cloud_vocabulary(
     payload = sent_body(route)
     assert payload.get("reasoning_effort") == wire_effort
     assert ("reasoning_effort" in payload) is (wire_effort is not None)
-    if described is not None:
-        assert (
-            OllamaCloudAdapter.describe_reasoning_render(
-                model_lookup=model_lookup,
-                model_id=model_id,
-                effort=effort,
-                provider_config=CLOUD_CONFIG,
-            )
-            == described
+    assert (
+        OllamaCloudAdapter.describe_reasoning_render(
+            model_lookup=model_lookup,
+            model_id=model_id,
+            effort=effort,
+            provider_config=CLOUD_CONFIG,
         )
+        == described
+    )
     await adapter.aclose()
 
 
@@ -300,19 +312,21 @@ _OLD_REASONING = "EXACT old Reasoning: äöü\nline two\n"
     [
         pytest.param("minimax-m3", None, "reasoning", id="verified-profile"),
         pytest.param("unprofiled-model", None, "reasoning_content", id="unprofiled-default"),
-        pytest.param("unprofiled-model", ("send", "reasoning"), "reasoning", id="sent-scan"),
+        pytest.param("unprofiled-model", ("send", "reasoning"), "reasoning", id="sent-observed"),
         pytest.param(
             "unprofiled-model",
             ("send", "reasoning_content"),
             "reasoning_content",
-            id="sent-scan-rc",
+            id="sent-observed-rc",
         ),
-        pytest.param("unprofiled-model", ("stream", "reasoning"), "reasoning", id="streamed-scan"),
+        pytest.param(
+            "unprofiled-model", ("stream", "reasoning"), "reasoning", id="streamed-observed"
+        ),
         pytest.param(
             "unprofiled-model",
             ("stream", "reasoning_content"),
             "reasoning_content",
-            id="streamed-scan-rc",
+            id="streamed-observed-rc",
         ),
     ],
 )
@@ -324,7 +338,7 @@ async def test_readable_reasoning_replays_under_exactly_one_carrier(
     route = respx.post(CLOUD_CHAT_URL)
     adapter = cloud_adapter()
     if prior_response is not None:
-        # This Run's real responses decide an unprofiled Model's carrier.
+        # The field an unprofiled Model was observed answering in becomes its carrier.
         mode, field = prior_response
         if mode == "send":
             message = {"role": "assistant", "content": "OK", field: "Check."}

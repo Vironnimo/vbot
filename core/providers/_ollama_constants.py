@@ -30,25 +30,10 @@ _CAPABILITY_COMPLETION = "completion"
 
 _CAPABILITY_EMBEDDING = "embedding"
 
-OLLAMA_EFFORT_FLOOR = ("low", "medium", "high")
-
 OLLAMA_GPT_OSS_EFFORTS = ("low", "medium", "high")
-
-OLLAMA_CLOUD_REASONING_EFFORTS = ("none", "low", "medium", "high", "max")
 
 # Local Ollama and Ollama Cloud serve their OpenAI-compatible API under /v1.
 _OLLAMA_OPENAI_PATH = "/v1"
-
-_OLLAMA_CLOUD_REASONING_PARAMETERS = (
-    "thinking_effort",
-    "reasoning_effort",
-    "reasoning",
-    "include_reasoning",
-)
-
-_OLLAMA_CLOUD_REASONING_FIELDS = ("reasoning_content", "reasoning")
-
-_OLLAMA_CLOUD_REASONING_FIELD_DEFAULT = "reasoning_content"
 
 _SHOW_DETAIL_CONCURRENCY = 8
 

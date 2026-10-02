@@ -46,7 +46,6 @@ def _catalog_model(
     *,
     reasoning: bool = True,
     levels: tuple[str, ...] = (),
-    metadata: dict[str, Any] | None = None,
 ) -> Model:
     return Model(
         model_id=model_id,
@@ -61,17 +60,12 @@ def _catalog_model(
         ),
         context_window=128000,
         max_output_tokens=8192,
-        metadata=metadata or {},
     )
 
 
 CATALOG = {
     "mistral-medium-latest": _catalog_model("mistral-medium-latest", reasoning=False),
     "mistral-medium-3-5": _catalog_model("mistral-medium-3-5", levels=("low", "medium", "high")),
-    # The magistral-medium reasoning mode is a published per-Model wire fact.
-    "magistral-medium-latest": _catalog_model(
-        "magistral-medium-latest", metadata={"mistral": {"prompt_mode": "reasoning"}}
-    ),
     "magistral-small-latest": _catalog_model("magistral-small-latest"),
 }
 
@@ -215,39 +209,27 @@ def test_non_chat_embed_ids_become_embedding_models(model_id: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("catalog", "model_id", "effort", "reasoning_effort", "prompt_mode"),
+    ("catalog", "model_id", "effort", "reasoning_effort"),
     [
-        # Without catalog data the binary {none, high} floor applies.
-        pytest.param(False, "mistral-large-latest", "minimal", "high", ABSENT, id="minimal"),
-        pytest.param(False, "mistral-large-latest", "medium", "high", ABSENT, id="medium"),
-        pytest.param(False, "mistral-large-latest", "max", "high", ABSENT, id="max"),
-        pytest.param(False, "mistral-large-latest", "none", "none", ABSENT, id="none"),
-        pytest.param(False, "mistral-large-latest", None, ABSENT, ABSENT, id="no-effort"),
-        pytest.param(False, "magistral-small-latest", "high", "high", ABSENT, id="no-catalog"),
-        # A feed ladder snaps first; any active snapped effort still engages thinking.
-        pytest.param(True, "mistral-medium-3-5", "medium", "high", ABSENT, id="feed-ladder"),
-        pytest.param(
-            True, "magistral-medium-latest", "high", ABSENT, "reasoning", id="prompt-mode"
-        ),
-        pytest.param(
-            True, "magistral-medium-latest", "none", ABSENT, ABSENT, id="prompt-mode-none"
-        ),
-        pytest.param(
-            True, "magistral-small-latest", "high", "high", ABSENT, id="reasoning-without-fact"
-        ),
-        pytest.param(
-            True, "mistral-medium-latest", "high", ABSENT, ABSENT, id="reasoning-unsupported"
-        ),
+        # Every active effort engages Mistral's single thinking mode; off is "none".
+        pytest.param(False, "mistral-large-latest", "minimal", "high", id="minimal"),
+        pytest.param(False, "mistral-large-latest", "medium", "high", id="medium"),
+        pytest.param(False, "mistral-large-latest", "max", "high", id="max"),
+        pytest.param(False, "mistral-large-latest", "none", "none", id="none"),
+        pytest.param(False, "mistral-large-latest", None, ABSENT, id="no-effort"),
+        # A multi-level catalog ladder still collapses onto the binary wire.
+        pytest.param(True, "mistral-medium-3-5", "medium", "high", id="feed-ladder"),
+        pytest.param(True, "magistral-small-latest", "high", "high", id="catalog-reasoning"),
+        pytest.param(True, "mistral-medium-latest", "high", ABSENT, id="reasoning-unsupported"),
     ],
 )
 @respx.mock
 @pytest.mark.asyncio
-async def test_reasoning_is_a_binary_toggle_on_the_model_specific_field(
+async def test_reasoning_is_a_binary_effort_toggle(
     catalog: bool,
     model_id: str,
     effort: str | None,
     reasoning_effort: Any,
-    prompt_mode: Any,
 ) -> None:
     route = respx.post(CHAT_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
     kwargs = {} if effort is None else {"thinking_effort": effort}
@@ -255,11 +237,10 @@ async def test_reasoning_is_a_binary_toggle_on_the_model_specific_field(
     await _adapter(catalog=catalog).send(HELLO, model_id=model_id, **kwargs)
 
     body = json.loads(route.calls.last.request.content)
-    for key, value in (("reasoning_effort", reasoning_effort), ("prompt_mode", prompt_mode)):
-        if value is ABSENT:
-            assert key not in body, key
-        else:
-            assert body[key] == value, key
+    if reasoning_effort is ABSENT:
+        assert "reasoning_effort" not in body
+    else:
+        assert body["reasoning_effort"] == reasoning_effort
 
 
 # ---------------------------------------------------------------------------

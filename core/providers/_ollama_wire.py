@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.providers._ollama_constants import (
@@ -35,13 +35,18 @@ def _ollama_openai_base_url(native_base_url: str) -> str:
     )
 
 
-def _to_ollama_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _to_ollama_messages(
+    messages: list[dict[str, Any]], *, history_field: str | None
+) -> list[dict[str, Any]]:
+    """Convert canonical messages; readable reasoning replays under ``history_field``."""
+
     return [
-        _to_ollama_message(message) for message in project_tool_result_content_fallbacks(messages)
+        _to_ollama_message(message, history_field=history_field)
+        for message in project_tool_result_content_fallbacks(messages)
     ]
 
 
-def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
+def _to_ollama_message(message: dict[str, Any], *, history_field: str | None) -> dict[str, Any]:
     role = message.get("role")
     if role == "tool":
         tool_message = {
@@ -61,7 +66,7 @@ def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
             tool_message["tool_name"] = tool_name
         return tool_message
     if role == "assistant":
-        return _to_ollama_assistant_message(message)
+        return _to_ollama_assistant_message(message, history_field=history_field)
 
     content, images = _split_content_blocks(message.get("content", ""))
     wire_message: dict[str, Any] = {"role": role, "content": content}
@@ -70,15 +75,16 @@ def _to_ollama_message(message: dict[str, Any]) -> dict[str, Any]:
     return wire_message
 
 
-def _to_ollama_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
+def _to_ollama_assistant_message(
+    message: dict[str, Any], *, history_field: str | None
+) -> dict[str, Any]:
     wire_message: dict[str, Any] = {
         "role": "assistant",
         "content": _flatten_text_content(message.get("content") or ""),
     }
     reasoning = message.get("reasoning")
-    if isinstance(reasoning, str) and reasoning:
-        # Ollama round-trips visible thinking text via the ``thinking`` field.
-        wire_message["thinking"] = reasoning
+    if history_field is not None and isinstance(reasoning, str) and reasoning:
+        wire_message[history_field] = reasoning
     tool_calls = message.get("tool_calls")
     if tool_calls:
         wire_message["tool_calls"] = [
@@ -94,6 +100,22 @@ def _to_ollama_assistant_message(message: dict[str, Any]) -> dict[str, Any]:
             for tool_call in tool_calls
         ]
     return wire_message
+
+
+def _find_ollama_reasoning(
+    message: Mapping[str, Any], fields: Sequence[str]
+) -> tuple[str, str] | None:
+    """Return ``(field, text)`` of the first non-empty readable reasoning field.
+
+    ``fields`` is the wire profile's ``response.reasoning_fields`` in priority
+    order; stream deltas and complete messages are read alike.
+    """
+
+    for field in fields:
+        value = message.get(field)
+        if isinstance(value, str) and value:
+            return field, value
+    return None
 
 
 def _split_content_blocks(content: Any) -> tuple[str, list[str]]:

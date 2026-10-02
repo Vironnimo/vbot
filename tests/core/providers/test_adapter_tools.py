@@ -369,12 +369,14 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
     return body["messages"][0]["tool_calls"][0]["id"], body["messages"][1]["tool_call_id"]
 
 
-# Only Adapters with a verified profile rewrite ids; the generic Chat wire sends them as-is.
+# Only wires whose profile names Tool-call id constraints rewrite ids; the
+# generic Chat wire sends them as-is.
 @pytest.mark.parametrize(
-    ("adapter_type", "path", "wire_ids", "profile"),
+    ("adapter_type", "provider_id", "path", "wire_ids", "profile"),
     [
         pytest.param(
             AnthropicCompatibleAdapter,
+            "wire",
             "/messages",
             _messages_wire_ids,
             ANTHROPIC_MESSAGES_TOOL_CALL_ID_PROFILE,
@@ -382,6 +384,7 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
         ),
         pytest.param(
             MistralAdapter,
+            "mistral",
             "/chat/completions",
             _chat_wire_ids,
             MISTRAL_TOOL_CALL_ID_PROFILE,
@@ -389,6 +392,7 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
         ),
         pytest.param(
             OpenAICompatibleAdapter,
+            "wire",
             "/chat/completions",
             _chat_wire_ids,
             None,
@@ -399,13 +403,16 @@ def _chat_wire_ids(body: dict[str, Any]) -> tuple[str, str]:
 @pytest.mark.asyncio
 async def test_adapter_sends_paired_wire_ids_without_mutating_canonical_history(
     adapter_type: Callable[..., ProviderAdapter],
+    provider_id: str,
     path: str,
     wire_ids: Any,
     profile: ToolCallIdProfile | None,
 ) -> None:
     messages = _tool_cycle(_FOREIGN_ID)
     original = copy.deepcopy(messages)
-    config = bearer_config("wire", defaults={"max_tokens": 1024})
+    config = bearer_config(
+        provider_id, base_url="https://wire.example.test/v1", defaults={"max_tokens": 1024}
+    )
     adapter = adapter_type(config, TOKEN)
     try:
         with respx.mock:

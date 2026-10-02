@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self, override
+from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
 
@@ -38,9 +38,7 @@ from core.providers._chat_completions_constants import (
     MAX_OUTPUT_TOKEN_KEYS,
     OPENAI_ERROR_FINISH_REASONS,
     OPENAI_NATIVE_TRANSPORT_FINISH_REASONS,
-    OPENAI_NONE_REASONING_PROVIDER_IDS,
     OPENAI_REASONING_EFFORTS,
-    OPENAI_REASONING_EFFORTS_WITH_NONE,
     OPENAI_REASONING_KEYS,
     OPENAI_REASONING_META_KEYS,
     OPENAI_TOOL_FINISH_REASONS,
@@ -80,6 +78,7 @@ from core.providers._http_shared import (
     prepare_json_body,
     wrap_network_error,
 )
+from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES, normalize_tool_call_ids
 from core.providers._wire_learning import execute_learning_from_rejections
 from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
@@ -102,13 +101,13 @@ from core.providers.providers import (
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_EFFORT,
+    REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
     ReasoningIntent,
     model_reasoning_budget_max,
     model_reasoning_control,
-    model_reasoning_levels,
     model_reasoning_supported,
     remove_reasoning_kwargs,
     resolve_reasoning_intent,
@@ -136,9 +135,7 @@ __all__ = [
     "MAX_OUTPUT_TOKEN_KEYS",
     "OPENAI_ERROR_FINISH_REASONS",
     "OPENAI_NATIVE_TRANSPORT_FINISH_REASONS",
-    "OPENAI_NONE_REASONING_PROVIDER_IDS",
     "OPENAI_REASONING_EFFORTS",
-    "OPENAI_REASONING_EFFORTS_WITH_NONE",
     "OPENAI_REASONING_KEYS",
     "OPENAI_REASONING_META_KEYS",
     "OPENAI_TOOL_FINISH_REASONS",
@@ -163,6 +160,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     Args:
         config: Immutable provider configuration.
         token_getter: Async callable that returns the current auth token.
+    """
+
+    DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = True
+    """Whether Chat Completions requests carry exactly the profile's reasoning plan.
+
+    True when reasoning reaches the wire only through :meth:`_apply_reasoning`
+    (the profile's plan in its dialect), so :meth:`describe_reasoning_render`
+    describes that plan. A subclass that still spells reasoning itself (Tool
+    toggles, other endpoints chosen per Model) sets it to False and keeps the
+    declared-control description until its wire is profile-driven.
     """
 
     def __init__(
@@ -324,28 +331,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             return OPENAI_REASONING_KEYS
         return self.wire_profile(model_id).response.reasoning_fields
 
-    def _reasoning_response_field(self, model_id: str | None) -> str | None:
-        """Resolve the data-driven reasoning response field for ``model_id``.
-
-        Reads ``metadata.<provider>.reasoning_response_field`` from the injected
-        catalog, where ``<provider>`` is this adapter's id with hyphens
-        normalized to underscores (matching the provider-scoped metadata key
-        convention, e.g. ``opencode_go``). Returns ``None`` — falling back to the
-        hardcoded default-key scan — when there is no lookup, no model, or no
-        such metadata field.
-        """
-
-        if model_id is None or self._model_lookup is None:
-            return None
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return None
-        provider_metadata = model.metadata.get(self._config.id.replace("-", "_"))
-        if not isinstance(provider_metadata, Mapping):
-            return None
-        field_name = provider_metadata.get(REASONING_RESPONSE_FIELD_METADATA_KEY)
-        return field_name if isinstance(field_name, str) and field_name else None
-
     def _format_assistant_message(
         self,
         message: dict[str, Any],
@@ -359,8 +344,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         captured it and the declaration allows meta, otherwise the readable
         text — never both. The readable text rides in the wire profile's
         ``replay.history_field``; a wire without one never receives readable
-        reasoning. Subclasses may still override for provider-specific field
-        placement (e.g. Ollama Cloud's scanned carrier field).
+        reasoning.
         """
         wire = _to_openai_assistant_message(message)
         fidelity = self.reasoning_replay_fidelity(model_id or "")
@@ -442,6 +426,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
         rules = self.wire_profile(model_id).request
+        id_profile = WIRE_TOOL_CALL_ID_PROFILES.get(rules.tool_call_ids)
+        if id_profile is not None:
+            messages = normalize_tool_call_ids(messages, id_profile)
         selected_effort = _selected_thinking_effort(request_kwargs)
         self._apply_model_output_limit(request_kwargs, model_id, messages)
         projected_messages = project_tool_result_content_fallbacks(messages)
@@ -615,30 +602,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         wire = self._reasoning_wire(model_id)
         return describe_reasoning(wire, wire.plan(effort))
 
-    @classmethod
-    def _reasoning_effort_ladder(
-        cls,
-        model_lookup: ModelLookup | None,
-        provider_config: ProviderConfig | None,
-        model_id: str,
-    ) -> set[str] | tuple[str, ...]:
-        """Class-level twin of :meth:`_supported_reasoning_efforts`.
-
-        The render path snaps against this through the instance; the render
-        description (``describe_reasoning_render``) snaps against the same
-        ladder without needing an adapter instance.
-        """
-        ladder = model_reasoning_levels(model_lookup, model_id)
-        if ladder is not None:
-            return ladder
-        return cls._reasoning_efforts_floor(provider_config)
-
-    @classmethod
-    def _reasoning_efforts_floor(cls, provider_config: ProviderConfig | None) -> set[str]:
-        if provider_config is not None and provider_config.id in OPENAI_NONE_REASONING_PROVIDER_IDS:
-            return OPENAI_REASONING_EFFORTS_WITH_NONE
-        return OPENAI_REASONING_EFFORTS
-
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -682,22 +645,30 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         effort: str | None,
         provider_config: ProviderConfig | None = None,
     ) -> ReasoningIntent:
-        """Describe the generic Chat Completions reasoning render.
+        """Describe the reasoning a request with ``effort`` carries for ``model_id``.
 
-        The generic wire has no toggle or budget field: ``_render_reasoning``
-        degrades an ``on``/``budget`` intent to the snapped effort level
-        whenever one snaps against the effective ladder — including for an
-        ``on_off``-declared Model (e.g. Ollama Cloud's GLM backends), whose
-        declared control is binary only because ``/api/show`` reports a
-        boolean thinking capability. The description therefore re-resolves
-        against the same effective ladder the render snaps against and
-        reports the level as an ``effort`` intent whenever one would be sent.
+        A Model the catalog marks as non-reasoning reports ``off``. On Chat
+        Completions the Provider's wire profile plans the effort exactly like
+        :meth:`_apply_reasoning`, and its dialect reports what the rendered
+        request carries. Other protocols of subclasses (Responses) and
+        subclasses that spell reasoning themselves
+        (:attr:`DESCRIBES_REASONING_FROM_PROFILE`) keep the declared-control
+        description against the profile's ladder, reporting an ``on``/``budget``
+        intent as the effort level such a wire sends.
         """
 
+        if model_reasoning_supported(model_lookup, model_id) is False:
+            return ReasoningIntent(REASONING_INTENT_OFF)
+        profile = cls._standalone_wire_profile(
+            model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
+        )
+        wire = profile.reasoning
+        if profile.protocol == "chat_completions" and cls.DESCRIBES_REASONING_FROM_PROFILE:
+            return describe_reasoning(wire, wire.plan(effort))
         intent = resolve_reasoning_intent(
             supported=model_reasoning_supported(model_lookup, model_id),
             control=model_reasoning_control(model_lookup, model_id),
-            levels=tuple(cls._reasoning_effort_ladder(model_lookup, provider_config, model_id)),
+            levels=wire.ladder or tuple(OPENAI_REASONING_EFFORTS),
             effort=effort,
             budget_max=model_reasoning_budget_max(model_lookup, model_id),
             max_tokens=None,

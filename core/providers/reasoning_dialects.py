@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from core.models.models import REASONING_CONTROL_LEVELS
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
@@ -125,8 +126,48 @@ def _describe_nous_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> Re
     return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
 
 
+# -- ollama_think -----------------------------------------------------------------
+# Ollama's native ``think``: a level string for Models with a level ladder,
+# otherwise a Boolean. Off is ``false``; an active decision without a level
+# (on/off and budget Models) is ``true``.
+
+
+def _ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> bool | str | None:
+    if intent.kind == REASONING_INTENT_OFF:
+        return False
+    if intent.kind not in _ACTIVE_KINDS:
+        return None
+    if (
+        intent.kind == REASONING_INTENT_EFFORT
+        and wire.control == REASONING_CONTROL_LEVELS
+        and intent.effort_level is not None
+    ):
+        return intent.effort_level
+    return True
+
+
+def _render_ollama_think(
+    wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]
+) -> None:
+    think = _ollama_think(wire, intent)
+    if think is not None:
+        payload["think"] = think
+
+
+def _describe_ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    think = _ollama_think(wire, intent)
+    if think is None:
+        return _SENDS_NOTHING
+    if think is False:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    if think is True:
+        return ReasoningIntent(REASONING_INTENT_ON)
+    return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=think)
+
+
 _DIALECTS: dict[str, _Dialect] = {
     "none": _Dialect(_render_nothing, _describe_nothing),
     "reasoning_effort": _Dialect(_render_reasoning_effort, _describe_reasoning_effort),
     "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning),
+    "ollama_think": _Dialect(_render_ollama_think, _describe_ollama_think),
 }

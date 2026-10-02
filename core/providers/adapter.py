@@ -285,13 +285,8 @@ class ProviderAdapter(ABC):
 
         binding = self._wire_binding
         if binding is None:
-            config = getattr(self, "_config", None)
-            connections = getattr(config, "connections", ()) or ()
-            binding = standalone_wire_binding(
-                provider_id=str(getattr(config, "id", "") or ""),
-                connection_id=str(getattr(connections[0], "id", "")) if connections else "",
-                protocols=type(self).WIRE_PROTOCOLS,
-                model_lookup=getattr(self, "_model_lookup", None),
+            binding = type(self)._standalone_wire_binding(
+                getattr(self, "_config", None), getattr(self, "_model_lookup", None)
             )
             self._wire_binding = binding
         return binding
@@ -300,6 +295,35 @@ class ProviderAdapter(ABC):
         """Return the resolved wire profile for ``model_id`` on this Adapter's Connection."""
 
         return self.wire.profile(model_id)
+
+    @classmethod
+    def _standalone_wire_profile(
+        cls,
+        *,
+        model_lookup: ModelLookup | None,
+        provider_config: ProviderConfig | None,
+        model_id: str,
+    ) -> WireProfile:
+        """Resolve ``model_id``'s profile without an Adapter instance.
+
+        For class-level descriptions such as :meth:`describe_reasoning_render`:
+        the bundled profile data on the Provider's first configured Connection,
+        without learned facts, exactly like a directly constructed Adapter.
+        """
+
+        return cls._standalone_wire_binding(provider_config, model_lookup).profile(model_id)
+
+    @classmethod
+    def _standalone_wire_binding(
+        cls, config: ProviderConfig | None, model_lookup: ModelLookup | None
+    ) -> WireBinding:
+        connections = getattr(config, "connections", ()) or ()
+        return standalone_wire_binding(
+            provider_id=str(getattr(config, "id", "") or ""),
+            connection_id=str(getattr(connections[0], "id", "")) if connections else "",
+            protocols=cls.WIRE_PROTOCOLS,
+            model_lookup=model_lookup,
+        )
 
     # ------------------------------------------------------------------
     # History shaping policy
@@ -357,12 +381,11 @@ class ProviderAdapter(ABC):
         the shared intent against the Model's declared control and ladder —
         the semantics of a wire whose render follows the declaration (binary
         thinking toggles, native token budgets). Wires whose render deviates
-        from the declaration override this; the generic OpenAI-compatible wire
-        is the main case (it sends the snapped effort level even for an
-        ``on_off``-declared Model and has no native budget field).
+        from the declaration override this; wires rendered from the wire
+        profile describe the profile's plan in its reasoning dialect.
 
-        ``provider_config`` is only consulted by adapters whose floor ladder
-        depends on the Provider identity; the default render ignores it.
+        ``provider_config`` names the Provider whose wire profile such an
+        override resolves; the default render ignores it.
         """
 
         del provider_config

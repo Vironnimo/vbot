@@ -377,6 +377,15 @@ _LADDER = ("low", "medium", "high")
             "max",
             ("effort", "max"),
         ),
+        (
+            ReasoningWire(
+                dialect="reasoning_effort",
+                catalog_levels=("low", "medium", "high"),
+                effort_map={"xhigh": "max"},
+            ),
+            "xhigh",
+            ("effort", "high"),
+        ),
         (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), "none", ("off", None)),
         (
             ReasoningWire(dialect="reasoning_effort", supported=True, floor=("none", *_LADDER)),
@@ -397,6 +406,11 @@ _LADDER = ("low", "medium", "high")
             ReasoningWire(dialect="reasoning_effort", floor=_LADDER, mandatory=True),
             "none",
             ("effort", "low"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", control="on_off", off="none"),
+            "none",
+            ("off", "none"),
         ),
         (
             ReasoningWire(dialect="reasoning_effort", floor=_LADDER, off="omit"),

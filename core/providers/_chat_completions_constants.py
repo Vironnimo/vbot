@@ -8,10 +8,6 @@ CHAT_COMPLETIONS_ENDPOINT = "/chat/completions"
 
 OPENAI_REASONING_EFFORTS = {"low", "medium", "high"}
 
-OPENAI_REASONING_EFFORTS_WITH_NONE = {"none", *OPENAI_REASONING_EFFORTS}
-
-OPENAI_NONE_REASONING_PROVIDER_IDS = {"openai"}
-
 OPENAI_REASONING_KEYS = ("reasoning", "reasoning_content", "reasoning_text", "thinking")
 
 OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
