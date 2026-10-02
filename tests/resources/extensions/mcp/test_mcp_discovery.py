@@ -153,7 +153,9 @@ def test_guidance_block_renders_while_a_connection_tool_is_listed(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(context_service):
+async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
+    context_service, host
+):
     service, registry, runner, calls = context_service
     remote_name = "get_blendfile_object_materials"
     runner.catalog["tools"][0]["name"] = remote_name
@@ -166,6 +168,8 @@ async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
 
     inspection = await service.manage("inspect", {"id": "example"})
     assert [tool["name"] for tool in inspection["tools"]] == [remote_name]
+    # The inspector names each Tool by the target the connection Tool's search lists.
+    assert inspection["tools"][0]["target"] == await tool_target(registry, host)
     assert "agent_access" not in inspection
     assert calls == []
 

@@ -55,7 +55,6 @@ from ._discovery import (
     search_page,
     summarize,
     target_arguments,
-    target_for,
 )
 from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
 from ._views import compact
@@ -599,16 +598,8 @@ class MCPService:
         """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
         runner = self.runners.get(identifier)
         catalog = runner.catalog if runner else {}
-        entries = [
-            {
-                "kind": "tool",
-                "name": item["name"],
-                "description": item.get("description") or item.get("title") or item["name"],
-                "target": target_for("tool", item["name"], item),
-            }
-            for item in catalog.get("tools", [])
-        ]
-        matches = search_entries(entries, arguments.get("query", ""))
+        entries = catalog_entries(identifier, catalog, None)
+        matches = search_entries(entries, arguments.get("query", ""), "tool")
         offset = arguments.get("offset", 0)
         return {
             **self._status(identifier),
