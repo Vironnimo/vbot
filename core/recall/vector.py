@@ -20,7 +20,7 @@ import hashlib
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TypeVar
+from typing import override
 
 from core.database import DatabaseError
 from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingUsage
@@ -40,8 +40,6 @@ from core.recall.recall import (
     RecallSearchPage,
     RecallSearchRequest,
 )
-
-_T = TypeVar("_T")
 
 # Agent-facing query guidance for session_search when this backend is active.
 # Static: it describes the capability, not the current availability — actual
@@ -120,6 +118,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         self.embeddings = context.embeddings
         self._on_waiting = on_waiting
 
+    @override
     def search_capabilities(self) -> RecallSearchCapabilities:
         return RecallSearchCapabilities(
             result_type="passage",
@@ -130,6 +129,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             default_order="relevance",
         )
 
+    @override
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         prepared = await self.prepare_search(request)
         return await prepared.page(request.offset, request.limit)
@@ -290,12 +290,12 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             degradation_reason=SEMANTIC_PARTIAL_REASON if prepared.pending > 0 else None,
         )
 
-    async def _semantic_operation(
+    async def _semantic_operation[T](
         self,
-        operation: Callable[[], Awaitable[_T]],
+        operation: Callable[[], Awaitable[T]],
         *,
         recover: bool,
-    ) -> _T:
+    ) -> T:
         """Run one index operation; map index/provider failures to ``semantic_unavailable``.
 
         With ``recover`` a damaged index is discarded and the operation retried

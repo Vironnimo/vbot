@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from contextlib import nullcontext
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -259,10 +259,12 @@ async def test_responses_error_body_read_failure_is_a_retryable_network_error_an
     class InterruptedErrorBody(httpx.AsyncByteStream):
         closed = False
 
+        @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
             yield b'{"error":'
             raise httpx.ReadError("body interrupted")
 
+        @override
         async def aclose(self) -> None:
             self.closed = True
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -326,6 +326,7 @@ async def test_each_provider_keeps_its_retry_profile(
 
 
 class _FailIfReadStream(httpx.AsyncByteStream):
+    @override
     async def __aiter__(self):
         raise AssertionError("oversized declared response body must not be read")
         yield b""  # pragma: no cover

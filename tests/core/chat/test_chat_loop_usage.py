@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -282,6 +282,7 @@ async def test_measured_context_decides_whether_the_next_request_fits_the_window
     fits: bool,
 ) -> None:
     class BiasedAdapter(StubAdapter):
+        @override
         def estimate_request_input_tokens(self, messages, *, model_id, tools=None):
             return estimation_bias + estimate_request_input_tokens(messages, tools)[0]
 
@@ -371,6 +372,7 @@ async def test_cancel_before_visible_output_keeps_reported_counters(tmp_path: Pa
     waiting = asyncio.Event()
 
     class UsageThenWaitAdapter(StubAdapter):
+        @override
         async def stream(self, messages, **kwargs):
             yield {"type": "usage", "input_tokens": 42}
             waiting.set()
@@ -412,6 +414,7 @@ async def test_cancel_during_usage_persistence_keeps_visible_answer(tmp_path: Pa
     release = asyncio.Event()
 
     class WaitingUsageRecorder(RecordingUsageRecorder):
+        @override
         async def finish(self, call_id, usage=None, *, status="completed"):
             saving.set()
             await release.wait()

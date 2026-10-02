@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -108,12 +108,14 @@ class _TrackedStream(httpx.AsyncByteStream):
         self._stall = stall
         self.closed = False
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for chunk in self._chunks:
             yield chunk
         if self._stall:
             await asyncio.Event().wait()
 
+    @override
     async def aclose(self) -> None:
         self.closed = True
 

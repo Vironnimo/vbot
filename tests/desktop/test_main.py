@@ -15,7 +15,7 @@ import types
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -258,6 +258,7 @@ class FakeWebview:
 
 
 class StartRaisesWebview(FakeWebview):
+    @override
     def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
         raise RuntimeError("gui loop crashed")
 
@@ -995,6 +996,7 @@ def test_enabled_voice_probes_dependencies_only_after_window_exists(
     class RunningWebview(FakeWebview):
         """Keeps the GUI loop running until Voice reported its start result."""
 
+        @override
         def start(self, func: Callable[[], Any] | None = None, **kwargs: Any) -> None:
             super().start(func, **kwargs)
             bridge = _bridge(self)

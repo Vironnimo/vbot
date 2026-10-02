@@ -7,7 +7,7 @@ import dataclasses
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -69,6 +69,7 @@ class _Embeddings(StubEmbeddings):
         self.in_flight = 0
         self.max_in_flight = 0
 
+    @override
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         self.in_flight += 1
         self.max_in_flight = max(self.max_in_flight, self.in_flight)
@@ -470,6 +471,7 @@ async def test_embedding_space_that_keeps_changing_stops_the_pass(
         _conversation(sessions, f"day-{day}", f"fruit {day}", day)
 
     class _Drifting(_Embeddings):
+        @override
         async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
             self.dimension = 4 + len(self.embed_calls)
             return await super().embed(texts, purpose=purpose)

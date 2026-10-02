@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 from core.tools.contracts import ToolContractError
 
@@ -127,6 +127,7 @@ async def _probe_mcp_workflow(adapter: Any, args: argparse.Namespace) -> dict[st
         )
 
         class FixtureRunner(ConnectionRunner):
+            @override
             async def _transport(self, stack: Any) -> Any:
                 return server
 

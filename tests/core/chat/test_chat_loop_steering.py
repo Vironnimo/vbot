@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -30,6 +30,7 @@ class SteeringAdapter(StubAdapter):
         self.loop: Any = None
         self.runtime: Any = None
 
+    @override
     async def send(
         self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
     ) -> dict[str, Any]:
@@ -50,6 +51,7 @@ class PausedAdapter(PolicyStubAdapter):
         self.entered = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def send(
         self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
     ) -> dict[str, Any]:
@@ -213,6 +215,7 @@ async def test_withdrawn_steering_input_keeps_the_final_answer(tmp_path: Path) -
     address = session_address("coder", "one")
 
     class WithdrawingAdapter(StubAdapter):
+        @override
         async def send(
             self, messages: list[dict[str, Any]], *, model_id: str, **kwargs: Any
         ) -> dict[str, Any]:

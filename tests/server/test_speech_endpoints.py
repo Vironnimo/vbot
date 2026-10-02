@@ -6,7 +6,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -154,6 +154,7 @@ class _Speech:
 
 
 class _FailingSpeech(_Speech):
+    @override
     async def transcribe(
         self,
         _audio: bytes,

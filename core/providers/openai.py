@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -189,6 +189,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             ).get("input"),
         )
 
+    @override
     async def aclose(self) -> None:
         """Close the cached Codex WebSocket and inherited HTTP client."""
         await self._codex_socket.aclose()
@@ -264,6 +265,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return isinstance(model_id, str) and model_id.startswith(_PLATFORM_EMBEDDING_PREFIX)
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -339,6 +341,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             metadata=base_model.metadata,
         )
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -363,6 +366,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             PROMPT_CACHE_AFFINITY_ID_KWARG: (prompt_cache_affinity_id or conversation_id),
         }
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Wire media depends on the connection's wire variant.
 
@@ -378,6 +382,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
         return super().wire_media_support(model_id) | {"application/pdf"}
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -413,6 +418,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             tools=tools,
         )
 
+    @override
     async def _build_headers(self, cache_scope_id: str | None = None) -> dict[str, str]:
         if self._connection_mode == CODEX_RESPONSES_MODE:
             return await self._build_codex_headers(cache_scope_id)
@@ -440,6 +446,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 headers[header_name] = wire_cache_scope
         return headers
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -507,6 +514,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return await self._post_json(RESPONSES_POLICY_ENDPOINT, payload)
         return await super().send(messages, model_id=model_id, **kwargs)
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -566,6 +574,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             async for delta in deltas:
                 yield delta
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -690,6 +699,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         return self._model_wire_policy(model_id).get("protocol") == OPENAI_RESPONSES_PROTOCOL
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -723,6 +733,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             provider_config=provider_config,
         )
 
+    @override
     def _model_context_window(self, model_id: str) -> int | None:
         """Resolve the Context window for the active OpenAI Connection."""
 

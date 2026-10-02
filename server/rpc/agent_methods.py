@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from contextlib import AsyncExitStack
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from core.archive import ArchiveSubjectInUseError
 from core.memory import MEMORY_PROMPT_MODES
@@ -65,7 +65,6 @@ from server.rpc.validation import (
 )
 
 JsonObject = dict[str, Any]
-_Result = TypeVar("_Result")
 
 _LOGGER = get_logger("server.rpc.agents")
 
@@ -186,12 +185,12 @@ def _update_agent_record(state: Any, params: JsonObject) -> tuple[JsonObject, li
     return response, changed_fields
 
 
-async def _run_agent_operation(
-    state: Any, operation: Callable[..., _Result], *arguments: Any
-) -> _Result:
+async def _run_agent_operation[Result](
+    state: Any, operation: Callable[..., Result], *arguments: Any
+) -> Result:
     """Run one Agent store operation on the Session database's pool, mapping its errors."""
     try:
-        result: _Result = await state.runtime.chat_sessions.run_async(operation, *arguments)
+        result: Result = await state.runtime.chat_sessions.run_async(operation, *arguments)
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     return result

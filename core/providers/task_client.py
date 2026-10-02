@@ -17,7 +17,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, Self, TypeVar
+from typing import Any, Literal, Protocol, Self
 from uuid import uuid4
 
 import httpx
@@ -35,7 +35,6 @@ from core.utils.retry import retry_async
 from core.utils.tls import shared_ssl_context
 
 JsonObject = dict[str, Any]
-ParsedResultT = TypeVar("ParsedResultT")
 HeaderBuilder = Callable[[], Awaitable[dict[str, str]]]
 
 # Option name of the JSON escape hatch every provider task target carries:
@@ -233,7 +232,7 @@ class ProviderTaskClient:
             usage_observer=usage_observer,
         )
 
-    async def post_and_parse(
+    async def post_and_parse[ParsedResultT](
         self,
         endpoint: str,
         *,
@@ -334,7 +333,7 @@ class ProviderTaskClient:
 
         return await auth_recovery.run(lambda: retry_async(_do_request))
 
-    async def get_and_parse(
+    async def get_and_parse[ParsedResultT](
         self,
         endpoint: str,
         *,

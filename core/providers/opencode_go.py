@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -234,11 +234,13 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
     """OpenCode Go's Anthropic Messages wire adapter."""
 
     @staticmethod
+    @override
     def _build_error_detail(status_code: int, response_body: str = "") -> str:
         # Gateway classification needs the structured code as well as the type
         # and message. Preserve the complete body on this wire too.
         return format_http_error_detail(status_code, response_body)
 
+    @override
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -267,12 +269,14 @@ class _OpenCodeGoMessagesAdapter(AnthropicCompatibleAdapter):
             max_tokens=max_tokens,
         )
 
+    @override
     def _request_headers_from_kwargs(
         self,
         request_kwargs: dict[str, Any],
     ) -> dict[str, str]:
         return _opencode_request_headers(request_kwargs)
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -348,10 +352,12 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
 
+    @override
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -373,12 +379,14 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             routing_id = hashlib.sha256(address).hexdigest()[:32]
         return {OPENCODE_SESSION_ID_KWARG: f"vbot-{routing_id}"}
 
+    @override
     def _request_headers_from_kwargs(
         self,
         request_kwargs: dict[str, Any],
     ) -> dict[str, str]:
         return _opencode_request_headers(request_kwargs)
 
+    @override
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Declare the reasoning class accepted by the selected wire.
 
@@ -392,6 +400,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return REASONING_REPLAY_FIDELITY_READABLE_ONLY
         return super().reasoning_replay_fidelity(model_id)
 
+    @override
     def _format_assistant_message(
         self,
         message: dict[str, Any],
@@ -416,6 +425,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         return wire
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -454,6 +464,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             provider_config=provider_config,
         )
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Resolve media support from the wire selected for this model."""
 
@@ -461,6 +472,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return self._messages.wire_media_support(model_id)
         return super().wire_media_support(model_id)
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -486,6 +498,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             tools=tools,
         )
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -511,6 +524,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return await self._post_responses_json(payload, request_headers=request_headers)
         return await super().send(messages, model_id=model_id, **request_kwargs)
 
+    @override
     def stream(
         self,
         messages: list[dict[str, Any]],
@@ -537,6 +551,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return self._stream_responses(payload, request_headers=request_headers)
         return super().stream(messages, model_id=model_id, **request_kwargs)
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -553,6 +568,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             return normalize_responses_response(response)
         return self._messages.normalize_response(response, model_id=model_id)
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -568,6 +584,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -793,6 +810,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         self._apply_model_output_limit(request_kwargs, model_id, messages)
         return request_kwargs
 
+    @override
     def _model_max_output_tokens(self, model_id: str) -> int | None:
         if self._model_lookup is None:
             return None
@@ -807,6 +825,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 return model.max_output_tokens
         return None
 
+    @override
     def _model_context_window(self, model_id: str) -> int | None:
         if self._model_lookup is None:
             return None

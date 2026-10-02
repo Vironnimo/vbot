@@ -29,7 +29,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from core.channels._state_schema import DATABASE_NAME, channel_database_spec
 from core.channels.adapter import (
@@ -48,8 +48,6 @@ from core.chat.messages import GroupRole
 from core.config_validation import JsonObject
 from core.database import Database, canonical_database_path, open_database
 from core.utils.timestamps import format_canonical_timestamp, utc_now_timestamp
-
-_Result = TypeVar("_Result")
 
 # Socket platforms may redeliver recent events after a reconnect; remembering the
 # newest receipts per Channel bounds both the dedupe window and the table.
@@ -101,9 +99,9 @@ class ChannelStateStore:
     def database(self) -> Database:
         return self._database
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking Channel state work on the ``channels.db`` worker pool.
 
         For an async caller's own unit of state work, such as a Run-button claim

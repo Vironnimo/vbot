@@ -2,6 +2,7 @@
 
 import io
 import threading
+from typing import override
 
 import pytest
 
@@ -12,6 +13,7 @@ from cli._progress import ProgressPrinter, status_line
 class Terminal(io.StringIO):
     encoding = "utf-8"
 
+    @override
     def isatty(self) -> bool:
         return True
 
@@ -40,6 +42,7 @@ def test_progress_flushes_before_work_and_stops_on_exception():
     class Output(io.StringIO):
         flushes = 0
 
+        @override
         def flush(self):
             self.flushes += 1
             if self.flushes >= 2:

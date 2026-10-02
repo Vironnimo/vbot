@@ -6,7 +6,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 from difflib import get_close_matches
-from typing import NoReturn
+from typing import NoReturn, override
 
 from cli._parser_agents import (
     _add_agent_parsers,
@@ -97,11 +97,13 @@ class _CliParser(argparse.ArgumentParser):
             ),
         )
 
+    @override
     def add_subparsers(self, **kwargs):
         kwargs.setdefault("metavar", "<command>")
         kwargs.setdefault("title", "commands")
         return super().add_subparsers(**kwargs)
 
+    @override
     def error(self, message: str) -> NoReturn:
         help_path = getattr(self, "_error_help_path", self.prog)
         selected = self._selected_parser
@@ -123,6 +125,7 @@ class _CliParser(argparse.ArgumentParser):
         )
         self.exit(2, f"{status_line('error', details, stream=sys.stderr)}\n")
 
+    @override
     def _parse_optional(self, arg_string):
         result = super()._parse_optional(arg_string)
         # A list of (action, option string, separator, explicit argument) interpretations.
@@ -130,6 +133,7 @@ class _CliParser(argparse.ArgumentParser):
             self._unknown_options.append(arg_string.split("=", 1)[0])
         return result
 
+    @override
     def _check_value(self, action, value) -> None:
         if isinstance(action, argparse._SubParsersAction) and value not in action.choices:
             matches = get_close_matches(value, action.choices, n=1)

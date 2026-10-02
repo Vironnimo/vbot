@@ -18,7 +18,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Generic, Literal, TypeVar
+from typing import Any, Literal
 
 from core.config_validation import (
     JsonDiagnostic,
@@ -62,14 +62,11 @@ LAUNCH_HISTORY_SHAPE = json_document(
 GROUPS_SHAPE = json_document({"groups"}, {"groups": json_list(GROUP_SHAPE, key="id")})
 
 
-_Entry = TypeVar("_Entry")
-
-
 @dataclass(frozen=True, slots=True)
-class ParsedEntries(Generic[_Entry]):
+class ParsedEntries[Entry]:
     """The entries of one Terminal document: parsed ones, and invalid ones verbatim."""
 
-    valid: list[_Entry] = field(default_factory=list)
+    valid: list[Entry] = field(default_factory=list)
     invalid: list[Any] = field(default_factory=list)
 
 
@@ -179,8 +176,10 @@ def parse_groups(document: Any) -> ParsedEntries[TerminalGroup]:
     return _parse_entries(entries, _parse_group)
 
 
-def _parse_entries(entries: list[Any], parse: Callable[[Any], _Entry]) -> ParsedEntries[_Entry]:
-    parsed: ParsedEntries[_Entry] = ParsedEntries()
+def _parse_entries[Entry](
+    entries: list[Any], parse: Callable[[Any], Entry]
+) -> ParsedEntries[Entry]:
+    parsed: ParsedEntries[Entry] = ParsedEntries()
     seen_ids: set[str] = set()
     for raw_entry in entries:
         try:

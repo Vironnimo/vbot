@@ -9,6 +9,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import Mock
 from xml.etree import ElementTree
 
@@ -571,6 +572,7 @@ def test_permission_hook_tolerates_older_sdks_and_logs_failures_once(monkeypatch
         Uri = "http://192.168.1.20:8420/"
         State = "default"
 
+        @override
         def __setattr__(self, name, value):
             if name == "SavesInProfile":
                 raise AttributeError(name)

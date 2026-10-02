@@ -14,7 +14,7 @@ import asyncio
 import dataclasses
 import hashlib
 from collections.abc import Callable
-from typing import Protocol
+from typing import Protocol, override
 
 from core.recall._passage_catalog import Candidates, StoredPassage
 from core.recall.canonical import (
@@ -101,6 +101,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
         self.index = index if index is not None else PassageIndex(context.data_dir)
         self._vector = VectorRecallBackend(context, index=self.index, on_waiting=on_waiting)
 
+    @override
     def search_capabilities(self) -> RecallSearchCapabilities:
         return RecallSearchCapabilities(
             result_type="passage",
@@ -113,6 +114,7 @@ class HybridRecallBackend(CanonicalSessionRecallBackend):
             default_order="relevance",
         )
 
+    @override
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         depth = min(max(_RRF_INITIAL_DEPTH, request.offset + request.limit + 1), _RRF_MAX_DEPTH)
         # The catalog is refreshed and the query embedded once per search;

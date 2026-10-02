@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -145,6 +145,7 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             },
         )
 
+    @override
     def _model_supports_temperature(self, model_id: str) -> bool:
         """Read Anthropic's discovery-derived per-model sampling policy."""
 

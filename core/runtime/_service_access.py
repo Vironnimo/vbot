@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Generic, TypeVar, overload
+from typing import TYPE_CHECKING, overload
 
 if TYPE_CHECKING:
     from core.runtime.runtime import Runtime
 
-_Service = TypeVar("_Service")
 
-
-class _StartedService(Generic[_Service]):
+class _StartedService[Service]:
     """Apply the same readiness and availability policy to an explicit service getter."""
 
-    def __init__(self, getter: Callable[[Runtime], _Service | None], unavailable: str) -> None:
+    def __init__(self, getter: Callable[[Runtime], Service | None], unavailable: str) -> None:
         self._getter = getter
         self._unavailable = unavailable
         self._name = ""
@@ -23,14 +21,14 @@ class _StartedService(Generic[_Service]):
         self._name = name
 
     @overload
-    def __get__(self, instance: None, owner: type[Runtime]) -> _StartedService[_Service]: ...
+    def __get__(self, instance: None, owner: type[Runtime]) -> _StartedService[Service]: ...
 
     @overload
-    def __get__(self, instance: Runtime, owner: type[Runtime] | None = None) -> _Service: ...
+    def __get__(self, instance: Runtime, owner: type[Runtime] | None = None) -> Service: ...
 
     def __get__(
         self, instance: Runtime | None, owner: type[Runtime] | None = None
-    ) -> _Service | _StartedService[_Service]:
+    ) -> Service | _StartedService[Service]:
         if instance is None:
             return self
         instance._ensure_started()

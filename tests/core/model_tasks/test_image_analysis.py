@@ -11,7 +11,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from PIL import Image
@@ -153,6 +153,7 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
         self.active_requests = 0
         self.max_active_requests = 0
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],

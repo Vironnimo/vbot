@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from core.database import Database, DatabaseError, open_database
 from core.sessions import (
@@ -70,8 +70,6 @@ TRANSCRIPT_WRITE_PATIENCE_S = 60.0
 # contention.
 ACTIVITY_WRITE_PATIENCE_S = 0.5
 
-_WriteResult = TypeVar("_WriteResult")
-_Decoded = TypeVar("_Decoded")
 _FTS_ERROR_MARKERS = ("fts",)
 
 
@@ -98,19 +96,19 @@ class SessionStore:
     def _writer(self) -> sqlite3.Connection:
         return self._database.writer
 
-    async def run_async(
-        self, function: Callable[..., _Decoded], *arguments: Any, **keyword_arguments: Any
-    ) -> _Decoded:
+    async def run_async[Decoded](
+        self, function: Callable[..., Decoded], *arguments: Any, **keyword_arguments: Any
+    ) -> Decoded:
         """Run blocking Session work on the database's bounded worker pool."""
         return await self._database.run_async(function, *arguments, **keyword_arguments)
 
-    def _read(self, select: Callable[[sqlite3.Connection], _Decoded]) -> _Decoded:
+    def _read[Decoded](self, select: Callable[[sqlite3.Connection], Decoded]) -> Decoded:
         with self._database.read() as connection:
             return select(connection)
 
-    def _read_decoded(
-        self, select: Callable[[sqlite3.Connection], Callable[[], _Decoded]]
-    ) -> _Decoded:
+    def _read_decoded[Decoded](
+        self, select: Callable[[sqlite3.Connection], Callable[[], Decoded]]
+    ) -> Decoded:
         """Select rows in one read transaction, then decode them after it ends.
 
         A rollback-journal store serves reads under its runtime lock, so Message
@@ -120,11 +118,11 @@ class SessionStore:
             decode = select(connection)
         return decode()
 
-    def _execute_write(
+    def _execute_write[WriteResult](
         self,
-        func: Callable[[sqlite3.Connection], _WriteResult],
+        func: Callable[[sqlite3.Connection], WriteResult],
         patience_s: float = WRITE_PATIENCE_S,
-    ) -> _WriteResult:
+    ) -> WriteResult:
         fts_retried = False
         while True:
             try:

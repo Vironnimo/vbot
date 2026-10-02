@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 from core.chat import ChatLoop, ChatMessage
 from core.chat._run_state import (
@@ -116,10 +116,12 @@ class RecordingCompactionAdapter(StubAdapter):
         )
         self.events: list[str] = []
 
+    @override
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.events.append("agent")
         return await super().send(messages, model_id=model_id, **kwargs)
 
+    @override
     async def stream(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> Any:
         self.events.append("compaction")
         async for delta in super().stream(messages, model_id=model_id, **kwargs):

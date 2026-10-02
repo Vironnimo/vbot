@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
-from typing import Any, cast
+from typing import Any, cast, override
 
 from core.providers.reasoning import (
     DEFAULT_REASONING_REPLAY_POLICY,
@@ -99,6 +99,7 @@ class BlockingStubAdapter(StubAdapter):
         self.request_started = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.requests.append(
             {"messages": deepcopy(messages), "model_id": model_id, "kwargs": deepcopy(kwargs)}
@@ -114,6 +115,7 @@ class BlockingStreamingStubAdapter(ClosingStubAdapter):
         self.stream_started = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -138,6 +140,7 @@ class BlockingReasoningStreamingStubAdapter(ClosingStubAdapter):
         self.stream_started = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -166,6 +169,7 @@ class SilentBlockingStreamingStubAdapter(ClosingStubAdapter):
         self.stream_started = asyncio.Event()
         self.release = asyncio.Event()
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -188,6 +192,7 @@ class TenToolsThenBlockingReasoningAdapter(ClosingStubAdapter):
         super().__init__([])
         self.second_step_started = asyncio.Event()
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -229,6 +234,7 @@ class SlowStreamingStubAdapter(StubAdapter):
         super().__init__([])
         self._delay = delay
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -246,6 +252,7 @@ class SlowStreamingStubAdapter(StubAdapter):
 
 
 class MidStreamCancelledStubAdapter(StubAdapter):
+    @override
     async def stream(
         self,
         messages: list[JsonObject],
@@ -268,6 +275,7 @@ class PolicyStubAdapter(StubAdapter):
         self._policy = policy
         self.policy_queries: list[str] = []
 
+    @override
     def reasoning_replay_policy(self, model_id: str) -> ReasoningReplayPolicy:
         self.policy_queries.append(model_id)
         return self._policy

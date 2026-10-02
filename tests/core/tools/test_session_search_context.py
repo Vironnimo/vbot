@@ -1,6 +1,7 @@
 """Session search: conversation-only hits, bounded context and visibility."""
 
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -164,6 +165,7 @@ async def test_empty_filtered_page_keeps_more_matches_signal(tmp_path: Path) -> 
     sessions = ChatSessionManager(tmp_path)
 
     class EmptyBackend(SqliteFtsRecallBackend):
+        @override
         async def search_page(self, request):
             return RecallSearchPage((), "message", "relevance", "snapshot", True, 12)
 
@@ -185,6 +187,7 @@ async def test_backend_failures_keep_code_without_leaking_internal_diagnostics(
     sessions = ChatSessionManager(tmp_path)
 
     class BrokenBackend(SqliteFtsRecallBackend):
+        @override
         async def search_page(self, request):
             raise RecallSearchError(code, "private-database-path-and-provider-detail")
 

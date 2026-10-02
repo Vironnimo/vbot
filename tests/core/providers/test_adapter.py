@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
-from typing import Any, cast
+from typing import Any, cast, override
 
 import httpx
 import pytest
@@ -39,12 +39,15 @@ from .adapter_test_support import TOKEN, bearer_config, catalog_model
 class _StubAdapter(ProviderAdapter):
     """Minimal concrete Adapter implementing only the abstract interface."""
 
+    @override
     async def aclose(self) -> None:
         """Nothing to release."""
 
+    @override
     async def send(self, messages: list[dict], *, model_id: str, **kwargs) -> dict:
         return {}
 
+    @override
     async def stream(self, messages: list[dict], *, model_id: str, **kwargs) -> AsyncIterator[dict]:
         yield {"type": "finish", "reason": "stop"}
 
@@ -281,10 +284,12 @@ class _PartialResponseStream(httpx.AsyncByteStream):
         self.events = events
         self.closed = False
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         for event in self.events:
             yield f"data: {json.dumps(event)}\n\n".encode()
 
+    @override
     async def aclose(self) -> None:
         self.closed = True
 

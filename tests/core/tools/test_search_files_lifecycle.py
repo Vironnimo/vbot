@@ -9,6 +9,7 @@ import threading
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
+from typing import override
 
 import psutil  # type: ignore[import-untyped]
 import pytest
@@ -260,6 +261,7 @@ async def test_stdout_eof_does_not_disable_search_timeout(tmp_path, monkeypatch)
     waiting = threading.Event()
 
     class TimeoutAfterOutput(SearchBudget):
+        @override
         def keep_going(self):
             # Native execution enters its wait phase only after stdout EOF.
             # Expire there, independently of child startup or machine load.

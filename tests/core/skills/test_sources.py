@@ -6,6 +6,7 @@ import io
 import json
 import time
 import zipfile
+from typing import override
 
 import httpx
 import pytest
@@ -189,6 +190,7 @@ def test_failed_or_unsafe_download_does_not_publish(tmp_path, response):
 def test_received_bytes_are_bounded_without_content_length(tmp_path):
     # Repository metadata is limited to 1 MiB, however the server streams it.
     class Stream(httpx.SyncByteStream):
+        @override
         def __iter__(self):
             yield b"{" + b" " * 1024 * 1024
 
@@ -204,6 +206,7 @@ def test_slow_small_chunks_cannot_evade_the_download_deadline(tmp_path, monkeypa
     elapsed = 0
 
     class Stream(httpx.SyncByteStream):
+        @override
         def __iter__(self):
             nonlocal elapsed
             for _ in range(10):

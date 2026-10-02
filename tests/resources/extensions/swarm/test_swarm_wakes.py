@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from typing import override
 
 import pytest
 
@@ -46,6 +47,7 @@ async def test_busy_burst_reaches_next_request_without_duplicate_wakes(
             self.release = asyncio.Event()
             self.continued = asyncio.Event()
 
+        @override
         async def send(self, messages, *, model_id, **kwargs):
             first = not self.requests
             response = await super().send(messages, model_id=model_id, **kwargs)
@@ -140,6 +142,7 @@ async def test_automatic_delivery_updates_pending_during_each_running_iteration(
             self.started = [asyncio.Event() for _ in range(4)]
             self.release = [asyncio.Event() for _ in range(4)]
 
+        @override
         async def send(self, messages, *, model_id, **kwargs):
             response = await super().send(messages, model_id=model_id, **kwargs)
             index = len(self.requests) - 1

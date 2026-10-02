@@ -8,7 +8,7 @@ import logging
 import threading
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any
 
 from core.chat.errors import ChatSessionError
 from core.runs import RunKind
@@ -56,7 +56,6 @@ if TYPE_CHECKING:
     from core.database import Database
     from core.runs import Run
 
-_Result = TypeVar("_Result")
 _LOGGER = get_logger("sessions")
 
 
@@ -97,9 +96,9 @@ class ChatSessionManager:
         """Accounting-only own audit across live and archived Session generations."""
         return self._store.usage_history(after_entry_key, limit=limit)
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking work that reads or writes Sessions on the Session database's pool.
 
         For a caller's own unit of Session work, such as several reads and their

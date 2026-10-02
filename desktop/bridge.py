@@ -27,7 +27,7 @@ import logging
 import re
 import threading
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from desktop.restart import RestartError
 from desktop.system_actions import DesktopSystemActions
@@ -47,8 +47,6 @@ VOICE_API_VERSION = 2
 _MAX_MODEL_BASE64_CHARS = 4 * ((MAX_CUSTOM_WAKEWORD_MODEL_BYTES + 2) // 3)
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]*")
 
-_BridgeClass = TypeVar("_BridgeClass", bound=type)
-
 
 class BridgeError(Exception):
     """A known, user-actionable bridge failure whose message is exactly its ``error_code``."""
@@ -58,7 +56,7 @@ class BridgeError(Exception):
         self.error_code = error_code
 
 
-def _reject_with_error_codes(cls: _BridgeClass) -> _BridgeClass:
+def _reject_with_error_codes[BridgeClass: type](cls: BridgeClass) -> BridgeClass:
     """Apply the module's error contract to every public method of ``cls``."""
     for name, member in list(vars(cls).items()):
         if not name.startswith("_") and inspect.isfunction(member):

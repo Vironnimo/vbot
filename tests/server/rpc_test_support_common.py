@@ -10,7 +10,7 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -678,6 +678,7 @@ class StubModels:
 
 
 class EmptyStubModels(StubModels):
+    @override
     def list_for_provider(self, provider_id: str) -> list[object]:
         if provider_id not in self._models:
             return []

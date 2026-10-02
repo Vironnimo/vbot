@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -580,10 +580,12 @@ async def test_gemini_rejected_stream_closes_when_the_error_body_read_fails() ->
     class BrokenBody(httpx.AsyncByteStream):
         closed = False
 
+        @override
         async def __aiter__(self) -> AsyncIterator[bytes]:
             yield b"partial error"
             raise httpx.ReadError("body interrupted")
 
+        @override
         async def aclose(self) -> None:
             self.closed = True
 

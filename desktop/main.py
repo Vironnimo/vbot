@@ -32,7 +32,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, override
 
 import httpx
 
@@ -165,6 +165,7 @@ class DesktopWindowLayout:
 class _DesktopLogFormatter(logging.Formatter):
     """Render the Desktop process with the same structured labels as vBot logs."""
 
+    @override
     def format(self, record: logging.LogRecord) -> str:
         original_label = getattr(record, "vbot_level", None)
         record.vbot_level = "WARN" if record.levelname == "WARNING" else record.levelname
@@ -194,6 +195,7 @@ class _DesktopDailyFileHandler(logging.FileHandler):
         self.original_logger_propagate = True
         super().__init__(self._path_for(self._active_date), encoding="utf-8")
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         self._rotate_if_needed()
         super().emit(record)

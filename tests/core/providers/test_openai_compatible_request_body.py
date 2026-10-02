@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from typing import Any
+from typing import Any, override
 
 import httpx
 import httpx._content
@@ -150,6 +150,7 @@ async def test_declared_body_limit_counts_the_exact_wire_bytes_before_io(
 
 
 class _CustomContentTypeAdapter(OpenAICompatibleAdapter):
+    @override
     async def _build_request_headers(
         self, messages: list[dict[str, Any]], payload: Any
     ) -> dict[str, str]:

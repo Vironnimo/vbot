@@ -10,6 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from typing import override
 
 import pytest
 
@@ -327,6 +328,7 @@ async def test_system_errors_are_explained_in_english_without_paths(
         return PermissionError(errno.EACCES, message, str(path), 32)
 
     class LockedSpool(tempfile.TemporaryDirectory):
+        @override
         def __exit__(self, *exc_info):
             super().__exit__(*exc_info)
             raise in_use(Path(self.name) / locked)

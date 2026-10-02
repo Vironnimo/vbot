@@ -25,12 +25,10 @@ from collections.abc import Awaitable, Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Any, TypeVar
+from typing import Any
 
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
-
-T = TypeVar("T")
 
 _LOGGER = get_logger("utils.retry")
 
@@ -132,7 +130,7 @@ async def sleep_for_retry(attempt: int, retry_after: float | None = None) -> Non
     await _sleep(delay)
 
 
-async def retry_async(
+async def retry_async[T](
     async_fn: Callable[..., Awaitable[T]],
     *args: Any,
     max_retries: int = MAX_RETRIES,

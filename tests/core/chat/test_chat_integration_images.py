@@ -13,7 +13,7 @@ import json
 import random
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from PIL import Image
@@ -55,9 +55,11 @@ async def test_image_validation_and_known_limits_reach_chat_requests(
     start_runtime: StartRuntime, source: str, damaged: bool
 ) -> None:
     class LimitedAdapter(FakeAdapter):
+        @override
         def image_size_limit(self, model_id):
             return 512
 
+        @override
         def wire_media_support(self, model_id):
             return frozenset({"image/png"})
 
@@ -220,12 +222,14 @@ async def test_provider_body_overflow_preserves_fresh_inputs_and_stops_without_r
     rejected: list[list[JsonObject]] = []
 
     class LimitedAdapter(FakeAdapter):
+        @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if source == "tool" and not self.requests:
                 return await super().send(messages, model_id=model_id, **kwargs)
             rejected.append(messages)
             raise ProviderRequestTooLargeError(1001, 1000)
 
+        @override
         async def stream(
             self, messages: list[dict], *, model_id: str, **kwargs: Any
         ) -> AsyncIterator[dict]:
@@ -292,6 +296,7 @@ async def test_read_image_returns_run_local_base64_in_tool_result_for_vision_mod
     tmp_path: Path, start_runtime: StartRuntime
 ) -> None:
     class DeletingAdapter(FakeAdapter):
+        @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if len(self.requests) == 1:
                 assert Path(agent.workspace).joinpath("diagram.png").read_bytes() == original_bytes
@@ -397,6 +402,7 @@ async def test_rereading_overwritten_image_delivers_each_calls_own_pixels(
         frames.append(buffer.getvalue())
 
     class OverwritingAdapter(FakeAdapter):
+        @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             step = len(self.requests)
             results = [
@@ -515,6 +521,7 @@ async def test_long_mixed_image_run_keeps_images_and_can_reopen_originals(
     live_budgets: list[wire_shaping.RequestImageBudget] = []
 
     class RebuildingAdapter(FakeAdapter):
+        @override
         async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
             if provider_pressure:
                 payload = wire._build_payload(messages, model_id, **kwargs)

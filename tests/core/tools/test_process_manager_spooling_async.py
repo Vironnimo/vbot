@@ -7,7 +7,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, BinaryIO, cast
+from typing import Any, BinaryIO, cast, override
 
 import pytest
 
@@ -27,9 +27,11 @@ class PipeTransport(asyncio.ReadTransport):
         self.closed = asyncio.Event()
         reader.set_transport(self)
 
+    @override
     def pause_reading(self) -> None:
         self.paused = True
 
+    @override
     def resume_reading(self) -> None:
         if self.closed.is_set():
             return
@@ -38,6 +40,7 @@ class PipeTransport(asyncio.ReadTransport):
             asyncio.get_running_loop().call_soon(self.reader.feed_data, self.pending)
             self.pending = b""
 
+    @override
     def close(self) -> None:
         self.closed.set()
         asyncio.get_running_loop().call_soon(self.reader.feed_eof)

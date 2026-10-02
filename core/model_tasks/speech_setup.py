@@ -9,7 +9,7 @@ import tomllib
 from dataclasses import dataclass
 from importlib import metadata, util
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 from core.model_tasks.local_setup import LocalSetup
 from core.model_tasks.model_files import PinnedModel
@@ -70,9 +70,11 @@ class LocalSpeechSetup(LocalSetup):
         return self._server_stack is not None and self._server_stack.restart_required
 
     @property
+    @override
     def blocks_execution(self) -> bool:
         return super().blocks_execution or self._restart_pending
 
+    @override
     def status(self, *, log_unavailable: bool = False) -> dict[str, Any]:
         status = super().status(log_unavailable=log_unavailable)
         if self._restart_pending and status["state"] in {"ready", "missing"}:
@@ -80,28 +82,33 @@ class LocalSpeechSetup(LocalSetup):
             status.pop("progress", None)
         return status
 
+    @override
     def install(self) -> dict[str, Any]:
         if self._restart_pending:
             return self.status()
         return super().install()
 
+    @override
     def activity(self) -> dict[str, Any] | None:
         # The target whose installation changed the server's packages asks for the restart.
         if self._restart_pending and self._state == "ready":
             return {"state": "action_required", "phase": "restart_required"}
         return super().activity()
 
+    @override
     def _environment_error(self) -> str:
         if self._server_stack is not None:
             return "" if _dependencies_available() else "dependencies_missing"
         return super()._environment_error()
 
+    @override
     def _python_version(self) -> str | None:
         # The managed STT worker imports vBot's source, which needs the server's Python.
         if self.engine:
             return None
         return f"{sys.version_info.major}.{sys.version_info.minor}"
 
+    @override
     async def _perform(self) -> None:
         if self._environment_error():
             if self.engine:

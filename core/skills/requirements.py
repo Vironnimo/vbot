@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypeAlias, cast
+from typing import Any, Literal, cast
 
-RequirementCheckKind: TypeAlias = Literal["binary", "env", "skill"]
-RequirementGroupKind: TypeAlias = Literal["all", "any"]
-SkillAvailabilityState: TypeAlias = Literal["available", "unavailable", "invalid"]
+type RequirementCheckKind = Literal["binary", "env", "skill"]
+type RequirementGroupKind = Literal["all", "any"]
+type SkillAvailabilityState = Literal["available", "unavailable", "invalid"]
 
 REQUIREMENTS_METADATA_KEY = "vbot"
 
@@ -43,7 +43,7 @@ class RequirementGroup:
         return f"{self.operator}({joiner.join(child.describe() for child in self.children)})"
 
 
-RequirementNode: TypeAlias = RequirementCheck | RequirementGroup
+type RequirementNode = RequirementCheck | RequirementGroup
 
 
 @dataclass(frozen=True)

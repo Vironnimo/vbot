@@ -8,7 +8,6 @@ import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import TypeVar
 
 from pathspec import PathSpec
 
@@ -24,8 +23,6 @@ _MAX_IGNORE_LINE_CHARS = 4096
 _SOURCE_CACHE_LIMIT = 4096
 _RACY_WINDOW_NS = 3_000_000_000
 _Stamp = tuple[int, int, int]
-_K = TypeVar("_K")
-_V = TypeVar("_V")
 _SOURCES: OrderedDict[tuple[Path, bool], tuple[_Stamp, tuple[int, list]]] = OrderedDict()
 _CONFIG_EXCLUDES: OrderedDict[Path, tuple[_Stamp, tuple[str | None]]] = OrderedDict()
 _CACHE_LOCK = threading.Lock()
@@ -36,7 +33,7 @@ def _stamp(path: Path) -> _Stamp:
     return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
 
 
-def _cached(cache: OrderedDict[_K, tuple[_Stamp, _V]], key: _K, stamp: _Stamp) -> _V | None:
+def _cached[K, V](cache: OrderedDict[K, tuple[_Stamp, V]], key: K, stamp: _Stamp) -> V | None:
     with _CACHE_LOCK:
         entry = cache.get(key)
         if entry is None or entry[0] != stamp:
@@ -45,7 +42,9 @@ def _cached(cache: OrderedDict[_K, tuple[_Stamp, _V]], key: _K, stamp: _Stamp) -
         return entry[1]
 
 
-def _remember(cache: OrderedDict[_K, tuple[_Stamp, _V]], key: _K, stamp: _Stamp, value: _V) -> None:
+def _remember[K, V](
+    cache: OrderedDict[K, tuple[_Stamp, V]], key: K, stamp: _Stamp, value: V
+) -> None:
     if time.time_ns() - stamp[0] < _RACY_WINDOW_NS:
         return
     with _CACHE_LOCK:

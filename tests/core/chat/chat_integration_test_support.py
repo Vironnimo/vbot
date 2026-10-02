@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -36,9 +36,11 @@ class FakeAdapter(ProviderAdapter):
         self.response = response
         self.requests: list[CapturedRequest] = []
 
+    @override
     async def aclose(self) -> None:
         return None
 
+    @override
     async def send(self, messages: list[dict], *, model_id: str, **kwargs: Any) -> dict:
         self.requests.append(
             CapturedRequest(messages=list(messages), model_id=model_id, kwargs=kwargs)
@@ -47,6 +49,7 @@ class FakeAdapter(ProviderAdapter):
             return self.response.pop(0)
         return self.response
 
+    @override
     async def stream(
         self,
         messages: list[dict],
@@ -57,11 +60,13 @@ class FakeAdapter(ProviderAdapter):
         raise NotImplementedError("streaming not implemented in this stub")
         yield {}
 
+    @override
     def normalize_response(
         self, response: JsonObject, *, model_id: str | None = None
     ) -> JsonObject:
         return response
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         del model_id
         return IMAGE_WIRE_MEDIA_TYPES

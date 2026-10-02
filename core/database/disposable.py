@@ -18,7 +18,7 @@ import sqlite3
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Literal, TypeVar
+from typing import Any, Literal
 
 from core.database._connections import classify_write_error, is_busy_error
 from core.database.database import Database, _discard, _open_disposable, database_worker_pool
@@ -30,7 +30,6 @@ from core.database.errors import (
 from core.database.spec import DISPOSABLE, DatabaseSpec
 
 ProjectionFailure = Literal["busy", "unavailable", "rebuild"]
-_Result = TypeVar("_Result")
 
 
 def projection_failure(error: BaseException) -> ProjectionFailure | None:
@@ -109,9 +108,9 @@ class DisposableDatabase:
                 self._database = _open_disposable(self.spec, workers=self._workers)
             return self._database
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking work that uses this database on its bounded worker pool.
 
         After ``close`` it raises :class:`DatabaseUnavailableError`, including

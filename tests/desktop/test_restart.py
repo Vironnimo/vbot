@@ -8,7 +8,7 @@ import os
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -259,6 +259,7 @@ class ExpiringProcess(FakeProcess):
         super().__init__()
         self.harness = harness
 
+    @override
     def poll(self) -> int | None:
         self.harness.now += restart.HANDOFF_TIMEOUT_SECONDS
         return None

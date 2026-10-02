@@ -6,7 +6,7 @@ import re
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -463,6 +463,7 @@ def test_logger_proxy_forwards_formatted_records_that_pass_its_filters() -> None
     captured: list[logging.LogRecord] = []
 
     class CaptureHandler(logging.Handler):
+        @override
         def emit(self, record: logging.LogRecord) -> None:
             captured.append(record)
 

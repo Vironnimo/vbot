@@ -8,7 +8,7 @@ import io
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from PIL import Image
@@ -750,6 +750,7 @@ def test_request_resolves_user_blocks_only_when_the_history_carries_them(tmp_pat
             super().__init__(store)
             self.current_turns: list[str] = []
 
+        @override
         async def resolve_messages(
             self, messages: list[dict[str, Any]], *, current_user_message_id: str, **kwargs: Any
         ) -> list[dict[str, Any]]:

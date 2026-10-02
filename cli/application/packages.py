@@ -15,7 +15,7 @@ import zipfile
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path, PurePosixPath
-from typing import Any, TypeVar
+from typing import Any
 
 import httpx
 
@@ -46,8 +46,6 @@ _BYTECODE_CACHE = re.compile(r"[^/]+\.pyc(?:\.[0-9]+)?")
 #: version from about 45 s to 7 s. Reads and hashing release the GIL.
 FILE_WORKERS = 16
 _LOGGER = logging.getLogger("vbot.application.packages")
-_Item = TypeVar("_Item")
-_Result = TypeVar("_Result")
 
 
 def version_label(manifest: dict[str, Any]) -> str:
@@ -70,7 +68,9 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
-def _concurrently(function: Callable[[_Item], _Result], items: Iterable[_Item]) -> list[_Result]:
+def _concurrently[Item, Result](
+    function: Callable[[Item], Result], items: Iterable[Item]
+) -> list[Result]:
     """Apply ``function`` to payload files concurrently; the first failure is raised."""
     items = list(items)
     if len(items) < 2:

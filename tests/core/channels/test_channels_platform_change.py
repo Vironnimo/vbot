@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -56,6 +56,7 @@ class LateWriteAdapter(DelayedStopAdapter):
         super().__init__(**kwargs)
         self._state = state
 
+    @override
     async def stop(self) -> None:
         await super().stop()
         await self._state.snapshot_participant_role(_CHANNEL, "-100", "60", "Late")

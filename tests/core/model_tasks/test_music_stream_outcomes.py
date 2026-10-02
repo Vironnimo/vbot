@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from typing import override
 
 import httpx
 import pytest
@@ -46,11 +47,13 @@ class _Stream(httpx.AsyncByteStream):
         self.failure = failure
         self.closed = False
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield self.body
         if self.failure is not None:
             raise self.failure
 
+    @override
     async def aclose(self) -> None:
         self.closed = True
 

@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol
 
 from core.database import (
     APPLICATION_IDS,
@@ -58,7 +58,6 @@ if TYPE_CHECKING:
     from core.usage import UsageRecorder
 
 JsonObject = dict[str, Any]
-_Result = TypeVar("_Result")
 
 _LOGGER = get_logger("statistics")
 
@@ -331,15 +330,15 @@ class StatisticsIndex:
         self._database = DisposableDatabase(statistics_database_spec(self.index_path))
         self._lock = threading.RLock()
 
-    def read(
+    def read[Result](
         self,
         sessions: StatisticsSessionSource,
         scopes: Sequence[StatisticsScope],
-        consume: Callable[[IndexView], _Result],
+        consume: Callable[[IndexView], Result],
         *,
         prune: bool = True,
         usage_recorder: UsageRecorder | None = None,
-    ) -> _Result:
+    ) -> Result:
         """Reconcile ``scopes`` and run ``consume`` on one consistent index view.
 
         ``prune`` removes indexed Sessions outside ``scopes``; partial readers
@@ -390,9 +389,9 @@ class StatisticsIndex:
         with self._lock:
             self._database.discard()
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking Statistics work on the index database's bounded worker pool.
 
         After :meth:`close` it raises :class:`~core.database.DatabaseUnavailableError`.
@@ -409,15 +408,15 @@ class StatisticsIndex:
         with contextlib.suppress(DatabaseUnavailableError):
             await self._database.run_async(self.close)
 
-    def _read_file(
+    def _read_file[Result](
         self,
         sessions: StatisticsSessionSource,
         scopes: Sequence[StatisticsScope],
-        consume: Callable[[IndexView], _Result],
+        consume: Callable[[IndexView], Result],
         *,
         prune: bool,
         usage_recorder: UsageRecorder | None,
-    ) -> _Result:
+    ) -> Result:
         database = self._database.get()
         indexed = database.write(
             lambda connection: _reconcile_sources(
@@ -433,15 +432,15 @@ class StatisticsIndex:
             patience_s=_WRITE_PATIENCE_S,
         )
 
-    def _read_memory(
+    def _read_memory[Result](
         self,
         sessions: StatisticsSessionSource,
         scopes: Sequence[StatisticsScope],
-        consume: Callable[[IndexView], _Result],
+        consume: Callable[[IndexView], Result],
         *,
         prune: bool,
         usage_recorder: UsageRecorder | None,
-    ) -> _Result:
+    ) -> Result:
         with closing(sqlite3.connect(":memory:", isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             _prepare_connection(connection)
@@ -454,11 +453,11 @@ class StatisticsIndex:
                 return _consume(connection, indexed, consume)
 
 
-def _consume(
+def _consume[Result](
     connection: sqlite3.Connection,
     indexed: Mapping[tuple[str, str, str], IndexedSession],
-    consume: Callable[[IndexView], _Result],
-) -> _Result:
+    consume: Callable[[IndexView], Result],
+) -> Result:
     """Run ``consume`` and drop its temporary tables before the transaction ends.
 
     Temporary tables outlive a commit on the long-lived writer, and some shadow
@@ -749,7 +748,7 @@ def _delete_facts(connection: sqlite3.Connection, session_keys: Sequence[int]) -
         connection.executemany(f"DELETE FROM {table} WHERE session_key = ?", parameters)
 
 
-def _source(call: Callable[..., _Result], *args: Any) -> _Result:
+def _source[Result](call: Callable[..., Result], *args: Any) -> Result:
     """Run one canonical Session read, keeping its failures apart from index failures."""
     try:
         return call(*args)

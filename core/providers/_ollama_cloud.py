@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -51,11 +51,13 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
     """
 
     @classmethod
+    @override
     def openai_compatible_base_url(cls, base_url: str) -> str:
         """The configured Cloud base is native; its OpenAI-compatible API is ``/v1``."""
 
         return _ollama_openai_base_url(base_url)
 
+    @override
     def request_body_limit(self, model_id: str) -> int | None:
         """Direct Cloud Chat rejects bodies above 16 MiB (verified 2026-09-11)."""
         del model_id
@@ -87,6 +89,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Return the Model's verified Cloud image formats when profiled."""
         model = self._model_lookup(model_id.split("::", 1)[0]) if self._model_lookup else None
@@ -100,11 +103,13 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             )
         return IMAGE_WIRE_MEDIA_TYPES
 
+    @override
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """The compatible Cloud wire round-trips readable reasoning text only."""
         del model_id
         return REASONING_REPLAY_FIDELITY_READABLE_ONLY
 
+    @override
     def _wrap_transport_error(self, exc: httpx.TransportError) -> Exception:
         """Preserve the Provider-specific direct Cloud connection diagnostic."""
 
@@ -112,12 +117,14 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             return NetworkError(f"Ollama Cloud is not reachable at {self._cloud_base_url} ({exc})")
         return super()._wrap_transport_error(exc)
 
+    @override
     def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:
         """Intersect the Model ladder with Ollama Cloud's accepted wire values."""
 
         return self._reasoning_effort_ladder(self._model_lookup, self._config, model_id)
 
     @classmethod
+    @override
     def _reasoning_effort_ladder(
         cls,
         model_lookup: ModelLookup | None,
@@ -142,6 +149,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
                 supported.append(wire_effort)
         return tuple(supported)
 
+    @override
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -173,6 +181,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             payload["reasoning_effort"] = "none"
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -197,6 +206,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
             provider_config=provider_config,
         )
 
+    @override
     def _format_assistant_message(
         self,
         message: dict[str, Any],
@@ -264,6 +274,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
                 self._scanned_reasoning_field = field
                 return
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -274,6 +285,7 @@ class OllamaCloudAdapter(OpenAICompatibleAdapter):
         _drop_ollama_cloud_zero_prompt_tokens(normalized.get("usage"), response.get("usage"))
         return normalized
 
+    @override
     def _normalize_stream_chunk(
         self,
         raw_chunk: dict[str, Any],

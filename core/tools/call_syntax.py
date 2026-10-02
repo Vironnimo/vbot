@@ -14,7 +14,7 @@ import copy
 import json
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
-from typing import Any
+from typing import Any, override
 
 from core.tools.contracts import ToolContract, ToolContractError, _load_json_value, _same_json_value
 
@@ -32,12 +32,15 @@ class SpellingAliases(Mapping[str, str]):
             spelling(alias): field for field, names in fields.items() for alias in names
         }
 
+    @override
     def __getitem__(self, key: str) -> str:
         return self._aliases[spelling(key)]
 
+    @override
     def __iter__(self) -> Iterator[str]:
         return iter(self._aliases)
 
+    @override
     def __len__(self) -> int:
         return len(self._aliases)
 

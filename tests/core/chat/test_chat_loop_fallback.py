@@ -7,7 +7,7 @@ import io
 import json
 import random
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from PIL import Image
@@ -237,6 +237,7 @@ class _RecordingAdapter(StubAdapter):
         super().__init__(responses)
         self.served_model_ids: list[str] = []
 
+    @override
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         self.served_model_ids.append(model_id)
         return await super().send(messages, model_id=model_id, **kwargs)
@@ -520,12 +521,14 @@ async def test_fallback_preserves_local_read_pixels_without_disk_copies(
     source.write_bytes(pixels)
 
     class DeletingAdapter(StubAdapter):
+        @override
         async def send(self, *args: Any, **kwargs: Any) -> Any:
             if self.requests:
                 source.unlink()
             return await super().send(*args, **kwargs)
 
     class LimitedAdapter(StubAdapter):
+        @override
         def image_size_limit(self, model_id: str) -> int | None:
             return byte_limit
 

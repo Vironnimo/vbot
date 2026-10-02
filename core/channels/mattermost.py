@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, override
 from urllib.parse import quote, urlsplit, urlunsplit
 
 from websockets.asyncio.client import connect
@@ -29,6 +29,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
     async def api(self, method: str, path: str, **kwargs: Any) -> Any:
         return await self.request(method, self._base + path, headers=self._headers, **kwargs)
 
+    @override
     async def _listen(self) -> None:
         identity = await self.api("GET", "/users/me")
         self._bot_id = identity["id"]
@@ -125,6 +126,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
             },
         )
 
+    @override
     async def build_media_blocks(self, raw_message: Any) -> Any:
         files = []
         for file in raw_message.get("files", []):
@@ -132,11 +134,13 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
             files.append({"id": file["id"], "name": info.get("name"), "size": info.get("size")})
         return await super().build_media_blocks({**raw_message, "files": files})
 
+    @override
     async def download(self, file: dict[str, Any]) -> bytes:
         return await self.read_download(
             f"{self._base}/files/{quote(file['id'], safe='')}", self._headers
         )
 
+    @override
     async def send_text(
         self,
         platform_target: str,
@@ -147,6 +151,7 @@ class MattermostChannelAdapter(NetworkChannelAdapter):
     ) -> None:
         await self.send(text, platform_target, thread_id=thread_id or reply_to_message_id)
 
+    @override
     async def send(
         self,
         message: str | None,

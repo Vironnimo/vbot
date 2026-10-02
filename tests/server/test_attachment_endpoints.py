@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 from fastapi import HTTPException, Request  # type: ignore[import-not-found]
@@ -26,6 +26,7 @@ class _RecordingAttachmentStore(AttachmentStore):
         super().__init__(data_dir, max_size_bytes=max_size_bytes)
         self.stored: list[str] = []
 
+    @override
     def store(self, filename: str, data: bytes) -> Any:
         self.stored.append(filename)
         return super().store(filename, data)

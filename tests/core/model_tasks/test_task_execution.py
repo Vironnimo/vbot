@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -105,6 +105,7 @@ def test_execution_rechecks_live_target_after_binding_was_saved(change: str) -> 
 
 def test_schema_resolution_failure_is_a_task_configuration_error() -> None:
     class ChangedLocalTarget(_StubModelTasks):
+        @override
         def options_with_defaults(self, binding: TaskModelBinding) -> dict[str, Any]:
             raise TaskModelError("Target no longer registered")
 

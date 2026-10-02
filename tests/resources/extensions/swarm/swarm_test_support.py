@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-# mypy: disable-error-code=arg-type
 import asyncio
 import json
 import re
@@ -10,7 +9,9 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, NamedTuple, cast
+
+# mypy: disable-error-code=arg-type
+from typing import Any, NamedTuple, cast, override
 
 from core.chat import ChatMessage
 from core.chat.messages import ToolCall
@@ -276,6 +277,7 @@ class PausedSwarmAdapter(StubAdapter):
         self.release = asyncio.Event()
         self.followed = asyncio.Event()
 
+    @override
     async def send(self, messages, *, model_id, **kwargs):
         response = await super().send(messages, model_id=model_id, **kwargs)
         ordinal = len(self.requests)

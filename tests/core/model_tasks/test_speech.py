@@ -7,7 +7,7 @@ import logging
 import wave
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -160,6 +160,7 @@ class _TtsModelTasks:
 
 
 class _LocalTts(LocalSpeechExecutor):
+    @override
     async def synthesize(
         self,
         _local_id: str,

@@ -6,6 +6,8 @@ no derived index of its own.
 
 from __future__ import annotations
 
+from typing import override
+
 from core.recall.canonical import CanonicalSessionRecallBackend
 from core.recall.recall import (
     RecallBackendContext,
@@ -24,6 +26,7 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
         self.logger = context.logger
 
     @staticmethod
+    @override
     def search_capabilities() -> RecallSearchCapabilities:
         query_description = (
             "Distinctive words to find, ignoring case. Every "
@@ -43,5 +46,6 @@ class SqliteFtsRecallBackend(CanonicalSessionRecallBackend):
             supports_roles=True,
         )
 
+    @override
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         return await self.sessions.run_async(self._search_page, request, use_fts=True)

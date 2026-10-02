@@ -8,7 +8,7 @@ import logging
 import threading
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -40,6 +40,7 @@ class DeniedAwareAdapter(BlockingAdapter):
         super().__init__()
         self._denied_chat_log = DeniedChatLog()
 
+    @override
     def denied_chats(self) -> list[Any]:
         return self._denied_chat_log.entries()
 
@@ -47,6 +48,7 @@ class DeniedAwareAdapter(BlockingAdapter):
 class ShutdownFailureAdapter(BlockingAdapter):
     """An adapter whose task ends with an error instead of its cancellation."""
 
+    @override
     async def start(self) -> None:
         self.started.set()
         try:

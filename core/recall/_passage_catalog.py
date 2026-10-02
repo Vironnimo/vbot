@@ -30,7 +30,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any
 
 from core.database import (
     DatabaseError,
@@ -47,8 +47,6 @@ from core.sessions import (
     SessionReadBatch,
 )
 from core.utils.timestamps import format_canonical_timestamp
-
-_T = TypeVar("_T")
 
 SessionVersion = tuple[str, int]
 
@@ -570,11 +568,11 @@ class PassageCatalog:
     def path(self) -> Path:
         return self._database.path
 
-    async def read(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+    async def read[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         database = await self._database.get_async()
         return await database.read_async(operation)
 
-    async def write(self, operation: Callable[[sqlite3.Connection], _T]) -> _T:
+    async def write[T](self, operation: Callable[[sqlite3.Connection], T]) -> T:
         database = await self._database.get_async()
         return await database.write_async(operation, patience_s=WRITE_PATIENCE_S)
 
@@ -635,12 +633,12 @@ class PassageCatalog:
             )
         )
 
-    async def recovering(
+    async def recovering[T](
         self,
-        operation: Callable[[], Awaitable[_T]],
+        operation: Callable[[], Awaitable[T]],
         *,
         warning: Callable[[BaseException], None],
-    ) -> _T:
+    ) -> T:
         """Run *operation*; a damaged database is discarded and it runs once more.
 
         ``warning`` reports each damage before the discard. Contention and

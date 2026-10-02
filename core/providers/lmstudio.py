@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, Callable, Mapping
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx
 
@@ -70,12 +70,14 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         )
 
     @classmethod
+    @override
     def openai_compatible_base_url(cls, base_url: str) -> str:
         """LM Studio serves its OpenAI-compatible API under ``/v1``."""
 
         return _chat_base_url(base_url)
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -142,6 +144,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
             metadata=metadata,
         )
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -152,6 +155,7 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         await self._ensure_model_loaded(model_id)
         return await super().send(messages, model_id=model_id, **kwargs)
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 from core.providers.github_copilot_responses import (
     REASONING_ENCRYPTED_CONTENT_INCLUDE,
@@ -36,6 +36,7 @@ XAI_IMAGE_MEDIA_TYPES = frozenset({"image/jpeg", "image/png"})
 class XAIResponsesPolicy(OpenAISubscriptionResponsesPolicy):
     """Responses policy that respects xAI's models which cannot disable reasoning."""
 
+    @override
     def closest_reasoning_effort(self, effort: Any) -> str | None:
         normalized = normalize_thinking_effort(effort)
         if not normalized:
@@ -49,6 +50,7 @@ class XAIAdapter(OpenAIAdapter):
     """Translate vBot requests to xAI's stateless ``/responses`` protocol."""
 
     @classmethod
+    @override
     def accepts_discovered_model(
         cls,
         raw: Mapping[str, Any],
@@ -59,6 +61,7 @@ class XAIAdapter(OpenAIAdapter):
         del cls, raw, connection
         return True
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -73,16 +76,19 @@ class XAIAdapter(OpenAIAdapter):
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """xAI's current language-model wire accepts JPEG and PNG images."""
 
         del model_id
         return XAI_IMAGE_MEDIA_TYPES
 
+    @override
     def _uses_platform_responses(self, model_id: str) -> bool:
         del model_id
         return True
 
+    @override
     def _allowed_reasoning_efforts(
         self,
         model_id: str,
@@ -93,6 +99,7 @@ class XAIAdapter(OpenAIAdapter):
         levels = model_reasoning_levels(self._model_lookup, model_id)
         return frozenset(levels or ())
 
+    @override
     def _responses_policy_for_model(self, model_id: str) -> XAIResponsesPolicy:
         base_policy = super()._responses_policy_for_model(model_id)
         supported_request_parameters = XAI_RESPONSES_REQUEST_PARAMETERS
@@ -114,6 +121,7 @@ class XAIAdapter(OpenAIAdapter):
             supported_request_parameters=supported_request_parameters,
         )
 
+    @override
     def _build_responses_payload(
         self,
         messages: list[dict[str, Any]],

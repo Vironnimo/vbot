@@ -14,7 +14,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from logging import Logger
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, override
 
 import httpx
 
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
     from core.providers.token_getter import OAuthRequestRecovery
 
-_T = TypeVar("_T")
 
 # ---------------------------------------------------------------------------
 # HTTP status constants
@@ -148,6 +147,7 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
         self._inner = inner
         self._recorder = recorder
 
+    @override
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         capture = self._recorder.begin_capture(
             method=request.method,
@@ -172,6 +172,7 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
             capture.finalize()
         return response
 
+    @override
     async def aclose(self) -> None:
         await self._inner.aclose()
 
@@ -188,11 +189,13 @@ class _CaptureByteStream(httpx.AsyncByteStream):
         self._inner = inner
         self._capture = capture
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._inner:
             self._capture.feed_body(chunk)
             yield chunk
 
+    @override
     async def aclose(self) -> None:
         try:
             await self._inner.aclose()
@@ -313,13 +316,13 @@ def unsupported_sampling_parameter(detail: str) -> str | None:
     return None
 
 
-async def execute_with_sampling_fallback(
-    execute_attempt: Callable[[], Awaitable[_T]],
+async def execute_with_sampling_fallback[T](
+    execute_attempt: Callable[[], Awaitable[T]],
     payload: dict[str, Any],
     *,
     logger: Logger,
     provider_label: str,
-) -> _T:
+) -> T:
     """Run one adapter request, retrying once without a rejected sampling parameter.
 
     ``execute_attempt`` must perform one full ``retry_async``-wrapped request

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 from tests.server.rpc_test_support import StubAdapter, StubRuntime
 
@@ -22,8 +22,10 @@ class ServerStubRuntime(StubRuntime):
         for name, service in services.items():
             setattr(self, name, service)
 
+    @override
     def stop(self) -> None:
         self.stopped = True
 
+    @override
     def activate_bootstrap(self) -> None:
         self.bootstrap_activated = True

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -42,6 +42,7 @@ class WireEstimateAdapter(StubAdapter):
         super().__init__([])
         self._estimates = list(estimates)
 
+    @override
     def estimate_request_input_tokens(
         self,
         _messages: list[JsonObject],
@@ -268,6 +269,7 @@ def _append_loaded_skill(session: Any, model: str, content: str) -> None:
 class _OverflowingSkillAdapter(RecordingCompactionAdapter):
     """Reject every Agent request that still carries the oversized Skill instructions."""
 
+    @override
     async def send(self, messages: list[JsonObject], *, model_id: str, **kwargs: Any) -> JsonObject:
         if "HUGE-SKILL" in json.dumps(messages):
             raise ProviderError("context_length_exceeded", retryable=False)

@@ -6,7 +6,7 @@ import base64
 import binascii
 import json
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -271,6 +271,7 @@ class ProviderImageClient(ProviderTaskClient):
             retry_policy=NON_IDEMPOTENT_TASK_REQUEST_RETRY_POLICY,
         )
 
+    @override
     async def _observe_response_usage(self, response: httpx.Response) -> Mapping[str, Any] | None:
         if self._connection.mode != CODEX_RESPONSES_MODE:
             return await super()._observe_response_usage(response)

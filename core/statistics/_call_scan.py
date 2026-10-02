@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import datetime
+from typing import override
 
 from core.projects.address import format_agent_address
 from core.sessions import SessionAddress
@@ -87,11 +88,13 @@ class AccountingScan(UnitScan):
                     self.live_positions.append(None)
         super().__init__(connection, units, since=since, until=until)
 
+    @override
     def table(self, table: str) -> str:
         if table in {"stat_calls", "stat_records"}:
             return f"{self._prefix}_{table.removeprefix('stat_')}"
         return table
 
+    @override
     def _scanned_sessions(self) -> set[int]:
         # Archived and standalone requests have no live Session range. Their
         # own indexed request timestamps supply the authoritative window.

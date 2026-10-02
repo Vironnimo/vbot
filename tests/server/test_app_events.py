@@ -7,7 +7,7 @@ import inspect
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
 
@@ -25,6 +25,7 @@ class _RecordingProcessManager(StubProcessManager):
     def __init__(self) -> None:
         self.terminal_callbacks: list[Callable[[JsonObject], None]] = []
 
+    @override
     def add_terminal_callback(self, callback: Callable[[JsonObject], None]) -> Any:
         self.terminal_callbacks.append(callback)
         return lambda: self.terminal_callbacks.remove(callback)

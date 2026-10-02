@@ -22,11 +22,9 @@ import traceback
 from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from scripts.perf_bench_suite.report import ResultRecord
-
-T = TypeVar("T")
 
 Operation = Callable[[], object]
 """A benchmark operation: a plain callable or an ``async def`` function."""
@@ -79,11 +77,11 @@ class BenchContext:
         self._fixtures: dict[str, object] = {}
         self._cleanups: list[Callable[[], object]] = []
 
-    def run(self, awaitable: Coroutine[Any, Any, T]) -> T:
+    def run[T](self, awaitable: Coroutine[Any, Any, T]) -> T:
         """Run one coroutine to completion on the suite's Event Loop."""
         return self.loop.run_until_complete(awaitable)
 
-    def fixture(self, key: str, build: Callable[[], T]) -> T:
+    def fixture[T](self, key: str, build: Callable[[], T]) -> T:
         """Build a shared fixture once; later calls return the same instance."""
         if key not in self._fixtures:
             self._fixtures[key] = build()

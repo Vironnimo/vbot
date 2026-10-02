@@ -8,7 +8,7 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
 from dataclasses import replace
-from typing import Any, cast
+from typing import Any, cast, override
 from urllib.parse import quote
 
 import httpx
@@ -170,6 +170,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         super().__init__(*args, **kwargs)
         self._routing = parse_openrouter_routing(routing or {})
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -188,6 +189,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         )
         return await self._post_responses_json(payload)
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -217,6 +219,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             async for delta in deltas:
                 yield delta
 
+    @override
     def normalize_response(
         self,
         response: dict[str, Any],
@@ -241,6 +244,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     def _uses_all_turns_responses(self, model_id: str) -> bool:
         return model_id.split("::", 1)[0] in OPENROUTER_ALL_TURNS_RESPONSES_MODELS
 
+    @override
     def _normalize_stream_chunk(
         self,
         raw_chunk: dict[str, Any],
@@ -266,6 +270,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 delta.update(_openrouter_usage_extras(raw_chunk.get("usage")))
         return _collapse_reasoning_delta_texts(normalized, normalization_state)
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -300,6 +305,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         request_kwargs.update(kwargs)
         return request_kwargs
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -458,6 +464,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             handle_error_status=_handle_error_status,
         )
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -635,6 +642,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         return discovered
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -691,6 +699,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             pricing=_embedding_catalog_pricing(model_id, raw, output_modalities),
         )
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -738,6 +747,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         return payload
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,

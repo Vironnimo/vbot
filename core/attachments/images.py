@@ -13,7 +13,7 @@ import struct
 import warnings
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 from PIL import Image, ImageCms, ImageOps
 from pillow_heif import register_heif_opener
@@ -133,6 +133,7 @@ class _OutputBuffer(io.BytesIO):
         self.max_bytes = max_bytes
         self.encoded_size = 0
 
+    @override
     def write(self, data: Any) -> int:
         self.encoded_size += len(data)
         if self.max_bytes is not None and self.encoded_size > self.max_bytes:

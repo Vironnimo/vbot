@@ -7,7 +7,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -89,14 +89,17 @@ class BlockingAdapter(ChannelAdapter):
         self.sent_buttons: list[list[list[InteractionButton]] | None] = []
         self.relayed_runs: list[tuple[Run, ReplyPlanFacts]] = []
 
+    @override
     async def start(self) -> None:
         self._report_connected()
         self.started.set()
         await asyncio.Future()
 
+    @override
     async def stop(self) -> None:
         self.stopped.set()
 
+    @override
     async def send(
         self,
         message: str | None,
@@ -109,9 +112,11 @@ class BlockingAdapter(ChannelAdapter):
         self.sent_messages.append((message, platform_target))
         self.sent_buttons.append(buttons)
 
+    @override
     async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         self.relayed_runs.append((run, reply_plan))
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:
@@ -134,17 +139,20 @@ class DelayedStopAdapter(ChannelAdapter):
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
 
+    @override
     async def start(self) -> None:
         self._events.append(f"start:{self.label}")
         self.started.set()
         await asyncio.Future()
 
+    @override
     async def stop(self) -> None:
         self._events.append(f"stop:{self.label}:begin")
         await self._stop_gate.wait()
         self._events.append(f"stop:{self.label}:end")
         self.stopped.set()
 
+    @override
     async def send(
         self,
         message: str | None,
@@ -156,6 +164,7 @@ class DelayedStopAdapter(ChannelAdapter):
     ) -> None:
         return
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:

@@ -12,7 +12,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -101,6 +101,7 @@ class NetworkChannelAdapter(ChannelAdapter):
             )
         return self._http_client
 
+    @override
     async def start(self) -> None:
         try:
             await self._listen()
@@ -137,6 +138,7 @@ class NetworkChannelAdapter(ChannelAdapter):
             raise ChannelConfigError(f"Missing {self.platform_display_name} credential in {key}")
         return token.strip()
 
+    @override
     async def stop(self) -> None:
         self._connected = False
         await self._engine.stop()
@@ -150,9 +152,11 @@ class NetworkChannelAdapter(ChannelAdapter):
     def connection_status(self) -> dict[str, Any]:
         return {"connected": self._connected}
 
+    @override
     def denied_chats(self) -> list[DeniedChatFacts]:
         return self._denied.entries()
 
+    @override
     async def relay_run(self, run: Any, reply_plan: ReplyPlanFacts) -> None:
         await self._engine.relay_run(run, reply_plan)
 
@@ -162,6 +166,7 @@ class NetworkChannelAdapter(ChannelAdapter):
         while len(self._conversations) > 1024:
             self._conversations.popitem(last=False)
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:

@@ -45,7 +45,7 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, override
 
 import numpy as np
 
@@ -806,6 +806,7 @@ class _ReferenceMonitor(threading.Thread):
     def stop(self) -> None:
         self._stopping.set()
 
+    @override
     def run(self) -> None:
         try:
             self._backend.start()

@@ -10,7 +10,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from core.chat.wire_shaping import (
     _quote_external_json,
@@ -46,7 +46,6 @@ _PROMPT_MAX_CHARS = 50_000
 RecordSink = Callable[[list[JsonObject]], None | Awaitable[None]]
 Clock = Callable[[], float]
 Sleeper = Callable[[float], Awaitable[None]]
-_WriteResult = TypeVar("_WriteResult")
 
 
 @dataclass
@@ -113,9 +112,9 @@ class JournalBoundary:
     records: tuple[JsonObject, ...]
     closes_step: bool = False
 
-    async def commit(
-        self, write: Callable[[list[JsonObject]], Awaitable[_WriteResult]]
-    ) -> _WriteResult:
+    async def commit[WriteResult](
+        self, write: Callable[[list[JsonObject]], Awaitable[WriteResult]]
+    ) -> WriteResult:
         """Run *write* with this boundary's records, pending deltas included.
 
         *write* must persist the records in the same transaction as its history
@@ -262,11 +261,11 @@ class ContinuationTracker:
             )
         return JournalBoundary(self, tuple(records))
 
-    async def _commit_boundary(
+    async def _commit_boundary[WriteResult](
         self,
         boundary: JournalBoundary,
-        write: Callable[[list[JsonObject]], Awaitable[_WriteResult]],
-    ) -> _WriteResult:
+        write: Callable[[list[JsonObject]], Awaitable[WriteResult]],
+    ) -> WriteResult:
         if self._closed:
             return await write([])
         cancelled_task = self._periodic_task
@@ -282,7 +281,7 @@ class ContinuationTracker:
             batch.extend(boundary.records)
             committed = False
 
-            async def tracked_write() -> _WriteResult:
+            async def tracked_write() -> WriteResult:
                 nonlocal committed
                 result = await write(batch)
                 committed = True
@@ -413,7 +412,7 @@ class ContinuationTracker:
             await cls._settle(result)
 
     @staticmethod
-    async def _settle(work: Awaitable[_WriteResult]) -> _WriteResult:
+    async def _settle[WriteResult](work: Awaitable[WriteResult]) -> WriteResult:
         """Await a journal write; cancellation waits for an already-started write."""
         task = asyncio.ensure_future(work)
         try:

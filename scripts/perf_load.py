@@ -36,6 +36,7 @@ import argparse
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import override
 
 # Direct execution loads project packages from this checkout.
 _checkout_root = Path(__file__).resolve().parents[1]
@@ -103,6 +104,7 @@ def _name_list(text: str) -> tuple[str, ...]:
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Show defaults for valued options only, not for on/off flags."""
 
+    @override
     def _get_help_string(self, action: argparse.Action) -> str | None:
         if action.default is None or isinstance(action.default, bool):
             return action.help

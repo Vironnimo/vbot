@@ -9,7 +9,7 @@ provider-specific behavior can subclass this adapter."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
 
@@ -191,6 +191,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @override
     async def aclose(self) -> None:
         """Close the HTTP client and release resources."""
         await self._client.aclose()
@@ -205,6 +206,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # Wire media capability
     # ------------------------------------------------------------------
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Images plus the OpenAI ``input_audio`` format set (WAV/MP3).
 
@@ -298,6 +300,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         del messages, payload
         return await self._build_headers()
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -412,6 +415,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Encode one canonical user content part for this provider's wire."""
         return _to_openai_user_content_part(part)
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -685,6 +689,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             payload["reasoning_effort"] = "none"
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -745,6 +750,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     # send() — non-streaming
     # ------------------------------------------------------------------
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -876,6 +882,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             raise ProviderRequestTooLargeError(len(body), limit)
         return body
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],

@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -50,6 +50,7 @@ class CompletedStreamingStubAdapter(StubAdapter):
         self.deltas = deltas or [{"type": "content_delta", "text": "Complete answer"}]
         self.finish_reason = finish_reason
 
+    @override
     async def stream(
         self,
         messages: list[JsonObject],

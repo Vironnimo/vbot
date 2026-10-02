@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
 
@@ -196,6 +196,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @override
     async def aclose(self) -> None:
         """Close the HTTP client and release resources."""
         if self._owns_client:
@@ -211,11 +212,13 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
     # Wire media capability
     # ------------------------------------------------------------------
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Return media types verified for this compatible endpoint profile."""
         del model_id
         return self._wire_media_types
 
+    @override
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """The Messages wire round-trips signed thinking blocks only.
 
@@ -242,6 +245,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             headers.update(self._config.extra_headers)
         return headers
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -269,6 +273,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             normalized["usage"] = usage
         return normalized
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -631,6 +636,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
     # send() — non-streaming
     # ------------------------------------------------------------------
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -702,6 +708,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
     # stream() — SSE streaming
     # ------------------------------------------------------------------
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],

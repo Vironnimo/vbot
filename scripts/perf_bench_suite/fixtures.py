@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -506,6 +506,7 @@ class MemoryByteStream(httpx.AsyncByteStream):
     def __init__(self, chunks: Sequence[bytes]) -> None:
         self._chunks = tuple(chunks)
 
+    @override
     async def __aiter__(self):  # type: ignore[override]
         for chunk in self._chunks:
             yield chunk

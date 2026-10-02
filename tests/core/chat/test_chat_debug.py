@@ -5,7 +5,7 @@ Model's, tells a recording Adapter which Run, Agent, Session, route and iteratio
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -30,6 +30,7 @@ class DebugTrackingAdapter(StubAdapter):
         super().__init__(responses, **options)
         self.debug_contexts: list[DebugContext] = []
 
+    @override
     def set_debug_context(self, context: DebugContext) -> None:
         self.debug_contexts.append(context)
 

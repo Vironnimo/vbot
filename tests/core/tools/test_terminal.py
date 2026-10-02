@@ -6,7 +6,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -178,6 +178,7 @@ async def test_launch_failure_is_reported_and_releases_capacity(
     class RecoveringFactory(AdapterFactory):
         failing = True
 
+        @override
         def __call__(
             self,
             argv: Sequence[str],

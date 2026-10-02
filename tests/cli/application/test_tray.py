@@ -6,6 +6,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
+from typing import override
 
 import pytest
 
@@ -25,12 +26,15 @@ class Actions(TrayActions):
         self.calls: list[str] = []
         self.fail: str | None = None
 
+    @override
     def state(self) -> TrayState:
         return self.current
 
+    @override
     def watch(self, sink: TraySink) -> None:
         self.calls.append("watch")
 
+    @override
     def unwatch(self) -> None:
         self.calls.append("unwatch")
 
@@ -39,36 +43,47 @@ class Actions(TrayActions):
         if self.fail == name:
             raise RuntimeError("test failure")
 
+    @override
     def start_server(self) -> None:
         self._call("start_server")
 
+    @override
     def stop_server(self) -> None:
         self._call("stop_server")
 
+    @override
     def restart_server(self) -> None:
         self._call("restart_server")
 
+    @override
     def open_desktop(self) -> None:
         self._call("open_desktop")
 
+    @override
     def open_browser(self) -> None:
         self._call("open_browser")
 
+    @override
     def open_session(self, agent: str, session: str) -> None:
         self._call(f"open_session:{agent}:{session}")
 
+    @override
     def start_update(self) -> None:
         self._call("start_update")
 
+    @override
     def open_logs(self) -> None:
         self._call("open_logs")
 
+    @override
     def open_server_logs(self) -> None:
         self._call("open_server_logs")
 
+    @override
     def restart(self) -> None:
         self._call("restart")
 
+    @override
     def quit(self) -> None:
         self._call("quit")
 
@@ -291,17 +306,20 @@ def test_callbacks_use_one_worker_and_recover_after_a_facade_exception():
     callback_threads: list[int] = []
 
     class ControlledActions(Actions):
+        @override
         def state(self) -> TrayState:
             if logs_entered.is_set() and release_logs.is_set():
                 recovery_polled.set()
             return super().state()
 
+        @override
         def start_server(self) -> None:
             callback_threads.append(threading.get_ident())
             start_entered.set()
             assert release_start.wait(timeout=5)
             raise RuntimeError("test failure")
 
+        @override
         def open_logs(self) -> None:
             callback_threads.append(threading.get_ident())
             logs_entered.set()

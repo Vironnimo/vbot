@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from core.chat.content_blocks import ContentBlock, FileBlock, MediaBlock
 from core.chat.messages import GroupRole
@@ -20,7 +20,6 @@ if TYPE_CHECKING:
 # in-memory log small under spam while still covering every realistic setup flow.
 DENIED_CHAT_LOG_LIMIT = 20
 
-_Result = TypeVar("_Result")
 
 BOUND_RUN_CALLBACK_VERSION = "v1"
 BOUND_RUN_CALLBACK_PREFIX = f"run:{BOUND_RUN_CALLBACK_VERSION}:"
@@ -67,9 +66,9 @@ class RunButtonBindingRegistry(Protocol):
 
     def restore_run_button_binding(self, channel_id: str, binding_id: str) -> None: ...
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking registry work on the worker pool of the registry's database."""
         ...
 
@@ -156,9 +155,9 @@ class ConversationPointerStore(Protocol):
         expected_session_id: str,
     ) -> None: ...
 
-    async def run_async(
-        self, function: Callable[..., _Result], *arguments: Any, **keyword_arguments: Any
-    ) -> _Result:
+    async def run_async[Result](
+        self, function: Callable[..., Result], *arguments: Any, **keyword_arguments: Any
+    ) -> Result:
         """Run blocking pointer work on the worker pool of the store's database."""
         ...
 

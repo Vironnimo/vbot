@@ -4,7 +4,7 @@ single reminder the next Run sends from it."""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -45,6 +45,7 @@ async def test_input_append_is_the_only_write_between_admission_and_the_first_re
     writes = 0
 
     class ObservingAdapter(StubAdapter):
+        @override
         async def send(self, messages: Any, *, model_id: str, **kwargs: Any) -> Any:
             session = runtime.chat_sessions.get(address)
             observed.append((writes, session.load_continuation(), session.load()))

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers.adapter import ModelLookup
@@ -165,15 +165,18 @@ class KimiAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         del model_id
         return KIMI_IMAGE_VIDEO_MEDIA_TYPES
 
+    @override
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Kimi's chat wire round-trips readable ``reasoning_content`` only."""
         del model_id
         return REASONING_REPLAY_FIDELITY_READABLE_ONLY
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -188,6 +191,7 @@ class KimiAdapter(OpenAICompatibleAdapter):
         conversation_id = f"{agent_id}:{session_id}"
         return {"prompt_cache_key": prompt_cache_affinity_id or conversation_id}
 
+    @override
     def _format_user_content_part(self, part: Any) -> dict[str, Any]:
         if isinstance(part, dict) and part.get("type") == "media":
             base64_data = part.get("base64")
@@ -203,6 +207,7 @@ class KimiAdapter(OpenAICompatibleAdapter):
                 }
         return super()._format_user_content_part(part)
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -289,6 +294,7 @@ class KimiAdapter(OpenAICompatibleAdapter):
             payload["max_completion_tokens"] = min(limits)
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],

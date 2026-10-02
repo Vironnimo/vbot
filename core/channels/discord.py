@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import dataclass, field
 from importlib import import_module
 from itertools import batched
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from core.attachments import AttachmentStore
 from core.channels._message_chunks import split_message
@@ -102,6 +102,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._backfilled_message_ids: OrderedDict[str, set[str]] = OrderedDict()
         self._known_conversations: OrderedDict[str, ConversationFacts] = OrderedDict()
 
+    @override
     async def start(self) -> None:
         """Connect to Discord's Gateway and process messages until stopped."""
         if self._client is not None:
@@ -131,6 +132,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         self._client = client
         await client.start(self._token)
 
+    @override
     async def stop(self) -> None:
         """Stop engine workers and close the Discord Gateway connection."""
         self._stopping = True
@@ -158,6 +160,7 @@ class DiscordChannelAdapter(ChannelAdapter):
                 exc_info=(type(error), error, error.__traceback__),
             )
 
+    @override
     async def send(
         self,
         message: str | None,
@@ -180,10 +183,12 @@ class DiscordChannelAdapter(ChannelAdapter):
         await self._send_payloads(target, message, list(files or []))
         self._backfilled_message_ids.pop(platform_target, None)
 
+    @override
     async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         """Relay one background Run through the composed conversation engine."""
         await self._engine.relay_run(run, reply_plan)
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:
@@ -487,6 +492,7 @@ class DiscordChannelAdapter(ChannelAdapter):
         parent_id = _snowflake_string(getattr(getattr(message, "channel", None), "parent_id", None))
         return parent_id is not None and parent_id in self._allowed_chat_ids
 
+    @override
     def denied_chats(self) -> list[DeniedChatFacts]:
         return self._denied_chat_log.entries()
 

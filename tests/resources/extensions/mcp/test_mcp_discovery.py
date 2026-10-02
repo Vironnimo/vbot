@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from typing import override
 
 import pytest
 
@@ -490,6 +491,7 @@ async def test_mcp_discovery_preserves_the_chat_prefix(context_service, host):
 
     class McpAgent(StubAgent):
         @property
+        @override
         def tool_access(self):
             return ToolAccess(mode="selected", allowed=("mcp_example",), granted=("mcp_example",))
 
