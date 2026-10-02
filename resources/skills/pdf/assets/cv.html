@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<!--
+  CV (curriculum vitae, Lebenslauf) on A4: one or two pages, dates in a narrow left column,
+  a serif name for a personal touch, everything else quiet.
+
+  To use: copy this file, replace every {{...}} placeholder, copy entries as needed, and delete
+  blocks you do not need, including the photo if the applicant gives none.
+  `pdf.py create` reports placeholders that are left over.
+  Translate the fixed English labels (lines marked LABEL) into the CV's language.
+  List entries newest first. Keep it to two pages; cut old or minor entries before shrinking type.
+-->
+<html lang="{{de}}">
+<head>
+<meta charset="utf-8">
+<title>{{Full name}} – CV</title> <!-- LABEL -->
+<style>
+  :root {
+    --accent: #9a3412;
+    --ink: #1f1c1a;
+    --muted: #6b645f;
+    --rule: #e2ddd8;
+    --serif: "Georgia", "Cambria", "Noto Serif", "DejaVu Serif", "Liberation Serif", serif;
+    --sans: "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif,
+      "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  }
+
+  @page {
+    size: A4;
+    margin: 20mm 20mm 20mm 20mm;
+    @bottom-right {
+      content: "{{Full name}} · " counter(page) "/" counter(pages);
+      font: 7.5pt var(--sans); color: var(--muted); vertical-align: top; padding-top: 7mm;
+    }
+  }
+
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body { margin: 0; color: var(--ink); font: 9.8pt/1.5 var(--sans); hyphens: auto; }
+  p { margin: 0 0 2mm; }
+
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 10mm; margin-bottom: 9mm; }
+  .name { font-family: var(--serif); font-size: 30pt; line-height: 1.05; font-weight: 400; letter-spacing: -0.01em; margin: 0; }
+  .role { font-size: 11.5pt; color: var(--accent); margin-top: 2.5mm; }
+  .contact { display: flex; flex-wrap: wrap; gap: 1mm 6mm; margin-top: 5mm; font-size: 8.8pt; color: var(--muted); }
+  .photo { width: 32mm; height: 40mm; object-fit: cover; border-radius: 1mm; flex: 0 0 auto; }
+
+  .profile { font-size: 10.5pt; line-height: 1.55; margin-bottom: 7mm; max-width: 160mm; }
+
+  section { margin-bottom: 6mm; }
+  h2 {
+    font-size: 8.5pt; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent); margin: 0 0 3mm; padding-bottom: 1.5mm; border-bottom: 0.6pt solid var(--rule);
+    break-after: avoid;
+  }
+
+  .entry { display: grid; grid-template-columns: 34mm 1fr; column-gap: 6mm; margin-bottom: 4mm; break-inside: avoid; }
+  .when { font-size: 8.8pt; color: var(--muted); padding-top: 0.4mm; font-variant-numeric: tabular-nums; }
+  .what { font-weight: 650; }
+  .where { color: var(--muted); }
+  .entry ul { margin: 1.2mm 0 0; padding-left: 4.5mm; }
+  .entry li { margin-bottom: 0.6mm; }
+
+  .skills { display: grid; grid-template-columns: 34mm 1fr; column-gap: 6mm; row-gap: 1.6mm; }
+  .skills dt { font-size: 8.8pt; color: var(--muted); }
+  .skills dd { margin: 0; }
+
+  .signature { margin-top: 10mm; font-size: 9pt; color: var(--muted); break-inside: avoid; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1 class="name">{{Full name}}</h1>
+    <div class="role">{{Profession or target role}}</div>
+    <div class="contact">
+      <span>{{Town}}</span>
+      <span>{{Phone}}</span>
+      <span>{{Email}}</span>
+      <span>{{LinkedIn or website}}</span>
+    </div>
+  </div>
+  <img class="photo" src="{{photo.jpg}}" alt="{{Full name}}">
+</header>
+
+<p class="profile">{{Two or three sentences: who you are professionally, what you are good at, what you are looking for.}}</p>
+
+<section>
+  <h2>Experience</h2> <!-- LABEL -->
+  <div class="entry">
+    <div class="when">{{03/2022 – today}}</div>
+    <div>
+      <div class="what">{{Job title}}</div>
+      <div class="where">{{Employer, town}}</div>
+      <ul>
+        <li>{{Responsibility or result, with a number where possible}}</li>
+        <li>{{Responsibility or result}}</li>
+      </ul>
+    </div>
+  </div>
+  <div class="entry">
+    <div class="when">{{08/2018 – 02/2022}}</div>
+    <div>
+      <div class="what">{{Job title}}</div>
+      <div class="where">{{Employer, town}}</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Education</h2> <!-- LABEL -->
+  <div class="entry">
+    <div class="when">{{2014 – 2018}}</div>
+    <div>
+      <div class="what">{{Degree or qualification}}</div>
+      <div class="where">{{School or university, town}}</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Skills</h2> <!-- LABEL -->
+  <dl class="skills">
+    <dt>{{Area, e.g. Languages}}</dt><dd>{{German (native), English (fluent, C1)}}</dd>
+    <dt>{{Area, e.g. Software}}</dt><dd>{{Items, separated by commas}}</dd>
+  </dl>
+</section>
+
+<div class="signature">{{Town, date}}</div> <!-- delete unless a dated signature line is expected -->
+
+</body>
+</html>

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<!--
+  Overlay for filling a form that has no fillable fields. Each .page is one page of the form,
+  in the same order and size. Positions are millimetres from the top-left corner of the page,
+  read off `pdf.py render --grid`.
+
+  .on-line  text that stands on a line: left = where the text starts, top = the line.
+  .in-box   text inside a box without a line: left and top = the top-left corner of the text.
+  .mark     a cross in a checkbox: left and top = the centre of the box.
+
+  Replace the sample entries, add or remove .page blocks, and set @page size to the form's
+  page size from `pdf.py inspect` (A4, letter, or a size such as 210mm 297mm).
+-->
+<html lang="{{de}}">
+<head>
+<meta charset="utf-8">
+<title>Form overlay</title>
+<style>
+  @page { size: A4; margin: 0; }
+  body {
+    margin: 0; color: #0b1f66;
+    font: 11pt "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif;
+  }
+  .page { position: relative; width: 210mm; height: 297mm; break-after: page; overflow: hidden; }
+  .page:last-child { break-after: auto; }
+  .on-line { position: absolute; height: 0; }
+  .on-line span { position: absolute; left: 0; bottom: 0.8mm; white-space: nowrap; line-height: 1; }
+  .in-box { position: absolute; line-height: 1.25; }
+  .mark { position: absolute; transform: translate(-50%, -50%); font-weight: 700; line-height: 1; }
+  .small { font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<div class="page">
+  <div class="on-line" style="left: {{54}}mm; top: {{48}}mm"><span>{{Text on a line}}</span></div>
+  <div class="in-box" style="left: {{22}}mm; top: {{130}}mm; width: {{80}}mm">{{Text in a box, wraps at the width}}</div>
+  <div class="mark" style="left: {{24.3}}mm; top: {{85.5}}mm">X</div>
+</div>
+
+</body>
+</html>

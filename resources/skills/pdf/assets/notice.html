@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!--
+  Notice on one A4 page: flyers, posters, invitations to events, notices for a hallway or
+  noticeboard, announcements. Readable from a few metres: one big message, the facts in large
+  type, little body text.
+
+  To use: copy this file, replace every {{...}} placeholder, delete blocks you do not need.
+  `pdf.py create` reports placeholders that are left over.
+  Translate the fixed English labels (lines marked LABEL) into the notice's language.
+  The page is exactly one A4 sheet: if text overflows, shorten it before making type smaller.
+  Choose --accent for the mood: warm and bright for a party, calm for a building notice,
+  a strong red only for warnings.
+-->
+<html lang="{{de}}">
+<head>
+<meta charset="utf-8">
+<title>{{Headline}}</title>
+<style>
+  :root {
+    --accent: #6d28d9;
+    --accent-ink: #ffffff;
+    --ink: #15131a;
+    --muted: #5f5a68;
+    --sans: "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, sans-serif,
+      "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  }
+
+  @page { size: A4; margin: 0; }
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body { margin: 0; color: var(--ink); font-family: var(--sans); }
+
+  .sheet { width: 210mm; height: 297mm; display: flex; flex-direction: column; overflow: hidden; }
+
+  .hero {
+    background: var(--accent); color: var(--accent-ink);
+    padding: 26mm 20mm 16mm; flex: 0 0 auto;
+  }
+  .kicker { font-size: 13pt; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.85; }
+  h1 {
+    font-size: 52pt; line-height: 1.02; font-weight: 800; letter-spacing: -0.025em;
+    margin: 6mm 0 0; text-wrap: balance;
+  }
+
+  .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; padding: 13mm 20mm 0; }
+  .fact-label { font-size: 9.5pt; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent); }
+  .fact-value { font-size: 19pt; line-height: 1.2; font-weight: 700; margin-top: 2mm; }
+  .fact-detail { font-size: 11pt; color: var(--muted); margin-top: 1mm; }
+
+  .body { padding: 11mm 20mm 0; flex: 1 1 auto; }
+  .body p { font-size: 14pt; line-height: 1.45; margin: 0 0 4mm; max-width: 150mm; text-wrap: pretty; }
+  .body ul { font-size: 14pt; line-height: 1.45; margin: 0; padding-left: 6mm; }
+  .body li::marker { color: var(--accent); }
+
+  .footer {
+    margin: 0 20mm; padding: 6mm 0 14mm; border-top: 1.2pt solid var(--ink);
+    display: flex; justify-content: space-between; align-items: flex-end; gap: 10mm;
+    font-size: 11pt; line-height: 1.4;
+  }
+  .footer b { display: block; font-size: 12.5pt; }
+  .footer .note { color: var(--muted); text-align: right; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <section class="hero">
+    <div class="kicker">{{Who invites or informs}}</div>
+    <h1>{{Headline: the one thing people must take away}}</h1>
+  </section>
+
+  <section class="facts">
+    <div>
+      <div class="fact-label">When</div> <!-- LABEL -->
+      <div class="fact-value">{{Day and date}}</div>
+      <div class="fact-detail">{{Time}}</div>
+    </div>
+    <div>
+      <div class="fact-label">Where</div> <!-- LABEL -->
+      <div class="fact-value">{{Place}}</div>
+      <div class="fact-detail">{{Address or room}}</div>
+    </div>
+    <div>
+      <div class="fact-label">{{Third fact, e.g. Entry}}</div>
+      <div class="fact-value">{{Value}}</div>
+      <div class="fact-detail">{{Detail}}</div>
+    </div>
+  </section>
+
+  <section class="body">
+    <p>{{Two or three short sentences: what happens, who it is for, what to bring or do.}}</p>
+    <ul>
+      <li>{{Point}}</li>
+      <li>{{Point}}</li>
+    </ul>
+  </section>
+
+  <footer class="footer">
+    <div><b>{{Contact name}}</b>{{Phone or email}}</div>
+    <div class="note">{{Short note, e.g. registration deadline}}</div>
+  </footer>
+
+</div>
+</body>
+</html>

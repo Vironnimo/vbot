@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<!--
+  Report: analyses, status reports, documentation, concepts, white papers.
+  Calm and structured: one accent colour, numbered sections, key figures up front.
+
+  To use: copy this file next to your images, replace every {{...}} placeholder, delete blocks
+  you do not need, and add sections by copying an existing one. `pdf.py create` reports
+  placeholders that are left over.
+  Translate the fixed English labels (lines marked LABEL) into the document's language.
+  Change --accent to suit the occasion; every other colour is derived from neutral greys.
+-->
+<html lang="{{en}}">
+<head>
+<meta charset="utf-8">
+<title>{{Document title}}</title>
+<style>
+  :root {
+    --accent: #1d4ed8;
+    --ink: #1a1e26;
+    --muted: #5b6372;
+    --rule: #d8dce3;
+    --tint: #f2f4f7;
+    --sans: "Inter", "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial,
+      sans-serif, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji";
+  }
+
+  @page {
+    size: A4;
+    margin: 22mm 22mm 24mm 22mm;
+    @top-left {
+      content: "{{Short title for the running header}}";
+      font: 8pt var(--sans); color: #7a8190; vertical-align: bottom; padding-bottom: 5mm;
+    }
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages); /* LABEL */
+      font: 8pt var(--sans); color: #7a8190; vertical-align: top; padding-top: 6mm;
+    }
+  }
+  @page :first {
+    @top-left { content: none; }
+  }
+
+  html { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  body {
+    margin: 0; color: var(--ink); font: 10.5pt/1.55 var(--sans);
+    hyphens: auto; counter-reset: section;
+  }
+  p { margin: 0 0 3.2mm; orphans: 3; widows: 3; text-wrap: pretty; }
+  a { color: var(--accent); text-decoration: none; }
+  strong { font-weight: 650; }
+
+  /* Title block */
+  .masthead { padding-bottom: 7mm; margin-bottom: 8mm; border-bottom: 0.6pt solid var(--rule); }
+  .eyebrow {
+    font-size: 8.5pt; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--accent); margin-bottom: 4mm;
+  }
+  h1 {
+    font-size: 26pt; line-height: 1.12; font-weight: 700; letter-spacing: -0.015em;
+    margin: 0 0 3mm; text-wrap: balance;
+  }
+  .lede { font-size: 13pt; line-height: 1.45; color: var(--muted); margin: 0 0 6mm; max-width: 150mm; }
+  .meta { display: flex; gap: 10mm; font-size: 8.5pt; color: var(--muted); }
+  .meta b { display: block; font-weight: 600; color: var(--ink); }
+
+  /* Summary with key figures */
+  .summary { background: var(--tint); border-radius: 2mm; padding: 6mm 7mm 3mm; margin-bottom: 9mm; break-inside: avoid; }
+  .summary h2 { counter-increment: none; margin-top: 0; font-size: 11pt; }
+  .summary h2::before { content: none; }
+  .figures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5mm; margin: 2mm 0 5mm; }
+  .figure-value {
+    font-size: 20pt; font-weight: 700; color: var(--accent); line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .figure-label { font-size: 8.5pt; color: var(--muted); margin-top: 1mm; }
+
+  /* Sections */
+  h2 {
+    counter-increment: section; font-size: 15pt; line-height: 1.25; font-weight: 700;
+    margin: 9mm 0 3mm; break-after: avoid; text-wrap: balance;
+  }
+  h2::before { content: counter(section) "\2002"; color: var(--accent); }
+  h3 { font-size: 11.5pt; font-weight: 650; margin: 6mm 0 2mm; break-after: avoid; }
+  ul, ol { margin: 0 0 3.5mm; padding-left: 5.5mm; }
+  li { margin-bottom: 1.2mm; }
+  li::marker { color: var(--accent); }
+
+  /* Tables: long tables continue on the next page with their header repeated */
+  table {
+    width: 100%; border-collapse: collapse; margin: 2mm 0 6mm; font-size: 9.5pt;
+    font-variant-numeric: tabular-nums;
+  }
+  caption { caption-side: top; text-align: left; font-weight: 600; font-size: 9.5pt; margin-bottom: 2mm; }
+  th {
+    text-align: left; font-weight: 600; font-size: 8.5pt; color: var(--muted);
+    border-bottom: 1pt solid var(--ink); padding: 1.6mm 2mm;
+  }
+  td { border-bottom: 0.5pt solid var(--rule); padding: 1.8mm 2mm; vertical-align: top; }
+  tr { break-inside: avoid; }
+  .number { text-align: right; white-space: nowrap; }
+  tfoot td { font-weight: 650; border-top: 1pt solid var(--ink); border-bottom: none; }
+
+  /* Figures and notes */
+  figure { margin: 3mm 0 7mm; break-inside: avoid; }
+  figure img { display: block; max-width: 100%; max-height: 110mm; margin: 0 auto; }
+  figcaption { font-size: 8.5pt; color: var(--muted); margin-top: 2mm; }
+  .note {
+    border-left: 2.2pt solid var(--accent); background: var(--tint);
+    padding: 3.5mm 5mm 0.5mm; margin: 2mm 0 6mm; break-inside: avoid;
+  }
+  .note-title { font-weight: 650; margin-bottom: 1mm; }
+  .sources { font-size: 8.5pt; color: var(--muted); border-top: 0.5pt solid var(--rule); margin-top: 10mm; padding-top: 3mm; }
+  .sources ol { padding-left: 5mm; }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="eyebrow">{{Organisation or project}} · {{Document type}}</div>
+  <h1>{{Document title}}</h1>
+  <p class="lede">{{One or two sentences that say what this document is about and what the reader gets from it.}}</p>
+  <div class="meta">
+    <div><b>Author</b>{{Name}}</div>       <!-- LABEL -->
+    <div><b>Date</b>{{Date}}</div>          <!-- LABEL -->
+    <div><b>Status</b>{{Draft or Final}}</div> <!-- LABEL; delete if not needed -->
+  </div>
+</header>
+
+<!-- Summary: keep it to what a reader needs if they read nothing else. Delete .figures without numbers. -->
+<section class="summary">
+  <h2>Summary</h2> <!-- LABEL -->
+  <div class="figures">
+    <div><div class="figure-value">{{42 %}}</div><div class="figure-label">{{What the number measures}}</div></div>
+    <div><div class="figure-value">{{1,280}}</div><div class="figure-label">{{What the number measures}}</div></div>
+    <div><div class="figure-value">{{3}}</div><div class="figure-label">{{What the number measures}}</div></div>
+  </div>
+  <p>{{The main finding or recommendation in two or three sentences.}}</p>
+</section>
+
+<h2>{{Section heading}}</h2>
+<p>{{Body text.}}</p>
+<ul>
+  <li>{{List item}}</li>
+  <li>{{List item}}</li>
+</ul>
+
+<h3>{{Subsection heading}}</h3>
+<p>{{Body text.}}</p>
+
+<table>
+  <caption>{{Table caption}}</caption>
+  <thead>
+    <tr><th>{{Column}}</th><th>{{Column}}</th><th class="number">{{Amount}}</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>{{Cell}}</td><td>{{Cell}}</td><td class="number">{{1,200.00}}</td></tr>
+    <tr><td>{{Cell}}</td><td>{{Cell}}</td><td class="number">{{830.50}}</td></tr>
+  </tbody>
+  <tfoot>
+    <tr><td colspan="2">Total</td><td class="number">{{2,030.50}}</td></tr> <!-- LABEL -->
+  </tfoot>
+</table>
+
+<div class="note">
+  <div class="note-title">{{Note title}}</div>
+  <p>{{A point the reader must not miss.}}</p>
+</div>
+
+<h2>{{Section heading}}</h2>
+<figure>
+  <img src="{{image.png}}" alt="{{Short description of the image}}">
+  <figcaption>{{Figure caption with the source if there is one.}}</figcaption>
+</figure>
+<p>{{Body text.}}</p>
+
+<section class="sources">
+  <ol>
+    <li>{{Source: author, title, publisher or URL, date}}</li>
+  </ol>
+</section>
+
+</body>
+</html>
