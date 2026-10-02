@@ -63,10 +63,9 @@ def test_transport_layers_do_not_own_command_workflows() -> None:
         assert forbidden not in combined
     for server_owned_workflow in (
         "HANDOFF_FRAGMENT_NAME",
-        "LEARN_FRAGMENT_NAME",
         "AGENT_TAKEOVER_NOTE",
         "_build_handoff_prompt",
-        "_build_learn_prompt",
+        "learn_brief",
         "_session_move_block_reason",
     ):
         assert server_owned_workflow not in chat_source

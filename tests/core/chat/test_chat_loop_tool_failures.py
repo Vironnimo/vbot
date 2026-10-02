@@ -387,6 +387,36 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
     assert persisted_roles(history(runtime)) == run_roles * 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("loop_limit", "run_limit"),
+    [(1000, 1), (1, 5)],
+    ids=["narrows-the-loop-limit", "never-raises-the-loop-limit"],
+)
+async def test_run_tool_iteration_limit_narrows_the_loop_limit(
+    tmp_path: Path, loop_limit: int, run_limit: int
+) -> None:
+    invocations: list[JsonObject] = []
+    runtime = tool_runtime(
+        tmp_path,
+        _counting_tool(invocations),
+        [tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime, max_tool_iterations=loop_limit)
+
+    run = await loop.start_run(
+        "coder", "Probe twice", session_id="session-one", max_tool_iterations=run_limit
+    )
+    await run.wait()
+
+    # One dispatched iteration; the second call gets the ordinary limit failure.
+    assert len(invocations) == 1
+    rejected = tool_results(history(runtime))[1]["error"]
+    assert rejected["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
+    assert rejected["message"].startswith("The Run reached its limit of 1 dispatched")
+
+
 def _tool_message(call: ToolCall, result: JsonObject) -> ChatMessage:
     return ChatMessage.tool(tool_call_id=call.id, name=call.name, content=json.dumps(result))
 

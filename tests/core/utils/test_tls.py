@@ -102,14 +102,18 @@ def test_prewarm_builds_and_imports_off_the_calling_thread_once(
 
 
 def test_every_server_httpx_client_uses_an_explicit_tls_context() -> None:
-    """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client."""
+    """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client.
+
+    ``httpx2`` (the MCP SDK's client) would instead verify through the system trust
+    store, unlike every other outbound client.
+    """
     missing: list[str] = []
-    for relative, tree in _server_modules("httpx."):
+    for relative, tree in _server_modules("httpx"):
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
             target = node.func.value
-            if not (isinstance(target, ast.Name) and target.id == "httpx"):
+            if not (isinstance(target, ast.Name) and target.id in {"httpx", "httpx2"}):
                 continue
             if node.func.attr not in _HTTPX_CONSTRUCTORS:
                 continue

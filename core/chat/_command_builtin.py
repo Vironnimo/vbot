@@ -30,9 +30,9 @@ from core.projects import (
     format_agent_address,
     parse_agent_address,
 )
+from core.prompts.briefs import learn_brief
 from core.runs import ActiveRunError, ChatRunManager, RunAdmissionBlockedError
 from core.sessions import SessionAddress
-from core.tools.availability import memory_tool_enabled
 from core.tools.terminal_manager import TerminalManager, TerminalOwner
 
 if TYPE_CHECKING:
@@ -44,8 +44,6 @@ if TYPE_CHECKING:
 
 
 HANDOFF_FRAGMENT_NAME = "handoff.md"
-
-LEARN_FRAGMENT_NAME = "learn.md"
 
 CHANNEL_SOURCE_META_KEY = "source_channel_id"
 
@@ -77,19 +75,6 @@ def _build_handoff_prompt(base_instruction: str, instruction: str | None) -> str
         "writing, without dropping anything else that genuinely matters:\n"
         f"{cleaned}"
     )
-
-
-def _build_learn_prompt(base_instruction: str, argument: str | None) -> str:
-    base = base_instruction.strip()
-    cleaned = (argument or "").strip()
-    if not cleaned:
-        return (
-            f"{base}\n\n"
-            "No request was given. If the recent conversation clearly establishes reusable "
-            "learning, apply the instructions above to it. Otherwise, ask the user what "
-            "they want captured."
-        )
-    return f"{base}\n\nThe request to learn from:\n{cleaned}"
 
 
 async def _execute_compact(
@@ -259,13 +244,10 @@ async def _execute_learn(
     )
     if not getattr(agent, "workspace", ""):
         return _notice("learn", "Skill authoring needs an identity agent with its own skill home.")
-    learn_prompt = await _COMMAND_WORKERS.run(
-        storage.read_prompt_fragment,
-        LEARN_FRAGMENT_NAME,
-    )
+    learn_prompt = await _COMMAND_WORKERS.run(learn_brief, storage, argument)
     learn_run = await trigger_service.trigger_run(
         context.agent_id,
-        _build_learn_prompt(learn_prompt, argument),
+        learn_prompt,
         session_id=context.session_id,
         project_id=context.project_id,
         internal=True,
@@ -304,12 +286,12 @@ async def _execute_reflect(
         return _notice(
             "reflect", "Reflection needs an identity agent with its own memory and skill home."
         )
-    if not memory_tool_enabled(agent.memory_prompt_mode):
-        return _notice("reflect", "Reflection needs the memory Tool to be active for this Agent.")
-    focus = (argument or "").strip()
-    extra_instruction = (
-        f"The user asked you to focus this reflection on:\n{focus}" if focus else None
-    )
+    if reflection.available_review_scope(agent) is None:
+        return _notice(
+            "reflect",
+            "Reflection needs the memory Tool, or both the skill and skill_manage Tools, "
+            "to be available to this Agent.",
+        )
     changes: list[CommandResourceChange] = []
 
     def report_fork(fork_id: str) -> None:
@@ -321,7 +303,7 @@ async def _execute_reflect(
         context.agent_id,
         context.session_id,
         project_id=context.project_id,
-        extra_instruction=extra_instruction,
+        focus=argument,
         on_fork_created=report_fork,
         reply_surface=context.reply_surface,
     )
@@ -330,6 +312,7 @@ async def _execute_reflect(
         context.agent_id,
         context.session_id,
         context.project_id,
+        result.scope,
     )
     return CommandOutcome(
         command="reflect",

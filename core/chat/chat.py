@@ -190,6 +190,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
+        max_tool_iterations: int | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
@@ -207,6 +208,11 @@ class ChatLoop:
         restricted run keeps a byte-identical prompt prefix (the prompt-cache
         invariant). ``None`` is the unrestricted default.
 
+        ``max_tool_iterations`` narrows the loop's dispatched Tool-iteration
+        limit for this run only (it never raises it); reaching it fails further
+        Tool Calls with ``tool_iteration_limit`` and asks for the final answer.
+        ``None`` keeps the loop's limit.
+
         ``source_session_id`` attributes a review Run executing in a fork to the
         Session it examines; it is accessor-only provenance on the Run.
         """
@@ -222,6 +228,7 @@ class ChatLoop:
             project_id=project_id,
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
+            max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
@@ -262,6 +269,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
+        max_tool_iterations: int | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
@@ -286,6 +294,7 @@ class ChatLoop:
             project_id=project_id,
             tool_restriction=tool_restriction,
             tool_denial_resolver=tool_denial_resolver,
+            max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             run_kind=run_kind,
             contributes_to_agent_activity=contributes_to_agent_activity,
@@ -305,6 +314,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
+        max_tool_iterations: int | None = None,
         waiting_work_admission: WaitingWorkAdmission | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
@@ -314,8 +324,9 @@ class ChatLoop:
         """Queue one chat run for a busy session or start it immediately when idle.
 
         ``project_id`` scopes the session/run to a project anchor; ``None`` keeps
-        today's identity behavior.
+        today's identity behavior. ``max_tool_iterations`` is as in :meth:`start_run`.
         """
+        _validate_run_tool_iteration_limit(max_tool_iterations)
         await self._reject_owner_managed_session(project_id, agent_id, session_id)
         agent = await self._dependencies.agent_resolver.resolve_agent_async(
             project_id, agent_id, session_id=session_id
@@ -335,6 +346,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
             tool_denial_resolver=tool_denial_resolver,
+            max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             resume_process_restart=resume_process_restart,
         )
@@ -457,6 +469,7 @@ class ChatLoop:
         project_id: str | None = None,
         tool_restriction: Sequence[str] | None = None,
         tool_denial_resolver: Callable[[str], str | None] | None = None,
+        max_tool_iterations: int | None = None,
         input_persisted_hook: Callable[[], None] | None = None,
         run_kind: RunKind = RunKind.USER,
         contributes_to_agent_activity: bool = True,
@@ -464,6 +477,7 @@ class ChatLoop:
         edit_message_id: str | None = None,
         source_session_id: str | None = None,
     ) -> Run:
+        _validate_run_tool_iteration_limit(max_tool_iterations)
         if session_id is not None:
             await self._reject_owner_managed_session(project_id, agent_id, session_id)
         agent = await self._dependencies.agent_resolver.resolve_agent_async(
@@ -488,6 +502,7 @@ class ChatLoop:
             reply_surface=reply_surface,
             tool_restriction=(tuple(tool_restriction) if tool_restriction is not None else None),
             tool_denial_resolver=tool_denial_resolver,
+            max_tool_iterations=max_tool_iterations,
             input_persisted_hook=input_persisted_hook,
             resume_process_restart=resume_process_restart,
             edit_message_id=edit_message_id,
@@ -656,3 +671,8 @@ class ChatLoop:
         return await self._requests.preview_tool_definitions(
             agent, session_tool_grants=session_tool_grants
         )
+
+
+def _validate_run_tool_iteration_limit(max_tool_iterations: int | None) -> None:
+    if max_tool_iterations is not None and max_tool_iterations < 0:
+        raise ChatError("max tool iterations must not be negative")

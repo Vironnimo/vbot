@@ -18,6 +18,16 @@ def _reflection_cases() -> list[dict[str, Any]]:
     return cases
 
 
+class _BundledFragments:
+    """Read prompt fragments from the bundled resources, as a fresh install does."""
+
+    def __init__(self, resources: Path) -> None:
+        self._resources = resources
+
+    def read_prompt_fragment(self, fragment_name: str) -> str:
+        return (self._resources / fragment_name).read_text(encoding="utf-8")
+
+
 async def _probe_reflection_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any], scope: str
 ) -> dict[str, Any]:
@@ -26,9 +36,10 @@ async def _probe_reflection_case(
     Only synthetic history and production context reach the Model; expectations
     stay in the observer. Chat fork/cadence integration is tested separately.
     """
-    from core.automation.reflection import REFLECT_FRAGMENT_NAMES, REFLECTION_TOOL_RESTRICTIONS
+    from core.automation.reflection import REFLECTION_TOOL_RESTRICTIONS
     from core.chat.wire_shaping import system_reminder_request_message
     from core.memory.memory import MemoryScope, MemoryService, memory_block_definition
+    from core.prompts.briefs import learn_brief, reflection_brief
     from core.prompts.prompts import _format_skill_catalog
     from core.skills import SkillAuthoringService, SkillRegistry
     from core.tools.memory import register_memory_tool
@@ -85,10 +96,12 @@ async def _probe_reflection_case(
                 (resources / "skill_maintenance.md").read_text(encoding="utf-8"),
             ]
         )
-        fragment = "learn.md" if scope == "learn" else REFLECT_FRAGMENT_NAMES[scope]  # type: ignore[index]
-        brief = (resources / fragment).read_text(encoding="utf-8").strip()
-        if scope == "learn":
-            brief += "\n\nThe request to learn from:\n" + case["learn_request"]
+        fragments = _BundledFragments(resources)
+        brief = (
+            learn_brief(fragments, case["learn_request"])
+            if scope == "learn"
+            else reflection_brief(fragments, scope)  # type: ignore[arg-type]
+        )
         messages = [
             {"role": "system", "content": system},
             *case["history"],
