@@ -11,6 +11,7 @@ from typing import Any, override
 
 import pytest
 
+from core.prompts.briefs import BRIEF_FRAGMENT_NAMES
 from core.providers.adapter import (
     IMAGE_WIRE_MEDIA_TYPES,
     ProviderAdapter,
@@ -203,14 +204,9 @@ def _write_prompt_resources(resources: Path) -> None:
     (prompts_dir / "skills.md").write_text("Skills\n{generated:skill_catalog}", encoding="utf-8")
     (prompts_dir / "skill_maintenance.md").write_text("Skill maintenance", encoding="utf-8")
     (prompts_dir / "compaction.md").write_text("Summarize the conversation.", encoding="utf-8")
-    # Backend-only fragments (like compaction), read by Reflection Runs.
-    (prompts_dir / "reflect-memory.md").write_text(
-        "Review this session for memory updates.", encoding="utf-8"
-    )
-    (prompts_dir / "reflect-skill.md").write_text(
-        "Review this session for skill updates.", encoding="utf-8"
-    )
-    (prompts_dir / "reflect.md").write_text("Review this session.", encoding="utf-8")
+    # Backend-only brief fragments (like compaction), read by Reflection and /learn Runs.
+    for name in BRIEF_FRAGMENT_NAMES:
+        (prompts_dir / name).write_text(f"Brief fragment {name}.", encoding="utf-8")
 
 
 def _write_workspace_templates(resources: Path) -> None:
