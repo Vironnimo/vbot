@@ -11,6 +11,7 @@ import math
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Any
 
 from scripts.perf_load_suite.directive import PerfDirective
@@ -152,7 +153,7 @@ def step_gaps(
     gaps: list[StepGap] = []
     for tag, tagged in by_tag.items():
         ordered = sorted(tagged, key=lambda request: float(request["arrival"]))
-        for current, following in zip(ordered, ordered[1:], strict=False):
+        for current, following in pairwise(ordered):
             completed = current.get("completed")
             if current.get("kind") != "tool_calls" or completed is None:
                 continue

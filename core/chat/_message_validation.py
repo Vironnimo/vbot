@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from itertools import pairwise
 from typing import Any, cast
 
 from core.chat import messages as _records
@@ -362,10 +363,7 @@ def _validate_assistant_message(message: _records.ChatMessage) -> None:
             )
         for spans in spans_by_line.values():
             ordered = sorted(spans)
-            if any(
-                current[0] < previous[1]
-                for previous, current in zip(ordered, ordered[1:], strict=False)
-            ):
+            if any(current[0] < previous[1] for previous, current in pairwise(ordered)):
                 raise ChatMessageValidationError("assistant output_files spans must not overlap")
 
 
