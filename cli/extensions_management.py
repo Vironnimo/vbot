@@ -198,7 +198,7 @@ def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
 def extensions_show(instance: ServerInstance, name: str) -> CommandResult:
     """Show one extension's settings: schema fields, current values, secret state.
 
-    This is the read half of the settings surface (``vbot extensions <name>``): for
+    This is the read half of the settings surface (``vbot extensions show <name>``): for
     a schema'd extension it renders each field with its live value (a secret shows
     only ``set``/``not set``, never the value); a schema-less extension falls back to
     its raw persisted config.
@@ -472,7 +472,7 @@ def _format_waiting(extension: dict[str, object]) -> str:
     name = _string_or_default(extension.get("name"), "<name>")
     return (
         f"waiting for configuration{suffix}: "
-        f"run 'vbot extensions {name}' to see its settings, then "
+        f"run 'vbot extensions show {name}' to see its settings, then "
         f"'vbot extensions set {name} <field> <value>' (or Settings > Extensions)"
     )
 
@@ -554,7 +554,7 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
                 {
                     "operations": summary,
                     "next": (
-                        f"vbot extensions {name} <operation> --help for the complete argument "
+                        f"vbot extensions run {name} <operation> --help for the complete argument "
                         "schema; keep the same target options"
                     ),
                 },

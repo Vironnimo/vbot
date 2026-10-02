@@ -114,6 +114,10 @@ def test_catalog_is_bounded_and_operation_help_keeps_the_complete_schema(
     assert summary["operations"] == [
         {"name": "save", "description": "Replace the saved connection.", "secret": False}
     ]
+    assert summary["next"] == (
+        "vbot extensions run mcp <operation> --help for the complete argument schema; "
+        "keep the same target options"
+    )
     assert json.loads(detail[1]) == save
     assert _operation_calls(rpc) == ["describe", "describe"]
 
