@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from core.chat import ChatMessage
 from core.recall import (
-    RecallBackendContext,
     RecallSearchHit,
     RecallSearchPage,
     RecallSearchRequest,
@@ -20,6 +18,7 @@ from core.recall.canonical import RecallScope
 from core.recall.hybrid import HybridRecallBackend
 from core.sessions import ChatSessionManager
 from tests.core.recall.recall_test_support import (
+    HybridBackendFactory,
     StubEmbeddings,
     embed_documents,
     forbid_database_calls_on_loop,
@@ -31,16 +30,8 @@ from tests.core.recall.recall_test_support import (
 pytestmark = pytest.mark.asyncio
 
 
-def backend(
-    tmp_path: Path, sessions: ChatSessionManager, *, embeddings: Any | None = None
-) -> HybridRecallBackend:
-    return HybridRecallBackend(
-        RecallBackendContext(data_dir=tmp_path, sessions=sessions, embeddings=embeddings)
-    )
-
-
 async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, hybrid_backend: HybridBackendFactory
 ) -> None:
     sessions.create("coder", session_id="both").append(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
@@ -49,7 +40,7 @@ async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
         ChatMessage.user("vehicle maintenance", timestamp=timestamp(2))
     )
     embeddings = StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    recall = hybrid_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("driving"))
@@ -62,12 +53,12 @@ async def test_typed_hybrid_search_uses_passage_rrf_and_source_membership(
 
 
 async def test_typed_hybrid_degrades_explicitly_to_literal_passages(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, hybrid_backend: HybridBackendFactory
 ) -> None:
     sessions.create("coder", session_id="literal").append(
         ChatMessage.user("telegraminstallation", timestamp=timestamp(1))
     )
-    recall = backend(tmp_path, sessions)
+    recall = hybrid_backend()
 
     page = await recall.search_page(request("telegram"))
 
@@ -78,13 +69,13 @@ async def test_typed_hybrid_degrades_explicitly_to_literal_passages(
 
 
 async def test_typed_hybrid_keeps_multiple_passages_from_one_session(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, hybrid_backend: HybridBackendFactory
 ) -> None:
     sessions.create("coder", session_id="repeated").append(
         ChatMessage.user("needle context " * 400, timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    recall = hybrid_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("needle"))
@@ -109,9 +100,9 @@ class _WaitingArm:
 
 
 async def test_hybrid_arms_rank_concurrently(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    hybrid_backend: HybridBackendFactory, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    recall = backend(tmp_path, sessions)
+    recall = hybrid_backend()
     literal_ranked = asyncio.Event()
     semantic_ranked = asyncio.Event()
 
@@ -131,7 +122,9 @@ async def test_hybrid_arms_rank_concurrently(
 
 
 async def test_hybrid_depth_growth_prepares_each_arm_once(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    hybrid_backend: HybridBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A deeper fusion pass reruns only the rankings, never freshness or query embedding."""
 
@@ -140,7 +133,7 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
             ChatMessage.user(f"I was driving today {index}", timestamp=timestamp(index + 1))
         )
     embeddings = StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    recall = hybrid_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     stability_checks = 0
 
@@ -185,13 +178,15 @@ async def test_hybrid_depth_growth_prepares_each_arm_once(
 
 
 async def test_hybrid_search_keeps_session_and_index_work_off_the_event_loop(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    hybrid_backend: HybridBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sessions.create("coder", session_id="both").append(
         ChatMessage.user("I was driving today", timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    recall = hybrid_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     calls = forbid_event_loop_calls(monkeypatch, sessions._store)
     database_calls = forbid_database_calls_on_loop(monkeypatch)
@@ -208,13 +203,13 @@ async def test_hybrid_search_keeps_session_and_index_work_off_the_event_loop(
 
 
 async def test_hybrid_short_query_retains_literal_and_semantic_sources(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, hybrid_backend: HybridBackendFactory
 ) -> None:
     sessions.create("coder", session_id="short").append(
         ChatMessage.user("Go fast", timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = backend(tmp_path, sessions, embeddings=embeddings)
+    recall = hybrid_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     page = await recall.search_page(request("go"))
     assert page.hits[0].session_id == "short"
@@ -244,13 +239,12 @@ class _Ranking:
 
 
 def _fixed_arms(
-    tmp_path: Path,
-    sessions: ChatSessionManager,
+    hybrid_backend: HybridBackendFactory,
     monkeypatch: pytest.MonkeyPatch,
     literal: _Ranking,
     semantic: _Ranking,
 ) -> HybridRecallBackend:
-    recall = backend(tmp_path, sessions)
+    recall = hybrid_backend()
 
     async def prepare_semantic(*_args: Any, **_kwargs: Any) -> _Ranking:
         return semantic
@@ -262,8 +256,7 @@ def _fixed_arms(
 
 @pytest.mark.parametrize(("offset", "limit"), [(0, 10), (8, 2), (9, 1)])
 async def test_hybrid_resolves_late_contributions_before_returning_selected_hits(
-    tmp_path: Path,
-    sessions: ChatSessionManager,
+    hybrid_backend: HybridBackendFactory,
     monkeypatch: pytest.MonkeyPatch,
     offset: int,
     limit: int,
@@ -277,11 +270,8 @@ async def test_hybrid_resolves_late_contributions_before_returning_selected_hits
         "a",
     ]
 
-    recall = _fixed_arms(tmp_path, sessions, monkeypatch, _Ranking(literal), _Ranking(semantic))
-    try:
-        page = await recall.search_page(request("query", limit=limit, offset=offset))
-    finally:
-        await recall.aclose()
+    recall = _fixed_arms(hybrid_backend, monkeypatch, _Ranking(literal), _Ranking(semantic))
+    page = await recall.search_page(request("query", limit=limit, offset=offset))
 
     # The top ten members are already known at depth 20, but b's semantic
     # contribution at rank 21 must put it before a (whose other rank is 40).
@@ -296,8 +286,7 @@ async def test_hybrid_resolves_late_contributions_before_returning_selected_hits
 
 @pytest.mark.parametrize(("offset", "expected_hits"), [(0, 10), (35, 5), (40, 0)])
 async def test_hybrid_depth_stops_at_its_limit(
-    tmp_path: Path,
-    sessions: ChatSessionManager,
+    hybrid_backend: HybridBackendFactory,
     monkeypatch: pytest.MonkeyPatch,
     offset: int,
     expected_hits: int,
@@ -313,7 +302,7 @@ async def test_hybrid_depth_stops_at_its_limit(
     # Both arms rank the same Passages, so the fused ranking is as deep as the limit.
     literal = _Ranking([f"passage-{index}" for index in range(100)])
     semantic = _Ranking([f"passage-{index}" for index in range(100)])
-    recall = _fixed_arms(tmp_path, sessions, monkeypatch, literal, semantic)
+    recall = _fixed_arms(hybrid_backend, monkeypatch, literal, semantic)
 
     page = await recall.search_page(request("query", offset=offset, limit=10))
 

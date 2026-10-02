@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, override
 
 import pytest
@@ -22,11 +21,11 @@ from core.recall.vector import SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.recall.recall_test_support import (
     StubEmbeddings,
+    VectorBackendFactory,
     embed_documents,
     pending_count,
     request,
     timestamp,
-    vector_backend,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -56,13 +55,13 @@ class _CapturingLogger:
 
 
 async def test_search_returns_ranked_passages_without_session_dedup(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="fruit-heavy").append(
         ChatMessage.user("fruit banana " * 400, timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("fruit"))
@@ -76,7 +75,7 @@ async def test_search_returns_ranked_passages_without_session_dedup(
 
 
 async def test_search_ranks_by_cosine_distance_without_a_cutoff_or_literal_fallback(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     for session_id, text, day in (
         ("cars", "My car broke down", 1),
@@ -87,7 +86,7 @@ async def test_search_ranks_by_cosine_distance_without_a_cutoff_or_literal_fallb
             ChatMessage.user(text, timestamp=timestamp(day))
         )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     top = await recall.search_page(request("car", limit=2))
@@ -102,7 +101,7 @@ async def test_search_ranks_by_cosine_distance_without_a_cutoff_or_literal_fallb
 
 
 async def test_search_prefilters_time_inside_knn(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="old").append(
         ChatMessage.user("banana fruit old", timestamp=timestamp(1))
@@ -111,7 +110,7 @@ async def test_search_prefilters_time_inside_knn(
         ChatMessage.user("banana fruit new", timestamp=timestamp(3))
     )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     page = await recall.search_page(request("fruit", since=datetime(2026, 5, 2, tzinfo=UTC)))
@@ -120,7 +119,9 @@ async def test_search_prefilters_time_inside_knn(
 
 
 async def test_search_beyond_the_knn_limit_pages_without_failing(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    vector_backend: VectorBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A page deeper than the index can rank reports more instead of failing."""
 
@@ -129,7 +130,7 @@ async def test_search_beyond_the_knn_limit_pages_without_failing(
             ChatMessage.user(f"banana fruit {index}", timestamp=timestamp(index + 1))
         )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     monkeypatch.setattr(passage_index_module, "KNN_MAX_K", 2)
 
@@ -144,7 +145,9 @@ async def test_search_beyond_the_knn_limit_pages_without_failing(
 
 
 async def test_search_skips_a_session_deleted_during_reconciliation(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    vector_backend: VectorBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = sessions.create("coder", session_id="deleted-during-index")
     session.append(ChatMessage.user("banana fruit", timestamp=timestamp(1)))
@@ -161,7 +164,7 @@ async def test_search_skips_a_session_deleted_during_reconciliation(
         return versions
 
     monkeypatch.setattr(sessions, "list_history_revisions", list_then_delete)
-    recall = vector_backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    recall = vector_backend(embeddings=StubEmbeddings())
 
     page = await recall.search_page(request("fruit"))
 
@@ -175,16 +178,14 @@ async def test_search_skips_a_session_deleted_during_reconciliation(
 
 
 async def test_search_embeds_only_its_query_and_reports_waiting_passages(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="one").append(
         ChatMessage.user("banana fruit", timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
     nudges: list[None] = []
-    recall = vector_backend(
-        tmp_path, sessions, embeddings=embeddings, on_waiting=lambda: nudges.append(None)
-    )
+    recall = vector_backend(embeddings=embeddings, on_waiting=lambda: nudges.append(None))
 
     waiting = await recall.search_page(request("fruit"))
 
@@ -207,13 +208,13 @@ async def test_search_embeds_only_its_query_and_reports_waiting_passages(
 
 
 async def test_search_answers_from_indexed_passages_while_new_ones_wait(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="one").append(
         ChatMessage.user("banana fruit", timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     await asyncio.to_thread(
         sessions.create("coder", session_id="two").append,
@@ -253,13 +254,13 @@ class _UsageEmbeddings(StubEmbeddings):
 
 
 async def test_search_logs_the_usage_of_its_query_embedding(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="one").append(
         ChatMessage.user("banana fruit", timestamp=timestamp(1))
     )
     logger = _CapturingLogger()
-    recall = vector_backend(tmp_path, sessions, embeddings=_UsageEmbeddings(), logger=logger)
+    recall = vector_backend(embeddings=_UsageEmbeddings(), logger=logger)
 
     await recall.search_page(request("fruit"))
 
@@ -293,22 +294,20 @@ class _FailingEmbeddings(StubEmbeddings):
     ids=["no-binding", "binding-raises", "embed-fails"],
 )
 async def test_search_without_working_embeddings_is_semantic_unavailable(
-    tmp_path: Path, sessions: ChatSessionManager, embeddings: Any
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory, embeddings: Any
 ) -> None:
     sessions.create("coder", session_id="carrots").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
     )
 
     with pytest.raises(RecallSearchError, match="Semantic search") as error:
-        await vector_backend(tmp_path, sessions, embeddings=embeddings).search_page(
-            request("carrot")
-        )
+        await vector_backend(embeddings=embeddings).search_page(request("carrot"))
 
     assert error.value.code == "semantic_unavailable"
 
 
 async def test_search_cancellation_reaches_the_embedding_call(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     """Cancelling a Run stops its in-flight semantic provider request."""
 
@@ -330,9 +329,7 @@ async def test_search_cancellation_reaches_the_embedding_call(
         ChatMessage.user("semantic content", timestamp=timestamp(1))
     )
     task = asyncio.create_task(
-        vector_backend(tmp_path, sessions, embeddings=_SlowEmbeddings()).search_page(
-            request("semantic content")
-        )
+        vector_backend(embeddings=_SlowEmbeddings()).search_page(request("semantic content"))
     )
 
     await asyncio.wait_for(started.wait(), timeout=1)
@@ -348,7 +345,7 @@ async def test_search_cancellation_reaches_the_embedding_call(
 
 
 async def test_served_model_name_change_keeps_the_index(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     # A router such as OpenRouter answers one configured model from several
     # hosts that report different model names; the vectors stay usable.
@@ -357,7 +354,7 @@ async def test_served_model_name_change_keeps_the_index(
     )
     embeddings = StubEmbeddings()
     embeddings.response_model_id = "served/embed-a"
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit", limit=1))
     documents_before = len(embeddings.document_inputs)
@@ -383,7 +380,11 @@ async def test_served_model_name_change_keeps_the_index(
     ids=["model", "fingerprint", "dimension"],
 )
 async def test_embedding_space_change_invalidates_continuations_and_requeues_everything(
-    tmp_path: Path, sessions: ChatSessionManager, field: str, value: Any, reason: str
+    sessions: ChatSessionManager,
+    vector_backend: VectorBackendFactory,
+    field: str,
+    value: Any,
+    reason: str,
 ) -> None:
     for session_id, day in (("one", 1), ("two", 2)):
         sessions.create("coder", session_id=session_id).append(
@@ -392,7 +393,7 @@ async def test_embedding_space_change_invalidates_continuations_and_requeues_eve
     embeddings = StubEmbeddings()
     embeddings.response_model_id = "served/embed-a"
     logger = _CapturingLogger()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings, logger=logger)
+    recall = vector_backend(embeddings=embeddings, logger=logger)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit", limit=1))
     continuation = request("fruit", limit=1, offset=1, snapshot_id=first.snapshot_id)
