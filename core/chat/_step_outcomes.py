@@ -37,6 +37,16 @@ TOOL_ITERATION_LIMIT_FAILURE_CODE = "tool_iteration_limit"
 
 TOOL_FINALIZATION_DISABLED_FAILURE_CODE = "tool_calls_disabled"
 
+TOOL_ITERATION_LIMIT_FAILURE_MESSAGE = (
+    "The Run reached its limit of {limit} dispatched Tool iterations. This Tool was not "
+    "executed; provide the final answer without issuing another Tool Call."
+)
+
+TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE = (
+    "Tool execution is disabled for the remainder of this Run. This Tool was not executed; "
+    "provide the final answer without issuing another Tool Call."
+)
+
 TOOL_FINALIZATION_NOTE = (
     "Tool execution is disabled for the remainder of this Run because {reason}. "
     "Do not issue further Tool Calls. Explain the blocker and provide the best final answer "

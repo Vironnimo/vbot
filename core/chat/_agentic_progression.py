@@ -19,8 +19,10 @@ from core.chat._step_outcomes import (
     MAX_TOOL_FINALIZATION_VIOLATIONS,
     STREAM_RECOVERY_NOTE,
     TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+    TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE,
     TOOL_FINALIZATION_NOTE,
     TOOL_ITERATION_LIMIT_FAILURE_CODE,
+    TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
     _combined_interrupted_result,
     _prepare_completed_assistant,
     _terminal_outcome_error,
@@ -365,10 +367,12 @@ class AgenticProgression:
                 target.model_id,
                 len(messages_for_request),
             )
-            request_tools = [] if context.tool_progress.finalization_reason is not None else tools
+            # Finalization requests keep the pinned Tool list: dropping it would
+            # change the Provider prompt-cache prefix. The finalization note and
+            # the bounded refusal below stop further Tool use instead.
             # Calls resolve against the listed Tools plus those announced as
             # enabled; a Tool announced as removed keeps its own name.
-            offered_tool_names = [str(tool.get("name")) for tool in request_tools]
+            offered_tool_names = [str(tool.get("name")) for tool in tools]
             removed_tool_names: frozenset[str] = frozenset()
             if state.tool_epoch is not None:
                 offered_tool_names.extend(state.tool_epoch.announced_names)
@@ -397,13 +401,13 @@ class AgenticProgression:
                     messages_for_request,
                     adapter=target.adapter,
                     model_id=target.model_id,
-                    tools=request_tools,
+                    tools=tools,
                     scope=context.prompt_cache_affinity_id,
                 )
                 self._requests._raise_if_measured_context_exhausted(
                     context.session_snapshot.active_messages,
                     messages_for_request,
-                    [] if context.tool_progress.finalization_reason is not None else tools,
+                    tools,
                     agent,
                     run,
                     target,
@@ -425,7 +429,7 @@ class AgenticProgression:
                             target.model_id,
                             target.model_reference,
                             messages_for_request,
-                            [] if context.tool_progress.finalization_reason is not None else tools,
+                            tools,
                             run,
                             prompt_cache_affinity_id=context.prompt_cache_affinity_id,
                             chunk_timeout_seconds=target.chunk_timeout_seconds,
@@ -486,7 +490,7 @@ class AgenticProgression:
                 output_cwd: Path | None = output_cwd,
                 request_context_usage: JsonObject = request_context_usage,
                 assistant_step: _AssistantStep = assistant_step,
-                request_tools: list[JsonObject] = request_tools,
+                request_tools: list[JsonObject] = tools,
                 offered_tool_names: list[str] = offered_tool_names,
                 removed_tool_names: frozenset[str] = removed_tool_names,
             ) -> tuple[ChatMessage, JsonObject, list[JsonObject], JsonObject]:
@@ -734,11 +738,7 @@ class AgenticProgression:
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
                                 code=TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
-                                message=(
-                                    "Tool execution is disabled for the remainder of this Run. "
-                                    "This Tool was not executed; provide the final answer without "
-                                    "issuing another Tool Call."
-                                ),
+                                message=TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE,
                                 retryable=False,
                             )
                             media_outputs: list[JsonObject] = []
@@ -751,10 +751,8 @@ class AgenticProgression:
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
                                 code=TOOL_ITERATION_LIMIT_FAILURE_CODE,
-                                message=(
-                                    f"The Run reached its limit of {tool_iteration_limit} "
-                                    "dispatched Tool iterations. This Tool was not executed; "
-                                    "provide the final answer without issuing another Tool Call."
+                                message=TOOL_ITERATION_LIMIT_FAILURE_MESSAGE.format(
+                                    limit=tool_iteration_limit
                                 ),
                                 retryable=False,
                             )

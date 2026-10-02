@@ -30,16 +30,6 @@ from scripts.provider_probe.learning_texts import TextPack, load_text_pack
 # the harness bounds its cost here instead.
 LEARN_TOOL_ITERATION_LIMIT = 30
 MAX_REPETITIONS = 50
-# Chat's answers to Tool calls it refuses once a Run must finish
-# (core/chat/_agentic_progression.py).
-_LIMIT_FAILURE = (
-    "The Run reached its limit of {limit} dispatched Tool iterations. This Tool was not "
-    "executed; provide the final answer without issuing another Tool Call."
-)
-_DISABLED_FAILURE = (
-    "Tool execution is disabled for the remainder of this Run. This Tool was not executed; "
-    "provide the final answer without issuing another Tool Call."
-)
 
 
 def _reflection_cases() -> list[dict[str, Any]]:
@@ -141,8 +131,8 @@ class _ToolBudget:
 
     A round of calls at the iteration limit fails unrun, and a round that
     repeats an identical failed call ``MAX_IDENTICAL_FAILED_TOOL_CALLS`` times
-    asks for the final answer too; afterwards requests offer no Tools and calls
-    fail unrun. The second round of calls after that ends the Run.
+    asks for the final answer too; afterwards requests still offer the same Tools
+    but calls fail unrun. The second round of calls after that ends the Run.
     """
 
     def __init__(self, limit: int, registry: Any) -> None:
@@ -160,20 +150,24 @@ class _ToolBudget:
         """Start a round: the result refusing its calls unrun, or ``None`` to dispatch."""
         from core.chat._step_outcomes import (
             TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+            TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE,
             TOOL_ITERATION_LIMIT_FAILURE_CODE,
+            TOOL_ITERATION_LIMIT_FAILURE_MESSAGE,
         )
         from core.tools import tool_failure
 
         self._limit_reached = False
         if self.finalization_reason is not None:
             return tool_failure(
-                TOOL_FINALIZATION_DISABLED_FAILURE_CODE, _DISABLED_FAILURE, retryable=False
+                TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
+                TOOL_FINALIZATION_DISABLED_FAILURE_MESSAGE,
+                retryable=False,
             )
         if self.iterations >= self.limit:
             self._limit_reached = True
             return tool_failure(
                 TOOL_ITERATION_LIMIT_FAILURE_CODE,
-                _LIMIT_FAILURE.format(limit=self.limit),
+                TOOL_ITERATION_LIMIT_FAILURE_MESSAGE.format(limit=self.limit),
                 retryable=False,
             )
         self.iterations += 1
@@ -293,7 +287,7 @@ async def _run_attempt(
                 raw = await adapter.send(
                     messages,
                     model_id=args.model,
-                    tools=[] if budget.finalization_reason else definitions,
+                    tools=definitions,
                     thinking_effort=args.thinking_effort,
                     **request_kwargs,
                 )
