@@ -41,8 +41,9 @@ class CallObserver:
     """Collect process violations while an attempt's Tool calls run.
 
     A Memory write needs a current ``list`` of its scope in this attempt; a new
-    Skill needs a current catalog listing; a write to an existing own Skill file
-    needs a ``skill`` read of that file. Writes that target a protected Skill
+    Skill needs a current catalog listing, which a Librarian pass has from the
+    start; a write to an existing own Skill file needs a ``skill`` read of that
+    file, and a delete a load of the Skill. Writes that target a protected Skill
     (read-only, pinned, or an own Skill of human origin) or name one in
     ``absorbed_into`` are violations whatever the Tool answers, and so is any
     failed call. In the ``librarian`` scope a delete needs ``absorbed_into``.
@@ -51,6 +52,9 @@ class CallObserver:
     def __init__(self, case: Mapping[str, Any], scope: str = "") -> None:
         self._scope = scope
         self._reads: set[tuple[str, str]] = set()
+        if scope == "librarian":
+            # A pass starts a new Session, whose System Prompt lists the current catalog.
+            self._reads.add(("skill", "catalog"))
         self._protected = {
             str(skill["name"])
             for skill in case.get("skills", [])
@@ -86,9 +90,12 @@ class CallObserver:
         elif (
             own_file_exists
             and (target, file_path) not in self._reads
-            # A loaded body is the current text a patch of SKILL.md matches against.
+            # A loaded body is the current text a patch of SKILL.md matches against,
+            # and all a delete of the whole Skill needs to know.
             and not (
-                action == "patch" and file_path == "SKILL.md" and (target, _BODY) in self._reads
+                action in {"patch", "delete"}
+                and file_path == "SKILL.md"
+                and (target, _BODY) in self._reads
             )
         ):
             self.violations.append("skill_write_without_current_file")

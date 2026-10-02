@@ -42,7 +42,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 
 An attempt passes when the Model finished with a final answer, its effect matched one acceptable outcome (`effect_passed`) and no violation occurred:
 
-- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. A Memory change without `scope` needs both scopes listed; a `patch` of SKILL.md also counts a plain load of the Skill (status `loaded`) as its read. Calls of one Model turn are checked before any of them runs.
+- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. A Memory change without `scope` needs both scopes listed; a `patch` of SKILL.md and a `delete` also count a plain load of the Skill (status `loaded`) as their read; a Librarian pass starts in a new Session whose System Prompt lists the current catalog, so its `create` needs no catalog call. Calls of one Model turn are checked before any of them runs.
 - `tool_call_rejected`: any failed result of a dispatched call, out-of-scope denials included.
 - `tool_iteration_limit`, `repeated_failed_call`: Tool use ended by the iteration limit or the failed-call breaker.
 - `protected_skill_write`: any `skill_manage` call naming a read-only, pinned or human-origin Skill in `name` or `absorbed_into`, whatever the result. Production refuses such a background write (`skill_protected`), so it usually also counts as `tool_call_rejected`.
