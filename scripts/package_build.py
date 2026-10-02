@@ -140,7 +140,8 @@ def file_hashes(version_root: Path) -> dict[str, str]:
             if folded in seen:
                 raise BuildError(f"case-colliding payload path: {relative}")
             seen.add(folded)
-            values[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            with path.open("rb") as handle:
+                values[relative] = hashlib.file_digest(handle, "sha256").hexdigest()
     return values
 
 
@@ -216,7 +217,8 @@ def sign_archive(
             raise BuildError(
                 "release signing key must be a base64 raw Ed25519 private key"
             ) from exc
-        digest = hashlib.sha256(archive.read_bytes()).digest()
+        with archive.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").digest()
         signature.write_text(
             base64.b64encode(key.sign(digest)).decode("ascii") + "\n", encoding="ascii"
         )

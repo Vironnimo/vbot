@@ -11,11 +11,8 @@ from pathlib import Path
 
 def sha256_file(path: Path) -> str:
     """The hex SHA-256 of one file's bytes."""
-    digest = hashlib.sha256()
     with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(handle, "sha256").hexdigest()
 
 
 def fsync_file(path: Path) -> None:
