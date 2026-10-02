@@ -286,6 +286,17 @@ async def _invalid_agent_target(world: ArchiveWorld, tmp_path: Path) -> tuple[st
     return (await world.service.archive_agent("coder")).entry_id, "Not An Id"
 
 
+async def _reserved_agent_target(world: ArchiveWorld, tmp_path: Path) -> tuple[str, str | None]:
+    world.agents.create("coder")
+    # Windows reserves device names; a new id is checked before it reads as taken there.
+    return (await world.service.archive_agent("coder")).entry_id, "nul"
+
+
+async def _reserved_project_target(world: ArchiveWorld, tmp_path: Path) -> tuple[str, str | None]:
+    world.projects.create("vbot", "vBot", _repo(tmp_path))
+    return (await world.service.archive_project("vbot")).entry_id, "Com1"
+
+
 async def _claimed_project_repo(world: ArchiveWorld, tmp_path: Path) -> tuple[str, str | None]:
     repo = _repo(tmp_path)
     world.projects.create("vbot", "vBot", repo)
@@ -317,6 +328,8 @@ async def _project_agent_outside_the_team(
     [
         pytest.param(_newer_agent_payload, "newer_format", id="newer-format"),
         pytest.param(_invalid_agent_target, "invalid_target_id", id="invalid-target"),
+        pytest.param(_reserved_agent_target, "reserved_target_id", id="reserved-agent-target"),
+        pytest.param(_reserved_project_target, "reserved_target_id", id="reserved-project-target"),
         pytest.param(_claimed_project_repo, "project_cwd_claimed", id="claimed-repo"),
         pytest.param(_archived_agent_scope, "scope_missing", id="agent-archived"),
         pytest.param(_project_agent_outside_the_team, "scope_missing", id="not-in-team"),

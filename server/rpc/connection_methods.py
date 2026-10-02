@@ -20,6 +20,7 @@ from core.settings.normalizers import (
     normalize_custom_provider_settings,
 )
 from core.utils.errors import ConfigError
+from core.utils.ids import is_reserved_name, reserved_name_message
 from server.events import RESOURCE_KIND_MODELS, RESOURCE_KIND_PROVIDERS
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
@@ -196,6 +197,12 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
             raise RpcError(
                 RPC_ERROR_INVALID_REQUEST,
                 f"Custom Provider id '{provider_id}' conflicts with a bundled Provider",
+            )
+        # Model discovery stores its results in files named after the id.
+        if is_reserved_name(provider_id):
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                reserved_name_message("Custom Provider id", provider_id),
             )
 
     previous = existing_custom.get(provider_id)

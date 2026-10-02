@@ -362,7 +362,11 @@ def test_create_rejects_duplicate_agent(store: AgentStore) -> None:
         store.create("coder", "Coder Agent")
 
 
-@pytest.mark.parametrize("agent_id", ["", "../escape", "with space", "slash/name"])
+@pytest.mark.parametrize(
+    "agent_id",
+    # Names Windows reserves are refused on every platform, so data stays portable.
+    ["", "../escape", "with space", "slash/name", "con", "Aux", "lpt0"],
+)
 def test_create_rejects_unsafe_agent_id(store: AgentStore, agent_id: str) -> None:
     with pytest.raises(InvalidAgentIdError):
         store.create(agent_id, "Unsafe Agent")

@@ -251,6 +251,8 @@ def test_repeat_is_unchanged_and_overwrite_requires_explicit_replace(tmp_path):
                 "assets/COM¹.txt",
                 "assets/LPT².log",
                 "assets/COM³",
+                "assets/COM0.txt",
+                "assets/lpt0",
                 "assets/CONIN$",
                 "assets/CONOUT$",
                 "assets/CON .txt",

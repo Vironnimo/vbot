@@ -924,6 +924,8 @@ export default Object.freeze({
     'A newer vBot version archived it. Update vBot to restore it.',
   'archive.problem.invalidTargetId':
     'Use 1–64 letters, numbers, hyphens, or underscores, starting with a letter or number.',
+  'archive.problem.reservedTargetId':
+    'Windows reserves this ID as a device name, like CON, NUL, AUX, COM1, or LPT1. Choose another ID.',
   'archive.problem.agentIdTaken': 'An Agent with the ID {id} exists.',
   'archive.problem.projectIdTaken': 'A Project with the ID {id} exists.',
   'archive.problem.sessionTaken': 'A Session with the ID {ids} exists.',

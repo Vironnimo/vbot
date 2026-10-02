@@ -52,6 +52,7 @@ from core.settings import (
     validate_thinking_effort,
 )
 from core.tools.availability import normalize_tool_access
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_AGENTS, RESOURCE_KIND_PROJECTS, RESOURCE_KIND_SKILLS
@@ -814,13 +815,26 @@ def _display_name_from_cwd(cwd: str) -> str:
 
 def _slug_from_display_name(display_name: str) -> str:
     try:
-        return slugify_project_id(display_name)
+        slug = slugify_project_id(display_name)
     except ValueError as exc:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,
             f"cannot derive a project id from {display_name!r}: "
             "provide a display_name with letters or digits",
         ) from exc
+    if is_reserved_name(slug):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            reserved_name_message(
+                "Project id",
+                slug,
+                advice=(
+                    f"provide a display_name other than {display_name!r}, "
+                    "from which the Project id is derived"
+                ),
+            ),
+        )
+    return slug
 
 
 def _project_response(project: Project) -> JsonObject:

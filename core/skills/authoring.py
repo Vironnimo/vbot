@@ -36,6 +36,7 @@ from core.skills.skill_validator import (
 from core.skills.skills import RESOURCE_DIRECTORIES, SKILL_FILENAME
 from core.utils.atomic import atomic_write_bytes
 from core.utils.errors import VBotError
+from core.utils.ids import is_reserved_name, reserved_name_message
 
 PROVENANCE_AUTHOR_KEY = "author"
 PROVENANCE_SOURCE_KEY = "source"
@@ -101,6 +102,9 @@ class SkillAuthoringService:
     ) -> SkillWriteResult:
         """Create ``<target_root>/<skill_name>/SKILL.md``."""
         with self._write_lock:
+            _validate_skill_name(skill_name)
+            if is_reserved_name(skill_name):
+                raise SkillAuthoringError(reserved_name_message("Skill name", skill_name))
             skill_dir = self._skill_dir(target_root, skill_name)
             if skill_dir.exists():
                 raise SkillAuthoringError(f"Skill '{skill_name}' already exists.")
@@ -295,6 +299,7 @@ class SkillAuthoringService:
             raise SkillAuthoringError("Support file content must be a string.")
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
+            _reject_new_reserved_path(skill_dir, relative_path)
             resource_path = self._resource_path(skill_dir, relative_path)
             existed = resource_path.is_file()
             file_ending = "\n"
@@ -445,6 +450,20 @@ def _reject_redirect(path: Path) -> None:
         return
     if redirect:
         raise SkillAuthoringError("Refusing to write through a symlink or junction Skill path.")
+
+
+def _reject_new_reserved_path(skill_dir: Path, relative_path: str) -> None:
+    """Refuse to create a support file or folder under a name Windows reserves.
+
+    Checked on every platform, before the path is resolved (Windows maps device
+    names to devices). Replacing a file that already exists stays allowed.
+    """
+    normalized = _normalized_support_path(relative_path)
+    reserved = next(
+        (part for part in PurePosixPath(normalized).parts if is_reserved_name(part)), None
+    )
+    if reserved is not None and not (skill_dir / normalized).is_file():
+        raise SkillAuthoringError(reserved_name_message("file or folder name", reserved))
 
 
 def normalize_skill_file_path(relative_path: str) -> str:

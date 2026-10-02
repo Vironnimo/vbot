@@ -50,6 +50,7 @@ from core.sessions import (
     ArchiveTree,
     SessionAddress,
 )
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.tree_move import move_tree
 
@@ -388,12 +389,15 @@ def _plan_agent(
             _payload_problem(inspected.problem, findings)
         agent = inspected.agent
     target_problem = services.agents.restore_target_problem(target)
+    renamed = target != entry.subject_id
     if target_problem == "invalid_target_id":
         findings.block("invalid_target_id", f"{target} is not a valid Agent id")
+    elif renamed and is_reserved_name(target):
+        # Before the taken check: Windows reports a device name such as ``nul`` as taken.
+        findings.block("reserved_target_id", reserved_name_message("Agent id", target))
     elif target_problem is not None:
         findings.block("agent_id_taken", f"an Agent with id {target} exists", agent_id=target)
     else:
-        renamed = target != entry.subject_id
         _check_addresses(services, entry, findings, **({"agent_id": target} if renamed else {}))
     for grant in entry.facts.get("grants") or ():
         holder = grant.get("agent_id") if isinstance(grant, Mapping) else None
@@ -489,12 +493,15 @@ def _plan_project(
             _payload_problem(inspected.problem, findings)
         project = inspected.project
     target_problem = services.projects.restore_target_problem(target)
+    renamed = target != entry.subject_id
     if target_problem == "invalid_target_id":
         findings.block("invalid_target_id", f"{target} is not a valid Project id")
+    elif renamed and is_reserved_name(target):
+        # Before the taken check: Windows reports a device name such as ``nul`` as taken.
+        findings.block("reserved_target_id", reserved_name_message("Project id", target))
     elif target_problem is not None:
         findings.block("project_id_taken", f"a Project with id {target} exists", project_id=target)
     else:
-        renamed = target != entry.subject_id
         _check_addresses(services, entry, findings, **({"project_id": target} if renamed else {}))
     if project is not None:
         owner = services.projects.find_by_cwd(project.cwd)

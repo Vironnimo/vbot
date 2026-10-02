@@ -39,6 +39,7 @@ from core.json_documents import (
 from core.projects.paths import cwd_identity_key
 from core.projects.projects import (
     PROJECT_FORMAT_VERSION,
+    InvalidProjectIdError,
     Project,
     ProjectAlreadyExistsError,
     ProjectError,
@@ -54,7 +55,7 @@ from core.settings import (
     is_valid_project_id,
 )
 from core.utils.atomic import atomic_write_bytes
-from core.utils.ids import has_id_entry
+from core.utils.ids import has_id_entry, is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 from core.utils.tree_move import move_tree
@@ -82,6 +83,16 @@ def _validate_project_id(project_id: str) -> str:
     if not is_valid_project_id(project_id):
         raise ProjectError(f"Invalid project id: {project_id!r}")
     return project_id
+
+
+def _reject_reserved_project_id(project_id: str) -> None:
+    """Refuse a new Anchor directory name that Windows reserves, on every platform.
+
+    Applies where a user picks the id (create, restore under another id); existing
+    Anchors keep theirs.
+    """
+    if is_reserved_name(project_id):
+        raise InvalidProjectIdError(reserved_name_message("Project id", project_id))
 
 
 @dataclass(frozen=True)
@@ -168,6 +179,7 @@ class ProjectStore:
                 source_format=source_format,
                 auto_load=seed_default_auto_load(auto_load),
             )
+            _reject_reserved_project_id(project.project_id)
 
             project_dir = self._project_dir(project.project_id)
             if project_dir.exists():
@@ -457,11 +469,14 @@ class ProjectStore:
         """
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_project_id(target_id)
-            if self.restore_target_problem(target_id) is not None:
-                raise ProjectAlreadyExistsError(f"Project already exists: {target_id}")
             project = project_from_dict(
                 load_validated_project_json(source / _PROJECT_CONFIG_FILENAME)
             )
+            # Checked first: Windows reports a device name such as ``nul`` as taken.
+            if target_id != project.project_id:
+                _reject_reserved_project_id(target_id)
+            if self.restore_target_problem(target_id) is not None:
+                raise ProjectAlreadyExistsError(f"Project already exists: {target_id}")
             self._reject_duplicate_cwd(project.cwd, exclude_project_id=None)
             restored = replace(project, project_id=target_id, updated_at=utc_now_timestamp())
             project_dir = self._project_dir(target_id)

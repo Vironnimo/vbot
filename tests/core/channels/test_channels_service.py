@@ -71,6 +71,8 @@ async def test_create_and_update_refuse_invalid_changes(tmp_path: Path) -> None:
             service.create_channel(
                 replace(make_config("tg-other", enabled=False), agent_id="missing-agent")
             ),
+            # Windows reserves the name for a device; it is refused on every platform.
+            service.create_channel(make_config("aux", enabled=False)),
             service.update_channel("tg-assistant", agent_id="missing-agent"),
             service.update_channel("tg-assistant", unknown_field="value"),
         ]

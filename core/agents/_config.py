@@ -78,6 +78,7 @@ from core.tools.availability import (
     normalize_env_keys,
     normalize_tool_access,
 )
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.timestamps import utc_now_timestamp
 
 DEFAULT_FALLBACK_MODELS: list[str] = []
@@ -684,3 +685,14 @@ def _validate_agent_id(agent_id: str) -> None:
         raise InvalidAgentIdError(
             "Agent id must be 1-64 characters using only letters, numbers, hyphen, or underscore"
         )
+
+
+def _validate_new_agent_id(agent_id: str) -> None:
+    """Validate an id a user picks for a new or renamed Agent.
+
+    The id names the Agent's directory, so a name Windows reserves is refused on
+    every platform; existing Agents keep their ids.
+    """
+    _validate_agent_id(agent_id)
+    if is_reserved_name(agent_id):
+        raise InvalidAgentIdError(reserved_name_message("Agent id", agent_id))

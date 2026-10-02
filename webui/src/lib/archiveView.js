@@ -338,6 +338,8 @@ export function restoreProblemText(problem, { warning = false } = {}) {
       });
     case 'invalid_target_id':
       return t('archive.problem.invalidTargetId');
+    case 'reserved_target_id':
+      return t('archive.problem.reservedTargetId');
     case 'project_cwd_claimed':
       return t('archive.problem.projectCwdClaimed', {
         project: text(problem.project_id),

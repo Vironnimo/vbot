@@ -42,6 +42,7 @@ from core.agents._config import (
     _validate_excluded_skills,
     _validate_fallback_models,
     _validate_memory_prompt_mode,
+    _validate_new_agent_id,
     _validate_root_project_id,
     _validate_string_field,
     _validate_temperature,
@@ -249,7 +250,7 @@ class AgentStore:
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
         with self._snapshot_barrier.compound_mutation(), self._change():
-            _validate_agent_id(agent_id)
+            _validate_new_agent_id(agent_id)
             agent_dir = self._agent_dir(agent_id)
             if exists_strict(agent_dir):
                 raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
@@ -727,7 +728,7 @@ class AgentStore:
         """
         with self._snapshot_barrier.compound_mutation(), self._change():
             _validate_agent_id(agent_id)
-            _validate_agent_id(new_agent_id)
+            _validate_new_agent_id(new_agent_id)
             if agent_id == new_agent_id:
                 raise AgentError("new agent id must differ from the current id")
             if exists_strict(self._rename_record_path()):

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from core.agents import AgentAlreadyExistsError, AgentError, AgentStore
+from core.agents import AgentAlreadyExistsError, AgentError, AgentStore, InvalidAgentIdError
 from core.utils import tree_move
 from tests.core.agents.agents_test_support import persisted
 from tests.core.agents.agents_test_support import store as store
@@ -183,6 +183,11 @@ def test_restore_files_rewrites_the_payload_to_the_target_and_keeps_unknown_fiel
         store.restore_files(payload, "beta", workspace=None, root_project_id=None),
     ):
         pytest.fail("a taken id is refused before anything moves")
+    with (
+        pytest.raises(InvalidAgentIdError, match="'aux' is reserved on Windows"),
+        store.restore_files(payload, "aux", workspace=None, root_project_id=None),
+    ):
+        pytest.fail("a new id Windows reserves is refused before anything moves")
     with (
         pytest.raises(RuntimeError, match="database unavailable"),
         store.restore_files(payload, "coder-2", workspace=None, root_project_id=None),

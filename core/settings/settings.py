@@ -50,13 +50,16 @@ ALLOWED_THINKING_EFFORTS = frozenset(
 MAX_FALLBACK_MODELS = 5
 # Single authority for the agent-id format (filesystem-safe slug): a leading
 # letter or digit, then up to 63 more of letter/digit/hyphen/underscore. Shared
-# by file-schema validation, the agent store, and prompt-fragment storage.
+# by file-schema validation, the agent store, and prompt-fragment storage. Every
+# reader accepts these; creating or renaming an Agent also refuses names Windows
+# reserves (``core.utils.ids.is_reserved_name``), such as ``con`` or ``lpt1``.
 AGENT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # Single authority for the project-id format (filesystem-safe slug). Same shape
 # as the agent-id rule: a leading letter or digit, then up to 63 more of
 # letter/digit/hyphen/underscore. Shared by the project store and the central
 # file-schema validator. Lives here (not in core.projects) so validation.py can
-# import it without an import cycle through the projects package.
+# import it without an import cycle through the projects package. Creating a
+# Project also refuses names Windows reserves (``core.utils.ids.is_reserved_name``).
 PROJECT_ID_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 # The coding-agent ecosystems a project may declare as its single source format
 # (GLOSSARY → Source Format): where its Team agents *and* its project skills come
