@@ -260,6 +260,8 @@ vbot provider enable ollama
 vbot model refresh openrouter
 ```
 
+vBot learns from Provider responses: when a Provider rejects a sampling parameter or a reasoning effort for a Model, vBot retries without it and leaves it out of later requests. Such a lesson expires after 30 days; `vbot model forget-wire-facts <provider>[/<model-id>] [--connection <id>]` drops it at once, for example after the Provider fixed the Model.
+
 A key passed to `provider key set` may be retained by shell history. Prefer the WebUI, a protected environment variable, or a shell-specific history-safe workflow when entering a real secret.
 
 </details>
@@ -1142,7 +1144,7 @@ Installed commands use `vbot`. From a development checkout, `python cli/main.py`
 | Memory | `memory list`, `memory add`, `memory replace`, `memory remove` |
 | System Prompt | `prompt list`, `prompt show`, `prompt update`, `prompt reset`, `prompt create`, `prompt remove`, `prompt layout set`, `prompt layout reset`, `prompt preview` |
 | Providers | `provider list`, `provider status`, `provider usage`, `provider history list`, `provider history clear`, `provider custom list`, `provider custom save`, `provider custom delete`, `provider key set`, `provider key unset`, `provider enable`, `provider disable`, `provider connect`, `provider disconnect`, `provider connection status` |
-| Models | `model list`, `model show`, `model refresh`, `task-model list`, `task-model target list`, `task-model option list`, `task-model set`, `task-model option set`, `task-model option unset`, `task-model clear` |
+| Models | `model list`, `model show`, `model refresh`, `model forget-wire-facts`, `task-model list`, `task-model target list`, `task-model option list`, `task-model set`, `task-model option set`, `task-model option unset`, `task-model clear` |
 | Extensions | `extensions list`, `extensions reload`, `extensions enable`, `extensions disable`, `extensions show <name>`, `extensions set <name>`, `extensions operations <name>`, `extensions run <name> <operation>` |
 | Cron | `cron list`, `cron show`, `cron create`, `cron update`, `cron delete`, `cron enable`, `cron disable` |
 | Bootstrap | `bootstrap list`, `bootstrap show`, `bootstrap create`, `bootstrap update`, `bootstrap delete`, `bootstrap enable`, `bootstrap disable` |

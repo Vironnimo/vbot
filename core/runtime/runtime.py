@@ -1244,6 +1244,12 @@ class Runtime:
         """Return the wire profile ``(status, verification)`` without resolving the profile."""
         return self._provider_operations().wire_status(provider_id, connection_id, model_id)
 
+    def forget_wire_facts(
+        self, provider_id: str, connection_id: str | None = None, model_id: str | None = None
+    ) -> int:
+        """Drop what live traffic taught about a Provider, a Connection, or one Model."""
+        return self._provider_operations().forget_wire_facts(provider_id, connection_id, model_id)
+
     def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
         """Return the wire profile data by Provider id, Custom Provider blocks included."""
         return self._provider_operations().wire_profile_files

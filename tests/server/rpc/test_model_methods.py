@@ -288,7 +288,8 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``model.list`` reports each usable Connection's wire status; ``model.get``
-    adds the profile summary and the facts live traffic taught, as requests use them."""
+    adds the profile summary and the facts live traffic taught, as requests use them,
+    until ``model.forget_wire_facts`` drops them."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("OPENAI_OAUTH_TOKEN", "oauth-token")
@@ -362,6 +363,23 @@ async def test_model_catalog_reports_wire_profiles_per_usable_connection(
             },
         },
     }
+
+    refused = await rpc_error(
+        state, "model.forget_wire_facts", model="openai/gpt-5.2", connection="nowhere"
+    )
+    forgotten = await rpc_result(
+        state, "model.forget_wire_facts", model="openai/gpt-5.2", connection="openai:oauth"
+    )
+    model = (await rpc_result(state, "model.get", model="openai/gpt-5.2"))["model"]
+
+    assert refused["code"] == "invalid_request"
+    assert forgotten == {
+        "provider_id": "openai",
+        "model_id": "gpt-5.2",
+        "connection_id": "oauth",
+        "forgotten": 1,
+    }
+    assert model["wire_profiles"]["oauth"]["learned"]["rejected_parameters"] == []
 
 
 @pytest.mark.asyncio

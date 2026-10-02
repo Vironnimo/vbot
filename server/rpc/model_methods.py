@@ -221,6 +221,38 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
     return {"model": response}
 
 
+async def _forget_wire_facts(state: Any, params: JsonObject) -> JsonObject:
+    """Drop learned wire facts for a Provider or one of its Models, optionally on one Connection."""
+
+    _reject_unsupported(params, {"model", "connection"}, "model.forget_wire_facts")
+    reference = _required_string(params, "model")
+    bare_reference = reference.rpartition("::")[0] if "::" in reference else reference
+    provider_id, _separator, model_id = bare_reference.partition("/")
+    connection_id = params.get("connection")
+    if connection_id is not None and (not isinstance(connection_id, str) or not connection_id):
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.connection must be a non-empty string")
+    runtime = state.runtime
+    provider = _provider_config_or_none(runtime, provider_id)
+    if provider is None:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, f"unknown Provider {provider_id!r}")
+    if connection_id is not None:
+        connection_id = connection_id.removeprefix(f"{provider_id}:")
+        known = [connection.id for connection in getattr(provider, "connections", ())]
+        if connection_id not in known:
+            raise RpcError(
+                RPC_ERROR_INVALID_REQUEST,
+                f"unknown Connection {connection_id!r} of {provider_id!r}; "
+                f"choices: {', '.join(known)}",
+            )
+    forgotten = runtime.forget_wire_facts(provider_id, connection_id, model_id or None)
+    return {
+        "provider_id": provider_id,
+        "model_id": model_id or None,
+        "connection_id": connection_id,
+        "forgotten": forgotten,
+    }
+
+
 async def _routing_provider_options(state: Any, params: JsonObject) -> JsonObject:
     """Return provider slugs selectable for OpenRouter globally or per Model."""
 
@@ -884,6 +916,7 @@ def _summarize_refreshed_providers(successes: list[JsonObject]) -> tuple[int, in
 def method_handlers() -> dict[str, RpcMethodHandler]:
     """Return the registered model RPC handlers."""
     return {
+        "model.forget_wire_facts": _forget_wire_facts,
         "model.get": _get_model,
         "model.list": _list_models,
         "model.refresh_db": _refresh_model_db,

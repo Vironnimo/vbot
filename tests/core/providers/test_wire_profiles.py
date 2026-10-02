@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from core.providers._wire_profile_files import (
     parse_wire_profile_file,
 )
 from core.providers.reasoning import ReasoningIntent
-from core.providers.wire_observations import ObservedFacts, WireObservations
+from core.providers.wire_observations import REJECTION_TTL, ObservedFacts, WireObservations
 from core.providers.wire_profile import (
     BudgetRule,
     ParameterRule,
@@ -610,9 +611,45 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
 
     reloaded = WireObservations.load(path, save_delay=None)
     assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
-    reloaded.forget("acme", "api-key")
+    assert reloaded.forget("acme", model_id="unknown") == 1
+    assert reloaded.facts_for("acme", "api-key", "m").reasoning_field == "reasoning_content"
+    assert reloaded.forget("acme", "api-key") == 1
     assert reloaded.facts_for("acme", "api-key", "m").is_empty()
     assert reloaded.facts_for("acme", "other", "m").rejected_parameters == ("top_p",)
+
+
+def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> None:
+    path = tmp_path / "wire-observations.json"
+    now = [datetime(2026, 10, 1, tzinfo=UTC)]
+    store = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    profiles, _ = _profiles(None, {"m": _model("m")})
+    profiles.set_observations(store)
+    store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
+    store.record_rejected_parameter("acme", "api-key", "m", "temperature")
+    now[0] += timedelta(days=10)
+    store.record_rejected_parameter("acme", "api-key", "m", "top_p")
+    store.flush()
+    assert set(_resolve(profiles, "m").request.parameters) == {"temperature", "top_p"}
+
+    now[0] += REJECTION_TTL - timedelta(days=10)
+    remaining = ObservedFacts(
+        reasoning_field="reasoning_content",
+        rejected_parameters=("top_p",),
+        reasoning_returned=True,
+    )
+    assert set(_resolve(profiles, "m").request.parameters) == {"top_p"}
+    assert store.facts_for("acme", "api-key", "m") == remaining
+    store.flush()
+    assert (
+        WireObservations.load(path, save_delay=None, clock=lambda: now[0]).facts_for(
+            "acme", "api-key", "m"
+        )
+        == remaining
+    )
+
+    now[0] += timedelta(days=10)
+    reloaded = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
+    assert reloaded.facts_for("acme", "api-key", "m").rejected_parameters == ()
 
 
 @pytest.mark.parametrize(

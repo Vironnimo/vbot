@@ -13,6 +13,7 @@ from cli._input import (
 )
 from cli.channel_management import channel_set_app_token, channel_whatsapp
 from cli.extensions_management import extensions_operation
+from cli.model_management import model_forget_wire_facts
 from cli.provider_management import (
     provider_connect,
     provider_connect_status,
@@ -288,6 +289,7 @@ def dispatch_model_command(
     list_models_fn: Callable[[ServerInstance, dict[str, Any]], CommandResult],
     show_model_fn: Callable[[ServerInstance, str], CommandResult],
     refresh_models_fn: Callable[[ServerInstance, str | None], CommandResult],
+    forget_wire_facts_fn: Callable[..., CommandResult] = model_forget_wire_facts,
 ) -> CommandResult:
     """Dispatch one parsed model command against the server RPC client."""
 
@@ -297,6 +299,8 @@ def dispatch_model_command(
         return show_model_fn(instance, args.model)
     if args.command == "refresh":
         return refresh_models_fn(instance, args.provider)
+    if args.command == "forget-wire-facts":
+        return forget_wire_facts_fn(instance, args.model, args.connection)
     raise ValueError(f"Unsupported model command: {args.command}")
 
 

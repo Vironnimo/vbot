@@ -625,6 +625,11 @@ class StubRuntime:
     ) -> tuple[ProfileStatus, Verification | None]:
         return self.wire_profiles.status(provider_id, connection_id, model_id)
 
+    def forget_wire_facts(
+        self, provider_id: str, connection_id: str | None = None, model_id: str | None = None
+    ) -> int:
+        return self.wire_observations.forget(provider_id, connection_id, model_id)
+
     def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
         return self.wire_profiles.files
 

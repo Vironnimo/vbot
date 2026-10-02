@@ -49,6 +49,28 @@ def model_show(instance: ServerInstance, model: str) -> CommandResult:
     )
 
 
+def model_forget_wire_facts(
+    instance: ServerInstance, model: str, connection: str | None = None
+) -> CommandResult:
+    """Drop what live traffic taught vBot about a Provider's or one Model's wire."""
+
+    params: dict[str, Any] = {"model": model}
+    if connection is not None:
+        params["connection"] = connection
+    payload = _rpc_call(instance, "model.forget_wire_facts", params)
+    if not payload.ok:
+        return payload.to_command_result()
+    forgotten = payload.data.get("forgotten")
+    count = forgotten if isinstance(forgotten, int) else 0
+    scope = model if connection is None else f"{model} on {connection}"
+    message = (
+        f"forgot learned wire facts of {count} Model target(s) for {scope}"
+        if count
+        else f"no learned wire facts for {scope}"
+    )
+    return CommandResult(ok=True, message=message, instance=instance)
+
+
 def model_refresh(
     instance: ServerInstance,
     provider_id: str | None = None,

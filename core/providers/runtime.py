@@ -162,6 +162,12 @@ class ProviderRuntime:
         """Return what live traffic showed for one Model on one local Connection id."""
         return self._wire_observations.facts_for(provider_id, connection_id, model_id)
 
+    def forget_wire_facts(
+        self, provider_id: str, connection_id: str | None = None, model_id: str | None = None
+    ) -> int:
+        """Drop learned wire facts; returns how many (Connection, Model) targets lost facts."""
+        return self._wire_observations.forget(provider_id, connection_id, model_id)
+
     def close_wire_observations(self) -> None:
         """Write pending learned wire facts (called on Runtime shutdown)."""
         self._wire_observations.close()

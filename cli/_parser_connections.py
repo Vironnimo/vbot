@@ -517,6 +517,22 @@ def _add_model_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
         metavar="<provider-id>",
         help="Refresh only this provider; omitted means all refreshable providers",
     )
+    forget_parser = _add_command_parser(
+        model_subparsers,
+        "forget-wire-facts",
+        MODEL_HELP["forget-wire-facts"],
+        example="model forget-wire-facts openrouter/qwen/qwen3.8-max --connection api-key",
+    )
+    forget_parser.add_argument(
+        "model",
+        metavar="<provider>[/<model-id>]",
+        help="A Provider id (all its Models) or one exact Model",
+    )
+    forget_parser.add_argument(
+        "--connection",
+        metavar="<connection-id>",
+        help="Only the facts learned on this Connection",
+    )
 
 
 def _add_task_model_parsers(
