@@ -583,7 +583,7 @@ def _available_recall_backends(runtime: Any) -> list[str]:
 
 
 def _validate_model_connections(models: Any, settings_update: JsonObject) -> None:
-    """Reject default-agent, summary, title and Librarian models on a forbidden connection."""
+    """Reject default-agent, summary and title models on a forbidden connection."""
     agent_defaults = settings_update.get("defaults", {}).get("agent", {})
     model_binding = agent_defaults.get("model")
     if isinstance(model_binding, str):
