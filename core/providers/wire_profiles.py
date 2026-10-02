@@ -165,6 +165,11 @@ class WireProfiles:
             self._observations = observations
             self._cache.clear()
 
+    @property
+    def files(self) -> Mapping[str, WireProfileFile]:
+        """The current profile data by Provider id (bundled files plus Custom Provider blocks)."""
+        return self._files
+
     def file_for(self, provider_id: str) -> WireProfileFile | None:
         return self._files.get(provider_id)
 
@@ -324,18 +329,19 @@ def standalone_wire_binding(
     connection_id: str,
     protocols: Sequence[Protocol],
     model_lookup: Callable[[str], Model | None] | None,
+    files: Mapping[str, WireProfileFile] | None = None,
 ) -> WireBinding:
     """Profile lookup for an Adapter built outside a Runtime (tools, tests).
 
-    Uses the bundled files and the Adapter's own Model lookup. Learned facts
-    live in memory for the Adapter's lifetime only.
+    Uses ``files`` (the bundled files when omitted) and the Adapter's own Model
+    lookup. Learned facts live in memory for the Adapter's lifetime only.
     """
 
     def resolve_model(_provider_id: str, model_id: str) -> Model | None:
         return model_lookup(model_id) if model_lookup is not None else None
 
     profiles = WireProfiles(
-        files=bundled_wire_profile_files(),
+        files=bundled_wire_profile_files() if files is None else files,
         protocol_support=lambda _provider_id: protocols,
         model_resolver=resolve_model,
         report=log_wire_profile_issue,

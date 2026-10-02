@@ -13,6 +13,7 @@ from typing import Any
 
 from core.providers.providers import AuthConfig, ConnectionConfig, OAuthConfig, ProviderConfig
 from core.providers.token_store import TokenStore
+from core.providers.wire_profiles import bundled_wire_profile_files
 from core.storage.layout import DataDirectoryLayout
 from server.events import ServerEventBus
 
@@ -138,6 +139,7 @@ def oauth_provider_state(tmp_path: Path, provider: ProviderConfig) -> SimpleName
                 load_custom_providers_settings=dict,
             ),
             models=_ModelRegistry(),
+            wire_profile_files=bundled_wire_profile_files,
         ),
         event_bus=ServerEventBus(),
     )

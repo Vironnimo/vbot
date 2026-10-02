@@ -807,6 +807,7 @@ async def _refresh_provider_connections(
                         resources_dir,
                         credential_connection=discovery_connection,
                         models_dev_catalog=models_dev_catalog,
+                        wire_files=runtime.wire_profile_files(),
                     )
         except (ConfigError, RpcError, ModelDiscoveryError, ProviderError, NetworkError) as exc:
             _LOGGER.warning(

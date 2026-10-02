@@ -19,6 +19,10 @@ from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import ModelsDevCatalog
 from core.providers import OpenCodeZenAdapter
+from core.providers._wire_profile_files import (
+    WIRE_PROFILE_FORMAT_VERSION,
+    parse_wire_profile_file,
+)
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 from .discovery_test_support import (
@@ -37,13 +41,17 @@ from .discovery_test_support import (
     openrouter_config,
     raw_openrouter_model,
     read_models_file,
+    simple_compatible_config,
 )
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_path: Path) -> None:
-    """Zen admits a Model its protocol hint or a reviewed rule routes, unless free or retired."""
+    """Zen admits a Model its protocol hint or a reviewed rule routes, unless free or retired.
+
+    A refresh without models.dev keeps what earlier enrichment projected.
+    """
     resources_dir = tmp_path / "resources"
     config = ProviderConfig(
         id="opencode-zen",
@@ -161,6 +169,59 @@ async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_pa
     }
     assert profiles["claude-future-6"].provenance["protocol"] == "catalog_hint"
     await adapter.aclose()
+
+    # A refresh while models.dev is unreachable keeps every earlier enrichment,
+    # so no hint-routed Model loses its protocol or admission.
+    await refresh_models(
+        config,
+        "api-key-secret",
+        resources_dir,
+        credential_connection=config.get_connection("api-key"),
+    )
+
+    def without_connection_order(models: dict[str, Any]) -> dict[str, Any]:
+        return {
+            model_id: {**data, "connections": sorted(data["connections"])}
+            for model_id, data in models.items()
+        }
+
+    after_outage = read_models_file(resources_dir, "opencode-zen.json")["models"]
+    assert without_connection_order(after_outage) == without_connection_order(written)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_refresh_admits_by_the_wire_files_it_is_given(tmp_path: Path) -> None:
+    """A Runtime's wire data, Custom Provider blocks included, decides what is written."""
+    config = simple_compatible_config()
+    wire_file = parse_wire_profile_file(
+        "simple",
+        {
+            "format_version": WIRE_PROFILE_FORMAT_VERSION,
+            "rules": [
+                {
+                    "when": {"ids": ["old-model"]},
+                    "set": {"admission": {"state": "retired", "message": "gone"}},
+                }
+            ],
+        },
+        source="test",
+        report=pytest.fail,
+    )
+    assert wire_file is not None
+    respx.get("https://simple.example/v1/models").mock(
+        return_value=httpx.Response(200, json={"data": [{"id": "old-model"}, {"id": "new-model"}]})
+    )
+
+    await refresh_models(
+        config,
+        API_KEY,
+        tmp_path,
+        credential_connection=config.get_connection("api-key"),
+        wire_files={"simple": wire_file},
+    )
+
+    assert set(read_models_file(tmp_path, "simple.json")["models"]) == {"new-model"}
 
 
 @respx.mock

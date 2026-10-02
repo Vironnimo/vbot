@@ -7,6 +7,7 @@ provider model file.
 
 from __future__ import annotations
 
+import copy
 import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
@@ -35,6 +36,7 @@ from core.models.models_dev import (
     reasoning_response_field,
 )
 from core.providers._http_shared import classify_http_status, wrap_network_error
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.adapter import ProviderAdapter
 from core.providers.adapter_types import ADAPTER_TYPES
 from core.providers.anthropic import AnthropicAdapter
@@ -161,6 +163,7 @@ async def refresh_models(
     model_filter: ModelFilter | None = None,
     credential_connection: ConnectionConfig | None = None,
     models_dev_catalog: ModelsDevCatalog | None = None,
+    wire_files: Mapping[str, WireProfileFile] | None = None,
 ) -> dict[str, Any]:
     """Fetch, normalize, project, write, and invalidate one provider catalog.
 
@@ -183,6 +186,9 @@ async def refresh_models(
             written (the join is enrichment, not a dependency). Fetching the
             catalog ONCE per refresh is the caller's job (the RPC refresh path
             and the regen script) so it is not re-fetched per provider.
+        wire_files: The wire profile data whose admission decides which Models
+            are written; the bundled files when ``None``. A Runtime passes its
+            own, so a Custom Provider's Settings ``wire`` block applies.
     """
 
     _require_discovery_target(provider_config, credential_connection)
@@ -348,17 +354,21 @@ async def refresh_models(
         # Refresh writes the PURE provider projection — NO override baking (that
         # cross-file merge moved to LOAD in Phase 2). Each model is serialized to
         # data and enriched with a models.dev canonical pointer / deviating ladder.
+        output_path = models_dir / f"{provider_config.id}.json"
+        existing_models = _read_existing_provider_models(output_path)
         projected_models = _project_provider_models(
             normalized_models,
             provider_config,
             catalog,
+            existing_models,
         )
         projected_models = _admitted_models(
-            projected_models, normalized_models, provider_config, credential_connection
+            projected_models,
+            normalized_models,
+            provider_config,
+            credential_connection,
+            wire_files,
         )
-
-        output_path = models_dir / f"{provider_config.id}.json"
-        existing_models = _read_existing_provider_models(output_path)
         connection_id = credential_connection.id if credential_connection is not None else None
         tagged_fresh = _tag_fresh_models(projected_models, connection_id)
         final_models = _merge_models_by_connection(existing_models, tagged_fresh, connection_id)
@@ -398,6 +408,7 @@ def _project_provider_models(
     normalized_models: Mapping[str, Model],
     provider_config: ProviderConfig,
     catalog: ModelsDevCatalog | None,
+    previous_models: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     """Serialize provider models to data and enrich each from models.dev.
 
@@ -407,6 +418,11 @@ def _project_provider_models(
     wire-id match and a **deviating reasoning ladder** when the provider's own
     ``reasoning_options`` differ from the lab spec. No cross-file merge — this is
     the pure provider projection.
+
+    When models.dev is unavailable, a wire id the current catalog already holds
+    keeps the facts an earlier enrichment gave it (``previous_models``): an
+    outage must not strip pricing, limits, canonical joins or the protocol hint
+    that routes and admits a gateway Model.
     """
 
     projected: dict[str, dict[str, Any]] = {}
@@ -415,8 +431,75 @@ def _project_provider_models(
         data = _model_to_data(model)
         if catalog is not None:
             _enrich_provider_model(data, provider_config.id, models_dev_id, wire_id, catalog)
+        elif wire_id in previous_models:
+            _carry_forward_enrichment(data, previous_models[wire_id], provider_config.id)
         projected[wire_id] = data
     return projected
+
+
+def _carry_forward_enrichment(
+    data: dict[str, Any], previous: Mapping[str, Any], provider_id: str
+) -> None:
+    """Keep what ``_enrich_provider_model`` added to ``previous``, under its own rules.
+
+    Fill, don't overwrite: a fact the endpoint reported now wins over the
+    earlier value, modalities only widen, and an adapter-reported reasoning
+    control is kept. Otherwise the reasoning control description is taken as
+    one unit from ``previous`` - including its absence, which lets a canonical
+    ladder flow through at load - while adapter facts outside it stay.
+    """
+
+    for key in ("canonical", "pricing"):
+        if key in previous and key not in data:
+            data[key] = copy.deepcopy(previous[key])
+    for key in ("context_window", "max_output_tokens", "family"):
+        if previous.get(key) and not data.get(key):
+            data[key] = previous[key]
+
+    metadata_key = _provider_metadata_key(provider_id)
+    previous_metadata = previous.get("metadata")
+    previous_facts = (
+        previous_metadata.get(metadata_key) if isinstance(previous_metadata, Mapping) else None
+    )
+    if isinstance(previous_facts, Mapping):
+        for fact in ("npm", "reasoning_response_field"):
+            if fact in previous_facts:
+                metadata = data.setdefault("metadata", {})
+                provider_metadata = metadata.setdefault(metadata_key, {})
+                provider_metadata.setdefault(fact, previous_facts[fact])
+
+    capabilities = data.get("capabilities")
+    previous_capabilities = previous.get("capabilities")
+    if not isinstance(capabilities, dict) or not isinstance(previous_capabilities, Mapping):
+        return
+    for direction in ("input_modalities", "output_modalities"):
+        earlier = previous_capabilities.get(direction)
+        if isinstance(earlier, list) and set(capabilities.get(direction) or []) < set(earlier):
+            capabilities[direction] = list(earlier)
+            if direction == "input_modalities":
+                capabilities["vision"] = "image" in earlier
+    current = capabilities.get("reasoning")
+    if isinstance(current, dict) and current.get("control") is not None:
+        return
+    adapter_facts = (
+        {key: value for key, value in current.items() if key not in REASONING_CONTROL_FIELDS}
+        if isinstance(current, dict)
+        else {}
+    )
+    earlier_reasoning = previous_capabilities.get("reasoning")
+    earlier_control = (
+        {
+            key: copy.deepcopy(value)
+            for key, value in earlier_reasoning.items()
+            if key in REASONING_CONTROL_FIELDS
+        }
+        if isinstance(earlier_reasoning, Mapping)
+        else {}
+    )
+    if earlier_control or adapter_facts:
+        capabilities["reasoning"] = {**earlier_control, **adapter_facts}
+    else:
+        capabilities.pop("reasoning", None)
 
 
 def _admitted_models(
@@ -424,6 +507,7 @@ def _admitted_models(
     normalized_models: Mapping[str, Model],
     provider_config: ProviderConfig,
     connection: ConnectionConfig | None,
+    wire_files: Mapping[str, WireProfileFile] | None,
 ) -> dict[str, dict[str, Any]]:
     """Keep the Models the Provider's wire profile admits on this Connection.
 
@@ -453,6 +537,7 @@ def _admitted_models(
         connection_id=connection.id if connection is not None else "",
         protocols=adapter_class.WIRE_PROTOCOLS,
         model_lookup=projected_model,
+        files=wire_files,
     )
     admitted: dict[str, dict[str, Any]] = {}
     for model_id, data in projected.items():

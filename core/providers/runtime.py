@@ -12,6 +12,7 @@ from typing import Any, cast
 from core.debug import DebugTraceStore, ProviderDebugRecorder
 from core.models.database import ModelDatabaseRefresh, begin_runtime_model_database_refresh
 from core.models.models import Model, ModelRegistry
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import DEFAULT_ACCOUNT_ID, ConnectionRef, split_connection_id
 from core.providers.adapter import ModelLookup, ProviderAdapter
 from core.providers.adapter_types import ADAPTER_TYPES
@@ -127,6 +128,11 @@ class ProviderRuntime:
         so already built Adapters use the new blocks from their next request.
         """
         self._wire_profiles.replace_files(wire_profile_files(custom_providers))
+
+    @property
+    def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
+        """The wire profile data requests use: bundled files plus Custom Provider blocks."""
+        return self._wire_profiles.files
 
     @property
     def wire_observations(self) -> WireObservations:
@@ -313,6 +319,7 @@ class ProviderRuntime:
                                 credential_value,
                                 refresh_resources_dir,
                                 credential_connection=connection,
+                                wire_files=self._wire_profiles.files,
                             )
                     except ModelDiscoveryError as error:
                         previous = self._connection_reachability.get(connection_id)

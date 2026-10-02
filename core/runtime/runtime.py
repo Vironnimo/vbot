@@ -59,6 +59,7 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.adapter import ProviderAdapter
 from core.providers.providers import ProviderRegistry
@@ -1242,6 +1243,10 @@ class Runtime:
     ) -> tuple[ProfileStatus, Verification | None]:
         """Return the wire profile ``(status, verification)`` without resolving the profile."""
         return self._provider_operations().wire_status(provider_id, connection_id, model_id)
+
+    def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
+        """Return the wire profile data by Provider id, Custom Provider blocks included."""
+        return self._provider_operations().wire_profile_files
 
     def learned_wire_facts(
         self, provider_id: str, connection_id: str, model_id: str

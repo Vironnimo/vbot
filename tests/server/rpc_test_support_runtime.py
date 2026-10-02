@@ -21,6 +21,7 @@ from core.chat import (
 )
 from core.database import SnapshotBarrier, write_bootstrap_marker
 from core.memory import MemoryService
+from core.providers._wire_profile_files import WireProfileFile
 from core.providers.accounts import (
     DEFAULT_ACCOUNT_ID,
     ConnectionRef,
@@ -623,6 +624,9 @@ class StubRuntime:
         self, provider_id: str, connection_id: str, model_id: str
     ) -> tuple[ProfileStatus, Verification | None]:
         return self.wire_profiles.status(provider_id, connection_id, model_id)
+
+    def wire_profile_files(self) -> Mapping[str, WireProfileFile]:
+        return self.wire_profiles.files
 
     def learned_wire_facts(
         self, provider_id: str, connection_id: str, model_id: str
