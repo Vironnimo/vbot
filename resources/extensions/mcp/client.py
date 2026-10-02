@@ -3,16 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
+import hashlib
+import json
 import logging
 import os
 import random
+import subprocess
+import sys
 import threading
 import time
 import warnings
 from collections.abc import Callable, Coroutine
-from contextlib import AsyncExitStack
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
-from typing import Any, cast
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Self, cast, override
 
 import anyio
 import httpx2
@@ -22,21 +30,25 @@ from mcp import Client
 from mcp.client.auth import OAuthFlowError
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.streamable_http import MCP_SESSION_ID, streamable_http_client
+from mcp.os.win32.utilities import get_windows_executable_command
 from mcp.shared.dispatcher import CallOptions
 from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
+from mcp.shared.message import SessionMessage
 
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
 
 from ._callbacks import ServerRequests
-from ._events import ConnectionEvents, dump
+from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
 from .interactions import InputRequests
 
 CONNECTION_QUEUE_LIMIT = 64
+# Calls one connection runs at the same time; further calls wait in its queue.
+CONNECTION_CONCURRENCY = 8
 MAX_READ_RETRIES = 3
 READ_RETRY_BASE_SECONDS = 0.5
 RETRYABLE_READ_STATUSES = frozenset({429, 500, 502, 503, 504})
@@ -53,7 +65,16 @@ READ_OPERATIONS = frozenset(
     }
 )
 CONNECTION_CLOSE_TIMEOUT_SECONDS = 15
+# How long a connection that ends waits for its interrupted calls to stop, so their
+# cancellation still reaches the server.
+CALL_STOP_SECONDS = 5
+# Automatic reconnects after an established connection was lost; later calls reconnect.
+MAX_RECONNECTS = 3
+# Catalog change notifications within this window cause one catalog refresh.
+CATALOG_REFRESH_DELAY_SECONDS = 0.5
 DISCOVERY_PROTOCOL_VERSION = "2026-07-28"
+# Characters of an invalid Tool result's validation problem that a caller sees.
+RESULT_PROBLEM_CHARACTERS = 300
 _LOGGER = logging.getLogger("vbot.extensions.mcp")
 # Tests patch this seam instead of the process-wide ``asyncio.sleep``.
 _sleep = asyncio.sleep
@@ -70,6 +91,16 @@ EXPECTED_FAILURES = (
     anyio.BrokenResourceError,
     anyio.ClosedResourceError,
 )
+# HTTP failures that prove the server did not process a request: no connection, or a
+# sign-in that failed after the server refused the request.
+_UNSENT_HTTP_ERRORS = (
+    httpx2.ConnectError,
+    httpx2.ConnectTimeout,
+    httpx2.PoolTimeout,
+    OAuthFlowError,
+)
+# Characters cmd.exe interprets outside quotes in the command line of a batch file.
+_BATCH_METACHARACTERS = frozenset("&|<>^")
 
 
 OPERATION_MODELS: dict[str, Any] = {
@@ -95,6 +126,53 @@ def operation_schema(operation: str) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "additionalProperties": False}
 
 
+class _ObservedHTTPClient(httpx2.AsyncClient):
+    """One connection's HTTP client; tells its runner what each exchange proves.
+
+    The runner learns which requests reached the server and when the server
+    ended the connection's session, which the SDK reports only as error text.
+    """
+
+    def __init__(self, observer: ConnectionRunner, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._observer = observer
+
+    @override
+    async def send(self, request: httpx2.Request, **kwargs: Any) -> httpx2.Response:
+        try:
+            response = await super().send(request, **kwargs)
+        except Exception as error:
+            self._observer._http_failed(request, error)
+            raise
+        await self._observer._http_answered(request, response)
+        return response
+
+
+def _batch_argument_problem(command: str, args: list[str]) -> str | None:
+    """Why Windows would not pass *args* unchanged to *command*, or ``None``.
+
+    Windows runs a ``.cmd`` or ``.bat`` file, such as ``npx.cmd``, through
+    cmd.exe, which interprets ``& | < > ^`` outside quotes and ends the command
+    at a line break; Python quotes arguments only for the program's own parser.
+    """
+    executable = get_windows_executable_command(command)
+    if not executable.lower().endswith((".cmd", ".bat")):
+        return None
+    quoted = False
+    for index, argument in enumerate(args, start=1):
+        # The command line is each argument's quoted form joined by spaces.
+        for character in subprocess.list2cmdline([argument]):
+            if character == '"':
+                quoted = not quoted
+            elif character in "\r\n" or (not quoted and character in _BATCH_METACHARACTERS):
+                return (
+                    f"argument {index} contains {character!r}, which cmd.exe interprets "
+                    f"when Windows runs {Path(executable).name}; start the server's program "
+                    "directly or pass the value through an environment variable"
+                )
+    return None
+
+
 class InvocationNotSentError(ValueError):
     """An invocation that never reached the server, so it changed nothing there."""
 
@@ -103,20 +181,170 @@ class InvocationNotSentError(ValueError):
         self.denied = denied
 
 
-@dataclass
-class Invocation:
+class InvalidToolResultError(ValueError):
+    """A Tool ran, but its result does not satisfy the output schema the Tool declares.
+
+    *problem* is redacted and bounded; *payload* is the result as received.
+    """
+
+    def __init__(self, problem: str, payload: dict[str, Any]) -> None:
+        super().__init__(problem)
+        self.problem = problem
+        self.payload = payload
+
+
+@dataclass(eq=False)
+class _Call:
+    """One admitted invocation, from its queue entry until its result is settled."""
+
+    runner: ConnectionRunner
     operation: str
     arguments: dict[str, Any]
     context: ToolContext | None
     result: asyncio.Future[dict[str, Any]]
+    # Whether a request of this call may have reached the server.
+    delivered: bool
+    # The connection task that admitted the call.
+    owner: asyncio.Task[None] | None
+    task: asyncio.Task[None] | None = None
+    # A read that may run again: it failed transiently or lost its connection.
+    retry: bool = False
+
+
+# The call a task serves; transports carry it into the server requests of that call.
+_CURRENT_CALL: contextvars.ContextVar[_Call | None] = contextvars.ContextVar(
+    "mcp_current_call", default=None
+)
+
+
+class _ObservedReadStream:
+    """A connection's read stream that reports its end."""
+
+    def __init__(self, inner: Any, ended: Callable[[], None]) -> None:
+        self._inner = inner
+        self._ended = ended
+
+    @property
+    def last_context(self) -> contextvars.Context | None:
+        return cast(contextvars.Context | None, getattr(self._inner, "last_context", None))
+
+    async def receive(self) -> Any:
+        try:
+            return await self._inner.receive()
+        except anyio.EndOfStream, anyio.ClosedResourceError:
+            self._ended()
+            raise
+
+    def __aiter__(self) -> Self:
+        return self
+
+    async def __anext__(self) -> Any:
+        try:
+            return await self._inner.__anext__()
+        except StopAsyncIteration, anyio.ClosedResourceError:
+            self._ended()
+            raise
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+    async def __aenter__(self) -> Self:
+        await self._inner.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        return cast(bool | None, await self._inner.__aexit__(exc_type, exc_val, exc_tb))
+
+
+class _ObservedWriteStream:
+    """A connection's write stream that marks delivered requests and reports a closed one."""
+
+    def __init__(self, inner: Any, runner: ConnectionRunner, *, marks_delivery: bool) -> None:
+        self._inner = inner
+        self._runner = runner
+        self._marks_delivery = marks_delivery
+
+    async def send(self, item: SessionMessage) -> None:
+        call = _CURRENT_CALL.get()
+        marked = (
+            self._marks_delivery
+            and call is not None
+            and call.runner is self._runner
+            and isinstance(item.message, types.JSONRPCRequest)
+        )
+        previous = call.delivered if call is not None else False
+        if marked and call is not None:
+            # A started write counts: it can hand the request over and still raise.
+            call.delivered = True
+        try:
+            await self._inner.send(item)
+        except anyio.BrokenResourceError, anyio.ClosedResourceError:
+            if marked and call is not None:
+                call.delivered = previous
+            self._runner._lose("the connection to the MCP server closed")
+            raise
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+    async def __aenter__(self) -> Self:
+        await self._inner.__aenter__()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        return cast(bool | None, await self._inner.__aexit__(exc_type, exc_val, exc_tb))
+
+
+class _ObservedTransport:
+    """A transport whose streams report a connection's end and its delivered requests."""
+
+    def __init__(
+        self,
+        inner: AbstractAsyncContextManager[Any],
+        runner: ConnectionRunner,
+        *,
+        marks_delivery: bool,
+    ) -> None:
+        self._inner = inner
+        self._runner = runner
+        self._marks_delivery = marks_delivery
+
+    async def __aenter__(self) -> tuple[_ObservedReadStream, _ObservedWriteStream]:
+        read_stream, write_stream = await self._inner.__aenter__()
+        return (
+            _ObservedReadStream(
+                read_stream, lambda: self._runner._lose("the MCP server closed the connection")
+            ),
+            _ObservedWriteStream(write_stream, self._runner, marks_delivery=self._marks_delivery),
+        )
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> bool | None:
+        return await self._inner.__aexit__(exc_type, exc_val, exc_tb)
 
 
 class ConnectionRunner:
-    """One task owns each SDK context from entry through exit.
+    """One connection's lifecycle: one task owns each SDK connection from entry to exit.
 
-    Calls on one connection serialize so server-initiated requests cannot inherit
-    another Agent's directories, Model, or Session. Different connections remain
-    independent. A cancelled mutation is never automatically replayed.
+    Calls run concurrently, up to ``CONNECTION_CONCURRENCY`` per connection, behind
+    a bounded queue. A server request inside a call belongs to that call's Agent
+    (``_attributed_context``). A connection that ends while calls run settles each
+    of them as never sent or as unconfirmed; it never cancels its callers, and a
+    mutation is never automatically replayed. A lost connection reconnects.
     """
 
     def __init__(
@@ -127,6 +355,7 @@ class ConnectionRunner:
         publish: Any,
         *,
         authorize: Callable[[ToolContext], None] | None = None,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.host = host
@@ -134,23 +363,40 @@ class ConnectionRunner:
         self.publish = publish
         self._authorize = authorize
         self.id = config["id"]
-        self.state = "disconnected"
+        self._on_change = on_change
+        self._state = "disconnected"
         self.error: str | None = None
         self.client: Client | None = None
         self.catalog: dict[str, Any] = {}
-        self.context: ToolContext | None = None
         # Each connection task gets its own queue, shut down when that connection ends.
-        self._queue: asyncio.Queue[Invocation] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
+        self._queue: asyncio.Queue[_Call] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
         self._task: asyncio.Task[None] | None = None
-        self._active: asyncio.Task[dict[str, Any]] | None = None
+        self._calls: set[_Call] = set()
         self._ready = asyncio.Event()
         self._closing = False
-        self._events = ConnectionEvents(host, lambda: self.config)
+        # Why the current connection was lost, once it was; and the task it ended.
+        self._loss: str | None = None
+        self._lost_owner: asyncio.Task[None] | None = None
+        # Whether this connection's transport reports which requests it delivered,
+        # and whether its HTTP client does so instead of its write stream.
+        self._tracks_delivery = False
+        self._http_marks_delivery = False
+        self._events = ConnectionEvents(host, lambda: self.config, on_stderr=self._stderr_changed)
         self._requests = ServerRequests(
-            self.id, host, inputs, self._events, lambda: self.context, config=lambda: self.config
+            self.id,
+            host,
+            inputs,
+            self._events,
+            self._attributed_context,
+            config=lambda: self.config,
         )
-        self._catalog_pages: dict[str, list[dict[str, Any]]] = {}
+        self._refreshing = asyncio.Lock()
+        self._published: str | None = None
+        # Background work of the current connection: catalog watch and refresh.
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
+        self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
+        self._catalog_stale = False
+        self._transport_warned = False
         # The log level an Agent chose with logging/setLevel; until then requests
         # carry none and the server applies its own default.
         self._log_level: str | None = None
@@ -159,11 +405,34 @@ class ConnectionRunner:
         # A failing stretch spans lazy reconnects until one connection comes up.
         self._failures = 0
         self._failing_since: float | None = None
+        self._automatic = False
+        self._reconnects = 0
+        self._reconnect: asyncio.Task[None] | None = None
 
-    def start(self) -> None:
+    @property
+    def state(self) -> str:
+        """``disconnected``, ``connecting``, ``connected`` or ``failed``."""
+        return self._state
+
+    @state.setter
+    def state(self, value: str) -> None:
+        changed = value != self._state
+        self._state = value
+        if changed and self._on_change is not None:
+            self._on_change()
+
+    def _stderr_changed(self) -> None:
+        # A failed connection reports its stderr tail, which can still grow.
+        if self._state == "failed" and self._on_change is not None:
+            self._on_change()
+
+    def start(self, *, automatic: bool = False) -> None:
         if self._task is not None and not self._task.done():
             return
+        self._cancel_reconnect()
         self._closing = False
+        self._automatic = automatic
+        self._loss = None
         self._ready.clear()
         self.state = "connecting"
         self._queue = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
@@ -177,11 +446,12 @@ class ConnectionRunner:
 
     async def close(self) -> None:
         self._closing = True
+        self._cancel_reconnect()
         self._ready.set()
         self._reject_queued()
+        # Callers learn the outcome now: SDK teardown below may take long or hang.
+        self._interrupt_calls()
         self.inputs.cancel_connection(self.id)
-        if self._active is not None:
-            self._active.cancel()
         if self._task is not None and not self._task.done():
             # Cancellation also interrupts handshakes and pending OAuth.
             self._task.cancel()
@@ -202,24 +472,65 @@ class ConnectionRunner:
         """Release unsent calls even when SDK teardown cannot finish.
 
         Shutting the queue down first refuses callers still waiting for room, so
-        nothing can join it after this drain.
+        nothing can join it after this drain. A read refused because its
+        connection ended may run again on the next connection.
         """
         self._queue.shutdown()
         while True:
             try:
-                invocation = self._queue.get_nowait()
-            except asyncio.QueueShutDown:
+                call = self._queue.get_nowait()
+            except asyncio.QueueShutDown, asyncio.QueueEmpty:
                 return
-            if not invocation.result.done():
-                invocation.result.set_exception(
+            if not call.result.done():
+                call.retry = not self._closing
+                call.result.set_exception(
                     InvocationNotSentError(self.error or "MCP connection closed")
                 )
 
+    def _interrupt_calls(self) -> None:
+        """Settle every running call of this connection and stop its task."""
+        for call in tuple(self._calls):
+            self._settle_interrupted(call)
+            if call.task is not None:
+                call.task.cancel()
+
+    def _settle_interrupted(self, call: _Call, *, final: bool = False) -> None:
+        """Settle *call*, which its connection's end interrupted, by what reached the server.
+
+        Until the cause of a failed connection is known, the call stays pending
+        unless *final*: the end of its connection task settles it with the cause.
+        """
+        if call.result.done():
+            return
+        if self._closing:
+            call.result.set_exception(
+                ValueError("The MCP connection was closed or reconfigured while the call ran")
+                if call.delivered
+                else InvocationNotSentError(
+                    "The MCP connection was closed or reconfigured before the call was sent"
+                )
+            )
+            return
+        reason = self._loss or (self.error if self.state == "failed" else None)
+        if reason is None:
+            if not final:
+                return
+            reason = self.error or "the MCP connection ended"
+        call.retry = True
+        call.result.set_exception(
+            ValueError(f"The connection was lost while the call ran: {reason}")
+            if call.delivered
+            else InvocationNotSentError(f"Connection lost: {reason}")
+        )
+
     def status(self) -> dict[str, Any]:
+        failed = self.state == "failed"
         return {
             "id": self.id,
             "state": self.state,
             "error": self.error,
+            "problem": self._events.problem if failed else None,
+            "stderr_tail": self._events.stderr_tail() if failed else [],
             "protocol_version": self.catalog.get("protocol_version"),
             "capabilities": self.catalog.get("capabilities", {}),
             "counts": {
@@ -243,29 +554,99 @@ class ConnectionRunner:
     async def invoke(
         self, operation: str, arguments: dict[str, Any], context: ToolContext | None = None
     ) -> dict[str, Any]:
-        if self._closing:
-            raise InvocationNotSentError("MCP connection is closing")
-        if self._task is None or self._task.done():
-            self.start()
-        owner = self._task
-        await self._ready.wait()
-        if self._closing or self._task is not owner or owner is None or owner.done():
-            raise InvocationNotSentError(self.error or "MCP connection closed")
-        if self.state != "connected":
-            raise InvocationNotSentError(self.error or "MCP connection did not become ready")
-        result: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        """Run *operation* on this connection, reconnecting it when it is not up.
+
+        Raises ``InvocationNotSentError`` when nothing reached the server and
+        ``ValueError`` when no result came back. A read that failed transiently or
+        lost its connection runs again, at most ``MAX_READ_RETRIES`` times.
+        """
+        for attempt in range(MAX_READ_RETRIES + 1):
+            call = await self._submit(operation, arguments, context)
+            try:
+                return await call.result
+            except ValueError:
+                if (
+                    not call.retry
+                    or operation not in READ_OPERATIONS
+                    or attempt == MAX_READ_RETRIES
+                    or self._closing
+                ):
+                    raise
+            delay = READ_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
+            self._events.record("read_retry", {"operation": operation, "attempt": attempt + 1})
+            await _sleep(delay)
+        raise AssertionError("Read retry loop must return or raise")
+
+    async def _submit(
+        self, operation: str, arguments: dict[str, Any], context: ToolContext | None
+    ) -> _Call:
+        owner = await self._connected()
+        call = _Call(
+            self,
+            operation,
+            arguments,
+            context,
+            asyncio.get_running_loop().create_future(),
+            delivered=not self._tracks_delivery,
+            owner=owner,
+        )
         try:
             # The queue belongs to the admitting connection: once that connection
             # ends, a call still waiting for room is refused, never sent later.
-            await self._queue.put(Invocation(operation, arguments, context, result))
+            await self._queue.put(call)
         except asyncio.QueueShutDown:
-            raise InvocationNotSentError(self.error or "MCP connection closed") from None
-        return await result
+            call.retry = not self._closing
+            call.result.set_exception(InvocationNotSentError(self.error or "MCP connection closed"))
+        return call
+
+    async def _connected(self) -> asyncio.Task[None]:
+        """Wait until this connection is up, starting it when it is not running.
+
+        The wait is bounded by the configured timeout. A connection lost while a
+        call waits is replaced once: the call waits for its end and reconnects.
+        """
+        deadline = asyncio.get_running_loop().time() + self.config["timeout"]
+        for _ in range(2):
+            if self._closing:
+                raise InvocationNotSentError("MCP connection is closing")
+            if self._task is None or self._task.done():
+                self.start()
+            owner = self._task
+            assert owner is not None
+            try:
+                async with asyncio.timeout_at(deadline):
+                    await self._ready.wait()
+            except TimeoutError:
+                raise InvocationNotSentError(self._not_connected()) from None
+            if self._closing:
+                raise InvocationNotSentError("MCP connection is closing")
+            if owner is self._task and not owner.done() and self.state == "connected":
+                return owner
+            if not (owner.done() and self._lost_owner is owner):
+                break
+        raise InvocationNotSentError(self.error or "MCP connection did not become ready")
+
+    def _not_connected(self) -> str:
+        """Why a call stopped waiting for the connection."""
+        waited = f"MCP connection did not connect within {self.config['timeout']:g} seconds"
+        if any(
+            item["connection"] == self.id and item["kind"] == "oauth" for item in self.inputs.list()
+        ):
+            return f"{waited}: its sign-in is waiting for the user"
+        return f"{waited}; last error: {self.error}" if self.error else waited
 
     async def _run(self) -> None:
+        established = False
         try:
             async with AsyncExitStack() as stack:
+                self._http_marks_delivery = False
                 transport = await self._transport(stack)
+                # A transport the SDK enters itself; an in-process server has no streams.
+                self._tracks_delivery = isinstance(transport, AbstractAsyncContextManager)
+                if self._tracks_delivery:
+                    transport = _ObservedTransport(
+                        transport, self, marks_delivery=not self._http_marks_delivery
+                    )
                 # A capability the connection's policy turns off is not offered at all.
                 sampling = self.config.get("sampling", "off") != "off"
                 client = Client(
@@ -285,10 +666,14 @@ class ConnectionRunner:
                     client_info=types.Implementation(name="vbot", version="1"),
                 )
                 self.client = await stack.enter_async_context(client)
+                self._check_results(self.client)
+                self._transport_warned = False
                 await self._refresh()
                 self.state = "connected"
                 self.error = None
+                self._reconnects = 0
                 self._log_connected()
+                established = True
                 self._ready.set()
                 self._subscriptions["catalog"] = asyncio.create_task(
                     self._watch_catalog(), name=f"mcp-catalog-watch:{self.id}"
@@ -296,24 +681,103 @@ class ConnectionRunner:
                 try:
                     await self._serve()
                 finally:
-                    for task in self._subscriptions.values():
-                        task.cancel()
-                    await asyncio.gather(*self._subscriptions.values(), return_exceptions=True)
-                    self._subscriptions.clear()
+                    await self._stop_work()
         except asyncio.CancelledError:
             raise
         except (Exception, BaseExceptionGroup) as error:
-            self.state = "failed"
-            self.error = self.safe_error(error)
-            self._events.record("connection_failed", {"error": self.error})
+            self._events.diagnose(error)
             expected = self._expected(error)
-            self._log_failed(expected=expected)
+            if self._loss is None:
+                self.state = "failed"
+                self.error = self.safe_error(error)
+                self._events.record("connection_failed", {"error": self.error})
+                self._log_failed(expected=expected)
+            elif not expected:
+                _LOGGER.error(
+                    "MCP connection crashed (connection=%s): %s", self.id, self.safe_error(error)
+                )
             if not expected:
                 raise
         finally:
             self.client = None
             self._ready.set()
             self._reject_queued()
+            for call in tuple(self._calls):
+                self._settle_interrupted(call, final=True)
+                if call.task is None or call.task.done():
+                    self._calls.discard(call)
+            current = asyncio.current_task()
+            if (
+                not self._closing
+                and (established or self._automatic)
+                and (current is None or not current.cancelling())
+            ):
+                self._schedule_reconnect()
+
+    async def _stop_work(self) -> None:
+        """Stop the calls and background work of a connection that is ending.
+
+        Its calls are settled first; then their tasks get a short time to stop
+        while the transport still carries their cancellation to the server.
+        """
+        self._reject_queued()
+        self._interrupt_calls()
+        tasks: set[asyncio.Task[Any]] = {call.task for call in self._calls if call.task is not None}
+        background = [
+            *self._subscriptions.values(),
+            *(task for task, _ in self._resource_watches.values()),
+        ]
+        self._subscriptions.clear()
+        self._resource_watches.clear()
+        for task in background:
+            task.cancel()
+        tasks.update(background)
+        if tasks:
+            await asyncio.wait(tasks, timeout=CALL_STOP_SECONDS)
+
+    def _lose(self, reason: str) -> None:
+        """End the current connection, which can no longer serve calls, because of *reason*."""
+        owner = self._task
+        if (
+            self._closing
+            or self._loss is not None
+            or self.state != "connected"
+            or owner is None
+            or owner.done()
+        ):
+            return
+        self._loss = reason
+        self._lost_owner = owner
+        self.state = "failed"
+        self.error = f"Connection lost: {reason}"
+        # An earlier failure's cause no longer applies; the error that ends
+        # the connection's task, if any, is diagnosed next.
+        self._events.diagnose(None)
+        self._ready.clear()
+        self._events.record("connection_failed", {"error": self.error})
+        self._log_failed(expected=True)
+        self._reject_queued()
+        self._interrupt_calls()
+
+    def _schedule_reconnect(self) -> None:
+        if self._reconnects >= MAX_RECONNECTS:
+            return
+        delay = READ_RETRY_BASE_SECONDS * (2**self._reconnects) * random.uniform(0.5, 1.5)
+        self._reconnects += 1
+        self._reconnect = asyncio.create_task(
+            self._reconnect_after(delay), name=f"mcp-reconnect:{self.id}"
+        )
+
+    async def _reconnect_after(self, delay: float) -> None:
+        await _sleep(delay)
+        self._reconnect = None
+        if not self._closing:
+            self.start(automatic=True)
+
+    def _cancel_reconnect(self) -> None:
+        if self._reconnect is not None and self._reconnect is not asyncio.current_task():
+            self._reconnect.cancel()
+        self._reconnect = None
 
     def _log_connected(self) -> None:
         """Log a connection that came up: a start, or the end of a failing stretch."""
@@ -354,11 +818,18 @@ class ConnectionRunner:
             environment = dict(self.config.get("environment", {}))
             for key, source in self.config.get("credential_environment", {}).items():
                 environment[key] = self._credential(source)
+            args = self.config.get("args", [])
+            if sys.platform == "win32" and (
+                problem := _batch_argument_problem(self.config["command"], args)
+            ):
+                raise ValueError(f"MCP server not started: {problem}")
             parameters = StdioServerParameters(
                 command=self.config["command"],
-                args=self.config.get("args", []),
+                args=args,
                 cwd=self.config.get("cwd"),
                 env=environment,
+                # A byte sequence that is not UTF-8 must not end the connection.
+                encoding_error_handler="replace",
             )
             reader, writer = os.pipe()
             errors = stack.enter_context(os.fdopen(writer, "w", encoding="utf-8"))
@@ -378,6 +849,8 @@ class ConnectionRunner:
             else None
         )
         url = self.config["url"]
+        self._http_marks_delivery = True
+        observed = functools.partial(_ObservedHTTPClient, self)
         if self.config["transport"] == "sse":
 
             def sse_http_client(
@@ -386,15 +859,24 @@ class ConnectionRunner:
                 auth: httpx2.Auth | None = None,
             ) -> httpx2.AsyncClient:
                 # ``sse_client`` always passes its own timeouts.
-                return http_client(url, headers=headers, timeout=timeout, auth=auth)
+                return http_client(
+                    url, headers=headers, timeout=timeout, auth=auth, factory=observed
+                )
 
-            return sse_client(url, headers=headers, auth=auth, httpx_client_factory=sse_http_client)
+            return sse_client(
+                url,
+                headers=headers,
+                timeout=self.config["timeout"],
+                auth=auth,
+                httpx_client_factory=sse_http_client,
+            )
         http = await stack.enter_async_context(
             http_client(
                 url,
                 headers=headers,
                 auth=auth,
                 timeout=httpx2.Timeout(self.config["timeout"], connect=15.0),
+                factory=observed,
             )
         )
         return streamable_http_client(url, http_client=http)
@@ -402,148 +884,275 @@ class ConnectionRunner:
     def _credential(self, key: str) -> str:
         value = self.host.resolve_credential(key)
         if not value:
-            raise ValueError(f"Missing MCP credential: {key}")
+            raise MissingCredentialError(key)
         return value
 
+    def _http_failed(self, request: httpx2.Request, error: Exception) -> None:
+        """An HTTP request of this connection failed without a response."""
+        if request.method != "POST":
+            return
+        if not isinstance(error, _UNSENT_HTTP_ERRORS) and _carries_request(request):
+            self._mark_delivered()
+        # Both SDK transports stop sending after a failed message POST.
+        self._lose(self.safe_error(error))
+
+    async def _http_answered(self, request: httpx2.Request, response: httpx2.Response) -> None:
+        """An HTTP request of this connection got *response*."""
+        status = response.status_code
+        if request.method == "DELETE":
+            return
+        if request.method == "POST" or self.config["transport"] == "sse":
+            # A failure diagnosis names this status; a server may refuse the
+            # optional GET stream of Streamable HTTP without harm.
+            self._events.observe_status(status)
+        if (
+            status == 404
+            and request.headers.get(MCP_SESSION_ID)
+            and not await _reports_unknown_method(response)
+        ):
+            # The server ended the session without processing the request; the
+            # client must start a new session (Streamable HTTP, 2025 protocols).
+            self._lose("the MCP server ended the session of this connection")
+            return
+        if request.method != "POST":
+            return
+        # A redirect or a 4xx refusal leaves the request unprocessed; a 5xx may
+        # come after the server began to process it.
+        if (status < 300 or status >= 500) and _carries_request(request):
+            self._mark_delivered()
+        if self.config["transport"] == "sse" and not 200 <= status < 300:
+            # The legacy SSE transport stops sending after a refused message.
+            self._lose(f"the MCP server refused a message with HTTP {status}")
+
+    def _mark_delivered(self) -> None:
+        call = _CURRENT_CALL.get()
+        if call is not None and call.runner is self:
+            call.delivered = True
+
     async def _serve(self) -> None:
+        slots = asyncio.Semaphore(CONNECTION_CONCURRENCY)
         while not self._closing:
+            await slots.acquire()
             try:
-                invocation = await self._queue.get()
+                call = await self._queue.get()
             except asyncio.QueueShutDown:
+                slots.release()
                 return
-            if invocation.result.cancelled():
+            if call.result.done():
+                # Its caller stopped waiting while it was queued.
+                slots.release()
                 continue
-            if invocation.context is not None and self._authorize is not None:
+            if call.context is not None and self._authorize is not None:
                 try:
-                    self._authorize(invocation.context)
+                    self._authorize(call.context)
                 except (ValueError, VBotError) as error:
-                    invocation.result.set_exception(InvocationNotSentError(str(error), denied=True))
+                    call.result.set_exception(InvocationNotSentError(str(error), denied=True))
+                    slots.release()
                     continue
-            self.context = invocation.context
-            self._active = asyncio.create_task(
-                self._perform_with_retries(invocation.operation, invocation.arguments),
-                name=f"mcp-call:{self.id}:{invocation.operation}",
-            )
-            active = self._active
+            self._start(call, slots)
 
-            def cancel_active(
-                future: asyncio.Future[dict[str, Any]], task: asyncio.Task[dict[str, Any]] = active
-            ) -> None:
-                if future.cancelled():
-                    task.cancel()
+    def _start(self, call: _Call, slots: asyncio.Semaphore) -> None:
+        task = asyncio.create_task(
+            self._run_call(call), name=f"mcp-call:{self.id}:{call.operation}"
+        )
+        call.task = task
+        self._calls.add(call)
 
-            invocation.result.add_done_callback(cancel_active)
-            try:
-                value = await active
-            except asyncio.CancelledError:
-                invocation.result.cancel()
-                if (
-                    self._closing
-                    or (owner := asyncio.current_task()) is not None
-                    and owner.cancelling()
-                ):
-                    raise
-            except Exception as error:
-                safe = self.safe_error(error)
-                self._events.record(
-                    "request_failed", {"operation": invocation.operation, "error": safe}
-                )
-                if not invocation.result.done():
-                    invocation.result.set_exception(
-                        ValueError(safe) if self._expected(error) else error
-                    )
-                if not self._expected(error):
-                    raise
-            else:
-                if not invocation.result.done():
-                    invocation.result.set_result(value)
-            finally:
+        def cancel(result: asyncio.Future[dict[str, Any]]) -> None:
+            # Its caller was cancelled: cancel the request so the server stops too.
+            if result.cancelled():
+                task.cancel()
+
+        def finished(_: asyncio.Task[None]) -> None:
+            slots.release()
+            owner = call.owner
+            if not call.result.done() and owner is not None and not owner.done():
+                # Its connection failed without a known cause yet; the end of the
+                # connection task settles it.
+                return
+            self._settle_interrupted(call, final=True)
+            self._calls.discard(call)
+            if not self._calls and owner is self._task:
+                # Inputs a finished call's server still waits for have no one to answer.
                 self.inputs.cancel_connection(self.id)
-                self.context = None
-                self._active = None
-                if (
-                    invocation.context is not None
-                    and not self._closing
-                    and self.state == "connected"
-                ):
-                    await self._notify_roots_changed()
 
-    async def _all(self, method: Any, field: str) -> list[dict[str, Any]]:
+        call.result.add_done_callback(cancel)
+        task.add_done_callback(finished)
+
+    async def _run_call(self, call: _Call) -> None:
+        # Each task runs in its own context copy: this marks only this call.
+        _CURRENT_CALL.set(call)
+        try:
+            value = await self._perform(call.operation, call.arguments, call.context)
+        except asyncio.CancelledError:
+            # By its caller (its result is cancelled), or by its connection's end.
+            self._settle_interrupted(call)
+            raise
+        except Exception as error:
+            self._fail(call, error)
+        else:
+            if not call.result.done():
+                call.result.set_result(value)
+        if call.context is not None and self._serving(call):
+            try:
+                # The server reads the roots again: none belong to it after the call.
+                await self._notify_roots_changed()
+            except EXPECTED_FAILURES as error:
+                self._events.record("request_failed", {"operation": "roots", "error": str(error)})
+
+    def _serving(self, call: _Call) -> bool:
+        return (
+            not self._closing
+            and self._loss is None
+            and self.state == "connected"
+            and call.owner is self._task
+        )
+
+    def _fail(self, call: _Call, error: Exception) -> None:
+        safe = self.safe_error(error)
+        self._events.record("request_failed", {"operation": call.operation, "error": safe})
+        if call.result.done():
+            return
+        if isinstance(error, InvalidToolResultError):
+            call.result.set_exception(error)
+            return
+        owner = call.owner
+        if (
+            self._closing
+            or self._loss is not None
+            or owner is None
+            or owner.done()
+            or owner.cancelling()
+        ):
+            # Its connection is ending: the outcome depends on what reached the server.
+            self._settle_interrupted(call)
+            return
+        if not self._expected(error):
+            _LOGGER.error(
+                "MCP call failed unexpectedly (connection=%s operation=%s): %s",
+                self.id,
+                call.operation,
+                safe,
+                exc_info=error,
+            )
+        call.retry = isinstance(error, OSError | TimeoutError) or (
+            isinstance(error, httpx2.HTTPError)
+            and (
+                not isinstance(error, httpx2.HTTPStatusError)
+                or error.response.status_code in RETRYABLE_READ_STATUSES
+            )
+        )
+        call.result.set_exception(ValueError(safe))
+
+    def _attributed_context(self) -> ToolContext | None:
+        """The Agent call a server request belongs to, or ``None`` for no Agent.
+
+        A request the transport carries inside a call (current-protocol input
+        requests, Streamable HTTP responses of that call) belongs to that call;
+        otherwise to the only call in flight; otherwise to none.
+        """
+        call = _CURRENT_CALL.get()
+        if call is not None and call.runner is self:
+            return call.context if call in self._calls else None
+        if len(self._calls) == 1:
+            return next(iter(self._calls)).context
+        return None
+
+    async def _all(
+        self, method: Any, field: str
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Every item of one catalog list, and each page's own metadata."""
         cursor = None
         seen: set[str] = set()
         items: list[dict[str, Any]] = []
-        self._catalog_pages[field] = []
+        pages: list[dict[str, Any]] = []
         while True:
             page = await method(cursor=cursor, cache_mode="refresh")
             # The page's own metadata; its items are kept once, in the catalog's list.
-            self._catalog_pages[field].append(
+            pages.append(
                 page.model_dump(mode="json", by_alias=True, exclude_none=True, exclude={field})
             )
             items.extend(dump(item) for item in getattr(page, field))
             cursor = page.next_cursor
             if cursor is None:
-                return items
+                return items, pages
             if cursor in seen:
                 raise ValueError("MCP server repeated a pagination cursor")
             seen.add(cursor)
 
     async def _refresh(self) -> dict[str, Any]:
-        client = self._client()
-        capabilities = client.server_capabilities
-        catalog: dict[str, Any] = {
-            "protocol_version": client.protocol_version,
-            "capabilities": dump(capabilities),
-            "server_info": dump(client.server_info),
-            "instructions": client.instructions,
-            "tools": [],
-            "resources": [],
-            "resource_templates": [],
-            "prompts": [],
-        }
-        for capability, method, field in (
-            (capabilities.tools, client.list_tools, "tools"),
-            (capabilities.resources, client.list_resources, "resources"),
-            (capabilities.resources, client.list_resource_templates, "resource_templates"),
-            (capabilities.prompts, client.list_prompts, "prompts"),
-        ):
-            if capability is not None:
-                catalog[field] = await self._all(method, field)
-        catalog["pages"] = dict(self._catalog_pages)
-        self.publish(self, catalog)
-        self.catalog = catalog
-        return catalog
+        """List the catalog again; publish it when it changed."""
+        async with self._refreshing:
+            client = self._client()
+            capabilities = client.server_capabilities
+            catalog: dict[str, Any] = {
+                "protocol_version": client.protocol_version,
+                "capabilities": dump(capabilities),
+                "server_info": dump(client.server_info),
+                "instructions": client.instructions,
+                "tools": [],
+                "resources": [],
+                "resource_templates": [],
+                "prompts": [],
+            }
+            pages: dict[str, list[dict[str, Any]]] = {}
+            for capability, method, field in (
+                (capabilities.tools, client.list_tools, "tools"),
+                (capabilities.resources, client.list_resources, "resources"),
+                (capabilities.resources, client.list_resource_templates, "resource_templates"),
+                (capabilities.prompts, client.list_prompts, "prompts"),
+            ):
+                if capability is not None:
+                    catalog[field], pages[field] = await self._all(method, field)
+            catalog["pages"] = pages
+            fingerprint = hashlib.sha256(
+                json.dumps(catalog, sort_keys=True, default=str).encode()
+            ).hexdigest()
+            if fingerprint != self._published:
+                self.publish(self, catalog)
+                self._published = fingerprint
+            self.catalog = catalog
+            return catalog
 
     def _client(self) -> Client:
         if self.client is None:
             raise ValueError("MCP connection is not connected")
         return self.client
 
-    async def _perform_with_retries(
-        self, operation: str, arguments: dict[str, Any]
-    ) -> dict[str, Any]:
-        for attempt in range(MAX_READ_RETRIES + 1):
-            try:
-                return await self._perform(operation, arguments)
-            except (httpx2.HTTPError, OSError, TimeoutError) as error:
-                retryable = (
-                    error.response.status_code in RETRYABLE_READ_STATUSES
-                    if isinstance(error, httpx2.HTTPStatusError)
-                    else True
-                )
-                if operation not in READ_OPERATIONS or not retryable or attempt == MAX_READ_RETRIES:
-                    raise
-                delay = READ_RETRY_BASE_SECONDS * (2**attempt) * random.uniform(0.5, 1.5)
-                self._events.record("read_retry", {"operation": operation, "attempt": attempt + 1})
-                await _sleep(delay)
-        raise AssertionError("Read retry loop must return or raise")
+    def _check_results(self, client: Client) -> None:
+        """Make a Tool result that fails its output schema a failure of that call alone.
 
-    async def _perform(self, operation: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        SDK 2.2.0 validates each Tool result against the Tool's output schema
+        inside ``call_tool`` and raises a plain ``RuntimeError`` when the result
+        or the schema is invalid (an unresolvable ``$ref`` too). That would read
+        as a crash; this session-level seam turns it into ``InvalidToolResultError``
+        carrying the redacted problem and the result as received.
+        """
+        session = client.session
+        validate = session.validate_tool_result
+
+        async def checked(name: str, result: types.CallToolResult) -> None:
+            try:
+                await validate(name, result)
+            except RuntimeError as error:
+                if type(error) is not RuntimeError:
+                    raise
+                problem = self.redact(str(error).split("\n", 1)[0])
+                raise InvalidToolResultError(
+                    problem[:RESULT_PROBLEM_CHARACTERS], dump(result)
+                ) from error
+
+        session.validate_tool_result = checked  # type: ignore[method-assign]
+
+    async def _perform(
+        self, operation: str, arguments: dict[str, Any], context: ToolContext | None
+    ) -> dict[str, Any]:
         errors = list(Draft202012Validator(operation_schema(operation)).iter_errors(arguments))
         if errors:
             paths = ["/".join(map(str, error.absolute_path)) or "arguments" for error in errors]
             raise ValueError(f"Invalid MCP operation arguments at: {', '.join(paths)}")
         client = self._client()
-        if self.context is not None:
+        if context is not None:
             await self._notify_roots_changed()
         if operation == "catalog":
             return await self._refresh()
@@ -598,20 +1207,25 @@ class ConnectionRunner:
             )
         if operation == "resources/subscribe":
             uri = arguments["uri"]
-            existing = self._subscriptions.get(uri)
-            if existing is None or existing.done():
+            watch = self._resource_watches.get(uri)
+            if watch is None or watch[0].done():
                 ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-                subscription_task = asyncio.create_task(
-                    self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                watch = (
+                    asyncio.create_task(
+                        self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                    ),
+                    ready,
                 )
-                self._subscriptions[uri] = subscription_task
-                await ready
+                self._resource_watches[uri] = watch
+            # Concurrent subscribers share one acknowledgement; one that is
+            # cancelled leaves it to the others.
+            await asyncio.shield(watch[1])
             return {"subscribed": uri}
         if operation == "resources/unsubscribe":
-            task = self._subscriptions.pop(arguments["uri"], None)
-            if task is not None:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            watch = self._resource_watches.pop(arguments["uri"], None)
+            if watch is not None:
+                watch[0].cancel()
+                await asyncio.gather(watch[0], return_exceptions=True)
             return {"unsubscribed": arguments["uri"]}
         if operation == "logging/setLevel":
             level = arguments["level"]
@@ -698,14 +1312,56 @@ class ConnectionRunner:
     async def _message(self, message: Any) -> None:
         if isinstance(message, types.ServerNotification):
             self._events.record("notification", dump(message))
+            if isinstance(
+                message,
+                types.ToolListChangedNotification
+                | types.ResourceListChangedNotification
+                | types.PromptListChangedNotification,
+            ):
+                self._catalog_changed()
         elif isinstance(message, Exception):
-            self.error = self.safe_error(message)
-            self.state = "failed"
-            self._events.record("connection_failed", {"error": self.error})
-            if not self._closing:
-                self._log_failed(expected=self._expected(message))
-            if self._task is not None:
-                self._task.cancel()
+            # A transport error that leaves the connection up, such as a line that
+            # is not JSON on stdout; a transport that ends also closes its stream.
+            error = self.safe_error(message)
+            self._events.record("transport_error", {"error": error})
+            if self._transport_warned:
+                _LOGGER.debug("MCP transport error (connection=%s): %s", self.id, error)
+            else:
+                self._transport_warned = True
+                _LOGGER.warning("MCP transport error (connection=%s): %s", self.id, error)
+
+    def _catalog_changed(self) -> None:
+        """Refresh the catalog soon after a legacy server reported a change.
+
+        A current-protocol connection learns changes through its catalog watch.
+        """
+        client = self.client
+        if (
+            client is None
+            or self.state != "connected"
+            or client.protocol_version >= DISCOVERY_PROTOCOL_VERSION
+        ):
+            return
+        self._catalog_stale = True
+        refresh = self._subscriptions.get("catalog-refresh")
+        if refresh is None or refresh.done():
+            self._subscriptions["catalog-refresh"] = asyncio.create_task(
+                self._refresh_catalog(), name=f"mcp-catalog-refresh:{self.id}"
+            )
+
+    async def _refresh_catalog(self) -> None:
+        # A notification inside a call may have started this task; it is no part of that call.
+        _CURRENT_CALL.set(None)
+        while self._catalog_stale:
+            self._catalog_stale = False
+            # Changes reported meanwhile join this refresh.
+            await _sleep(CATALOG_REFRESH_DELAY_SECONDS)
+            self._events.record("catalog_changed", {"source": "notification"})
+            try:
+                await self.invoke("catalog", {})
+            except ValueError as error:
+                self._events.record("subscription_failed", {"error": str(error)})
+                return
 
     async def _progress(self, progress: float, total: float | None, message: str | None) -> None:
         self._events.record("progress", {"progress": progress, "total": total, "message": message})
@@ -720,7 +1376,7 @@ class ConnectionRunner:
                 ("prompts", capabilities.prompts),
             )
         }
-        if not any(flags.values()):
+        if not any(flags.values()) or self._client().protocol_version < DISCOVERY_PROTOCOL_VERSION:
             return
         try:
             async with self._client().listen(
@@ -737,6 +1393,8 @@ class ConnectionRunner:
             self._events.record("subscription_failed", {"error": self.safe_error(error)})
 
     async def _watch_resource(self, uri: str, ready: asyncio.Future[None]) -> None:
+        # The subscribing call created this task, but the watch outlives that call.
+        _CURRENT_CALL.set(None)
         try:
             async with self._client().listen(resource_subscriptions=[uri]) as events:
                 if not ready.done():
@@ -757,3 +1415,24 @@ class ConnectionRunner:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
+
+
+def _carries_request(request: httpx2.Request) -> bool:
+    """Whether *request* may carry a JSON-RPC request, which the server would process."""
+    try:
+        message = json.loads(request.content)
+    except httpx2.RequestNotRead, ValueError:
+        return True
+    return not isinstance(message, dict) or ("method" in message and "id" in message)
+
+
+async def _reports_unknown_method(response: httpx2.Response) -> bool:
+    """Whether a 404 answer is a JSON-RPC "method not found" rather than a lost session."""
+    if not response.headers.get("content-type", "").lower().startswith("application/json"):
+        return False
+    try:
+        body = json.loads(await response.aread())
+    except httpx2.HTTPError, httpx2.StreamError, ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("code") == types.METHOD_NOT_FOUND

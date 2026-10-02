@@ -57,10 +57,23 @@ from ._discovery import (
     summarize,
     target_arguments,
 )
-from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
+from ._importer import ImportDraft, parse_setup
+from ._management import (
+    CONNECTIONS_RESOURCE,
+    JOBS_RESOURCE,
+    ManagementJobs,
+    check_connection,
+    invoke_for_agent,
+    register_management,
+)
 from ._oauth import forget_sign_in, sign_in_status
 from ._views import compact
-from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError
+from .client import (
+    READ_OPERATIONS,
+    ConnectionRunner,
+    InvalidToolResultError,
+    InvocationNotSentError,
+)
 from .config import ConnectionStore, validate_connection
 from .content import ContentStore
 from .interactions import InputRequests
@@ -101,8 +114,9 @@ class MCPService:
         self.connections: dict[str, dict[str, Any]] = {}
         self.runners: dict[str, ConnectionRunner] = {}
         self.inputs = InputRequests(on_change=self._inputs_changed)
-        self._inputs_revision = 0
-        self.jobs = ManagementJobs(self.inputs)
+        # One revision for every change this service publishes to accessors.
+        self._revision = 0
+        self.jobs = ManagementJobs(self.inputs, on_finish=self._job_finished)
         # Serializes changes to the saved connections; held only while they change.
         self._lock = asyncio.Lock()
         # Per connection while in use: runner changes and the calls that select a runner.
@@ -144,16 +158,26 @@ class MCPService:
 
     def _inputs_changed(self, request_id: str) -> None:
         """Tell accessors that the pending inputs gained or lost *request_id*."""
+        self._changed(PENDING_INPUTS_RESOURCE, [request_id])
+
+    def _connection_changed(self, *identifiers: str) -> None:
+        """Tell accessors that what ``status`` reports for *identifiers* changed."""
+        self._changed(CONNECTIONS_RESOURCE, list(identifiers))
+
+    def _job_finished(self, job_id: str) -> None:
+        self._changed(JOBS_RESOURCE, [job_id])
+
+    def _changed(self, resource: str, ids: list[str]) -> None:
         host = self.host
         if self._closed or host is None or host.publish_change is None:
             return
-        self._inputs_revision += 1
+        self._revision += 1
         try:
-            host.publish_change(PENDING_INPUTS_RESOURCE, [request_id], self._inputs_revision)
+            host.publish_change(resource, ids, self._revision)
         except ValueError:
             # The registration retired for a reload or disable, which
             # invalidates every Extension surface itself.
-            self.api.logger.debug("Pending input change not published: registration retired")
+            self.api.logger.debug("MCP %s change not published: registration retired", resource)
 
     @asynccontextmanager
     async def _connection_lock(self, identifier: str) -> AsyncIterator[None]:
@@ -177,7 +201,12 @@ class MCPService:
         identifier = config["id"]
         if identifier not in self.runners:
             self.runners[identifier] = ConnectionRunner(
-                config, self._host(), self.inputs, self._publish, authorize=self._authorize
+                config,
+                self._host(),
+                self.inputs,
+                self._publish,
+                authorize=self._authorize,
+                on_change=lambda: self._connection_changed(identifier),
             )
             self._publish(self.runners[identifier], None)
         return self.runners[identifier]
@@ -198,8 +227,17 @@ class MCPService:
             return
         if catalog is not None:
             self.catalogs.record(runner.id, catalog_summary(catalog))
+            self._connection_changed(runner.id)
         parent = f"mcp_{runner.id}"
         about = self.connections.get(runner.id, runner.config).get("description")
+        disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
+        # A remote Tool is ready while its connection is up; naming one before
+        # tells the Agent why it cannot run and what to do.
+        follower_hint = (
+            disabled
+            if not self.connections.get(runner.id, runner.config).get("enabled")
+            else MCP_MESSAGES["disconnected"].format(connection=runner.id)
+        )
         declarations = [
             {
                 "name": parent,
@@ -207,6 +245,7 @@ class MCPService:
                 "parameters": MCP_PARAMETERS,
                 "handler": self._handler(runner.id),
                 "ready": lambda: bool(self.connections.get(runner.id, {}).get("enabled")),
+                "readiness_hint": disabled,
                 "parallel_safe": False,
                 "open_input_schema": True,
                 "requires_opt_in": True,
@@ -224,6 +263,7 @@ class MCPService:
                     "parameters": parameters,
                     "handler": self._handler(runner.id, tool["name"], copy.deepcopy(parameters)),
                     "ready": lambda: runner.state == "connected",
+                    "readiness_hint": follower_hint,
                     "parallel_safe": False,
                     "open_input_schema": True,
                     "deferred": True,
@@ -479,6 +519,8 @@ class MCPService:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
             return self._unreachable(runner, error)
+        except InvalidToolResultError as error:
+            return await self._invalid_result(runner, context, error, source=source)
         except ValueError as error:
             detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             if operation in READ_OPERATIONS:
@@ -500,6 +542,39 @@ class MCPService:
             return tool_failure(
                 "mcp_result_unavailable", MCP_MESSAGES["result_unavailable"].format(detail=detail)
             )
+
+    async def _invalid_result(
+        self,
+        runner: ConnectionRunner,
+        context: ToolContext,
+        error: InvalidToolResultError,
+        *,
+        source: str | None,
+    ) -> dict[str, Any]:
+        """The failure for a Tool whose result fails the output schema it declares."""
+        assert self.content is not None
+        try:
+            text, artifacts = await self.content.error_report(
+                error.payload, context, runner.id, source=source
+            )
+        except (ValueError, OSError) as failure:
+            detail = runner.safe_error(failure)
+            self.api.logger.warning(
+                "MCP result preparation failed (connection=%s): %s", runner.id, detail
+            )
+            return tool_failure(
+                "mcp_result_unavailable", MCP_MESSAGES["result_unavailable"].format(detail=detail)
+            )
+        return tool_failure(
+            "mcp_invalid_result",
+            MCP_MESSAGES["invalid_result"].format(
+                tool=source or "operation",
+                problem=error.problem,
+                text=text,
+                connection=runner.id,
+            ),
+            artifacts=artifacts,
+        )
 
     async def _present(
         self,
@@ -544,6 +619,8 @@ class MCPService:
             return await self.jobs.cancel(arguments["job_id"])
         if operation == "save":
             return await self._save(arguments["connection"])
+        if operation == "import":
+            return await self._import(arguments)
         identifier = arguments["id"]
         config = self._connection(identifier)
         if operation == "status":
@@ -555,12 +632,7 @@ class MCPService:
         async with self._connection_lock(identifier):
             config = self._connection(identifier)
             if operation == "credential":
-                sources = set(config.get("credential_environment", {}).values()) | set(
-                    config.get("credential_headers", {}).values()
-                )
-                if config.get("oauth_client_secret"):
-                    sources.add(config["oauth_client_secret"])
-                if arguments["key"] not in sources:
+                if arguments["key"] not in _credential_names(config):
                     raise ValueError("Credential must be referenced by this MCP connection")
                 self._host().set_credential(arguments["key"], arguments["value"])
                 # The variable name only: never its value.
@@ -572,6 +644,7 @@ class MCPService:
                 )
                 await self._stop(identifier)
                 self._runner(config)
+                self._connection_changed(identifier)
                 return {
                     "id": identifier,
                     "credential": arguments["key"],
@@ -582,6 +655,7 @@ class MCPService:
                     raise ValueError("MCP connection does not sign in with OAuth")
                 await self._stop(identifier)
                 forget_sign_in(self._host(), identifier)
+                self._connection_changed(identifier)
                 self.api.logger.info("MCP connection signed out (connection=%s)", identifier)
                 runner = self._runner(config)
                 if config["enabled"]:
@@ -602,6 +676,11 @@ class MCPService:
                     # A connection that then fails logs its own WARNING.
                     self.api.logger.info("MCP connection started (connection=%s)", identifier)
                 runner.start()
+                return self._status(identifier)
+            if operation == "reconnect":
+                # A new client and, for a local server, a new process.
+                (await self._replace_runner(identifier, config)).start()
+                self.api.logger.info("MCP connection restarted (connection=%s)", identifier)
                 return self._status(identifier)
             if operation == "events":
                 return runner.events(arguments.get("after", 0))
@@ -624,6 +703,7 @@ class MCPService:
         result = {
             **status,
             "configuration": copy.deepcopy(config),
+            "missing_credentials": self._missing_credentials(config),
             "pending_requests": [
                 item for item in self.inputs.list() if item["connection"] == identifier
             ],
@@ -631,6 +711,13 @@ class MCPService:
         if config.get("oauth"):
             result["oauth"] = sign_in_status(self._host(), config)
         return result
+
+    def _missing_credentials(self, config: dict[str, Any]) -> list[str]:
+        """The credentials *config* references that have no value yet."""
+        host = self._host()
+        return sorted(
+            name for name in _credential_names(config) if not host.resolve_credential(name)
+        )
 
     def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
@@ -659,7 +746,99 @@ class MCPService:
             ],
         }
 
-    async def _save(self, value: dict[str, Any]) -> dict[str, Any]:
+    async def _import(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Preview the servers of setup text, or with ``apply`` save the chosen ones.
+
+        A preview stores nothing. Saving re-reads the text and never replaces a
+        saved connection. A connection that cannot work yet, with a credential
+        or a placeholder still to fill in, is saved disabled.
+        """
+        drafts = parse_setup(arguments["source"], arguments.get("ids"))
+        preview = [self._import_preview(draft) for draft in drafts]
+        if not arguments.get("apply"):
+            return {"servers": preview}
+        wanted = arguments.get("servers")
+        names = {draft.name for draft in drafts}
+        if wanted is not None and (unknown := sorted(set(wanted) - names)):
+            raise ValueError(f"No imported server is named {', '.join(unknown)}")
+        chosen = [
+            (draft, item)
+            for draft, item in zip(drafts, preview, strict=True)
+            if (draft.name in wanted if wanted is not None else item["selected"])
+        ]
+        if not chosen:
+            raise ValueError("Choose at least one server to import")
+        problems = [
+            f"{draft.name}: {draft.error or f'connection {draft.id} already exists'}"
+            for draft, item in chosen
+            if draft.error is not None or item["conflict"]
+        ]
+        if problems:
+            raise ValueError("Cannot import " + "; ".join(problems))
+        host = self._host()
+        imported = []
+        for draft, item in chosen:
+            for credential in draft.credentials:
+                if credential.state == "provided" and credential.value:
+                    host.set_credential(credential.name, credential.value)
+            connection = {**draft.connection, "enabled": item["enabled"]}
+            imported.append(await self._save(connection, replace=False))
+        stored = [
+            credential
+            for draft, _ in chosen
+            for credential in draft.credentials
+            if credential.state == "provided"
+        ]
+        self.api.logger.info(
+            "MCP connections imported (connections=%s credentials=%d)",
+            ",".join(draft.id for draft, _ in chosen),
+            len(stored),
+        )
+        return {"imported": imported}
+
+    def _import_preview(self, draft: ImportDraft) -> dict[str, Any]:
+        """What importing *draft* would save; credential values never leave the draft.
+
+        A credential is ``provided`` by the setup text, already ``set`` on the
+        vBot host, or ``missing``: it still needs a value.
+        """
+        host = self._host()
+        credentials = [
+            {
+                "name": credential.name,
+                "kind": credential.kind,
+                "target": credential.target,
+                "state": (
+                    credential.state
+                    if credential.state != "reference"
+                    else "set"
+                    if host.resolve_credential(credential.name)
+                    else "missing"
+                ),
+                "description": credential.description,
+            }
+            for credential in draft.credentials
+        ]
+        conflict = draft.id in self.connections
+        complete = all(item["state"] != "missing" for item in credentials)
+        return {
+            "name": draft.name,
+            "id": draft.id,
+            "connection": copy.deepcopy(draft.connection) or None,
+            "error": draft.error,
+            "conflict": conflict,
+            "selected": draft.error is None and not conflict and not draft.exposes_secret,
+            # Saved enabled only when it can work: no placeholder left in it
+            # (``unresolved``), not turned off by the setup text (``disabled``)
+            # and no credential missing.
+            "enabled": complete and not draft.unresolved and not draft.disabled,
+            "unresolved": draft.unresolved,
+            "disabled": draft.disabled,
+            "credentials": credentials,
+            "warnings": copy.deepcopy(draft.warnings),
+        }
+
+    async def _save(self, value: dict[str, Any], *, replace: bool = True) -> dict[str, Any]:
         config = validate_connection(value)
         identifier = config["id"]
         # The connection's lock spans the replacement of its runner; the saved
@@ -668,6 +847,8 @@ class MCPService:
         async with self._connection_lock(identifier):
             async with self._lock:
                 previous = self.connections.get(identifier)
+                if previous is not None and not replace:
+                    raise ValueError(f"MCP connection {identifier} already exists")
                 await self._store_connections({**self.connections, identifier: config})
             runner = self.runners.get(identifier)
             if (
@@ -682,8 +863,10 @@ class MCPService:
                 await self._stop(identifier)
                 if previous is not None and _signs_in_elsewhere(previous, config):
                     forget_sign_in(self._host(), identifier)
+                # A disabled connection keeps its connection Tool, not ready.
+                runner = self._runner(config)
                 if config["enabled"]:
-                    self._runner(config).start()
+                    runner.start()
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
         return self._status(identifier)
 
@@ -701,12 +884,17 @@ class MCPService:
                 await self._store_connections(records)
             if operation == "remove":
                 self.catalogs.forget(identifier)
-            if operation in {"disable", "remove"}:
                 await self._stop(identifier)
-            if operation == "remove":
                 forget_sign_in(self._host(), identifier)
-            elif config["enabled"]:
-                self._runner(config).start()
+            elif operation == "disable":
+                # Its Tools stay registered but not ready, so the Agent no longer
+                # sees them and naming one says the connection is disabled.
+                await self._replace_runner(identifier, config)
+            else:
+                runner = self._runner(config)
+                # Republished, its Tools no longer say the connection is disabled.
+                self._publish(runner, runner.catalog or None)
+                runner.start()
         self.api.logger.info(
             "MCP connection updated (connection=%s operation=%s)", identifier, operation
         )
@@ -721,7 +909,28 @@ class MCPService:
         if self.store is None:
             raise RuntimeError("MCP store was not initialized")
         await run_tool_worker(self.store.save, records)
+        changed = [
+            identifier
+            for identifier in {**self.connections, **records}
+            if self.connections.get(identifier) != records.get(identifier)
+        ]
         self.connections = records
+        if changed:
+            self._connection_changed(*changed)
+
+    async def _replace_runner(self, identifier: str, config: dict[str, Any]) -> ConnectionRunner:
+        """Close *identifier*'s client and give the connection a new, unstarted runner.
+
+        The connection's Tools stay registered with the last catalog but are not
+        ready until the new runner connects; naming one tells the Agent why.
+        """
+        previous = self.runners.get(identifier)
+        await self._stop(identifier)
+        runner = self._runner(config)
+        if previous is not None and previous.catalog:
+            runner.catalog = previous.catalog
+            self._publish(runner, runner.catalog)
+        return runner
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)
@@ -730,6 +939,17 @@ class MCPService:
                 await runner.close()
         finally:
             self.api.operations.replace_tools(identifier, [])
+
+
+def _credential_names(config: dict[str, Any]) -> set[str]:
+    """The credentials *config* references: variables, headers and an OAuth client secret."""
+    names = {
+        *config.get("credential_environment", {}).values(),
+        *config.get("credential_headers", {}).values(),
+    }
+    if config.get("oauth_client_secret"):
+        names.add(config["oauth_client_secret"])
+    return names
 
 
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:

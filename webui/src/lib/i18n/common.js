@@ -153,8 +153,6 @@ export default Object.freeze({
     'Drag a row to reorder it, or press Alt+Up or Alt+Down to move the focused row.',
   'common.sortable.moved': 'Moved {name} to position {position} of {total}',
   'common.details': 'Details',
-  'common.yes': 'Yes',
-  'common.no': 'No',
   'common.search': 'Search',
   'common.previous': 'Previous',
   'common.next': 'Next',

@@ -86,6 +86,8 @@
     sessionsRefreshToken = 0,
     initialScrollPosition = null,
     onScrollPositionChange = noop,
+    // The App's Extension invalidations (see app/extensions.svelte.js).
+    subscribeExtensionInvalidations = null,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -911,6 +913,7 @@
   {:else if panelId === 'extensions'}
     <SettingsExtensionsPanel
       {onToast}
+      {subscribeExtensionInvalidations}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if modelTasksBySection[panelId]}

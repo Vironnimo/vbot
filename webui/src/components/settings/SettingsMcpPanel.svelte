@@ -13,16 +13,23 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
+  import McpImportDialog from './McpImportDialog.svelte';
+  import McpQuickFill from './McpQuickFill.svelte';
   import { t } from '$lib/i18n.js';
   import {
     createMcpSettings,
     MCP_DESCRIPTION_MAX_LENGTH,
     mcpDraft,
     mcpCredentialNames,
+    mcpProblemText,
   } from '$lib/mcpSettings.js';
   import { tooltip } from '$lib/tooltip.js';
 
   const componentId = $props.id();
+  // The App's Extension invalidations; the connections refresh on their
+  // changes instead of on a timer.
+  let { subscribeInvalidations = null } = $props();
   let state = $state({
     connections: [],
     loading: true,
@@ -39,6 +46,9 @@
   let secretKey = $state('');
   let secretValue = $state('');
   let capabilityQuery = $state('');
+  // The import dialog's starting text while it is open, otherwise null.
+  let importSource = $state(null);
+  let fillNotes = $state([]);
   // Each connection is one collapsed row; its endpoint, catalog counts and
   // actions open in its details. The details stay in the DOM so settings
   // search still matches them.
@@ -49,10 +59,17 @@
     },
   });
   let blocked = $derived(state.busy || Boolean(state.job));
+  let dialogOpen = $derived(
+    Boolean(draft || secretConnection) || importSource !== null,
+  );
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
     { value: 'http', label: t('mcp.http') },
-    { value: 'sse', label: t('mcp.sse') },
+    {
+      value: 'sse',
+      label: t('mcp.sse'),
+      secondaryLabel: t('mcp.sseDeprecated'),
+    },
   ]);
   let samplingOptions = $derived([
     { value: 'off', label: t('mcp.samplingOff') },
@@ -84,6 +101,7 @@
   onMount(() => {
     void controller.refresh();
   });
+  $effect(() => subscribeInvalidations?.(controller.handleInvalidation));
   onDestroy(() => controller.dispose());
 
   function edit(connection = null) {
@@ -91,6 +109,43 @@
       ? JSON.parse(JSON.stringify(connection.configuration))
       : null;
     draft = mcpDraft(original);
+    fillNotes = [];
+  }
+  // Fills the new connection from a command line or URL; setup text with
+  // several servers or a secret to store goes to the import dialog.
+  async function quickFill(text) {
+    const { servers } = await controller.previewImport(text);
+    const [server] = servers;
+    if (
+      servers.length !== 1 ||
+      server.error ||
+      server.credentials.some((credential) => credential.state === 'provided')
+    ) {
+      draft = null;
+      importSource = text;
+      return;
+    }
+    // What the user already typed into the form stays.
+    draft = {
+      ...mcpDraft({ ...server.connection, enabled: server.enabled }),
+      id: String(draft.id ?? '').trim() || server.id,
+      description: draft.description || server.connection.description || '',
+    };
+    fillNotes = [
+      ...server.warnings.map((warning) => warning.message),
+      ...server.credentials
+        .filter((credential) => credential.state === 'missing')
+        .map((credential) =>
+          t('mcp.quickFillCredential', {
+            name: credential.name,
+            target: credential.target,
+          }),
+        ),
+    ];
+  }
+  function imported(ids) {
+    importSource = null;
+    for (const id of ids) expanded.add(id);
   }
   function set(field, value) {
     draft = { ...draft, [field]: value };
@@ -178,13 +233,22 @@
       <h4 class="s-subhead__title">{t('mcp.title')}</h4>
       <InfoHint text={t('mcp.help')} ariaLabel={t('mcp.helpAria')} />
     </div>
-    <Button
-      variant="secondary"
-      disabled={blocked || state.loading}
-      onClick={() => edit()}>{t('mcp.add')}</Button
-    >
+    <div class="mcp-subhead__actions">
+      <Button
+        variant="tertiary"
+        disabled={blocked || state.loading}
+        onClick={() => {
+          importSource = '';
+        }}>{t('mcp.import')}</Button
+      >
+      <Button
+        variant="secondary"
+        disabled={blocked || state.loading}
+        onClick={() => edit()}>{t('mcp.add')}</Button
+      >
+    </div>
   </div>
-  {#if state.error && !draft && !secretConnection}
+  {#if state.error && !dialogOpen}
     <Banner variant="error" role="alert">
       {state.error}
       <Button
@@ -194,9 +258,8 @@
       >
     </Banner>
   {/if}
-  {#if state.notice && !draft && !secretConnection}<Banner
-      variant="success"
-      role="status">{state.notice}</Banner
+  {#if state.notice && !dialogOpen}<Banner variant="success" role="status"
+      >{state.notice}</Banner
     >{/if}
   {#if state.job}
     <Banner variant="warn" role="status">
@@ -243,7 +306,7 @@
               {/if}
               {#if connection.error}
                 <div class="s-row-desc mcp-connection__error">
-                  {connection.error}
+                  {mcpProblemText(connection.problem) || connection.error}
                 </div>
               {/if}
             </div>
@@ -314,6 +377,7 @@
                   })}
                 </p>
               {/if}
+              <McpConnectionDiagnostics {connection} />
             </div>
             <div class="mcp-actions">
               <Button
@@ -333,6 +397,13 @@
                 disabled={blocked || !connection.configuration.enabled}
                 onClick={() => controller.test(connection.id)}
                 >{t('mcp.test')}</Button
+              >
+              <Button
+                variant="tertiary"
+                disabled={blocked || !connection.configuration.enabled}
+                tooltip={t('mcp.reconnectHelp')}
+                onClick={() => controller.mutate('reconnect', connection.id)}
+                >{t('mcp.reconnect')}</Button
               >
               {#if mcpCredentialNames(connection.configuration).length}
                 <Button
@@ -532,6 +603,12 @@
         {#if state.error}<Banner variant="error" role="alert"
             >{state.error}</Banner
           >{/if}
+        {#if !original}
+          <McpQuickFill disabled={state.busy} onFill={quickFill} />
+        {/if}
+        {#each fillNotes as note, noteIndex (noteIndex)}
+          <Banner variant="warn">{note}</Banner>
+        {/each}
         <div class="mcp-grid">
           <FormField
             controlId={`${componentId}-name`}
@@ -563,6 +640,9 @@
               />{/snippet}
           </FormField>
         </div>
+        {#if draft.transport === 'sse'}
+          <Banner variant="warn">{t('mcp.sseHint')}</Banner>
+        {/if}
         <FormField
           controlId={`${componentId}-description`}
           label={t('mcp.description')}
@@ -960,6 +1040,18 @@
       >
     {/snippet}
   </Modal>
+{/if}
+{#if importSource !== null}
+  <McpImportDialog
+    {controller}
+    busy={state.busy}
+    error={state.error}
+    initialSource={importSource}
+    onClose={() => {
+      importSource = null;
+    }}
+    onImported={imported}
+  />
 {/if}
 {#if removal}
   <ConfirmDialog

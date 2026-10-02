@@ -165,3 +165,68 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.mcp-subhead__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* A new connection can be filled from a command line or URL. */
+.mcp-quick-fill {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+.mcp-quick-fill > .btn-secondary {
+  margin-top: 24px;
+}
+/* Why a connection fails: missing credentials, the technical error and the
+   local server's last error output. */
+.mcp-diagnostics__missing {
+  color: var(--text-med);
+}
+.mcp-diagnostics__output {
+  margin: 0;
+  max-height: 16em;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* The import dialog: the pasted setup, then one entry per server. */
+.mcp-import__file {
+  display: none;
+}
+.mcp-import__servers {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-import__server {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.mcp-import__name {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+@media (max-width: 640px) {
+  .mcp-quick-fill {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mcp-quick-fill > .btn-secondary {
+    margin-top: 0;
+  }
+}
