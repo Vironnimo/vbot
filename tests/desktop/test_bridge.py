@@ -375,7 +375,9 @@ def test_connecting_returns_the_prepared_result_for_javascript_navigation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, method: str
 ) -> None:
     bridge, probed = _server_bridge(tmp_path, monkeypatch)
-    failing, _ = _server_bridge(tmp_path / "failing", monkeypatch, "server_unreachable")
+    failing, failing_probed = _server_bridge(
+        tmp_path / "failing", monkeypatch, "server_unreachable"
+    )
 
     assert getattr(bridge, method)("pi.lan", 9000) == {
         "status": "webui_available",
@@ -385,6 +387,8 @@ def test_connecting_returns_the_prepared_result_for_javascript_navigation(
     failure = getattr(failing, method)("pi.lan", 9000)
     assert set(failure) == {"status", "error_title", "error_body"}
     assert failure["status"] == "server_unreachable"
+    # A connect the user starts fails at once; only the launch connect waits.
+    assert failing_probed == [("pi.lan", 9000)]
 
 
 @pytest.mark.parametrize(

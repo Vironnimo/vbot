@@ -830,6 +830,35 @@ def test_a_target_override_connects_directly_and_becomes_last_used(
 
 
 @pytest.mark.parametrize(
+    ("argv", "saved"),
+    [([], SAVED_PI), (["--host", "pi.lan", "--port", "9000"], None)],
+    ids=["last-used", "override"],
+)
+def test_closing_the_window_ends_a_launch_connect_still_waiting_for_its_server(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    argv: list[str],
+    saved: dict[str, Any] | None,
+) -> None:
+    def unreachable(target: DesktopTarget) -> DesktopProbeResult:
+        return DesktopProbeResult(desktop_main.PROBE_SERVER_UNREACHABLE, target)
+
+    with caplog.at_level("INFO", logger="vbot.desktop.connection"):
+        fake_webview = _launch(tmp_path, argv, settings=saved, probe=unreachable)
+
+    # The shown window waited for the server until it closed, then stopped.
+    [page] = fake_webview.window.loaded_html
+    assert 'id="connection-waiting"' in page
+    assert fake_webview.window.loaded_urls == []
+    assert not [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "vbot-desktop-launch-wait" and thread.is_alive()
+    ]
+    assert "reason=closed" in caplog.text
+
+
+@pytest.mark.parametrize(
     ("argv", "target"),
     [
         (["--open-session", "builder@project", "session-1"], ("pi.lan", 9000)),

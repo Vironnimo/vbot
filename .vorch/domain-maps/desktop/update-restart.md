@@ -24,7 +24,7 @@ Read when changing how a packaged Desktop notices a newly activated version, res
 2. The successor (`launch_desktop`, contract present) takes the request (reads and deletes it). It is valid for 120 s in either direction, at most 16 KiB, with an alphanumeric nonce of 16-64 characters; an invalid server, location or placement is dropped individually and the nonce alone still completes the handoff. A request server replaces any launch target and Session link.
 3. The successor calls `claim_desktop_instance(handoff=nonce)`: finding the guard held, it writes the activation request `{"handoff": nonce}`, signals, and polls the mutex for up to `HANDOFF_CLAIM_TIMEOUT_SECONDS` (30 s). Without the guard by then it logs a warning and exits without a window (`launch_desktop` returns `False`).
 4. The old Desktop's activation listener routes a `handoff` request to `DesktopRestart.accept_handoff`, never to focusing; only the current attempt's nonce counts. It then destroys its window; the normal shutdown releases the guard.
-5. The successor claims the guard and opens the request's server with the location appended to the first navigation, at the recorded placement.
+5. The successor claims the guard and opens the request's server with the location appended to the first navigation, at the recorded placement. A server still starting after the update is waited for (`desktop.md` -> Interfaces -> Launch wait).
 
 The old window closes only after step 4. Without the signal within `HANDOFF_TIMEOUT_SECONDS` (60 s), or when the relaunch process exits nonzero first, the attempt fails: the request is deleted (only when it still holds this nonce), the window stays, and the page shows the failure. Closing the Desktop during a handoff abandons it and deletes the request.
 
