@@ -92,6 +92,11 @@
       "set": {"protocol": "messages"}
     },
     {
+      "when": {"ids": ["claude-opus-4.7"]},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Anthropic rejects thinking type disabled for this adaptive-only Model (resources/wire/anthropic.json), so effort none sends no thinking field."
+    },
+    {
       "when": {"control": "budget"},
       "set": {"reasoning": {"off": "omit"}},
       "note": "Budget-only thinking Models have never been sent thinking disabled; effort none sends no thinking."

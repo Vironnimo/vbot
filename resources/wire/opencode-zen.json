@@ -145,6 +145,11 @@
       "note": "Qwen3.8 Max on Chat switches thinking.type on or off, enabled by default, and answers with reasoning_content (verified 2026-09-28)."
     },
     {
+      "when": {"ids": ["claude-fable-5", "claude-opus-4-7"]},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Zen forwards Messages to Anthropic, where these adaptive-only Models reject thinking type disabled (resources/wire/anthropic.json), so effort none sends no thinking field."
+    },
+    {
       "when": {"ids": ["gpt-6.1-sol", "space-bunny-free"]},
       "set": {"reasoning": {"off": "low"}},
       "note": "These Models always reason; none asks for the cheapest rung, low (GPT 6.1 Sol verified 2026-10-02, Space Bunny 2026-09-24)."
