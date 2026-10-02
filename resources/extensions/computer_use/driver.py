@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from contextlib import ExitStack, asynccontextmanager, suppress
@@ -127,7 +128,7 @@ class EmergencyHotkey:
                         self._requested.clear()
 
     def start(self) -> None:
-        if os.name != "nt":
+        if sys.platform != "win32":
             return
         if self._thread is not None:
             return
@@ -138,6 +139,8 @@ class EmergencyHotkey:
         self._ready.wait(2)
 
     def _listen(self) -> None:
+        if sys.platform != "win32":
+            return
         import ctypes
         from ctypes import wintypes
 
@@ -212,7 +215,7 @@ class EmergencyHotkey:
         self._closing.set()
         self.set_armed(None)
         self._requested.set()
-        if self._thread_id and self.available:
+        if sys.platform == "win32" and self._thread_id and self.available:
             import ctypes
 
             ctypes.WinDLL("user32").PostThreadMessageW(self._thread_id, 0x0012, 0, 0)
@@ -259,7 +262,7 @@ def unpack(result: dict[str, Any]) -> dict[str, Any]:
             if block.get("type") == "text":
                 try:
                     candidate = json.loads(block.get("text", ""))
-                except (ValueError, TypeError):
+                except ValueError, TypeError:
                     continue
                 if isinstance(candidate, dict):
                     payload = candidate
@@ -343,11 +346,14 @@ class CuaDriver:
     @asynccontextmanager
     async def _stdio(self, environment: dict[str, str]):
         # Own the real input worker, never a proxy to a shared desktop daemon.
+        creationflags = 0
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
         process = await anyio.open_process(
             [self.executable, "mcp", "--direct"],
             env=environment,
             stderr=subprocess.DEVNULL,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            creationflags=creationflags,
         )
         with self._process_lock:
             self._process = process
@@ -378,7 +384,7 @@ class CuaDriver:
                     async for message in outgoing:
                         encoded = message.message.model_dump_json(by_alias=True, exclude_none=True)
                         await process.stdin.send((encoded + "\n").encode())
-            except (anyio.BrokenResourceError, anyio.ClosedResourceError, OSError):
+            except anyio.BrokenResourceError, anyio.ClosedResourceError, OSError:
                 await incoming.aclose()
 
         try:
