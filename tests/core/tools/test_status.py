@@ -23,7 +23,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.messages import ChatMessage
-from core.chat.status_report import ReasoningIntent, StatusWireProfile, status_session_facts
+from core.chat.status_report import STATUS_PLACEHOLDER, ReasoningIntent, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import (
     AgentResolutionError,
@@ -32,7 +32,6 @@ from core.projects import (
     ResolutionAgentNotFoundError,
     ResolutionProjectNotFoundError,
 )
-from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from core.settings.settings import SettingsValidationError
@@ -270,9 +269,15 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
             if not line.startswith(("Session started:", "App uptime:", "Current time:"))
         ]
 
-    assert _without_live_time_lines(data["text"]) == _without_live_time_lines(
-        command_result.feedback.text
-    )
+    # Only the user's /status reports the wire profile; Agents cannot act on it.
+    wire_lines = ("Wire profile:", "Learned wire facts:")
+    assert _without_live_time_lines(data["text"]) == [
+        line
+        for line in _without_live_time_lines(command_result.feedback.text)
+        if not line.startswith(wire_lines)
+    ]
+    assert f"Wire profile: {STATUS_PLACEHOLDER}" in command_result.feedback.text.splitlines()
+    assert not any(line.startswith(wire_lines) for line in data["text"].splitlines())
     assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
     assert "Activity: idle" in data["text"]
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]
@@ -280,8 +285,8 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
 
 def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_path: Path) -> None:
     # A project run: the resolver and the Session lookup receive the Project and the Session
-    # (whose Agent overrides the report must reflect), and the Model registry, the Project
-    # store, the reasoning describer and the wire profile describer each feed their line.
+    # (whose Agent overrides the report must reflect), and the Model
+    # registry, the Project store and the reasoning describer each feed their report line.
     resolver = _StubResolver(_make_agent(thinking_effort="xhigh", temperature=None))
     sessions = _StubSessions([])
     described: list[tuple[str, str, str | None]] = []
@@ -296,9 +301,6 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         models=_StubModels(_make_model(name="GPT-5.2 Registry", recommended_temperature=1.0)),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
         reasoning_render_describer=describe_render,
-        wire_profile_describer=lambda agent: StatusWireProfile(
-            "openai:api-key", "verified", "2026-09-30", ObservedFacts()
-        ),
     )
 
     result = _dispatch(registry, tmp_path, project_id="vbot")
@@ -313,7 +315,6 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",
         "Temperature: 1 (model recommendation)",
-        "Wire profile: verified on 2026-09-30 (Connection openai:api-key)",
     ):
         assert line in text
 

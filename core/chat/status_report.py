@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage, usage_token_is_estimated
@@ -130,6 +131,12 @@ class StatusWireProfile:
 # Runtime-wired seam: Agent -> the wire profile of the Connection its Model
 # resolves to as chat resolves it, or ``None`` when it resolves to none.
 WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
+
+
+class _WireProfileOmitted(Enum):
+    """Default of the status renderers' ``wire_profile``: the report has no wire lines."""
+
+    OMITTED = "omitted"
 
 
 @dataclass(frozen=True)
@@ -380,7 +387,7 @@ def build_status_reply(
     project_label: str | None = None,
     temperature_status: str | None = None,
     timezone: tzinfo | None = None,
-    wire_profile: StatusWireProfile | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     with _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name):
@@ -408,7 +415,7 @@ def build_status_text(
     project_label: str | None = None,
     temperature_status: str | None = None,
     timezone: tzinfo | None = None,
-    wire_profile: StatusWireProfile | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
@@ -421,7 +428,10 @@ def build_status_text(
     ``project_label`` names the session's project (``None`` for an identity
     session, rendered as the placeholder).
     ``wire_profile`` describes the Connection the Model resolves to (see
-    :class:`StatusWireProfile`); learned wire facts get a line only when any exist.
+    :class:`StatusWireProfile`), ``None`` rendering the placeholder when nothing
+    resolves; learned wire facts get a line only when any exist. Left out, the
+    text has no wire profile lines: the user's ``/status`` passes it, while the
+    status Tool does not, because Agents cannot act on wire profiles.
     """
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone(timezone)
@@ -527,7 +537,9 @@ def _actual_thinking_effort_text(value: str | None) -> str:
     return value
 
 
-def _wire_profile_lines(wire_profile: StatusWireProfile | None) -> list[str]:
+def _wire_profile_lines(wire_profile: StatusWireProfile | None | _WireProfileOmitted) -> list[str]:
+    if isinstance(wire_profile, _WireProfileOmitted):
+        return []
     if wire_profile is None:
         return [f"Wire profile: {STATUS_PLACEHOLDER}"]
     status = _WIRE_STATUS_TEXT.get(wire_profile.status, wire_profile.status)

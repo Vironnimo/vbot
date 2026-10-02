@@ -366,7 +366,6 @@ def test_status_text_without_data_shows_placeholders() -> None:
         "Selected thinking effort",
         "Actual model thinking effort",
         "Temperature",
-        "Wire profile",
         "Context usage",
         "Last request cache",
         "Session cache",

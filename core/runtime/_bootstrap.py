@@ -688,7 +688,6 @@ def bootstrap(runtime: Runtime) -> None:
             runtime.local_context_windows,
             runtime.describe_reasoning_render,
             runtime.timezone_name,
-            runtime.describe_agent_wire_profile,
         )
         # Built-ins are all registered now; apply extension tools last so a
         # collision with any built-in name is skipped (built-in wins), right
