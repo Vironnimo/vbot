@@ -682,6 +682,24 @@ def provider_family(
     return family if isinstance(family, str) and family else None
 
 
+def provider_npm(catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str) -> str | None:
+    """Return the per-model AI SDK package (``provider.npm``) of one provider Model.
+
+    A gateway that serves several wire protocols names the client package per
+    Model (e.g. OpenCode Zen ``gpt-5.4`` → ``@ai-sdk/openai``); wire profiles map
+    it to a protocol. Only the per-model value counts: the section-wide ``npm``
+    is the provider's default client, not a fact about one Model, so a Model
+    without its own package yields ``None``.
+    """
+
+    provider_model = catalog.provider_model(models_dev_id, wire_id)
+    if provider_model is None:
+        return None
+    provider = provider_model.get("provider")
+    npm = provider.get("npm") if isinstance(provider, Mapping) else None
+    return npm if isinstance(npm, str) and npm else None
+
+
 def provider_pricing(
     catalog: ModelsDevCatalog, *, models_dev_id: str, wire_id: str
 ) -> dict[str, Any] | None:

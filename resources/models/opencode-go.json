@@ -434,6 +434,11 @@
       "context_window": 1050000,
       "family": "gpt-luna",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.6-luna",
       "pricing": {
         "rates": {
@@ -495,6 +500,11 @@
       "context_window": 1050000,
       "family": "gpt-luna",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-6-luna",
       "pricing": {
         "rates": {
@@ -553,6 +563,11 @@
       "context_window": 500000,
       "family": "grok",
       "max_output_tokens": 500000,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-4.6",
       "pricing": {
         "rates": {
@@ -610,6 +625,11 @@
       "context_window": 500000,
       "family": "grok",
       "max_output_tokens": 500000,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-4.7",
       "pricing": {
         "rates": {
@@ -1171,6 +1191,11 @@
       "context_window": 204800,
       "family": "minimax-m2.7",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "minimax-m2.7",
       "pricing": {
         "rates": {
@@ -1212,6 +1237,11 @@
       "context_window": 1000000,
       "family": "minimax-m3",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "minimax-m3",
       "pricing": {
         "rates": {
@@ -1272,6 +1302,11 @@
       "context_window": 1048576,
       "family": "muse",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "muse-spark-1.2-contributor",
       "pricing": {
         "rates": {
@@ -1321,6 +1356,11 @@
       "context_window": 1048576,
       "family": "muse",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "muse-spark-1.3-contributor",
       "pricing": {
         "rates": {
@@ -1542,6 +1582,11 @@
       "context_window": 1000000,
       "family": "qwen",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_go": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.8-flash",
       "pricing": {
         "rates": {

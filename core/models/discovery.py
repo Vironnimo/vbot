@@ -28,6 +28,7 @@ from core.models.models_dev import (
     provider_family,
     provider_limits,
     provider_modalities,
+    provider_npm,
     provider_pricing,
     provider_reasoning_block,
     provider_reasoning_supported,
@@ -444,6 +445,9 @@ def _enrich_provider_model(
       so a provider that DID report a limit keeps its own;
     * projects the models.dev ``interleaved`` response field into
       ``metadata.<provider>.reasoning_response_field`` (Phase 5) when present;
+    * projects the Model's own AI SDK package (models.dev per-model
+      ``provider.npm``) into ``metadata.<provider>.npm``, the catalog protocol
+      hint of wire profiles;
     * when models.dev reports a ladder that *deviates* from the lab spec, sets
       the reasoning control description to that deviating block (provider layer
       wins at load);
@@ -508,6 +512,14 @@ def _enrich_provider_model(
             provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
             if isinstance(provider_metadata, dict):
                 provider_metadata["reasoning_response_field"] = response_field
+
+    npm = provider_npm(catalog, models_dev_id=models_dev_id, wire_id=wire_id)
+    if npm is not None:
+        metadata = data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            provider_metadata = metadata.setdefault(_provider_metadata_key(provider_id), {})
+            if isinstance(provider_metadata, dict):
+                provider_metadata["npm"] = npm
 
     deviating = provider_reasoning_block(
         catalog,
