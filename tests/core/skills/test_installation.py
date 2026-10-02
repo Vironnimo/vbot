@@ -227,8 +227,18 @@ def test_repeat_is_unchanged_and_overwrite_requires_explicit_replace(tmp_path):
     assert preview.candidates[0]["exists"] is True
     assert preview.candidates[0]["unchanged"] is False
     assert local.exists()
-    assert authoring.install(target, str(source), replace=True).operation == "replaced"
+    replaced = authoring.install(target, str(source), replace=True)
+    assert replaced.operation == "replaced"
     assert not local.exists()
+    # The install and the replacement are revisions by a person; the local file
+    # was noticed as a change outside vBot first.
+    assert [(r.id, r.kind, r.actor) for r in authoring.history(target, "research")] == [
+        (3, "change", "human"),
+        (2, "external", "external"),
+        (1, "create", "human"),
+    ]
+    assert replaced.revision == 3
+    assert authoring.records(target)["research"].origin == "human"
 
 
 @pytest.mark.parametrize(

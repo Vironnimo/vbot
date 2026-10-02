@@ -15,6 +15,7 @@ import yaml
 from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillWriter,
     SkillWriteResult,
 )
 from core.skills.skill_validator import (
@@ -65,6 +66,7 @@ _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
 # owner's package). ``create`` is own-home-only by definition; ``delete`` stays
 # owner/human-only so a receiver cannot remove someone else's playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
+_AGENT_WRITER = SkillWriter(actor="agent")
 _LOGGER = get_logger("tools.skill_manage")
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
@@ -595,21 +597,23 @@ def _apply(
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
-        result = authoring.create(target_root, name, call.content or "", author="agent")
+        result = authoring.create(target_root, name, call.content or "", writer=_AGENT_WRITER)
         return result, f"Created Skill '{name}'."
     if call.action == "edit":
-        result = authoring.edit(target_root, name, call.content or "", author="agent")
+        result = authoring.edit(target_root, name, call.content or "", writer=_AGENT_WRITER)
         return result, f"Replaced SKILL.md of Skill '{name}'."
     if call.action == "patch":
         return _patch(authoring, target_root, call)
     file_path = call.file_path or ""
     if call.action == "write_file":
-        result = authoring.write_file(target_root, name, file_path, call.content or "")
+        result = authoring.write_file(
+            target_root, name, file_path, call.content or "", writer=_AGENT_WRITER
+        )
         return result, f"Wrote {file_path} of Skill '{name}'."
     if call.action == "remove_file":
-        result = authoring.remove_file(target_root, name, file_path)
+        result = authoring.remove_file(target_root, name, file_path, writer=_AGENT_WRITER)
         return result, f"Removed {file_path} from Skill '{name}'."
-    result = authoring.delete(target_root, name)
+    result = authoring.delete(target_root, name, writer=_AGENT_WRITER)
     return result, f"Deleted Skill '{name}' and its files."
 
 
@@ -628,7 +632,7 @@ def _patch(
         return replacement.new_content
 
     try:
-        result = authoring.rewrite(target_root, call.name, file_path, edit, author="agent")
+        result = authoring.rewrite(target_root, call.name, file_path, edit, writer=_AGENT_WRITER)
     except _RefusalError as refusal:
         if refusal.code == "text_not_found" and call.file_path == SKILL_FILENAME:
             hint = _support_file_hint(authoring, target_root, call)

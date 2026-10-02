@@ -8,10 +8,12 @@ import os
 import shutil
 import tempfile
 from dataclasses import asdict, dataclass, field
+from dataclasses import replace as replace_result
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.skills._history import SkillHistory
 from core.skills._packages import (
     INSTALL_RECEIPT,
     MAX_SKILL_DOCUMENT_BYTES,
@@ -33,7 +35,7 @@ from core.skills.skill_validator import (
 from core.utils.atomic import atomic_write_bytes
 
 if TYPE_CHECKING:
-    from core.skills.authoring import SkillAuthoringService
+    from core.skills.authoring import SkillAuthoringService, SkillWriter
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,8 @@ class SkillInstallResult:
     sha256: str | None = None
     warnings: list[str] = field(default_factory=list)
     candidates: list[dict[str, Any]] = field(default_factory=list)
+    # The recorded Skill history revision of a published install.
+    revision: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -107,6 +111,7 @@ def install_package(
     target_root: Path,
     source: str,
     *,
+    writer: SkillWriter,
     path: str | None = None,
     ref: str | None = None,
     replace: bool = False,
@@ -206,6 +211,8 @@ def install_package(
                 "Existing destination is not a Skill package; it was left unchanged."
             )
         destination.parent.mkdir(parents=True, exist_ok=True)
+        history = SkillHistory(destination.parent)
+        authoring._observe(history, name, destination if exists else None, writer)
         # The temporary directory is a sibling, guaranteeing publication on one filesystem.
         transaction = Path(tempfile.mkdtemp(prefix=".skill-install-", dir=destination.parent))
         preserve_backup = False
@@ -255,4 +262,10 @@ def install_package(
                             f"{transaction.as_posix()}."
                         )
                     # On a failed write, preserve the original error and leave residue inert.
-        return result
+        if exists:
+            revision = authoring._commit(history, name, destination, writer, "change")
+        else:
+            revision = authoring._commit(
+                history, name, destination, writer, "create", origin=writer.actor
+            )
+        return replace_result(result, revision=revision)

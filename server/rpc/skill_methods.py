@@ -3,9 +3,11 @@
 Write data-dir skill scopes for the UI/accessors: ``global`` (the user-curated
 ``<data_dir>/skills``) or ``agent:<agent_id>`` (a chosen agent's private home).
 Never the project/repo scope — those are repo files authored with the ordinary
-file tools. All writes go through the one validated authoring service, then scoped
-invalidation so the change is live without a restart. Authored documents use
-``author="human"`` provenance; package imports preserve the source document.
+file tools. All writes go through the one validated authoring service as a person
+(``HUMAN_WRITER``: ``metadata.vbot.author: human`` and a ``human`` history revision),
+then scoped invalidation so the change is live without a restart; package imports
+preserve the source document. ``skill.delete`` moves the package into the home's
+archive.
 Validation failures surface authoring diagnostics as an ``invalid_request`` error.
 
 The manager surface (``skill.inventory`` / ``skill.set_disabled`` / ``skill.share``)
@@ -21,7 +23,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.settings import is_valid_agent_id
-from core.skills import SkillAuthoringError, SkillPolicyError, SkillRegistry, SkillWriteResult
+from core.skills import (
+    HUMAN_WRITER,
+    SkillAuthoringError,
+    SkillPolicyError,
+    SkillRegistry,
+    SkillWriteResult,
+)
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
@@ -42,7 +50,6 @@ JsonObject = dict[str, Any]
 
 _GLOBAL_SCOPE = "global"
 _AGENT_SCOPE_PREFIX = "agent:"
-_HUMAN_AUTHOR = "human"
 _LOGGER = get_logger("server.rpc.skills")
 _SKILL_READ_WORKERS = BoundedWorkerPool(name="skill-manager", max_workers=1)
 
@@ -146,7 +153,7 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
         state,
         scope,
         lambda root: state.runtime.skill_authoring.create(
-            root, name, content, author=_HUMAN_AUTHOR, source=source
+            root, name, content, writer=HUMAN_WRITER, source=source
         ),
     )
 
@@ -226,7 +233,7 @@ async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
         state,
         scope,
         lambda root: state.runtime.skill_authoring.edit(
-            root, name, content, author=_HUMAN_AUTHOR, source=source
+            root, name, content, writer=HUMAN_WRITER, source=source
         ),
     )
 
@@ -234,7 +241,11 @@ async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
 async def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
-    return await _write(state, scope, lambda root: state.runtime.skill_authoring.delete(root, name))
+    return await _write(
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.delete(root, name, writer=HUMAN_WRITER),
+    )
 
 
 async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
@@ -247,7 +258,9 @@ async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
     return await _write(
         state,
         scope,
-        lambda root: state.runtime.skill_authoring.write_file(root, name, path, content),
+        lambda root: state.runtime.skill_authoring.write_file(
+            root, name, path, content, writer=HUMAN_WRITER
+        ),
     )
 
 
@@ -256,7 +269,11 @@ async def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
     name = _required_string(params, "name")
     path = _required_string(params, "path")
     return await _write(
-        state, scope, lambda root: state.runtime.skill_authoring.remove_file(root, name, path)
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.remove_file(
+            root, name, path, writer=HUMAN_WRITER
+        ),
     )
 
 
