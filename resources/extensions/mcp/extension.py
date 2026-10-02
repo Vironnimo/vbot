@@ -234,11 +234,11 @@ class MCPService:
         about = self.connections.get(runner.id, runner.config).get("description")
         disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
         # A remote Tool is ready while its connection is up; naming one before
-        # tells the Agent why it cannot run and what to do.
+        # tells the Agent why it cannot run and what to do. A disconnected one
+        # can run again through the connection Tool, which reconnects.
+        enabled = bool(self.connections.get(runner.id, runner.config).get("enabled"))
         follower_hint = (
-            disabled
-            if not self.connections.get(runner.id, runner.config).get("enabled")
-            else MCP_MESSAGES["disconnected"].format(connection=runner.id)
+            MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else disabled
         )
         declarations = [
             {
@@ -266,6 +266,7 @@ class MCPService:
                     "handler": self._handler(runner.id, tool["name"], copy.deepcopy(parameters)),
                     "ready": lambda: runner.state == "connected",
                     "readiness_hint": follower_hint,
+                    "readiness_retryable": enabled,
                     "parallel_safe": False,
                     "open_input_schema": True,
                     "deferred": True,

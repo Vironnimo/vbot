@@ -153,6 +153,10 @@ class Tool:
     # like the description, never frontend i18n. ``None`` when the tool has no
     # readiness precondition to explain.
     readiness_hint: str | None = None
+    # Whether a not-ready Tool's failure is transient: ``tool_not_ready`` carries it
+    # as ``retryable``. True only when the hint names a retry that can succeed (an
+    # MCP remote Tool whose connection reconnects); a missing setup is not.
+    readiness_retryable: bool = False
     # The name of the extension that registered this tool, or ``None`` for a
     # built-in tool. Set at extension-tool apply time so ``tool.list`` can attribute
     # a tool to its owning extension.
