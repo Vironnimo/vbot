@@ -4,8 +4,10 @@ stream line framing and the debug capture of the exact wire exchange."""
 from __future__ import annotations
 
 import asyncio
+import gzip
 import json
 import logging
+import zlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -568,15 +570,29 @@ def _sse(content: str, headers: dict[str, str] | None = None) -> httpx.Response:
 
 @respx.mock
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content_encoding", "encode"),
+    [
+        (None, lambda body: body),
+        ("gzip", gzip.compress),
+        ("deflate, gzip", lambda body: gzip.compress(zlib.compress(body))),
+    ],
+)
 async def test_send_persists_one_redacted_trace_of_the_exact_wire_exchange(
-    debug_adapter: OpenAICompatibleAdapter, debug_store: DebugTraceStore
+    debug_adapter: OpenAICompatibleAdapter,
+    debug_store: DebugTraceStore,
+    content_encoding: str | None,
+    encode: Callable[[bytes], bytes],
 ) -> None:
     context = _debug_context(streaming=False)
+    encoding_header = {"Content-Encoding": content_encoding} if content_encoding else {}
     route = respx.post(_DEBUG_URL).mock(
         return_value=httpx.Response(
             200,
-            json=_COMPLETION,
+            content=encode(json.dumps(_COMPLETION).encode()),
             headers={
+                "Content-Type": "application/json",
+                **encoding_header,
                 "X-Request-Id": "req-001",
                 "X-Debug-Secret": "do-not-leak",
                 "X-Refresh-Token": "refresh-tkn-xxx",
@@ -587,9 +603,12 @@ async def test_send_persists_one_redacted_trace_of_the_exact_wire_exchange(
 
     debug_adapter.set_debug_context(context)
     try:
-        await debug_adapter.send(_MESSAGES, model_id="gpt-5.2")
+        result = await debug_adapter.send(_MESSAGES, model_id="gpt-5.2")
     finally:
         await debug_adapter.aclose()
+
+    # The Adapter still receives the body httpx decoded from the wire.
+    assert result == _COMPLETION
 
     [trace] = _traces(debug_store)
     wire_body = route.calls.last.request.content.decode("utf-8")
@@ -612,7 +631,9 @@ async def test_send_persists_one_redacted_trace_of_the_exact_wire_exchange(
     assert request["headers"]["x-custom-header"] == "test-value"
     response = trace["response"]
     assert response["status_code"] == 200
+    # The body is recorded with its Content-Encoding undone; the header stays.
     assert json.loads(response["body"]) == _COMPLETION
+    assert response["headers"].get("content-encoding") == content_encoding
     assert {name: response["headers"][name] for name in ("x-request-id", "x-debug-secret")} == {
         "x-request-id": "req-001",
         "x-debug-secret": _REDACTED,

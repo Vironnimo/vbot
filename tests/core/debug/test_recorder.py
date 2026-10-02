@@ -87,6 +87,19 @@ class TestFullCycle:
         assert "stream" not in trace
         assert isinstance(trace["duration_ms"], int)
 
+    @pytest.mark.parametrize("content_encoding", ["gzip", "x-unsupported"])
+    def test_undecodable_content_encoding_keeps_the_received_body(
+        self, recorder, store, content_encoding
+    ):
+        capture = recorder.begin_capture(
+            method="POST", url="https://api.example.com/v1/chat", headers={}, body=None
+        )
+        capture.record_response_head(502, {"Content-Encoding": content_encoding})
+        capture.feed_body(b"upstream failed")
+        capture.finalize()
+
+        assert _latest_trace(store)["response"]["body"] == "upstream failed"
+
 
 class TestRedaction:
     def test_headers_and_url_are_redacted_but_bodies_are_stored_raw(self, recorder, store):
