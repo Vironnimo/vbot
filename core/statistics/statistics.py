@@ -415,7 +415,7 @@ class StatisticsService:
                     )
                 ),
             )
-            for agent in self._agents.list()
+            for agent in self._agents.list_with_builtins()
         ]
         for project_id, agent_id in self._project_scopes():
             scopes.append(

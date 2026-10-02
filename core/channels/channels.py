@@ -995,10 +995,15 @@ class ChannelService:
         self._create_adapter(config)
 
     def _validate_agent_exists(self, agent_id: str) -> None:
+        """Require one of the user's Agents; a built-in Agent never serves a Channel."""
         try:
-            self._agent_store.get(agent_id)
+            agent = self._agent_store.get(agent_id)
         except Exception as error:
             raise ChannelConfigError(f"Unknown agent_id: {agent_id}") from error
+        if agent.builtin is not None:
+            raise ChannelConfigError(
+                f"agent_id {agent_id} is vBot's built-in {agent.name}; choose one of your Agents"
+            )
 
     def _persist_created_channel(self, config: ChannelConfig) -> None:
         """Write ``channel.json``, then register the Channel with empty state; all or nothing.

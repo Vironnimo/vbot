@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
@@ -17,6 +17,20 @@ from core.tools.availability import (
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 # Librarian passes curate an Agent's own Skills unless its switch is off.
 DEFAULT_LIBRARIAN_ENABLED = True
+
+# The built-in Agents vBot creates itself. ``agent.json`` marks one with
+# ``builtin``; the mark is valid only on its reserved id.
+BuiltinAgent = Literal["librarian"]
+LIBRARIAN_BUILTIN: BuiltinAgent = "librarian"
+BUILTIN_AGENTS: frozenset[str] = frozenset({LIBRARIAN_BUILTIN})
+# The Librarian curates other Agents' Skills in Sessions of its own.
+LIBRARIAN_AGENT_ID = "librarian"
+LIBRARIAN_AGENT_NAME = "Librarian"
+# The Librarian's whole Tool set; nothing widens it.
+LIBRARIAN_TOOLS = ("skill", "skill_manage")
+# Why the Librarian is unavailable: no Agent has its id yet, a user's Agent (or
+# an unfinished rename) holds the id, or its ``agent.json`` cannot be loaded.
+LibrarianProblem = Literal["missing", "agent_id_taken", "invalid_config"]
 
 
 class AgentError(ValueError):
@@ -49,6 +63,10 @@ class AgentReferencedError(AgentError):
 
 class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
+
+
+class BuiltinAgentError(AgentError):
+    """Raised when an operation would rename, delete or reconfigure a built-in Agent."""
 
 
 class InvalidAgentOrderError(AgentError):
@@ -90,6 +108,14 @@ class Agent:
     # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
     # still switches scheduled passes off for every Agent.
     librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED
+    # Which built-in Agent this is, ``None`` for an Agent of the user. A built-in
+    # Agent is left out of the roster and keeps fixed capabilities.
+    builtin: BuiltinAgent | None = None
+
+
+def is_librarian(agent: object) -> bool:
+    """Whether ``agent`` (any resolved Agent) is the built-in Librarian."""
+    return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN
 
 
 @dataclass(frozen=True)

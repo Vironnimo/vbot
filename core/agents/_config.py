@@ -10,8 +10,12 @@ from pathlib import Path
 from typing import Any, cast
 
 from core.agents._types import (
+    BUILTIN_AGENTS,
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     DEFAULT_LIBRARIAN_ENABLED,
+    LIBRARIAN_AGENT_ID,
+    LIBRARIAN_BUILTIN,
+    LIBRARIAN_TOOLS,
     Agent,
     AgentError,
     AgentRename,
@@ -52,6 +56,7 @@ from core.json_documents import (
 )
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
+    MEMORY_PROMPT_MODE_OFF,
     MEMORY_PROMPT_MODES,
     MemoryPromptMode,
     validate_memory_prompt_mode,
@@ -75,6 +80,7 @@ from core.tools.availability import (
     BASH_ALLOWED_ENV_KEY,
     BASH_TOOL_SETTINGS_KEY,
     TOOL_ACCESS_FIELDS,
+    TOOL_ACCESS_MODE_SELECTED,
     ToolAccess,
     normalize_env_keys,
     normalize_tool_access,
@@ -98,9 +104,17 @@ _EXCLUDED_SKILLS_WILDCARD_ERROR = (
     'excluded_skills cannot contain "*"; set allowed_skills to [] to allow no Skills'
 )
 
+# What a built-in Agent keeps whatever its ``agent.json`` says: the Librarian
+# can only load and maintain Skills, and has no Memory, Project, custom System
+# Prompt or Librarian passes of its own.
+_LIBRARIAN_TOOL_ACCESS = ToolAccess(
+    mode=TOOL_ACCESS_MODE_SELECTED, allowed=LIBRARIAN_TOOLS, fixed=True
+)
+
 _AGENT_CONFIG_FIELDS = frozenset(
     {
         "allowed_skills",
+        "builtin",
         "compaction_policy",
         "created_at",
         "current_session_id",
@@ -307,6 +321,14 @@ def validate_agent_data(data: Any) -> list[JsonDiagnostic]:
         data["librarian_enabled"], bool
     ):
         add_error(diagnostics, "$.librarian_enabled", "must be a boolean")
+    builtin = data.get("builtin")
+    if builtin is not None:
+        if builtin not in BUILTIN_AGENTS:
+            add_error(diagnostics, "$.builtin", f"must be null or one of: {sorted(BUILTIN_AGENTS)}")
+        elif builtin == LIBRARIAN_BUILTIN and data.get("id") != LIBRARIAN_AGENT_ID:
+            add_error(
+                diagnostics, "$.builtin", f"is valid only for the Agent id {LIBRARIAN_AGENT_ID}"
+            )
     validate_optional_compaction_policy(
         diagnostics, data.get("compaction_policy"), "$.compaction_policy"
     )
@@ -573,7 +595,7 @@ def _agent_from_dict(
     temperature = data.get("temperature")
     memory_prompt_mode = data.get("memory_prompt_mode")
     librarian_enabled = data.get("librarian_enabled")
-    return Agent(
+    agent = Agent(
         id=agent_id,
         name=data.get("name") or agent_id,
         model=data.get("model") or "",
@@ -609,6 +631,23 @@ def _agent_from_dict(
         current_session_id=data.get("current_session_id") or "",
         created_at=data.get("created_at") or timestamp_default,
         updated_at=data.get("updated_at") or timestamp_default,
+        builtin=data.get("builtin"),
+    )
+    return _with_builtin_capabilities(agent)
+
+
+def _with_builtin_capabilities(agent: Agent) -> Agent:
+    """Return ``agent`` with the fixed capabilities of a built-in Agent; others unchanged."""
+    if agent.builtin != LIBRARIAN_BUILTIN:
+        return agent
+    return replace(
+        agent,
+        tool_access=_LIBRARIAN_TOOL_ACCESS,
+        memory_prompt_mode=MEMORY_PROMPT_MODE_OFF,
+        custom_system_prompt_enabled=False,
+        librarian_enabled=False,
+        root_project_id=None,
+        tools={},
     )
 
 
@@ -620,6 +659,8 @@ def _agent_document(agent: Agent, *, workspace: str) -> JsonObject:
         persisted.pop("tools")
     if not persisted["excluded_skills"]:
         persisted.pop("excluded_skills")
+    if persisted["builtin"] is None:
+        persisted.pop("builtin")
     persisted["workspace"] = workspace
     return persisted
 
@@ -701,8 +742,13 @@ def _validate_new_agent_id(agent_id: str) -> None:
     """Validate an id a user picks for a new or renamed Agent.
 
     The id names the Agent's directory, so a name Windows reserves is refused on
-    every platform; existing Agents keep their ids.
+    every platform, and so is the built-in Librarian's id in any case; existing
+    Agents keep their ids.
     """
     _validate_agent_id(agent_id)
     if is_reserved_name(agent_id):
         raise InvalidAgentIdError(reserved_name_message("Agent id", agent_id))
+    if agent_id.casefold() == LIBRARIAN_AGENT_ID:
+        raise InvalidAgentIdError(
+            f"Agent id {agent_id} is reserved for vBot's built-in Librarian; choose another id"
+        )

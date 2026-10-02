@@ -243,7 +243,7 @@ def test_statistics_warmup_reconciles_the_index_at_startup(tmp_path: Path) -> No
         chat_sessions=ChatSessionManager(tmp_path),
         statistics_index=StatisticsIndex(tmp_path),
         usage_recorder=None,
-        agents=SimpleNamespace(list=lambda: []),
+        agents=SimpleNamespace(list_with_builtins=lambda: []),
         models=SimpleNamespace(pricing_for=lambda _: None),
         projects=SimpleNamespace(list=lambda: [], session_owning_agents=lambda _project_id: []),
     )

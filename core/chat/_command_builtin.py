@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from core.agents import is_librarian
 from core.chat.commands import (
     _COMMAND_WORKERS,
     _LOGGER,
@@ -52,6 +53,12 @@ SUBAGENT_SESSION_METADATA_FLAG = "is_subagent_session"
 SUBAGENT_PARENT_METADATA_KEY = "subagent_parent"
 
 AGENT_TAKEOVER_NOTE = "This session was just moved to you from {source}."
+
+LIBRARIAN_HANDOFF_REFUSAL = "Cannot handoff to vBot's built-in Librarian."
+
+LIBRARIAN_MOVE_REFUSAL = (
+    "vBot's built-in Librarian keeps its own Sessions: none can move to it or away from it."
+)
 
 
 def _session_change(
@@ -140,13 +147,15 @@ async def _execute_handoff(
 
     if (target_agent_id, target_project_id) != (context.agent_id, context.project_id):
         try:
-            await _COMMAND_WORKERS.run(
+            target = await _COMMAND_WORKERS.run(
                 resolver.resolve_agent,
                 target_project_id,
                 target_agent_id,
             )
         except AgentResolutionError:
             return _notice("handoff", f"Cannot handoff to unknown agent: {target_display}")
+        if is_librarian(target):
+            return _notice("handoff", LIBRARIAN_HANDOFF_REFUSAL)
 
     handoff_prompt = await _COMMAND_WORKERS.run(
         storage.read_prompt_fragment,
@@ -377,13 +386,20 @@ async def _execute_agent(
     if chat_runs.list_queued(context.agent_id, context.session_id, project_id=context.project_id):
         return _notice("agent", "This session can be moved once its queued run finishes.")
     try:
-        await _COMMAND_WORKERS.run(
+        target = await _COMMAND_WORKERS.run(
             resolver.resolve_agent,
             target_project_id,
             target_agent_id,
         )
     except AgentResolutionError:
         return _notice("agent", f"Cannot move to unknown agent: {target_display}")
+    source = (
+        await _COMMAND_WORKERS.run(agents.find, context.agent_id)
+        if context.project_id is None
+        else None
+    )
+    if is_librarian(target) or is_librarian(source):
+        return _notice("agent", LIBRARIAN_MOVE_REFUSAL)
 
     source_address = SessionAddress(
         project_id=context.project_id, agent_id=context.agent_id, session_id=context.session_id

@@ -477,10 +477,12 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )
-        # Creating the bootstrap Agent enters the snapshot barrier on the calling thread,
-        # the Event Loop in the server lifespan. It never waits there: no request, and so
-        # no data snapshot, is served before startup completes.
+        # Creating the bootstrap Agent and the built-in Librarian enters the snapshot
+        # barrier on the calling thread, the Event Loop in the server lifespan. It never
+        # waits there: no request, and so no data snapshot, is served before startup
+        # completes.
         runtime._agents.ensure_bootstrap()
+        runtime._agents.ensure_librarian()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
             sessions=runtime._chat_sessions,

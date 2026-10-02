@@ -546,6 +546,23 @@ async def test_run_end_accounting_follows_the_review_cadence(
             None,
             id="skill-unavailable",
         ),
+        # The built-in Librarian can call skill and skill_manage but is never reviewed.
+        pytest.param(
+            SimpleNamespace(
+                **{
+                    **vars(_without(memory=True)),
+                    "id": "librarian",
+                    "builtin": "librarian",
+                    "tool_access": ToolAccess(mode="selected", allowed=("skill", "skill_manage")),
+                }
+            ),
+            (1, 1),
+            (1, 5),
+            {"iteration_count": 3, "tool_call_names": {"skill_manage"}},
+            (1, 5),
+            None,
+            id="librarian",
+        ),
     ],
 )
 async def test_unavailable_dimension_is_neither_counted_nor_reviewed(

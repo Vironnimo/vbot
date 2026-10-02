@@ -2,6 +2,9 @@
 
 from core.agents._config import AGENT_FORMAT_VERSION
 from core.agents.agents import (
+    LIBRARIAN_AGENT_ID,
+    LIBRARIAN_AGENT_NAME,
+    LIBRARIAN_TOOLS,
     WORKSPACE_IDENTITY_FILES,
     Agent,
     AgentAlreadyExistsError,
@@ -16,9 +19,12 @@ from core.agents.agents import (
     AgentUpdateResult,
     ArchivedAgent,
     ArchivedAgentPayload,
+    BuiltinAgentError,
     InvalidAgentIdError,
     InvalidAgentOrderError,
+    LibrarianProblem,
     default_workspace_dir,
+    is_librarian,
     load_validated_agent_json,
     validate_agent_data,
     validate_agent_file,
@@ -31,6 +37,9 @@ from core.agents.temporary import TemporaryAgent, TemporaryAgentConfig, Temporar
 
 __all__ = [
     "AGENT_FORMAT_VERSION",
+    "LIBRARIAN_AGENT_ID",
+    "LIBRARIAN_AGENT_NAME",
+    "LIBRARIAN_TOOLS",
     "WORKSPACE_IDENTITY_FILES",
     "Agent",
     "AgentAlreadyExistsError",
@@ -45,9 +54,12 @@ __all__ = [
     "AgentUpdateResult",
     "ArchivedAgent",
     "ArchivedAgentPayload",
+    "BuiltinAgentError",
     "InvalidAgentIdError",
     "InvalidAgentOrderError",
+    "LibrarianProblem",
     "default_workspace_dir",
+    "is_librarian",
     "load_validated_agent_json",
     "validate_agent_data",
     "validate_agent_file",

@@ -19,7 +19,9 @@ The reflection service owns two halves of one capability:
 Both halves follow the Agent's effective Tool access: the memory dimension needs
 a callable ``memory``, the skill dimension callable ``skill`` and
 ``skill_manage``. An unavailable dimension is neither counted nor reviewed, and
-a requested scope narrows to the dimensions that remain.
+a requested scope narrows to the dimensions that remain. The built-in Librarian
+has no dimension: its Sessions maintain other Agents' Skills and are never
+reviewed.
 
 The chat loop notifies this service at run end through the small
 ``ReflectionNotifier`` protocol it owns; everything with I/O happens in a
@@ -35,6 +37,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from core.agents import is_librarian
 from core.chat.content_blocks import ContentBlock, TextBlock
 from core.prompts.briefs import REVIEW_TOOL_CALL_LIMIT, ReflectionScope, reflection_brief
 from core.runs import RunKind
@@ -531,10 +534,11 @@ def callable_review_dimensions(agent: Any, tools: Sequence[Any]) -> tuple[bool, 
     """Whether ``agent`` can call every Tool of the memory and of the skill dimension.
 
     ``agent`` is the effective Agent, so Project ceilings and Tool Access Policy
-    denials apply; ``tools`` are the registered Tools. The skill dimension is
-    also what a Librarian pass needs. Resolves policy in memory, so it is safe on
-    the Event Loop.
+    denials apply; ``tools`` are the registered Tools. The built-in Librarian has
+    neither. Resolves policy in memory, so it is safe on the Event Loop.
     """
+    if is_librarian(agent):
+        return False, False
     callable_tools = set(
         resolve_tool_access(
             agent.tool_access,

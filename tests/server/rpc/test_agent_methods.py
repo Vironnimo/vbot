@@ -5,6 +5,7 @@ Rename and delete live in ``test_agent_methods_lifecycle.py``.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -219,6 +220,39 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
     assert result["model"] == "openai/gpt-5.2"
     assert result["effective"]["model"] == {"value": "openai/gpt-5.2", "source": source}
     assert result["effective"]["temperature"] == {"value": None, "source": None}
+
+
+@pytest.mark.asyncio
+async def test_the_builtin_librarian_is_hidden_and_only_its_model_settings_change(
+    tmp_path: Path,
+) -> None:
+    state = _real_agent_state(tmp_path, {})
+    # Agent mutations take the reference lock and announce the change.
+    state.agent_delete_lock = asyncio.Lock()
+    state.event_bus = SimpleNamespace(publish=lambda _event, _payload: None)
+    state.runtime.agents.create("coder", "Coder")
+    state.runtime.agents.ensure_librarian()
+
+    listed = (await rpc_result(state, "agent.list"))["agents"]
+    updated = await rpc_result(
+        state, "agent.update", id="librarian", thinking_effort="high", temperature=0.3
+    )
+    refusals = [
+        await rpc_error(state, "agent.update", id="librarian", name="Curator"),
+        await rpc_error(state, "agent.create", id="librarian"),
+    ]
+
+    assert [agent["id"] for agent in listed] == ["coder"]
+    assert listed[0]["builtin"] is None
+    assert (updated["builtin"], updated["thinking_effort"], updated["temperature"]) == (
+        "librarian",
+        "high",
+        0.3,
+    )
+    assert updated["tool_access"] == {"mode": "selected", "allowed": ["skill", "skill_manage"]}
+    assert [error["code"] for error in refusals] == ["domain_error"] * 2
+    assert "built into vBot" in refusals[0]["message"]
+    assert "reserved" in refusals[1]["message"]
 
 
 @pytest.mark.asyncio
