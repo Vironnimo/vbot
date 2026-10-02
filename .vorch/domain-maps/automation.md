@@ -71,16 +71,34 @@ low-value material needs no write. A missing write capability never changes the
 candidate's destination. Candidates are checked against current Tool reads rather
 than inherited prompt snapshots; Skill maintenance replaces obsolete guidance in
 the affected passage. These are Model instructions, not semantic runtime guards.
-`tests/core/automation/test_reflection.py` checks brief delivery and dispatch scope;
-`scripts/probe_provider_tool_call.py --scenario reflection_workflow` evaluates
-decisions against `tests/fixtures/reflection/cases.json` with production guidance,
-definitions, and disposable Memory/Skill handlers. Expected outcomes stay outside
-the Model context; the probe checks stored effects and read-before-write behavior.
+`tests/core/automation/test_reflection.py` checks brief delivery and dispatch scope.
 
 - **Shared review orchestration:** requires an Identity Agent with active `memory` Tool; reads only the source title (`metadata_value_async`) off the Event Loop, then forks same-Agent (always-strip keys applied, pinned Skill catalog kept) with the Agent-display-name title and the scope-specific Run kind committed in the fork's one write transaction, and starts an internal Run in the fork whose admission carries the source Session id. Scope selects brief + dispatch boundary: `memory` -> reflect-memory brief with only `memory`; `skill` -> skill brief with `skill`+`skill_manage`; `combined` -> combined brief with all three. No Run-local Tool grant - fork keeps source definitions and prompt unchanged; each brief states all other Tools are disabled. The review is a real Run (admission, cancellation, viewing, history, traces) but produces no attention status; the source Session is untouched; `/reflect` rejects before forking when Memory is inactive.
 - **Cadence trigger** fires non-blocking at every Run end, and its Settings read and counter write run on the bounded `reflection` worker pool, never on the Event Loop: internal Runs, empty workspaces, inactive memory Tools, and Sub-Agent Sessions never count. Each completed visible Run (and each user-cancelled one with >=1 completed Model step) increments counters in canonical Session metadata; a dispatched memory call resets the Memory counter even if the Run later fails; iteration counting uses Chat's canonical count, never derived from messages. Settings read live per boundary; at interval one scoped review fires (both due -> combined). Counts consume only on successful completion - failed reviews stay due; one review at a time per Agent; due Sessions during a review keep counters for next end. The review being internal never re-triggers accounting; forks strip counters and restart at zero. A background review logs one INFO outcome line (Agent, source Session, fork, scope, reviewed turns and iterations) or a WARNING on failure; its closing summary is Model output and never enters the log (`test_reflection.py`).
 - `reset_counters` zeroes and advances generation (manual `/reflect` covers both dimensions). Cadence resets from `memory` or `skill_manage` also advance that generation, so an older in-flight review cannot consume activity counted after a reset. `aclose()` rejects later notifications and clears per-Agent guards.
 - Attribution: the server event bridge stamps the review Run's `source_session_id` onto its payloads (`server/events-and-reconnect.md`); background forks appear in the drawer on next load; manual reviews report via the command change observer projected to `resource_changed(sessions)`. Automation and Chat never import the server event bus.
+
+The learning evaluation (`scripts/probe_provider_tool_call.py --scenario
+reflection_workflow`, cases in `tests/fixtures/reflection/cases.json`) runs reviews
+and `/learn` against a real Model in a disposable vBot through production prompt
+rendering and dispatch, repeats every attempt, scores stored effects and Tool use in
+code, and swaps learning texts through text packs. It builds briefs through
+`brief_text` in `scripts/provider_probe/learning_texts.py`: a change to review or
+`/learn` brief assembly updates that seam in the same change, or evaluations measure
+stale briefs.
+
+```
+# export the current texts as a pack (edit a copy for a candidate arm)
+python -m scripts.provider_probe.learning_eval export-pack ~/.cache/vbot-evals/learning/packs/<name>
+# run one arm; omit --text-pack for the checkout's texts
+python scripts/probe_provider_tool_call.py --scenario reflection_workflow --repetitions 3 \
+  --text-pack <pack> --reflection-report ~/.cache/vbot-evals/learning/reports/<arm>.json
+# compare two arms with equal attempt counts per (case, scope)
+python -m scripts.provider_probe.learning_eval compare <a>.json <b>.json
+```
+
+`--reflection-case` and `--reflection-scope` narrow the matrix; every attempt is a
+Provider request loop.
 
 ## Constraints & Gotchas
 
@@ -98,3 +116,4 @@ the Model context; the probe checks stored effects and read-before-write behavio
 Read these only when your task matches - not by default.
 
 - Choosing how background producers inform the Model (persisted notes vs internal triggers) -> `model-communication.md`
+- Running, extending or interpreting the learning evaluation of reviews and `/learn` (fixture fidelity and deviations, case schema, scoring, text packs, reports, compare) -> `automation/learning-evaluation.md`
