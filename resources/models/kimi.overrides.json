@@ -4,9 +4,15 @@
     "k3": {
       "canonical": "moonshotai/kimi-k3",
       "name": "Kimi K3",
-      "connections": ["coding-plan"],
+      "connections": [
+        "coding-plan"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -15,15 +21,37 @@
           "response_format",
           "thinking",
           "tools"
-        ]
-      }
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      },
+      "context_window": 1048576,
+      "max_output_tokens": 131072
     },
     "k3-256k": {
       "canonical": "moonshotai/kimi-k3",
       "name": "Kimi K3 256K",
-      "connections": ["coding-plan"],
+      "connections": [
+        "coding-plan"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image"],
+        "input_modalities": [
+          "text",
+          "image"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -32,7 +60,22 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
       },
       "context_window": 262144,
       "max_output_tokens": 131072
@@ -40,9 +83,15 @@
     "kimi-for-coding": {
       "canonical": "moonshotai/kimi-k2.7-code",
       "name": "Kimi K2.7 Code",
-      "connections": ["coding-plan"],
+      "connections": [
+        "coding-plan"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -50,16 +99,32 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true
+        }
       },
-      "max_output_tokens": 32768
+      "max_output_tokens": 32768,
+      "context_window": 262144
     },
     "kimi-for-coding-highspeed": {
       "canonical": "moonshotai/kimi-k2.7-code-highspeed",
       "name": "Kimi K2.7 Code HighSpeed",
-      "connections": ["coding-plan"],
+      "connections": [
+        "coding-plan"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -67,15 +132,32 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true
+        }
       },
-      "max_output_tokens": 32768
+      "max_output_tokens": 32768,
+      "context_window": 262144
     },
     "kimi-k3": {
       "canonical": "moonshotai/kimi-k3",
-      "connections": ["api-key", "api-key-cn"],
+      "connections": [
+        "api-key",
+        "api-key-cn"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -84,14 +166,39 @@
           "response_format",
           "thinking",
           "tools"
-        ]
-      }
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true,
+          "control": "levels",
+          "levels": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      },
+      "name": "Kimi K3",
+      "context_window": 1048576,
+      "max_output_tokens": 131072
     },
     "kimi-k2.7-code": {
       "canonical": "moonshotai/kimi-k2.7-code",
-      "connections": ["api-key", "api-key-cn"],
+      "connections": [
+        "api-key",
+        "api-key-cn"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -99,15 +206,33 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true
+        }
       },
-      "max_output_tokens": 32768
+      "max_output_tokens": 32768,
+      "name": "Kimi K2.7 Code",
+      "context_window": 262144
     },
     "kimi-k2.7-code-highspeed": {
       "canonical": "moonshotai/kimi-k2.7-code-highspeed",
-      "connections": ["api-key", "api-key-cn"],
+      "connections": [
+        "api-key",
+        "api-key-cn"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -115,15 +240,33 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true
+        }
       },
-      "max_output_tokens": 32768
+      "max_output_tokens": 32768,
+      "name": "Kimi K2.7 Code HighSpeed",
+      "context_window": 262144
     },
     "kimi-k2.6": {
       "canonical": "moonshotai/kimi-k2.6",
-      "connections": ["api-key", "api-key-cn"],
+      "connections": [
+        "api-key",
+        "api-key-cn"
+      ],
       "capabilities": {
-        "input_modalities": ["text", "image", "video"],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
         "supported_parameters": [
           "max_completion_tokens",
           "parallel_tool_calls",
@@ -131,9 +274,21 @@
           "response_format",
           "thinking",
           "tools"
-        ]
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "json_mode": true,
+        "vision": true,
+        "reasoning": {
+          "supported": true,
+          "control": "on_off"
+        }
       },
-      "max_output_tokens": 32768
+      "max_output_tokens": 32768,
+      "name": "Kimi K2.6",
+      "context_window": 262144
     }
   }
 }

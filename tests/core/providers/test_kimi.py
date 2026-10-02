@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import respx
 
-from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
@@ -45,14 +46,10 @@ CONFIG = ProviderConfig(
 )
 
 
-def _model(model_id: str) -> Model:
-    return KimiAdapter.normalize_catalog_entry(
-        {"id": model_id, "supports_reasoning": True}, {"max_tokens": 32768}
-    )
-
-
+# The bundled Model DB records: Kimi's per-Model facts live in its override file.
+_REGISTRY = ModelRegistry.load(Path(__file__).resolve().parents[3] / "resources")
 MODELS = {
-    model_id: _model(model_id)
+    model_id: _REGISTRY.get("kimi", model_id)
     for model_id in ("kimi-k3", "kimi-k2.6", "kimi-k2.7-code", "k3", "kimi-for-coding")
 }
 MODELS["plain-model"] = Model(
@@ -279,22 +276,7 @@ def test_request_body_limit_follows_the_connection(connection: str, limit: int) 
     assert _adapter(connection).request_body_limit("kimi-k3") == limit
 
 
-def test_catalog_normalization_applies_current_kimi_facts() -> None:
-    k3 = KimiAdapter.normalize_catalog_entry({"id": "k3"})
-    k3_256k = KimiAdapter.normalize_catalog_entry({"id": "k3-256k"})
-    k2 = KimiAdapter.normalize_catalog_entry({"id": "kimi-k2.6"})
-
-    assert k3.context_window == 1048576
-    assert k3.max_output_tokens == 131072
-    assert k3.capabilities.input_modalities == ("text", "image", "video")
-    assert k3.capabilities.reasoning.levels == ("low", "high", "max")
-    assert k3_256k.context_window == 262144
-    assert k3_256k.capabilities.input_modalities == ("text", "image")
-    assert k2.capabilities.reasoning.control == "on_off"
-    assert k2.max_output_tokens == 32768
-
-
-def test_unknown_catalog_entry_preserves_discovered_media_and_reasoning_flags() -> None:
+def test_catalog_entry_preserves_discovered_media_and_reasoning_flags() -> None:
     model = KimiAdapter.normalize_catalog_entry(
         {
             "id": "future-kimi",
