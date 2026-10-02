@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import faulthandler
 import gc
 import logging
 import os
 import signal
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from time import perf_counter
 from types import FrameType
@@ -17,7 +19,7 @@ from typing import Any, Literal
 
 import psutil  # type: ignore[import-untyped]
 
-from core.storage.layout import initialize_data_directory
+from core.storage.layout import DataDirectoryLayout, initialize_data_directory
 from core.utils.config import (
     DEFAULT_HOST,
     DEFAULT_PORT,
@@ -55,6 +57,11 @@ __all__ = [
 _LOGGER = get_logger("server")
 # The directory holding this code: `app` inside an installed version of a packaged build.
 _APP_ROOT = Path(__file__).resolve().parents[1]
+# Fatal errors (a native crash, a fatal interpreter error) bypass logging; the
+# fault handler writes them to this file in the log directory instead.
+CRASH_LOG_NAME = "server-crash.log"
+# Checked at each start: a larger crash log moves to its single previous generation.
+_CRASH_LOG_ROTATE_BYTES = 1024 * 1024
 
 _UVICORN_IMPORT_ERROR: ModuleNotFoundError | None
 
@@ -177,6 +184,7 @@ def main(argv: list[str] | None = None) -> None:
             log_manager = LogManager(
                 level=config.get("LOG_LEVEL", "INFO"), data_dir=config.data_dir
             )
+            _enable_crash_log(config.data_dir)
             server = uvicorn.Server(uvicorn_config)
             uvicorn_handle_exit = server.handle_exit
 
@@ -322,6 +330,38 @@ def _format_duration(seconds: float) -> str:
     if minutes:
         return f"{minutes}m{secs:02d}s"
     return f"{secs}s"
+
+
+def _enable_crash_log(data_dir: Path) -> None:
+    """Record this process's fatal errors in the crash log of its log directory.
+
+    Each start appends one line in the daily log format, so a crashed process's
+    dump (every thread's Python stack, and the C stack where the platform
+    provides one) follows the line of its own start, and the Logs view shows it
+    as that line's continuation. The fault handler keeps the file object
+    referenced, so it stays open until the interpreter has finalized; native
+    libraries still crash there.
+    """
+    path = DataDirectoryLayout(data_dir).logs / CRASH_LOG_NAME
+    started = time.strftime("%Y-%m-%d %H:%M:%S")
+    header = f"{started} [INFO] vbot.server - Server process started (pid={os.getpid()})\n"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # A missing file needs nothing; a file another server process holds open
+        # cannot move and keeps growing until a later start.
+        with suppress(OSError):
+            if path.stat().st_size > _CRASH_LOG_ROTATE_BYTES:
+                os.replace(path, path.with_name(f"{path.name}.1"))
+        crash_log = path.open("ab", buffering=0)
+        try:
+            crash_log.write(header.encode("utf-8"))
+        except OSError:
+            crash_log.close()
+            raise
+    except OSError as exc:
+        _LOGGER.warning("Opening the crash log failed (path=%s error=%s)", path, exc)
+        return
+    faulthandler.enable(file=crash_log, all_threads=True, c_stack=True)
 
 
 # A thread that computes holds the GIL until the waiting Event Loop asks for it,

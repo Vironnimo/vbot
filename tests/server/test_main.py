@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import signal
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 import uvicorn.server
 
 from core.database import DataStoreMarker, read_marker
+from core.utils.log_viewer import LOG_LINE_PATTERN
 from core.utils.logging import resolve_daily_log_path
 from core.utils.server_control import SHUTDOWN_FAILED_EXIT_CODE, STARTUP_FAILED_EXIT_CODE
 from core.utils.version import BuildIdentity
@@ -80,7 +82,13 @@ def _patch_serving(
     monkeypatch.setattr(server_main.gc, "collect", lambda: None)
     monkeypatch.setattr(server_main.gc, "freeze", lambda: None)
     monkeypatch.setattr(server_main.sys, "setswitchinterval", lambda _interval: None)
+    # The real fault handler would take over the test process's own.
+    monkeypatch.setattr(server_main, "faulthandler", SimpleNamespace(enable=_close_crash_log))
     return calls
+
+
+def _close_crash_log(*, file: Any, **_options: Any) -> None:
+    file.close()
 
 
 def test_parse_args_accepts_data_dir_port_and_one_safe_startup_mode() -> None:
@@ -270,3 +278,63 @@ def test_main_logs_one_start_line_and_one_stop_line_with_its_reason(
     assert len(stopped) == 1
     assert stop_fields in stopped[0]
     assert " uptime=" in stopped[0]
+
+
+@pytest.mark.parametrize("oversized", [False, True])
+def test_main_records_fatal_errors_in_a_crash_log_kept_across_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, oversized: bool
+) -> None:
+    _patch_serving(monkeypatch, _serve_until("control"))
+    enabled: list[dict[str, Any]] = []
+
+    def enable(*, file: Any, **options: Any) -> None:
+        enabled.append({"path": Path(file.name).resolve(), **options})
+        _close_crash_log(file=file)
+
+    monkeypatch.setattr(server_main, "faulthandler", SimpleNamespace(enable=enable))
+    monkeypatch.setattr(server_main, "_CRASH_LOG_ROTATE_BYTES", 64)
+    crash_log = tmp_path / "data" / "logs" / server_main.CRASH_LOG_NAME
+    crash_log.parent.mkdir(parents=True)
+    previous = b"Fatal Python error: Segmentation fault\n" * (2 if oversized else 1)
+    crash_log.write_bytes(previous)
+
+    main(["--data-dir", str(tmp_path / "data"), "--port", "8765"])
+
+    # Every thread's Python stack, plus the C stack where the platform provides one.
+    assert enabled == [{"path": crash_log.resolve(), "all_threads": True, "c_stack": True}]
+    if oversized:
+        # A start keeps one previous generation of an oversized crash log.
+        assert crash_log.with_name(f"{crash_log.name}.1").read_bytes() == previous
+        started = crash_log.read_text(encoding="utf-8")
+    else:
+        # A start after a crash keeps what the crashed process wrote.
+        content = crash_log.read_bytes()
+        assert content.startswith(previous)
+        started = content.removeprefix(previous).decode("utf-8")
+    # One line per start in the log format names the process whose dump follows it.
+    header = LOG_LINE_PATTERN.match(started.removesuffix("\n"))
+    assert header is not None and started.count("\n") == 1
+    assert f"pid={os.getpid()}" in header["message"]
+
+
+def test_main_starts_without_a_crash_log_it_cannot_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_serving(monkeypatch, _serve_until("control"))
+    enabled: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        server_main,
+        "faulthandler",
+        SimpleNamespace(enable=lambda **options: enabled.append(options)),
+    )
+    data_dir = tmp_path / "data"
+    (data_dir / "logs" / server_main.CRASH_LOG_NAME).mkdir(parents=True)
+
+    main(["--data-dir", str(data_dir), "--port", "8765"])
+
+    assert enabled == []
+    lines = resolve_daily_log_path(data_dir).read_text(encoding="utf-8").splitlines()
+    assert any(
+        "[WARN] vbot.server - " in line and server_main.CRASH_LOG_NAME in line for line in lines
+    )
+    assert any(" - Server started (" in line for line in lines)

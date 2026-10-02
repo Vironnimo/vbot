@@ -167,12 +167,21 @@ async def test_list_files_returns_newest_first_with_default_selection(tmp_path: 
     (logs_dir / "2026-05-09").write_text("", encoding="utf-8")
     (logs_dir / "2026-05-11").write_text("", encoding="utf-8")
     (logs_dir / "2026-05-10").write_text("", encoding="utf-8")
+    (logs_dir / "server-crash.log").write_text("", encoding="utf-8")
+    (logs_dir / "server-crash.log.1").write_text("", encoding="utf-8")
     (logs_dir / "subdir").mkdir()
 
     viewer = LogViewer(tmp_path)
 
+    # Other files, such as the crash log, follow the daily files and are never the default.
     assert await viewer.list_files() == {
-        "files": ["2026-05-11", "2026-05-10", "2026-05-09"],
+        "files": [
+            "2026-05-11",
+            "2026-05-10",
+            "2026-05-09",
+            "server-crash.log",
+            "server-crash.log.1",
+        ],
         "default_file": "2026-05-11",
     }
 

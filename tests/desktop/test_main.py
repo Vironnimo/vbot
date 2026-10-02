@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import os
 import re
 import subprocess
 import sys
@@ -390,6 +391,7 @@ def test_main_reports_a_normal_shutdown_only_after_its_own_window(
 
     monkeypatch.setattr(desktop_main, "configure_desktop_logging", lambda: None)
     monkeypatch.setattr(desktop_main, "close_desktop_logging", lambda _handler: None)
+    monkeypatch.setattr(desktop_main, "enable_desktop_crash_log", lambda: None)
     monkeypatch.setattr(desktop_main, "launch_desktop", lambda _argv: opened)
 
     with caplog.at_level("INFO", logger="vbot.desktop"):
@@ -414,6 +416,38 @@ def test_desktop_logging_writes_structured_daily_file(tmp_path: Path) -> None:
         assert "error (speech_to_text_unconfigured)" in content
     finally:
         desktop_main.close_desktop_logging(handler)
+
+
+def test_desktop_crash_log_keeps_earlier_crashes_in_bounded_generations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    enabled: list[dict[str, Any]] = []
+
+    def enable(*, file: Any, **options: Any) -> None:
+        enabled.append({"path": Path(file.name).resolve(), **options})
+        # The real fault handler would keep it open and take over the test process's own.
+        file.close()
+
+    monkeypatch.setattr(desktop_main, "faulthandler", types.SimpleNamespace(enable=enable))
+    monkeypatch.setattr(desktop_main, "_DESKTOP_CRASH_LOG_ROTATE_BYTES", 64)
+    crash_log = tmp_path / "logs" / desktop_main.DESKTOP_CRASH_LOG_NAME
+    crash_log.parent.mkdir()
+    crash_log.write_bytes(b"Windows fatal exception: access violation\n")
+
+    desktop_main.enable_desktop_crash_log(tmp_path)
+    # A start after a crash keeps what the crashed process wrote, then names itself
+    # in one line of the log format, which the dump of a later crash follows.
+    first = crash_log.read_text(encoding="utf-8")
+    crashed, started = first.splitlines()
+    assert crashed == "Windows fatal exception: access violation"
+    assert "[INFO] vbot.desktop - " in started and f"pid={os.getpid()}" in started
+
+    desktop_main.enable_desktop_crash_log(tmp_path)
+    # An oversized crash log moves to its single previous generation.
+    assert crash_log.with_name(f"{crash_log.name}.1").read_text(encoding="utf-8") == first
+    assert len(crash_log.read_text(encoding="utf-8").splitlines()) == 1
+    # Every thread's Python stack, plus the C stack where the platform provides one.
+    assert enabled == [{"path": crash_log.resolve(), "all_threads": True, "c_stack": True}] * 2
 
 
 def test_icon_path_selects_the_platform_native_asset(tmp_path: Path) -> None:

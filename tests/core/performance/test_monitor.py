@@ -55,6 +55,17 @@ def block_event_loop_for_test() -> None:
     spinner.join()
 
 
+async def block_in_task_for_test() -> None:
+    block_event_loop_for_test()
+
+
+async def await_blocking_task_for_test() -> None:
+    # As a Run awaits its parallel Tool Tasks: the blocking Task's own stack
+    # does not show who started it.
+    async with asyncio.TaskGroup() as group:
+        group.create_task(block_in_task_for_test())
+
+
 def collect_slowly_for_test() -> None:
     def slow_collection(phase: str, _info: dict) -> None:
         if phase == "start":
@@ -80,12 +91,13 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_and_busy_s
     try:
         await asyncio.sleep(0.05)
         service.start_recording()
-        asyncio.get_running_loop().call_soon(block_event_loop_for_test)
+        awaiting = asyncio.create_task(await_blocking_task_for_test())
 
         async def stalled() -> bool:
             return any(map(_is_test_stall, (await service.snapshot())["stalls"]))
 
         await _wait_for(stalled)
+        await awaiting
         snapshot = await service.snapshot()
         result = await service.stop_recording()
     finally:
@@ -100,6 +112,7 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_and_busy_s
         "cpu_window_ms",
         "loop_cpu_ms",
         "samples",
+        "awaited_by",
         "threads",
     }
     assert stall["duration_ms"] >= 150
@@ -108,6 +121,10 @@ async def test_blocked_loop_records_lag_and_a_stall_with_the_blocking_and_busy_s
     blocking = next(frame for frame in frames if "block_event_loop_for_test" in frame)
     assert blocking.startswith("tests/core/performance/test_monitor.py:")
     assert all("\\" not in frame for frame in frames)
+    # The Task that awaits the blocking Task is named with its own frames.
+    assert not any("await_blocking_task_for_test" in frame for frame in frames)
+    awaiter = next(f for f in stall["awaited_by"] if "await_blocking_task_for_test" in f)
+    assert awaiter.startswith("tests/core/performance/test_monitor.py:")
     assert sum(sample["count"] for sample in stall["samples"]) >= 1
     if THREAD_CPU:
         # The waiting loop used little CPU; the thread it waited for is named
@@ -152,12 +169,42 @@ async def test_collection_pauses_are_timed_and_attributed_to_the_stall(tmp_path:
 
     stall = next(filter(is_collection_stall, snapshot["stalls"]))
     assert 150 <= stall["gc_ms"] <= stall["duration_ms"]
+    # A plain callback runs in no Task, so nothing awaits it.
+    assert stall["awaited_by"] == []
     assert snapshot["metrics"]["gc.gen0"]["max_ms"] >= 150
     trace = json.loads(Path(result["trace_path"]).read_text(encoding="utf-8"))
     assert any(
         event["ph"] == "X" and event["name"] == "gc gen0" and event["dur"] >= 150_000
         for event in trace["traceEvents"]
     )
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_call_graph_still_records_the_stall_without_awaiters(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def changed_meanwhile(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("Set changed size during iteration")
+
+    # The watchdog reads the graph while the loop thread may change it.
+    monkeypatch.setattr(asyncio, "capture_call_graph", changed_meanwhile)
+    service = _fast_service(tmp_path)
+    service.start()
+    try:
+        await asyncio.sleep(0.05)
+        awaiting = asyncio.create_task(await_blocking_task_for_test())
+
+        async def stalled() -> bool:
+            return any(map(_is_test_stall, (await service.snapshot())["stalls"]))
+
+        await _wait_for(stalled)
+        await awaiting
+        snapshot = await service.snapshot()
+    finally:
+        await service.aclose()
+
+    stall = next(filter(_is_test_stall, snapshot["stalls"]))
+    assert stall["awaited_by"] == []
 
 
 @pytest.mark.asyncio
@@ -239,20 +286,34 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
             StallThread("performance_0", 1180.0, ((2, (f"{library}:5 dumps", *stack[2:])),)),
             StallThread("performance_1", 300.0, ()),
         ),
+        awaited_by=(f"{project}:7 run_tools",),
     )
     short = StallRecord(stall.started_perf, stall.started_at, 400.0, ())
+    # A Task running only library code, awaited by vBot code.
+    library_task = StallRecord(
+        stall.started_perf,
+        stall.started_at,
+        1100.0,
+        ((4, (f"{library}:5 dumps", f"{library}:88 Handle._run")),),
+        awaited_by=(
+            f"{library}:121 TaskGroup._aexit",
+            f"{project}:7 run_tools",
+            f"{project}:8 run_step",
+        ),
+    )
 
     with caplog.at_level(logging.WARNING, logger="vbot.performance"):
         service._record_stall(stall)  # noqa: SLF001 - watchdog callback.
         service._record_stall(stall)  # noqa: SLF001
         service._record_stall(short)  # noqa: SLF001
-        last_warning = service._last_stall_warning  # noqa: SLF001
-        assert last_warning is not None
-        service._last_stall_warning = last_warning - 31  # noqa: SLF001 - advance the window.
-        service._record_stall(stall)  # noqa: SLF001
+        for later in (stall, library_task):
+            last_warning = service._last_stall_warning  # noqa: SLF001
+            assert last_warning is not None
+            service._last_stall_warning = last_warning - 31  # noqa: SLF001 - advance the window.
+            service._record_stall(later)  # noqa: SLF001
 
     warnings = [record.getMessage() for record in caplog.records]
-    assert len(warnings) == 2
+    assert len(warnings) == 3
     assert "stalled for 1500 ms (gc_ms=1200 loop_cpu_ms=20/1250 samples=3" in warnings[0]
     assert f"top frames: {' <- '.join(stack[:5])};" in warnings[0]
     # The innermost vBot frames skip library code, however deep it sits.
@@ -266,6 +327,11 @@ def test_long_stall_warnings_are_rate_limited_and_count_suppressions(
     )
     assert "suppressed_warnings=0" in warnings[0]
     assert "suppressed_warnings=1" in warnings[1]
+    # The awaiting Tasks name the owner only when the stack itself names none.
+    assert "awaited by" not in warnings[0]
+    assert (
+        f"innermost vBot frames: - (awaited by: {project}:7 run_tools <- {project}:8 run_step);"
+    ) in warnings[2]
 
 
 def _monitor_resources(service: PerformanceService) -> tuple[asyncio.Task, threading.Thread]:

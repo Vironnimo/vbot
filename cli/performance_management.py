@@ -385,6 +385,12 @@ def _stall_section(stalls: Sequence[object], title: str) -> list[str]:
             f"samples={sum(_count(sample) for sample in samples)}"
         )
         lines.extend(_common_stack(samples))
+        awaited_by = [
+            frame for frame in _sequence(stall.get("awaited_by")) if isinstance(frame, str)
+        ]
+        if awaited_by:
+            lines.append("  awaited by")
+            lines.extend(f"    {frame}" for frame in awaited_by[:_STALL_FRAMES])
         threads = [thread for thread in _sequence(stall.get("threads")) if isinstance(thread, dict)]
         for thread in threads[:_STALL_THREADS]:
             lines.append(

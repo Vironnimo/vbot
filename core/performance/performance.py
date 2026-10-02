@@ -765,7 +765,7 @@ class PerformanceService:
             sum(count for count, _stack in stall.samples),
             suppressed,
             " <- ".join(stack[:_STALL_WARNING_FRAMES]) or "-",
-            _project_frames(stack),
+            _loop_project_frames(stack, stall.awaited_by),
             _busiest_thread(stall),
         )
 
@@ -775,6 +775,16 @@ def _project_frames(stack: tuple[str, ...]) -> str:
     # vBot frames name the code that owns the blocking call.
     frames = [frame for frame in stack if is_project_frame(frame)]
     return " <- ".join(frames[:_STALL_WARNING_PROJECT_FRAMES]) or "-"
+
+
+def _loop_project_frames(stack: tuple[str, ...], awaited_by: tuple[str, ...]) -> str:
+    # A Task that runs only library code (a client's own Task, a stream reader)
+    # has no vBot frame on the stack; the vBot code awaiting it owns the work.
+    frames = _project_frames(stack)
+    if frames != "-":
+        return frames
+    awaiting = _project_frames(awaited_by)
+    return frames if awaiting == "-" else f"- (awaited by: {awaiting})"
 
 
 def _cpu_text(cpu_ms: float | None, window_ms: float | None) -> str:
