@@ -16,6 +16,7 @@ export function makeStreamHarness({
     agentId === displayedAgentId && sessionId === displayedSessionId,
   reconcileRunSession = vi.fn(async () => true),
   reportStreamDiagnostic = vi.fn(),
+  onReflectionFinished = vi.fn(),
 } = {}) {
   const subAgentRunStatuses = {};
   const subscriptions = [];
@@ -31,6 +32,7 @@ export function makeStreamHarness({
     syncSessionQueue,
     reconcileRunSession,
     reportStreamDiagnostic,
+    onReflectionFinished,
     isDisplayedSession,
     updateSubAgentRunStatuses: (updates, { replaceActive = false } = {}) => {
       if (replaceActive) {

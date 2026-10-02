@@ -592,6 +592,9 @@
     isDisplayedSession: target.isDisplayedSession,
     updateSubAgentRunStatuses: (updates, options) =>
       chatController.applySubAgentStatusUpdates(updates, options),
+    // A finished review's row reports what it changed, displayed or not.
+    onReflectionFinished: (sourceState) =>
+      chatController.refreshReflections(sourceState),
   });
   chatController = createChatController({
     chatState,
@@ -1019,6 +1022,13 @@
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
         onNavigateToParentSession={navigation.navigateToParentSession}
         onOpenReflection={navigation.handleOpenReflection}
+        onLoadReflectionChanges={(row) =>
+          chatController.loadReflectionChanges(
+            target.activeSessionState,
+            row.runId,
+          )}
+        onUndoReflection={(row) =>
+          chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
         onCancelBackgroundProcess={actions.handleCancelBackgroundProcess}
       />

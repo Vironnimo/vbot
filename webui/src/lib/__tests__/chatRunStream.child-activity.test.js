@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { ensureSessionState } from '../chatState.js';
 import {
@@ -349,7 +349,8 @@ describe('reflection review tracking', () => {
     harness.chatState.sessions[`alpha::${SOURCE_SESSION_ID}`]?.reflectionTasks;
 
   it('tracks a reflection Run on the reviewed source Session from start to its terminal event', () => {
-    const harness = makeStreamHarness();
+    const onReflectionFinished = vi.fn();
+    const harness = makeStreamHarness({ onReflectionFinished });
 
     harness.stream.handleServerEvents(reflectionServerEvent('run_started'));
 
@@ -374,6 +375,14 @@ describe('reflection review tracking', () => {
       status: 'completed',
       startedAt: '2026-08-24T10:00:00.000Z',
     });
+    // The finished review is reported once, so its outcome can be read.
+    expect(onReflectionFinished).toHaveBeenCalledExactlyOnceWith(
+      harness.chatState.sessions[`alpha::${SOURCE_SESSION_ID}`],
+    );
+    harness.stream.handleServerEvents(
+      reflectionServerEvent('run_completed', { run_event_sequence: 3 }),
+    );
+    expect(onReflectionFinished).toHaveBeenCalledOnce();
   });
 
   it('ignores non-reflection runs and reflection events without source provenance', () => {
