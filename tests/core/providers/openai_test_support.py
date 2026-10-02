@@ -149,20 +149,19 @@ class RotatingTokenGetter:
         return token
 
 
-def wire_policy_model(
+def gpt_reasoning_model(
     model_id: str,
     *,
     connection_context_windows: dict[str, int] | None = None,
 ) -> Model:
-    """A reasoning Model whose OpenAI wire policies select Responses everywhere.
+    """A reasoning Model with the full GPT effort ladder on both Connections.
 
-    Only ``gpt-5.6*`` ids declare the public ``all_turns`` reasoning context on
-    the ``api-key`` wire, as the bundled profiles do.
+    Its id selects the bundled wire profile (``resources/wire/openai.json``),
+    which routes the profiled GPT ids to Responses on the ``api-key``
+    connection and adds the public ``all_turns`` reasoning context for
+    ``gpt-5.6*``.
     """
 
-    api_key_policy: dict[str, str] = {"protocol": "responses"}
-    if model_id.startswith("gpt-5.6"):
-        api_key_policy["reasoning_context"] = "all_turns"
     return Model(
         model_id=model_id,
         name=model_id,
@@ -186,14 +185,6 @@ def wire_policy_model(
             if connection_context_windows is not None
             else {"api-key": 1_050_000, "subscription": 272_000}
         ),
-        metadata={
-            "openai": {
-                "wire_policies": {
-                    "api-key": api_key_policy,
-                    "subscription": {"protocol": "responses"},
-                }
-            }
-        },
     )
 
 

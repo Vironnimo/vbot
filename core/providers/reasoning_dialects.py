@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.models.models import REASONING_CONTROL_LEVELS
+from core.providers._responses_values import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_DEFAULT,
@@ -136,6 +137,37 @@ def _describe_reasoning_effort(wire: ReasoningWire, intent: ReasoningIntent) -> 
     if intent.kind == REASONING_INTENT_OFF:
         return ReasoningIntent(REASONING_INTENT_OFF, effort_level=level)
     return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=level)
+
+
+# -- responses_reasoning ----------------------------------------------------------
+# Responses ``reasoning: {effort, summary: "auto"}``. Like ``reasoning_effort``,
+# ``on``/``budget`` degrade to their snapped level and off is spelled only as
+# the ``none`` level. ``reasoning.options.context`` adds ``reasoning.context``
+# to every request (a cross-turn reasoning scope such as ``all_turns``). A Model
+# known to reason also asks for its encrypted reasoning items (``include``),
+# which stateless replay returns on the next request, even when no effort is
+# sent.
+
+_RESPONSES_REASONING_SUMMARY = "auto"
+
+
+def _render_responses_reasoning(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del output_allowance
+    level = _effort_level(intent)
+    if level is not None:
+        payload["reasoning"] = {"effort": level, "summary": _RESPONSES_REASONING_SUMMARY}
+    context = wire.options.get("context")
+    if isinstance(context, str) and context:
+        payload.setdefault("reasoning", {})["context"] = context
+    if wire.supported is True:
+        include = payload.setdefault("include", [])
+        if REASONING_ENCRYPTED_CONTENT_INCLUDE not in include:
+            include.append(REASONING_ENCRYPTED_CONTENT_INCLUDE)
 
 
 # -- nous_reasoning -------------------------------------------------------------
@@ -381,6 +413,9 @@ _DIALECTS: dict[str, _Dialect] = {
     "none": _Dialect(_render_nothing, _describe_nothing),
     "reasoning_effort": _Dialect(
         _render_reasoning_effort, _describe_reasoning_effort, ("reasoning_effort",)
+    ),
+    "responses_reasoning": _Dialect(
+        _render_responses_reasoning, _describe_reasoning_effort, ("reasoning", "include")
     ),
     "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning, ("reasoning",)),
     "thinking_toggle": _Dialect(_render_thinking_toggle, _describe_thinking_toggle, ("thinking",)),

@@ -151,7 +151,7 @@ __all__ = [
 
 _LOGGER = get_logger("providers.openai_compatible")
 
-_PROFILE_DESCRIBED_PROTOCOLS = frozenset({"chat_completions", "messages"})
+_PROFILE_DESCRIBED_PROTOCOLS = frozenset({"chat_completions", "messages", "responses"})
 """Protocols whose codecs render reasoning only from the wire profile's plan."""
 
 
@@ -169,10 +169,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     """
 
     DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = True
-    """Whether Chat Completions (and routed Messages) requests carry exactly the profile's plan.
+    """Whether every request carries exactly the wire profile's reasoning plan.
 
-    True when reasoning reaches the wire only through :meth:`_apply_reasoning`
-    (the profile's plan in its dialect), so :meth:`describe_reasoning_render`
+    True when reasoning reaches the wire only as the profile's plan in its
+    dialect (Chat Completions :meth:`_apply_reasoning`, and the Messages and
+    Responses codecs of subclasses), so :meth:`describe_reasoning_render`
     describes that plan. A subclass that still spells reasoning itself (Tool
     toggles, other endpoints chosen per Model) sets it to False and keeps the
     declared-control description until its wire is profile-driven.
@@ -668,13 +669,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Describe the reasoning a request with ``effort`` carries for ``model_id``.
 
         A Model the catalog marks as non-reasoning reports ``off``. On Chat
-        Completions and Messages the Provider's wire profile plans the effort
-        exactly like the codec renders it, and its dialect reports what the
-        rendered request carries. Other protocols of subclasses (Responses) and
-        subclasses that spell reasoning themselves
-        (:attr:`DESCRIBES_REASONING_FROM_PROFILE`) keep the declared-control
-        description against the profile's ladder, reporting an ``on``/``budget``
-        intent as the effort level such a wire sends.
+        Completions, Messages and Responses the Provider's wire profile plans
+        the effort exactly like the codec renders it, and its dialect reports
+        what the rendered request carries. Subclasses that spell reasoning
+        themselves (:attr:`DESCRIBES_REASONING_FROM_PROFILE`) and other
+        protocols keep the declared-control description against the profile's
+        ladder, reporting an ``on``/``budget`` intent as the effort level such
+        a wire sends.
         """
 
         if model_reasoning_supported(model_lookup, model_id) is False:

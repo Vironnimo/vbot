@@ -6,7 +6,7 @@ future item kinds without reconstructing a lossy approximation."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.providers._responses_output import (
@@ -76,9 +76,16 @@ def build_responses_payload(
     policy: ResponsesRequestPolicy,
     stream: bool = False,
     document_media_types: frozenset[str] = frozenset(),
+    reasoning_renderer: Callable[[dict[str, Any]], None] | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Build a stateless ``/responses`` request payload from canonical messages."""
+    """Build a stateless ``/responses`` request payload from canonical messages.
+
+    ``reasoning_renderer`` writes the reasoning fields of a wire whose
+    reasoning comes from its wire profile; the caller has already consumed the
+    reasoning kwargs. Without it, ``policy`` derives the reasoning fields from
+    the caller's effort.
+    """
 
     wire_messages = normalize_tool_call_ids(messages, RESPONSES_TOOL_CALL_ID_PROFILE)
     request_kwargs = policy.filter_request_kwargs(kwargs)
@@ -100,7 +107,10 @@ def build_responses_payload(
         request_kwargs,
         policy,
     )
-    _apply_responses_reasoning(payload, request_kwargs, policy)
+    if reasoning_renderer is None:
+        _apply_responses_reasoning(payload, request_kwargs, policy)
+    else:
+        reasoning_renderer(payload)
     _apply_responses_text_format(payload, request_kwargs, policy)
     _apply_remaining_kwargs(payload, request_kwargs, policy)
     return payload

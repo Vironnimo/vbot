@@ -166,7 +166,7 @@ def test_request_input_budget_evaluates_a_fallback_only_without_a_matching_scope
     assert len(calls) == 2
 
 
-_BUDGET_MODEL_ID = "gpt-4.1"
+_BUDGET_MODEL_ID = "gpt-5.5"  # the OpenAI wire file routes it to Responses on api-key
 _BUDGET_MESSAGES = [{"role": "user", "content": "Keep this request unchanged."}]
 _BUDGET_TOOLS = [
     {
@@ -192,7 +192,6 @@ def _budget_adapter(wire: str) -> tuple[Any, str]:
         context_window=256_000,
         max_output_tokens=256_000,
         metadata={
-            "openai": {"wire_policies": {"api-key": {"protocol": "responses"}}},
             "github_copilot": {
                 "vendor": "OpenAI",
                 "family": _BUDGET_MODEL_ID,

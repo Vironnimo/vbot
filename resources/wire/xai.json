@@ -1,0 +1,25 @@
+{
+  "format_version": 1,
+  "_comment": "xAI Responses on the API-key and SuperGrok Connections (no live verification in this checkout; the shapes keep the pre-profile wire). Optional parameters are limited to the xAI set and, when the catalog lists supported parameters, to those it lists (max_tokens counts as listed with max_output_tokens). Effort none asks a Model without a none rung for its lowest rung, because those Models cannot disable reasoning. Only JPEG and PNG images are carried.",
+  "defaults": {
+    "request": {
+      "allowed_parameters": [
+        "max_tokens",
+        "max_output_tokens",
+        "prompt_cache_key",
+        "service_tier",
+        "temperature",
+        "top_p"
+      ],
+      "options": {"narrow_to_catalog_parameters": true}
+    },
+    "reasoning": {"off": "lowest"},
+    "media": {"types": ["image/jpeg", "image/png"]}
+  },
+  "models": {
+    "grok-4.3": {
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Grok 4.3 lists a none rung; the wire has always omitted reasoning for effort none. Kept until verified live."
+    }
+  }
+}

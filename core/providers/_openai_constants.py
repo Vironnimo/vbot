@@ -19,10 +19,6 @@ CODEX_RESPONSES_ENDPOINT = "/codex/responses"
 
 RESPONSES_POLICY_ENDPOINT = "/responses"
 
-OPENAI_METADATA_KEY = "openai"
-
-OPENAI_WIRE_POLICIES_KEY = "wire_policies"
-
 OPENAI_API_KEY_WIRE_KEY = "api-key"
 
 OPENAI_SUBSCRIPTION_WIRE_KEY = "subscription"
@@ -32,8 +28,6 @@ OPENAI_RESPONSES_PROTOCOL = "responses"
 OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS = frozenset(
     {"max_tokens", "max_output_tokens", "top_p"}
 )
-
-OPENAI_REASONING_CONTEXTS = frozenset({"auto", "current_turn", "all_turns"})
 
 OPENAI_SUBSCRIPTION_DEFAULT_INSTRUCTIONS = "You are a helpful assistant."
 

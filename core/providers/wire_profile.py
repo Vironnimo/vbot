@@ -21,9 +21,10 @@ Profiles are resolved per ``(provider, connection, model id)`` from layers:
 8. The Model entry's ``set``.
 9. The Model entry's ``connections[<connection>]``.
 
-The protocol itself is decided first, from the Model entry, the last matching
-rule, the catalog's protocol hint, the Connection, the file defaults and the
-Adapter's default protocol, in that order.
+The protocol itself is decided first, from the Model entry (its Connection
+block, then its ``set``), the last matching rule, the Connection, the file
+defaults and the Adapter's default protocol, in that order; a value the
+Adapter does not speak is reported and skipped.
 
 Every resolved field remembers which layer set it (``WireProfile.provenance``),
 and the profile carries a status: ``verified`` when its Model entry records a
@@ -106,8 +107,9 @@ ReasoningDialect = Literal[
 - ``anthropic_thinking``: ``thinking`` adaptive with ``output_config.effort``
   for effort ladders, ``enabled`` with ``budget_tokens`` for budgets,
   ``disabled`` for off.
-- ``responses_reasoning``: ``reasoning: {effort, summary}`` and the encrypted
-  reasoning ``include``.
+- ``responses_reasoning``: ``reasoning: {effort, summary}``; off is the
+  ``none`` level. ``reasoning.options.context`` adds ``reasoning.context``, and
+  a Model known to reason always gets the encrypted reasoning ``include``.
 - ``gemini_thinking``: ``generationConfig.thinkingConfig``.
 - ``ollama_think``: native Ollama ``think``: the level for Models with a level
   ladder, otherwise ``true``; off is ``false``.

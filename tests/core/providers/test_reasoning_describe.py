@@ -24,6 +24,7 @@ from core.providers.anthropic import AnthropicAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MINIMAX_M3_MODEL_ID, MiniMaxAdapter
 from core.providers.ollama import OllamaAdapter
+from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.reasoning import (
@@ -35,6 +36,7 @@ from core.providers.reasoning import (
     ReasoningIntent,
 )
 from core.providers.stepfun import StepFunAdapter
+from core.providers.xai import XAIAdapter
 
 from .adapter_test_support import bearer_config
 
@@ -222,6 +224,28 @@ def test_describe_reasoning_render_reports_what_the_wire_carries(
             "none",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
             id="anthropic-adaptive-only-off-sends-nothing",
+        ),
+        # GPT-6.1 Sol has no none rung; its profile spells off as the low effort.
+        pytest.param(
+            OpenAIAdapter,
+            "openai",
+            _model(
+                "gpt-6.1-sol",
+                control=REASONING_CONTROL_LEVELS,
+                levels=("low", "medium", "high", "xhigh", "max"),
+            ),
+            "none",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="low"),
+            id="openai-responses-off-is-low",
+        ),
+        # An xAI Model without a none rung cannot disable reasoning: off is its lowest rung.
+        pytest.param(
+            XAIAdapter,
+            "xai",
+            _model("grok-4.5", control=REASONING_CONTROL_LEVELS, levels=("low", "medium", "high")),
+            "none",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="low"),
+            id="xai-off-is-lowest-rung",
         ),
     ],
 )

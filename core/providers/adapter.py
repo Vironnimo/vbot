@@ -281,13 +281,16 @@ class ProviderAdapter(ABC):
         The Runtime binds its shared view (bundled and Custom Provider data,
         learned facts). An Adapter constructed directly resolves against the
         bundled files and its own Model lookup on its first configured
-        Connection and learns nothing.
+        Connection (the first one with the Adapter's connection mode, when it
+        was given one) and keeps learned facts in memory only.
         """
 
         binding = self._wire_binding
         if binding is None:
             binding = type(self)._standalone_wire_binding(
-                getattr(self, "_config", None), getattr(self, "_model_lookup", None)
+                getattr(self, "_config", None),
+                getattr(self, "_model_lookup", None),
+                connection_mode=getattr(self, "_connection_mode", None),
             )
             self._wire_binding = binding
         return binding
@@ -332,12 +335,25 @@ class ProviderAdapter(ABC):
 
     @classmethod
     def _standalone_wire_binding(
-        cls, config: ProviderConfig | None, model_lookup: ModelLookup | None
+        cls,
+        config: ProviderConfig | None,
+        model_lookup: ModelLookup | None,
+        *,
+        connection_mode: str | None = None,
     ) -> WireBinding:
         connections = getattr(config, "connections", ()) or ()
+        connection = next(
+            (
+                candidate
+                for candidate in connections
+                if connection_mode is not None
+                and getattr(candidate, "mode", None) == connection_mode
+            ),
+            connections[0] if connections else None,
+        )
         return standalone_wire_binding(
             provider_id=str(getattr(config, "id", "") or ""),
-            connection_id=str(getattr(connections[0], "id", "")) if connections else "",
+            connection_id=str(getattr(connection, "id", "")) if connection is not None else "",
             protocols=cls.WIRE_PROTOCOLS,
             model_lookup=model_lookup,
         )

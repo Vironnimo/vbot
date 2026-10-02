@@ -446,22 +446,21 @@ def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
 # ---------------------------------------------------------------------------
 
 
-def test_openai_reasoning_models_load_connection_specific_wire_policies(
+def test_openai_reasoning_models_load_connection_specific_limits(
     registry: ModelRegistry,
 ) -> None:
-    """Current OpenAI reasoning Models use Responses on every allowed wire.
+    """Current OpenAI reasoning Models load their Connections and per-Connection windows.
 
     The unsuffixed GPT-5.6 alias is a Platform alias only: the live ChatGPT
     Codex endpoint rejects it, while the named 5.6 variants are available on
-    both connections. Earlier Platform models use Responses without the
-    GPT-5.6-only ``all_turns`` request field.
+    both connections. (Their wire, including Responses routing, is the wire
+    profile's: ``resources/wire/openai.json``.)
     """
 
     gpt_52 = registry.get("openai", "gpt-5.2")
     assert gpt_52.connections == ("api-key",)
     assert gpt_52.context_window == 400_000
     assert gpt_52.max_output_tokens == 128_000
-    assert gpt_52.metadata["openai"]["wire_policies"] == {"api-key": {"protocol": "responses"}}
     assert set(gpt_52.capabilities.supported_parameters) == {
         "max_output_tokens",
         "parallel_tool_calls",
@@ -472,10 +471,6 @@ def test_openai_reasoning_models_load_connection_specific_wire_policies(
 
     gpt_55 = registry.get("openai", "gpt-5.5")
     assert gpt_55.connections == ("api-key", "subscription")
-    assert gpt_55.metadata["openai"]["wire_policies"] == {
-        "api-key": {"protocol": "responses"},
-        "subscription": {"protocol": "responses"},
-    }
 
     for model_id in ("gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"):
         model = registry.get("openai", model_id)
@@ -484,12 +479,6 @@ def test_openai_reasoning_models_load_connection_specific_wire_policies(
 
     alias = registry.get("openai", "gpt-5.6")
     assert alias.connections == ("api-key",)
-    assert alias.metadata["openai"]["wire_policies"] == {
-        "api-key": {
-            "protocol": "responses",
-            "reasoning_context": "all_turns",
-        }
-    }
 
 
 def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:
@@ -499,10 +488,6 @@ def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:
     assert gpt.context_window_for("subscription") == 272_000
     assert gpt.capabilities.reasoning.levels == ("low", "medium", "high", "xhigh", "max")
     assert gpt.capabilities.tools is True
-    assert gpt.metadata["openai"]["wire_policies"]["subscription"] == {
-        "protocol": "responses",
-        "minimum_reasoning_effort": "low",
-    }
 
 
 @pytest.mark.parametrize(
@@ -532,13 +517,6 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     assert model.capabilities.json_mode is True
     levels = ("low", "medium", "high", "xhigh", "max")
     assert model.capabilities.reasoning.levels == (("none", *levels) if supports_none else levels)
-    api_policy = {"protocol": "responses"}
-    if not supports_none:
-        api_policy["minimum_reasoning_effort"] = "low"
-    assert model.metadata["openai"]["wire_policies"] == {
-        "api-key": api_policy,
-        "subscription": {"protocol": "responses", "minimum_reasoning_effort": "low"},
-    }
     assert model.pricing is not None
     assert model.pricing.source == f"models.dev:openai/{model_id}"
     rates = model.pricing.rates
