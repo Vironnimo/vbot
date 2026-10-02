@@ -90,7 +90,10 @@ def test_supported_combinations_map_to_windows_virtual_keys(
 @pytest.mark.parametrize(
     "changes",
     [
-        *({"key": key} for key in ("Enter", "KeyAA", "Keya", "Digit10", "F0", "F25", "F01")),
+        *(
+            {"key": key}
+            for key in ("Enter", "KeyAA", "Keya", "Digit10", "F0", "F25", "F01", "F\u00b2")
+        ),
         *({"key": key} for key in ("ArrowUp", "", "Numpad1")),
         {**BARE, "key": "Space"},  # ordinary keys need a modifier
         {**BARE, "key": "F12"},

@@ -88,6 +88,7 @@ _LETTER_SCAN_CODES = {
 _DIGIT_SCAN_CODES = {str(digit): 0x02 + (digit - 1) % 10 for digit in range(10)}
 _VK_SPACE = 0x20
 _VK_F1 = 0x70
+_FUNCTION_KEYS = {f"F{number}": number for number in range(1, 25)}
 _LABELS = (("ctrl", "Ctrl"), ("alt", "Alt"), ("shift", "Shift"), ("win", "Win"))
 
 
@@ -128,17 +129,15 @@ def _key_codes(key: str) -> tuple[int, int | None] | None:
         return ord(key[3]), _LETTER_SCAN_CODES[key[3]]
     if key.startswith("Digit") and len(key) == 6 and key[5] in _DIGIT_SCAN_CODES:
         return ord(key[5]), _DIGIT_SCAN_CODES[key[5]]
-    if key.startswith("F") and key[1:].isdigit() and not key[1:].startswith("0"):
-        number = int(key[1:])
-        if 1 <= number <= 24:
-            return _VK_F1 + number - 1, None
+    if key in _FUNCTION_KEYS:
+        return _VK_F1 + _FUNCTION_KEYS[key] - 1, None
     return None
 
 
 def _needs_modifier(key: str) -> bool:
     """F13-F24 have no other use on common keyboards and may stand alone."""
 
-    return not (key.startswith("F") and key[1:].isdigit() and 13 <= int(key[1:]) <= 24)
+    return not 13 <= _FUNCTION_KEYS.get(key, 0) <= 24
 
 
 def parse_hotkey(setting: Mapping[str, Any]) -> HotkeySpec | None:
