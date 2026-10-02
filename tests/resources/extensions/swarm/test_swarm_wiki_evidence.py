@@ -68,6 +68,8 @@ async def test_wiki_emphasis_copy_preserves_formatting_outside_the_requested_edi
         ("**Read file** now", "Read **file** now"),
         (_PROSE.replace("A7", "B8"), _PROSE),
         (_PROSE.replace("never", "`**never**`"), _PROSE.replace("never", "`never`")),
+        # An unclosed backtick string stays literal, in linear time.
+        (_PROSE.replace("never", "**never**") + " " + "`" * 5000, _PROSE + " " + "`" * 5000),
         (
             _PROSE + " [details](https://example.test/**path**)",
             _PROSE + " [details](https://example.test/path)",
