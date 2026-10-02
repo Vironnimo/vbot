@@ -634,6 +634,22 @@ class LocalEmbeddingExecutor:
         if child is not None:
             child.kill()
 
+    def activities(self) -> list[dict[str, Any]]:
+        """Each local embedding installation that has something to show."""
+        result = []
+        for model in self._models.values():
+            activity = self._setups[model.id].activity()
+            if activity is not None:
+                result.append(
+                    {
+                        "target": f"local/{model.id}",
+                        "label": model.label,
+                        "task_type": TASK_TEXT_EMBEDDING,
+                        **activity,
+                    }
+                )
+        return result
+
     def memory_status(self) -> dict[str, Any]:
         """Which model is loaded; reads state only, never starts a child."""
         loaded = self._child_key[0] if self._child_key is not None else None

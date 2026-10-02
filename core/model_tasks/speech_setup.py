@@ -85,6 +85,12 @@ class LocalSpeechSetup(LocalSetup):
             return self.status()
         return super().install()
 
+    def activity(self) -> dict[str, Any] | None:
+        # The target whose installation changed the server's packages asks for the restart.
+        if self._restart_pending and self._state == "ready":
+            return {"state": "action_required", "phase": "restart_required"}
+        return super().activity()
+
     def _environment_error(self) -> str:
         if self._server_stack is not None:
             return "" if _dependencies_available() else "dependencies_missing"

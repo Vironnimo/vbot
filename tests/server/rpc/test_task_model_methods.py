@@ -82,6 +82,7 @@ def _local_owner(target: str, label: str) -> SimpleNamespace:
     setup = MagicMock()
     setup.status.return_value = {"state": "missing", "phase": "checking", "error": "python_missing"}
     setup.install.return_value = {"state": "installing", "phase": "queued", "error": ""}
+    setup.cancel = AsyncMock(return_value={"state": "missing", "phase": "checking", "error": ""})
     models = [{"target": target, "label": label, "loaded": True, "busy": False}]
 
     def setup_for(requested: str) -> Any:
@@ -134,6 +135,10 @@ async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it(
     assert install["result"]["state"] == "installing"
     embeddings.setup.install.assert_called_once_with()
     speech.setup.install.assert_not_called()
+    cancelled = await call("local_setup_cancel", target="local/qwen3-tts-1.7b")
+    assert cancelled["result"]["state"] == "missing"
+    speech.setup.cancel.assert_awaited_once_with()
+    embeddings.setup.cancel.assert_not_called()
     assert [
         model["target"] for model in (await call("local_memory_status"))["result"]["models"]
     ] == [
@@ -150,6 +155,7 @@ async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it(
         ("local_setup_status", {"target": "local/unknown"}),
         ("local_setup_install", {"target": "openrouter/x/y::api-key"}),
         ("local_setup_install", {"target": "local/qwen3-tts-1.7b", "packages": ["untrusted"]}),
+        ("local_setup_cancel", {"target": "local/unknown"}),
         ("local_unload", {"target": "local/unknown"}),
         ("local_memory_status", {"force": True}),
     ):

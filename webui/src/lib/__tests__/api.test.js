@@ -149,6 +149,12 @@ describe('RPC wrappers', () => {
   it.each([
     ['data_store.status', (o) => api.getDataStoreStatus(o), {}],
     ['recall.status', (o) => api.getRecallIndexStatus(o), {}],
+    ['activity.list', (o) => api.listBackgroundActivity(o), {}],
+    [
+      'activity.dismiss',
+      (o) => api.dismissBackgroundActivity('recall_index', o),
+      { id: 'recall_index' },
+    ],
     ['recall.rebuild_index', (o) => api.rebuildRecallIndex(o), {}],
     [
       'data_store.snapshot_create',
@@ -576,6 +582,11 @@ describe('RPC wrappers', () => {
     [
       'task_model.local_setup_install',
       (o) => api.installLocalSetup('local/granite-embedding-r2', o),
+      { target: 'local/granite-embedding-r2' },
+    ],
+    [
+      'task_model.local_setup_cancel',
+      (o) => api.cancelLocalSetup('local/granite-embedding-r2', o),
       { target: 'local/granite-embedding-r2' },
     ],
     ['speech.local_memory_status', (o) => api.getLocalSpeechMemory(o), {}],

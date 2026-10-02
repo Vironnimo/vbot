@@ -53,9 +53,37 @@ async def test_whatsapp_setup_is_idempotent_and_shutdown_cancels_install(
         await started.wait()
         assert (await service.setup_whatsapp("wa"))["setup"] == "installing"
         install_bridge.assert_awaited_once()
+        assert service.setup_activities() == [{"channel_id": "wa", "state": "running"}]
     finally:
         await service.aclose()
     assert cancelled.is_set()
+    assert service.setup_activities() == []
+
+
+@pytest.mark.asyncio
+async def test_failed_whatsapp_setup_is_background_activity_until_the_channel_goes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service, _start_adapter = await whatsapp_service(tmp_path, monkeypatch)
+    install_bridge = AsyncMock(side_effect=ChannelError("Node.js is missing"))
+    monkeypatch.setattr("core.channels._whatsapp_setup.install_bridge", install_bridge)
+    try:
+        await service.setup_whatsapp("wa")
+        async with asyncio.timeout(2):
+            while (await service.whatsapp_status("wa"))["setup"] != "failed":
+                await asyncio.sleep(0)
+        assert service.setup_activities() == [
+            {
+                "channel_id": "wa",
+                "state": "failed",
+                "error": "setup_failed",
+                "message": "Node.js is missing",
+            }
+        ]
+        await service.delete_channel("wa")
+        assert service.setup_activities() == []
+    finally:
+        await service.aclose()
 
 
 @pytest.mark.asyncio
@@ -106,6 +134,7 @@ async def test_whatsapp_operation_blocks_channel_changes_until_it_ends(
             async with asyncio.timeout(2):
                 while (await service.whatsapp_status("wa"))["setup"] != "ready":
                     await asyncio.sleep(0)
+            assert service.setup_activities() == [{"channel_id": "wa", "state": "completed"}]
         await service.delete_channel("wa")
         assert service.list_channels() == []
     finally:

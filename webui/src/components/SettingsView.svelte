@@ -6,6 +6,7 @@
   import ArchiveEntriesPanel from './archive/ArchiveEntriesPanel.svelte';
   import DesktopConnectionSettings from './settings/DesktopConnectionSettings.svelte';
   import DesktopLiveVoiceShortcut from './settings/DesktopLiveVoiceShortcut.svelte';
+  import SettingsActivityPanel from './settings/SettingsActivityPanel.svelte';
   import SettingsAppearancePanel from './settings/SettingsAppearancePanel.svelte';
   import SettingsChannelsPanel from './settings/SettingsChannelsPanel.svelte';
   import SettingsDebugPanel from './settings/SettingsDebugPanel.svelte';
@@ -75,6 +76,8 @@
     // The latest pushed Recall index status, applied by the Conversation
     // search panel.
     recallIndexStatus = null,
+    // The server's background activity list, kept current by its pushes.
+    backgroundActivity = [],
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
     archiveRefreshToken = 0,
@@ -95,6 +98,10 @@
 
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
+    {
+      id: 'activity',
+      label: () => t('settings.activity.title'),
+    },
     {
       id: 'appearance',
       label: () => t('settings.appearance.title'),
@@ -194,9 +201,11 @@
       id: 'general',
       label: () => t('settings.pages.general'),
       description: () => t('settings.pages.generalDescription'),
-      // Everyday display first; the time zone and the setup guide are
-      // rarely revisited.
+      // Running work first, so opening Settings shows every installation and
+      // large indexing pass at once; then everyday display. The time zone and
+      // the setup guide are rarely revisited.
       sections: [
+        'activity',
         'appearance',
         'session_titles',
         'notifications',
@@ -865,7 +874,13 @@
 </script>
 
 {#snippet panelContent(panelId)}
-  {#if panelId === 'preferences'}
+  {#if panelId === 'activity'}
+    <SettingsActivityPanel
+      activities={backgroundActivity}
+      onOpen={openDestination}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'preferences'}
     <SettingsGeneralPanel
       page="preferences"
       {settings}

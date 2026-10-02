@@ -209,6 +209,7 @@ describe('SettingsView', () => {
       ]);
       const expectedSections = {
         general: [
+          'activity',
           'appearance',
           'session_titles',
           'notifications',

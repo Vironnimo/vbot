@@ -100,6 +100,23 @@ export function getDataStoreStatus(options = {}) {
 }
 
 // The semantic Recall index: its state, coverage, last error and costs.
+// The server's background activity: `{ activities }`, the list that the
+// `activity_status` event pushes on every change.
+export function listBackgroundActivity(options = {}) {
+  return rpc('activity.list', {}, options);
+}
+
+// Hides a finished, failed or restart entry for every client until its work
+// runs again; returns `{ activities }`.
+export function dismissBackgroundActivity(id, options = {}) {
+  requireNonEmptyString(
+    id,
+    'Activity id must not be empty',
+    'activity.dismiss',
+  );
+  return rpc('activity.dismiss', { id }, options);
+}
+
 export function getRecallIndexStatus(options = {}) {
   return rpc('recall.status', {}, options);
 }

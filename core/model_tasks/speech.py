@@ -238,6 +238,9 @@ class SpeechService:
     def local_memory_status(self) -> dict[str, Any]:
         return self._local_executor.memory_status()
 
+    def local_activities(self) -> list[dict[str, Any]]:
+        return self._local_executor.activities()
+
     async def unload_local(self, target: str) -> dict[str, Any]:
         return await self._local_executor.release_memory(target)
 

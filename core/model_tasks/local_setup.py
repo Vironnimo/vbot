@@ -82,6 +82,7 @@ class LocalSetup:
         self._error = ""
         self._progress: tuple[int, int] | None = None
         self._closed = False
+        self._cancelled = False
         self._reported_unavailability = ""
 
     @property
@@ -112,6 +113,29 @@ class LocalSetup:
             completed, total = self._progress
             status["progress"] = {"completed": completed, "total": total}
         return status
+
+    def activity(self) -> dict[str, Any] | None:
+        """This installation as background activity, or None when there is nothing to show.
+
+        ``{state: running, phase, progress?}`` while it installs, ``{state:
+        completed}`` once an installation in this process finished, ``{state:
+        failed, error}`` after a failure and ``{state: action_required, phase:
+        restart_required}`` while a restart is due. A cancelled installation
+        reports nothing. Reads only in-memory state, so it is cheap to poll.
+        """
+        if self._state == "installing":
+            activity: dict[str, Any] = {"state": "running", "phase": self._phase}
+            if self._progress is not None:
+                completed, total = self._progress
+                activity["progress"] = {"completed": completed, "total": total}
+            return activity
+        if self._state == "failed":
+            return {"state": "failed", "error": self._error}
+        if self._state == "restart_required":
+            return {"state": "action_required", "phase": "restart_required"}
+        if self._state == "ready":
+            return {"state": "completed"}
+        return None
 
     @property
     def python(self) -> Path:
@@ -172,6 +196,26 @@ class LocalSetup:
         self._task = asyncio.create_task(self._install())
         return self.status()
 
+    async def cancel(self) -> dict[str, Any]:
+        """Stop a running installation and wait until it has stopped.
+
+        The setup is then simply not installed: nothing failed, and verified
+        model files and partial downloads stay for the next installation.
+        """
+        task = self._task
+        if self._state == "installing" and task is not None and not task.done():
+            self._cancelled = True
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            # A task cancelled before it started never ran its handler.
+            if self._state == "installing":
+                self._stopped()
+        return self.status()
+
+    def _stopped(self) -> None:
+        self._state, self._phase, self._error = "idle", "checking", ""
+        self._logger.info(f"{self._subject} installation cancelled (engine=%s)", self._name)
+
     async def _install(self) -> None:
         try:
             if self._install_lock.locked():
@@ -179,10 +223,16 @@ class LocalSetup:
             async with self._install_lock:
                 await self._run_install()
         except asyncio.CancelledError:
+            if self._cancelled and not self._closed:
+                self._stopped()
+                if (task := asyncio.current_task()) is not None:
+                    task.uncancel()
+                return
             self._fail("interrupted")
             raise
         finally:
             self._progress = None
+            self._cancelled = False
 
     async def _run_install(self) -> None:
         try:
