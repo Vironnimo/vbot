@@ -17,6 +17,7 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 3. computer_apps `{"action":"open","app":"Notepad"}` brings the app to the front, starting it if needed, and returns a screenshot.
 4. Act with computer, one action per call, or computer_batch for steps you can predict, such as click a field, type, press enter.
 5. Check the screenshot each result returns before the next step.
+6. When you are done, hand the computer back with computer_apps `{"action":"release"}`.
 
 ## Screenshots and coordinates
 
@@ -35,9 +36,9 @@ computer moves the user's real mouse and keyboard on the desktop of the computer
 
 - Never type passwords, keys or other secrets. Ask the user to enter them.
 - Ask the user before actions that are hard to undo: deleting, sending, buying, publishing, closing without saving, or changing system settings.
-- The user can stop you with the Stop button or by pressing Esc twice. After a stop, do not continue unless the user asks you to.
+- While you control the computer, a frame around the screens shows it, and the user can stop you at any time with the Stop button or by pressing Esc twice. After a stop, the computer stays off until the user's next message: tell the user what you did and what is left.
 - If something unexpected appears, such as a dialog, a login prompt or a warning, take a screenshot and decide from what you see; ask the user when unsure.
 
 ## Finish
 
-Save through the app and check the result: the dialog closed, the title shows no unsaved mark, or the file exists. Report what you did and what you verified.
+Save through the app and check the result: the dialog closed, the title shows no unsaved mark, or the file exists. Release the computer, then report what you did and what you verified.

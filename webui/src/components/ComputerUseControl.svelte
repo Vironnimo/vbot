@@ -23,7 +23,7 @@
   const control = (action) =>
     extensionOperation(EXTENSION, 'control', {
       action,
-      ...(action === 'stop' ? { call_id: status.call_id } : {}),
+      ...(action === 'stop' ? { control_id: status.control_id } : {}),
     });
 
   // Computer Use publishes a change whenever its control status changes, so
@@ -63,7 +63,7 @@
           (item) => item.name === EXTENSION && item.status === 'loaded',
         );
         if (!discovered) {
-          // An Extension that is not loaded runs no call.
+          // An Extension that is not loaded controls nothing.
           status = null;
           error = '';
           return;

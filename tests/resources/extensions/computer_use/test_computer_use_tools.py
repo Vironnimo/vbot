@@ -44,7 +44,7 @@ async def test_tools_register_as_one_opt_in_family_with_stop_control(computer: H
     await computer.call("computer_apps", {"action": "list"})
     assert computer.hotkeys == []
     await computer.computer(action="screenshot")
-    assert computer.hotkey.started and computer.hotkey.armed is None
+    assert computer.hotkey.started and computer.hotkey.armed is not None  # armed while in control
     status = await computer.api.operations.invoke("control", {"action": "status"})
     assert status["hotkey_available"] is True
 

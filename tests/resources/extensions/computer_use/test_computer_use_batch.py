@@ -137,7 +137,7 @@ async def test_double_escape_interrupts_a_batch_between_input_events(computer: H
     assert computer.target.activity == [True, False]  # a stop takes the sign down
 
 
-async def test_control_reports_and_stops_only_the_active_call(computer: Harness) -> None:
+async def test_control_reports_and_stops_only_the_current_control(computer: Harness) -> None:
     loop = asyncio.get_running_loop()
     seen: list[dict] = []
 
@@ -152,30 +152,35 @@ async def test_control_reports_and_stops_only_the_active_call(computer: Harness)
             return
         status = control({"action": "status"})
         seen.append(status)
-        seen.append(control({"action": "stop", "call_id": "ctl_other"}))
-        seen.append(control({"action": "stop", "call_id": status["call_id"]}))
+        seen.append(control({"action": "stop", "control_id": "ctl_other"}))
+        seen.append(control({"action": "stop", "control_id": status["control_id"]}))
 
     computer.target.on_input = inspect
     computer.published.clear()
     result = await computer.computer(action="type", text="x")
     status, ignored, stopped = seen
-    call_id = status["call_id"]
     assert computer.hotkey.armed is None
     assert status == {
         "available": True,
         "active": True,
         "stopping": False,
         "hotkey_available": True,
-        "call_id": call_id,
+        "control_id": status["control_id"],
     }
     assert ignored == status
-    assert stopped == {**status, "stopping": True}
+    # The frame is gone at once; the interrupted call still drains.
+    assert stopped == {
+        "available": True,
+        "active": False,
+        "stopping": True,
+        "hotkey_available": True,
+    }
     assert result["error"]["code"] == "computer_use_interrupted"
     assert result["error"]["message"].startswith(
         "The user stopped Computer Use during type (1 characters); it may have been partly sent."
     )
     controls = [change for change in computer.published if change[0] == "control"]
-    assert [ids for _, ids, _ in controls] == [[call_id]] * 3
+    assert controls and all(ids == ["control"] for _, ids, _ in controls)
     assert [revision for *_, revision in controls] == sorted(revision for *_, revision in controls)
     assert (await computer.api.operations.invoke("control", {}))["active"] is False
 
@@ -203,7 +208,7 @@ async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Ha
     assert computer.target.released == 1
 
 
-async def test_the_activity_sign_lasts_from_the_first_call_to_the_end_of_the_run(
+async def test_desktop_control_lasts_from_the_first_call_until_release_run_end_or_idle(
     computer: Harness, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await computer.call("computer_apps", {"action": "list"})
@@ -211,13 +216,55 @@ async def test_the_activity_sign_lasts_from_the_first_call_to_the_end_of_the_run
     await computer.computer(action="screenshot")
     await computer.computer(action="type", text="x")
     assert computer.target.activity == [True]
-    await computer.service.run_end(SimpleNamespace(run_id="other"))
-    assert computer.target.activity == [True]
-    await computer.service.run_end(SimpleNamespace(run_id="run"))
-    assert computer.target.activity == [True, False]
+    control_id = computer.hotkey.armed
+    assert control_id is not None  # double Esc works between calls too
+    assert (await computer.api.operations.invoke("control", {}))["control_id"] == control_id
 
-    # A Run that stops calling loses the sign after the idle time.
-    monkeypatch.setattr(computer_use, "ACTIVITY_IDLE_SECONDS", 0)
+    released = await computer.call("computer_apps", {"action": "release"})
+    assert model_text(released).startswith("Released the computer")
+    assert computer.target.activity == [True, False]
+    assert computer.hotkey.armed is None
+    again = await computer.call("computer_apps", {"action": "done"})
+    assert model_text(again).startswith("You were not controlling the computer")
+
+    # Taking the computer again in the same Run starts a new control.
+    await computer.computer(action="screenshot")
+    assert computer.hotkey.armed not in (None, control_id)
+    await computer.service.run_end(SimpleNamespace(run_id="other"))
+    assert computer.target.activity == [True, False, True]
+    await computer.service.run_end(SimpleNamespace(run_id="run"))
+    assert computer.target.activity == [True, False, True, False]
+
+    # A Run that stops calling loses control after the idle time.
+    monkeypatch.setattr(computer_use, "CONTROL_IDLE_SECONDS", 0)
     await computer.computer(action="screenshot")
     await asyncio.sleep(0.01)
-    assert computer.target.activity == [True, False, True, False]
+    assert computer.target.activity == [True, False, True, False, True, False]
+
+
+async def test_a_user_stop_between_calls_refuses_the_run_until_it_ends(
+    computer: Harness,
+) -> None:
+    computer.target.pointer = (200, 150)
+    assert (await computer.computer(action="left_mouse_down"))["ok"]
+    computer.target.inputs.clear()
+    computer.hotkey.press_double_escape()
+    assert computer.target.activity == [True, False]
+    assert computer.hotkey.armed is None
+
+    refused = await computer.computer(action="left_click", coordinate=[10, 10])
+    assert refused["error"]["code"] == "computer_use_interrupted"
+    assert refused["error"]["message"].startswith(
+        "The user stopped Computer Use by pressing Esc twice. Nothing was done. Computer Use "
+        "stays off until the user's next message"
+    )
+    opened = await computer.call("computer_apps", {"action": "open", "app": "Notepad"})
+    assert opened["error"]["code"] == "computer_use_interrupted"
+    assert computer.target.inputs == []
+    assert computer.target.activity == [True, False]
+
+    # The Run's end releases the held button, and the next Run may take control.
+    await computer.service.run_end(SimpleNamespace(run_id="run"))
+    assert computer.target.released == 1
+    assert (await computer.computer(action="screenshot"))["ok"]
+    assert computer.target.activity == [True, False, True]

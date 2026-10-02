@@ -64,21 +64,26 @@ STEP_SETTLE_SECONDS = 0.2
 OPEN_SETTLE_SECONDS = 1.5
 # A cached "not ready" is checked again at most this often.
 READINESS_RECHECK_SECONDS = 30.0
-# The activity sign stays up between the calls of a Run; without a call for this long
-# (a Run that waits on something else, or one whose end was missed) it goes away.
-ACTIVITY_IDLE_SECONDS = 120.0
+# Desktop control lasts from the first call that takes the desktop until the Agent
+# releases it, its Run ends, or no call came for this long.
+CONTROL_IDLE_SECONDS = 120.0
 _LIST_LIMIT = 25
 ASK_SETTING = "ask_per_app"
+_USER_STOPS = ("control", "double_escape")
 _STOPPED_BY = {
     "control": "The user stopped Computer Use",
     "double_escape": "The user stopped Computer Use by pressing Esc twice",
     "run_cancel": "The Run was cancelled",
     "shutdown": "vBot is shutting down, which stopped Computer Use",
 }
+_STOPPED_ADVICE = (
+    "Computer Use stays off until the user's next message: do not try to operate the computer "
+    "again in this reply. Tell the user what you did and what is left."
+)
 
 
 class Hotkey(Protocol):
-    """The global double-Esc stop, armed only while a call runs."""
+    """The global double-Esc stop, armed while an Agent controls the desktop."""
 
     available: bool
 
@@ -159,16 +164,19 @@ class ComputerUseService:
         self._stop = threading.Event()
         self._stopped = asyncio.Event()
         self._control_lock = threading.RLock()
+        # The running call that takes the desktop, and what stopped it.
         self._active: str | None = None
         self._stop_source: str | None = None
+        # Desktop control: shown by the frame, stoppable by the user while it lasts.
+        self._control_id: str | None = None
+        self._control_runs: set[str] = set()
+        self._control_timer: asyncio.TimerHandle | None = None
+        # Runs whose control the user stopped, mapped to how; refused until they end.
+        self._stopped_runs: dict[str, str] = {}
         self._control_revision = 0
         self._inputs_revision = 0
         # The Run whose left_mouse_down still holds the left button.
         self._held_run: str | None = None
-        # Runs that took the desktop since the activity sign went up.
-        self._activity_runs: set[str] = set()
-        self._activity_shown = False
-        self._activity_timer: asyncio.TimerHandle | None = None
 
     # Lifecycle
 
@@ -192,9 +200,9 @@ class ComputerUseService:
 
     async def close(self) -> None:
         self._closed = True
-        self.stop(source="shutdown")
+        self.interrupt(source="shutdown")
         self.access.cancel_all()
-        self._end_activity()
+        self._end_control()
         if self._hotkey is not None:
             self._hotkey.close()
         executor, target = self._executor, self._target
@@ -217,12 +225,11 @@ class ComputerUseService:
         self.sessions.clear()
 
     async def run_end(self, context: Any, **_: Any) -> None:
-        """Release a mouse button the ending Run left pressed; end its activity sign."""
-        run_id = getattr(context, "run_id", None)
-        if run_id in self._activity_runs:
-            self._activity_runs.discard(run_id)
-            if not self._activity_runs:
-                self._end_activity()
+        """End the Run's desktop control and release a mouse button it left pressed."""
+        run_id = getattr(context, "run_id", None) or ""
+        with self._control_lock:
+            self._stopped_runs.pop(run_id, None)
+        self._release_control(run_id)
         if self._held_run is None or self._held_run != run_id or self._target is None:
             return
         async with self._lock:
@@ -284,8 +291,21 @@ class ComputerUseService:
 
     # Stop control
 
-    def stop(self, owner: object | None = None, *, source: str = "control") -> None:
-        """Stop the active call (only *owner*'s, when given); safe from any thread."""
+    def stop(self, control_id: object | None = None, *, source: str = "control") -> None:
+        """End desktop control as the user (only *control_id*'s, when given).
+
+        Interrupts the running call, hides the frame, and refuses further calls of the
+        Runs that held control until they end. Safe from any thread.
+        """
+        with self._control_lock:
+            current = self._control_id
+            if current is None or (control_id is not None and control_id != current):
+                return
+            self.interrupt(source=source)
+            self._end_control(stopped_by=source)
+
+    def interrupt(self, owner: object | None = None, *, source: str) -> None:
+        """Interrupt the running call (only *owner*'s, when given); safe from any thread."""
         with self._control_lock:
             active = self._active
             if active is None or self._stop_source is not None:
@@ -294,44 +314,36 @@ class ComputerUseService:
                 return
             self._stop_source = source
             self._stop.set()
-            if self._hotkey is not None:
-                self._hotkey.set_armed(None)
             loop, stopped = self._loop, self._stopped
             if loop is not None:
                 # A closed loop has nothing waiting any more.
                 with contextlib.suppress(RuntimeError):
                     loop.call_soon_threadsafe(stopped.set)
-            self.api.logger.debug("Computer Use call stopped (source=%s)", source)
-            self._control_changed(active)
-            if loop is not None:
-                with contextlib.suppress(RuntimeError):
-                    loop.call_soon_threadsafe(self._end_activity)
+            self.api.logger.debug("Computer Use call interrupted (source=%s)", source)
+            self._control_changed()
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
         with self._control_lock:
-            if (
-                action == "stop"
-                and self._active is not None
-                and arguments.get("call_id") == self._active
-            ):
-                self.stop(source="control")
+            control_id = arguments.get("control_id")
+            if action == "stop" and control_id is not None:
+                self.stop(control_id, source="control")
             return {
                 "available": self.ready(),
-                "active": self._active is not None,
+                "active": self._control_id is not None,
                 "stopping": self._active is not None and self._stop_source is not None,
                 "hotkey_available": self._hotkey is not None and self._hotkey.available,
-                **({"call_id": self._active} if self._active is not None else {}),
+                **({"control_id": self._control_id} if self._control_id is not None else {}),
             }
 
-    def _control_changed(self, call_id: str) -> None:
+    def _control_changed(self) -> None:
         """Tell accessors that the ``control`` status changed; ``_control_lock`` is held."""
         host = self.host
         if self._closed or host is None or host.publish_change is None:
             return
         self._control_revision += 1
         try:
-            host.publish_change("control", [call_id], self._control_revision)
+            host.publish_change("control", ["control"], self._control_revision)
         except ValueError:
             # A retired registration invalidates every Extension surface itself.
             self.api.logger.debug("Computer Use change not published: registration retired")
@@ -350,36 +362,75 @@ class ComputerUseService:
     async def respond(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.access.respond(arguments.get("request_id"), arguments.get("response"))
 
-    # Activity sign
+    # Desktop control
 
-    def _begin_activity(self, run_id: str | None) -> None:
-        """Show the sign for a call that takes the desktop; it stays until the Run ends."""
-        if self._activity_timer is not None:
-            self._activity_timer.cancel()
-            self._activity_timer = None
-        self._activity_runs.add(run_id or "")
-        if not self._activity_shown and self._target is not None:
-            self._activity_shown = True
+    def _take_control(self, run_id: str) -> None:
+        """Start or join desktop control for *run_id*; ``_control_lock`` is held."""
+        if self._control_timer is not None:
+            self._control_timer.cancel()
+            self._control_timer = None
+        self._control_runs.add(run_id)
+        if self._control_id is not None:
+            return
+        self._control_id = new_id("ctl")
+        if self._hotkey is not None:
+            self._hotkey.set_armed(self._control_id)
+        if self._target is not None:
             self._target.set_activity(True)
+        self.api.logger.debug("Computer Use desktop control began")
+
+    def _release_control(self, run_id: str) -> bool:
+        """End *run_id*'s part in desktop control; return whether it had one."""
+        with self._control_lock:
+            if run_id not in self._control_runs:
+                return False
+            self._control_runs.discard(run_id)
+            if not self._control_runs:
+                self._end_control()
+            return True
+
+    def _end_control(self, *, stopped_by: str | None = None) -> None:
+        """Hide the frame and disarm the stop; *stopped_by* refuses the Runs' later calls.
+
+        Safe from any thread; only the event loop cancels the idle timer, and a timer
+        that fires late finds its control ended.
+        """
+        with self._control_lock:
+            if stopped_by is not None:
+                for run_id in self._control_runs:
+                    self._stopped_runs[run_id] = stopped_by
+            self._control_runs.clear()
+            if self._control_id is None:
+                return
+            self._control_id = None
+            if self._hotkey is not None:
+                self._hotkey.set_armed(None)
+            if self._target is not None:
+                self._target.set_activity(False)
+            self.api.logger.debug("Computer Use desktop control ended (stopped_by=%s)", stopped_by)
+            self._control_changed()
 
     def _call_done(self) -> None:
-        if self._activity_shown and self._loop is not None:
-            self._activity_timer = self._loop.call_later(ACTIVITY_IDLE_SECONDS, self._end_activity)
+        """Let desktop control lapse when no call follows within the idle time."""
+        control_id, loop = self._control_id, self._loop
+        if control_id is None or loop is None:
+            return
+        if self._control_timer is not None:
+            self._control_timer.cancel()
 
-    def _end_activity(self) -> None:
-        if self._activity_timer is not None:
-            self._activity_timer.cancel()
-            self._activity_timer = None
-        self._activity_runs.clear()
-        if self._activity_shown and self._target is not None:
-            self._activity_shown = False
-            self._target.set_activity(False)
+        def lapse() -> None:
+            with self._control_lock:
+                if self._control_id == control_id and self._active is None:
+                    self._end_control()
+
+        self._control_timer = loop.call_later(CONTROL_IDLE_SECONDS, lapse)
 
     @asynccontextmanager
     async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
-        """Hold the desktop for one call: stoppable, with the hotkey armed."""
+        """Hold the desktop for one call under desktop control, interruptible."""
         async with self._lock:
-            owner = new_id("ctl")
+            owner = new_id("call")
+            run_id = context.run_id or ""
             self._loop = asyncio.get_running_loop()
             if self._hotkey is None:
                 # The global keyboard hook starts with the first call that needs it.
@@ -387,27 +438,32 @@ class ComputerUseService:
                 await asyncio.to_thread(hotkey.start)
                 self._hotkey = hotkey
             with self._control_lock:
+                stopped_by = self._stopped_runs.get(run_id)
+                if stopped_by is not None:
+                    how = {"double_escape": " by pressing Esc twice", "control": ""}
+                    raise CallRefusedError(
+                        "computer_use_interrupted",
+                        f"The user stopped Computer Use{how.get(stopped_by, '')}. Nothing was "
+                        f"done. {_STOPPED_ADVICE}",
+                    )
                 self._active, self._stop_source = owner, None
                 self._stop.clear()
                 self._stopped = asyncio.Event()
-                if self._hotkey is not None:
-                    self._hotkey.set_armed(owner)
-                self._control_changed(owner)
-            context.on_cancel(lambda: self.stop(owner, source="run_cancel"))
+                cancelled = context.is_cancelled() or context.was_cancelled_by_user()
+                if not cancelled:
+                    self._take_control(run_id)
+                self._control_changed()
+            context.on_cancel(lambda: self.interrupt(owner, source="run_cancel"))
             try:
-                if context.is_cancelled() or context.was_cancelled_by_user():
-                    self.stop(owner, source="run_cancel")
-                else:
-                    self._begin_activity(context.run_id)
+                if cancelled:
+                    self.interrupt(owner, source="run_cancel")
                 yield
             finally:
-                self._call_done()
                 with self._control_lock:
                     if self._active == owner:
-                        if self._hotkey is not None:
-                            self._hotkey.set_armed(None)
                         self._active = None
-                        self._control_changed(owner)
+                        self._control_changed()
+                self._call_done()
 
     def _check_stop(self) -> None:
         if self._stop.is_set():
@@ -447,8 +503,7 @@ class ComputerUseService:
             return self._failed(
                 tool,
                 "computer_use_interrupted",
-                f"{self._stopped_text()}; held keys and buttons were released. Do not continue "
-                "operating the computer unless the user asks you to.",
+                f"{self._stopped_text()}; held keys and buttons were released. {_STOPPED_ADVICE}",
             )
         except TargetError as error:
             return self._failed(tool, error.code, _target_text(error, desktop))
@@ -555,8 +610,7 @@ class ComputerUseService:
             raise TargetError(
                 f"{self._stopped_text()} during {action.describe()}"
                 + ("; it may have been partly sent" if sent else "")
-                + ". Held keys and buttons were released. Do not continue operating the "
-                "computer unless the user asks you to.",
+                + f". Held keys and buttons were released. {_STOPPED_ADVICE}",
                 "computer_use_interrupted",
             ) from None
         return "\n".join([*lines, *action.notes])
@@ -564,7 +618,7 @@ class ComputerUseService:
     async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
         done = await self._on_worker(desktop.act, action, frame)
         if action.name == "left_mouse_down":
-            self._held_run = context.run_id
+            self._held_run = context.run_id or ""
         elif action.name == "left_mouse_up":
             self._held_run = None
         return done
@@ -613,8 +667,7 @@ class ComputerUseService:
             except InputInterrupted:
                 raise TargetError(
                     f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
-                    "final screenshot. Do not continue operating the computer unless the user "
-                    "asks you to.\n" + "\n".join(lines),
+                    f"final screenshot. {_STOPPED_ADVICE}\n" + "\n".join(lines),
                     "computer_use_interrupted",
                 ) from None
             lines.append(await self._on_worker(desktop.screenshot))
@@ -643,6 +696,8 @@ class ComputerUseService:
                 return await self._on_worker(_listing, desktop, arguments.get("query"))
             if action == "request":
                 return await self._request(context, access, agent, arguments)
+            if action == "release":
+                return await self._release(context)
             return await self._open(context, access, desktop, arguments.get("app"))
 
         return await self._handle(context, "computer_apps", work)
@@ -699,6 +754,21 @@ class ComputerUseService:
             f'"{new[0].name}"}}, or take a screenshot with computer {{"action":"screenshot"}}.'
         )
 
+    async def _release(self, context: ToolContext) -> str:
+        """Hand the desktop back: release a held button and end this Run's control."""
+        run_id = context.run_id or ""
+        async with self._lock:
+            if self._held_run == run_id and self._target is not None:
+                self._held_run = None
+                await self._on_worker(self._target.release_all)
+            released = self._release_control(run_id)
+        if released:
+            return (
+                "Released the computer: the user has it back. A later computer or "
+                "computer_batch call, or computer_apps open, takes it again."
+            )
+        return "You were not controlling the computer, so there was nothing to release."
+
     async def _ask(self, context: ToolContext, message: str) -> str:
         """Wait for the user's answer; a cancelled Run withdraws the request."""
         waiter = asyncio.ensure_future(self.access.ask(context.session_id, message))
@@ -744,7 +814,7 @@ class ComputerUseService:
                 shot = await self._on_worker(desktop.screenshot)
             except InputInterrupted:
                 raise TargetError(
-                    f"{self._stopped_text()} while {match.name} was opening.",
+                    f"{self._stopped_text()} while {match.name} was opening. {_STOPPED_ADVICE}",
                     "computer_use_interrupted",
                 ) from None
         return f"Opened {match.name}.\n{shot}"
@@ -826,8 +896,7 @@ def _batch_error(
     if isinstance(error, InputInterrupted):
         message = (
             f"{stopped} during action {number} of {len(actions)} ({action.describe()}).{skipped} "
-            "Held keys and buttons were released. Do not continue operating the computer "
-            f"unless the user asks you to.\n{ran}"
+            f"Held keys and buttons were released. {_STOPPED_ADVICE}\n{ran}"
         )
         return TargetError(message, "computer_use_interrupted")
     detail = str(error).rstrip()
@@ -861,17 +930,17 @@ def register(api: ExtensionAPI) -> None:
     api.operations.input_response_operation = "respond"
     api.operations.register(
         "control",
-        "Inspect or interrupt the active Computer Use call on the server host.",
+        "Inspect Computer Use's desktop control on the server host, or end it as the user.",
         {
             "type": "object",
             "properties": {
                 "action": {"type": "string", "enum": ["status", "stop"]},
-                "call_id": {"type": "string", "minLength": 1},
+                "control_id": {"type": "string", "minLength": 1},
             },
             "allOf": [
                 {
                     "if": {"properties": {"action": {"const": "stop"}}, "required": ["action"]},
-                    "then": {"required": ["call_id"]},
+                    "then": {"required": ["control_id"]},
                 }
             ],
             "additionalProperties": False,

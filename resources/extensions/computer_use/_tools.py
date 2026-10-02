@@ -40,7 +40,7 @@ ACTIONS = (
     "cursor_position",
 )
 SCROLL_DIRECTIONS = ("up", "down", "left", "right")
-APPS_ACTIONS = ("list", "open", "request")
+APPS_ACTIONS = ("list", "open", "request", "release")
 MAX_BATCH_ACTIONS = 30
 
 COMPUTER_DESCRIPTION = (
@@ -51,7 +51,11 @@ COMPUTER_DESCRIPTION = (
     "text, computer_batch for several predictable steps, and computer_apps to bring an "
     "app to the front. If the user requires approval per app, apps not approved yet "
     "appear as gray boxes and input into them is refused. This is the user's real mouse "
-    "and keyboard: the user can stop you with the Stop button or by pressing Esc twice."
+    "and keyboard. From your first call until you hand the computer back with "
+    'computer_apps {"action":"release"}, a frame around the screens shows the user that '
+    "you control it, and the user can stop you at any time with the Stop button or by "
+    "pressing Esc twice. Control also ends with your reply or after 2 minutes without a "
+    "call."
 )
 
 COMPUTER_BATCH_DESCRIPTION = (
@@ -71,7 +75,8 @@ COMPUTER_APPS_DESCRIPTION = (
     "front, starting it if needed, and returns a screenshot. request is needed only when "
     "the user requires approval per app: it asks the user to approve apps for the current "
     "Session and waits for the answer. Approvals end 30 minutes after the last Computer "
-    "Use call in the Session."
+    "Use call in the Session. release hands the computer back to the user when you are "
+    "done with it; a later computer call takes it again."
 )
 
 
@@ -715,6 +720,8 @@ _APPS_ALIASES = {
     **dict.fromkeys(("bringtofront", "openapp", "openapplication", "run"), "open"),
     **dict.fromkeys(("grant", "approve", "requestaccess", "access", "ask", "allow"), "request"),
     **dict.fromkeys(("ls", "status", "granted", "approved", "listapps", "search", "find"), "list"),
+    **dict.fromkeys(("done", "finish", "finished", "end", "handback", "giveback"), "release"),
+    **dict.fromkeys(("releasecontrol", "returncontrol", "endcontrol"), "release"),
 }
 
 
