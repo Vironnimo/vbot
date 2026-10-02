@@ -23,6 +23,7 @@ from core.chat.file_mentions import (
     resolve_mention_root,
 )
 from core.tools.file_state import FileReadState
+from tests.directory_links import link_directory
 
 # ---------------------------------------------------------------------------
 # list_mention_files
@@ -44,6 +45,21 @@ def test_lists_relative_forward_slash_paths_and_honors_gitignore(tmp_path: Path)
     assert truncated is False
     assert set(files) == {".gitignore", "README.md", "src/app.py"}
     assert list_mention_files(tmp_path / "does-not-exist") == ([], False)
+
+
+def test_listing_never_enters_directory_links(tmp_path: Path) -> None:
+    # A junction on Windows: os.walk enters those, unlike symbolic links.
+    root = tmp_path / "project"
+    outside = tmp_path / "outside"
+    (root / "src").mkdir(parents=True)
+    (root / "src" / "app.py").write_text("print()", encoding="utf-8")
+    outside.mkdir()
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    link_directory(root / "linked", outside)
+
+    files, truncated = list_mention_files(root)
+
+    assert (files, truncated) == (["src/app.py"], False)
 
 
 def test_listing_marks_truncation_at_the_file_cap(

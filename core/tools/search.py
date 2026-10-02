@@ -156,7 +156,9 @@ def iter_search_entries(
     Prunes ignored directories before descending and skips ignored files when
     ``apply_ignore_rules`` is set. ``.git`` internals are always pruned — never
     useful for content search — unless the root itself lies inside a ``.git``
-    tree (an explicit reach-in). Polls the budget per directory and per file.
+    tree (an explicit reach-in). Directory links are listed but never entered,
+    Windows junctions included, which ``os.walk`` alone would follow out of the
+    tree and around link cycles. Polls the budget per directory and per file.
     """
     ignore_filter = GitIgnoreFilter(search_root) if apply_ignore_rules else None
     skip_git_directories = ".git" not in search_root.parts
@@ -174,7 +176,9 @@ def iter_search_entries(
             if ignore_filter is not None and ignore_filter.is_ignored(child, is_directory=True):
                 continue
             kept_directories.append(name)
-        directory_names[:] = kept_directories
+        directory_names[:] = [
+            name for name in kept_directories if not (current / name).is_junction()
+        ]
 
         if include_directories:
             for name in kept_directories:
