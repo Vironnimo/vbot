@@ -2,12 +2,13 @@
 # The complete backend suite on Linux for scripts/push.py, run inside WSL on the
 # checked commit, which push.py has unpacked into "$1".
 #
-# As in CI: the one supported Python version with the dev extra installed
-# editable, the pinned search engine and the token estimation encodings
-# provisioned first, and failed tests run once more alone; those that pass then
-# are printed as "flaky: <node id>" and do not fail the run. Everything lasting
-# lives in ~/.cache/vbot-push: uv (the version pyproject.toml pins), one
-# environment per pyproject.toml and Python version, the search engine and the
+# As in CI: the Python runtime the Linux packages bundle
+# (scripts/linux/python.lock.json) with the dev extra installed editable, the
+# pinned search engine and the token estimation encodings provisioned first,
+# and failed tests run once more alone; those that pass then are printed as
+# "flaky: <node id>" and do not fail the run. Everything lasting lives in
+# ~/.cache/vbot-push: uv (the version pyproject.toml pins), the runtime, one
+# environment per pyproject.toml and runtime, the search engine and the
 # encodings. push.py holds that directory's lock for the whole run.
 set -u
 
@@ -23,8 +24,11 @@ fail() {
 }
 
 uv_version=$(grep -o '"uv==[0-9.]*"' pyproject.toml | head -1 | tr -d '"' | cut -d= -f3)
-python_version=$(sed -n 's/^PYTHON_VERSION = "\(.*\)"$/\1/p' scripts/package_build.py)
-[ -n "$uv_version" ] && [ -n "$python_version" ] || fail "uv or Python version pin not found"
+[ -n "$uv_version" ] || fail "the uv version pin was not found"
+read -r runtime_url runtime_sha256 < <(python3 -c 'import json, platform
+spec = json.load(open("scripts/linux/python.lock.json"))["runtimes"]["linux-" + platform.machine()]
+print(spec["url"], spec["sha256"])')
+[ -n "${runtime_sha256:-}" ] || fail "no locked Python runtime for $(uname -m)"
 
 uv=$cache/uv-$uv_version/bin/uv
 if [ ! -x "$uv" ]; then
@@ -34,12 +38,24 @@ if [ ! -x "$uv" ]; then
         || fail "uv $uv_version could not be installed (needs python3 with venv)"
 fi
 
-key=$( (cat pyproject.toml; echo "$python_version") | sha256sum | cut -c1-16)
+runtime=$cache/runtime-$runtime_sha256
+if [ ! -x "$runtime/bin/python3" ]; then
+    find "$cache" -maxdepth 1 -name 'runtime-*' -exec rm -rf {} +
+    archive=$cache/runtime.tar.gz
+    curl -fsSL --retry 3 "$runtime_url" -o "$archive" \
+        && echo "$runtime_sha256  $archive" | sha256sum -c --quiet - \
+        && mkdir "$runtime.partial" && tar -xzf "$archive" -C "$runtime.partial" \
+        && mv "$runtime.partial/python" "$runtime" \
+        || { rm -rf "$runtime" "$runtime.partial" "$archive"; fail "the locked Python runtime could not be installed"; }
+    rm -rf "$runtime.partial" "$archive"
+fi
+
+key=$( (cat pyproject.toml; echo "$runtime_sha256") | sha256sum | cut -c1-16)
 venv=$cache/venv-$key
 python=$venv/bin/python
 if [ ! -x "$python" ]; then
     find "$cache" -maxdepth 1 -name 'venv-*' -exec rm -rf {} +
-    "$uv" venv -q -p "$python_version" "$venv" \
+    "$uv" venv -q -p "$runtime/bin/python3" "$venv" \
         && VIRTUAL_ENV=$venv "$uv" pip install -q -e ".[dev]" \
         || { rm -rf "$venv"; fail "the test environment could not be created"; }
 else
@@ -63,8 +79,12 @@ except (OSError, ValueError):
     pass'
 }
 
+# As push.py on Windows: every core of the machine's test core pool, not the two
+# `-n auto` asks for there.
+workers=$("$python" -c 'from tests import cpu_pool; print(cpu_pool.pool_size())') \
+    || fail "the test core pool size could not be read"
 status=0
-"$python" -m pytest -rfE -q --no-header || status=$?
+"$python" -m pytest -n "$workers" -rfE -q --no-header || status=$?
 [ "$status" -eq 1 ] || exit "$status"
 failed=$(last_failed)
 [ -n "$failed" ] || exit 1
