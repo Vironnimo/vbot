@@ -416,6 +416,33 @@
   max-width: 100%;
 }
 
+/* A wide table (Diagnostics' data quality): column labels wrap where the
+   view is too narrow for them, so the numbers set the column widths and
+   the table fits a desktop-wide view. On a narrower view the table scrolls
+   sideways inside its block and its first column (the name) stays put. */
+.stats-view .stats-wide-table :is(th.data-table__cell, .data-table__sort) {
+  white-space: normal;
+}
+
+.stats-view .stats-wide-table .data-table__cell:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.stats-view .stats-wide-table th.data-table__cell:first-child {
+  z-index: 2;
+  background: var(--data-table-head-surface, var(--surface));
+}
+
+.stats-view
+  .stats-wide-table
+  .data-table__row:hover
+  > .data-table__cell:first-child {
+  background: var(--surface-2);
+}
+
 /* Where the column width is set (top lists, bar lists), a long badge
    gives way faster than the name, so the name stays readable. */
 .stats-view :is(.stats-compact-table, .stats-bars__label) .stats-agent__badge {
@@ -1096,6 +1123,18 @@
 /* ---- Narrower views (tablet, phone, wide sidebar) ---------------------- */
 
 @container stats-view (max-width: 1080px) {
+  /* A wide table may scroll here: a line marks where its name column
+     covers the scrolled columns. */
+  .stats-view .stats-wide-table td.data-table__cell:first-child {
+    box-shadow: inset -1px 0 0 var(--border);
+  }
+
+  .stats-view .stats-wide-table th.data-table__cell:first-child {
+    box-shadow:
+      inset -1px 0 0 var(--border),
+      inset 0 -1px 0 var(--border);
+  }
+
   .stats-view .stats-tiles--5,
   .stats-view .stats-tiles--6 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1111,6 +1150,10 @@
 }
 
 @container stats-view (max-width: 700px) {
+  .stats-view .stats-wide-table .stats-id {
+    max-width: 18ch;
+  }
+
   .stats-view .stats-figures--grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: var(--space-md);

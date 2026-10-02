@@ -521,6 +521,7 @@
           label: t('statistics.diagnostics.filterModels'),
         }}
         emptyText={t('statistics.none')}
+        class="stats-wide-table"
         dense
       />
     </div>
