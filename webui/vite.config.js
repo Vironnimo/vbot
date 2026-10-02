@@ -23,8 +23,8 @@ export default defineConfig({
         // Third-party code lives in its own chunks so app releases no longer
         // invalidate the browser cache for unchanged libraries. markdown-it
         // gets a dedicated chunk because it is the largest library and only
-        // grows with markdown features, never with app code. The @xterm
-        // packages match no group on purpose: they are loaded through
+        // grows with markdown features, never with app code. The @xterm and
+        // tldts packages match no group on purpose: they are loaded through
         // dynamic import() and must remain separate on-demand chunks.
         codeSplitting: {
           groups: [
@@ -36,7 +36,7 @@ export default defineConfig({
             },
             {
               name: 'vendor',
-              test: /[\\/]node_modules[\\/](?!@xterm[\\/])/,
+              test: /[\\/]node_modules[\\/](?!@xterm[\\/]|tldts(-core)?[\\/])/,
               minSize: 0,
               priority: 10,
             },

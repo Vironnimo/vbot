@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
+import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import { init, t } from '../../lib/i18n.js';
 
 const listRequests = vi.fn();
@@ -20,6 +21,7 @@ init('en');
 const REVIEW = t('extensions.reviewInput');
 const SEND = t('extensions.sendResponse');
 const DECLINE = t('extensions.declineInput');
+const CANCEL = t('extensions.cancelInput');
 const namePayload = {
   message: 'test-owned-question',
   requestedSchema: {
@@ -36,6 +38,7 @@ afterEach(async () => {
   document.body.innerHTML = '';
   vi.clearAllMocks();
   vi.useRealTimers();
+  setApplicationTimeZone('UTC');
 });
 
 function subscribeInvalidations(listener) {
@@ -88,14 +91,24 @@ function button(label) {
 
 function field(dialog, label) {
   return [...dialog.querySelectorAll('.form-field')].find(
-    (item) => item.querySelector('label')?.textContent.trim() === label,
+    (item) =>
+      item.querySelector('label')?.textContent.replace('*', '').trim() ===
+      label,
   );
 }
 
 function type(dialog, label, value) {
   const input = field(dialog, label).querySelector('input');
+  expect(input).toBeTruthy();
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
+  flushSync();
+}
+
+function check(container, label) {
+  [...container.querySelectorAll('[role="checkbox"]')]
+    .find((item) => item.textContent.trim() === label)
+    .click();
   flushSync();
 }
 
@@ -194,7 +207,7 @@ describe('Extension requests', () => {
     expect(dialog.textContent).toContain('test-owned-question');
     type(dialog, 'Name', 'sentinel');
     type(dialog, 'count', '0');
-    choose(dialog, 'selected', t('common.no'));
+    check(dialog, 'selected');
     type(dialog, 'values', '["a","b"]');
     button(SEND).click();
     await vi.waitFor(closed);
@@ -205,7 +218,7 @@ describe('Extension requests', () => {
         content: {
           name: 'sentinel',
           count: 0,
-          selected: false,
+          selected: true,
           values: ['a', 'b'],
         },
       },
@@ -235,28 +248,175 @@ describe('Extension requests', () => {
     closed();
   });
 
-  it('declines without sending the draft', async () => {
-    operation.mockResolvedValue({});
-    const dialog = await openRequest(namePayload);
-    type(dialog, 'Name', 'draft-sentinel');
-    button(DECLINE).click();
+  it('renders choices and formats from the schema and sends only answers that fit', async () => {
+    setApplicationTimeZone('Europe/Berlin');
+    operation.mockResolvedValue({ answered: true });
+    const dialog = await openRequest({
+      message: 'test-owned-question',
+      requestedSchema: {
+        required: ['color', 'tags', 'email'],
+        properties: {
+          color: {
+            type: 'string',
+            title: 'Color',
+            oneOf: [
+              { const: 'r', title: 'Red' },
+              { const: 'g', title: 'Green' },
+            ],
+            default: 'g',
+          },
+          size: {
+            type: 'string',
+            title: 'Size',
+            enum: ['s', 'm'],
+            enumNames: ['Small', 'Medium'],
+          },
+          tags: {
+            type: 'array',
+            title: 'Tags',
+            items: {
+              anyOf: [
+                { const: 'a', title: 'Alpha' },
+                { const: 'b', title: 'Beta' },
+                { const: 'c', title: 'Gamma' },
+              ],
+            },
+            minItems: 1,
+            maxItems: 2,
+          },
+          email: { type: 'string', title: 'Email', format: 'email' },
+          when: { type: 'string', title: 'When', format: 'date-time' },
+          count: {
+            type: 'integer',
+            title: 'Count',
+            minimum: 1,
+            maximum: 5,
+            default: 3,
+          },
+        },
+      },
+    });
+    expect(field(dialog, 'Email').querySelector('input').type).toBe('email');
+    expect(field(dialog, 'When').querySelector('input').type).toBe(
+      'datetime-local',
+    );
+    expect(dialog.textContent).toContain(
+      t('extensions.inputTimeZone', { zone: 'Europe/Berlin' }),
+    );
+    type(dialog, 'Email', 'not-an-address');
+    type(dialog, 'Count', '9');
+    for (const tag of ['Alpha', 'Beta', 'Gamma']) check(dialog, tag);
+    button(SEND).click();
+    flushSync();
+    expect(operation).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain(t('extensions.inputEmail'));
+    expect(dialog.textContent).toContain(
+      t('extensions.inputMaximum', { maximum: 5 }),
+    );
+    expect(dialog.textContent).toContain(
+      t('extensions.inputChoicesMax', { count: 2 }),
+    );
+
+    type(dialog, 'Email', 'user@example.com');
+    type(dialog, 'Count', '');
+    type(dialog, 'Count', '3');
+    check(dialog, 'Beta');
+    choose(dialog, 'Size', 'Small');
+    type(dialog, 'When', '2026-07-01T09:30');
+    button(SEND).click();
     await vi.waitFor(closed);
     expect(operation).toHaveBeenCalledExactlyOnceWith('mcp', 'respond', {
       request_id: 'request',
-      response: { action: 'decline' },
+      response: {
+        action: 'accept',
+        content: {
+          color: 'g',
+          size: 's',
+          tags: ['a', 'c'],
+          email: 'user@example.com',
+          when: '2026-07-01T09:30:00+02:00',
+          count: 3,
+        },
+      },
     });
   });
 
   it.each([
-    ['https://example.com/authorize', 'https://example.com/authorize'],
-    ['javascript:alert(1)', null],
-  ])(
-    'links the requested page %s only when it is a web address',
-    async (url, expected) => {
-      const dialog = await openRequest({ message: 'test-owned-link', url });
-      expect(dialog.querySelector('a')?.getAttribute('href') ?? null).toBe(
-        expected,
+    [DECLINE, 'decline'],
+    [CANCEL, 'cancel'],
+  ])('answers %s without sending the draft', async (label, action) => {
+    operation.mockResolvedValue({});
+    const dialog = await openRequest(namePayload);
+    type(dialog, 'Name', 'draft-sentinel');
+    button(label).click();
+    await vi.waitFor(closed);
+    expect(operation).toHaveBeenCalledExactlyOnceWith('mcp', 'respond', {
+      request_id: 'request',
+      response: { action },
+    });
+  });
+
+  it('shows where a requested page leads and accepts only when the user opens it', async () => {
+    operation.mockResolvedValue({});
+    const url = 'https://login.example.co.uk/authorize?state=test-owned';
+    const dialog = await openRequest({
+      mode: 'url',
+      message: 'test-owned-link',
+      url,
+      elicitationId: 'test-owned-elicitation',
+    });
+    expect(dialog.textContent).toContain(
+      t('extensions.urlRequest', { name: 'blender' }),
+    );
+    expect(dialog.textContent).toContain('test-owned-link');
+    expect(dialog.querySelector('.requested-url__address').textContent).toBe(
+      url,
+    );
+    await vi.waitFor(() => {
+      flushSync();
+      expect(dialog.querySelector('.requested-url__domain').textContent).toBe(
+        'example.co.uk',
       );
-    },
-  );
+    });
+    expect(dialog.querySelector('.requested-url__site').textContent).toBe(
+      'example.co.uk',
+    );
+    const links = dialog.querySelectorAll('a');
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute('href')).toBe(url);
+    expect(links[0].target).toBe('_blank');
+    expect(links[0].rel).toBe('noopener noreferrer');
+    expect(button(SEND)).toBeUndefined();
+    expect(operation).not.toHaveBeenCalled();
+    // jsdom cannot navigate; the browser would open the page in a new tab.
+    const stay = (event) => event.preventDefault();
+    document.addEventListener('click', stay);
+    try {
+      links[0].click();
+    } finally {
+      document.removeEventListener('click', stay);
+    }
+    await vi.waitFor(closed);
+    expect(operation).toHaveBeenCalledExactlyOnceWith('mcp', 'respond', {
+      request_id: 'request',
+      response: { action: 'accept' },
+    });
+  });
+
+  it.each([
+    [
+      'http://xn--bcher-kva.example/pay',
+      ['extensions.urlInsecure', 'extensions.urlInternational'],
+      true,
+    ],
+    ['javascript:alert(1)', ['extensions.urlInvalid'], false],
+  ])('warns about the requested page %s', async (url, warnings, linked) => {
+    const dialog = await openRequest({
+      mode: 'url',
+      message: 'test-owned-link',
+      url,
+    });
+    for (const key of warnings) expect(dialog.textContent).toContain(t(key));
+    expect(Boolean(dialog.querySelector('a'))).toBe(linked);
+  });
 });
