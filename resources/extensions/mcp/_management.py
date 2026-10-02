@@ -46,6 +46,10 @@ _DESCRIPTIONS = {
     "disable": "Disable a saved connection and stop its client and published Tools.",
     "connect": "Start connecting an enabled connection; inspect status for readiness.",
     "disconnect": "Close the current client without disabling the saved connection.",
+    "reconnect": (
+        "Close and restart an enabled connection, including a local server's process; "
+        "inspect status for readiness."
+    ),
     "reauthorize": (
         "Sign an OAuth connection out: delete its stored tokens and registered client, "
         "then reconnect an enabled connection, which starts a new sign-in."
@@ -96,6 +100,7 @@ def register_management(
                 "disable",
                 "connect",
                 "disconnect",
+                "reconnect",
                 "reauthorize",
                 "test",
             ),

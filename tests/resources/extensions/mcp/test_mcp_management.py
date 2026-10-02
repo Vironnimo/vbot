@@ -294,6 +294,31 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
 
 
 @pytest.mark.asyncio
+async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_one(
+    host, monkeypatch, caplog
+):
+    started: list[ConnectionRunner] = []
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
+    service, _registry = await start_service(host)
+    try:
+        await service.manage("save", {"connection": _CONNECTION})
+        first = service.runners["example"]
+
+        with caplog.at_level(logging.INFO):
+            await service.manage("reconnect", {"id": "example"})
+
+        # A new client, and for a local server a new process, replaces the old one.
+        assert started == [first, service.runners["example"]]
+        assert service.runners["example"] is not first
+        assert "MCP connection restarted (connection=example)" in caplog.text
+        await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
+        with pytest.raises(ValueError, match="disabled"):
+            await service.manage("reconnect", {"id": "example"})
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
 async def test_connection_and_job_changes_reach_accessors_in_revision_order(host, monkeypatch):
     changes: list[tuple[str, list[str], int]] = []
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)

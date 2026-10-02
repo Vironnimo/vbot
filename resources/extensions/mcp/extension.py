@@ -679,6 +679,12 @@ class MCPService:
                     self.api.logger.info("MCP connection started (connection=%s)", identifier)
                 runner.start()
                 return self._status(identifier)
+            if operation == "reconnect":
+                # A new client and, for a local server, a new process.
+                await self._stop(identifier)
+                self._runner(config).start()
+                self.api.logger.info("MCP connection restarted (connection=%s)", identifier)
+                return self._status(identifier)
             if operation == "events":
                 return runner.events(arguments.get("after", 0))
             if operation == "test":
