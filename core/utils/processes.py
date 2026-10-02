@@ -57,25 +57,27 @@ def activate_process_containment(*, platform_name: str = os.name) -> None:
 
 
 def guarded_process_launch(
-    argv: Sequence[str], *, platform_name: str = os.name
+    argv: Sequence[str], *, controlling_terminal: bool = False, platform_name: str = os.name
 ) -> GuardedProcessLaunch:
-    """Wrap a POSIX child with the active server-lifetime guardian when enabled."""
+    """Wrap a POSIX child with the private guardian when it needs one.
+
+    The guardian ties the child to the server lifetime while containment is
+    active. With *controlling_terminal* it also makes the PTY on the child's
+    stdin its controlling terminal, so the caller must start the launch as a
+    session leader (``start_new_session=True``) with the PTY slave as stdin.
+    """
 
     if not argv:
         raise ValueError("Process argv must not be empty")
-    if platform_name == "nt" or _POSIX_LIFETIME_READ_FD is None:
+    lifetime_fd = _POSIX_LIFETIME_READ_FD
+    if platform_name == "nt" or (lifetime_fd is None and not controlling_terminal):
         return GuardedProcessLaunch(tuple(argv))
+    options = ["--controlling-terminal"] if controlling_terminal else []
+    if lifetime_fd is not None:
+        options += ["--lifetime-fd", str(lifetime_fd)]
     return GuardedProcessLaunch(
-        (
-            sys.executable,
-            "-m",
-            "core.utils.process_guardian",
-            "--lifetime-fd",
-            str(_POSIX_LIFETIME_READ_FD),
-            "--",
-            *argv,
-        ),
-        (_POSIX_LIFETIME_READ_FD,),
+        (sys.executable, "-m", "core.utils.process_guardian", *options, "--", *argv),
+        () if lifetime_fd is None else (lifetime_fd,),
     )
 
 

@@ -109,7 +109,7 @@ These libraries remain separately installed dependencies; their source distribut
 
 ## Interactive terminal dependencies
 
-The `terminal` Tool uses [pyte](https://github.com/selectel/pyte), distributed under the GNU Lesser General Public License v3, as an in-memory VT terminal emulator. It uses [pywinpty](https://github.com/andfoy/pywinpty), distributed under the MIT License, for ConPTY access on Windows and [ptyprocess](https://github.com/pexpect/ptyprocess), distributed under the ISC License, for PTY process control on POSIX systems. The WebUI Terminals surface uses [xterm.js](https://github.com/xtermjs/xterm.js), including `@xterm/xterm` and `@xterm/addon-fit`, distributed under the MIT License, for browser-side VT rendering and responsive fitting. These libraries remain separately installed dependencies; their source distributions and license texts are available from the linked upstream projects and installed package metadata.
+The `terminal` Tool uses [pyte](https://github.com/selectel/pyte), distributed under the GNU Lesser General Public License v3, as an in-memory VT terminal emulator. It uses [pywinpty](https://github.com/andfoy/pywinpty), distributed under the MIT License, for ConPTY access on Windows; on POSIX systems it uses the operating system's PTY support directly. The WebUI Terminals surface uses [xterm.js](https://github.com/xtermjs/xterm.js), including `@xterm/xterm` and `@xterm/addon-fit`, distributed under the MIT License, for browser-side VT rendering and responsive fitting. These libraries remain separately installed dependencies; their source distributions and license texts are available from the linked upstream projects and installed package metadata.
 
 
 ## Web page extraction
