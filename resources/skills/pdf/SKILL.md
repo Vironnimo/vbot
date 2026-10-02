@@ -29,6 +29,7 @@ HTML documents need a Chromium-based browser: Edge, Chrome or Chromium. `create`
 
 - On your own: install the Python packages with `setup --install`; create work files in `pdf-work/` and output files.
 - Only when the user asked for it: `--flatten` on forms, `--break-signatures`, removing a password, replacing or deleting a file the user gave you.
+- A request to change a file, such as adding pages to it or stamping it, asks for a changed copy: write a new file and name it in your report. Replace the original only when the user says to overwrite or replace it.
 - Only after the user agreed: installing a browser (also with `setup --install-browser`), system packages or fonts.
 
 ## Create a document
