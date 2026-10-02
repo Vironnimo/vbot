@@ -9,7 +9,10 @@ import re
 import socket
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import override
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 import httpcore2
 import mcp.types as types
@@ -20,15 +23,22 @@ from mcp.server import Server
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
+from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._callbacks import sampling_messages
 from resources.extensions.mcp._network import DestinationGuard
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.interactions import InputRequests
-from tests.resources.extensions.mcp.mcp_test_support import context, runner_for, start_service
+from tests.resources.extensions.mcp.mcp_test_support import (
+    StreamServer,
+    context,
+    runner_for,
+    start_service,
+)
 
 # A minimal stdio server: it answers the handshake, one plain Tool and one Tool that
-# requires the task protocol, whose result it hands out through tasks/result.
+# requires the task protocol, whose result it hands out through tasks/result. It
+# also writes a line that is neither UTF-8 nor JSON.
 _STDIO_SERVER = """import json
 import sys
 task = {"taskId": "task-sentinel", "status": "completed", "ttl": 1000,
@@ -41,6 +51,9 @@ for line in sys.stdin:
     params = request.get("params", {})
     result = None
     if method == "initialize":
+        # A stray line that is neither UTF-8 nor JSON, as from a noisy server.
+        sys.stdout.buffer.write(b"\\xff stray output\\n")
+        sys.stdout.flush()
         result = {"protocolVersion": "2025-11-25", "capabilities": {"tools": {},
             "tasks": {"requests": {"tools": {"call": {}}}}},
             "serverInfo": {"name": "tasks", "version": "1"}}
@@ -85,6 +98,7 @@ async def test_stdio_wire_round_trips_calls_and_task_payloads_then_shuts_down(ho
             started = await runner.invoke("tools/call", {"name": "long", "arguments": {}})
             result = await runner.invoke("tasks/result", {"taskId": started["task"]["taskId"]})
         assert echoed["content"][0]["text"] == "wire-sentinel"
+        assert [event["kind"] for event in runner.events()["events"]].count("transport_error") == 1
         assert result["content"][0]["text"] == "payload-sentinel"
         assert result["structuredContent"] == {"nested": [1, 2, 3]}
         assert result["_meta"] == {"preserved": True}
@@ -126,6 +140,100 @@ async def test_http_transports(host, server, transport):
                 "tools/call", {"name": "echo", "arguments": {"value": transport}}
             )
         assert json.loads(result["content"][0]["text"]) == {"value": transport}
+    finally:
+        await runner.close()
+        http_server.should_exit = True
+        await asyncio.wait_for(serving, 5)
+        listener.close()
+        await _stop_sse_shutdown_watcher()
+
+
+class _ExpiringSessions:
+    """ASGI middleware that ends sessions the way a restarted legacy server does."""
+
+    def __init__(self, app):
+        self.app = app
+        self.expired: set[bytes] = set()
+        self.current: bytes | None = None
+
+    async def __call__(self, scope, receive, send):
+        session = dict(scope.get("headers", [])).get(b"mcp-session-id")
+        if session is not None:
+            self.current = session
+            if session in self.expired:
+                body = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {"code": -32600, "message": "Session not found"},
+                }
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 404,
+                        "headers": [(b"content-type", b"application/json")],
+                    }
+                )
+                await send({"type": "http.response.body", "body": json.dumps(body).encode()})
+                return
+        await self.app(scope, receive, send)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["tools/call", "resources/read"])
+async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
+    host, server, monkeypatch, operation
+):
+    from mcp import Client
+
+    def legacy_client(*args, **kwargs):
+        kwargs["mode"] = "legacy"
+        return Client(*args, **kwargs)
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr("resources.extensions.mcp.client.Client", legacy_client)
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    sessions = _ExpiringSessions(server.streamable_http_app())
+    http_server = uvicorn.Server(
+        uvicorn.Config(sessions, log_config=None, access_log=False, timeout_graceful_shutdown=1)
+    )
+    serving = asyncio.create_task(http_server.serve(sockets=[listener]))
+    runner = ConnectionRunner(
+        validate_connection(
+            {"id": "http", "transport": "http", "url": f"http://127.0.0.1:{port}/mcp"}
+        ),
+        host,
+        InputRequests(),
+        lambda *args: None,
+    )
+    echo = {"name": "echo", "arguments": {"value": "after"}}
+    try:
+        async with asyncio.timeout(10):
+            while not http_server.started:
+                if serving.done():
+                    await serving
+                await asyncio.sleep(0)
+            await runner.invoke("tools/call", echo)
+            assert sessions.current is not None
+            sessions.expired.add(sessions.current)
+            if operation == "tools/call":
+                # Refused without being processed: reported as never sent, not repeated.
+                with pytest.raises(InvocationNotSentError) as refused:
+                    await runner.invoke("tools/call", echo, context(host))
+                assert str(refused.value) == (
+                    "Connection lost: the MCP server ended the session of this connection"
+                )
+                result = await runner.invoke("tools/call", echo)
+                assert json.loads(result["content"][0]["text"]) == {"value": "after"}
+            else:
+                # A read runs again on the new session.
+                result = await runner.invoke("resources/read", {"uri": "test://scene"})
+                assert result["contents"][0]["text"] == "test-owned-scene"
+        assert sessions.current not in sessions.expired
     finally:
         await runner.close()
         http_server.should_exit = True
@@ -542,3 +650,215 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
 def test_sampling_rejects_unknown_content_instead_of_losing_it():
     with pytest.raises(ValueError):
         sampling_messages({"messages": [{"role": "user", "content": {"type": "future-data"}}]})
+
+
+class _Hanging:
+    """A transport whose connection never comes up."""
+
+    def __init__(self, entered):
+        self.entered = entered
+
+    async def __aenter__(self):
+        await self.entered()
+        await asyncio.Event().wait()
+
+    async def __aexit__(self, *exc):
+        return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sign_in, expected",
+    [
+        (False, "MCP connection did not connect within 0.05 seconds"),
+        (
+            True,
+            "MCP connection did not connect within 0.05 seconds: its sign-in is waiting for "
+            "the user",
+        ),
+    ],
+)
+async def test_a_call_waits_for_its_connection_only_until_the_timeout(
+    host, server, monkeypatch, sign_in, expected
+):
+    runner = runner_for(host, server, monkeypatch)
+    runner.config["timeout"] = 0.05
+
+    async def entered():
+        if sign_in:
+            await runner.inputs.request("example", "oauth", {"authorization_url": "test"})
+
+    async def transport(stack):
+        return _Hanging(entered)
+
+    monkeypatch.setattr(runner, "_transport", transport)
+    try:
+        with pytest.raises(InvocationNotSentError) as refused:
+            await asyncio.wait_for(runner.invoke("ping", {}), 5)
+        assert str(refused.value) == expected
+        assert runner.state == "connecting"
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_unanswered_server_requests_expire_but_a_sign_in_keeps_its_own_deadline(host):
+    inputs = InputRequests(ttl=0)
+    sign_in = asyncio.create_task(inputs.request("example", "oauth", {"url": "test-owned"}))
+    try:
+        elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
+        sampled = await inputs.request("example", "sampling", {"message": "test-owned"})
+
+        assert elicited == sampled == {"action": "cancel"}
+        assert [item["kind"] for item in inputs.list()] == ["oauth"]
+    finally:
+        sign_in.cancel()
+        await asyncio.gather(sign_in, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transport, keys, expected",
+    [
+        # The transport carries each call into its server requests.
+        pytest.param("memory", ["a", "b"], {"a": ["a"], "b": ["b"]}, id="carried"),
+        # A stream does not; a server request belongs to the only call in flight ...
+        pytest.param("stream", ["a"], {"a": ["a"]}, id="only-call"),
+        # ... and to no Agent while several run.
+        pytest.param("stream", ["a", "b"], {"a": [], "b": []}, id="several-calls"),
+    ],
+)
+async def test_calls_run_concurrently_and_server_requests_belong_to_their_call(
+    host, tmp_path, monkeypatch, recwarn, transport, keys, expected
+):
+    entered = {key: asyncio.Event() for key in keys}
+    release = asyncio.Event()
+    listed: list[str] = []
+    all_listed = asyncio.Event()
+
+    async def call(server_context, params):
+        key = params.arguments["key"]
+        entered[key].set()
+        await release.wait()
+        roots = await server_context.session.list_roots()
+        listed.append(key)
+        if len(listed) == len(keys):
+            all_listed.set()
+        # No call ends before every call has its roots.
+        await all_listed.wait()
+        names = [Path(url2pathname(urlparse(str(root.uri)).path)).name for root in roots.roots]
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text=json.dumps(names))]
+        )
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[types.Tool(name="roots", input_schema={"type": "object"})]
+        )
+
+    server = Server("roots", on_call_tool=call, on_list_tools=list_tools)
+    runner = runner_for(
+        host,
+        StreamServer(server) if transport == "stream" else server,
+        monkeypatch,
+        roots="workspace",
+    )
+    # The legacy protocol, where servers send requests of their own.
+    runner.config["transport"] = "sse"
+    calls = {
+        key: asyncio.create_task(
+            runner.invoke(
+                "tools/call",
+                {"name": "roots", "arguments": {"key": key}},
+                replace(context(host), cwd=tmp_path / key),
+            )
+        )
+        for key in keys
+    }
+    try:
+        async with asyncio.timeout(10):
+            # Every call runs before any of them finishes.
+            await asyncio.gather(*(event.wait() for event in entered.values()))
+            release.set()
+            results = {key: await task for key, task in calls.items()}
+        assert {
+            key: json.loads(result["content"][0]["text"]) for key, result in results.items()
+        } == (expected)
+    finally:
+        for task in calls.values():
+            task.cancel()
+        await asyncio.gather(*calls.values(), return_exceptions=True)
+        await runner.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_list_changed_refreshes_and_republishes_a_changed_catalog(host, monkeypatch):
+    tools = ["add"]
+    published: list[list[str]] = []
+
+    async def call(server_context, params):
+        tools.append("added")
+        # A burst of changes: one refresh follows.
+        for _ in range(3):
+            await server_context.session.send_tool_list_changed()
+        return types.CallToolResult(content=[])
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[types.Tool(name=name, input_schema={"type": "object"}) for name in tools]
+        )
+
+    async def sleep(delay):
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    server = Server("changes", on_call_tool=call, on_list_tools=list_tools)
+    runner = runner_for(host, StreamServer(server), monkeypatch)
+    runner.config["transport"] = "sse"
+    runner.publish = lambda _, catalog: published.append(
+        [tool["name"] for tool in catalog["tools"]]
+    )
+    try:
+        async with asyncio.timeout(10):
+            await runner.invoke("tools/call", {"name": "add"})
+            while runner.catalog["tools"][-1]["name"] != "added" or not (
+                runner._subscriptions["catalog-refresh"].done()
+            ):
+                await asyncio.sleep(0)
+        # Republished once: refreshes that find the same catalog publish nothing.
+        assert published == [["add"], ["add", "added"]]
+    finally:
+        await runner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows runs batch files through cmd.exe")
+async def test_batch_file_arguments_that_cmd_would_reinterpret_are_refused(host, tmp_path):
+    marker = tmp_path / "started"
+    shim = tmp_path / "server.cmd"
+    shim.write_text(f'@echo off\r\necho started> "{marker}"\r\n')
+    runner = ConnectionRunner(
+        validate_connection(
+            {
+                "id": "shim",
+                "transport": "stdio",
+                "command": str(shim),
+                "args": ["--database", "postgres://host/db?user=a&mode=b"],
+            }
+        ),
+        host,
+        InputRequests(),
+        lambda *args: None,
+    )
+    try:
+        with pytest.raises(InvocationNotSentError) as refused:
+            await asyncio.wait_for(runner.invoke("ping", {}), 10)
+    finally:
+        await runner.close()
+
+    assert str(refused.value) == (
+        "ValueError: MCP server not started: argument 2 contains '&', which cmd.exe interprets "
+        "when Windows runs server.cmd; start the server's program directly or pass the value "
+        "through an environment variable"
+    )
+    assert not marker.exists()

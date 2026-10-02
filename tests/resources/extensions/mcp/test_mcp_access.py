@@ -8,13 +8,15 @@ import pytest
 
 from core.tools.availability import ToolAccess, resolve_tool_access
 from core.tools.tools import ToolNotAllowedError
-from resources.extensions.mcp.client import Invocation
+from resources.extensions.mcp import client as mcp_client
+from resources.extensions.mcp.client import InvocationNotSentError
 from resources.extensions.mcp.extension import remote_tool_name
 from tests.resources.extensions.mcp.mcp_test_support import (
     allowed_tools,
     context,
     dispatch,
     model_text,
+    runner_for,
     targets,
 )
 
@@ -172,34 +174,51 @@ async def test_same_name_in_other_project_does_not_inherit_opt_in(context_servic
 
 
 @pytest.mark.asyncio
-async def test_queued_call_rechecks_access_before_remote_effect(context_service, host, monkeypatch):
-    service, registry, runner, calls = context_service
+async def test_queued_call_rechecks_access_before_remote_effect(
+    context_service, host, server, monkeypatch
+):
+    service, registry, _, _ = context_service
+    # One call at a time, so the second waits in the queue while access changes.
+    monkeypatch.setattr(mcp_client, "CONNECTION_CONCURRENCY", 1)
     started = asyncio.Event()
     release = asyncio.Event()
+    calls = []
 
-    async def perform(operation, arguments):
-        calls.append(arguments)
+    @server.tool()
+    async def hold(value: str) -> str:
+        calls.append(value)
         started.set()
         await release.wait()
-        return {}
+        return value
 
-    monkeypatch.setattr(runner, "_perform_with_retries", perform)
-    runner.state = "disconnected"
-    first = asyncio.get_running_loop().create_future()
-    second = asyncio.get_running_loop().create_future()
-    await runner._queue.put(Invocation("tools/call", {"value": "first"}, context(host), first))
-    await runner._queue.put(Invocation("tools/call", {"value": "second"}, context(host), second))
-    runner._queue.shutdown()
-    worker = asyncio.create_task(runner._serve())
+    runner = runner_for(host, server, monkeypatch)
+    runner._authorize = service._authorize
+
+    def call(value):
+        return asyncio.create_task(
+            runner.invoke(
+                "tools/call", {"name": "hold", "arguments": {"value": value}}, context(host)
+            )
+        )
+
+    first = call("first")
+    second = None
     try:
-        await asyncio.wait_for(started.wait(), 2)
-        host.resolve_agent(None, "alice").tool_access = ToolAccess()
-        release.set()
-        assert await asyncio.wait_for(first, 2) == {}
-        with pytest.raises(ValueError):
-            await asyncio.wait_for(second, 2)
-        await asyncio.wait_for(worker, 2)
-        assert calls == [{"value": "first"}]
+        async with asyncio.timeout(5):
+            await started.wait()
+            second = call("second")
+            while runner._queue.empty():
+                await asyncio.sleep(0)
+            host.resolve_agent(None, "alice").tool_access = ToolAccess()
+            release.set()
+            assert (await first)["content"][0]["text"] == "first"
+            with pytest.raises(InvocationNotSentError) as denied:
+                await second
+        assert denied.value.denied
+        assert calls == ["first"]
     finally:
-        worker.cancel()
-        await asyncio.gather(worker, return_exceptions=True)
+        for task in (first, second):
+            if task is not None:
+                task.cancel()
+        await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
+        await runner.close()

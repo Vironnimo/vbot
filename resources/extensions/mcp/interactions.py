@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -11,6 +12,13 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from core.utils.ids import new_id
+
+# How long a server's request for user input waits for the user before it expires.
+INPUT_REQUEST_TTL_SECONDS = 600.0
+# Inputs a server requested; an expired one answers the server with ``cancel``. A
+# sign-in bounds its own wait.
+_SERVER_REQUESTS = frozenset({"elicitation", "sampling"})
+_LOGGER = logging.getLogger("vbot.extensions.mcp")
 
 
 @dataclass
@@ -24,11 +32,21 @@ class PendingInput:
 
 
 class InputRequests:
-    """Pending inputs; ``on_change`` receives the id of each added or removed one."""
+    """Pending inputs; ``on_change`` receives the id of each added or removed one.
 
-    def __init__(self, on_change: Callable[[str], None] | None = None) -> None:
+    A server's request (elicitation, sampling approval) nobody answers within
+    *ttl* seconds expires as cancelled.
+    """
+
+    def __init__(
+        self,
+        on_change: Callable[[str], None] | None = None,
+        *,
+        ttl: float = INPUT_REQUEST_TTL_SECONDS,
+    ) -> None:
         self._pending: dict[str, PendingInput] = {}
         self._on_change = on_change
+        self._ttl = ttl
 
     async def request(
         self,
@@ -43,9 +61,18 @@ class InputRequests:
             identifier, connection, kind, copy.deepcopy(payload), future, session_id
         )
         self._pending[identifier] = pending
+        expiry = asyncio.timeout(self._ttl if kind in _SERVER_REQUESTS else None)
         try:
             self._changed(identifier)
-            return await future
+            async with expiry:
+                return await future
+        except TimeoutError:
+            if not expiry.expired():
+                raise
+            _LOGGER.info(
+                "MCP input request expired unanswered (connection=%s kind=%s)", connection, kind
+            )
+            return {"action": "cancel"}
         finally:
             self._pending.pop(identifier, None)
             self._changed(identifier)
