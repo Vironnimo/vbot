@@ -84,9 +84,11 @@ def test_absolute_mouse_coordinates_land_on_the_requested_pixel(origin, size):
 
 def test_typed_text_presses_enter_once_per_line_break_and_tab_for_tabs():
     assert _win_input.text_units("a\r\nb\rc\nd\te") == [
-        ord("a"), "enter", ord("b"), "enter", ord("c"), "enter", ord("d"), "tab", ord("e"),
+        (ord("a"),), "enter", (ord("b"),), "enter", (ord("c"),), "enter", (ord("d"),), "tab",
+        (ord("e"),),
     ]  # fmt: skip
-    assert _win_input.text_units("ä😀") == [0xE4, 0xD83D, 0xDE00]  # UTF-16 code units
+    # Each character's UTF-16 code units, sent together.
+    assert _win_input.text_units("ä😀") == [(0xE4,), (0xD83D, 0xDE00)]
 
 
 @pytest.mark.parametrize(
