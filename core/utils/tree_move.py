@@ -58,13 +58,48 @@ def _move_across_volumes(source: Path, destination: Path) -> None:
     # A same-directory rename is the one step guaranteed to stay on the source's volume.
     retired = source.with_name(f".{source.name}.moved-{uuid.uuid4().hex}")
     try:
-        shutil.copytree(source, destination, symlinks=True)
+        _copy_tree(source, destination)
         _replace(source, retired)
     except BaseException:
         # ``source`` is intact, so the destination is only a duplicate, whole or partial.
         _discard_tree(destination, "partial copy")
         raise
     _discard_tree(retired, "original")
+
+
+def _copy_tree(source: Path, destination: Path) -> None:
+    """Copy the tree ``source`` as a rename moves it: every link stays a link to its target.
+
+    ``shutil.copytree`` keeps symbolic links but copies what a Windows junction
+    points at, duplicating a tree from outside ``source``. Junctions are left out
+    of the copy and recreated with their targets afterwards instead.
+    """
+    if sys.platform != "win32":
+        shutil.copytree(source, destination, symlinks=True)
+        return
+    import _winapi
+
+    junctions: list[tuple[Path, str]] = []
+
+    def leave_out_junctions(directory: str, names: list[str]) -> set[str]:
+        left_out = {name for name in names if os.path.isjunction(os.path.join(directory, name))}
+        junctions.extend(
+            (Path(directory, name).relative_to(source), os.readlink(Path(directory, name)))
+            for name in sorted(left_out)
+        )
+        return left_out
+
+    shutil.copytree(source, destination, symlinks=True, ignore=leave_out_junctions)
+    for relative, target in junctions:
+        link = destination / relative
+        # ``os.readlink`` spells the target with the ``\\?\`` prefix, which
+        # CreateJunction would store verbatim. A target without a drive letter,
+        # such as a volume mounted on a folder, cannot be recreated: the move fails.
+        plain = target.removeprefix("\\\\?\\")
+        drive, root, _ = os.path.splitroot(plain)
+        if len(drive) != 2 or drive[1] != ":" or not root:
+            raise OSError(errno.EINVAL, f"Cannot recreate the junction to {target}", str(link))
+        _winapi.CreateJunction(plain, str(link))
 
 
 def _discard_tree(path: Path, what: str) -> None:
