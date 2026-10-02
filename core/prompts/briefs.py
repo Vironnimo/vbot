@@ -215,6 +215,8 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
     uses = "1 use" if candidate.uses == 1 else f"{candidate.uses} uses"
     used = "never" if candidate.last_used is None else f"{candidate.last_used} ({uses})"
     files = ", ".join(candidate.support_files) or "none"
+    # skill_manage refuses to delete a Skill a schedule triggers by name.
+    scheduled = "yes, so it cannot be deleted" if candidate.scheduled else "no"
     return "\n".join(
         (
             f"- {candidate.name}",
@@ -225,7 +227,7 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
             f"  Last used: {used}",
             f"  SKILL.md: {candidate.skill_md_chars} characters",
             f"  Support files: {files}",
-            f"  Used by a schedule: {'yes' if candidate.scheduled else 'no'}",
+            f"  Used by a schedule: {scheduled}",
         )
     )
 

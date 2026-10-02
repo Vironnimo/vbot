@@ -59,6 +59,8 @@ class _Harness:
         self.changes: list[list[str | None]] = []
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
+        # Names the live automations of ``main`` trigger.
+        self.scheduled: set[str] = set()
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -71,6 +73,7 @@ class _Harness:
             ),
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
+            triggered_skill_names=lambda agent_id: self.scheduled if agent_id == "main" else (),
         )
 
     def home(self, agent_id: str) -> Path:
@@ -354,6 +357,16 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "absorbed_into. If no other Skill holds them, leave 'demo' as it is.",
             id="delete-without-absorbed-into",
         ),
+        pytest.param(
+            "scheduled",
+            {"action": "delete", "name": "demo", "absorbed_into": "other"},
+            "skill_protected",
+            "Skill 'demo' is used by one of your schedules, which loads it by its name, so it "
+            "cannot be deleted in the background; nothing changed. To merge it with other "
+            "Skills, move their instructions into 'demo' and delete them with absorbed_into "
+            "'demo'. Otherwise leave 'demo' as it is.",
+            id="scheduled-skill",
+        ),
     ],
 )
 def test_background_reviews_refuse_skills_they_may_not_change(
@@ -369,14 +382,17 @@ def test_background_reviews_refuse_skills_they_may_not_change(
         harness.create()
     if setup == "pinned":
         harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
+    if setup == "scheduled":
+        harness.create(name="other")
+        harness.scheduled.add("demo")
     before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
 
     result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
 
     assert result == tool_failure(code, message, retryable=False)
     assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
-    # An attended Run is not limited by pins or by who created the Skill.
-    if setup in ("user", "pinned"):
+    # An attended Run is not limited by pins, by who created the Skill or by schedules.
+    if setup in ("user", "pinned", "scheduled"):
         assert harness.run(arguments)["ok"] is True
 
 

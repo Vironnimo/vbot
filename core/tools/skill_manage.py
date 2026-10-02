@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,7 +51,7 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
-    offload_tool_handler,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
@@ -74,7 +74,8 @@ SKILL_MANAGE_ABSORBED = (
 )
 # Refusals of a background Run (no user present: a reflection review or the
 # Librarian). It changes only Skills an Agent created that the user has not
-# pinned. The closing reply is where the Run reports what it could not change;
+# pinned, and never deletes a Skill that one of the Agent's live automations
+# triggers by name. The closing reply is where the Run reports what it could not change;
 # the review briefs ask for the same.
 _LEAVE_IT = "Leave it as it is and name the needed change in your closing reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
@@ -92,6 +93,12 @@ SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
 SKILL_MANAGE_SHARED_REFUSAL = (
     "Skill '{name}' is shared with you by another Agent, so it cannot be changed in the "
     f"background; nothing changed. {_LEAVE_IT}"
+)
+SKILL_MANAGE_SCHEDULED_REFUSAL = (
+    "Skill '{name}' is used by one of your schedules, which loads it by its name, so it "
+    "cannot be deleted in the background; nothing changed. To merge it with other Skills, "
+    "move their instructions into '{name}' and delete them with absorbed_into '{name}'. "
+    "Otherwise leave '{name}' as it is."
 )
 SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
     "In the background, delete needs absorbed_into: the name of another of your own Skills "
@@ -271,8 +278,12 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-) -> Callable[[ToolContext, JsonObject], JsonObject]:
+) -> Callable[[ToolContext, JsonObject, Collection[str]], JsonObject]:
     """Return the direct Skill-management handler.
+
+    The handler's third argument names the caller's Skills that its live
+    automations trigger by name; a background Run never deletes one of them,
+    because the automation would then trigger nothing.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -290,7 +301,9 @@ def make_skill_manage_handler(
     affected scoped caches were invalidated, so open Skill views can refresh.
     """
 
-    def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    def skill_manage_handler(
+        context: ToolContext, arguments: JsonObject, scheduled: Collection[str] = ()
+    ) -> JsonObject:
         writer = _writer(context)
         try:
             call = _read_call(arguments)
@@ -339,6 +352,10 @@ def make_skill_manage_handler(
             if writer.background and call.action != "create":
                 authoring.check_writable(target_root, call.name, writer=writer)
             if call.action == "delete":
+                if writer.background and call.name in scheduled:
+                    raise _RefusalError(
+                        "skill_protected", SKILL_MANAGE_SCHEDULED_REFUSAL.format(name=call.name)
+                    )
                 _check_absorbed_into(call, own_root, writer)
             result, summary = _apply(authoring, target_root, call, writer)
         except _RefusalError as refusal:
@@ -1030,8 +1047,14 @@ def register_skill_manage_tool(
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
+    triggered_skill_names: Callable[[str], Collection[str]] | None = None,
 ) -> None:
-    """Register identity-only direct Skill management."""
+    """Register identity-only direct Skill management.
+
+    ``triggered_skill_names(agent_id)`` names the Skills an Identity Agent's live
+    automations trigger by name. It reads automation state, so it runs on the
+    Event Loop, before the write moves to a worker.
+    """
     handler = make_skill_manage_handler(
         authoring,
         resolve_agent_skills_dir,
@@ -1041,15 +1064,27 @@ def register_skill_manage_tool(
         on_changed=on_changed,
     )
 
-    def guarded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    def guarded_handler(
+        context: ToolContext, arguments: JsonObject, scheduled: Collection[str]
+    ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments)
+            return handler(context, arguments, scheduled)
+
+    async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        scheduled: Collection[str] = ()
+        if (
+            triggered_skill_names is not None
+            and arguments.get("action") == "delete"
+            and is_unattended_run_kind(context.run_kind)
+        ):
+            scheduled = triggered_skill_names(context.agent_id)
+        return await run_tool_worker(guarded_handler, context, arguments, scheduled)
 
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
-        offload_tool_handler(guarded_handler),
+        offloaded_handler,
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,

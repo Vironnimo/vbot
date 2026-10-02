@@ -8,7 +8,7 @@ The candidates below are the Skills you can change. Every other Skill is read-on
 
 Work through the candidates this way:
 1. Group candidates that serve the same kind of task, for example Skills sharing a first word or a domain. For each group, ask whether a careful maintainer would write one Skill with labeled sections instead. When the answer is yes, merge the group. Distinct triggers alone are not a reason to keep Skills separate.
-2. Choose the umbrella: the candidate that already covers the broadest part of the group, or a new Skill named for the kind of task when no candidate is broad enough.
+2. Choose the umbrella. A candidate used by a schedule cannot be deleted, so when the group has one, it is the umbrella; leave any further one as it is. Otherwise choose the candidate that already covers the broadest part of the group, or a new Skill named for the kind of task when no candidate is broad enough.
 3. Read every Skill of the group with `skill`, including its support files.
 4. Merge by distilling: write each lesson once as a general rule with a short reason, combine duplicate rules, and drop dates, ticket numbers and stories of single conversations. Copying a SKILL.md unchanged into `references/` is not a merge. Move depth that is needed only sometimes into a topic file under `references/`, `assets/` or `scripts/` of the umbrella with `skill_manage` action write_file, and point to it from the umbrella's SKILL.md. Update every path the moved text refers to.
 5. Keep the umbrella's description accurate for the whole group: what kind of task it covers and when to load it.

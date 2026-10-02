@@ -96,7 +96,7 @@ _CANDIDATE_TEXT = (
     "  Last used: never\n"
     "  SKILL.md: 3210 characters\n"
     "  Support files: references/env.md, scripts/check.sh\n"
-    "  Used by a schedule: yes"
+    "  Used by a schedule: yes, so it cannot be deleted"
 )
 
 
@@ -108,9 +108,13 @@ def test_librarian_brief_fills_its_placeholders_and_lists_each_candidate(tmp_pat
         "\n\n{generated:candidates}\n\nEnd.\n",
         encoding="utf-8",
     )
-    used = replace(_CANDIDATE, name="deploy-netlify", last_used="2026-09-20", uses=1)
-    used_text = _CANDIDATE_TEXT.replace("deploy-vercel", "deploy-netlify").replace(
-        "never", "2026-09-20 (1 use)"
+    used = replace(
+        _CANDIDATE, name="deploy-netlify", last_used="2026-09-20", uses=1, scheduled=False
+    )
+    used_text = (
+        _CANDIDATE_TEXT.replace("deploy-vercel", "deploy-netlify")
+        .replace("never", "2026-09-20 (1 use)")
+        .replace("yes, so it cannot be deleted", "no")
     )
 
     assert librarian_brief(storage, [_CANDIDATE, used], limit=60) == (
