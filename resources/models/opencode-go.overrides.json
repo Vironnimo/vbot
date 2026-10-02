@@ -68,6 +68,17 @@
         }
       }
     },
+    "glm-5.1": {
+      "capabilities": {
+        "reasoning": {"supported": true}
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
     "glm-5.2": {
       "reasoning_replay": "full_history",
       "capabilities": {
@@ -150,6 +161,19 @@
         "opencode_go": {
           "protocol": "openai",
           "reasoning_response_field": "reasoning"
+        }
+      }
+    },
+    "kimi-k2.6": {
+      "capabilities": {
+        "reasoning": {"supported": true, "control": "on_off"}
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning",
+          "thinking_control": "toggle",
+          "thinking_keep": "all"
         }
       }
     },
@@ -252,6 +276,14 @@
         }
       }
     },
+    "minimax-m2.5": {
+      "capabilities": {
+        "reasoning": {"supported": true}
+      },
+      "metadata": {
+        "opencode_go": {"protocol": "anthropic"}
+      }
+    },
     "minimax-m2.7": {
       "metadata": {
         "opencode_go": {
@@ -278,6 +310,27 @@
         "opencode_go": {
           "protocol": "responses"
         }
+      }
+    },
+    "omen-alpha": {
+      "capabilities": {
+        "reasoning": {"supported": true}
+      },
+      "metadata": {
+        "opencode_go": {
+          "protocol": "openai",
+          "reasoning_response_field": "reasoning_content"
+        }
+      }
+    },
+    "qwen3.6-plus": {
+      "metadata": {
+        "opencode_go": {"protocol": "anthropic"}
+      }
+    },
+    "qwen3.7-max": {
+      "metadata": {
+        "opencode_go": {"protocol": "anthropic"}
       }
     },
     "qwen3.7-plus": {

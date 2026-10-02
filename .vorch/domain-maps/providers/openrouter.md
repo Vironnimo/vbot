@@ -13,6 +13,12 @@ OpenAI-compatible Provider with OpenRouter-specific reasoning, per-Model Chat Co
 
 The 2026-09-22 refresh adds `openai/gpt-6-sol` and `openai/gpt-6-luna` plus OpenRouter's Pro and batch variants. The base ids are selectable through the existing Chat Completions route. Synthetic live calls through the actual Adapter returned one Tool Call for each base id both at Provider-default reasoning and with explicit `none`; this does not establish the same result for Pro or batch variants.
 
+## GPT-6.1 Sol catalog and integration (2026-10-02)
+
+The complete refresh adds `openai/gpt-6.1-sol` and its Pro variant. The exact base [endpoint catalog](https://openrouter.ai/api/v1/models/openai/gpt-6.1-sol/endpoints) publishes six OpenAI/Azure variants at Context 1,050,000 and output 128,000, with Reasoning, Tools, and structured formats (read 2026-10-02). The existing mandatory-Reasoning mapping renders an Agent `none` selection as `low`. This gateway's Chat Completions route remains usable independently of direct OpenAI's Responses-only Tool contract.
+
+Independent raw Chat Tool and continuation requests completed (51/17 and 94/5 input/output). The actual streaming Adapter then returned a valid Tool Call at the lowest effort (67/17), followed by the correct result after Chat accumulation, disposable SQLite save/reopen, request shaping, and a correlated synthetic Tool Result (99/5). Both paths returned terminal Usage. Canonical PNG/JPEG/GIF/WebP fixtures and a Chat-style strict JSON schema also completed correctly. No Tool was dispatched and no routing preference was changed. Reasoning Replay, maximum capacities, and cache effectiveness were not measured on this gateway; the Pro variant has no transferred live capability claim.
+
 ## Catalog follow-up (2026-09-28)
 
 The complete refresh contains 630 OpenRouter Models, including eleven new ids. Four are decision-only (`jaredpalmer/kev-4b` and the three `respan/span-01` variants), two are transcription entries (`fish-audio/transcribe-1-pro`, `google/gemini-3.5-transcribe`), one generates speech (`bytedance-seed/seed-audio-1-0`), and four are Chat entries (`mistralai/devstral-2512`, `mistralai/mistral-large-2512`, `perceptron/perceptron-mk1.5`, `typesafe/jev-router`). These are newly discovered gateway ids, not a claim that every underlying Model was newly released. Existing task/modality normalization handles them without manual capability Overrides. The Jev Router feed declares no Tools.

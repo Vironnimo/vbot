@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-28T10:09:01.084153+00:00",
+  "fetched_at": "2026-10-02T09:30:07.369818+00:00",
   "models": {
     "aion-labs/aion-2.0": {
       "capabilities": {
@@ -2877,6 +2877,128 @@
         "source": "models.dev:openrouter/anthropic/claude-sonnet-5"
       }
     },
+    "anthropic/claude-sonnet-5.5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:openrouter/anthropic/claude-sonnet-5.5"
+      }
+    },
+    "anthropic/claude-sonnet-5.5:batch": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "file"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "stop",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "Anthropic: Claude Sonnet 5.5 (batch)"
+    },
     "anthropic/claude-sonnet-5:batch": {
       "capabilities": {
         "input_modalities": [
@@ -2926,6 +3048,63 @@
         }
       },
       "name": "Anthropic: Claude Sonnet 5 (batch)"
+    },
+    "apodex/apodex-1.1-mini:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "on_off",
+          "supported": true
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "max_tokens",
+          "presence_penalty",
+          "reasoning",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->text"
+        }
+      },
+      "name": "Apodex: Apodex 1.1 Mini (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0,
+          "output": 0.0
+        },
+        "source": "models.dev:openrouter/apodex/apodex-1.1-mini:free"
+      }
     },
     "arcee-ai/maestro-reasoning": {
       "capabilities": {
@@ -3081,7 +3260,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "BAAI: bge-base-en-v1.5"
+      "name": "BAAI: bge-base-en-v1.5",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:baai/bge-base-en-v1.5"
+      }
     },
     "baai/bge-large-en-v1.5": {
       "capabilities": {
@@ -3113,7 +3298,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "BAAI: bge-large-en-v1.5"
+      "name": "BAAI: bge-large-en-v1.5",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:baai/bge-large-en-v1.5"
+      }
     },
     "baai/bge-m3": {
       "capabilities": {
@@ -3145,7 +3336,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "BAAI: bge-m3"
+      "name": "BAAI: bge-m3",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:baai/bge-m3"
+      }
     },
     "baidu/ernie-4.5-vl-424b-a47b": {
       "capabilities": {
@@ -3203,6 +3400,94 @@
         },
         "source": "models.dev:openrouter/baidu/ernie-4.5-vl-424b-a47b"
       }
+    },
+    "black-forest-labs/flux-3-image": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "seed"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "21:9",
+                  "2:1",
+                  "16:9",
+                  "3:2",
+                  "7:5",
+                  "4:3",
+                  "5:4",
+                  "1:1",
+                  "4:5",
+                  "3:4",
+                  "5:7",
+                  "2:3",
+                  "9:16",
+                  "1:2",
+                  "9:21",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 10,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "768",
+                  "1K",
+                  "1.5K",
+                  "2K",
+                  "4K"
+                ]
+              }
+            },
+            "passthrough": {
+              "black-forest-labs": [
+                "safety_tolerance"
+              ]
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 46864,
+      "max_output_tokens": 42177,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "Black Forest Labs: FLUX.3 Image"
     },
     "black-forest-labs/flux-3-video": {
       "capabilities": {
@@ -4261,6 +4546,94 @@
         }
       },
       "name": "ByteDance Seed: Seedream 4.5"
+    },
+    "bytedance-seed/seedream-5-0-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "image"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "frequency_penalty",
+          "max_tokens",
+          "temperature",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_options": {
+          "image_generation": {
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "1:1",
+                  "1:2",
+                  "2:1",
+                  "2:3",
+                  "3:2",
+                  "3:4",
+                  "4:3",
+                  "4:5",
+                  "5:4",
+                  "9:16",
+                  "16:9",
+                  "9:19.5",
+                  "19.5:9",
+                  "9:20",
+                  "20:9",
+                  "9:21",
+                  "21:9",
+                  "auto"
+                ]
+              },
+              "input_references": {
+                "max": 14,
+                "min": 0,
+                "type": "range"
+              },
+              "n": {
+                "max": 1,
+                "min": 1,
+                "type": "range"
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "1K",
+                  "2K"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "image_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->image"
+        }
+      },
+      "name": "ByteDance Seed: Seedream 5.0 Flash"
     },
     "bytedance-seed/seedream-5-0-lite": {
       "capabilities": {
@@ -5802,15 +6175,10 @@
         },
         "supported_parameters": [
           "frequency_penalty",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
-          "presence_penalty",
-          "repetition_penalty",
           "response_format",
           "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
@@ -5832,7 +6200,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 147456,
+      "max_output_tokens": 115200,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6028,60 +6396,6 @@
         "source": "models.dev:openrouter/deepseek/deepseek-r1-0528"
       }
     },
-    "deepseek/deepseek-r1-distill-llama-70b": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "top_k",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": false,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 8192,
-      "family": "deepseek-thinking",
-      "max_output_tokens": 7372,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "DeepSeek: R1 Distill Llama 70B",
-      "pricing": {
-        "rates": {
-          "input": 0.8,
-          "output": 0.8
-        },
-        "source": "models.dev:openrouter/deepseek/deepseek-r1-distill-llama-70b"
-      }
-    },
     "deepseek/deepseek-v3.1-terminus": {
       "capabilities": {
         "input_modalities": [
@@ -6127,7 +6441,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 32768,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6137,7 +6451,7 @@
       "pricing": {
         "rates": {
           "cache_read": 0.135,
-          "input": 0.27,
+          "input": 0.3,
           "output": 1.0
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v3.1-terminus"
@@ -6222,22 +6536,14 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
-          "logprobs",
           "max_tokens",
-          "min_p",
-          "presence_penalty",
           "reasoning",
-          "repetition_penalty",
           "response_format",
-          "seed",
-          "stop",
           "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -6253,7 +6559,7 @@
       ],
       "context_window": 163840,
       "family": "deepseek",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 147456,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6322,7 +6628,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 384000,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -6332,9 +6638,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.028,
-          "input": 0.14,
-          "output": 0.28
+          "cache_read": 0.0084,
+          "input": 0.042,
+          "output": 0.084
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash"
       }
@@ -6392,7 +6698,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "deepseek-flash",
       "max_output_tokens": 943718,
       "metadata": {
@@ -6403,9 +6709,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash 0731",
       "pricing": {
         "rates": {
-          "cache_read": 0.016,
-          "input": 0.021,
-          "output": 0.32
+          "cache_read": 0.0051,
+          "input": 0.0051,
+          "output": 1.28
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-0731"
       }
@@ -6466,7 +6772,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 943717,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -6475,9 +6781,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Vision Exp",
       "pricing": {
         "rates": {
-          "cache_read": 0.014,
-          "input": 0.44,
-          "output": 1.32
+          "cache_read": 0.00686,
+          "input": 0.2156,
+          "output": 0.6468
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-flash-vision-exp"
       }
@@ -6545,9 +6851,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0423",
       "pricing": {
         "rates": {
-          "cache_read": 0.079605,
-          "input": 0.95526,
-          "output": 1.91052
+          "cache_read": 0.0174,
+          "input": 0.2088,
+          "output": 0.4176
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro"
       }
@@ -6605,7 +6911,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-thinking",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 393216,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -6614,9 +6920,9 @@
       "name": "DeepSeek: DeepSeek V4 Pro 0813",
       "pricing": {
         "rates": {
-          "cache_read": 0.399,
-          "input": 0.3995,
-          "output": 4.2
+          "cache_read": 0.044,
+          "input": 1.32,
+          "output": 3.96
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4-pro-0813"
       }
@@ -6677,7 +6983,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -6686,9 +6992,9 @@
       "name": "DeepSeek: DeepSeek V4.1 Flash",
       "pricing": {
         "rates": {
-          "cache_read": 0.01,
-          "input": 0.02,
-          "output": 0.6
+          "cache_read": 0.002115,
+          "input": 0.015,
+          "output": 0.75
         },
         "source": "models.dev:openrouter/deepseek/deepseek-v4.1-flash"
       }
@@ -9565,8 +9871,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8192,
-      "max_output_tokens": 7372,
+      "context_window": 32768,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->speech"
@@ -9629,8 +9935,8 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 8192,
-      "max_output_tokens": 7372,
+      "context_window": 32768,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->speech"
@@ -9722,7 +10028,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Google: Gemini Embedding 001"
+      "name": "Google: Gemini Embedding 001",
+      "pricing": {
+        "rates": {
+          "input": 0.15
+        },
+        "source": "openrouter:google/gemini-embedding-001"
+      }
     },
     "google/gemini-embedding-2": {
       "capabilities": {
@@ -9759,7 +10071,13 @@
           "modality": "text+image+file+audio+video->embeddings"
         }
       },
-      "name": "Google: Gemini Embedding 2"
+      "name": "Google: Gemini Embedding 2",
+      "pricing": {
+        "rates": {
+          "input": 0.2
+        },
+        "source": "openrouter:google/gemini-embedding-2"
+      }
     },
     "google/gemini-embedding-2-preview": {
       "capabilities": {
@@ -9799,7 +10117,13 @@
           "modality": "text+image+file+audio+video->embeddings"
         }
       },
-      "name": "Google: Gemini Embedding 2 Preview"
+      "name": "Google: Gemini Embedding 2 Preview",
+      "pricing": {
+        "rates": {
+          "input": 0.2
+        },
+        "source": "openrouter:google/gemini-embedding-2-preview"
+      }
     },
     "google/gemini-embedding-2:batch": {
       "capabilities": {
@@ -9839,7 +10163,13 @@
           "modality": "text+image+file+audio+video->embeddings"
         }
       },
-      "name": "Google: Gemini Embedding 2 (batch)"
+      "name": "Google: Gemini Embedding 2 (batch)",
+      "pricing": {
+        "rates": {
+          "input": 0.1
+        },
+        "source": "openrouter:google/gemini-embedding-2:batch"
+      }
     },
     "google/gemma-2-27b-it": {
       "capabilities": {
@@ -10127,9 +10457,9 @@
       "name": "Google: Gemma 4 26B A4B ",
       "pricing": {
         "rates": {
-          "cache_read": 0.05,
-          "input": 0.09,
-          "output": 0.3
+          "cache_read": 0.0425,
+          "input": 0.0765,
+          "output": 0.255
         },
         "source": "models.dev:openrouter/google/gemma-4-26b-a4b-it"
       }
@@ -10920,6 +11250,90 @@
       },
       "name": "HeyGen: Avatar IV"
     },
+    "heygen/heygen-video-1": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "video",
+          "audio"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "video"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_options": {
+          "video_generation": {
+            "frame_images": [
+              "first_frame"
+            ],
+            "parameters": {
+              "aspect_ratio": {
+                "type": "enum",
+                "values": [
+                  "21:9",
+                  "16:9",
+                  "4:3",
+                  "1:1",
+                  "3:4",
+                  "9:16"
+                ]
+              },
+              "duration": {
+                "type": "enum",
+                "values": [
+                  "5",
+                  "6",
+                  "7",
+                  "8",
+                  "9",
+                  "10",
+                  "11",
+                  "12",
+                  "13",
+                  "14",
+                  "15"
+                ]
+              },
+              "resolution": {
+                "type": "enum",
+                "values": [
+                  "480p",
+                  "768p"
+                ]
+              },
+              "seed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "task_types": [
+          "image_input",
+          "audio_input",
+          "video_input",
+          "video_generation"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+audio+video->video"
+        }
+      },
+      "name": "HeyGen: Video 1"
+    },
     "ibm-granite/granite-4.0-h-micro": {
       "capabilities": {
         "input_modalities": [
@@ -11165,6 +11579,38 @@
         "source": "models.dev:openrouter/inception/mercury-2.5"
       }
     },
+    "inception/mercury-decide:free": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32768,
+      "max_output_tokens": 29491,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "Inception: Mercury Decide (free)"
+    },
     "inclusionai/ling-3.0-flash": {
       "capabilities": {
         "input_modalities": [
@@ -11244,6 +11690,7 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
+          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -11256,6 +11703,7 @@
           "tool_choice",
           "tools",
           "top_k",
+          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -11285,64 +11733,6 @@
           "output": 0.18
         },
         "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-fin"
-      }
-    },
-    "inclusionai/ling-3.0-flash-fin:free": {
-      "capabilities": {
-        "input_modalities": [
-          "text"
-        ],
-        "json_mode": false,
-        "output_modalities": [
-          "text"
-        ],
-        "reasoning": {
-          "control": "on_off",
-          "supported": true
-        },
-        "supported_parameters": [
-          "frequency_penalty",
-          "include_reasoning",
-          "logprobs",
-          "max_tokens",
-          "presence_penalty",
-          "reasoning",
-          "repetition_penalty",
-          "seed",
-          "stop",
-          "temperature",
-          "tool_choice",
-          "tools",
-          "top_k",
-          "top_logprobs",
-          "top_p"
-        ],
-        "supported_voices": [],
-        "task_types": [
-          "chat",
-          "text_output"
-        ],
-        "tools": true,
-        "vision": false
-      },
-      "connections": [
-        "api-key"
-      ],
-      "context_window": 262144,
-      "family": "ling",
-      "max_output_tokens": 32768,
-      "metadata": {
-        "openrouter": {
-          "modality": "text->text"
-        }
-      },
-      "name": "inclusionAI: Ling 3.0 Flash Fin (free)",
-      "pricing": {
-        "rates": {
-          "input": 0.0,
-          "output": 0.0
-        },
-        "source": "models.dev:openrouter/inclusionai/ling-3.0-flash-fin:free"
       }
     },
     "inclusionai/ling-3.0-flash-sante:free": {
@@ -11516,6 +11906,9 @@
                   "jpeg",
                   "webp"
                 ]
+              },
+              "size": {
+                "type": "boolean"
               }
             }
           }
@@ -11582,6 +11975,9 @@
                   "png",
                   "webp"
                 ]
+              },
+              "size": {
+                "type": "boolean"
               }
             }
           }
@@ -11623,6 +12019,7 @@
           "max_tokens",
           "min_p",
           "presence_penalty",
+          "repetition_penalty",
           "response_format",
           "seed",
           "stop",
@@ -11677,6 +12074,7 @@
           "max_tokens",
           "min_p",
           "presence_penalty",
+          "repetition_penalty",
           "response_format",
           "seed",
           "stop",
@@ -11743,7 +12141,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Intfloat: E5-Base-v2"
+      "name": "Intfloat: E5-Base-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:intfloat/e5-base-v2"
+      }
     },
     "intfloat/e5-large-v2": {
       "capabilities": {
@@ -11775,7 +12179,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Intfloat: E5-Large-v2"
+      "name": "Intfloat: E5-Large-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:intfloat/e5-large-v2"
+      }
     },
     "intfloat/multilingual-e5-large": {
       "capabilities": {
@@ -11807,7 +12217,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Intfloat: Multilingual-E5-Large"
+      "name": "Intfloat: Multilingual-E5-Large",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:intfloat/multilingual-e5-large"
+      }
     },
     "jaredpalmer/kev-4b": {
       "capabilities": {
@@ -12406,6 +12822,38 @@
       },
       "name": "Kling: Video O1"
     },
+    "liquid/d1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 65536,
+      "max_output_tokens": 58982,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "LiquidAI: D1"
+    },
     "liquid/lfm-2.5-2.6b:free": {
       "capabilities": {
         "input_modalities": [
@@ -12498,7 +12946,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "LiquidAI: LFM2.5-Embedding-350M (free)"
+      "name": "LiquidAI: LFM2.5-Embedding-350M (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0
+        },
+        "source": "openrouter:liquid/lfm-2.5-embedding-350m:free"
+      }
     },
     "mancer/weaver": {
       "capabilities": {
@@ -12919,7 +13373,6 @@
           "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "repetition_penalty",
           "response_format",
@@ -13176,7 +13629,7 @@
       ],
       "context_window": 131072,
       "family": "muse",
-      "max_output_tokens": 16384,
+      "max_output_tokens": 117964,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text",
@@ -13187,8 +13640,8 @@
       "pricing": {
         "rates": {
           "cache_read": 0.04,
-          "input": 0.3,
-          "output": 1.2
+          "input": 0.35,
+          "output": 1.5
         },
         "source": "models.dev:openrouter/meta/muse-glimmer-30b"
       }
@@ -14056,6 +14509,268 @@
       },
       "name": "Microsoft AI: MAI-Voice-2-Flash"
     },
+    "microsoft/mai-voice-2.1": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [
+          "cs-cz-grant:mai-voice-2.1",
+          "cs-cz-harper:mai-voice-2.1",
+          "da-dk-grant:mai-voice-2.1",
+          "da-dk-harper:mai-voice-2.1",
+          "de-de-grant:mai-voice-2.1",
+          "de-de-harper:mai-voice-2.1",
+          "de-de-klaus:mai-voice-2.1",
+          "de-de-mia:mai-voice-2.1",
+          "en-au-isla:mai-voice-2.1",
+          "en-gb-emily:mai-voice-2.1",
+          "en-gb-harry:mai-voice-2.1",
+          "en-in-dhruv:mai-voice-2.1",
+          "en-in-priya:mai-voice-2.1",
+          "en-us-ethan:mai-voice-2.1",
+          "en-us-grant:mai-voice-2.1",
+          "en-us-harper:mai-voice-2.1",
+          "en-us-iris:mai-voice-2.1",
+          "en-us-jasper:mai-voice-2.1",
+          "en-us-olivia:mai-voice-2.1",
+          "en-us-sage:mai-voice-2.1",
+          "es-es-marta:mai-voice-2.1",
+          "es-mx-alejo:mai-voice-2.1",
+          "es-mx-grant:mai-voice-2.1",
+          "es-mx-harper:mai-voice-2.1",
+          "es-mx-valeria:mai-voice-2.1",
+          "fi-fi-grant:mai-voice-2.1",
+          "fi-fi-harper:mai-voice-2.1",
+          "fr-fr-grant:mai-voice-2.1",
+          "fr-fr-harper:mai-voice-2.1",
+          "fr-fr-marc:mai-voice-2.1",
+          "fr-fr-soleil:mai-voice-2.1",
+          "hi-in-arjun:mai-voice-2.1",
+          "hi-in-dhruv:mai-voice-2.1",
+          "hi-in-grant:mai-voice-2.1",
+          "hi-in-harper:mai-voice-2.1",
+          "hi-in-kavya:mai-voice-2.1",
+          "hi-in-priya:mai-voice-2.1",
+          "hu-hu-bence:mai-voice-2.1",
+          "hu-hu-grant:mai-voice-2.1",
+          "hu-hu-harper:mai-voice-2.1",
+          "hu-hu-levente:mai-voice-2.1",
+          "hu-hu-lilla:mai-voice-2.1",
+          "hu-hu-reka:mai-voice-2.1",
+          "id-id-grant:mai-voice-2.1",
+          "id-id-harper:mai-voice-2.1",
+          "it-it-grant:mai-voice-2.1",
+          "it-it-harper:mai-voice-2.1",
+          "it-it-luca:mai-voice-2.1",
+          "it-it-rosa:mai-voice-2.1",
+          "ko-kr-grant:mai-voice-2.1",
+          "ko-kr-haena:mai-voice-2.1",
+          "ko-kr-harper:mai-voice-2.1",
+          "ko-kr-junho:mai-voice-2.1",
+          "nb-no-grant:mai-voice-2.1",
+          "nb-no-harper:mai-voice-2.1",
+          "nl-nl-grant:mai-voice-2.1",
+          "nl-nl-harper:mai-voice-2.1",
+          "nl-nl-sander:mai-voice-2.1",
+          "pl-pl-grant:mai-voice-2.1",
+          "pl-pl-harper:mai-voice-2.1",
+          "pt-br-caio:mai-voice-2.1",
+          "pt-br-grant:mai-voice-2.1",
+          "pt-br-harper:mai-voice-2.1",
+          "pt-br-luana:mai-voice-2.1",
+          "pt-br-pedro:mai-voice-2.1",
+          "pt-br-rafael:mai-voice-2.1",
+          "pt-pt-grant:mai-voice-2.1",
+          "pt-pt-harper:mai-voice-2.1",
+          "pt-pt-rui:mai-voice-2.1",
+          "ro-ro-andrei:mai-voice-2.1",
+          "ro-ro-elena:mai-voice-2.1",
+          "ro-ro-grant:mai-voice-2.1",
+          "ro-ro-harper:mai-voice-2.1",
+          "ro-ro-ioana:mai-voice-2.1",
+          "ro-ro-radu:mai-voice-2.1",
+          "ru-ru-grant:mai-voice-2.1",
+          "ru-ru-harper:mai-voice-2.1",
+          "ru-ru-lev:mai-voice-2.1",
+          "ru-ru-masha:mai-voice-2.1",
+          "sv-se-grant:mai-voice-2.1",
+          "sv-se-harper:mai-voice-2.1",
+          "th-th-grant:mai-voice-2.1",
+          "th-th-harper:mai-voice-2.1",
+          "th-th-krit:mai-voice-2.1",
+          "th-th-nattapong:mai-voice-2.1",
+          "tr-tr-aydin:mai-voice-2.1",
+          "tr-tr-elif:mai-voice-2.1",
+          "tr-tr-grant:mai-voice-2.1",
+          "tr-tr-harper:mai-voice-2.1",
+          "vi-vn-grant:mai-voice-2.1",
+          "vi-vn-harper:mai-voice-2.1",
+          "zh-cn-bo:mai-voice-2.1",
+          "zh-cn-grant:mai-voice-2.1",
+          "zh-cn-harper:mai-voice-2.1",
+          "zh-cn-lan:mai-voice-2.1",
+          "zh-cn-mei:mai-voice-2.1",
+          "zh-cn-wei:mai-voice-2.1"
+        ],
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->speech"
+        }
+      },
+      "name": "Microsoft AI: MAI-Voice-2.1"
+    },
+    "microsoft/mai-voice-2.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "speech"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [
+          "cs-cz-grant:mai-voice-2.1-flash",
+          "cs-cz-harper:mai-voice-2.1-flash",
+          "da-dk-grant:mai-voice-2.1-flash",
+          "da-dk-harper:mai-voice-2.1-flash",
+          "de-de-grant:mai-voice-2.1-flash",
+          "de-de-harper:mai-voice-2.1-flash",
+          "de-de-klaus:mai-voice-2.1-flash",
+          "de-de-mia:mai-voice-2.1-flash",
+          "en-au-isla:mai-voice-2.1-flash",
+          "en-gb-emily:mai-voice-2.1-flash",
+          "en-gb-harry:mai-voice-2.1-flash",
+          "en-in-dhruv:mai-voice-2.1-flash",
+          "en-in-priya:mai-voice-2.1-flash",
+          "en-us-ethan:mai-voice-2.1-flash",
+          "en-us-grant:mai-voice-2.1-flash",
+          "en-us-harper:mai-voice-2.1-flash",
+          "en-us-iris:mai-voice-2.1-flash",
+          "en-us-jasper:mai-voice-2.1-flash",
+          "en-us-olivia:mai-voice-2.1-flash",
+          "en-us-sage:mai-voice-2.1-flash",
+          "es-es-marta:mai-voice-2.1-flash",
+          "es-mx-alejo:mai-voice-2.1-flash",
+          "es-mx-grant:mai-voice-2.1-flash",
+          "es-mx-harper:mai-voice-2.1-flash",
+          "es-mx-valeria:mai-voice-2.1-flash",
+          "fi-fi-grant:mai-voice-2.1-flash",
+          "fi-fi-harper:mai-voice-2.1-flash",
+          "fr-fr-grant:mai-voice-2.1-flash",
+          "fr-fr-harper:mai-voice-2.1-flash",
+          "fr-fr-marc:mai-voice-2.1-flash",
+          "fr-fr-soleil:mai-voice-2.1-flash",
+          "hi-in-arjun:mai-voice-2.1-flash",
+          "hi-in-dhruv:mai-voice-2.1-flash",
+          "hi-in-grant:mai-voice-2.1-flash",
+          "hi-in-harper:mai-voice-2.1-flash",
+          "hi-in-kavya:mai-voice-2.1-flash",
+          "hi-in-priya:mai-voice-2.1-flash",
+          "hu-hu-bence:mai-voice-2.1-flash",
+          "hu-hu-grant:mai-voice-2.1-flash",
+          "hu-hu-harper:mai-voice-2.1-flash",
+          "hu-hu-levente:mai-voice-2.1-flash",
+          "hu-hu-lilla:mai-voice-2.1-flash",
+          "hu-hu-reka:mai-voice-2.1-flash",
+          "id-id-grant:mai-voice-2.1-flash",
+          "id-id-harper:mai-voice-2.1-flash",
+          "it-it-grant:mai-voice-2.1-flash",
+          "it-it-harper:mai-voice-2.1-flash",
+          "it-it-luca:mai-voice-2.1-flash",
+          "it-it-rosa:mai-voice-2.1-flash",
+          "ko-kr-grant:mai-voice-2.1-flash",
+          "ko-kr-haena:mai-voice-2.1-flash",
+          "ko-kr-harper:mai-voice-2.1-flash",
+          "ko-kr-junho:mai-voice-2.1-flash",
+          "nb-no-grant:mai-voice-2.1-flash",
+          "nb-no-harper:mai-voice-2.1-flash",
+          "nl-nl-grant:mai-voice-2.1-flash",
+          "nl-nl-harper:mai-voice-2.1-flash",
+          "nl-nl-sander:mai-voice-2.1-flash",
+          "pl-pl-grant:mai-voice-2.1-flash",
+          "pl-pl-harper:mai-voice-2.1-flash",
+          "pt-br-caio:mai-voice-2.1-flash",
+          "pt-br-grant:mai-voice-2.1-flash",
+          "pt-br-harper:mai-voice-2.1-flash",
+          "pt-br-luana:mai-voice-2.1-flash",
+          "pt-br-pedro:mai-voice-2.1-flash",
+          "pt-br-rafael:mai-voice-2.1-flash",
+          "pt-pt-grant:mai-voice-2.1-flash",
+          "pt-pt-harper:mai-voice-2.1-flash",
+          "pt-pt-rui:mai-voice-2.1-flash",
+          "ro-ro-andrei:mai-voice-2.1-flash",
+          "ro-ro-elena:mai-voice-2.1-flash",
+          "ro-ro-grant:mai-voice-2.1-flash",
+          "ro-ro-harper:mai-voice-2.1-flash",
+          "ro-ro-ioana:mai-voice-2.1-flash",
+          "ro-ro-radu:mai-voice-2.1-flash",
+          "ru-ru-grant:mai-voice-2.1-flash",
+          "ru-ru-harper:mai-voice-2.1-flash",
+          "ru-ru-lev:mai-voice-2.1-flash",
+          "ru-ru-masha:mai-voice-2.1-flash",
+          "sv-se-grant:mai-voice-2.1-flash",
+          "sv-se-harper:mai-voice-2.1-flash",
+          "th-th-grant:mai-voice-2.1-flash",
+          "th-th-harper:mai-voice-2.1-flash",
+          "th-th-krit:mai-voice-2.1-flash",
+          "th-th-nattapong:mai-voice-2.1-flash",
+          "tr-tr-aydin:mai-voice-2.1-flash",
+          "tr-tr-elif:mai-voice-2.1-flash",
+          "tr-tr-grant:mai-voice-2.1-flash",
+          "tr-tr-harper:mai-voice-2.1-flash",
+          "vi-vn-grant:mai-voice-2.1-flash",
+          "vi-vn-harper:mai-voice-2.1-flash",
+          "zh-cn-bo:mai-voice-2.1-flash",
+          "zh-cn-grant:mai-voice-2.1-flash",
+          "zh-cn-harper:mai-voice-2.1-flash",
+          "zh-cn-lan:mai-voice-2.1-flash",
+          "zh-cn-mei:mai-voice-2.1-flash",
+          "zh-cn-wei:mai-voice-2.1-flash"
+        ],
+        "task_types": [
+          "audio_generation",
+          "text_to_speech"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": null,
+      "max_output_tokens": 0,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->speech"
+        }
+      },
+      "name": "Microsoft AI: MAI-Voice-2.1-Flash"
+    },
     "microsoft/phi-4": {
       "capabilities": {
         "input_modalities": [
@@ -14512,7 +15227,7 @@
       "name": "MiniMax: MiniMax M1",
       "pricing": {
         "rates": {
-          "input": 0.4,
+          "input": 0.55,
           "output": 2.2
         },
         "source": "models.dev:openrouter/minimax/minimax-m1"
@@ -14764,7 +15479,6 @@
           "frequency_penalty",
           "include_reasoning",
           "logit_bias",
-          "logprobs",
           "max_tokens",
           "min_p",
           "presence_penalty",
@@ -14773,12 +15487,10 @@
           "response_format",
           "seed",
           "stop",
-          "structured_outputs",
           "temperature",
           "tool_choice",
           "tools",
           "top_k",
-          "top_logprobs",
           "top_p"
         ],
         "supported_voices": [],
@@ -14794,7 +15506,7 @@
       ],
       "context_window": 204800,
       "family": "minimax",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 176947,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -14804,9 +15516,9 @@
       "name": "MiniMax: MiniMax M2.7",
       "pricing": {
         "rates": {
-          "cache_read": 0.06,
-          "input": 0.3,
-          "output": 1.2
+          "cache_read": 0.042,
+          "input": 0.21,
+          "output": 0.84
         },
         "source": "models.dev:openrouter/minimax/minimax-m2.7"
       }
@@ -15175,7 +15887,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Mistral: Codestral Embed 2505"
+      "name": "Mistral: Codestral Embed 2505",
+      "pricing": {
+        "rates": {
+          "input": 0.15
+        },
+        "source": "openrouter:mistralai/codestral-embed-2505"
+      }
     },
     "mistralai/devstral-2512": {
       "capabilities": {
@@ -15483,7 +16201,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Mistral: Mistral Embed 2312"
+      "name": "Mistral: Mistral Embed 2312",
+      "pricing": {
+        "rates": {
+          "input": 0.1
+        },
+        "source": "openrouter:mistralai/mistral-embed-2312"
+      }
     },
     "mistralai/mistral-large": {
       "capabilities": {
@@ -16989,9 +17713,9 @@
       "name": "MoonshotAI: Kimi K2.6",
       "pricing": {
         "rates": {
-          "cache_read": 0.15,
-          "input": 0.65,
-          "output": 3.41
+          "cache_read": 0.07312,
+          "input": 0.43415,
+          "output": 1.828
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k2.6"
       }
@@ -17092,8 +17816,8 @@
       "pricing": {
         "rates": {
           "cache_read": 0.18,
-          "input": 0.6562,
-          "output": 3.3
+          "input": 0.6712,
+          "output": 3.35
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k2.7-code"
       }
@@ -17166,9 +17890,9 @@
       "name": "MoonshotAI: Kimi K3",
       "pricing": {
         "rates": {
-          "cache_read": 0.3,
-          "input": 3.0,
-          "output": 15.0
+          "cache_read": 0.27,
+          "input": 2.7,
+          "output": 13.5
         },
         "source": "models.dev:openrouter/moonshotai/kimi-k3"
       }
@@ -17365,6 +18089,132 @@
       },
       "name": "Nex AGI: DeepSeek V3.1 Nex N1"
     },
+    "nex-agi/nex-n2.5-mini": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "structured_outputs",
+          "temperature",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": false,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "agi",
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Nex AGI: Nex-N2.5-Mini",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.0025,
+          "input": 0.025,
+          "output": 0.1
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-mini"
+      }
+    },
+    "nex-agi/nex-n2.5-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "none",
+            "medium",
+            "high"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "logprobs",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_k",
+          "top_logprobs",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 262144,
+      "family": "agi",
+      "max_output_tokens": 235929,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Nex AGI: Nex-N2.5-Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.015,
+          "input": 0.075,
+          "output": 0.25
+        },
+        "source": "models.dev:openrouter/nex-agi/nex-n2.5-pro"
+      }
+    },
     "nousresearch/hermes-3-llama-3.1-405b": {
       "capabilities": {
         "input_modalities": [
@@ -17559,7 +18409,13 @@
           "modality": "text+image->embeddings"
         }
       },
-      "name": "NVIDIA: Llama Nemotron Embed VL 1B V2 (free)"
+      "name": "NVIDIA: Llama Nemotron Embed VL 1B V2 (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0
+        },
+        "source": "openrouter:nvidia/llama-nemotron-embed-vl-1b-v2:free"
+      }
     },
     "nvidia/nemotron-3-embed-1b:free": {
       "capabilities": {
@@ -17591,7 +18447,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "NVIDIA: Nemotron 3 Embed 1B (free)"
+      "name": "NVIDIA: Nemotron 3 Embed 1B (free)",
+      "pricing": {
+        "rates": {
+          "input": 0.0
+        },
+        "source": "openrouter:nvidia/nemotron-3-embed-1b:free"
+      }
     },
     "nvidia/nemotron-3-nano-30b-a3b": {
       "capabilities": {
@@ -17891,7 +18753,7 @@
       ],
       "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 182520,
+      "max_output_tokens": 16384,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -17900,9 +18762,9 @@
       "name": "NVIDIA: Nemotron 3 Ultra",
       "pricing": {
         "rates": {
-          "cache_read": 0.12,
-          "input": 0.6,
-          "output": 2.4
+          "cache_read": 0.1,
+          "input": 0.5,
+          "output": 2.2
         },
         "source": "models.dev:openrouter/nvidia/nemotron-3-ultra-550b-a55b"
       }
@@ -18153,9 +19015,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1000000,
+      "context_window": 262144,
       "family": "nemotron",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 32768,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -18164,9 +19026,9 @@
       "name": "NVIDIA: Nemotron 3.5 Lightning",
       "pricing": {
         "rates": {
-          "cache_read": 0.04,
-          "input": 0.08,
-          "output": 0.2
+          "cache_read": 0.03,
+          "input": 0.06,
+          "output": 0.16
         },
         "source": "models.dev:openrouter/nvidia/nemotron-3.5-lightning"
       }
@@ -19630,7 +20492,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -19695,7 +20558,8 @@
           "structured_outputs",
           "temperature",
           "top_logprobs",
-          "top_p"
+          "top_p",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_options": {
@@ -19813,7 +20677,8 @@
           "structured_outputs",
           "temperature",
           "top_logprobs",
-          "top_p"
+          "top_p",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_options": {
@@ -19933,7 +20798,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -19992,7 +20858,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20050,7 +20917,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20109,7 +20977,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20163,7 +21032,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20221,7 +21091,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20279,7 +21150,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20342,7 +21214,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20405,7 +21278,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20467,7 +21341,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20523,7 +21398,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20581,7 +21457,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20636,7 +21513,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20700,7 +21578,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20763,7 +21642,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20821,7 +21701,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20871,7 +21752,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20929,7 +21811,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -20996,7 +21879,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21078,7 +21962,8 @@
           "seed",
           "stop",
           "structured_outputs",
-          "top_logprobs"
+          "top_logprobs",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_options": {
@@ -21202,7 +22087,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21260,7 +22146,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21318,7 +22205,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21376,7 +22264,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21432,7 +22321,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21500,7 +22390,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21550,7 +22441,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21608,7 +22500,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21683,7 +22576,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21751,7 +22645,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21801,7 +22696,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21860,7 +22756,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -21941,7 +22838,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22012,7 +22910,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22061,7 +22960,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22120,7 +23020,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22201,7 +23102,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22229,16 +23131,16 @@
       "name": "OpenAI: GPT-5.6 Sol Pro",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
-          "cache_write": 2.5,
-          "input": 2.0,
-          "output": 10.0,
+          "cache_read": 0.4,
+          "cache_write": 5.0,
+          "input": 4.0,
+          "output": 20.0,
           "tiers": [
             {
-              "cache_read": 0.4,
-              "cache_write": 5.0,
-              "input": 4.0,
-              "output": 15.0,
+              "cache_read": 0.8,
+              "cache_write": 10.0,
+              "input": 8.0,
+              "output": 30.0,
               "tier": {
                 "size": 272000,
                 "type": "context"
@@ -22272,7 +23174,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22321,7 +23224,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22380,7 +23284,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22461,7 +23366,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22532,7 +23438,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22581,7 +23488,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22630,7 +23538,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22689,7 +23598,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22770,7 +23680,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22842,7 +23753,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22892,7 +23804,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -22952,7 +23865,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23033,7 +23947,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23104,7 +24019,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23153,7 +24069,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23212,7 +24129,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23293,7 +24211,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23364,7 +24283,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23413,7 +24333,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -23438,6 +24359,170 @@
         }
       },
       "name": "OpenAI: GPT-6 Sol (batch)"
+    },
+    "openai/gpt-6.1-sol": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "family": "gpt-sol",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "OpenAI: GPT-6.1 Sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-6.1-sol"
+      }
+    },
+    "openai/gpt-6.1-sol-pro": {
+      "capabilities": {
+        "input_modalities": [
+          "file",
+          "image",
+          "text"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "supported_parameters": [
+          "include_reasoning",
+          "max_completion_tokens",
+          "max_tokens",
+          "reasoning",
+          "reasoning_effort",
+          "response_format",
+          "seed",
+          "structured_outputs",
+          "tool_choice",
+          "tools",
+          "verbosity"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding",
+          "file_input",
+          "file_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1050000,
+      "family": "gpt",
+      "max_output_tokens": 128000,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
+        }
+      },
+      "name": "OpenAI: GPT-6.1 Sol Pro",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openrouter/openai/gpt-6.1-sol-pro"
+      }
     },
     "openai/gpt-audio": {
       "capabilities": {
@@ -24171,7 +25256,7 @@
       ],
       "context_window": 131072,
       "family": "gpt-oss",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 117964,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -24181,9 +25266,8 @@
       "name": "OpenAI: gpt-oss-120b",
       "pricing": {
         "rates": {
-          "cache_read": 0.075,
-          "input": 0.15,
-          "output": 0.6
+          "input": 0.037,
+          "output": 0.17
         },
         "source": "models.dev:openrouter/openai/gpt-oss-120b"
       }
@@ -24304,6 +25388,7 @@
       "name": "OpenAI: gpt-oss-20b",
       "pricing": {
         "rates": {
+          "cache_read": 0.009,
           "input": 0.018,
           "output": 0.09
         },
@@ -25180,7 +26265,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding 3 Large"
+      "name": "OpenAI: Text Embedding 3 Large",
+      "pricing": {
+        "rates": {
+          "input": 0.13
+        },
+        "source": "openrouter:openai/text-embedding-3-large"
+      }
     },
     "openai/text-embedding-3-large:batch": {
       "capabilities": {
@@ -25212,7 +26303,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding 3 Large (batch)"
+      "name": "OpenAI: Text Embedding 3 Large (batch)",
+      "pricing": {
+        "rates": {
+          "input": 0.065
+        },
+        "source": "openrouter:openai/text-embedding-3-large:batch"
+      }
     },
     "openai/text-embedding-3-small": {
       "capabilities": {
@@ -25244,7 +26341,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding 3 Small"
+      "name": "OpenAI: Text Embedding 3 Small",
+      "pricing": {
+        "rates": {
+          "input": 0.02
+        },
+        "source": "openrouter:openai/text-embedding-3-small"
+      }
     },
     "openai/text-embedding-3-small:batch": {
       "capabilities": {
@@ -25276,7 +26379,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding 3 Small (batch)"
+      "name": "OpenAI: Text Embedding 3 Small (batch)",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:openai/text-embedding-3-small:batch"
+      }
     },
     "openai/text-embedding-ada-002": {
       "capabilities": {
@@ -25308,7 +26417,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding Ada 002"
+      "name": "OpenAI: Text Embedding Ada 002",
+      "pricing": {
+        "rates": {
+          "input": 0.1
+        },
+        "source": "openrouter:openai/text-embedding-ada-002"
+      }
     },
     "openai/text-embedding-ada-002:batch": {
       "capabilities": {
@@ -25340,7 +26455,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "OpenAI: Text Embedding Ada 002 (batch)"
+      "name": "OpenAI: Text Embedding Ada 002 (batch)",
+      "pricing": {
+        "rates": {
+          "input": 0.05
+        },
+        "source": "openrouter:openai/text-embedding-ada-002:batch"
+      }
     },
     "openai/whisper-1": {
       "capabilities": {
@@ -25901,7 +27022,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Perplexity: Embed V1 0.6B"
+      "name": "Perplexity: Embed V1 0.6B",
+      "pricing": {
+        "rates": {
+          "input": 0.004
+        },
+        "source": "openrouter:perplexity/pplx-embed-v1-0.6b"
+      }
     },
     "perplexity/pplx-embed-v1-4b": {
       "capabilities": {
@@ -25933,7 +27060,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Perplexity: Embed V1 4B"
+      "name": "Perplexity: Embed V1 4B",
+      "pricing": {
+        "rates": {
+          "input": 0.03
+        },
+        "source": "openrouter:perplexity/pplx-embed-v1-4b"
+      }
     },
     "perplexity/sonar": {
       "capabilities": {
@@ -26456,6 +27589,7 @@
       "name": "PrismML: Ternary Bonsai 2 27B",
       "pricing": {
         "rates": {
+          "cache_read": 0.0375,
           "input": 0.075,
           "output": 0.5
         },
@@ -28061,7 +29195,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Qwen: Qwen3 Embedding 4B"
+      "name": "Qwen: Qwen3 Embedding 4B",
+      "pricing": {
+        "rates": {
+          "input": 0.02
+        },
+        "source": "openrouter:qwen/qwen3-embedding-4b"
+      }
     },
     "qwen/qwen3-embedding-8b": {
       "capabilities": {
@@ -28093,7 +29233,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Qwen: Qwen3 Embedding 8B"
+      "name": "Qwen: Qwen3 Embedding 8B",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:qwen/qwen3-embedding-8b"
+      }
     },
     "qwen/qwen3-max": {
       "capabilities": {
@@ -28857,7 +30003,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 235929,
+      "max_output_tokens": 65536,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -28993,7 +30139,7 @@
       ],
       "context_window": 262144,
       "family": "qwen",
-      "max_output_tokens": 65536,
+      "max_output_tokens": 235929,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text"
@@ -29002,8 +30148,9 @@
       "name": "Qwen: Qwen3.5-35B-A3B",
       "pricing": {
         "rates": {
-          "input": 0.1625,
-          "output": 1.3
+          "cache_read": 0.05,
+          "input": 0.15,
+          "output": 1.0
         },
         "source": "models.dev:openrouter/qwen/qwen3.5-35b-a3b"
       }
@@ -32504,7 +33651,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Sentence Transformers: all-MiniLM-L12-v2"
+      "name": "Sentence Transformers: all-MiniLM-L12-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:sentence-transformers/all-minilm-l12-v2"
+      }
     },
     "sentence-transformers/all-minilm-l6-v2": {
       "capabilities": {
@@ -32536,7 +33689,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Sentence Transformers: all-MiniLM-L6-v2"
+      "name": "Sentence Transformers: all-MiniLM-L6-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:sentence-transformers/all-minilm-l6-v2"
+      }
     },
     "sentence-transformers/all-mpnet-base-v2": {
       "capabilities": {
@@ -32568,7 +33727,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Sentence Transformers: all-mpnet-base-v2"
+      "name": "Sentence Transformers: all-mpnet-base-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:sentence-transformers/all-mpnet-base-v2"
+      }
     },
     "sentence-transformers/multi-qa-mpnet-base-dot-v1": {
       "capabilities": {
@@ -32600,7 +33765,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Sentence Transformers: multi-qa-mpnet-base-dot-v1"
+      "name": "Sentence Transformers: multi-qa-mpnet-base-dot-v1",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:sentence-transformers/multi-qa-mpnet-base-dot-v1"
+      }
     },
     "sentence-transformers/paraphrase-minilm-l6-v2": {
       "capabilities": {
@@ -32632,7 +33803,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Sentence Transformers: paraphrase-MiniLM-L6-v2"
+      "name": "Sentence Transformers: paraphrase-MiniLM-L6-v2",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:sentence-transformers/paraphrase-minilm-l6-v2"
+      }
     },
     "sesame/csm-1b": {
       "capabilities": {
@@ -33227,10 +34404,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -33620,8 +34795,10 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
+          "logit_bias",
           "max_completion_tokens",
           "max_tokens",
+          "min_p",
           "presence_penalty",
           "reasoning",
           "reasoning_effort",
@@ -33861,7 +35038,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Thenlper: GTE-Base"
+      "name": "Thenlper: GTE-Base",
+      "pricing": {
+        "rates": {
+          "input": 0.005
+        },
+        "source": "openrouter:thenlper/gte-base"
+      }
     },
     "thenlper/gte-large": {
       "capabilities": {
@@ -33893,7 +35076,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "Thenlper: GTE-Large"
+      "name": "Thenlper: GTE-Large",
+      "pricing": {
+        "rates": {
+          "input": 0.01
+        },
+        "source": "openrouter:thenlper/gte-large"
+      }
     },
     "thinkingmachines/inkling": {
       "capabilities": {
@@ -33953,7 +35142,7 @@
       ],
       "context_window": 524288,
       "family": "ling",
-      "max_output_tokens": 471859,
+      "max_output_tokens": 262144,
       "metadata": {
         "openrouter": {
           "modality": "text+image+audio->text"
@@ -33962,8 +35151,8 @@
       "name": "Thinking Machines: Inkling",
       "pricing": {
         "rates": {
-          "cache_read": 0.17,
-          "input": 1.0,
+          "cache_read": 0.16,
+          "input": 0.95,
           "output": 4.05
         },
         "source": "models.dev:openrouter/thinkingmachines/inkling"
@@ -34179,6 +35368,38 @@
         "source": "models.dev:openrouter/thinkingmachines/inkling:free"
       }
     },
+    "togethercomputer/tev1-4b-experimental": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 32768,
+      "max_output_tokens": 8,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "Together: Tev1 4B Experimental"
+    },
     "typesafe/jev-1.13": {
       "capabilities": {
         "input_modalities": [
@@ -34220,14 +35441,39 @@
           "text",
           "video"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "reasoning": {
-          "supported": false
+          "supported": true
         },
-        "supported_parameters": [],
+        "supported_parameters": [
+          "frequency_penalty",
+          "include_reasoning",
+          "logit_bias",
+          "logprobs",
+          "max_completion_tokens",
+          "max_tokens",
+          "min_p",
+          "parallel_tool_calls",
+          "presence_penalty",
+          "reasoning",
+          "reasoning_effort",
+          "repetition_penalty",
+          "response_format",
+          "seed",
+          "stop",
+          "structured_outputs",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_a",
+          "top_k",
+          "top_logprobs",
+          "top_p",
+          "verbosity"
+        ],
         "supported_voices": [],
         "task_types": [
           "chat",
@@ -34241,7 +35487,7 @@
           "video_input",
           "video_understanding"
         ],
-        "tools": false,
+        "tools": true,
         "vision": true
       },
       "connections": [
@@ -34262,12 +35508,13 @@
           "text",
           "image"
         ],
-        "json_mode": false,
+        "json_mode": true,
         "output_modalities": [
           "text"
         ],
         "supported_parameters": [
           "max_tokens",
+          "response_format",
           "temperature",
           "tool_choice",
           "tools",
@@ -34301,6 +35548,56 @@
           "output": 7.5
         },
         "source": "models.dev:openrouter/unbiased/pareto"
+      }
+    },
+    "unbiased/pareto-26.10-preview": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "max_tokens",
+          "temperature",
+          "tool_choice",
+          "tools",
+          "top_p"
+        ],
+        "supported_voices": [],
+        "task_types": [
+          "chat",
+          "text_output",
+          "image_input",
+          "image_understanding"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "metadata": {
+        "openrouter": {
+          "modality": "text+image->text"
+        }
+      },
+      "name": "Pareto 26.10 Preview",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.03,
+          "input": 0.8,
+          "output": 3.2
+        },
+        "source": "models.dev:openrouter/unbiased/pareto-26.10-preview"
       }
     },
     "undi95/remm-slerp-l2-13b": {
@@ -34359,6 +35656,38 @@
         },
         "source": "models.dev:openrouter/undi95/remm-slerp-l2-13b"
       }
+    },
+    "upstage/solar-decide": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "decisions"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "decision"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 524288,
+      "max_output_tokens": 471859,
+      "metadata": {
+        "openrouter": {
+          "modality": "text->decisions"
+        }
+      },
+      "name": "Upstage: Solar Decide"
     },
     "upstage/solar-mini4": {
       "capabilities": {
@@ -34586,7 +35915,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "VoyageAI by MongoDB: voyage-4"
+      "name": "VoyageAI by MongoDB: voyage-4",
+      "pricing": {
+        "rates": {
+          "input": 0.06
+        },
+        "source": "openrouter:voyageai/voyage-4"
+      }
     },
     "voyageai/voyage-4-large": {
       "capabilities": {
@@ -34618,7 +35953,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "VoyageAI by MongoDB: voyage-4-large"
+      "name": "VoyageAI by MongoDB: voyage-4-large",
+      "pricing": {
+        "rates": {
+          "input": 0.12
+        },
+        "source": "openrouter:voyageai/voyage-4-large"
+      }
     },
     "voyageai/voyage-4-lite": {
       "capabilities": {
@@ -34650,7 +35991,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "VoyageAI by MongoDB: voyage-4-lite"
+      "name": "VoyageAI by MongoDB: voyage-4-lite",
+      "pricing": {
+        "rates": {
+          "input": 0.02
+        },
+        "source": "openrouter:voyageai/voyage-4-lite"
+      }
     },
     "voyageai/voyage-code-4": {
       "capabilities": {
@@ -34682,7 +36029,13 @@
           "modality": "text->embeddings"
         }
       },
-      "name": "VoyageAI by MongoDB: voyage-code-4"
+      "name": "VoyageAI by MongoDB: voyage-code-4",
+      "pricing": {
+        "rates": {
+          "input": 0.12
+        },
+        "source": "openrouter:voyageai/voyage-code-4"
+      }
     },
     "voyageai/voyage-multimodal-3.5": {
       "capabilities": {
@@ -34716,7 +36069,13 @@
           "modality": "text+image->embeddings"
         }
       },
-      "name": "VoyageAI by MongoDB: voyage-multimodal-3.5"
+      "name": "VoyageAI by MongoDB: voyage-multimodal-3.5",
+      "pricing": {
+        "rates": {
+          "input": 0.12
+        },
+        "source": "openrouter:voyageai/voyage-multimodal-3.5"
+      }
     },
     "writer/palmyra-x5": {
       "capabilities": {
@@ -35273,14 +36632,14 @@
       "name": "SpaceXAI: Grok 4.7",
       "pricing": {
         "rates": {
-          "cache_read": 0.4,
-          "input": 1.6,
-          "output": 4.8,
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 6.0,
           "tiers": [
             {
-              "cache_read": 0.8,
-              "input": 3.2,
-              "output": 9.6,
+              "cache_read": 1.0,
+              "input": 4.0,
+              "output": 12.0,
               "tier": {
                 "size": 200000,
                 "type": "context"
@@ -35831,9 +37190,7 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -35899,10 +37256,8 @@
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
-          "logit_bias",
           "logprobs",
           "max_tokens",
-          "min_p",
           "presence_penalty",
           "reasoning",
           "repetition_penalty",
@@ -35999,7 +37354,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1048576,
+      "context_window": 1050000,
       "family": "mimo",
       "max_output_tokens": 131072,
       "metadata": {
@@ -36515,7 +37870,7 @@
       "name": "Z.ai: GLM 4.6V",
       "pricing": {
         "rates": {
-          "cache_read": 0.055,
+          "cache_read": 0.05,
           "input": 0.3,
           "output": 0.9
         },
@@ -36821,9 +38176,9 @@
       "name": "Z.ai: GLM 5.1",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
-          "input": 1.4,
-          "output": 4.4
+          "cache_read": 0.17914,
+          "input": 0.9646,
+          "output": 3.0316
         },
         "source": "models.dev:openrouter/z-ai/glm-5.1"
       }
@@ -36881,7 +38236,7 @@
       ],
       "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 131072,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -36891,9 +38246,9 @@
       "name": "Z.ai: GLM 5.2",
       "pricing": {
         "rates": {
-          "cache_read": 0.12064,
-          "input": 0.6496,
-          "output": 2.0416
+          "cache_read": 0.26,
+          "input": 0.41,
+          "output": 3.99
         },
         "source": "models.dev:openrouter/z-ai/glm-5.2"
       }
@@ -36950,9 +38305,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 943717,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -36962,7 +38317,7 @@
       "name": "Z.ai: GLM 5.3",
       "pricing": {
         "rates": {
-          "cache_read": 0.26,
+          "cache_read": 0.14,
           "input": 1.4,
           "output": 4.4
         },
@@ -37027,7 +38382,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "glm-flash",
       "max_output_tokens": 943717,
       "metadata": {
@@ -37584,6 +38939,7 @@
           "response_format",
           "stop",
           "structured_outputs",
+          "temperature",
           "tool_choice",
           "tools",
           "verbosity"
@@ -37608,7 +38964,8 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "Anthropic: Claude Sonnet Latest",
@@ -37678,7 +39035,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek-flash",
-      "max_output_tokens": 384000,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image->text"
@@ -37687,9 +39044,9 @@
       "name": "DeepSeek: DeepSeek Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.01,
-          "input": 0.02,
-          "output": 0.6
+          "cache_read": 0.002115,
+          "input": 0.015,
+          "output": 0.75
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-flash-latest"
       }
@@ -37747,7 +39104,7 @@
       ],
       "context_window": 1048576,
       "family": "deepseek",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 393216,
       "metadata": {
         "openrouter": {
           "modality": "text->text"
@@ -37756,9 +39113,9 @@
       "name": "DeepSeek: DeepSeek Pro Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.08832,
-          "input": 0.128,
-          "output": 1.9584
+          "cache_read": 0.0042,
+          "input": 0.132,
+          "output": 0.396
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-pro-latest"
       }
@@ -37816,7 +39173,7 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "deepseek",
       "max_output_tokens": 943718,
       "metadata": {
@@ -37827,9 +39184,9 @@
       "name": "DeepSeek: DeepSeek V4 Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.016,
-          "input": 0.021,
-          "output": 0.32
+          "cache_read": 0.0051,
+          "input": 0.0051,
+          "output": 1.28
         },
         "source": "models.dev:openrouter/~deepseek/deepseek-v4-flash-latest"
       }
@@ -38067,9 +39424,9 @@
       "name": "MoonshotAI: Kimi Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.3,
-          "input": 1.0,
-          "output": 9.0
+          "cache_read": 0.8,
+          "input": 1.39,
+          "output": 13.0
         },
         "source": "models.dev:openrouter/~moonshotai/kimi-latest"
       }
@@ -38106,7 +39463,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -38188,7 +39546,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -38268,7 +39627,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -38317,7 +39677,6 @@
         "reasoning": {
           "control": "levels",
           "levels": [
-            "none",
             "low",
             "medium",
             "high",
@@ -38336,7 +39695,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -38358,19 +39718,20 @@
       "max_output_tokens": 128000,
       "metadata": {
         "openrouter": {
-          "modality": "text+image+file->text"
+          "modality": "text+image+file->text",
+          "reasoning_mandatory": true
         }
       },
       "name": "OpenAI: GPT Sol Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.2,
+          "cache_read": 0.1,
           "cache_write": 2.5,
           "input": 2.0,
           "output": 10.0,
           "tiers": [
             {
-              "cache_read": 0.4,
+              "cache_read": 0.2,
               "cache_write": 5.0,
               "input": 4.0,
               "output": 15.0,
@@ -38417,7 +39778,8 @@
           "seed",
           "structured_outputs",
           "tool_choice",
-          "tools"
+          "tools",
+          "verbosity"
         ],
         "supported_voices": [],
         "task_types": [
@@ -38560,14 +39922,14 @@
       "name": "xAI: Grok Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.4,
-          "input": 1.6,
-          "output": 4.8,
+          "cache_read": 0.5,
+          "input": 2.0,
+          "output": 6.0,
           "tiers": [
             {
-              "cache_read": 0.8,
-              "input": 3.2,
-              "output": 9.6,
+              "cache_read": 1.0,
+              "input": 4.0,
+              "output": 12.0,
               "tier": {
                 "size": 200000,
                 "type": "context"
@@ -38636,9 +39998,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "glm-flash",
-      "max_output_tokens": 128000,
+      "max_output_tokens": 943718,
       "metadata": {
         "openrouter": {
           "modality": "text+image+video->text",
@@ -38648,9 +40010,9 @@
       "name": "Z.ai: GLM Flash Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.01,
-          "input": 0.045,
-          "output": 0.14
+          "cache_read": 0.013125,
+          "input": 0.02625,
+          "output": 0.9
         },
         "source": "models.dev:openrouter/~z-ai/glm-flash-latest"
       }
@@ -38707,9 +40069,9 @@
       "connections": [
         "api-key"
       ],
-      "context_window": 1310720,
+      "context_window": 1048576,
       "family": "glm",
-      "max_output_tokens": 943718,
+      "max_output_tokens": 131072,
       "metadata": {
         "openrouter": {
           "modality": "text->text",
@@ -38719,9 +40081,9 @@
       "name": "Z.ai: GLM Latest",
       "pricing": {
         "rates": {
-          "cache_read": 0.146625,
-          "input": 0.1785,
-          "output": 2.805
+          "cache_read": 0.06,
+          "input": 0.12,
+          "output": 4.0
         },
         "source": "models.dev:openrouter/~z-ai/glm-latest"
       }

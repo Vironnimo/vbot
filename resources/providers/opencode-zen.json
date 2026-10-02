@@ -45,6 +45,7 @@
   "models_endpoint": "/models",
   "models_dev_id": "opencode",
   "catalog_exclusions": [
+    "fledge-alpha-free",
     "big-pickle",
     "longcat-2.5-preview-free",
     "mimo-v2.6-flash-free",

@@ -116,7 +116,27 @@ The ChatGPT Codex backend routes its prompt cache by **per-request transport hea
 - Opaque reasoning fields such as `encrypted_content` and the complete Responses `output` array stay in `reasoning_meta` for exact round-tripping. A GPT-5.6 full-history context therefore depends on both the all-turns request control where supported and the prior output items actually being present.
 - Live exact Adapter/history probes on 2026-09-02 verified complete output-item and encrypted-reasoning replay across later Runs plus Tool continuations for subscription GPT-5.3 Codex Spark, GPT-5.4, GPT-5.4 Mini, GPT-5.5, GPT-5.6 Luna/Sol/Terra, and the upstream `gpt-reserve` and `codex-auto-review` slugs. The last two remain excluded from the selectable catalog because `/codex/models` marks them `visibility: hide`.
 - On the Codex Responses path, the selected Model's catalog ladder controls effort rendering. GPT-6 Astra supports `low/medium/high/xhigh/max`; `minimal` maps to `low`. Its subscription wire policy declares `minimum_reasoning_effort: "low"`, so `none` sends `low` and the displayed Reasoning intent agrees. Omitting effort remains the Provider default. Other Models retain their own ladders and policies.
-- Shared OpenAI wire ids do not imply shared Context limits. The public Platform values are GPT-5.2 and GPT-5.4 Mini at 400,000 and GPT-5.4, GPT-5.5, GPT-5.6 Luna/Sol/Terra, and GPT-6 Sol/Luna at 1,050,000; the last successfully refreshed subscription Codex catalog reports 272,000 for its shared ids. `connection_context_windows` preserves the active Connection's limit for Chat compaction and Adapter output budgeting. GPT-6 Sol/Luna currently use a conservative 272,000-token subscription limit by analogy with the existing Codex profiles, pending a successful live catalog refresh.
+- Shared OpenAI wire ids do not imply shared Context limits. The public Platform values are GPT-5.2 and GPT-5.4 Mini at 400,000 and GPT-5.4, GPT-5.5, GPT-5.6 Luna/Sol/Terra, GPT-6 Sol/Luna, and GPT-6.1 Sol at 1,050,000; the successfully refreshed subscription Codex catalog reports 272,000 for its shared ids, including all three Sol/Luna ids on 2026-10-02. `connection_context_windows` preserves the active Connection's limit for Chat compaction and Adapter output budgeting.
+
+### GPT-6.1 Sol profile (2026-10-02)
+
+The official [Model page](https://developers.openai.com/api/docs/models/gpt-6.1-sol), [reasoning guidance](https://developers.openai.com/api/docs/guides/reasoning), and [ChatGPT Model guide](https://learn.chatgpt.com/docs/models) were read on 2026-10-02. The exact id is `gpt-6.1-sol`; Responses is required for Tool calls. Public Platform facts are text/image input, text output, 1,050,000 Context, 128,000 output, and `low/medium/high/xhigh/max` (default `medium`). Bundled canonical facts/prices come from the complete models.dev refresh. The manual canonical join exposes API-key and subscription, with Responses on both and Connection-specific Context limits of 1,050,000 and 272,000 respectively. Both wire policies pin minimum effort `low`: `none` maps to `low`, and `minimal` snaps to `low`. No `reasoning.context` field is inferred from GPT-5.6.
+
+Independent raw subscription SSE requests accepted all five efforts, returned default `medium` on omission, and rejected `none` and `minimal` with HTTP 400 `unsupported_value`. `max_output_tokens`, `temperature`, and `top_p` were also rejected on this private endpoint; public Platform request support must not be transferred to it. The existing exact Adapter probe passed plain and Tool continuations through normal conversation-context transport. The public API-key Connection has documentation and local request coverage but no usable development credential for a live request.
+
+Actual streamed plain and two-Tool responses were accumulated by Chat, saved to disposable SQLite, reopened, and continued through fresh Adapters with normal conversation context. Original output items, encrypted Reasoning, Tool ids, and order survived exactly. A omitted historical Reasoning; B retained the exact returned items; C added visible accounting text (the returned summary when present, otherwise a synthetic calibration). Controls and Tool definitions stayed fixed within each comparison:
+
+| Request shape | A: absent | B: exact Reasoning | C: visible control |
+| --- | ---: | ---: | ---: |
+| Completed plain history, later Run without Tools | 67 | 171 | 176 |
+| Completed plain history, later Run with Tools | 110 | 214 | 219 |
+| Immediate two-Tool continuation | 180 | 203 | 264 |
+| Completed Tool history, later Run without Tools | 163 | 200 | 405 |
+| Completed Tool history, later Run with Tools | 206 | 243 | 448 |
+
+The positive B increases support inherited `full_history` on this exact subscription route. The streamed persisted Tool continuation returned terminal Usage (203 input/20 output) and the correct result. Canonical PNG/JPEG/GIF/WebP fixtures and a strict Responses JSON schema also completed correctly. Maximum capacities, sampling efficacy, and cache effectiveness were not measured.
+
+Regression anchors: the expanded GPT-6 catalog/effort cases in `tests/core/models/test_models_resources.py` and `tests/core/providers/test_openai_requests.py`, plus persisted exact output and route isolation in `tests/core/providers/test_reasoning_route_switch_conformance.py`.
 
 ### GPT-6 Sol/Luna profiles (2026-09-22)
 
