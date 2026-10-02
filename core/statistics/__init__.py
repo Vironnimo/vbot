@@ -48,6 +48,8 @@ from core.statistics.skills import (
     SkillInventorySource,
     SkillsSection,
     SkillUsageStat,
+    SkillUse,
+    counts_as_skill_use,
 )
 from core.statistics.statistics import (
     StatisticsService,
@@ -84,6 +86,7 @@ __all__ = [
     "SkillByAgentCount",
     "SkillInventorySource",
     "SkillUsageStat",
+    "SkillUse",
     "SkillsSection",
     "StatisticsIndex",
     "StatisticsReport",
@@ -97,4 +100,5 @@ __all__ = [
     "UsageSection",
     "UsageTotals",
     "WindowInfo",
+    "counts_as_skill_use",
 ]

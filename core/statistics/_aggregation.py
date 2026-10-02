@@ -104,7 +104,8 @@ class ReportBuilder:
         self._include_skills = include_skills
 
         self._ledger = ReportLedger()
-        self._skill_facts: list[tuple[str | None, list[str]]] = []
+        # Per unit: Session start, offered Skills, and whether it counts as use.
+        self._skill_facts: list[tuple[str | None, list[str], bool]] = []
 
         self._usage = UsageAccumulator()
         self._runs = RunAccumulator()
@@ -137,16 +138,20 @@ class ReportBuilder:
         *,
         created_at: str | None = None,
         offered_skills: Sequence[str] = (),
+        skill_use: bool = True,
     ) -> None:
         """Queue one surviving unit in processing order.
 
         ``created_at`` and ``offered_skills`` feed the skills tally, which
-        windows offers by Session start rather than by record timestamp.
+        windows offers by Session start rather than by record timestamp. A unit
+        with ``skill_use`` false (a background Session, see
+        ``core.statistics.skills.counts_as_skill_use``) adds no offers and no
+        activations.
         """
         self._ledger.add_unit(
             unit, None if unit.extension is None else self._extensions.slice(unit.extension)
         )
-        self._skill_facts.append((created_at, list(offered_skills)))
+        self._skill_facts.append((created_at, list(offered_skills), skill_use))
 
     def register_agent(self, agent_id: str, summaries: Sequence[JsonObject]) -> None:
         """Record an agent and its session-level structural facts."""
@@ -349,7 +354,9 @@ class ReportBuilder:
         ):
             activations.setdefault(unit, []).append((name, timestamp))
         for unit, report_unit in enumerate(self._ledger.units):
-            created_at, offered = self._skill_facts[unit]
+            created_at, offered, skill_use = self._skill_facts[unit]
+            if not skill_use:
+                continue
             self._skill_usage.observe_session(
                 display_key=report_unit.display_key,
                 created_at=created_at,
