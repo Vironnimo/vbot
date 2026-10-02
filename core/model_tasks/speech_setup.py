@@ -118,7 +118,7 @@ class LocalSpeechSetup(LocalSetup):
         if self.model is not None and self._model_error():
             if not await self._fetch_model():
                 return
-            self._publish_model()
+            await self._publish_model()
             _LOGGER.info(
                 "Local speech model installed (target=%s revision=%s)",
                 self._name,

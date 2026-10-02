@@ -276,9 +276,11 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
 
         # The environment was removed off the Event Loop, then created again on a
         # uv-managed Python of the server's version: uv does not see the server's
-        # interpreter as its parent.
-        threads = [thread for path, thread in removals if path == harrier.directory]
-        assert threads and threading.get_ident() not in threads
+        # interpreter as its parent. The Model's superseded revision was removed
+        # off the Event Loop too.
+        for removed in (harrier.directory, stale):
+            threads = [thread for path, thread in removals if path == removed]
+            assert threads and threading.get_ident() not in threads
         assert not (harrier.directory / "pyvenv.cfg").exists()
         venv = next(call for call in commands.calls if "venv" in call)
         server = f"{sys.version_info.major}.{sys.version_info.minor}"
