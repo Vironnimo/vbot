@@ -45,7 +45,7 @@ At any level, including DEBUG and exception messages built by vBot:
 
 Use the vBot-owned id of the same object instead (`core/utils/ids.py`). Channel-derived Session ids (`ch-<channel id>-<platform part>`, `channels.md`) are the one derived form a line may carry: every Session id is logged as usual, and the pipeline writes the platform part as a pseudonym (Constraints & Gotchas). Channel code itself still names only the Channel id and conversation kinds.
 
-asyncio Task names follow the same rules: they appear in asyncio's own log lines (an unretrieved Task exception) and in the `python -m asyncio ps` task listing, which no formatter pseudonymizes. Long-lived Tasks are named `<purpose>:<vBot-owned id>` (for example `run:<run id>`, `mcp-call:<connection id>:<operation>`); a name never carries a platform id, Channel-derived Session id, resource URI, user content or credential.
+asyncio Task names follow the same rules: they appear in asyncio's own log lines (an unretrieved Task exception) and in the `python -m asyncio ps` task listing (`performance.md`), which no formatter pseudonymizes. Long-lived Tasks are named `<purpose>:<vBot-owned id>` (for example `run:<run id>`, `mcp-call:<connection id>:<operation>`); a name never carries a platform id, Channel-derived Session id, resource URI, user content or credential.
 
 ## Constraints & Gotchas
 
