@@ -12,17 +12,21 @@ from typing import Any
 
 import pytest
 
+from core.providers.accounts import ConnectionRef
 from core.providers.credentials import ProviderCredentialResolver
+from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import (
     AuthConfig,
     ConnectionConfig,
     ProviderConfig,
     ProviderRegistry,
 )
+from core.providers.reasoning import REASONING_INTENT_ON, ReasoningIntent
 from core.runtime.runtime import Runtime
 from core.storage.storage import StorageManager
 from core.utils.config import Config
 from server.events import ServerEventBus
+from tests.core.providers.openai_compatible_test_support import sent_payload
 from tests.server.rpc_test_support import (
     JsonObject,
     StubAdapter,
@@ -655,5 +659,74 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         assert "VBOT_CUSTOM_LOCAL_AI_API_KEY" not in runtime.storage.load_environment()
         with pytest.raises(KeyError):
             providers.get("local-ai")
+    finally:
+        await runtime.aclose()
+
+
+@pytest.mark.asyncio
+async def test_custom_provider_wire_block_shapes_requests_live(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``wire`` block is the Provider's wire profile data: requests, ``model.get``
+    and the reasoning report use it, a save applies it to existing Adapters, and a
+    block with entries vBot would ignore is refused without saving anything."""
+
+    monkeypatch.delenv("VBOT_CUSTOM_LOCAL_AI_API_KEY", raising=False)
+    runtime = Runtime(Config(data_dir=tmp_path / "data"), safe_startup_mode="test")
+    runtime.start()
+    try:
+        state = SimpleNamespace(
+            runtime=runtime,
+            event_bus=ServerEventBus(),
+            server_bind={"listen_host": "127.0.0.1", "listen_port": 8420, "port_source": "default"},
+        )
+        provider = _custom_provider_payload()
+        provider["models"]["chat-model"]["capabilities"]["reasoning"] = True
+        provider["wire"] = {"defaults": {"reasoning": {"dialect": "thinking_toggle"}}}
+        await rpc_result(state, "provider.custom_save", provider=provider, api_key="secret")
+        adapter = runtime.get_adapter(ConnectionRef("local-ai", "local-ai:default"))
+        assert isinstance(adapter, OpenAICompatibleAdapter)
+        url = "http://127.0.0.1:8080/v1/chat/completions"
+
+        toggled = await sent_payload(
+            adapter, url=url, model_id="chat-model", thinking_effort="high"
+        )
+        model = (await rpc_result(state, "model.get", model="local-ai/chat-model"))["model"]
+
+        assert toggled["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in toggled
+        assert model["wire_profiles"]["default"]["reasoning_dialect"] == "thinking_toggle"
+        assert runtime.describe_reasoning_render("local-ai", "chat-model", "high") == (
+            ReasoningIntent(REASONING_INTENT_ON)
+        )
+
+        refused = await rpc_error(
+            state,
+            "provider.custom_save",
+            provider={**provider, "wire": {"connections": {"api-key": {}}}},
+        )
+
+        assert refused["code"] == "invalid_request"
+        assert refused["data"] == {
+            "wire_issues": [
+                "wire.connections.api-key: unknown Connection (this Provider has default), "
+                "ignoring it"
+            ]
+        }
+        assert "was not saved" in refused["message"]
+        assert (
+            runtime.storage.load_custom_providers_settings()["local-ai"]["wire"]
+            == (provider["wire"])
+        )
+
+        # Without a block, the same Adapter falls back to the protocol defaults.
+        await rpc_result(state, "provider.custom_save", provider={**provider, "wire": None})
+        effort = await sent_payload(adapter, url=url, model_id="chat-model", thinking_effort="high")
+
+        assert effort["reasoning_effort"] == "high"
+        assert "thinking" not in effort
+        assert "wire" not in runtime.storage.load_custom_providers_settings()["local-ai"]
+        await adapter.aclose()
     finally:
         await runtime.aclose()

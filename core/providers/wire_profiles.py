@@ -25,6 +25,7 @@ from core.providers._wire_profile_files import (
     child_node,
     is_opaque,
     load_wire_profile_files,
+    parse_wire_profile_block,
 )
 from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
 from core.providers.reasoning import normalize_thinking_effort
@@ -250,6 +251,58 @@ def bundled_wire_profile_files() -> Mapping[str, WireProfileFile]:
     return MappingProxyType(
         load_wire_profile_files(VBOT_ROOT / "resources", report=log_wire_profile_issue)
     )
+
+
+def custom_provider_wire_file(
+    provider_id: str,
+    provider: Mapping[str, Any],
+    *,
+    report: WireIssueReport,
+    source: str | None = None,
+) -> WireProfileFile | None:
+    """Parse the ``wire`` block of one Custom Provider Settings record.
+
+    The block is that Provider's wire profile file: the body of a bundled file
+    without ``format_version``. It may only name the Provider's one Connection
+    and the protocols its Adapter speaks. ``None`` when the record has no block
+    or the block is not an object (reported); every other invalid entry is
+    reported and omitted on its own.
+    """
+
+    raw = provider.get("wire")
+    if raw is None:
+        return None
+    # Imported here: Adapters import this module, and Settings import Providers lazily.
+    from core.providers.adapter_types import ADAPTER_TYPES
+    from core.settings.normalizers import CUSTOM_PROVIDER_CONNECTION_ID
+
+    adapter_class = ADAPTER_TYPES.get(str(provider.get("adapter")))
+    return parse_wire_profile_block(
+        provider_id,
+        raw,
+        source=source or f"settings.json:providers.custom.{provider_id}.wire",
+        report=report,
+        connection_ids=(CUSTOM_PROVIDER_CONNECTION_ID,),
+        protocols=adapter_class.WIRE_PROTOCOLS if adapter_class is not None else None,
+    )
+
+
+def wire_profile_files(
+    custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
+) -> Mapping[str, WireProfileFile]:
+    """The bundled files plus every Custom Provider's wire block.
+
+    A Custom Provider's block is its only file; without a block it resolves
+    from the protocol defaults and its catalog.
+    """
+
+    files = dict(bundled_wire_profile_files())
+    for provider_id, provider in (custom_providers or {}).items():
+        files.pop(provider_id, None)
+        parsed = custom_provider_wire_file(provider_id, provider, report=log_wire_profile_issue)
+        if parsed is not None:
+            files[provider_id] = parsed
+    return MappingProxyType(files)
 
 
 def standalone_wire_binding(
@@ -682,8 +735,10 @@ def _build_media(values: Mapping[str, Any]) -> MediaRules:
 
 __all__ = [
     "bundled_wire_profile_files",
+    "custom_provider_wire_file",
     "log_wire_profile_issue",
     "standalone_wire_binding",
+    "wire_profile_files",
     "LAYER_CATALOG",
     "LAYER_FILE_CONNECTION",
     "LAYER_FILE_DEFAULTS",
