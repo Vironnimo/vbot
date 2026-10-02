@@ -11,7 +11,8 @@ import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from core.providers.github_copilot_policy import RESPONSES_ENDPOINT, copilot_model_policy
+from core.providers._openai_constants import OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS
+from core.providers._openai_policy import OpenAISubscriptionResponsesPolicy
 from core.providers.github_copilot_responses import (
     ResponsesRequestPolicy,
     ResponsesStreamState,
@@ -19,26 +20,28 @@ from core.providers.github_copilot_responses import (
 )
 
 
-def responses_policy(model_id: str = "gpt-5.4", **overrides: Any) -> ResponsesRequestPolicy:
-    """A request policy with every optional feature unless overridden.
+def responses_policy(
+    *,
+    reasoning_efforts: Iterable[str] = ("low", "medium", "high", "xhigh"),
+    tool_calls: bool = True,
+    parallel_tool_calls: bool = True,
+    structured_outputs: bool = True,
+) -> ResponsesRequestPolicy:
+    """A request policy with every optional feature unless switched off.
 
-    The payload builder reads a Provider policy. The GitHub Copilot policy
-    serves here because its catalog facts (``overrides``) switch each feature.
+    The payload builder reads a Provider policy that derives reasoning from the
+    caller's effort. The OpenAI declared-Responses policy serves here because
+    its fields switch each feature; its optional parameters are ``max_tokens``,
+    ``max_output_tokens`` and ``top_p``.
     """
 
-    facts: dict[str, Any] = {
-        "vendor": "OpenAI",
-        "family": model_id,
-        "version": model_id,
-        "supported_endpoints": [RESPONSES_ENDPOINT],
-        "reasoning_efforts": ["low", "medium", "high", "xhigh"],
-        "tool_calls": True,
-        "parallel_tool_calls": True,
-        "streaming": True,
-        "structured_outputs": True,
-        **overrides,
-    }
-    return copilot_model_policy(model_id, {"github_copilot": facts})
+    return OpenAISubscriptionResponsesPolicy(
+        allowed_reasoning_efforts=frozenset(reasoning_efforts),
+        supports_tools=tool_calls,
+        supports_parallel_tool_calls=parallel_tool_calls,
+        supports_structured_outputs=structured_outputs,
+        supported_request_parameters=OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
+    )
 
 
 def sse_event(event: str, data: Mapping[str, Any]) -> str:

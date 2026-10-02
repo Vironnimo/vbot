@@ -1,0 +1,40 @@
+{
+  "format_version": 1,
+  "_comment": "OpenRouter. Every chat Model speaks Chat Completions except the GPT-5.6 Models, which speak stateless Responses. Chat reasoning is OpenRouter's reasoning object ({effort}, or {enabled: true} for on/off Models) plus include_reasoning; OpenRouter maps an effort onto an upstream token budget itself, so no budget is sent. A Model without a catalog ladder snaps onto none..xhigh, an id the catalog does not know is treated as a reasoning Model, and a Model whose reasoning is mandatory gets its lowest active level instead of off. Claude Models cache only at explicit cache_control breakpoints; other families cache implicitly and do not get markers. Responses accepts max_output_tokens and top_p as its only optional parameters and omits reasoning for effort none.",
+  "defaults": {
+    "reasoning": {
+      "supported": true,
+      "floor": ["none", "minimal", "low", "medium", "high", "xhigh"]
+    }
+  },
+  "protocols": {
+    "chat_completions": {
+      "reasoning": {"dialect": "openrouter_reasoning"}
+    },
+    "responses": {
+      "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
+      "reasoning": {"off": "omit"}
+    }
+  },
+  "rules": [
+    {
+      "when": {
+        "ids": [
+          "openai/gpt-5.6-luna",
+          "openai/gpt-5.6-luna-pro",
+          "openai/gpt-5.6-sol",
+          "openai/gpt-5.6-sol-pro",
+          "openai/gpt-5.6-terra",
+          "openai/gpt-5.6-terra-pro"
+        ]
+      },
+      "set": {"protocol": "responses"},
+      "note": "GPT-5.6 keeps its reasoning across turns only on stateless Responses, which replays the exact output items; the :batch variants and auto-router slugs stay on Chat Completions."
+    },
+    {
+      "when": {"prefix": ["anthropic/claude", "~anthropic/claude"]},
+      "set": {"request": {"prompt_cache": "anthropic_breakpoints"}},
+      "note": "Anthropic cache_control breakpoints on the last system message and the most recent history messages."
+    }
+  ]
+}

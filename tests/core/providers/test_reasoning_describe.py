@@ -21,6 +21,7 @@ from core.models.models import (
 )
 from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
+from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
 from core.providers.minimax import MINIMAX_M3_MODEL_ID, MiniMaxAdapter
 from core.providers.ollama import OllamaAdapter
@@ -101,23 +102,6 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
             "none",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
             id="generic-on-off-none-sends-nothing",
-        ),
-        # OpenRouter toggles ``reasoning.enabled``; the effort never reaches it.
-        pytest.param(
-            OpenRouterAdapter,
-            _ON_OFF,
-            "high",
-            ReasoningIntent(REASONING_INTENT_ON, effort_level="high"),
-            id="openrouter-on-off-toggles",
-        ),
-        # xhigh ties between high and max; the lower rank wins so the render never
-        # silently increases cost beyond the selection.
-        pytest.param(
-            OpenRouterAdapter,
-            _model("ladder-model", control=REASONING_CONTROL_LEVELS, levels=("low", "high", "max")),
-            "xhigh",
-            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
-            id="openrouter-levels-snaps-lower-on-tie",
         ),
         # The native ``think`` control is a boolean for on_off Models.
         pytest.param(
@@ -224,6 +208,45 @@ def test_describe_reasoning_render_reports_what_the_wire_carries(
             "none",
             ReasoningIntent(REASONING_INTENT_DEFAULT),
             id="anthropic-adaptive-only-off-sends-nothing",
+        ),
+        # OpenRouter toggles ``reasoning.enabled``; the effort never reaches it.
+        pytest.param(
+            OpenRouterAdapter,
+            "openrouter",
+            _ON_OFF,
+            "high",
+            ReasoningIntent(REASONING_INTENT_ON),
+            id="openrouter-on-off-toggles",
+        ),
+        # xhigh ties between high and max; the lower rank wins so the render never
+        # silently increases cost beyond the selection.
+        pytest.param(
+            OpenRouterAdapter,
+            "openrouter",
+            _model("ladder-model", control=REASONING_CONTROL_LEVELS, levels=("low", "high", "max")),
+            "xhigh",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="high"),
+            id="openrouter-levels-snaps-lower-on-tie",
+        ),
+        # Copilot's Haiku 4.5 on Messages takes adaptive thinking without an effort,
+        # although the catalog reports a thinking budget.
+        pytest.param(
+            GitHubCopilotAdapter,
+            "github-copilot",
+            _model(
+                "claude-haiku-4.5",
+                control=REASONING_CONTROL_BUDGET,
+                budget_max=32_000,
+                metadata={
+                    "github_copilot": {
+                        "vendor": "Anthropic",
+                        "supported_endpoints": ["/chat/completions", "/v1/messages"],
+                    }
+                },
+            ),
+            "high",
+            ReasoningIntent(REASONING_INTENT_ON),
+            id="copilot-haiku-adaptive-on",
         ),
         # GPT-6.1 Sol has no none rung; its profile spells off as the low effort.
         pytest.param(

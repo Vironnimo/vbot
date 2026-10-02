@@ -22,6 +22,7 @@ from tests.core.providers.openrouter_test_support import (
     catalog_model,
     chat_sse,
     openrouter_adapter,
+    openrouter_config,
     responses_sse,
     sent_body,
 )
@@ -53,7 +54,10 @@ async def test_mandatory_reasoning_model_never_renders_off(
 
     body = sent_body(route)
     intent = adapter.describe_reasoning_render(
-        model_lookup=lookup, model_id=SPACE_BUNNY, effort=effort
+        model_lookup=lookup,
+        model_id=SPACE_BUNNY,
+        effort=effort,
+        provider_config=openrouter_config(),
     )
     if expected is None:
         assert "reasoning" not in body

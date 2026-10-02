@@ -96,8 +96,9 @@ ReasoningDialect = Literal[
 - ``none``: the wire takes no reasoning control; nothing is sent.
 - ``reasoning_effort``: top-level ``reasoning_effort: <level>``; off is the
   ``none`` level.
-- ``openrouter_reasoning``: ``reasoning: {effort|enabled|max_tokens}`` plus
-  ``include_reasoning``.
+- ``openrouter_reasoning``: ``reasoning: {effort}`` (``{enabled: true}`` for a
+  plain on and on/off Models) plus ``include_reasoning``; off is
+  ``{effort: "none"}`` or ``{enabled: false}``. No token budget is sent.
 - ``nous_reasoning``: ``reasoning: {enabled: true, effort}``.
 - ``thinking_toggle``: ``thinking: {type: enabled|disabled[, keep]}``.
 - ``thinking_toggle_with_effort``: the toggle plus ``reasoning_effort``.
@@ -106,7 +107,8 @@ ReasoningDialect = Literal[
   ``reasoning_split``.
 - ``anthropic_thinking``: ``thinking`` adaptive with ``output_config.effort``
   for effort ladders, ``enabled`` with ``budget_tokens`` for budgets,
-  ``disabled`` for off.
+  ``disabled`` for off. ``reasoning.options.adaptive_on`` spells a plain on as
+  adaptive thinking without an effort.
 - ``responses_reasoning``: ``reasoning: {effort, summary}``; off is the
   ``none`` level. ``reasoning.options.context`` adds ``reasoning.context``, and
   a Model known to reason always gets the encrypted reasoning ``include``.

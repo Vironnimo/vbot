@@ -6,26 +6,7 @@ import re
 
 from core.utils.logging import get_logger
 
-OPENROUTER_REASONING_EFFORTS = {"none", "minimal", "low", "medium", "high", "xhigh"}
-
-OPENROUTER_REASONING_OFF = {"enabled": False}
-
-OPENROUTER_NONE_EFFORT = "none"
-
 OPENROUTER_RESPONSES_ENDPOINT = "/responses"
-
-OPENROUTER_ALL_TURNS_RESPONSES_MODELS = frozenset(
-    {
-        "openai/gpt-5.6-luna",
-        "openai/gpt-5.6-luna-pro",
-        "openai/gpt-5.6-sol",
-        "openai/gpt-5.6-sol-pro",
-        "openai/gpt-5.6-terra",
-        "openai/gpt-5.6-terra-pro",
-    }
-)
-
-OPENROUTER_RESPONSES_REQUEST_PARAMETERS = frozenset({"max_tokens", "max_output_tokens", "top_p"})
 
 _OPENROUTER_SHARED_POLICY_STATUSES = frozenset({401, 403, 429, 502, 503, 504})
 

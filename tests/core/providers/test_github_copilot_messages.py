@@ -15,7 +15,7 @@ from core.providers.adapter import (
     request_input_budget,
 )
 from core.providers.errors import ProviderError
-from core.providers.github_copilot_policy import CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT
+from core.providers.github_copilot import CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
 from tests.core.providers.github_copilot_test_support import (
@@ -297,12 +297,13 @@ async def test_send_resolves_messages_max_tokens(
                 "output_config": {"effort": "xhigh", "unknown": True},
                 "thinking_budget": 64000,
             },
+            # Raw thinking fields never reach the wire; the effort is planned.
             {
                 "thinking": {"type": "adaptive", "display": "summarized"},
                 "output_config": {"effort": "xhigh"},
                 "max_tokens": 4096,
             },
-            id="explicit-thinking-beats-budget",
+            id="effort-wins-over-raw-thinking-fields",
         ),
         pytest.param(
             "claude-opus-4.7",
@@ -314,13 +315,6 @@ async def test_send_resolves_messages_max_tokens(
                 "max_tokens": 4096,
             },
             id="effort-maps-to-nearest-allowed",
-        ),
-        pytest.param(
-            "claude-opus-4.7",
-            {"metadata": _claude_metadata("claude-opus-4.7")},
-            {"thinking_budget": 2048},
-            {"thinking": {"type": "enabled", "budget_tokens": 2048}, "max_tokens": 4096},
-            id="explicit-budget",
         ),
         pytest.param(
             "claude-budget",

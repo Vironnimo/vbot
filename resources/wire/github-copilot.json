@@ -1,0 +1,155 @@
+{
+  "format_version": 1,
+  "_comment": "GitHub Copilot fronts three wires; the catalog's reported supported_endpoints and vendor pick one per Model (no live verification in this checkout; the shapes keep the pre-profile wire). Without a vendor preference the first advertised wire wins in the order Chat Completions, Messages, Responses; OpenAI and Azure OpenAI Models prefer Responses, Google Models Chat Completions and Anthropic Models Messages. Every wire carries JPEG, PNG, GIF and WebP images only (narrowed by the Model's reported vision formats). Chat Completions accepts max_tokens, temperature and top_p; Responses max_tokens, max_output_tokens and top_p, and omits reasoning for effort none; Messages accepts the sampling parameters even while thinking, keeps Tool call ids unchanged, and spells a budget Model's effort none by omission. A Model the catalog does not know gets Chat Completions without Tools, structured output or reasoning.",
+  "defaults": {
+    "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+  },
+  "protocols": {
+    "chat_completions": {
+      "request": {"allowed_parameters": ["max_tokens", "temperature", "top_p"]}
+    },
+    "messages": {
+      "request": {
+        "allowed_parameters": [
+          "max_tokens",
+          "max_output_tokens",
+          "max_completion_tokens",
+          "temperature",
+          "top_p",
+          "top_k",
+          "stop_sequences"
+        ],
+        "tool_call_ids": "none",
+        "parameters": {
+          "temperature": {"mode": "send"},
+          "top_p": {"mode": "send"},
+          "top_k": {"mode": "send"}
+        }
+      },
+      "replay": {
+        "fidelity": "meta_preferred",
+        "history_field": "reasoning_content",
+        "strip_when_off": false
+      },
+      "_replay_note": "The Messages output allowance is budgeted against the Chat Completions rendering of the history, so the Chat Completions replay declaration stays."
+    },
+    "responses": {
+      "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
+      "reasoning": {"off": "omit"}
+    }
+  },
+  "rules": [
+    {
+      "when": {"metadata": {"supported_endpoints": {"contains": "/responses"}}},
+      "set": {"protocol": "responses"},
+      "note": "Advertised wires without a vendor preference: Responses last..."
+    },
+    {
+      "when": {"metadata": {"supported_endpoints": {"contains": "/v1/messages"}}},
+      "set": {"protocol": "messages"},
+      "note": "...then Messages..."
+    },
+    {
+      "when": {"metadata": {"supported_endpoints": {"contains": "/chat/completions"}}},
+      "set": {"protocol": "chat_completions"},
+      "note": "...and Chat Completions first."
+    },
+    {
+      "when": {"metadata": {"vendor": "OpenAI", "supported_endpoints": {"contains": "/responses"}}},
+      "set": {"protocol": "responses"}
+    },
+    {
+      "when": {
+        "metadata": {"vendor": "Azure OpenAI", "supported_endpoints": {"contains": "/responses"}}
+      },
+      "set": {"protocol": "responses"}
+    },
+    {
+      "when": {
+        "prefix": ["gpt-", "gpt_", "o1", "o3", "o4"],
+        "metadata": {"supported_endpoints": {"contains": "/responses"}}
+      },
+      "set": {"protocol": "responses"},
+      "note": "OpenAI Model ids prefer Responses when the vendor is not reported."
+    },
+    {
+      "when": {"metadata": {"vendor": "Google", "supported_endpoints": {"contains": "/chat/completions"}}},
+      "set": {"protocol": "chat_completions"}
+    },
+    {
+      "when": {
+        "prefix": "gemini",
+        "metadata": {"supported_endpoints": {"contains": "/chat/completions"}}
+      },
+      "set": {"protocol": "chat_completions"}
+    },
+    {
+      "when": {"metadata": {"vendor": "Anthropic", "supported_endpoints": {"contains": "/v1/messages"}}},
+      "set": {"protocol": "messages"}
+    },
+    {
+      "when": {"prefix": "claude", "metadata": {"supported_endpoints": {"contains": "/v1/messages"}}},
+      "set": {"protocol": "messages"}
+    },
+    {
+      "when": {"control": "budget"},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Budget-only thinking Models have never been sent thinking disabled; effort none sends no thinking."
+    },
+    {
+      "when": {"unknown": true},
+      "set": {
+        "reasoning": {"dialect": "none"},
+        "request": {
+          "parameters": {
+            "tools": {"mode": "drop"},
+            "tool_choice": {"mode": "drop"},
+            "parallel_tool_calls": {"mode": "drop"},
+            "response_format": {"mode": "drop"},
+            "structured_outputs": {"mode": "drop"},
+            "json_mode": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "Without catalog facts no Tool, structured-output or reasoning support is assumed."
+    },
+    {
+      "when": {"ids": ["gpt-5-mini"], "unknown": true},
+      "set": {
+        "reasoning": {"dialect": "reasoning_effort", "levels": ["low", "medium", "high"]},
+        "request": {
+          "parameters": {
+            "tools": {"mode": "send"},
+            "tool_choice": {"mode": "send"},
+            "parallel_tool_calls": {"mode": "send"},
+            "response_format": {"mode": "send"},
+            "structured_outputs": {"mode": "send"},
+            "json_mode": {"mode": "send"}
+          }
+        }
+      },
+      "note": "gpt-5-mini keeps Tools, structured output and its low..high efforts on Chat Completions while the catalog lacks it."
+    }
+  ],
+  "models": {
+    "claude-haiku-4.5": {
+      "set": {
+        "reasoning": {
+          "supported": true,
+          "control": "on_off",
+          "off": "auto",
+          "options": {"adaptive_on": true}
+        }
+      },
+      "note": "Copilot takes adaptive thinking without an effort for Haiku 4.5 and no thinking budget, although the catalog reports budget bounds."
+    },
+    "claude-sonnet-4.6": {
+      "set": {"request": {"parameters": {"temperature": {"mode": "drop_while_thinking"}}}},
+      "note": "temperature is not sent while thinking is active."
+    },
+    "gemini-3.1-pro-preview": {
+      "set": {"reasoning": {"dialect": "none"}},
+      "note": "Copilot takes no reasoning_effort for Gemini 3.1 Pro Preview, although the catalog reports efforts."
+    }
+  }
+}

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from core.models.models import REASONING_CONTROL_LEVELS
+from core.models.models import REASONING_CONTROL_LEVELS, REASONING_CONTROL_ON_OFF
 from core.providers._responses_values import REASONING_ENCRYPTED_CONTENT_INCLUDE
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
@@ -168,6 +168,58 @@ def _render_responses_reasoning(
         include = payload.setdefault("include", [])
         if REASONING_ENCRYPTED_CONTENT_INCLUDE not in include:
             include.append(REASONING_ENCRYPTED_CONTENT_INCLUDE)
+
+
+# -- openrouter_reasoning ---------------------------------------------------------
+# OpenRouter's ``reasoning`` object plus ``include_reasoning: true``. An effort
+# (and the level a budget snaps to) is ``reasoning: {effort}``: OpenRouter maps
+# an effort onto an upstream token budget itself, so no budget is sent. A plain
+# ``on``, and every active decision for an on/off Model, is ``reasoning:
+# {enabled: true}``. Off is ``{effort: "none"}`` when the decision carries the
+# ``none`` level and ``{enabled: false}`` otherwise; an off request never asks
+# for the reasoning text, so a caller's ``include_reasoning`` is removed.
+
+
+def _openrouter_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> dict[str, Any] | None:
+    """The ``reasoning`` object a decision is spelled as (``None``: nothing is sent)."""
+
+    if intent.kind in _ACTIVE_KINDS:
+        if intent.kind == REASONING_INTENT_ON or wire.control == REASONING_CONTROL_ON_OFF:
+            return {"enabled": True}
+        if intent.effort_level is not None:
+            return {"effort": intent.effort_level}
+        return None
+    if intent.kind == REASONING_INTENT_OFF:
+        return {"effort": "none"} if intent.effort_level == "none" else {"enabled": False}
+    return None
+
+
+def _render_openrouter_reasoning(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del output_allowance
+    reasoning = _openrouter_reasoning(wire, intent)
+    if reasoning is None:
+        return
+    payload["reasoning"] = reasoning
+    if intent.kind == REASONING_INTENT_OFF:
+        payload.pop("include_reasoning", None)
+    else:
+        payload["include_reasoning"] = True
+
+
+def _describe_openrouter_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    reasoning = _openrouter_reasoning(wire, intent)
+    if reasoning is None:
+        return _SENDS_NOTHING
+    if intent.kind == REASONING_INTENT_OFF:
+        return ReasoningIntent(REASONING_INTENT_OFF, effort_level=reasoning.get("effort"))
+    if "effort" in reasoning:
+        return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=reasoning["effort"])
+    return ReasoningIntent(REASONING_INTENT_ON)
 
 
 # -- nous_reasoning -------------------------------------------------------------
@@ -324,7 +376,9 @@ def _describe_minimax_thinking(wire: ReasoningWire, intent: ReasoningIntent) -> 
 # Anthropic Messages ``thinking``: an effort is adaptive thinking (summarized)
 # with ``output_config.effort`` above ``minimal``; a budget is ``enabled`` with
 # ``budget_tokens``; a plain ``on`` is the minimum budget, skipped when it does
-# not fit below the output allowance; off is ``disabled``.
+# not fit below the output allowance; off is ``disabled``. With
+# ``reasoning.options.adaptive_on: true`` a plain ``on`` is adaptive thinking
+# without an effort instead (Models that take neither an effort nor a budget).
 
 _ANTHROPIC_MINIMAL_EFFORT = "minimal"
 
@@ -341,6 +395,8 @@ def _render_anthropic_thinking(
             payload["output_config"] = {"effort": intent.effort_level}
     elif intent.kind == REASONING_INTENT_BUDGET:
         payload["thinking"] = {"type": "enabled", "budget_tokens": intent.budget_tokens}
+    elif intent.kind == REASONING_INTENT_ON and wire.options.get("adaptive_on") is True:
+        payload["thinking"] = {"type": "adaptive", "display": "summarized"}
     elif intent.kind == REASONING_INTENT_ON:
         budget = wire.budget.minimum
         if output_allowance is not None and output_allowance <= budget:
@@ -416,6 +472,11 @@ _DIALECTS: dict[str, _Dialect] = {
     ),
     "responses_reasoning": _Dialect(
         _render_responses_reasoning, _describe_reasoning_effort, ("reasoning", "include")
+    ),
+    "openrouter_reasoning": _Dialect(
+        _render_openrouter_reasoning,
+        _describe_openrouter_reasoning,
+        ("reasoning", "include_reasoning"),
     ),
     "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning, ("reasoning",)),
     "thinking_toggle": _Dialect(_render_thinking_toggle, _describe_thinking_toggle, ("thinking",)),

@@ -1,10 +1,9 @@
-"""Openrouter policy."""
+"""OpenRouter request and response helpers: routing, prompt caching, errors, newline runs."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -15,92 +14,8 @@ from core.providers._openrouter_constants import (
     OPENROUTER_CACHE_BREAKPOINT_LIMIT,
     OPENROUTER_CACHE_CONTROL_EPHEMERAL,
     OPENROUTER_MAX_HISTORY_CACHE_BREAKPOINTS,
-    OPENROUTER_NONE_EFFORT,
-    OPENROUTER_REASONING_OFF,
-    OPENROUTER_RESPONSES_REQUEST_PARAMETERS,
     REASONING_NEWLINE_RUN_PATTERN,
 )
-from core.providers.reasoning import (
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
-    ReasoningIntent,
-    closest_supported_effort,
-    normalize_thinking_effort,
-)
-
-
-@dataclass(frozen=True)
-class OpenRouterResponsesPolicy:
-    """Request-shaping facts for an exact OpenRouter Responses-routed Model."""
-
-    allowed_reasoning_efforts: frozenset[str]
-    supports_tools: bool
-    supports_parallel_tool_calls: bool
-    supports_structured_outputs: bool
-
-    @property
-    def allows_any_reasoning_controls(self) -> bool:
-        return bool(self.allowed_reasoning_efforts)
-
-    @property
-    def supports_explicit_none_effort(self) -> bool:
-        # No Responses-routed OpenRouter Model has been live-proven to need an
-        # explicit off rung yet; preserve omission until its wire is audited.
-        return False
-
-    def filter_request_kwargs(self, kwargs: Mapping[str, Any]) -> dict[str, Any]:
-        filtered = {key: value for key, value in kwargs.items() if value is not None}
-        if not self.supports_tools:
-            for name in ("tools", "tool_choice", "parallel_tool_calls"):
-                filtered.pop(name, None)
-        elif not self.supports_parallel_tool_calls:
-            filtered.pop("parallel_tool_calls", None)
-
-        if not self.supports_structured_outputs:
-            for name in ("response_format", "structured_outputs", "json_mode", "text"):
-                filtered.pop(name, None)
-
-        if not self.allows_any_reasoning_controls:
-            for name in ("thinking_effort", "reasoning_effort", "reasoning", "include_reasoning"):
-                filtered.pop(name, None)
-        else:
-            self._normalize_effort(filtered, "thinking_effort")
-            self._normalize_effort(filtered, "reasoning_effort")
-
-        for name in ("max_tokens", "max_output_tokens", "temperature", "top_p", "top_k"):
-            if name in filtered and name not in OPENROUTER_RESPONSES_REQUEST_PARAMETERS:
-                filtered.pop(name, None)
-        return filtered
-
-    def closest_reasoning_effort(self, effort: Any) -> str | None:
-        normalized = normalize_thinking_effort(effort)
-        if not normalized:
-            return None
-        if normalized == OPENROUTER_NONE_EFFORT:
-            return (
-                OPENROUTER_NONE_EFFORT
-                if OPENROUTER_NONE_EFFORT in self.allowed_reasoning_efforts
-                else None
-            )
-        return closest_supported_effort(normalized, self.allowed_reasoning_efforts)
-
-    def supports_request_parameter(self, parameter_name: str) -> bool:
-        return parameter_name in OPENROUTER_RESPONSES_REQUEST_PARAMETERS
-
-    def _normalize_effort(
-        self,
-        filtered: dict[str, Any],
-        parameter_name: str,
-    ) -> None:
-        if parameter_name not in filtered:
-            return
-        safe_effort = self.closest_reasoning_effort(filtered[parameter_name])
-        if safe_effort is None:
-            filtered.pop(parameter_name, None)
-        else:
-            filtered[parameter_name] = safe_effort
 
 
 def _openrouter_provider_preferences(
@@ -246,60 +161,6 @@ def _collapse_reasoning_delta_texts(
         if collapsed:
             result.append({"type": "reasoning_delta", "text": collapsed})
     return result
-
-
-def _render_openrouter_reasoning(payload: dict[str, Any], intent: ReasoningIntent) -> None:
-    """Render a reasoning intent onto an OpenRouter payload.
-
-    OpenRouter speaks ``reasoning: {effort}`` / ``{enabled}``. An ``effort``
-    intent maps straight through; ``budget`` also renders as an effort (OpenRouter
-    maps effort→budget internally, so no token budget is sent); ``on`` toggles
-    ``enabled: true``. ``off`` keeps the byte-identical ``{"effort": "none"}`` for
-    an effort-spelled-off wire (``effort_level == "none"``) and falls back to the
-    documented ``{"enabled": false}`` toggle otherwise; ``default`` omits the
-    field entirely.
-    """
-
-    if intent.kind == REASONING_INTENT_ON:
-        payload["reasoning"] = {"enabled": True}
-        payload["include_reasoning"] = True
-    elif intent.kind in (REASONING_INTENT_EFFORT, REASONING_INTENT_BUDGET):
-        if intent.effort_level is not None:
-            payload["reasoning"] = {"effort": intent.effort_level}
-            payload["include_reasoning"] = True
-    elif intent.kind == REASONING_INTENT_OFF:
-        if intent.effort_level == OPENROUTER_NONE_EFFORT:
-            payload["reasoning"] = {"effort": OPENROUTER_NONE_EFFORT}
-        else:
-            payload["reasoning"] = dict(OPENROUTER_REASONING_OFF)
-        # Some upstreams honor the output toggle even when they ignore the
-        # requested effort. Never ask one to return reasoning for an off intent.
-        payload.pop("include_reasoning", None)
-
-
-def _describe_openrouter_intent(intent: ReasoningIntent) -> ReasoningIntent:
-    """Map a resolved intent onto OpenRouter's render (``/status`` description).
-
-    Mirrors :func:`_render_openrouter_reasoning`: an ``on`` intent toggles
-    ``enabled`` rather than sending an effort, and a ``budget`` intent renders
-    as the effort OpenRouter maps internally.
-    """
-
-    if intent.kind == REASONING_INTENT_BUDGET and intent.effort_level is not None:
-        return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
-    return intent
-
-
-def _is_claude_family(model_id: str) -> bool:
-    """True for Anthropic Claude models on OpenRouter (``anthropic/claude-*``).
-
-    Matching on the ``claude`` substring covers the vendor-prefixed slug, the
-    tilde auto-router form (``~anthropic/claude-haiku-latest``), and any dated
-    variant, while never matching a non-Claude model. Only these need explicit
-    ``cache_control`` — every other family caches implicitly upstream.
-    """
-
-    return "claude" in model_id.lower()
 
 
 def _apply_openrouter_prompt_caching(payload: dict[str, Any]) -> None:

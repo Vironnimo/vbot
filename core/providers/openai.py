@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import TYPE_CHECKING, Any, ClassVar, TypedDict, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, cast, override
 
 import httpx
 from websockets.asyncio.client import connect as websocket_connect
@@ -79,6 +79,13 @@ from core.providers._openai_policy import (
     _subscription_capability_supported,
     _subscription_supported_parameters,
 )
+from core.providers._responses_profile import (
+    RESPONSES_DOCUMENT_TYPES,
+    RESPONSES_REASONING_FIELDS,
+    catalog_tool_support,
+    profile_responses_policy,
+    take_reasoning_renderer,
+)
 from core.providers._wire_learning import execute_learning_from_rejections
 from core.providers.adapter import ModelLookup
 from core.providers.errors import (
@@ -88,6 +95,7 @@ from core.providers.errors import (
     ProviderTimeoutError,
 )
 from core.providers.github_copilot_responses import (
+    ResponsesRequestPolicy,
     ResponsesStreamState,
     build_responses_payload,
     estimate_responses_input_tokens,
@@ -627,12 +635,13 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         declared = self._declared_responses_policy(model_id)
         profile: WireProfile | None = None
         reasoning_renderer: Callable[[dict[str, Any]], None] | None = None
+        policy: ResponsesRequestPolicy
         if declared is not None:
             policy = declared
         else:
             profile = self.wire_profile(model_id)
-            policy = self._profile_responses_policy(model_id, profile)
-            reasoning_renderer = self._responses_reasoning_renderer(profile, request_kwargs)
+            policy = profile_responses_policy(profile, self._catalog_model(model_id))
+            reasoning_renderer = take_reasoning_renderer(profile, request_kwargs)
         # A wire that takes no output-token field (Codex) is never budgeted
         # locally: the reserve would abort a still-valid request (it sits at the
         # same 80% line as Compaction, which never sees this pre-send path).
@@ -666,7 +675,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             profile.request.shape_parameters(
                 payload,
                 reasoning_active="reasoning" in payload,
-                protected=_RESPONSES_REASONING_FIELDS,
+                protected=RESPONSES_REASONING_FIELDS,
                 provider_label=self._config.name,
             )
         payload["store"] = False
@@ -709,7 +718,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         declared = self._model_wire_policy(model_id)
         if declared.get("protocol") != OPENAI_RESPONSES_PROTOCOL:
             return None
-        model = self._model_lookup(model_id) if self._model_lookup is not None else None
+        model = self._catalog_model(model_id)
         allowed_reasoning_efforts: frozenset[str] = frozenset()
         if model is None or model.capabilities.reasoning.supported:
             ladder = model_reasoning_levels(self._model_lookup, model_id)
@@ -718,7 +727,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
         return OpenAISubscriptionResponsesPolicy(
             allowed_reasoning_efforts=allowed_reasoning_efforts,
-            **self._responses_tool_support(model_id),
+            **catalog_tool_support(model),
             minimum_reasoning_effort=(
                 _optional_string(declared.get("minimum_reasoning_effort")) or None
             ),
@@ -726,100 +735,15 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             supported_request_parameters=OPENAI_PLATFORM_RESPONSES_REQUEST_PARAMETERS,
         )
 
-    def _profile_responses_policy(
-        self, model_id: str, profile: WireProfile
-    ) -> OpenAISubscriptionResponsesPolicy:
-        """Request filtering for a profile-driven Responses Model.
-
-        The policy carries no reasoning controls: the profile's plan renders
-        reasoning (:meth:`_responses_reasoning_renderer`).
-        """
-
-        return OpenAISubscriptionResponsesPolicy(
-            allowed_reasoning_efforts=frozenset(),
-            **self._responses_tool_support(model_id),
-            supported_request_parameters=self._responses_request_parameters(model_id, profile),
-        )
-
-    def _responses_tool_support(self, model_id: str) -> _ResponsesToolSupport:
-        """Tool, parallel-Tool and structured-output support from the catalog.
-
-        A Model the catalog does not know is assumed to support all three.
-        """
-
-        model = self._model_lookup(model_id) if self._model_lookup is not None else None
-        if model is None:
-            return {
-                "supports_tools": True,
-                "supports_parallel_tool_calls": True,
-                "supports_structured_outputs": True,
-            }
-        capabilities = model.capabilities
-        supported_parameters = set(capabilities.supported_parameters)
-        return {
-            "supports_tools": capabilities.tools,
-            "supports_parallel_tool_calls": capabilities.tools
-            and (
-                not supported_parameters
-                or "parallel_tool_calls" in supported_parameters
-                or "tools" in supported_parameters
-            ),
-            "supports_structured_outputs": capabilities.json_mode,
-        }
-
-    def _responses_request_parameters(self, model_id: str, profile: WireProfile) -> frozenset[str]:
-        """The optional request parameters the profile allows for ``model_id``.
-
-        ``request.allowed_parameters`` lists them (``None``: every optional
-        parameter the Responses codec knows). With the request option
-        ``narrow_to_catalog_parameters`` the list narrows to the parameters the
-        catalog's ``supported_parameters`` names, when it names any;
-        ``max_tokens`` counts as named with ``max_output_tokens``.
-        """
-
-        rules = profile.request
-        allowed = (
-            frozenset(rules.allowed_parameters)
-            if rules.allowed_parameters is not None
-            else _RESPONSES_OPTIONAL_PARAMETERS
-        )
-        if rules.options.get("narrow_to_catalog_parameters") is not True:
-            return allowed
-        model = self._model_lookup(model_id) if self._model_lookup is not None else None
-        advertised = (
-            frozenset(model.capabilities.supported_parameters) if model is not None else frozenset()
-        )
-        if not advertised:
-            return allowed
-        return frozenset(
-            parameter
-            for parameter in allowed
-            if parameter in advertised
-            or (parameter == "max_tokens" and "max_output_tokens" in advertised)
-        )
-
-    def _responses_reasoning_renderer(
-        self, profile: WireProfile, request_kwargs: dict[str, Any]
-    ) -> Callable[[dict[str, Any]], None]:
-        """Consume the caller's reasoning kwargs and plan them on the profile.
-
-        The returned renderer spells the plan in the profile's reasoning
-        dialect (``responses_reasoning``).
-        """
-
-        effort = _selected_thinking_effort(request_kwargs)
-        for name in REASONING_PARAMETER_NAMES:
-            request_kwargs.pop(name, None)
-        wire = profile.reasoning
-        intent = wire.plan(effort)
-        return lambda payload: self._render_reasoning(payload, intent, wire=wire)
+    def _catalog_model(self, model_id: str) -> Model | None:
+        return self._model_lookup(model_id) if self._model_lookup is not None else None
 
     def _responses_document_types(self, model_id: str) -> frozenset[str]:
         """Document media the Responses wire carries as native ``input_file`` parts."""
 
         if self._declared_responses_policy(model_id) is not None:
-            return _RESPONSES_DOCUMENT_TYPES
-        return self.wire_profile(model_id).media.types & _RESPONSES_DOCUMENT_TYPES
+            return RESPONSES_DOCUMENT_TYPES
+        return self.wire_profile(model_id).media.types & RESPONSES_DOCUMENT_TYPES
 
     async def _run_platform_responses[T](
         self,
@@ -1081,27 +1005,6 @@ def _responses_stream_state() -> ResponsesStreamState:
     stay fatal; Chat's recovery budget bounds the retries.
     """
     return ResponsesStreamState(lenient_unknown_errors=True, rejected_requests_fatal=True)
-
-
-_RESPONSES_OPTIONAL_PARAMETERS = OPTIONAL_REQUEST_PARAMETER_NAMES | {
-    "prompt_cache_key",
-    "service_tier",
-}
-"""Optional parameters the Responses codec forwards when the profile lists none."""
-
-_RESPONSES_DOCUMENT_TYPES = frozenset({"application/pdf"})
-"""Document media the Responses codec can carry as ``input_file`` parts."""
-
-_RESPONSES_REASONING_FIELDS = ("reasoning", "include")
-"""Request fields the ``responses_reasoning`` dialect writes."""
-
-
-class _ResponsesToolSupport(TypedDict):
-    """The Tool fields of a Responses request policy."""
-
-    supports_tools: bool
-    supports_parallel_tool_calls: bool
-    supports_structured_outputs: bool
 
 
 # Platform embedding Model ids; the ``/models`` listing has no other fact.
