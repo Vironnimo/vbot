@@ -564,14 +564,16 @@ async def test_tool_time_note_follows_the_results_in_history_and_requests(tmp_pa
 
     tools = ToolRegistry()
     tools.register("record_note", "Record note.", {"type": "object"}, record_note)
+    # The Model's key order differs from the sorted order storage persists.
+    arguments = {"zeta": 1, "alpha": {"b": 2, "a": 1}}
     runtime = _runtime(
         tmp_path,
         [
             {
                 "content": None,
-                "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": {}}],
+                "tool_calls": [{"id": "call_1", "name": "record_note", "arguments": arguments}],
             },
-            *_answers(2),
+            *_answers(3),
         ],
         tools=tools,
         allowed_tools=["record_note"],
@@ -611,6 +613,16 @@ async def test_tool_time_note_follows_the_results_in_history_and_requests(tmp_pa
     assert next_run[4] == reminder
     sent = [message for request in runtime.adapter.requests for message in request["messages"]]
     assert all("run_id" not in message and message["role"] != "note" for message in sent)
+
+    fork = await runtime.chat_sessions.fork(SESSION)
+    await loop.send("coder", "Fork follow up", session_id=fork.id)
+
+    # The Tool cycle is byte-identical in the in-Run follow-up, the next Run and
+    # a fork's first request, so the Provider prompt-cache prefix holds.
+    fork_run = runtime.adapter.requests[3]["messages"]
+    cycles = {json.dumps(request[2:4]) for request in (same_run, next_run, fork_run)}
+    assert len(cycles) == 1
+    assert list(same_run[2]["tool_calls"][0]["arguments"]) == ["alpha", "zeta"]
 
 
 @pytest.mark.asyncio
