@@ -32,10 +32,11 @@ from core.tools.tools import (
 )
 
 MEMORY_TOOL_DESCRIPTION = (
-    "Manage pinned Memory: durable facts shown to you in future Sessions. Scope user holds "
-    "facts about the user and their standing preferences; scope agent holds stable "
-    "environment and project facts. Change or remove an entry by old_text, any unique part "
-    "of its current text; a failed match returns the current entries."
+    "Manage Memory: facts shown to you in every future Session. Scope user holds facts "
+    "about the user and preferences that apply to all of their work; scope agent holds "
+    "stable environment and project facts. A lesson for one kind of task belongs in that "
+    "task's Skill, not in Memory. Change or remove an entry by old_text, any unique part of "
+    "its current text; a failed match returns the current entries."
 )
 MEMORY_ACTIONS = ("list", "add", "replace", "remove")
 MEMORY_SCOPES = ("user", "agent")
@@ -52,7 +53,10 @@ _MEMORY_SCOPE_PARAMETER: JsonObject = {
 _MEMORY_CONTENT_PARAMETER: JsonObject = {
     "type": "string",
     "minLength": 1,
-    "description": "One concise declarative fact: the new entry for add, the new text for replace.",
+    "description": (
+        "One concise declarative fact: the new entry for add, the complete replacement "
+        "entry for replace."
+    ),
 }
 _MEMORY_OLD_TEXT_PARAMETER: JsonObject = {
     "type": "string",
