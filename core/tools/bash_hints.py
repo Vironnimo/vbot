@@ -14,6 +14,9 @@ Design rules (keep these when adding patterns):
   how often their failure shape wastes model turns.
 * Scans only the first ``_SCAN_CHARS`` of output — hints must key on
   error headers, not deep context.
+* The command is not truncated, so a pattern over it must run in linear
+  time: one whose failed attempts each scan on to the end of the command is
+  quadratic and can stall the Event Loop.
 * Hints state the *next action*, not a diagnosis essay. One or two
   sentences.
 * No I/O beyond existence checks in the command's working directory —
@@ -45,9 +48,14 @@ _EXIT_CODE_HINTS: dict[int, str] = {
 }
 
 
+# POSIX: bash/sh report "<name>: command not found", after a prefix such as
+# "bash: line 1: " or "sh: 1: ". The name is a whole run of name characters; the
+# lookbehind keeps a failed attempt from rescanning the rest of the same run.
+_COMMAND_NOT_FOUND = re.compile(r"(?<![\w.+-])([\w.+-]++): command not found")
+
+
 def _hint_command_not_found(command: str, output: str, workdir: Path | None) -> str | None:
-    # POSIX: bash/sh report "<name>: command not found".
-    m = re.search(r"(?:bash: line \d+: |bash: |sh: \d*:? ?)?([\w.+-]+): command not found", output)
+    m = _COMMAND_NOT_FOUND.search(output)
     if not m:
         return None
     missing = m.group(1)
@@ -173,8 +181,13 @@ def _hint_powershell_alias_flags(command: str, output: str, workdir: Path | None
     return None
 
 
+# -Recurse after Select-String in the same pipeline step. An attempt ends at the
+# next Select-String, which starts its own, so a long command is scanned once.
+_SELECT_STRING_RECURSE = re.compile(r"Select-String\b(?:(?!Select-String\b)[^|;\n])*-Recurse", re.I)
+
+
 def _hint_select_string_recurse(command: str, output: str, workdir: Path | None) -> str | None:
-    if not re.search(r"Select-String\b[^|;\n]*-Recurse", command, re.I):
+    if not _SELECT_STRING_RECURSE.search(command):
         return None
     if "Select-String" not in output or not _quoted_in("Recurse", output):
         return None
@@ -191,10 +204,36 @@ _ESCAPED_QUOTE_HINT = (
     "piped to the program, such as `@'...'@ | python -`."
 )
 # A PowerShell here-string: @" or @' ends its line, and "@ or '@ starts a line.
-_HERE_STRING = re.compile(r"@(['\"])[ \t]*\r?\n(.*?)\r?\n\1@", re.S)
+_HERE_STRING_OPENER = re.compile(r"@(['\"])[ \t]*\r?\n")
 # '' before a word is a quote doubled as in a single-quoted string; an empty
 # string literal such as ''.join is followed by a sign instead.
 _DOUBLED_QUOTE = re.compile(r"''\w")
+
+
+def _here_strings(command: str) -> tuple[list[tuple[str, str]], str]:
+    """Return each here-string's quote and text, and the command outside them.
+
+    A here-string ends at the first line that starts with its quote and @. When
+    one never ends, no later one with the same quote can end either, so each
+    quote is searched to the end of the command at most once.
+    """
+    found: list[tuple[str, str]] = []
+    outside: list[str] = []
+    unclosed: set[str] = set()
+    copied = position = 0
+    while opener := _HERE_STRING_OPENER.search(command, position):
+        quote, start = opener[1], opener.end()
+        close = -1 if quote in unclosed else command.find(f"\n{quote}@", start)
+        if close < 0:
+            unclosed.add(quote)
+            position = opener.start() + 1
+            continue
+        end = close - 1 if close > start and command[close - 1] == "\r" else close
+        found.append((quote, command[start:end]))
+        outside.append(command[copied : opener.start()])
+        copied = position = close + 3
+    outside.append(command[copied:])
+    return found, "".join(outside)
 
 
 def _hint_powershell_syntax(command: str, output: str, workdir: Path | None) -> str | None:
@@ -204,8 +243,7 @@ def _hint_powershell_syntax(command: str, output: str, workdir: Path | None) -> 
     unchanged break the code the called program reads, so a Python or Node
     SyntaxError follows; only the Windows shell is PowerShell.
     """
-    here_strings = list(_HERE_STRING.finditer(command))
-    outside = _HERE_STRING.sub("", command)
+    here_strings, outside = _here_strings(command)
     if "ParserError" in output:
         if re.search(r"<<-?\s*['\"]?[A-Za-z_]\w*['\"]?", command):
             return (
@@ -216,12 +254,12 @@ def _hint_powershell_syntax(command: str, output: str, workdir: Path | None) -> 
         return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
     if not _POWERSHELL or "SyntaxError" not in output:
         return None
-    if any(match[1] == '"' and '\\"' in match[2] for match in here_strings):
+    if any(quote == '"' and '\\"' in text for quote, text in here_strings):
         return (
             'Inside a @"..."@ here-string, \\" stays a backslash and a quote. Write the '
             "quotes there without backslashes, or use @'...'@, which also keeps $ literal."
         )
-    if any(match[1] == "'" and _DOUBLED_QUOTE.search(match[2]) for match in here_strings):
+    if any(quote == "'" and _DOUBLED_QUOTE.search(text) for quote, text in here_strings):
         return "Inside a @'...'@ here-string, '' stays two quotes. Write each quote once there."
     return _ESCAPED_QUOTE_HINT if '\\"' in outside else None
 
