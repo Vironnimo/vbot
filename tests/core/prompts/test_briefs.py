@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from core.prompts.briefs import BRIEF_FRAGMENT_NAMES, learn_brief, reflection_brief
+from core.prompts.briefs import (
+    BRIEF_FRAGMENT_NAMES,
+    LibrarianCandidate,
+    learn_brief,
+    librarian_brief,
+    reflection_brief,
+)
 from core.storage import StorageManager
 
 # SHA-256 of the whole-brief resources the assembled briefs replaced, stripped
@@ -69,3 +76,52 @@ def test_briefs_compose_per_fragment_overrides_and_share_each_fragment(tmp_path:
         "reusable learning, apply the instructions above to it. Otherwise, ask the user what "
         "they want captured."
     )
+    # A Librarian copy without the candidates marker still lists the candidates.
+    assert librarian_brief(storage, [_CANDIDATE], limit=60) == (
+        f"[librarian.md]\n\n{_CANDIDATE_TEXT}"
+    )
+
+
+_CANDIDATE = LibrarianCandidate(
+    name="deploy-vercel",
+    description="Deploy the web app\n  to Vercel.",
+    origin="reflection",
+    created="2026-05-01",
+    changed="2026-06-01",
+    last_used=None,
+    uses=0,
+    skill_md_chars=3210,
+    support_files=("references/env.md", "scripts/check.sh"),
+    scheduled=True,
+)
+_CANDIDATE_TEXT = (
+    "- deploy-vercel\n"
+    "  Description: Deploy the web app to Vercel.\n"
+    "  Created by: a background review of a conversation\n"
+    "  Created: 2026-05-01\n"
+    "  Last changed: 2026-06-01\n"
+    "  Last used: never\n"
+    "  SKILL.md: 3210 characters\n"
+    "  Support files: references/env.md, scripts/check.sh\n"
+    "  Used by a schedule: yes"
+)
+
+
+def test_librarian_brief_fills_its_placeholders_and_lists_each_candidate(tmp_path: Path) -> None:
+    storage = StorageManager(data_dir=tmp_path / "data")
+    storage.ensure_directories()
+    (storage.prompts_dir / "librarian.md").write_text(
+        "At most {limit} calls; SKILL.md over {max_chars}.\n\n{generated:candidates}\n\nEnd.\n",
+        encoding="utf-8",
+    )
+    used = replace(_CANDIDATE, name="deploy-netlify", last_used="2026-09-20", uses=1)
+    used_text = _CANDIDATE_TEXT.replace("deploy-vercel", "deploy-netlify").replace(
+        "never", "2026-09-20 (1 use)"
+    )
+
+    assert librarian_brief(storage, [_CANDIDATE, used], limit=60) == (
+        f"At most 60 calls; SKILL.md over 12000.\n\n{_CANDIDATE_TEXT}\n{used_text}\n\nEnd."
+    )
+    # The bundled brief carries no unfilled placeholder.
+    bundled = librarian_brief(StorageManager(data_dir=tmp_path / "bundled"), [_CANDIDATE], limit=7)
+    assert "{" not in bundled and "at most 7 calls" in bundled
