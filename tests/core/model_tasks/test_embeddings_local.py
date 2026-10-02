@@ -266,15 +266,13 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         assert harrier._task is not None
         await harrier._task
 
-        # The environment was created again on the server's Python.
+        # The environment was created again on a uv-managed Python of the server's
+        # version; uv does not see the server's interpreter as its parent.
         assert not (harrier.directory / "pyvenv.cfg").exists()
         venv = next(call for call in commands.calls if "venv" in call)
         server = f"{sys.version_info.major}.{sys.version_info.minor}"
-        assert venv[venv.index("--python") + 1 :] == [
-            server,
-            "--managed-python",
-            str(harrier.directory),
-        ]
+        uv = [sys.executable, "-c", local_setup._UV]
+        assert venv == [*uv, "venv", "--python", server, "--managed-python", str(harrier.directory)]
 
         assert harrier.status()["state"] == "ready" and harrier.available()
         assert harrier.activity() == {"state": "completed"}
@@ -293,7 +291,7 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         # The pinned recipe goes into the managed environment only, never the server.
         installs = [call for call in commands.calls if "install" in call and "pip" in call]
         assert installs and all(
-            call[:3] == [sys.executable, "-m", "uv"]
+            call[:3] == [sys.executable, "-c", local_setup._UV]
             and call[call.index("--python") + 1] == str(harrier.python)
             for call in installs
         )

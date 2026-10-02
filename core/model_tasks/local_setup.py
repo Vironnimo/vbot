@@ -56,6 +56,12 @@ UV_BOOTSTRAP_EXTRA = "local-tts"
 SETUP_TIMEOUT_S = 3600
 # The Python an environment requires when its recipe names none.
 SERVER_PYTHON = f"{sys.version_info.major}.{sys.version_info.minor}"
+# Runs the uv executable the server's Python provides, as ``python -m uv`` does,
+# but without naming that interpreter as uv's parent: uv prefers its parent over
+# ``--managed-python`` when the versions match, and an environment based on the
+# server's interpreter would depend on this release's runtime (or on a development
+# checkout's Python) instead of a uv-managed Python.
+_UV = "import subprocess, sys, uv; sys.exit(subprocess.call([uv.find_uv_bin(), *sys.argv[1:]]))"
 
 
 class LocalSetup:
@@ -378,7 +384,7 @@ class LocalSetup:
         if not self._packaged() and await self._pip(bootstrap) != 0:
             self._fail("install_failed")
             return None
-        uv = [sys.executable, "-m", "uv"]
+        uv = [sys.executable, "-c", _UV]
         self._phase = "python"
         if (
             self._environment_needed()
