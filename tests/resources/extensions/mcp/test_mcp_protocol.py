@@ -290,7 +290,7 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
         )
 
     server = Server("callbacks", on_call_tool=call, on_list_tools=list_tools)
-    runner = runner_for(host, server, monkeypatch)
+    runner = runner_for(host, server, monkeypatch, sampling="allow", roots="workspace")
     task = asyncio.create_task(runner.invoke("tools/call", {"name": "callbacks"}, context(host)))
     try:
         async with asyncio.timeout(10):
@@ -307,6 +307,93 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
         assert responses[0]["sample"].content.text == "sampled"
         assert str(responses[0]["roots"].roots[0].uri) == host.data_dir.as_uri()
         assert responses[0]["input"].content == {"name": "user-sentinel"}
+    finally:
+        task.cancel()
+        await runner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("policy", "samples", "answer", "outcome", "sent_count"),
+    [
+        # The default: the server is never offered sampling or roots.
+        (None, 1, None, "not offered", 0),
+        ("ask", 1, "decline", "The user declined the sampling request", 0),
+        ("ask", 1, "accept", "sampled", 1),
+        ("allow", 1, None, "sampled", 1),
+        # A burst beyond the connection's budget is refused.
+        ("allow", 6, None, "Too many sampling requests", 5),
+    ],
+)
+async def test_sampling_follows_the_connection_policy_within_its_limits(
+    host, monkeypatch, policy, samples, answer, outcome, sent_count
+):
+    sent = []
+
+    async def sample(invocation, request):
+        sent.append(request)
+        return {"model": "test/model", "content": "sampled"}
+
+    request = {
+        "method": "sampling/createMessage",
+        "params": {
+            "messages": [{"role": "user", "content": {"type": "text", "text": "prompt-sentinel"}}],
+            "maxTokens": 100000,
+        },
+    }
+
+    async def call(server_context, params):
+        capabilities = server_context.session.client_capabilities
+        if capabilities is None or capabilities.sampling is None:
+            assert capabilities is None or capabilities.roots is None
+            text = "not offered"
+        elif params.input_responses:
+            text = params.input_responses["sample0"].content.text
+        else:
+            return types.InputRequiredResult.model_validate(
+                {
+                    "resultType": "input_required",
+                    "inputRequests": {f"sample{index}": request for index in range(samples)},
+                }
+            )
+        return types.CallToolResult(content=[types.TextContent(type="text", text=text)])
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[types.Tool(name="callbacks", input_schema={"type": "object"})]
+        )
+
+    server = Server("callbacks", on_call_tool=call, on_list_tools=list_tools)
+    config = {} if policy is None else {"sampling": policy}
+    runner = runner_for(replace(host, sample=sample), server, monkeypatch, **config)
+    task = asyncio.create_task(runner.invoke("tools/call", {"name": "callbacks"}, context(host)))
+    try:
+        async with asyncio.timeout(10):
+            if answer is not None:
+                while not runner.inputs.list():
+                    await asyncio.sleep(0)
+                pending = runner.inputs.list()[0]
+                assert pending["kind"] == "sampling"
+                assert pending["session_id"] == "session"
+                # The user sees the prompt and the capped reply size before deciding.
+                assert "prompt-sentinel" in pending["payload"]["message"]
+                assert "up to 4096 tokens" in pending["payload"]["message"]
+                runner.inputs.respond(pending["id"], {"action": answer})
+            try:
+                result = await task
+                observed = result["content"][0]["text"]
+            except Exception as error:  # noqa: BLE001 - the refusal reaches the Tool call
+                observed = str(error)
+        assert outcome in observed
+        # The reply is capped whatever the server asks for.
+        assert [request["max_tokens"] for request in sent] == [4096] * sent_count
+        events = runner.events()["events"]
+        assert "prompt-sentinel" not in json.dumps(events)
+        if policy is not None:
+            recorded = [e["payload"] for e in events if e["kind"] == "sampling_request"]
+            assert {"requested_max_tokens": 100000, "max_tokens": 4096}.items() <= recorded[
+                -1
+            ].items()
     finally:
         task.cancel()
         await runner.close()
@@ -359,7 +446,7 @@ async def test_legacy_server_sampling_and_roots(host, monkeypatch, caplog, recwa
         legacy = Server(
             "legacy", on_call_tool=call, on_list_tools=list_tools, on_set_logging_level=set_level
         )
-    runner = runner_for(host, legacy, monkeypatch)
+    runner = runner_for(host, legacy, monkeypatch, sampling="allow", roots="workspace")
     try:
         with caplog.at_level(logging.INFO, logger="vbot.extensions.mcp"):
             result = await asyncio.wait_for(

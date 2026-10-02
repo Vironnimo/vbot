@@ -146,7 +146,9 @@ class ConnectionRunner:
         self._ready = asyncio.Event()
         self._closing = False
         self._events = ConnectionEvents(host, lambda: self.config)
-        self._requests = ServerRequests(self.id, host, inputs, self._events, lambda: self.context)
+        self._requests = ServerRequests(
+            self.id, host, inputs, self._events, lambda: self.context, config=lambda: self.config
+        )
         self._catalog_pages: dict[str, list[dict[str, Any]]] = {}
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         # The log level an Agent chose with logging/setLevel; until then requests
@@ -264,16 +266,20 @@ class ConnectionRunner:
         try:
             async with AsyncExitStack() as stack:
                 transport = await self._transport(stack)
+                # A capability the connection's policy turns off is not offered at all.
+                sampling = self.config.get("sampling", "off") != "off"
                 client = Client(
                     transport,
                     read_timeout_seconds=self.config["timeout"],
                     mode="legacy" if self.config["transport"] == "sse" else "auto",
-                    sampling_callback=self._requests.sample,
-                    sampling_capabilities=types.SamplingCapability(
-                        tools=types.SamplingToolsCapability()
+                    sampling_callback=self._requests.sample if sampling else None,
+                    sampling_capabilities=(
+                        types.SamplingCapability(tools=types.SamplingToolsCapability())
+                        if sampling
+                        else None
                     ),
                     elicitation_callback=self._requests.elicit,
-                    list_roots_callback=self._requests.roots,
+                    list_roots_callback=self._requests.roots if self._offers_roots() else None,
                     logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
@@ -656,9 +662,12 @@ class ConnectionRunner:
         session._stamp({"method": method, "params": arguments}, options)
         return dict(await session._dispatcher.send_raw_request(method, arguments, options))
 
+    def _offers_roots(self) -> bool:
+        return self.config.get("roots") == "workspace"
+
     async def _notify_roots_changed(self) -> None:
         client = self._client()
-        if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+        if self._offers_roots() and client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
             await self._legacy("roots", client.send_roots_list_changed)
 
     async def _legacy[Result](

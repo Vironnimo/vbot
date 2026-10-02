@@ -30,7 +30,10 @@ from .interactions import InputRequests
 
 _DESCRIPTIONS = {
     "list": "List saved connections, live connection state, and effective Agent access.",
-    "requests": "List pending server inputs, including OAuth and elicitation; answer with respond.",
+    "requests": (
+        "List pending server inputs: OAuth sign-ins, sampling approvals and elicitation; "
+        "answer with respond."
+    ),
     "status": "Read one connection's saved configuration, live state, and Agent access.",
     "remove": "Remove a saved connection and stop its client and published Tools.",
     "enable": "Enable a saved connection and start connecting; inspect status for readiness.",
