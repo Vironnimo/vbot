@@ -190,8 +190,17 @@ describe('statisticsView charts', () => {
     ]);
     expect(chart.scaleMax).toBe(50);
     expect(trendColumns([], 'cost').scaleMax).toBe(0);
+    // Count axes keep whole ticks: an integer maximum and midpoint.
+    expect(
+      trendColumns([{ date: '2026-09-01', runs: 13 }], 'runs').scaleMax,
+    ).toBe(20);
+    expect(
+      trendColumns([{ date: '2026-09-01', runs: 1 }], 'runs').scaleMax,
+    ).toBe(2);
 
-    expect(axisLabelIndices(30, 6)).toEqual([0, 6, 12, 17, 23, 29]);
+    // Labels at one regular stride that ends at the latest column.
+    expect(axisLabelIndices(30, 6)).toEqual([5, 11, 17, 23, 29]);
+    expect(axisLabelIndices(7, 6)).toEqual([0, 2, 4, 6]);
     expect(axisLabelIndices(3, 6)).toEqual([0, 1, 2]);
     expect(formatSeriesDate('2026-09-07', 'day', 'en')).toBe('Sep 7');
     expect(formatSeriesDate('2026-09-07', 'week', 'en', { long: true })).toBe(
@@ -213,10 +222,12 @@ describe('statisticsView charts', () => {
       '>1h',
     ]);
     expect(durations.columns[0].total).toBe(3);
+    expect(durations.scaleMax).toBe(4);
 
-    const hours = hourColumns([{ hour: 9, count: 3 }]);
+    const hours = hourColumns([{ hour: 9, count: 25 }]);
     expect(hours.columns).toHaveLength(24);
-    expect(hours.columns[9]).toMatchObject({ label: '09:00', total: 3 });
+    expect(hours.columns[9]).toMatchObject({ label: '09:00', total: 25 });
+    expect(hours.scaleMax).toBe(30);
 
     expect(
       barEntries([{ count: 4 }, { count: 1 }]).map((item) => item.fraction),

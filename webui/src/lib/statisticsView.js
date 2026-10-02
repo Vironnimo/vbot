@@ -1044,13 +1044,25 @@ export function findInsight(insights, id) {
 export const TREND_GRANULARITIES = Object.freeze(['day', 'week', 'month']);
 
 const CHART_SCALE_STEPS = Object.freeze([1, 1.5, 2, 2.5, 5, 10]);
+const COUNT_SCALE_STEPS = Object.freeze([1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]);
 
 /** The smallest "nice" axis maximum (1, 1.5, 2, 2.5, 5 x 10^n) at or above
- *  `value`; 0 for an empty chart. */
-export function niceScaleMax(value) {
+ *  `value`; 0 for an empty chart. A count axis (`integer`) keeps whole
+ *  ticks: its maximum and midpoint are integers, so it is at least 2. */
+export function niceScaleMax(value, { integer = false } = {}) {
   const number = finite(value);
   if (number === null || number <= 0) return 0;
   const magnitude = 10 ** Math.floor(Math.log10(number));
+  if (integer) {
+    for (const scale of [magnitude, magnitude * 10]) {
+      for (const candidate of COUNT_SCALE_STEPS) {
+        const maximum = Math.round(candidate * scale * 1e6) / 1e6;
+        if (maximum >= number - 1e-9 && maximum >= 2 && maximum % 2 === 0) {
+          return maximum;
+        }
+      }
+    }
+  }
   const step = CHART_SCALE_STEPS.find(
     (candidate) => candidate * magnitude >= number - 1e-9,
   );
@@ -1131,6 +1143,7 @@ const TREND_METRICS = Object.freeze({
     total: (row) => totalTokens(row),
   }),
   runs: Object.freeze({
+    integer: true,
     segments: Object.freeze([
       [
         'finished',
@@ -1172,7 +1185,10 @@ export function trendColumns(series, metric = 'cost', granularity = 'day') {
     };
   });
   const max = columns.reduce((top, column) => Math.max(top, column.total), 0);
-  return { columns, scaleMax: niceScaleMax(max) };
+  return {
+    columns,
+    scaleMax: niceScaleMax(max, { integer: Boolean(definition.integer) }),
+  };
 }
 
 /** The trend period that keeps a series of `dayCount` days readable: days
@@ -1198,16 +1214,18 @@ export function formatChartTick(value, metric = 'cost', locale = 'en') {
   return numberFormat(locale, { maximumFractionDigits: 1 }).format(number);
 }
 
-/** Up to `count` evenly spread column indices for axis labels, always
- *  including the first and the last. */
-export function axisLabelIndices(length, count = 6) {
+/** Up to `count` column indices for axis labels: every column when they
+ *  fit, else columns at one regular stride that always includes the last. */
+export function axisLabelIndices(length, count = 8) {
   if (length <= 0) return [];
   if (length <= count) return Array.from({ length }, (_, index) => index);
-  const indices = new Set();
-  for (let step = 0; step < count; step += 1) {
-    indices.add(Math.round((step * (length - 1)) / (count - 1)));
+  if (count <= 1) return [length - 1];
+  const stride = Math.ceil((length - 1) / (count - 1));
+  const indices = [];
+  for (let index = length - 1; index >= 0; index -= stride) {
+    indices.unshift(index);
   }
-  return [...indices].sort((left, right) => left - right);
+  return indices;
 }
 
 const seriesDateFormats = new Map();
@@ -1280,7 +1298,11 @@ export function durationColumns(buckets) {
     };
   });
   const max = columns.reduce((top, column) => Math.max(top, column.total), 0);
-  return { columns, origins, scaleMax: niceScaleMax(max) };
+  return {
+    columns,
+    origins,
+    scaleMax: niceScaleMax(max, { integer: true }),
+  };
 }
 
 /** Errors per local hour of the day, all 24 hours. */
@@ -1299,7 +1321,7 @@ export function hourColumns(byHour) {
     segments: [{ id: 'errors', value: count }],
   }));
   const max = Math.max(0, ...counts);
-  return { columns, scaleMax: niceScaleMax(max) };
+  return { columns, scaleMax: niceScaleMax(max, { integer: true }) };
 }
 
 /** Bar list entries: each entry's value as a fraction of the largest. */

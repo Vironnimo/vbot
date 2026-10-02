@@ -3,7 +3,8 @@
   // `{ key, total, segments: [{ id, value }] }`; a segment's color comes from
   // its id (`stats-fill--<id>` in report.css). The columns form one Tab stop:
   // arrow keys, Home and End move between them, and each column says its
-  // values through its accessible name and a tooltip.
+  // values through its accessible name and a tooltip. Axis labels sit at a
+  // regular stride, as many as the chart's width leaves room for.
   import { tooltip } from '$lib/tooltip.js';
   import { axisLabelIndices } from '$lib/statisticsView.js';
 
@@ -15,15 +16,27 @@
     axisLabel = (column) => column.label ?? column.key,
     columnLabel = (column) => String(column.total),
     columnTooltip = () => '',
-    maxAxisLabels = 6,
+    maxAxisLabels = 8,
     compact = false,
   } = $props();
 
+  // The width one axis label needs, including the gap to its neighbour.
+  const AXIS_LABEL_WIDTH = 56;
+
   let activeIndex = $state(-1);
   let columnElements = $state([]);
+  let axisWidth = $state(0);
 
+  const labelCount = $derived(
+    axisWidth > 0
+      ? Math.min(
+          maxAxisLabels,
+          Math.max(2, Math.floor(axisWidth / AXIS_LABEL_WIDTH)),
+        )
+      : maxAxisLabels,
+  );
   const labelled = $derived(
-    new Set(axisLabelIndices(columns.length, maxAxisLabels)),
+    new Set(axisLabelIndices(columns.length, labelCount)),
   );
   // The column that takes the Tab stop: the one last moved to, else the
   // latest.
@@ -94,7 +107,7 @@
       {/each}
     </div>
   </div>
-  <div class="stats-chart__x" aria-hidden="true">
+  <div class="stats-chart__x" aria-hidden="true" bind:clientWidth={axisWidth}>
     {#each columns as column, index (column.key)}
       <span>{labelled.has(index) ? axisLabel(column) : ''}</span>
     {/each}
