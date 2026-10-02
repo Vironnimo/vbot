@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createMcpSettings,
   mcpConfiguration,
+  mcpCredentialNames,
   mcpDraft,
   MCP_REFRESH_MS,
 } from '../mcpSettings.js';
@@ -15,9 +16,27 @@ const configuration = {
 
   enabled: true,
   timeout: 240,
+  sampling: 'ask',
+  roots: 'workspace',
   environment: { LANG: 'de' },
   credential_environment: { TOKEN: 'SHARED_KEY' },
   credential_headers: {},
+};
+const oauthConfiguration = {
+  id: 'remote',
+  transport: 'http',
+  url: 'https://mcp.example.com/mcp',
+  oauth: true,
+  oauth_client_id: 'vbot-client',
+  oauth_client_secret: 'REMOTE_CLIENT_SECRET',
+  oauth_scopes: ['files:read', 'files:write'],
+  enabled: true,
+  timeout: 120,
+  sampling: 'off',
+  roots: 'off',
+  environment: {},
+  credential_environment: {},
+  credential_headers: { Extra: 'EXTRA_KEY' },
 };
 const clone = (value) => structuredClone(value);
 let controller;
@@ -110,6 +129,26 @@ describe('MCP settings', () => {
     });
     expect(result).not.toHaveProperty('command');
     expect(result).not.toHaveProperty('args');
+  });
+  it('keeps a pre-registered OAuth client only while OAuth is on', () => {
+    const draft = mcpDraft(oauthConfiguration);
+    expect(mcpConfiguration(draft)).toEqual(oauthConfiguration);
+    expect(mcpCredentialNames(oauthConfiguration)).toEqual([
+      'EXTRA_KEY',
+      'REMOTE_CLIENT_SECRET',
+    ]);
+    draft.oauth_scopes = ' files:read  files:read admin ';
+    expect(mcpConfiguration(draft).oauth_scopes).toEqual([
+      'files:read',
+      'admin',
+    ]);
+    const signedOut = mcpConfiguration({ ...draft, oauth: false });
+    for (const field of [
+      'oauth_client_id',
+      'oauth_client_secret',
+      'oauth_scopes',
+    ])
+      expect(signedOut).not.toHaveProperty(field);
   });
   it('rejects duplicate mapping keys instead of discarding an entry', () => {
     const draft = mcpDraft(configuration);

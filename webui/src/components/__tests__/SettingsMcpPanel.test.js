@@ -310,6 +310,41 @@ describe('MCP management surface', () => {
     expect(document.querySelector('input[type="password"]')).toBeNull();
     expect(document.body.textContent).not.toContain('test-owned-secret');
   });
+  it('shows an OAuth sign-in and signs it out on request', async () => {
+    records = [
+      {
+        id: 'remote',
+        configuration: {
+          id: 'remote',
+          transport: 'http',
+          url: 'https://mcp.example.com/mcp',
+          oauth: true,
+          enabled: true,
+          timeout: 120,
+        },
+        oauth: {
+          redirect_uri: 'http://127.0.0.1:8420/api/oauth/callback',
+          signed_in: true,
+        },
+        state: 'connected',
+      },
+    ];
+    component = mount(Panel, { target: document.body });
+    await settle();
+    const details = document.querySelector('article[aria-label="remote"]');
+    expect(details.textContent).toContain('Signed in');
+    // The redirect URL is what a pre-registered client must be registered with.
+    expect(details.textContent).toContain(
+      'http://127.0.0.1:8420/api/oauth/callback',
+    );
+    button('Sign in again').click();
+    await settle();
+    expect(rpc).toHaveBeenCalledWith('extensions.operation', {
+      name: 'mcp',
+      operation: 'reauthorize',
+      arguments: { id: 'remote' },
+    });
+  });
   it('reconciles enablement and requires confirmation before removal', async () => {
     records = [
       {
