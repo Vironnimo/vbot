@@ -53,3 +53,37 @@ describe.each([
     expect(onSelect).not.toHaveBeenCalled();
   });
 });
+
+describe('model autocomplete', () => {
+  let mountedComponent;
+
+  afterEach(async () => {
+    if (mountedComponent) {
+      await unmount(mountedComponent);
+    }
+    document.body.innerHTML = '';
+  });
+
+  it('keeps the option marker of a Model option', () => {
+    init('en');
+    mountedComponent = mount(ModelAutocomplete, {
+      target: document.body,
+      props: {
+        options: [
+          {
+            value: 'demo/inferred',
+            marker: { label: 'Not verified', tooltip: 'Not verified yet.' },
+          },
+          { value: 'demo/verified' },
+        ],
+      },
+    });
+    flushSync();
+
+    const [inferred, verified] = document.querySelectorAll('[role="option"]');
+    expect(
+      inferred.querySelector('[role="img"][aria-label="Not verified"]'),
+    ).toBeTruthy();
+    expect(verified.querySelector('.option-marker')).toBeNull();
+  });
+});

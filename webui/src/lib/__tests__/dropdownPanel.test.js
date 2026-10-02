@@ -82,19 +82,24 @@ describe('computePanelPosition', () => {
 });
 
 describe('optionDecorations', () => {
-  it('accepts known status dots, count badges, accessible names and tooltips only', () => {
+  it('accepts known status dots, count badges, accessible names, tooltips and markers only', () => {
     expect(
       optionDecorations({
         statusDot: 'unread',
         badge: 3,
         ariaLabel: 'Gamma: 3 unread results',
         tooltip: { title: 'Gamma', rows: [] },
+        marker: { label: 'Not verified', tooltip: 'Gamma is not verified.' },
       }),
     ).toEqual({
       statusDot: 'unread',
       badge: '3',
       ariaLabel: 'Gamma: 3 unread results',
       tooltip: { title: 'Gamma', rows: [], placement: 'right' },
+      marker: {
+        label: 'Not verified',
+        tooltip: { text: 'Gamma is not verified.', placement: 'right' },
+      },
     });
     expect(
       optionDecorations({
@@ -102,18 +107,21 @@ describe('optionDecorations', () => {
         badge: '',
         ariaLabel: 7,
         tooltip: 'Gamma',
+        marker: { tooltip: 'A marker needs an accessible name.' },
       }),
     ).toEqual({
       statusDot: '',
       badge: '',
       ariaLabel: '',
       tooltip: { text: 'Gamma', placement: 'right' },
+      marker: null,
     });
     expect(optionDecorations(null)).toEqual({
       statusDot: '',
       badge: '',
       ariaLabel: '',
       tooltip: '',
+      marker: null,
     });
   });
 });

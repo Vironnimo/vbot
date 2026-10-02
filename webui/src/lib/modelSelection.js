@@ -124,6 +124,34 @@ function suitabilityBadgeLabel(reasons) {
     .join(' · ');
 }
 
+// Option fields every catalog Model option carries: its suitability and, when
+// none of its usable Connections has a verified or configured wire profile
+// (model.list `wire_profiles`), a quiet "not verified" marker.
+function modelOptionFields(model) {
+  return { ...suitabilityFields(model), ...wireProfileFields(model) };
+}
+
+function wireProfileFields(model) {
+  const profiles = model?.wire_profiles;
+  const statuses =
+    profiles !== null && typeof profiles === 'object'
+      ? Object.values(profiles).map((profile) => profile?.wire_status)
+      : [];
+  if (
+    statuses.length === 0 ||
+    statuses.some((status) => status === 'verified' || status === 'configured')
+  ) {
+    return {};
+  }
+
+  return {
+    marker: {
+      label: t('models.wire.unverified'),
+      tooltip: t('models.wire.unverifiedHint'),
+    },
+  };
+}
+
 function suitabilityFields(model) {
   const { suitable, reasons } = modelSuitability(model);
   // A known-down local endpoint (model.list `reachable: false`, e.g. Ollama
@@ -184,7 +212,7 @@ export function buildModelSelectOptions({
           label: selectedModel.model,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(selectedCatalogModel),
+          ...modelOptionFields(selectedCatalogModel),
         }
       : null;
   const emptyOption = {
@@ -200,7 +228,7 @@ export function buildModelSelectOptions({
           label: model.id,
           code: true,
           isUnavailable: false,
-          ...suitabilityFields(model),
+          ...modelOptionFields(model),
         },
       ];
     }
@@ -331,7 +359,7 @@ export function modelShortName(modelValue) {
 function connectionModelOptions(model, connection, providerConnectionCount) {
   const localId = connectionLocalIdFromConnectionId(connection.id);
   const usableAccounts = usableConnectionAccounts(connection);
-  const suitability = suitabilityFields(model);
+  const modelFields = modelOptionFields(model);
 
   if (usableAccounts.length <= 1) {
     return [
@@ -340,7 +368,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
         label: modelOptionLabel(model, connection, providerConnectionCount),
         code: true,
         isUnavailable: false,
-        ...suitability,
+        ...modelFields,
       },
     ];
   }
@@ -358,7 +386,7 @@ function connectionModelOptions(model, connection, providerConnectionCount) {
     ),
     code: true,
     isUnavailable: false,
-    ...suitability,
+    ...modelFields,
   }));
 }
 

@@ -316,6 +316,65 @@ describe('buildModelSelectOptions', () => {
     ]);
   });
 
+  it('marks a Model none of whose usable Connections has a verified or configured wire profile', () => {
+    const withProfiles = (id, statuses) => ({
+      ...catalogModel(id, 'demo'),
+      wire_profiles: Object.fromEntries(
+        Object.entries(statuses).map(([connection, wireStatus]) => [
+          connection,
+          { wire_status: wireStatus, verified_at: null },
+        ]),
+      ),
+    });
+    const models = [
+      withProfiles('demo/verified', {
+        'api-key': 'verified',
+        oauth: 'inferred',
+      }),
+      withProfiles('demo/configured', { 'api-key': 'configured' }),
+      withProfiles('demo/inferred', {
+        'api-key': 'inferred',
+        oauth: 'inferred',
+      }),
+      catalogModel('demo/unreported', 'demo'),
+    ];
+    const marker = {
+      label: t('models.wire.unverified'),
+      tooltip: t('models.wire.unverifiedHint'),
+    };
+    const markers = (options) =>
+      options.slice(1).map((option) => [option.value, option.marker]);
+
+    expect(
+      markers(
+        buildModelSelectOptions({
+          models,
+          connections: [
+            usableConnection('demo:api-key', 'demo', 'API key'),
+            usableConnection('demo:oauth', 'demo', 'Subscription'),
+          ],
+        }),
+      ),
+    ).toEqual([
+      ['demo/verified::api-key', undefined],
+      ['demo/verified::oauth', undefined],
+      ['demo/configured::api-key', undefined],
+      ['demo/configured::oauth', undefined],
+      ['demo/inferred::api-key', marker],
+      ['demo/inferred::oauth', marker],
+      ['demo/unreported::api-key', undefined],
+      ['demo/unreported::oauth', undefined],
+    ]);
+    expect(
+      markers(buildModelSelectOptions({ models, modelOnly: true })),
+    ).toEqual([
+      ['demo/verified', undefined],
+      ['demo/configured', undefined],
+      ['demo/inferred', marker],
+      ['demo/unreported', undefined],
+    ]);
+  });
+
   it('reuses suitability and keeps one exact selected value without connection pins', () => {
     const options = buildModelSelectOptions({
       models: [catalogModel('demo/model', 'demo'), { id: 'demo/no-tools' }],

@@ -415,6 +415,17 @@
   font-size: var(--fs-body-lg);
   color: var(--text-hi);
 }
+/* Options stack their rows here, so a marker sits at the end of the name row. */
+.onboarding-model-menu .s-dropdown-opt:has(.option-marker) {
+  position: relative;
+  padding-right: 36px;
+}
+.onboarding-model-menu .s-dropdown-opt .option-marker {
+  position: absolute;
+  top: 13px;
+  right: 14px;
+  margin: 0;
+}
 /* Model id · connection: the Model id makes this a code value. */
 .onboarding-model-menu .searchable-dropdown__option-meta {
   color: var(--onboarding-muted);

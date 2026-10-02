@@ -153,7 +153,12 @@ describe('SearchableDropdown', () => {
         id: 'decorated-searchable-dropdown',
         value: 'gamma',
         options: [
-          { value: 'beta', label: 'Beta', statusDot: 'running' },
+          {
+            value: 'beta',
+            label: 'Beta',
+            statusDot: 'running',
+            marker: { label: 'Not verified', tooltip: 'Beta is not verified.' },
+          },
           {
             value: 'gamma',
             label: 'Gamma',
@@ -178,5 +183,14 @@ describe('SearchableDropdown', () => {
     );
     expect(gamma?.getAttribute('aria-selected')).toBe('true');
     expect(gamma?.querySelector('.count-badge')?.textContent).toBe('3');
+    expect(gamma?.querySelector('.option-marker')).toBeNull();
+    // A marker is an icon named for assistive technology, inside the option
+    // and only in the list, never on the trigger.
+    const beta = document.querySelector('[role="option"]');
+    expect(beta?.textContent).toContain('Beta');
+    expect(
+      beta?.querySelector('[role="img"][aria-label="Not verified"]'),
+    ).toBeTruthy();
+    expect(trigger.querySelector('.option-marker')).toBeNull();
   });
 });
