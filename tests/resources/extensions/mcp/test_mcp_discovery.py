@@ -497,9 +497,12 @@ async def test_mcp_discovery_preserves_the_chat_prefix(context_service, host):
 
     agent = McpAgent(id="alice", model="openai/gpt-5.2")
     runtime = StubRuntime(data_dir=host.data_dir, agent=agent, adapter=adapter, tools=registry)
-    runtime.chat_sessions.create("alice", session_id="session-one")
-    run = await build_chat_loop(runtime).start_run("alice", "inspect", session_id="session-one")
-    await run.wait()
+    try:
+        runtime.chat_sessions.create("alice", session_id="session-one")
+        run = await build_chat_loop(runtime).start_run("alice", "inspect", session_id="session-one")
+        await run.wait()
+    finally:
+        runtime.chat_sessions.close()
 
     assert len(calls) == 1
     assert len(adapter.requests) == 4
