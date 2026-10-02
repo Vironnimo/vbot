@@ -272,6 +272,7 @@ class Runtime:
                 usage_recorder=self.usage_recorder,
                 tools=self.tools,
                 models=self.models,
+                providers=self.providers,
                 provider_credentials=self.provider_credentials,
                 system_prompts=self.system_prompts,
                 get_registry=lambda: self._extensions,

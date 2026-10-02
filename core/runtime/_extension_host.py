@@ -25,6 +25,7 @@ from core.projects import AgentResolver, ProjectStore
 from core.projects.resolver import effective_project_allowed_skills
 from core.prompts import SystemPromptManager
 from core.prompts.prompts import ProjectPromptContext
+from core.providers.providers import ProviderRegistry
 from core.runs import ChatRunManager, RunAdmissionBlockedError
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
@@ -114,6 +115,7 @@ class ExtensionHostFactory:
         usage_recorder: UsageRecorder,
         tools: ToolRegistry,
         models: ModelRegistry,
+        providers: ProviderRegistry,
         provider_credentials: ProviderCredentialResolverProtocol,
         system_prompts: SystemPromptManager,
         get_registry: Callable[[], ExtensionRegistry | None],
@@ -139,6 +141,7 @@ class ExtensionHostFactory:
         self._usage_recorder = usage_recorder
         self.tools = tools
         self.models = models
+        self.providers = providers
         self.provider_credentials = provider_credentials
         self.system_prompts = system_prompts
         self._get_registry = get_registry
@@ -560,14 +563,34 @@ class ExtensionHostFactory:
         }
 
     def _extension_catalog_models(self) -> list[dict[str, Any]]:
+        usable_connections_by_provider: dict[str, list[str]] = {}
+
+        def usable_connections(provider_id: str) -> list[str]:
+            cached = usable_connections_by_provider.get(provider_id)
+            if cached is not None:
+                return cached
+            try:
+                provider = self.providers.get(provider_id)
+            except KeyError:
+                connection_ids: list[str] = []
+            else:
+                connection_ids = [
+                    connection.id
+                    for connection in provider.connections
+                    if self.provider_credentials.is_usable(
+                        provider_id, f"{provider_id}:{connection.id}"
+                    )
+                ]
+            usable_connections_by_provider[provider_id] = connection_ids
+            return connection_ids
+
         models: list[dict[str, Any]] = []
         for provider_id, model in self.models.query(ModelQuery()):
+            # An empty ``connections`` allowlist lets the Model run on every Connection.
             connections = [
                 connection_id
-                for connection_id in model.connections
-                if self.provider_credentials.is_usable(
-                    provider_id, f"{provider_id}:{connection_id}"
-                )
+                for connection_id in usable_connections(provider_id)
+                if model.allows_connection(connection_id)
             ]
             if connections:
                 models.append(
