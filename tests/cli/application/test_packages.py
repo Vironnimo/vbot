@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import logging
+import os
 import re
 import stat
 import zipfile
@@ -17,6 +19,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from cli.application import packages
 from cli.application.packages import (
     RELEASE_IDENTITY_ASSET,
     digest_files,
@@ -31,7 +34,7 @@ from cli.application.state import (
     current_platform,
     package_name,
 )
-from tests.directory_links import link_directory
+from tests.directory_links import cloud_placeholder_status, link_directory
 
 _VERSION = "rel_example"
 _CACHE = "app/cli/__pycache__/main.cpython-313.pyc"
@@ -149,6 +152,36 @@ def test_revalidation_checks_payload_bytes_and_rejects_links(tmp_path, change):
             pytest.skip("symlink privilege unavailable")
     with pytest.raises(ApplicationError):
         validate_release(root, shape="server")
+
+
+def test_revalidation_treats_a_cloud_file_placeholder_as_an_ordinary_file(tmp_path, monkeypatch):
+    install = _install(tmp_path / "install")
+    stage_package(install, _archive(tmp_path / "release.zip"), local=True)
+    root = install.version(_VERSION)
+    placeholder = str(root / "app" / "cli" / "main.py")
+    scandir = os.scandir
+
+    class Entry:
+        def __init__(self, entry: os.DirEntry[str]) -> None:
+            self._entry = entry
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._entry, name)
+
+        def stat(self, *, follow_symlinks: bool = True) -> Any:
+            status = self._entry.stat(follow_symlinks=follow_symlinks)
+            if self._entry.path == placeholder and not follow_symlinks:
+                return cloud_placeholder_status(status)
+            return status
+
+    @contextlib.contextmanager
+    def placeholder_scandir(path: Any) -> Any:
+        with scandir(path) as entries:
+            yield [Entry(entry) for entry in entries]
+
+    monkeypatch.setattr(packages.os, "scandir", placeholder_scandir)
+
+    validate_release(root, shape="server")
 
 
 def _staged(
