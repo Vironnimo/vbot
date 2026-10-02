@@ -4,20 +4,32 @@
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
 
-const FOLLOWED_KINDS = new Set(['shared', 'bootstrap', 'cron', 'calendar']);
+// One moved reference in words, or '' for a kind this WebUI does not know.
+function followedReferenceText(reference) {
+  const { name } = reference;
+  switch (reference.kind) {
+    case 'shared':
+      return t('skills.followed.shared', { name });
+    case 'bootstrap':
+      return t('skills.followed.bootstrap', { name });
+    case 'cron':
+      return t('skills.followed.cron', { name });
+    case 'calendar':
+      return t('skills.followed.calendar', { name });
+    default:
+      return '';
+  }
+}
 
 /** The moved references in words, or '' when nothing moved. */
 export function skillFollowedText(followed) {
   const items = (Array.isArray(followed) ? followed : [])
     .filter(
       (reference) =>
-        isPlainObject(reference) &&
-        FOLLOWED_KINDS.has(reference.kind) &&
-        typeof reference.name === 'string',
+        isPlainObject(reference) && typeof reference.name === 'string',
     )
-    .map((reference) =>
-      t(`skills.followed.${reference.kind}`, { name: reference.name }),
-    );
+    .map(followedReferenceText)
+    .filter(Boolean);
   return items.length ? t('skills.followed', { items: items.join(', ') }) : '';
 }
 
