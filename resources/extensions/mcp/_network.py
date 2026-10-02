@@ -209,9 +209,14 @@ def http_client(
     headers: dict[str, str] | None = None,
     timeout: httpx2.Timeout | None = None,
     auth: httpx2.Auth | None = None,
+    factory: Callable[..., httpx2.AsyncClient] = httpx2.AsyncClient,
 ) -> httpx2.AsyncClient:
-    """The HTTP client of one connection to *server_url*."""
-    return httpx2.AsyncClient(
+    """The HTTP client of one connection to *server_url*.
+
+    *factory* builds it from ``httpx2.AsyncClient`` keyword arguments, for a
+    client subclass that observes the requests it sends.
+    """
+    return factory(
         headers=headers,
         timeout=timeout,
         auth=auth,

@@ -66,9 +66,10 @@ class _RequestBudget:
 class ServerRequests:
     """The client callbacks of one connection.
 
-    *invocation* returns the Tool call the connection is currently serving, or
-    ``None`` between calls; *config* returns the connection's configuration,
-    whose ``sampling`` and ``roots`` policies decide what the server gets.
+    *invocation* returns the Agent invocation whose call the current server
+    request belongs to, or ``None`` when it belongs to none; *config* returns the
+    connection's configuration, whose ``sampling`` and ``roots`` policies decide
+    what the server gets.
     """
 
     def __init__(

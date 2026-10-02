@@ -15,7 +15,12 @@ from core.tools.tools import tool_success
 from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.config import validate_connection
 from resources.extensions.mcp.extension import remote_tool_name
-from tests.resources.extensions.mcp.mcp_test_support import dispatch, start_service
+from tests.resources.extensions.mcp.mcp_test_support import (
+    context,
+    dispatch,
+    model_text,
+    start_service,
+)
 
 _USAGE = "Describe a tool for its arguments schema, then call it."
 _NO_TOOLS = "No tools reported yet; search lists them."
@@ -29,16 +34,28 @@ _CATALOG = {
 }
 
 
-def _tool_names(registry) -> list[str]:
-    return [tool.name for tool in registry.list_tools()]
+def _tool_names(registry, *, ready_only: bool = False) -> list[str]:
+    return [tool.name for tool in registry.list_tools(ready_only=ready_only)]
 
 
 def _description(registry) -> str:
     return str(registry.get("mcp_example").description)
 
 
+_DISABLED = (
+    "Error (tool_not_ready): The MCP connection example is disabled, so nothing was run. "
+    "Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP connections "
+    "if it is needed.\nretryable: false"
+)
+_DISCONNECTED = (
+    "Error (tool_not_ready): The MCP connection example is not connected, so nothing was run. "
+    "Call this tool again through mcp_example, which reconnects first. If it cannot connect, "
+    "tell the user that the MCP server example cannot be reached.\nretryable: false"
+)
+
+
 @pytest.mark.asyncio
-async def test_disabling_a_connection_that_ignores_cancellation_still_removes_its_tools(
+async def test_disabling_a_connection_that_ignores_cancellation_still_retires_its_tools(
     host, monkeypatch, caplog
 ):
     service, registry = await start_service(host)
@@ -47,8 +64,18 @@ async def test_disabling_a_connection_that_ignores_cancellation_still_removes_it
     )
     runner = service._runner(service.connections["example"])
     runner.state = "connected"
-    service._publish(runner, {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]})
-    assert "mcp_example" in _tool_names(registry)
+    runner.catalog = {"tools": [{"name": "echo", "inputSchema": {"type": "object"}}]}
+    service._publish(runner, runner.catalog)
+    names = ["mcp_example", remote_tool_name("example", "echo")]
+    assert set(names) <= set(_tool_names(registry, ready_only=True))
+    # While the connection is down, its remote Tools are hidden and say how to reconnect.
+    runner.state = "failed"
+    assert names[1] not in _tool_names(registry, ready_only=True)
+    result = await registry.dispatch(
+        replace(context(host), tool_name=names[1]), {}, allowed_tools=names
+    )
+    assert model_text(result) == _DISCONNECTED
+    runner.state = "connected"
     release = asyncio.Event()
 
     async def stuck() -> None:
@@ -69,7 +96,13 @@ async def test_disabling_a_connection_that_ignores_cancellation_still_removes_it
             assert done, "disabling must not wait forever on a connection ignoring cancellation"
             await disabling
 
-        assert "mcp_example" not in _tool_names(registry)
+        # The Agent no longer sees the connection's Tools; naming one says why.
+        assert not set(names) & set(_tool_names(registry, ready_only=True))
+        for name in names:
+            result = await registry.dispatch(
+                replace(context(host), tool_name=name), {}, allowed_tools=names
+            )
+            assert model_text(result) == _DISABLED
         assert runner.state == "disconnected"
         assert "did not stop within" in caplog.text
     finally:
