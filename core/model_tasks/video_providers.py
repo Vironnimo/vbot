@@ -113,7 +113,7 @@ def _video_payload(
         if not is_omittable_option(value):
             payload[name] = value
     duration = options.get("duration")
-    if isinstance(duration, str) and duration.isdigit():
+    if isinstance(duration, str) and duration.isdecimal():
         payload["duration"] = int(duration)
     elif isinstance(duration, int) and not isinstance(duration, bool):
         payload["duration"] = duration

@@ -43,7 +43,7 @@ def _is_object(value: Any) -> bool:
 
 def _is_count(value: Any) -> bool:
     return (isinstance(value, int) and not isinstance(value, bool)) or (
-        isinstance(value, str) and value.strip().isdigit()
+        isinstance(value, str) and value.strip().isdecimal()
     )
 
 
