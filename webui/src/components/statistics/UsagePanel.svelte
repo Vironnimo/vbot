@@ -47,6 +47,8 @@
     section,
     dimension = $bindable('agent'),
     granularity = $bindable(null),
+    // The report's series bucket: `day`, or `hour` for a short window.
+    bucket = 'day',
     metric = $bindable('cost'),
   } = $props();
 
@@ -405,6 +407,7 @@
     metrics={['cost', 'tokens']}
     bind:metric
     bind:granularity
+    {bucket}
     title={t('statistics.usage.trend')}
   />
 

@@ -101,7 +101,7 @@ def test_a_report_without_activity_has_every_section_in_its_zero_form(
 
     assert set(report) == {"generated_at", "window", *REPORT_SECTIONS}
     assert report["generated_at"] == "2026-06-02T00:30:00.000000Z"
-    assert report["window"] == {"since": None, "until": None, "timezone": "UTC"}
+    assert report["window"] == {"since": None, "until": None, "timezone": "UTC", "bucket": "day"}
     overview = report["overview"]
     # Zero requests cost nothing; a split without requests is unknown.
     assert (overview["totals"]["calls"], overview["totals"]["cost_usd"]) == (0, 0.0)
@@ -175,6 +175,7 @@ async def test_window_is_hour_aligned_half_open_and_compared_with_the_span_befor
         "since": "2026-06-01T10:00:00.000000Z",
         "until": "2026-06-01T13:00:00.000000Z",
         "timezone": "UTC",
+        "bucket": "hour",
     }
     overview = report["overview"]
     assert (overview["totals"]["calls"], overview["totals"]["cost_usd"]) == (2, 12.0)
@@ -222,6 +223,61 @@ async def test_day_series_group_hours_into_local_calendar_days(
     assert {point["date"]: point["calls"] for point in overview_series} == calls_by_day
     assert [point["date"] for point in report["usage"]["series"]] == list(calls_by_day)
     assert sum(point["cost_usd"] for point in report["usage"]["series"]) == 1.5
+
+
+@pytest.mark.asyncio
+async def test_a_window_of_at_most_two_days_has_hour_buckets_in_every_series(
+    manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
+) -> None:
+    # A failed Run with one Model call and an error at 12:00 (BASE).
+    address = _runs(manager, [("r1", "failed", 1000, 1)])
+    await _call(ledger, {"reported_cost_usd": 0.5}, address=address, run_id="r1", at=BASE)
+    _write_session(
+        manager,
+        "main",
+        [ChatMessage.error("timeout", "slow", timestamp=BASE + timedelta(seconds=2))],
+    )
+    service = statistics(usage_recorder=ledger, clock=_clock)
+    until = BASE + timedelta(minutes=30)
+
+    report = service.report(since=BASE - timedelta(hours=2), until=until)
+
+    # [10:00, 13:00): one point per UTC hour, empty hours filled with zeros.
+    hours = [f"2026-06-01T{hour}:00:00.000000Z" for hour in ("10", "11", "12")]
+    assert report["window"]["bucket"] == "hour"
+    overview, usage = report["overview"]["series"], report["usage"]["series"]
+    runs = report["runs"]
+    assert [(p["hour_start"], p["calls"], p["runs"], p["failed_runs"]) for p in overview] == [
+        (hours[0], 0, 0, 0),
+        (hours[1], 0, 0, 0),
+        (hours[2], 1, 1, 1),
+    ]
+    assert [(p["hour_start"], p["calls"]) for p in usage] == list(
+        zip(hours, [0, 0, 1], strict=True)
+    )
+    assert [(p["hour_start"], p["runs"], p["failed"]) for p in runs["daily"]] == [
+        (hours[0], 0, 0),
+        (hours[1], 0, 0),
+        (hours[2], 1, 1),
+    ]
+    assert runs["errors"]["daily"] == [
+        {"hour_start": hour, "count": count} for hour, count in zip(hours, [0, 0, 1], strict=True)
+    ]
+    assert not any("date" in point for point in [*overview, *usage, *runs["daily"]])
+    # 48 hours still count by the hour, 49 by the local day; an open end runs
+    # to the current hour.
+    two_days = service.report(since=BASE - timedelta(hours=47), until=until, sections=["usage"])
+    assert (two_days["window"]["bucket"], len(two_days["usage"]["series"])) == ("hour", 48)
+    longer = service.report(since=BASE - timedelta(hours=48), until=until, sections=["usage"])
+    assert longer["window"]["bucket"] == "day"
+    assert [p["date"] for p in longer["usage"]["series"]] == [
+        "2026-05-30",
+        "2026-05-31",
+        "2026-06-01",
+    ]
+    open_end = service.report(since=NOW - timedelta(hours=24), sections=["usage"])["usage"]
+    assert open_end["series"][-1]["hour_start"] == "2026-06-02T00:00:00.000000Z"
+    assert len(open_end["series"]) == 25
 
 
 # -- Runs ---------------------------------------------------------------------

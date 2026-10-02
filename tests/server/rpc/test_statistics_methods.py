@@ -170,7 +170,12 @@ async def test_report_returns_the_requested_sections_for_the_window_and_timezone
 
     assert set(result) == {"generated_at", "window", *REPORT_SECTIONS}
     # Without a timezone the Settings timezone applies.
-    assert result["window"] == {"since": None, "until": None, "timezone": "Europe/Berlin"}
+    assert result["window"] == {
+        "since": None,
+        "until": None,
+        "timezone": "Europe/Berlin",
+        "bucket": "day",
+    }
     assert result["extensions"] == {"extensions": []}
     # Project Sessions count under their ``agent@project`` address.
     assert result["overview"]["active_agents"] == 2
@@ -185,6 +190,7 @@ async def test_report_returns_the_requested_sections_for_the_window_and_timezone
         "since": "2026-06-30T22:00:00.000000Z",
         "until": "2026-07-31T00:00:00.000000Z",
         "timezone": "UTC",
+        "bucket": "day",
     }
     assert windowed["runs"]["totals"]["total"] == 0
     assert state.statistics_service is service

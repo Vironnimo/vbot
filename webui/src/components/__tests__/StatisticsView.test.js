@@ -187,6 +187,41 @@ describe('StatisticsView', () => {
     expect(panel().querySelector('.stats-tiles .stats-change')).toBeNull();
   });
 
+  it('counts a range of up to two days by the hour in the Settings time zone', async () => {
+    setApplicationTimeZone('Europe/Berlin');
+    const hourly = makeReport(['overview'], {
+      window: {
+        since: '2026-06-12T22:00:00.000000Z',
+        until: null,
+        timezone: 'Europe/Berlin',
+        bucket: 'hour',
+      },
+    });
+    hourly.overview.series = hourly.overview.series.map(
+      ({ date: _date, ...point }, index) => ({
+        hour_start: `2026-06-13T0${8 + index}:00:00.000000Z`,
+        ...point,
+      }),
+    );
+    rpcMock.mockImplementation(
+      routedRpc(undefined, (params) =>
+        params.sections.includes('overview')
+          ? hourly
+          : makeReport(params.sections),
+      ),
+    );
+    suite.mountedComponent = mount(StatisticsView, { target: document.body });
+    await waitForOverview();
+
+    // Hours have no Day/Week/Month periods; each reads as its local time.
+    expect(buttonNamed('statistics.granularity.week')).toBeUndefined();
+    expect(
+      [...panel().querySelectorAll('.stats-chart__column')].map((column) =>
+        column.getAttribute('aria-label').split(':').slice(0, 2).join(':'),
+      ),
+    ).toEqual(['Jun 13, 10:00 AM', 'Jun 13, 11:00 AM']);
+  });
+
   it('shows a revisited tab from its cache while one request revalidates it', async () => {
     const answers = [];
     rpcMock.mockImplementation(

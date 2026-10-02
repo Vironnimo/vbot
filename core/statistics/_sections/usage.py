@@ -116,12 +116,12 @@ def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list
 
 
 def _series(context: ReportContext) -> list[JsonObject]:
+    buckets = context.buckets
     hourly = grouped_totals(context, "a.hour")
-    hours = context.window.series_hours(min(hourly, default=None), max(hourly, default=None))
-    days = {day: Totals() for day in context.calendar.days(hours)}
+    points = {key: Totals() for key in buckets.keys(hourly)}
     for hour, totals in hourly.items():
-        days[context.calendar.date(hour)].merge(totals)
-    return [{"date": day, **totals.json()} for day, totals in days.items()]
+        points[buckets.key(hour)].merge(totals)
+    return [{buckets.field: key, **totals.json()} for key, totals in points.items()]
 
 
 def _top_sessions(context: ReportContext, units: str, runs: Counter[int]) -> list[JsonObject]:

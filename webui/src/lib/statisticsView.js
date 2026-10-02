@@ -1112,11 +1112,11 @@ function addValue(left, right) {
  * Daily series rows (`{ date, ...numbers }`, local calendar days from the
  * server, gaps already filled) summed into weeks (Monday first) or months.
  * Each period keeps the date of its first day; a field unknown on every day
- * of a period stays null.
+ * of a period stays null. Day and hour rows stay as they are.
  */
 export function rollupSeries(series, granularity = 'day') {
   const rows = Array.isArray(series) ? series : [];
-  if (granularity === 'day') return rows;
+  if (granularity === 'day' || granularity === 'hour') return rows;
   const periods = new Map();
   for (const row of rows) {
     const key = periodKey(row?.date, granularity);
@@ -1175,7 +1175,8 @@ export function trendSegments(metric) {
 /**
  * Chart columns of a series for one metric (`cost`, `tokens`, `runs`):
  * each period's total, its stacked segments, and the source row; plus the
- * axis maximum.
+ * axis maximum. A column's key is its date, or for `hour` its row's
+ * `hour_start` (the canonical UTC timestamp of the hour).
  */
 export function trendColumns(series, metric = 'cost', granularity = 'day') {
   const definition = TREND_METRICS[metric] ?? TREND_METRICS.cost;
@@ -1186,7 +1187,7 @@ export function trendColumns(series, metric = 'cost', granularity = 'day') {
     }));
     const segmentSum = segments.reduce((sum, entry) => sum + entry.value, 0);
     return {
-      key: row.date,
+      key: granularity === 'hour' ? row.hour_start : row.date,
       row,
       total: Math.max(toFiniteNumber(definition.total(row)), segmentSum),
       segments,
@@ -1238,15 +1239,25 @@ export function axisLabelIndices(length, count = 8) {
 
 const seriesDateFormats = new Map();
 
-/** A local calendar date key as an axis or table label: `Sep 3` for a day,
- *  the week's Monday for a week, `Sep 2026` for a month. `long` adds the
- *  year to days and weeks. */
+/** A series key as an axis or table label: a local calendar date as `Sep 3`
+ *  for a day, the week's Monday for a week, `Sep 2026` for a month (`long`
+ *  adds the year to days and weeks); an hour's UTC start timestamp as its
+ *  time in the Settings time zone, `9:00 AM` (`long` adds the date). */
 export function formatSeriesDate(
   dateKey,
   granularity = 'day',
   locale = 'en',
   { long = false } = {},
 ) {
+  if (granularity === 'hour') {
+    const hour = parseIso(dateKey);
+    if (hour === null) return String(dateKey ?? EM_DASH);
+    return formatDateTimeInApplicationZone(hour, locale, {
+      ...(long ? { month: 'short', day: 'numeric' } : {}),
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  }
   const day = parseDateKey(dateKey);
   if (day === null) return String(dateKey ?? EM_DASH);
   const options =

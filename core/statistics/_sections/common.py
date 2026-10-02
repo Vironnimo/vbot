@@ -21,7 +21,12 @@ from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._measurements import _nearest_rank_index
 from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollups import USAGE_MEASURES
-from core.statistics._sections.window import LocalCalendar, ReportWindow, instant_timestamp
+from core.statistics._sections.window import (
+    LocalCalendar,
+    ReportWindow,
+    SeriesBuckets,
+    instant_timestamp,
+)
 from core.statistics.skills import _ResolvedInventory
 
 JsonObject = dict[str, Any]
@@ -207,6 +212,7 @@ class ReportContext:
         self.connection = connection
         self.window = window
         self.calendar = LocalCalendar(window.zone)
+        self.buckets = SeriesBuckets(window, self.calendar)
         self.sessions = tuple(sessions)
         self.skill_inventory = skill_inventory
         self.by_key: dict[int, LiveSession] = {}

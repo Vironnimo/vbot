@@ -187,6 +187,7 @@ export default Object.freeze({
   'statistics.subview.tools': 'Tools & skills',
   'statistics.granularity.label': 'Period',
   'statistics.granularity.day': 'Day',
+  'statistics.granularity.hour': 'Hour',
   'statistics.granularity.week': 'Week',
   'statistics.granularity.month': 'Month',
   'statistics.status.completed': 'Completed',

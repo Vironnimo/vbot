@@ -1,4 +1,4 @@
-"""Overview: usage and Run totals against the previous window, day series, leaders, insights."""
+"""Overview: usage and Run totals against the previous window, series, leaders, insights."""
 
 from __future__ import annotations
 
@@ -201,30 +201,29 @@ def _active_sessions(context: ReportContext) -> int:
 
 
 def _series(context: ReportContext, runs: list[RunGroup]) -> list[JsonObject]:
+    buckets = context.buckets
     hourly = grouped_totals(context, "a.hour")
-    run_hours = {group.hour for group in runs}
-    active = [*hourly, *run_hours]
-    hours = context.window.series_hours(min(active, default=None), max(active, default=None))
-    days = {day: (Totals(), Counter[str]()) for day in context.calendar.days(hours)}
+    active = {*hourly, *(group.hour for group in runs)}
+    points = {key: (Totals(), Counter[str]()) for key in buckets.keys(active)}
     for hour, totals in hourly.items():
-        days[context.calendar.date(hour)][0].merge(totals)
+        points[buckets.key(hour)][0].merge(totals)
     for group in runs:
-        counts = days[context.calendar.date(group.hour)][1]
+        counts = points[buckets.key(group.hour)][1]
         counts["runs"] += group.runs
         if group.status == "failed":
             counts["failed_runs"] += group.runs
-    points = []
-    for day, (totals, counts) in days.items():
+    series = []
+    for key, (totals, counts) in points.items():
         values = totals.json()
-        points.append(
+        series.append(
             {
-                "date": day,
+                buckets.field: key,
                 **{field: values[field] for field in _SERIES_FIELDS},
                 "runs": counts["runs"],
                 "failed_runs": counts["failed_runs"],
             }
         )
-    return points
+    return series
 
 
 _SERIES_FIELDS = (

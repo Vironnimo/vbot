@@ -40,6 +40,8 @@
   let {
     section,
     granularity = $bindable(null),
+    // The report's series bucket: `day`, or `hour` for a short window.
+    bucket = 'day',
     metric = $bindable('cost'),
     onOpenUsage = () => {},
     onNavigate = () => {},
@@ -308,6 +310,7 @@
     series={section.series ?? []}
     bind:metric
     bind:granularity
+    {bucket}
     title={t('statistics.overview.trend')}
   />
 
