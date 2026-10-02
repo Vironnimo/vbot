@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
@@ -133,7 +133,9 @@ class ChannelConversationEngine:
         self._access = ChannelAccessPolicy(config, access_registry)
         self._conversation_pointers = conversation_pointers
         self._routing = ChannelSessionRouting(config, chat_sessions, conversation_pointers)
-        self._chat_queues: dict[str, asyncio.Queue[_QueuedWork]] = {}
+        # One FIFO and worker per conversation while it has work; an idle
+        # conversation retires both and the next item creates them again.
+        self._chat_queues: dict[str, deque[_QueuedWork]] = {}
         self._chat_workers: dict[str, asyncio.Task[None]] = {}
         self._busy_reply_times: OrderedDict[str, float] = OrderedDict()
         self._bound_tap_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
@@ -470,10 +472,10 @@ class ChannelConversationEngine:
 
         queue = self._chat_queues.get(platform_target)
         if queue is None:
-            queue = asyncio.Queue()
+            queue = deque()
             self._chat_queues[platform_target] = queue
 
-        queue.put_nowait(replace(queued, admission=admission))
+        queue.append(replace(queued, admission=admission))
 
         worker = self._chat_workers.get(platform_target)
         if worker is None or worker.done():
@@ -487,11 +489,18 @@ class ChannelConversationEngine:
     async def _run_chat_queue(
         self,
         platform_target: str,
-        queue: asyncio.Queue[_QueuedWork],
+        queue: deque[_QueuedWork],
     ) -> None:
+        """Process one conversation's FIFO, then retire with it once it is empty.
+
+        Enqueueing is synchronous, and nothing awaits between the empty check and
+        the retirement, so an item arriving later either joins this queue while
+        the worker runs or finds no worker and starts a new one: one worker per
+        conversation at a time, in arrival order.
+        """
         try:
-            while True:
-                queued = await queue.get()
+            while queue:
+                queued = queue.popleft()
                 try:
                     await self._process_queued_work(queued)
                 except Exception as error:
@@ -503,13 +512,12 @@ class ChannelConversationEngine:
                     )
                 finally:
                     self._trigger_service.release_waiting_work(queued.admission)
-                    queue.task_done()
-        except asyncio.CancelledError:
-            raise
         finally:
-            current = self._chat_workers.get(platform_target)
-            if current is asyncio.current_task():
+            if self._chat_workers.get(platform_target) is asyncio.current_task():
                 self._chat_workers.pop(platform_target, None)
+                # A worker that ended abnormally leaves its items to the next one.
+                if not queue and self._chat_queues.get(platform_target) is queue:
+                    self._chat_queues.pop(platform_target, None)
 
     async def _process_queued_work(self, queued: _QueuedWork) -> None:
         if isinstance(queued, (_QueuedInboundMessage, _QueuedInboundMedia)):
@@ -959,10 +967,8 @@ class ChannelConversationEngine:
         workers = list(self._chat_workers.values())
         self._chat_workers.clear()
         for queue in self._chat_queues.values():
-            while not queue.empty():
-                queued = queue.get_nowait()
-                self._trigger_service.release_waiting_work(queued.admission)
-                queue.task_done()
+            while queue:
+                self._trigger_service.release_waiting_work(queue.popleft().admission)
         self._chat_queues.clear()
         self._busy_reply_times.clear()
         for worker in workers:

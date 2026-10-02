@@ -27,7 +27,18 @@ _LIMIT = engine_module.CHANNEL_WAITING_WORK_LIMIT
 
 
 @pytest.mark.asyncio
-async def test_messages_wait_behind_a_running_turn_and_keep_arrival_order(tmp_path: Path) -> None:
+async def test_messages_keep_arrival_order_and_an_idle_conversation_retires_its_worker(
+    tmp_path: Path,
+) -> None:
+    earlier_tasks = asyncio.all_tasks()
+
+    def conversation_workers() -> list[asyncio.Task[object]]:
+        return [
+            task
+            for task in asyncio.all_tasks() - earlier_tasks
+            if task.get_name().endswith(":chat-queue")
+        ]
+
     runs = HeldRuns()
     engine, _sessions, _trigger, _transport = make_engine(tmp_path, trigger_run=runs.trigger)
     try:
@@ -37,11 +48,19 @@ async def test_messages_wait_behind_a_running_turn_and_keep_arrival_order(tmp_pa
         await engine.handle_inbound_text(make_conversation(), "third")
         await asyncio.sleep(0)
         assert runs.contents == ["first"]
+        assert len(conversation_workers()) == 1
 
         runs.release()
         await drain(engine, 12345)
 
         assert runs.contents == ["first", "second", "third"]
+        assert conversation_workers() == []
+        # The next message starts a new worker, which retires again once idle.
+        await engine.handle_inbound_text(make_conversation(), "fourth")
+        assert len(conversation_workers()) == 1
+        await drain(engine, 12345)
+        assert runs.contents == ["first", "second", "third", "fourth"]
+        assert conversation_workers() == []
     finally:
         runs.release()
         await engine.stop()
