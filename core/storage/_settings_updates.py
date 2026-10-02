@@ -11,6 +11,7 @@ from core.settings import (
     SettingsValidationError,
 )
 from core.settings.normalizers import (
+    LIBRARIAN_SETTING_DEFAULTS,
     coerce_defaults_section,
     coerce_defaults_update,
     coerce_skills_update,
@@ -23,6 +24,7 @@ from core.settings.normalizers import (
     normalize_defaults_settings,
     normalize_extensions_settings,
     normalize_json_object,
+    normalize_librarian_settings,
     normalize_local_models_settings,
     normalize_model_task_settings,
     normalize_notification_settings,
@@ -206,6 +208,29 @@ def apply_reflection_settings(
     )
     settings["reflection"] = normalized_reflection
     return dict(normalized_reflection)
+
+
+def apply_librarian_settings(
+    settings: dict[str, Any],
+    librarian: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Merge Librarian settings into an in-memory settings mapping."""
+
+    if not isinstance(librarian, Mapping):
+        raise StorageError("Librarian settings must be a mapping")
+    supported = set(LIBRARIAN_SETTING_DEFAULTS)
+    unsupported_fields = sorted(set(librarian) - supported)
+    if unsupported_fields:
+        raise StorageError(f"Unsupported librarian settings: {', '.join(unsupported_fields)}")
+
+    normalized_librarian = normalize_librarian_settings(
+        {
+            **normalize_librarian_settings(settings.get("librarian")),
+            **dict(librarian),
+        }
+    )
+    settings["librarian"] = normalized_librarian
+    return dict(normalized_librarian)
 
 
 def apply_notification_settings(
@@ -512,6 +537,7 @@ _SECTION_APPLIERS: dict[str, Callable[[dict[str, Any], Any], Any]] = {
     "server": apply_server_settings,
     "extensions": apply_extensions_settings,
     "reflection": apply_reflection_settings,
+    "librarian": apply_librarian_settings,
     "local_models": apply_local_models_settings,
     "session_titles": apply_session_title_settings,
     "notifications": apply_notification_settings,

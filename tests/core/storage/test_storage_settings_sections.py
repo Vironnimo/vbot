@@ -104,6 +104,11 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
         REFLECTION_DEFAULTS,
     ),
     (
+        StorageManager.load_librarian_settings,
+        {"librarian": {"interval_days": 0}},
+        {"enabled": True, "interval_days": 7, "archive_after_days": 90, "consolidate": True},
+    ),
+    (
         StorageManager.load_web_search_settings,
         {"web_search": {"provider": "unknown"}},
         WEB_SEARCH_DEFAULTS,
@@ -389,6 +394,12 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         {"reflection": {"memory_turn_interval": 12}},
         StorageManager.load_reflection_settings,
         {"enabled": False, "memory_turn_interval": 12, "skill_model_step_interval": 33},
+    ),
+    "librarian-merges-into-stored-section": (
+        {"librarian": {"enabled": False, "interval_days": 3}},
+        {"librarian": {"consolidate": False}},
+        StorageManager.load_librarian_settings,
+        {"enabled": False, "interval_days": 3, "archive_after_days": 90, "consolidate": False},
     ),
     "local-models-merge-set-and-remove-windows": (
         {"local_models": {"context_windows": {"ollama/a": 8192, "ollama/b": 16384}}},

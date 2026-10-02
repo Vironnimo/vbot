@@ -176,6 +176,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         compaction=_COMPACTION,
         defaults={"agent": {"model": "openai/gpt-4.1-mini"}},
         reflection={"enabled": True, "memory_turn_interval": 5},
+        librarian={"archive_after_days": 30},
         web_search={"provider": "searxng", "searxng": {"base_url": "http://localhost:9999"}},
         session_titles={"enabled": True, "model": "openai/gpt-4.1-mini::api-key"},
         notifications={"run_completed": False},
@@ -208,6 +209,12 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "enabled": True,
         "memory_turn_interval": 5,
         "skill_model_step_interval": 10,
+    }
+    assert result["librarian"] == {
+        "enabled": True,
+        "interval_days": 7,
+        "archive_after_days": 30,
+        "consolidate": True,
     }
     assert {key: result["web_search"][key] for key in ("provider", "default_count", "searxng")} == {
         "provider": "searxng",

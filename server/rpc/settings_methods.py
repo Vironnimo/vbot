@@ -692,6 +692,7 @@ async def _settings_response(state: Any) -> JsonObject:
         },
         "archive": runtime.storage.load_archive_settings(),
         "reflection": dict(reflection),
+        "librarian": runtime.storage.load_librarian_settings(),
         "speech": speech,
         "model_tasks": model_tasks,
         "session_titles": session_titles,

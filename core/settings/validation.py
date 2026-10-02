@@ -71,6 +71,8 @@ from core.settings.normalizers import (
 from core.settings.settings import (
     AGENT_DEFAULT_FIELDS,
     ARCHIVE_RETENTION_DAYS_RULE,
+    LIBRARIAN_BOOLEAN_FIELDS,
+    LIBRARIAN_DAY_FIELDS,
     NOTIFICATION_FIELDS,
     OPENROUTER_ROUTING_FIELDS,
     OPENROUTER_ROUTING_POLICY_FIELDS,
@@ -102,6 +104,7 @@ KNOWN_RAW_SETTINGS_KEYS = frozenset(
         "extension_directories",
         "extensions",
         "keep_awake",
+        "librarian",
         "local_models",
         "max_subagent_depth",
         "max_subagents_per_turn",
@@ -144,6 +147,7 @@ SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_model_step_interval"})
+LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS})
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
@@ -208,6 +212,7 @@ SETTINGS_SHAPE: JsonShape = json_document(
         ),
         "recall": json_object(RECALL_FIELDS),
         "reflection": json_object(REFLECTION_FIELDS),
+        "librarian": json_object(LIBRARIAN_FIELDS),
         "session_titles": json_object(SESSION_TITLE_FIELDS),
         "speech": json_object(
             SPEECH_FIELDS, {"transcription_audio": json_object(TRANSCRIPTION_AUDIO_FIELDS)}
@@ -455,6 +460,7 @@ def validate_settings_data(data: Any) -> list[JsonDiagnostic]:
     _validate_debug(diagnostics, data.get("debug"))
     _validate_archive(diagnostics, data.get("archive"))
     _validate_reflection(diagnostics, data.get("reflection"))
+    _validate_librarian(diagnostics, data.get("librarian"))
     _validate_local_models(diagnostics, data.get("local_models"))
     _validate_providers(diagnostics, data.get("providers"))
     _validate_session_titles(diagnostics, data.get("session_titles"))
@@ -1091,6 +1097,27 @@ def _validate_reflection(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             _error(diagnostics, f"$.reflection.{field}", "must be a positive integer")
         elif interval <= 0:
             _error(diagnostics, f"$.reflection.{field}", "must be at least 1")
+
+
+def _validate_librarian(diagnostics: list[JsonDiagnostic], value: Any) -> None:
+    if value is None:
+        return
+    if not isinstance(value, Mapping):
+        _error(diagnostics, "$.librarian", "must be an object")
+        return
+
+    _warn_unknown_keys(diagnostics, "$.librarian", value, LIBRARIAN_FIELDS, "librarian field")
+    for field in LIBRARIAN_BOOLEAN_FIELDS:
+        if field in value and not isinstance(value[field], bool):
+            _error(diagnostics, f"$.librarian.{field}", "must be a boolean")
+    for field in LIBRARIAN_DAY_FIELDS:
+        if field not in value:
+            continue
+        days = value[field]
+        if isinstance(days, bool) or not isinstance(days, int):
+            _error(diagnostics, f"$.librarian.{field}", "must be a positive integer")
+        elif days <= 0:
+            _error(diagnostics, f"$.librarian.{field}", "must be at least 1")
 
 
 def validate_temperature_diagnostic(

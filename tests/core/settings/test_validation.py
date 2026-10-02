@@ -278,6 +278,12 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     "memory_turn_interval": 10,
                     "skill_model_step_interval": 25,
                 },
+                "librarian": {
+                    "enabled": True,
+                    "interval_days": 7,
+                    "archive_after_days": 90,
+                    "consolidate": False,
+                },
                 "extensions": {
                     "disabled": ["legacy-ext"],
                     "config": {
@@ -497,6 +503,25 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                 ("error", "$.reflection.skill_model_step_interval", "must be at least 1"),
             ],
             id="reflection-fields",
+        ),
+        pytest.param(
+            {
+                "librarian": {
+                    "enabled": 1,
+                    "consolidate": "no",
+                    "interval_days": "7",
+                    "archive_after_days": 0,
+                    "extra": 1,
+                }
+            },
+            [
+                ("warning", "$.librarian.extra", "unknown librarian field: extra"),
+                ("error", "$.librarian.enabled", "must be a boolean"),
+                ("error", "$.librarian.consolidate", "must be a boolean"),
+                ("error", "$.librarian.interval_days", "must be a positive integer"),
+                ("error", "$.librarian.archive_after_days", "must be at least 1"),
+            ],
+            id="librarian-fields",
         ),
         pytest.param(
             {"local_models": []},
