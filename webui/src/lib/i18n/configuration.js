@@ -61,7 +61,7 @@ export default Object.freeze({
   'settings.providers.opencode.removeKey': 'Remove shared key',
   'settings.pages.general': 'General',
   'settings.pages.generalDescription':
-    'Display, Session titles, notifications, time zone, and setup.',
+    'Background activity, display, Session titles, notifications, time zone, and setup.',
   'settings.pages.providersDescription':
     'Connect the services and local runtimes that supply your Models.',
   'settings.pages.voiceDescription':
