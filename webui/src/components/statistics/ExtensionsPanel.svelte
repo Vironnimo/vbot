@@ -1,22 +1,34 @@
 <script>
+  // Extensions tab: activity of the Sessions Extensions run on their own
+  // (such as Swarm participants), per Extension, group and participant.
   import { t, activeLocaleTag } from '$lib/i18n.js';
+  import { tooltip } from '$lib/tooltip.js';
   import Badge from '../ui/Badge.svelte';
+  import DataTable from '../ui/DataTable.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
   import {
+    activityCostTotals,
+    activityTokens,
+    costTooltip,
     formatCost,
     formatDateTime,
     formatInteger,
+    formatTokens,
+    runStatusLabel,
     shortGroupId,
-    tokenBreakdownTooltip,
-    tokenSplit,
-    unfinishedRunsTooltip,
+    tokenTooltip,
   } from '$lib/statisticsView.js';
-  import { statCard, tokenCell, tokensHeader } from './ReportPrimitives.svelte';
+  import {
+    costValue,
+    kpiTile,
+    idCell,
+    tokenValue,
+  } from './ReportPrimitives.svelte';
 
-  let { report } = $props();
+  let { section } = $props();
 
   const locale = $derived(activeLocaleTag());
-  const extensions = $derived(report?.extensions?.extensions ?? []);
+  const extensions = $derived(section?.extensions ?? []);
 
   // Groups started before generated titles existed carry none; name them by
   // start time and a short id so they stay distinguishable.
@@ -32,83 +44,125 @@
     });
   }
 
-  function failedRuns(activity) {
-    const status = activity.run_status;
-    return status.failed + status.cancelled + status.interrupted;
+  function unfinishedRuns(activity) {
+    const status = activity?.run_status ?? {};
+    return (
+      (status.failed ?? 0) + (status.cancelled ?? 0) + (status.interrupted ?? 0)
+    );
   }
 
-  function groupSummary(group) {
-    return t('statistics.extensions.groupSummary', {
-      participants: formatInteger(group.participants.length, locale),
-      runs: formatInteger(group.activity.runs, locale),
-    });
+  function unfinishedTooltip(activity) {
+    const status = activity?.run_status ?? {};
+    const rows = ['failed', 'cancelled', 'interrupted']
+      .filter((key) => (status[key] ?? 0) > 0)
+      .map((key) => ({
+        label: runStatusLabel(key),
+        value: formatInteger(status[key], locale),
+      }));
+    return rows.length > 0 ? { rows } : '';
   }
+
+  function activityTiles(activity, groups) {
+    const tokens = activityTokens(activity);
+    const costs = activityCostTotals(activity?.costs);
+    return [
+      ...(groups == null
+        ? []
+        : [
+            {
+              label: t('statistics.extensions.groups'),
+              hint: t('statistics.extensions.groupsHint'),
+              value: formatInteger(groups, locale),
+            },
+          ]),
+      {
+        label: t('statistics.extensions.sessions'),
+        value: formatInteger(activity?.sessions, locale),
+      },
+      {
+        label: t('statistics.extensions.runs'),
+        value: formatInteger(activity?.runs, locale),
+        detail:
+          unfinishedRuns(activity) > 0
+            ? t('statistics.extensions.unfinishedRuns', {
+                count: formatInteger(unfinishedRuns(activity), locale),
+              })
+            : '',
+        detailTooltip: unfinishedTooltip(activity),
+      },
+      {
+        label: t('statistics.extensions.tokens'),
+        value: formatTokens(tokens.total, locale),
+        valueTooltip: tokenTooltip(tokens.total, tokens.estimated, locale),
+      },
+      {
+        label: t('statistics.overview.cost'),
+        value: formatCost(costs.cost_usd, locale),
+        valueTooltip: costTooltip(costs, locale),
+      },
+      {
+        label: t('statistics.extensions.toolCalls'),
+        value: formatInteger(activity?.tool_calls, locale),
+      },
+    ];
+  }
+
+  const participantColumns = $derived([
+    {
+      id: 'participant',
+      label: t('statistics.extensions.participant'),
+      sortValue: (row) => row.name || row.participant_id,
+      format: (row) => row.name || row.participant_id,
+    },
+    {
+      id: 'model',
+      label: t('statistics.col.model'),
+      mono: true,
+      cell: idCell,
+    },
+    {
+      id: 'runs',
+      label: t('statistics.col.runs'),
+      align: 'end',
+      sortValue: (row) => row.activity?.runs,
+      format: (row) => formatInteger(row.activity?.runs, locale),
+    },
+    {
+      id: 'tokens',
+      label: t('statistics.col.tokens'),
+      align: 'end',
+      sortValue: (row) => activityTokens(row.activity).total,
+      cell: participantTokens,
+    },
+    {
+      id: 'cost',
+      label: t('statistics.col.cost'),
+      align: 'end',
+      sortValue: (row) => activityCostTotals(row.activity?.costs).cost_usd,
+      cell: participantCost,
+    },
+    {
+      id: 'tool_calls',
+      label: t('statistics.col.toolCalls'),
+      align: 'end',
+      sortValue: (row) => row.activity?.tool_calls,
+      format: (row) => formatInteger(row.activity?.tool_calls, locale),
+    },
+  ]);
 </script>
 
-{#snippet activityCards(activity, groups)}
-  <div class="stats-grid">
-    {#if groups != null}
-      {@render statCard(
-        t('statistics.extensions.groups'),
-        formatInteger(groups, locale),
-        t('statistics.extensions.groupsHint'),
-      )}
-    {/if}
-    {@render statCard(
-      t('statistics.extensions.sessions'),
-      formatInteger(activity.sessions, locale),
-    )}
-    {@render statCard(
-      t('statistics.extensions.runs'),
-      formatInteger(activity.runs, locale),
-      null,
-      t('statistics.extensions.unfinishedRuns', {
-        count: formatInteger(failedRuns(activity), locale),
-      }),
-      failedRuns(activity) > 0
-        ? unfinishedRunsTooltip(activity.run_status, locale)
-        : '',
-    )}
-    {@render statCard(
-      t('statistics.extensions.tokens'),
-      formatInteger(tokenSplit(activity).measured, locale),
-      null,
-      tokenSplit(activity).hasEstimated
-        ? t('statistics.extensions.estimatedTokens', {
-            count: formatInteger(tokenSplit(activity).estimated, locale),
-          })
-        : null,
-      tokenSplit(activity).hasEstimated
-        ? tokenBreakdownTooltip(activity, locale)
-        : '',
-    )}
-    {@render statCard(
-      t('statistics.cost.reported'),
-      formatCost(activity.costs.reported_usd, locale),
-      null,
-      t('statistics.cost.callCount', {
-        count: formatInteger(activity.costs.reported_calls, locale),
-      }),
-    )}
-    {@render statCard(
-      t('statistics.cost.estimated'),
-      formatCost(activity.costs.estimated_usd, locale),
-      null,
-      t('statistics.cost.callCount', {
-        count: formatInteger(activity.costs.estimated_calls, locale),
-      }),
-    )}
-    {@render statCard(
-      t('statistics.extensions.toolCalls'),
-      formatInteger(activity.tool_calls, locale),
-    )}
-  </div>
+{#snippet participantTokens(row)}
+  {@const tokens = activityTokens(row.activity)}
+  {@render tokenValue(tokens.total, tokens.estimated)}
+{/snippet}
+
+{#snippet participantCost(row)}
+  {@const costs = activityCostTotals(row.activity?.costs)}
+  {@render costValue(costs.cost_usd, costTooltip(costs, locale))}
 {/snippet}
 
 <div class="stats-panel">
-  <p class="stats-note">
-    {t('statistics.extensions.note')}
-  </p>
+  <p class="stats-note">{t('statistics.extensions.note')}</p>
   {#if extensions.length === 0}
     <EmptyState
       density="compact"
@@ -118,99 +172,94 @@
   {#each extensions as extension (extension.name)}
     <section class="stats-block stats-extension">
       <div class="stats-block__head">
-        <h3 class="stats-block__title">
-          <span class="stats-mono">{extension.name}</span>
+        <h3 class="stats-block__title stats-extension__title">
+          <span>{extension.name}</span>
           <Badge variant="neutral">{t('statistics.agent.extensionBadge')}</Badge
           >
         </h3>
       </div>
-      {@render activityCards(extension.activity, extension.total_groups)}
+      <div class="stats-tiles stats-tiles--6">
+        {#each activityTiles(extension.activity, extension.total_groups) as tile (tile.label)}
+          {@render kpiTile(tile)}
+        {/each}
+      </div>
       {#if extension.groups_truncated}
-        <p class="stats-note stats-spaced">
+        <p class="stats-note">
           {t('statistics.extensions.truncated', {
             shown: formatInteger(extension.groups.length, locale),
             total: formatInteger(extension.total_groups, locale),
           })}
         </p>
       {/if}
-      <div class="stats-call-list">
-        {#each extension.groups as group (group.group_id)}
-          <details class="stats-call stats-extension-group">
-            <summary>
-              <span class="stats-call__time"
-                >{formatDateTime(group.started_at, locale)}</span
-              >
-              <span class="stats-wrap">{groupLabel(group)}</span>
-              <span class="stats-call__source">{groupSummary(group)}</span>
-              <strong>{@render tokenCell(group.activity, false)}</strong>
-            </summary>
-            <div class="stats-call__body">
-              {@render activityCards(group.activity, null)}
-              <!-- svelte-ignore a11y_no_noninteractive_tabindex (Keyboard users scroll wide tables here.) -->
-              <div
-                class="stats-table-scroll stats-spaced"
-                role="region"
-                tabindex="0"
-                aria-label={t('statistics.extensions.participants')}
-              >
-                <table class="stats-table">
-                  <thead>
-                    <tr>
-                      <th>{t('statistics.extensions.participant')}</th>
-                      <th>{t('statistics.col.model')}</th>
-                      <th>{t('statistics.extensions.runs')}</th>
-                      <th
-                        >{@render tokensHeader(
-                          t('statistics.extensions.tokens'),
-                        )}</th
-                      >
-                      <th>{t('statistics.cost.reported')}</th>
-                      <th>{t('statistics.cost.estimated')}</th>
-                      <th>{t('statistics.extensions.toolCalls')}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {#each group.participants as participant (participant.session_id)}
-                      <tr>
-                        <td>{participant.name || participant.participant_id}</td
-                        >
-                        <td class="stats-mono stats-wrap"
-                          >{participant.model ?? '—'}</td
-                        >
-                        <td
-                          >{formatInteger(
-                            participant.activity.runs,
-                            locale,
-                          )}</td
-                        >
-                        <td>{@render tokenCell(participant.activity)}</td>
-                        <td
-                          >{formatCost(
-                            participant.activity.costs.reported_usd,
-                            locale,
-                          )}</td
-                        >
-                        <td
-                          >{formatCost(
-                            participant.activity.costs.estimated_usd,
-                            locale,
-                          )}</td
-                        >
-                        <td
-                          >{formatInteger(
-                            participant.activity.tool_calls,
-                            locale,
-                          )}</td
-                        >
-                      </tr>
-                    {/each}
-                  </tbody>
-                </table>
+      <ul class="stats-groups">
+        {#each extension.groups ?? [] as group (group.group_id)}
+          {@const tokens = activityTokens(group.activity)}
+          {@const costs = activityCostTotals(group.activity?.costs)}
+          <li>
+            <details class="stats-group">
+              <summary>
+                <span class="stats-group__name">
+                  <span
+                    class="stats-group__title"
+                    use:tooltip={{
+                      text: groupLabel(group),
+                      whenTruncated: true,
+                    }}>{groupLabel(group)}</span
+                  >
+                  <span class="stats-group__meta"
+                    >{formatDateTime(group.started_at, locale)} · {t(
+                      'statistics.extensions.groupSummary',
+                      {
+                        participants: formatInteger(
+                          group.participants?.length ?? 0,
+                          locale,
+                        ),
+                        runs: formatInteger(group.activity?.runs, locale),
+                      },
+                    )}</span
+                  >
+                </span>
+                <span class="stats-group__figures">
+                  <span
+                    class="stats-number"
+                    class:stats-number--estimated={tokens.estimated > 0}
+                    use:tooltip={tokenTooltip(
+                      tokens.total,
+                      tokens.estimated,
+                      locale,
+                    )}
+                    >{t('statistics.tokens.count', {
+                      count: formatTokens(tokens.total, locale),
+                    })}</span
+                  >
+                  <span
+                    class="stats-number"
+                    use:tooltip={costTooltip(costs, locale)}
+                    >{formatCost(costs.cost_usd, locale)}</span
+                  >
+                </span>
+              </summary>
+              <div class="stats-group__body">
+                <div class="stats-tiles stats-tiles--5">
+                  {#each activityTiles(group.activity, null) as tile (tile.label)}
+                    {@render kpiTile(tile)}
+                  {/each}
+                </div>
+                <DataTable
+                  columns={participantColumns}
+                  rows={group.participants ?? []}
+                  rowKey={(row) => row.session_id || row.participant_id}
+                  ariaLabel={t('statistics.extensions.participants')}
+                  initialSort={{ column: 'tokens', direction: 'desc' }}
+                  limit={15}
+                  emptyText={t('statistics.none')}
+                  dense
+                />
               </div>
-            </div>
-          </details>
+            </details>
+          </li>
         {/each}
-      </div>
+      </ul>
     </section>
   {/each}
 </div>

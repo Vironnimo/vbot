@@ -138,6 +138,8 @@ describe('RPC wrappers', () => {
   const statisticsWindow = {
     since: '2026-06-01T00:00:00Z',
     until: '2026-06-07T12:00:00Z',
+    timezone: 'Europe/Berlin',
+    sections: ['tools', 'skills'],
   };
   const subAgentWork = {
     id: 'sub-work-one',
