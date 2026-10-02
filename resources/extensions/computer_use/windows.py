@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import ctypes as ct
 import io
+import sys
 import threading
 import time
 from contextlib import contextmanager
@@ -96,12 +97,16 @@ def mouse(flags: int, *, x: int = 0, y: int = 0, data: int = 0) -> Input:
 class WindowsDesktop:
     "Own pixel geometry and all held input; stop never waits for capture or an action loop."
 
+    user: ct.CDLL
+
     def __init__(self) -> None:
-        self.user = ct.WinDLL("user32", use_last_error=True)
         self._stopped = threading.Event()
         self._lock = threading.RLock()
         self._held: list[Input] = []
         self._frames: dict[tuple[Any, ...], tuple[int, ...]] = {}
+        if sys.platform != "win32":
+            raise ComputerUseError("The Windows desktop driver runs only on Windows.")
+        self.user = ct.WinDLL("user32", use_last_error=True)
         self._bind()
 
     def _bind(self) -> None:
@@ -193,6 +198,9 @@ class WindowsDesktop:
         self.release()
 
     def monitors(self) -> list[dict[str, Any]]:
+        if sys.platform != "win32":
+            return []
+
         class MonitorInfo(ct.Structure):
             _fields_ = [
                 ("size", ct.c_uint32),

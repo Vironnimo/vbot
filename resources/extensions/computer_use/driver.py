@@ -323,7 +323,7 @@ class CuaDriver:
         self._process_lock = threading.Lock()
         self._interrupted = False
         self.desktop: WindowsDesktop | None = None
-        if os.name == "nt":
+        if sys.platform == "win32":
             from .windows import WindowsDesktop
 
             self.desktop = WindowsDesktop()
