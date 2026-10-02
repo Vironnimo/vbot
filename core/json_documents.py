@@ -66,6 +66,7 @@ DURABLE_DOCUMENTS: Mapping[str, str] = MappingProxyType(
         "agent_order": "agents/order.json",
         "agent_rename": "agents/rename-pending.json",
         "agent_prompt_layout": "agents/*/prompts/layout.json",
+        "librarian_state": "agents/*/librarian.json",
         "prompt_layout": "prompts/layout.json",
         "channel": "channels/*/channel.json",
         "project": "projects/*/project.json",

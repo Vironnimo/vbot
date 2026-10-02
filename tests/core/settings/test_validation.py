@@ -118,6 +118,7 @@ _DATA_DIR_DOCUMENTS: dict[str, tuple[str, dict[str, object]]] = {
     "agents/order.json": ("{}", {"revision": 1, "agent_ids": []}),
     "agents/rename-pending.json": ("{}", {"source_id": "main", "target_id": "renamed"}),
     "agents/main/prompts/layout.json": ("[]", {"entries": []}),
+    "agents/main/librarian.json": ("{}", {}),
     "prompts/layout.json": ("[]", {"entries": []}),
     "cron/jobs.json": ("[]", {"jobs": []}),
     "bootstrap/jobs.json": ("[]", {"jobs": []}),

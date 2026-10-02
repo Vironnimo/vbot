@@ -22,6 +22,7 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    LibrarianService,
     ReflectionService,
     TriggerService,
 )
@@ -219,6 +220,7 @@ class Runtime:
         self._archive: ArchiveService | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
+        self._librarian_service: LibrarianService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._chat_loop: ChatLoop | None = None
@@ -520,6 +522,9 @@ class Runtime:
 
     def _start_archive_retention(self) -> None:
         start_event_loop_service(self._archive, "Archive is not available")
+
+    def _start_librarian(self) -> None:
+        start_event_loop_service(self._librarian_service, "Librarian service not available")
 
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
@@ -1163,6 +1168,10 @@ class Runtime:
 
     reflection: _StartedService[ReflectionService] = _StartedService(
         lambda runtime: runtime._reflection_service, "Reflection service not available"
+    )
+
+    librarian: _StartedService[LibrarianService] = _StartedService(
+        lambda runtime: runtime._librarian_service, "Librarian service not available"
     )
 
     streaming_chat_loop: _StartedService[ChatLoop] = _StartedService(

@@ -352,7 +352,11 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         validate_agent_rename_file,
     )
     from core.attachments import validate_attachment_metadata_file
-    from core.automation import validate_bootstrap_jobs_file, validate_cron_jobs_file
+    from core.automation import (
+        validate_bootstrap_jobs_file,
+        validate_cron_jobs_file,
+        validate_librarian_state_file,
+    )
     from core.calendar import validate_calendar_actions_file, validate_calendar_events_file
     from core.channels import validate_channel_file
     from core.model_tasks.artifacts import validate_task_artifact_metadata_file
@@ -376,6 +380,7 @@ def validate_data_dir_config(data_dir: str | Path) -> tuple[JsonValidationReport
         "agent_order": validate_agent_order_file,
         "agent_rename": validate_agent_rename_file,
         "agent_prompt_layout": validate_prompt_layout_file,
+        "librarian_state": validate_librarian_state_file,
         "prompt_layout": validate_prompt_layout_file,
         "channel": validate_channel_file,
         "project": validate_project_file,
