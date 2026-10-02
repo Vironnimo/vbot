@@ -36,7 +36,7 @@ export default defineConfig({
             },
             {
               name: 'vendor',
-              test: /[\\/]node_modules[\\/]/,
+              test: /[\\/]node_modules[\\/](?!@xterm[\\/])/,
               minSize: 0,
               priority: 10,
             },
