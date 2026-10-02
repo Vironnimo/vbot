@@ -72,7 +72,6 @@ async def test_run_cancellation_stops_foreground_without_handoff(
 ) -> None:
     watcher_calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
-    monkeypatch.setattr(bash_module, "FOREGROUND_POLL_INTERVAL_SECONDS", 10.0)
     monkeypatch.setattr(
         bash_module,
         "_maybe_spawn_completion_watcher",
@@ -219,7 +218,7 @@ async def test_user_cancel_kill_failure_is_logged(
     )
     # Register the user-cancel callback through the handler's wiring without
     # spawning a real process.
-    bash_module._register_user_cancel_callback(manager, context, "process-x")
+    bash_module._register_user_cancel_callback(manager, context, "process-x", wake=asyncio.Event())
     assert captured_callback
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools.bash"):
@@ -555,6 +554,91 @@ async def test_large_foreground_stdout_is_bounded_and_truncated(
 
 
 # --- Process exit ----------------------------------------------------------
+
+
+class _ScriptedProcess:
+    """An OS process whose output and exit the test produces."""
+
+    def __init__(self) -> None:
+        self.stdout = asyncio.StreamReader()
+        self.stderr = asyncio.StreamReader()
+        self.returncode: int | None = None
+        self._exited: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+
+    def exit(self, code: int) -> None:
+        self.stdout.feed_eof()
+        self.stderr.feed_eof()
+        self.returncode = code
+        self._exited.set_result(code)
+
+    async def wait(self) -> int:
+        return await asyncio.shield(self._exited)
+
+
+async def _within_loop_passes(condition: Any) -> None:
+    """Let ready callbacks run until ``condition()`` holds; a timer never fires here."""
+    for _ in range(1000):
+        if condition():
+            return
+        await asyncio.sleep(0)
+    pytest.fail("the expected state needed a timer to fire")
+
+
+@pytest.mark.asyncio
+async def test_foreground_output_and_exit_reach_the_call_without_a_timer(
+    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The foreground wait wakes on the process's own events, never on an interval.
+
+    The Event Loop clock stands still while the command runs, so a periodic check
+    would never run again: output and exit arrive only because they wake the call.
+    """
+    process = _ScriptedProcess()
+
+    async def launch(*_args: Any, **_kwargs: Any) -> _ScriptedProcess:
+        return process
+
+    monkeypatch.setattr(process_manager_module, "create_subprocess_exec", launch)
+    events: list[tuple[str, dict[str, Any]]] = []
+    context = make_context(tmp_path, emit_hook=lambda kind, payload: events.append((kind, payload)))
+    loop = asyncio.get_running_loop()
+    task = None
+    with monkeypatch.context() as clock:
+        now = loop.time()
+        clock.setattr(loop, "time", lambda: now)
+        try:
+            task = asyncio.create_task(bash_handler(context, {"command": "build"}, manager))
+            await _within_loop_passes(lambda: manager.list_processes(AGENT_ID))
+            # Let the call settle into its wait before the command prints.
+            for _ in range(20):
+                await asyncio.sleep(0)
+
+            process.stdout.feed_data(b"compiled\n")
+            await _within_loop_passes(lambda: events)
+            assert events == [
+                (
+                    "tool_call_stdout",
+                    {
+                        "tool_call_id": "call-a",
+                        "process_id": manager.list_processes(AGENT_ID)[0].process_id,
+                        "data": "compiled\n",
+                    },
+                )
+            ]
+
+            process.exit(0)
+            await _within_loop_passes(task.done)
+        finally:
+            if process.returncode is None:
+                process.exit(1)
+            if task is not None and not task.done():
+                task.cancel()
+    assert task is not None
+    result = task.result()
+    assert result["ok"] is True
+    assert result["data"]["status"] == "completed"
+    assert result["data"]["exit_code"] == 0
+    assert result["data"]["output"] == "compiled\n"
 
 
 @pytest.mark.asyncio

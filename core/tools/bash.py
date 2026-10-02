@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 from collections.abc import Awaitable, Callable, Sequence
@@ -216,7 +217,6 @@ def _bash_tool_parameters(*, subagent: bool) -> JsonObject:
 BASH_TOOL_PARAMETERS = _bash_tool_parameters(subagent=False)
 BASH_SUBAGENT_TOOL_PARAMETERS = _bash_tool_parameters(subagent=True)
 
-FOREGROUND_POLL_INTERVAL_SECONDS = 0.05
 RUN_CANCELLED_FAILURE_CODE = "run_cancelled"
 RUN_CANCELLED_FAILURE_MESSAGE = "Command stopped because the owning Run was cancelled"
 
@@ -359,7 +359,10 @@ async def bash_handler(
     if handoff is not None:
         _release_handoff_after_exit(process_manager, context, process_id, handoff)
 
-    _register_user_cancel_callback(process_manager, context, process_id)
+    # Set by everything the foreground wait reacts to: output and lifecycle
+    # changes of the process, cancellation, a handoff request.
+    wake = asyncio.Event()
+    _register_user_cancel_callback(process_manager, context, process_id, wake=wake)
 
     timeout_task, timeout_state = _schedule_timeout(
         process_manager, context, process_id, parsed.get("timeout")
@@ -390,6 +393,7 @@ async def bash_handler(
         process_id,
         command=command,
         timeout_seconds=parsed["timeout"],
+        wake=wake,
     )
 
     if context.is_cancelled() or context.was_cancelled_by_user():
@@ -560,16 +564,7 @@ async def _watch_background_process(
     timeout_seconds: float | None = None,
 ) -> None:
     try:
-        tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
-        wait_task = tracked.wait_task
-        if wait_task is not None:
-            await asyncio.shield(wait_task)
-        else:
-            while (
-                process_manager.get_process(process_id, agent_id, project_id=project_id).status
-                == "running"
-            ):
-                await asyncio.sleep(FOREGROUND_POLL_INTERVAL_SECONDS)
+        await _until_finished(process_manager, process_id, agent_id, project_id=project_id)
     except ProcessNotFoundError as error:
         _LOGGER.warning(
             "Bash completion watcher skipped trigger for agent=%s process=%s: %s",
@@ -659,6 +654,32 @@ async def _watch_background_process(
             project_id=project_id,
         )
         raise
+
+
+async def _until_finished(
+    process_manager: ProcessManager,
+    process_id: str,
+    agent_id: str,
+    *,
+    project_id: str | None,
+) -> None:
+    """Return once the process has finished, woken by its exit, never by a timer."""
+    tracked = process_manager.get_process(process_id, agent_id, project_id=project_id)
+    if tracked.wait_task is not None:
+        # The manager's finalizer: it ends once the exit is observed and the
+        # output drained. Shielded, so cancelling this wait cannot cancel it.
+        await asyncio.shield(tracked.wait_task)
+        return
+    changed = asyncio.Event()
+    stop_watching = process_manager.add_change_callback(
+        process_id, agent_id, changed.set, project_id=project_id
+    )
+    try:
+        while tracked.status == "running":
+            await changed.wait()
+            changed.clear()
+    finally:
+        stop_watching()
 
 
 def _maybe_spawn_completion_watcher(
@@ -811,6 +832,8 @@ def _register_user_cancel_callback(
     process_manager: ProcessManager,
     context: ToolContext,
     process_id: str,
+    *,
+    wake: asyncio.Event,
 ) -> None:
     """Register a cancel callback that kills the spawned process and tags its record.
 
@@ -819,7 +842,8 @@ def _register_user_cancel_callback(
     use explicit user-abort wording. The callback returns the kill, which the Run
     awaits within its cancellation cleanup budget, so a cancelled Run ends only
     after its process is gone. The user origin is read when the callback fires,
-    while the call's cancellation mark still exists.
+    while the call's cancellation mark still exists. The callback also sets
+    ``wake``, so a foreground wait sees the cancellation at once.
     """
 
     async def kill(by_user: bool) -> None:
@@ -841,7 +865,11 @@ def _register_user_cancel_callback(
                 exc_info=(type(error), error, error.__traceback__),
             )
 
-    context.on_cancel(lambda: kill(context.was_cancelled_by_user()))
+    def cancelled() -> Awaitable[None]:
+        wake.set()
+        return kill(context.was_cancelled_by_user())
+
+    context.on_cancel(cancelled)
 
 
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
@@ -954,9 +982,18 @@ async def _run_foreground_phase(
     *,
     command: str,
     timeout_seconds: float | None = None,
+    wake: asyncio.Event,
 ) -> JsonObject:
+    """Stream the command's output until it finishes, is cancelled or is handed off.
+
+    Each pass runs when something it reacts to happened, never on a timer: the
+    process's output or lifecycle state changed (ProcessManager change
+    callbacks), the call was cancelled or a handoff requested (both set
+    ``wake``), or the handoff deadline arrived.
+    """
+    loop = asyncio.get_running_loop()
     deadline = (
-        asyncio.get_running_loop().time() + FOREGROUND_HANDOFF_SECONDS
+        loop.time() + FOREGROUND_HANDOFF_SECONDS
         if not _background_blocked_at_depth(context)
         else None
     )
@@ -970,70 +1007,77 @@ async def _run_foreground_phase(
         if tracked.status != "running" or context.is_cancelled() or context.was_cancelled_by_user():
             return False
         background_requested = True
+        wake.set()
         return True
 
     if not _background_blocked_at_depth(context) and context.background_registration_hook:
         context.background_registration_hook(request_background)
 
-    while True:
-        poll_result = await process_manager.poll(
-            process_id, context.agent_id, project_id=context.project_id
-        )
-        await _emit_output_chunks(context, process_id, poll_result)
+    stop_watching = process_manager.add_change_callback(
+        process_id, context.agent_id, wake.set, project_id=context.project_id
+    )
+    try:
+        while True:
+            # Cleared before reading: a change during this pass wakes the next wait.
+            wake.clear()
+            poll_result = await process_manager.poll(
+                process_id, context.agent_id, project_id=context.project_id
+            )
+            await _emit_output_chunks(context, process_id, poll_result)
 
-        tracked = process_manager.get_process(
-            process_id, context.agent_id, project_id=context.project_id
-        )
-        if tracked.termination_failed:
-            return tool_failure(
-                "process_kill_failed", str(ProcessTerminationError(process_id)), retryable=True
+            tracked = process_manager.get_process(
+                process_id, context.agent_id, project_id=context.project_id
             )
+            if tracked.termination_failed:
+                return tool_failure(
+                    "process_kill_failed", str(ProcessTerminationError(process_id)), retryable=True
+                )
 
-        if poll_result["status"] != "running":
-            return await _completion_result(
-                process_manager,
-                context,
-                process_id,
-                command=command,
-            )
+            if poll_result["status"] != "running":
+                return await _completion_result(
+                    process_manager,
+                    context,
+                    process_id,
+                    command=command,
+                )
 
-        if context.is_cancelled():
-            await process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
-            return await _completion_result(
-                process_manager,
-                context,
-                process_id,
-                command=command,
-            )
-        if background_requested or (
-            deadline is not None and asyncio.get_running_loop().time() >= deadline
-        ):
-            return await _background_result(
-                process_manager,
-                context,
-                process_id,
-                requested_by_user=background_requested,
-                timeout_seconds=timeout_seconds,
-                handoff_after=(
-                    (
-                        datetime.now(UTC)
-                        - process_manager.get_process(
-                            process_id, context.agent_id, project_id=context.project_id
-                        ).started_at
-                    ).total_seconds()
-                    if background_requested
-                    else FOREGROUND_HANDOFF_SECONDS
-                ),
-            )
+            if context.is_cancelled():
+                await process_manager.kill(
+                    process_id, context.agent_id, project_id=context.project_id
+                )
+                return await _completion_result(
+                    process_manager,
+                    context,
+                    process_id,
+                    command=command,
+                )
+            if background_requested or (deadline is not None and loop.time() >= deadline):
+                return await _background_result(
+                    process_manager,
+                    context,
+                    process_id,
+                    requested_by_user=background_requested,
+                    timeout_seconds=timeout_seconds,
+                    handoff_after=(
+                        (datetime.now(UTC) - tracked.started_at).total_seconds()
+                        if background_requested
+                        else FOREGROUND_HANDOFF_SECONDS
+                    ),
+                )
 
-        sleep_seconds = FOREGROUND_POLL_INTERVAL_SECONDS
-        if deadline is not None:
-            sleep_seconds = min(
-                sleep_seconds,
-                deadline - asyncio.get_running_loop().time(),
-            )
-        if sleep_seconds > 0:
-            await asyncio.sleep(sleep_seconds)
+            await _until_woken(wake, deadline)
+    finally:
+        stop_watching()
+
+
+async def _until_woken(wake: asyncio.Event, deadline: float | None) -> None:
+    """Wait until ``wake`` is set or the Event Loop clock reaches ``deadline``."""
+    if deadline is None:
+        await wake.wait()
+        return
+    with contextlib.suppress(TimeoutError):
+        async with asyncio.timeout_at(deadline):
+            await wake.wait()
 
 
 async def _emit_output_chunks(

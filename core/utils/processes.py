@@ -13,7 +13,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, override
 
 from core.utils.logging import get_logger
 
@@ -256,6 +256,33 @@ def _launch_workers() -> BoundedWorkerPool:
     return BoundedWorkerPool(name="process-launch", max_workers=4)
 
 
+class _ExitSignallingProtocol(asyncio.subprocess.SubprocessStreamProtocol):
+    """asyncio's subprocess stream protocol that also records the OS process exit."""
+
+    def __init__(self, limit: int, loop: asyncio.AbstractEventLoop) -> None:
+        super().__init__(limit=limit, loop=loop)
+        self.exited: asyncio.Future[None] = loop.create_future()
+
+    @override
+    def process_exited(self) -> None:
+        super().process_exited()
+        if not self.exited.done():
+            self.exited.set_result(None)
+
+
+class _ExitSignallingProcess(asyncio.subprocess.Process):
+    """An asyncio ``Process`` whose OS exit can be awaited apart from its pipes."""
+
+    def __init__(
+        self,
+        transport: asyncio.SubprocessTransport,
+        protocol: _ExitSignallingProtocol,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        super().__init__(transport, protocol, loop)
+        self.exited = protocol.exited
+
+
 async def create_subprocess_exec(
     program: str,
     *args: str,
@@ -272,22 +299,44 @@ async def create_subprocess_exec(
     and scanned. Here that work runs on a launch worker; the started process is
     then attached to the loop's subprocess transport, so the returned
     ``Process`` behaves exactly like asyncio's. Other platforms and loops use
-    asyncio directly.
+    asyncio's own transport. On every platform the returned process also
+    signals its OS exit to :func:`wait_for_exit`.
     """
     loop = asyncio.get_running_loop()
     if os.name != "nt" or not isinstance(loop, getattr(asyncio, "ProactorEventLoop", ())):
-        return await asyncio.create_subprocess_exec(
+        # asyncio.create_subprocess_exec, with the exit-signalling protocol.
+        transport, protocol = await loop.subprocess_exec(
+            lambda: _ExitSignallingProtocol(limit, loop),
             program,
             *args,
             stdin=stdin,
             stdout=stdout,
             stderr=stderr,
-            limit=limit,
             **popen_arguments,
         )
+        return _ExitSignallingProcess(transport, protocol, loop)
     return await _create_windows_subprocess_exec(
         loop, [program, *args], stdin, stdout, stderr, limit, popen_arguments
     )
+
+
+async def wait_for_exit(process: asyncio.subprocess.Process) -> int:
+    """Return the exit code as soon as the OS process has exited.
+
+    ``Process.wait()`` also waits until every pipe of the process has closed,
+    which a descendant that inherited the pipes can delay indefinitely. A
+    process from :func:`create_subprocess_exec` reports its exit directly: the
+    loop's own exit notification (IOCP on Windows, the child watcher on POSIX)
+    resolves the wait, with no periodic check. Any other process falls back to
+    ``Process.wait()``. Cancelling the caller never cancels the exit signal.
+    """
+    if process.returncode is not None:
+        return process.returncode
+    if not isinstance(process, _ExitSignallingProcess):
+        return await process.wait()
+    await asyncio.shield(process.exited)
+    # asyncio records the exit code before it notifies the protocol.
+    return cast(int, process.returncode)
 
 
 async def _create_windows_subprocess_exec(
@@ -302,7 +351,6 @@ async def _create_windows_subprocess_exec(
     if sys.platform != "win32":
         raise RuntimeError("asyncio's Windows process pipes exist only on Windows")
     from asyncio import windows_utils
-    from asyncio.subprocess import Process, SubprocessStreamProtocol
 
     started: list[Any] = []
 
@@ -320,7 +368,7 @@ async def _create_windows_subprocess_exec(
         for orphan in started:
             _discard_unattached_process(orphan)
         raise
-    protocol = SubprocessStreamProtocol(limit=limit, loop=loop)
+    protocol = _ExitSignallingProtocol(limit, loop)
     waiter = loop.create_future()
     try:
         transport = _attached_transport_type()(
@@ -336,7 +384,7 @@ async def _create_windows_subprocess_exec(
         transport.close()
         await transport._wait()
         raise
-    return Process(transport, protocol, loop)
+    return _ExitSignallingProcess(transport, protocol, loop)
 
 
 @functools.cache
