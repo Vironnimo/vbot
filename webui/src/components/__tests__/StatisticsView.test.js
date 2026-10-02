@@ -97,6 +97,12 @@ describe('StatisticsView', () => {
     expect(document.body.textContent).not.toContain(
       t('statistics.overview.noComparison'),
     );
+    // Where the cost comes from, the largest share first.
+    expect(
+      [...panel().querySelectorAll('.stats-bars__label')].map((label) =>
+        label.textContent.trim(),
+      ),
+    ).toEqual([t('statistics.origin.user'), t('statistics.origin.automation')]);
   });
 
   it('requests only the sections of the tab it shows', async () => {

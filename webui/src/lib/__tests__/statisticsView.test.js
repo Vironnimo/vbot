@@ -98,6 +98,7 @@ describe('statisticsView numbers', () => {
     expect(formatPercent(null, 'en')).toBe('—');
     expect(formatShare(1, 3, 'en')).toBe('33.3%');
     expect(formatShare(1, 0, 'en')).toBe('—');
+    expect(formatShare(null, 3, 'en')).toBe('—');
     expect(
       [null, 850, 12_340, 245_000, 7_800_000].map(formatDurationMs),
     ).toEqual(['—', '850 ms', '12.3 s', '4m 05s', '2h 10m']);

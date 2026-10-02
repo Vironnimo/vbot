@@ -283,11 +283,13 @@ export function formatPercent(ratio, locale = 'en', fractionDigits = 1) {
   }).format(value);
 }
 
-/** `value` as a share of `total`; a dash when the total is not positive. */
+/** `value` as a share of `total`; a dash when the value is unknown or the
+ *  total is not positive. */
 export function formatShare(value, total, locale = 'en') {
+  const part = finite(value);
   const whole = finite(total);
-  if (whole === null || whole <= 0) return EM_DASH;
-  return formatPercent(toFiniteNumber(value) / whole, locale);
+  if (part === null || whole === null || whole <= 0) return EM_DASH;
+  return formatPercent(part / whole, locale);
 }
 
 /** A duration: `850 ms`, `12.3 s`, `4m 05s`, `2h 10m`; a dash when unknown. */

@@ -24,6 +24,7 @@
     statisticsTabLabel,
     tokenTooltip,
     totalTokens,
+    usageRowLabel,
   } from '$lib/statisticsView.js';
   import {
     agentName,
@@ -204,8 +205,14 @@
     return rows.length > 0 ? { rows } : '';
   }
 
+  // Highest cost first; an origin whose cost is unknown comes last.
   const originEntries = $derived(
-    barEntries(section.by_origin ?? [], (entry) => entry.cost_usd ?? 0),
+    barEntries(
+      [...(section.by_origin ?? [])].sort(
+        (left, right) => (right.cost_usd ?? -1) - (left.cost_usd ?? -1),
+      ),
+      (entry) => entry.cost_usd ?? 0,
+    ),
   );
 
   // The top lists sit three abreast: number columns get a set width and
@@ -216,6 +223,7 @@
     {
       id: 'agent_id',
       label: t('statistics.col.agent'),
+      sortValue: (row) => usageRowLabel('agent', row.agent_id),
       cell: agentCell,
     },
     {
