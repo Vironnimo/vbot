@@ -121,7 +121,7 @@ actor key `extension:<owner>`, never under its synthetic participant Agent id; s
 
 ## Agent-facing text
 
-Rows cover only the bundled-page paragraphs of the `vbot-cli` Skill reference (`resources/skills/vbot-cli/references/extensions.md`) listed below; its older wording has no recorded reasons yet.
+Rows cover only the bundled-page paragraphs of the `vbot-cli` Skill's page reference (`resources/skills/vbot-cli/references/extension-pages.md`) listed below; its older wording has no recorded reasons yet.
 
 | Text | Reason |
 |---|---|
@@ -134,7 +134,7 @@ Rows cover only the bundled-page paragraphs of the `vbot-cli` Skill reference (`
 
 Read these only when your task matches - not by default.
 
-- Authoring an Extension or adapting a runnable template -> `resources/skills/vbot-cli/references/extensions.md` and `resources/skills/vbot-cli/assets/extensions/` (repository-relative); bundled usage guidance -> `resources/skills/vbot-cli/references/extension-usage.md`
+- Authoring an Extension or adapting a runnable template -> `resources/skills/vbot-cli/references/extensions.md` (pages and owned Sessions: `references/extension-pages.md`) and `resources/skills/vbot-cli/assets/extensions/` (repository-relative); bundled usage guidance -> `resources/skills/vbot-cli/references/extension-usage.md`
 - Adding or changing hooks, Command/Tool/Recall/Prompt capabilities, channel interactions, dispatch decisions, collision behavior, or handler payloads -> `extensions/capabilities.md`
 - Changing discovery, manifests, records, settings schemas, secret handling, visibility, enable/disable, startup/shutdown, or full reload -> `extensions/management.md`
 - Changing Computer Use, its opt-in Tool, driver sessions, capture ownership, or desktop input -> `extensions/computer-use.md`

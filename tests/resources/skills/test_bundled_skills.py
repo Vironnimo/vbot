@@ -80,7 +80,12 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     tmp_path: Path,
 ) -> None:
     package = SKILLS_ROOT / "vbot-cli"
-    for relative in ("SKILL.md", "references/extensions.md", "references/extension-usage.md"):
+    for relative in (
+        "SKILL.md",
+        "references/extensions.md",
+        "references/extension-pages.md",
+        "references/extension-usage.md",
+    ):
         for target in local_markdown_links(package / relative):
             resolved = (package / relative).parent.joinpath(target).resolve()
             assert resolved.is_relative_to(package), (relative, target)
@@ -93,6 +98,7 @@ def test_vbot_cli_exposes_extension_templates_without_loading_their_skill(
     activated = tool.call({"name": "vbot-cli"})
     resources = [
         "references/extensions.md",
+        "references/extension-pages.md",
         "references/extension-usage.md",
         "assets/extensions/guard_bash.py",
         "assets/extensions/word_count.py",
