@@ -28,6 +28,11 @@ from tests.core.providers.openai_compatible_test_support import (
     sse_response,
 )
 
+_USAGE = {
+    "prompt_tokens": 5,
+    "completion_tokens": 3,
+    "completion_tokens_details": {"reasoning_tokens": 2},
+}
 _REPLY = {
     "choices": [
         {
@@ -35,12 +40,23 @@ _REPLY = {
             "finish_reason": "stop",
         }
     ],
-    "usage": {
-        "prompt_tokens": 5,
-        "completion_tokens": 3,
-        "completion_tokens_details": {"reasoning_tokens": 2},
-    },
+    "usage": _USAGE,
 }
+
+_QUESTION = "What is the weather in Paris? Use the tool."
+
+
+def _tool_call_reply(prompt_tokens: int) -> dict[str, object]:
+    call = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+    }
+    message = {"role": "assistant", "content": "", "thinking": "Check Paris", "tool_calls": [call]}
+    return {
+        "choices": [{"message": message, "finish_reason": "tool_calls"}],
+        "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": 9},
+    }
 
 
 @pytest.mark.asyncio
@@ -60,25 +76,35 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
     adapter.bind_wire_profiles(profiles.bind("minimal", "api-key"))
 
     def reply(request: httpx.Request) -> httpx.Response:
-        if json.loads(request.content).get("stream"):
+        body = json.loads(request.content)
+        if body["messages"][-1]["content"] == _QUESTION:
+            return httpx.Response(200, json=_tool_call_reply(len(request.content)))
+        if body.get("stream"):
             return sse_response(
                 sse(
                     {"choices": [{"delta": {"thinking": "Trace"}}]},
                     {"choices": [{"delta": {"content": "ready"}, "finish_reason": "stop"}]},
                 )
             )
-        return httpx.Response(200, json=_REPLY)
+        usage = {**_USAGE, "prompt_tokens": len(request.content)}
+        return httpx.Response(200, json={**_REPLY, "usage": usage})
 
     with respx.mock:
         respx.post(MINIMAL_URL).mock(side_effect=reply)
-        results = await run_checks(adapter, "m", checks=("send", "efforts"))
+        results = await run_checks(adapter, "m", checks=("send", "efforts", "replay"))
 
     assert [(result.name, result.status) for result in results] == [
         ("send", "ok"),
         ("effort:low", "ok"),
         ("effort:high", "ok"),
         ("effort:none", "ok"),
+        ("replay", "ok"),
     ]
+    # Input tokens follow the request size here, so the replayed carrier is measured as consumed.
+    replay = results[-1].facts
+    assert replay["in_run"]["result"] == replay["cross_run"]["result"] == "consumed"
+    assert replay["measured_scope"] == replay["profile_scope"] == "full_history"
+    assert replay["in_run"]["a"] < min(replay["in_run"]["b"], replay["in_run"]["c"])
     entry = propose_entry(
         adapter.wire_profile("m"),
         observations.facts_for("minimal", "api-key", "m"),

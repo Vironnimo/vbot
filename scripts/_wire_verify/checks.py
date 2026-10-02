@@ -19,12 +19,22 @@ from typing import Any
 from core.providers.adapter import ProviderAdapter
 from core.providers.errors import ProviderError
 from core.providers.reasoning import (
+    REASONING_REPLAY_POLICIES,
     THINKING_EFFORT_RANKS,
     ReasoningIntent,
+    ReasoningReplayPolicy,
     normalize_thinking_effort,
 )
 
-CHECKS: tuple[str, ...] = ("send", "stream", "efforts", "sampling", "tool_replay", "image")
+CHECKS: tuple[str, ...] = (
+    "send",
+    "stream",
+    "efforts",
+    "sampling",
+    "tool_replay",
+    "replay",
+    "image",
+)
 """Every check, in run order."""
 
 _PROMPT = [{"role": "user", "content": "Reply with exactly one word: ready"}]
@@ -64,8 +74,10 @@ class _Reply:
     reasoning: str = ""
     reasoning_meta: bool = False
     reasoning_tokens: int | None = None
+    input_tokens: int | None = None
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     normalized: dict[str, Any] = field(default_factory=dict)
+    unread_fields: list[str] = field(default_factory=list)
     seconds: float = 0.0
 
 
@@ -117,16 +129,54 @@ async def _send(
     )
     normalized = adapter.normalize_response(raw, model_id=model_id)
     usage = normalized.get("usage")
+    usage = usage if isinstance(usage, Mapping) else {}
     reply = _Reply(
         content=str(normalized.get("content") or ""),
         reasoning=str(normalized.get("reasoning") or ""),
         reasoning_meta=bool(normalized.get("reasoning_meta")),
-        reasoning_tokens=usage.get("reasoning_tokens") if isinstance(usage, Mapping) else None,
+        reasoning_tokens=_count(usage.get("reasoning_tokens")),
+        input_tokens=_count(usage.get("input_tokens")),
         tool_calls=list(normalized.get("tool_calls") or []),
         normalized=normalized,
     )
+    if not reply.reasoning:
+        read = adapter.wire_profile(model_id).response.reasoning_fields
+        reply.unread_fields = _unread_message_fields(raw, read)
     reply.seconds = time.monotonic() - started
     return reply
+
+
+def _count(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+# Chat Completions message fields that never carry reasoning.
+_ANSWER_FIELDS = frozenset(
+    {"role", "content", "tool_calls", "function_call", "refusal", "annotations", "audio", "name"}
+)
+
+
+def _unread_message_fields(raw: Any, read: Sequence[str]) -> list[str]:
+    """Return non-empty text fields of a Chat Completions message vBot did not read.
+
+    Reasoning in such a field is invisible to vBot: neither shown nor replayed.
+    Other wires answer in typed items or blocks and report nothing here.
+    """
+
+    choices = raw.get("choices") if isinstance(raw, Mapping) else None
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return []
+    message = choices[0].get("message")
+    if not isinstance(message, Mapping):
+        return []
+    return sorted(
+        str(name)
+        for name, value in message.items()
+        if name not in _ANSWER_FIELDS
+        and name not in read
+        and isinstance(value, str)
+        and value.strip()
+    )
 
 
 async def _stream(
@@ -154,13 +204,28 @@ async def _stream(
 
 
 def _reply_facts(reply: _Reply) -> dict[str, Any]:
-    return {
+    facts: dict[str, Any] = {
         "content_chars": len(reply.content),
         "reasoning_chars": len(reply.reasoning),
         "reasoning_meta": reply.reasoning_meta,
         "reasoning_tokens": reply.reasoning_tokens,
         "seconds": round(reply.seconds, 1),
     }
+    if reply.unread_fields:
+        facts["unread_fields"] = reply.unread_fields
+    return facts
+
+
+def _carrier_warning(reply: _Reply) -> str:
+    """Name text fields that may carry reasoning the profile does not read."""
+
+    if not reply.unread_fields:
+        return ""
+    return (
+        "the reply carried unread text in "
+        + ", ".join(reply.unread_fields)
+        + "; if that is reasoning, add it to response.reasoning_fields"
+    )
 
 
 def _error_summary(error: ProviderError) -> str:
@@ -174,9 +239,9 @@ def _error_summary(error: ProviderError) -> str:
 async def _check_send(adapter: ProviderAdapter, model_id: str, vision: bool) -> CheckResult:
     del vision
     reply = await _send(adapter, model_id, _PROMPT)
-    status = "ok" if reply.content.strip() else "warn"
-    detail = "" if status == "ok" else "no visible content returned"
-    return CheckResult("send", status, detail, _reply_facts(reply))
+    detail = "" if reply.content.strip() else "no visible content returned"
+    detail = detail or _carrier_warning(reply)
+    return CheckResult("send", "warn" if detail else "ok", detail, _reply_facts(reply))
 
 
 async def _check_stream(adapter: ProviderAdapter, model_id: str, vision: bool) -> CheckResult:
@@ -244,22 +309,16 @@ async def _check_tool_replay(adapter: ProviderAdapter, model_id: str, vision: bo
     del vision
     wire = adapter.wire_profile(model_id).reasoning
     effort = _strongest_effort(wire.ladder) if wire.supported is not False else None
-    question = {"role": "user", "content": "What is the weather in Paris? Use the tool."}
     first = await _send(
         adapter,
         model_id,
-        [question],
+        [_QUESTION],
         tools=[_WEATHER_TOOL],
         **({"thinking_effort": effort} if effort else {}),
     )
     if not first.tool_calls:
         return CheckResult("tool_replay", "warn", "the Model answered without a Tool Call")
-    call = first.tool_calls[0]
-    history: list[dict[str, Any]] = [
-        question,
-        first.normalized,
-        {"role": "tool", "tool_call_id": call["id"], "content": '{"temp_c": 21, "sky": "clear"}'},
-    ]
+    history = [_QUESTION, first.normalized, _tool_result(first)]
     second = await _send(
         adapter,
         model_id,
@@ -273,9 +332,155 @@ async def _check_tool_replay(adapter: ProviderAdapter, model_id: str, vision: bo
         "replayed_reasoning_meta": first.reasoning_meta,
         **_reply_facts(second),
     }
-    status = "ok" if second.content.strip() or second.tool_calls else "warn"
-    detail = "" if status == "ok" else "the continuation returned nothing"
-    return CheckResult("tool_replay", status, detail, facts)
+    answered = second.content.strip() or second.tool_calls
+    detail = "" if answered else "the continuation returned nothing"
+    detail = detail or _carrier_warning(first)
+    return CheckResult("tool_replay", "warn" if detail else "ok", detail, facts)
+
+
+_QUESTION = {"role": "user", "content": "What is the weather in Paris? Use the tool."}
+_FOLLOW_UP = {"role": "user", "content": "Should I take an umbrella? Answer in one sentence."}
+
+
+def _tool_result(reply: _Reply) -> dict[str, Any]:
+    call = reply.tool_calls[0]
+    return {"role": "tool", "tool_call_id": call["id"], "content": '{"temp_c": 21, "sky": "clear"}'}
+
+
+async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -> CheckResult:
+    """Measure whether replayed reasoning reaches the Model, inside a Run and across Runs.
+
+    Each scope sends three otherwise identical requests and compares the
+    Provider-reported input tokens: A without the reasoning, B with the
+    reasoning on its carrier, and C with the same text as visible content (the
+    accounting control; readable reasoning only). B above A means the Provider
+    consumes the carrier; B not above A while C is above A means the carrier is
+    stripped or ignored. Anything else stays unresolved.
+    """
+
+    del vision
+    profile = adapter.wire_profile(model_id)
+    effort = (
+        _strongest_effort(profile.reasoning.ladder)
+        if profile.reasoning.supported is not False
+        else None
+    )
+    if effort is None:
+        return CheckResult("replay", "skipped", "the profile requests no reasoning")
+    options: dict[str, Any] = {"tools": [_WEATHER_TOOL], "thinking_effort": effort}
+    first = await _send(adapter, model_id, [_QUESTION], **options)
+    if not first.tool_calls:
+        return CheckResult("replay", "warn", "the Model answered without a Tool Call")
+    if not first.reasoning and not first.reasoning_meta:
+        warning = _carrier_warning(first)
+        if warning:
+            return CheckResult("replay", "warn", warning, _reply_facts(first))
+        return CheckResult("replay", "skipped", "the Tool Call turn returned no reasoning")
+
+    in_run = [_QUESTION, first.normalized, _tool_result(first)]
+    in_run_tokens, answer = await _measure(adapter, model_id, in_run, options)
+    final = {"role": "assistant", "content": answer or "It is 21 C and clear in Paris."}
+    cross_run = [*in_run, final, _FOLLOW_UP]
+    cross_run_tokens, _ = await _measure(adapter, model_id, cross_run, options)
+
+    in_run_result = _classify(*in_run_tokens)
+    cross_run_result = _classify(*cross_run_tokens)
+    measured = _measured_scope(in_run_result, cross_run_result)
+    scope = profile.replay.scope
+    facts = {
+        "effort": effort,
+        "profile_scope": scope,
+        "in_run": _scope_facts(in_run_tokens, in_run_result),
+        "cross_run": _scope_facts(cross_run_tokens, cross_run_result),
+        "measured_scope": measured,
+    }
+    detail = ""
+    if measured is not None and _scope_rank(measured) > _scope_rank(scope):
+        detail = f"the Model consumes replayed reasoning ({measured}); the profile replays {scope}"
+    elif measured == "none" and scope != "none":
+        detail = f"the Provider ignores replayed reasoning; the profile replays {scope}"
+    return CheckResult("replay", "warn" if detail else "ok", detail, facts)
+
+
+_Tokens = tuple[int | None, int | None, int | None]
+
+
+async def _measure(
+    adapter: ProviderAdapter,
+    model_id: str,
+    history: list[dict[str, Any]],
+    options: Mapping[str, Any],
+) -> tuple[_Tokens, str]:
+    """Return input tokens for A (stripped), B (carried), C (control) and B's answer."""
+
+    carried = await _send(adapter, model_id, history, **options)
+    stripped = await _send(adapter, model_id, _without_reasoning(history), **options)
+    control_history = _reasoning_as_content(history)
+    control = (
+        await _send(adapter, model_id, control_history, **options)
+        if control_history is not None
+        else None
+    )
+    tokens = (
+        stripped.input_tokens,
+        carried.input_tokens,
+        control.input_tokens if control is not None else None,
+    )
+    return tokens, carried.content
+
+
+_REASONING_KEYS = ("reasoning", "reasoning_meta", "reasoning_scope")
+
+
+def _without_reasoning(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {key: value for key, value in message.items() if key not in _REASONING_KEYS}
+        if message.get("role") == "assistant"
+        else dict(message)
+        for message in history
+    ]
+
+
+def _reasoning_as_content(history: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]] | None:
+    """Move readable reasoning into visible Assistant content, or ``None`` if there is none."""
+
+    stripped = _without_reasoning(history)
+    moved = False
+    for original, message in zip(history, stripped, strict=True):
+        reasoning = original.get("reasoning") if original.get("role") == "assistant" else None
+        if isinstance(reasoning, str) and reasoning:
+            message["content"] = f"{reasoning}\n\n{message.get('content') or ''}".strip()
+            moved = True
+    return stripped if moved else None
+
+
+def _classify(stripped: int | None, carried: int | None, control: int | None) -> str:
+    if stripped is None or carried is None:
+        return "unresolved"
+    if carried > stripped:
+        return "consumed"
+    if control is not None and control > stripped:
+        return "ignored"
+    return "unresolved"
+
+
+def _scope_facts(tokens: _Tokens, result: str) -> dict[str, Any]:
+    stripped, carried, control = tokens
+    return {"a": stripped, "b": carried, "c": control, "result": result}
+
+
+def _measured_scope(in_run: str, cross_run: str) -> ReasoningReplayPolicy | None:
+    if cross_run == "consumed":
+        return "full_history"
+    if in_run == "consumed" and cross_run == "ignored":
+        return "current_run"
+    if in_run == "ignored" and cross_run == "ignored":
+        return "none"
+    return None
+
+
+def _scope_rank(scope: ReasoningReplayPolicy) -> int:
+    return REASONING_REPLAY_POLICIES.index(scope)
 
 
 def _strongest_effort(ladder: Sequence[str]) -> str | None:
@@ -304,5 +509,6 @@ _RUNNERS = {
     "stream": _check_stream,
     "sampling": _check_sampling,
     "tool_replay": _check_tool_replay,
+    "replay": _check_replay,
     "image": _check_image,
 }
