@@ -142,11 +142,13 @@ def allowed_tools(registry: ToolRegistry, host: ExtensionHost) -> tuple[str, ...
 
 
 def runner_for(
-    host: ExtensionHost, server: Any, monkeypatch: pytest.MonkeyPatch
+    host: ExtensionHost, server: Any, monkeypatch: pytest.MonkeyPatch, **config: Any
 ) -> ConnectionRunner:
-    """A connection runner whose transport is the in-memory *server*."""
+    """A connection runner whose transport is the in-memory *server*; *config* adds fields."""
     runner = ConnectionRunner(
-        validate_connection({"id": "example", "transport": "stdio", "command": sys.executable}),
+        validate_connection(
+            {"id": "example", "transport": "stdio", "command": sys.executable, **config}
+        ),
         host,
         InputRequests(),
         lambda *args: None,

@@ -11,11 +11,13 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from core.skills import SkillRegistry
-from core.skills.authoring import SkillAuthoringService
+from core.skills.authoring import SkillAuthoringService, SkillWriter
 from core.tools import ToolContext, ToolRegistry, register_skill_manage_tool, tool_failure
 from core.tools.skill import register_skill_tool
 from scripts.provider_probe.choices import SKILL_MANAGE_CASES
 from scripts.provider_probe.scenario_agents import _skill_manage_scenario
+
+_AGENT_WRITER = SkillWriter(actor="agent")
 
 
 def skill_tolerance_cases() -> list[dict[str, Any]]:
@@ -83,13 +85,17 @@ async def _skill_case(
         original = _skill_manage_scenario("create_own").expected_arguments
         assert original is not None
         if case["id"] != "create_own":
-            authoring.create(skills_root, "provider-probe", original["content"], author="agent")
+            authoring.create(
+                skills_root, "provider-probe", original["content"], writer=_AGENT_WRITER
+            )
             for path, content in {
                 "scripts/check.py": "value = 1\n",
                 "references/notes.md": "Keep this step.\nobsolete line\n",
                 "assets/placeholder.txt": "old content",
             }.items():
-                authoring.write_file(skills_root, "provider-probe", path, content)
+                authoring.write_file(
+                    skills_root, "provider-probe", path, content, writer=_AGENT_WRITER
+                )
         registry = ToolRegistry()
         register_skill_manage_tool(registry, authoring, lambda _: skills_root, lambda _: None)
         register_skill_tool(registry, lambda *_: SkillRegistry.load(skills_root), lambda: None)

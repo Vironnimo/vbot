@@ -8,10 +8,16 @@ Runs that work serialized every Agent behind it.
 
 Every outbound ``httpx`` client and transport in the server therefore passes
 ``verify=shared_ssl_context()``, and so do the ``httpx2`` clients of the MCP
-SDK, whose default would verify through the system trust store instead. The
-context carries exactly httpx's default verification (certifi bundle, or
-``SSL_CERT_FILE``/``SSL_CERT_DIR`` from the environment) and is built once per
-process. ``ssl.SSLContext`` is safe to share between clients and threads;
+SDK. The context carries httpx's default verification (certifi bundle, or
+``SSL_CERT_FILE``/``SSL_CERT_DIR`` from the environment) plus the operating
+system's trusted CAs (``load_default_certs``: the Windows ROOT and CA stores,
+OpenSSL's default paths elsewhere), so servers behind a private CA the system
+trusts verify too. It is built once per process; the system store adds about
+25 ms to that build and nothing per handshake. ``truststore`` (httpx2's
+default) is not used: it switches the shared context to unverified for the
+duration of each handshake, which races across threads.
+
+``ssl.SSLContext`` is safe to share between clients and threads;
 httpcore and httpcore2 only (re)set the HTTP/1.1 ALPN list on it before each
 handshake, which is idempotent while no client enables HTTP/2.
 
@@ -44,7 +50,9 @@ def shared_ssl_context() -> ssl.SSLContext:
         return context
     with _lock:
         if _context is None:
-            _context = httpx.create_ssl_context()
+            context = httpx.create_ssl_context()
+            context.load_default_certs(ssl.Purpose.SERVER_AUTH)
+            _context = context
         return _context
 
 

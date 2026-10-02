@@ -409,5 +409,991 @@
         ]
       }
     }
+  },
+  {
+    "id": "buried_lesson",
+    "history": [
+      {
+        "role": "user",
+        "content": "Can you turn these meeting notes into three bullet points? 'Budget review moved to next week. Marketing needs the Q3 deck by Friday. Hiring freeze lifted for engineering.'"
+      },
+      {
+        "role": "assistant",
+        "content": "- Budget review moved to next week.\n- Marketing needs the Q3 deck by Friday.\n- The engineering hiring freeze is lifted."
+      },
+      {
+        "role": "user",
+        "content": "Thanks. What's 18% of 2,450?"
+      },
+      {
+        "role": "assistant",
+        "content": "18% of 2,450 is 441."
+      },
+      {
+        "role": "user",
+        "content": "Rewrite this to sound less formal: 'We hereby inform you that the office will be closed on Monday.'"
+      },
+      {
+        "role": "assistant",
+        "content": "Heads up: the office is closed on Monday."
+      },
+      {
+        "role": "user",
+        "content": "The supplier call is at 3 PM Berlin time. What time is that in New York?"
+      },
+      {
+        "role": "assistant",
+        "content": "3 PM in Berlin is 9 AM in New York."
+      },
+      {
+        "role": "user",
+        "content": "Please always give me times in 24-hour format, like 15:00 instead of 3 PM. AM and PM trip me up every time, so keep doing that from now on."
+      },
+      {
+        "role": "assistant",
+        "content": "Sure. The supplier call is at 15:00 in Berlin, which is 09:00 in New York."
+      },
+      {
+        "role": "user",
+        "content": "Give me a subject line for an email asking the team to submit their timesheets."
+      },
+      {
+        "role": "assistant",
+        "content": "Reminder: please submit your timesheets by Friday"
+      },
+      {
+        "role": "user",
+        "content": "Convert 12 miles to kilometers."
+      },
+      {
+        "role": "assistant",
+        "content": "12 miles is about 19.3 km."
+      },
+      {
+        "role": "user",
+        "content": "Sort these names alphabetically: Zoe, Adam, Mia, Liam."
+      },
+      {
+        "role": "assistant",
+        "content": "Adam, Liam, Mia, Zoe"
+      },
+      {
+        "role": "user",
+        "content": "What's a good synonym for 'important' in a formal report?"
+      },
+      {
+        "role": "assistant",
+        "content": "\"Significant\" works well in a formal report."
+      },
+      {
+        "role": "user",
+        "content": "Thanks, that's all for today."
+      },
+      {
+        "role": "assistant",
+        "content": "You're welcome. Have a good evening!"
+      }
+    ],
+    "preference_tokens": [
+      "24-hour",
+      "24 hour",
+      "24h"
+    ],
+    "expected": {
+      "memory": {
+        "kind": "user",
+        "contains": [
+          "24"
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "user",
+        "contains": [
+          "24"
+        ]
+      }
+    }
+  },
+  {
+    "id": "retracted_guess",
+    "history": [
+      {
+        "role": "user",
+        "content": "I need to point the reporting job at Orchard's staging Postgres. Which port should it use?"
+      },
+      {
+        "role": "assistant",
+        "content": "I don't have that value, but it is most likely 5433, since Orchard's other staging services sit next to the default Postgres port."
+      },
+      {
+        "role": "user",
+        "content": "No, that's a guess and it's wrong. Orchard staging Postgres is only reachable through PgBouncer on port 6432. Nothing listens on 5433 there."
+      },
+      {
+        "role": "assistant",
+        "content": "Thanks for the correction. The reporting job should connect to Orchard staging Postgres through PgBouncer on port 6432."
+      },
+      {
+        "role": "user",
+        "content": "Right, that's what I put in the job config."
+      },
+      {
+        "role": "assistant",
+        "content": "Good, then the reporting job uses the correct port."
+      }
+    ],
+    "expected": {
+      "memory": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "agent",
+            "contains": [
+              "6432"
+            ],
+            "excludes": [
+              "5433"
+            ]
+          }
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "agent",
+            "contains": [
+              "6432"
+            ],
+            "excludes": [
+              "5433"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "long_routine",
+    "history": [
+      {
+        "role": "user",
+        "content": "Run the unit tests for the parser package."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "bash",
+            "arguments": {
+              "command": "python -m pytest tests/parser -q"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": "..........................................                               [100%]\n42 passed in 1.84s\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "All 42 parser tests pass."
+      },
+      {
+        "role": "user",
+        "content": "How many lines does src/parser/header.py have?"
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_02",
+            "name": "bash",
+            "arguments": {
+              "command": "python -c \"print(sum(1 for _ in open('src/parser/header.py')))\""
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_02",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": "214\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "src/parser/header.py has 214 lines."
+      },
+      {
+        "role": "user",
+        "content": "Rename the variable `tmp` to `buffer` in this snippet: `tmp = read(); tmp = tmp.strip(); return tmp`"
+      },
+      {
+        "role": "assistant",
+        "content": "`buffer = read(); buffer = buffer.strip(); return buffer`"
+      },
+      {
+        "role": "user",
+        "content": "Format this JSON nicely: {\"name\":\"parser\",\"version\":\"2.1.0\",\"private\":true}"
+      },
+      {
+        "role": "assistant",
+        "content": "```json\n{\n  \"name\": \"parser\",\n  \"version\": \"2.1.0\",\n  \"private\": true\n}\n```"
+      },
+      {
+        "role": "user",
+        "content": "What does the regex ^\\d{4}-\\d{2}-\\d{2}$ match?"
+      },
+      {
+        "role": "assistant",
+        "content": "It matches a whole string in the form YYYY-MM-DD, for example 2026-10-02: four digits, a hyphen, two digits, a hyphen and two digits."
+      },
+      {
+        "role": "user",
+        "content": "Show me the last three commits."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_03",
+            "name": "bash",
+            "arguments": {
+              "command": "git log --oneline -3"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_03",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": "a41c9e2 parser: accept folded header lines\n7d03b18 parser: add tests for empty bodies\n5be9f70 docs: describe the header API\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The last three commits are:\n- a41c9e2 parser: accept folded header lines\n- 7d03b18 parser: add tests for empty bodies\n- 5be9f70 docs: describe the header API"
+      },
+      {
+        "role": "user",
+        "content": "Write a one-sentence summary of what the parser package does for the README."
+      },
+      {
+        "role": "assistant",
+        "content": "The parser package reads raw messages and turns their headers and bodies into structured Python objects."
+      },
+      {
+        "role": "user",
+        "content": "Great, thanks. That's it for now."
+      },
+      {
+        "role": "assistant",
+        "content": "You're welcome!"
+      }
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "environment_failure",
+    "history": [
+      {
+        "role": "user",
+        "content": "Convert notes.md to a PDF so I can send it to the board."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "bash",
+            "arguments": {
+              "command": "pandoc notes.md -o notes.pdf"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 127,
+            "output": "bash: line 1: pandoc: command not found\n",
+            "hint": "`pandoc` is not installed or not on PATH. Verify with `which pandoc`; install it or use an absolute path instead of retrying the same command."
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The conversion failed because pandoc is not installed on this machine. Can you install it, or should I use a different converter?"
+      },
+      {
+        "role": "user",
+        "content": "I just installed it with `sudo apt install pandoc`. Try again."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_02",
+            "name": "bash",
+            "arguments": {
+              "command": "pandoc notes.md -o notes.pdf"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_02",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": ""
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Done. notes.pdf is ready next to notes.md."
+      },
+      {
+        "role": "user",
+        "content": "Great, thanks."
+      },
+      {
+        "role": "assistant",
+        "content": "You're welcome."
+      }
+    ],
+    "forbidden_claims": [
+      "pandoc\\b[^.\\n]*\\b(is not|isn't|is no longer|not) (installed|available|on (the )?path)",
+      "pandoc\\b[^.\\n]*\\b(missing|unavailable|broken|does not work|doesn't work|cannot be used)",
+      "\\b(bash|powershell|shell)( tool)?\\b[^.\\n]*\\b(cannot|can't|is unable to|does not|doesn't) (run|convert|produce)"
+    ],
+    "expected": {
+      "memory": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "agent",
+            "contains": [
+              "pandoc"
+            ]
+          }
+        ]
+      },
+      "skill": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "create",
+            "contains": [
+              "pandoc"
+            ]
+          }
+        ]
+      },
+      "combined": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "agent",
+            "contains": [
+              "pandoc"
+            ]
+          },
+          {
+            "kind": "create",
+            "contains": [
+              "pandoc"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "format_correction_own_skill",
+    "history": [
+      {
+        "role": "user",
+        "content": "Write this week's status report. Atlas: API migration finished, load tests next week, risk: vendor SDK update pending. Borealis: design review done, two accessibility issues open, next: fix them before the beta."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "skill",
+            "arguments": {
+              "name": "weekly-status-report"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "skill",
+        "dispatch": true
+      },
+      {
+        "role": "assistant",
+        "content": "**Atlas**: The API migration is finished and load tests are planned for next week. The pending vendor SDK update remains a risk.\n\n**Borealis**: The design review is done. Two accessibility issues are still open and will be fixed before the beta.\n\nOverall: both projects are on track, with one external dependency to watch."
+      },
+      {
+        "role": "user",
+        "content": "Please don't write paragraphs for these weekly reports. I need a table with the columns Project, Progress, Risks and Next step, because I paste it straight into our tracker. Redo it."
+      },
+      {
+        "role": "assistant",
+        "content": "| Project | Progress | Risks | Next step |\n|---|---|---|---|\n| Atlas | API migration finished | Vendor SDK update pending | Load tests next week |\n| Borealis | Design review done | Two open accessibility issues | Fix them before the beta |\n\nOverall: both projects are on track, with one external dependency to watch."
+      },
+      {
+        "role": "user",
+        "content": "Perfect, that's how every weekly report should look."
+      },
+      {
+        "role": "assistant",
+        "content": "Understood."
+      }
+    ],
+    "skills": [
+      {
+        "name": "weekly-status-report",
+        "content": "---\nname: weekly-status-report\ndescription: Write the weekly project status report from the user's project notes. Use when the user asks for the weekly status or a status update covering several projects.\n---\n\n# Weekly Status Report\n\n1. Collect progress, risks and next steps for each project from the user's notes.\n2. Write one short paragraph per project covering progress, risks and next steps.\n3. End with a one-line overall summary.\n\nKeep the report under 300 words.\n"
+      }
+    ],
+    "preference_tokens": [
+      "Next step"
+    ],
+    "expected": {
+      "memory": {
+        "kind": "none"
+      },
+      "skill": {
+        "kind": "update",
+        "name": "weekly-status-report",
+        "contains": [
+          "table",
+          "Risks",
+          "Next step",
+          "300 words"
+        ],
+        "excludes": [
+          "one short paragraph per project"
+        ]
+      },
+      "combined": {
+        "kind": "update",
+        "name": "weekly-status-report",
+        "contains": [
+          "table",
+          "Risks",
+          "Next step",
+          "300 words"
+        ],
+        "excludes": [
+          "one short paragraph per project"
+        ]
+      }
+    }
+  },
+  {
+    "id": "cross_cutting_preference",
+    "history": [
+      {
+        "role": "user",
+        "content": "Draft the release notes for version 2.3: faster sync, fixed the login timeout, new CSV export."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "skill",
+            "arguments": {
+              "name": "release-notes"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "skill",
+        "dispatch": true
+      },
+      {
+        "role": "assistant",
+        "content": "## Version 2.3\n\n- New: export your data as CSV.\n- Sync is faster.\n- Fixed: logins no longer time out."
+      },
+      {
+        "role": "user",
+        "content": "Fine. And from now on, please answer me in Dutch, for everything including reports and release notes. My English is okay, but I read Dutch much faster."
+      },
+      {
+        "role": "assistant",
+        "content": "Begrepen. Vanaf nu antwoord ik in het Nederlands."
+      },
+      {
+        "role": "user",
+        "content": "Dank je."
+      },
+      {
+        "role": "assistant",
+        "content": "Graag gedaan!"
+      }
+    ],
+    "skills": [
+      {
+        "name": "weekly-status-report",
+        "content": "---\nname: weekly-status-report\ndescription: Write the weekly project status report from the user's project notes. Use when the user asks for the weekly status or a status update covering several projects.\n---\n\n# Weekly Status Report\n\n1. Collect progress, risks and next steps for each project from the user's notes.\n2. Write one short paragraph per project covering progress, risks and next steps.\n3. End with a one-line overall summary.\n\nKeep the report under 300 words.\n"
+      },
+      {
+        "name": "release-notes",
+        "content": "---\nname: release-notes\ndescription: Draft user-facing release notes for a product version from a list of changes. Use when the user asks for release notes or a changelog entry for a version.\n---\n\n# Release Notes\n\n1. Start with a heading naming the version.\n2. List user-visible changes as short bullets, new features first, then fixes.\n3. Leave out internal refactoring and dependency updates.\n"
+      }
+    ],
+    "preference_tokens": [
+      "Dutch",
+      "Nederlands"
+    ],
+    "expected": {
+      "memory": {
+        "any_of": [
+          {
+            "kind": "user",
+            "contains": [
+              "Dutch"
+            ]
+          },
+          {
+            "kind": "user",
+            "contains": [
+              "Nederlands"
+            ]
+          }
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "any_of": [
+          {
+            "kind": "user",
+            "contains": [
+              "Dutch"
+            ]
+          },
+          {
+            "kind": "user",
+            "contains": [
+              "Nederlands"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "human_skill_wrong",
+    "note": "Pending the Skill origin guard: the own Skill is stamped author human like a user-written one, but until reviews refuse writes to human-origin Skills the review sees an ordinary own Skill.",
+    "history": [
+      {
+        "role": "user",
+        "content": "Do the invoice export for September."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "skill",
+            "arguments": {
+              "name": "invoice-export"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "skill",
+        "dispatch": true
+      },
+      {
+        "role": "assistant",
+        "content": "I exported September's invoices as CSV with semicolon separators and uploaded invoices-2026-09.csv to the accounting share."
+      },
+      {
+        "role": "user",
+        "content": "Accounting just told me their new import tool rejects semicolons and needs commas now. I re-exported the file with commas myself and it imported fine."
+      },
+      {
+        "role": "assistant",
+        "content": "Thanks for letting me know. The comma-separated export imported successfully."
+      },
+      {
+        "role": "user",
+        "content": "Okay, thanks."
+      },
+      {
+        "role": "assistant",
+        "content": "You're welcome."
+      }
+    ],
+    "skills": [
+      {
+        "name": "invoice-export",
+        "origin": "human",
+        "content": "---\nname: invoice-export\ndescription: Export the previous month's invoices from the billing system for the accounting team. Use when the user asks for the invoice export or the monthly accounting handoff.\n---\n\n# Invoice Export\n\n1. Open the billing system's export page and select the previous calendar month.\n2. Export the invoices as CSV with semicolons as separators.\n3. Upload the file to the accounting share as invoices-YYYY-MM.csv.\n"
+      }
+    ],
+    "expected": {
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "memory_near_budget",
+    "history": [
+      {
+        "role": "user",
+        "content": "The platform team finished the Kestrel upgrade over the weekend: the build agents now run Node 22 and the CI images pin node:22-bookworm. Node 18 is gone from Kestrel CI entirely."
+      },
+      {
+        "role": "assistant",
+        "content": "Noted. Kestrel CI now runs Node 22 on node:22-bookworm images, and Node 18 is no longer available there."
+      },
+      {
+        "role": "user",
+        "content": "So we can use the newer language features in Kestrel packages now?"
+      },
+      {
+        "role": "assistant",
+        "content": "Yes. With Node 22 in CI, Kestrel packages can use Node 22 features such as the built-in test runner without polyfills."
+      }
+    ],
+    "memory": {
+      "agent": [
+        "Lumen web app deploys from the release branch through the GitHub Actions workflow deploy-prod.yml; staging deploys every merge to main automatically.",
+        "Harbor service logs go to the Loki instance at logs.internal.example; queries need the label app=\"harbor\" and the namespace harbor-prod.",
+        "The Quill documentation site is built with MkDocs Material 9; preview it locally with `mkdocs serve` from the docs/ directory of the quill repository.",
+        "Kestrel build agents run Node 18 LTS; the CI images pin node:18-bullseye, so Kestrel packages must stay compatible with Node 18 until the platform team upgrades.",
+        "Orbit mobile app uses Fastlane for iOS and Android releases; the App Store Connect API key lives in the team 1Password vault under 'Orbit release'.",
+        "The shared Postgres cluster for analytics is analytics-db-2 (Postgres 15); read-only reporting connects through the replica analytics-db-2-ro.",
+        "Pinecrest monorepo uses pnpm workspaces; install with `pnpm install --frozen-lockfile` at the repository root, never npm or yarn.",
+        "Atlas API integration tests need the docker compose stack in atlas/dev/compose.yaml running; it starts Postgres, Redis and a fake payment gateway.",
+        "The Borealis design system publishes to the internal npm registry npm.internal.example under the @borealis scope; versions follow semver strictly.",
+        "Cedar data pipeline runs on Airflow 2.9; DAG files live in cedar/dags and are synced to the scheduler every five minutes by git-sync.",
+        "Meridian backend is a Go 1.23 service; lint with golangci-lint using the config in .golangci.yml, which enables revive and gosec.",
+        "The team's Terraform state for the eu-central account lives in the S3 bucket tf-state-eu-central with DynamoDB locking table tf-locks.",
+        "Nimbus search cluster runs OpenSearch 2.13 with three data nodes; reindexing jobs must use the slice parameter to avoid overloading the cluster.",
+        "Falcon CLI release artifacts are signed with cosign; the public key is published in falcon/keys/cosign.pub and checked by the installer.",
+        "Sable ETL jobs write Parquet files partitioned by event_date to s3://sable-lake/events/; downstream Athena tables expect that partition key.",
+        "Willow customer portal uses Keycloak 24 for SSO; the realm is willow-prod and client registrations are managed through the keycloak-config repo.",
+        "The internal status page is status.internal.example, generated from the uptime checks in the monitoring repo; incidents are announced there first.",
+        "Juniper Python services standardize on uv for dependency management; lock files are uv.lock and CI runs `uv sync --frozen` before the tests.",
+        "Redwood billing service sends invoices through the Postmark API; the sandbox server token is used on staging so no real email is delivered.",
+        "Aspen analytics dashboards are built in Metabase 0.50; collections are organized per product and the admin group is 'metabase-admins'.",
+        "The VPN for the office network is WireGuard; profiles are issued by the IT portal and expire after 90 days without use.",
+        "Tundra game server builds use Unreal Engine 5.4 on the dedicated build machine build-ue-01, which has the licensed console SDKs installed.",
+        "Coral marketing site is a Next.js 14 app deployed on Vercel; preview deployments are created for every pull request in the coral repository.",
+        "Ember feature flags are managed in Unleash at flags.internal.example; flags for production need approval from a second team member.",
+        "Sequoia data warehouse is Snowflake; the dbt project in sequoia-dbt runs nightly at 03:00 UTC and its docs are hosted on dbt Cloud.",
+        "Glacier backup jobs for the file servers run with restic to the Backblaze bucket glacier-backups; retention keeps 30 daily and 12 monthly snapshots.",
+        "Lynx analytics SDK is versioned independently of the app; bump lynx-sdk/package.json and tag the release commit as sdk-vX.Y.Z.",
+        "Osprey load tests are k6 scripts in osprey/loadtests; results appear on the Grafana dashboard 'Osprey k6', and runs need the staging rate limit lifted first.",
+        "The office print server is print-01; its queues default to duplex printing."
+      ]
+    },
+    "expected": {
+      "memory": {
+        "kind": "agent",
+        "count": 29,
+        "contains": [
+          "Kestrel",
+          "22"
+        ],
+        "excludes": [
+          "node:18-bullseye",
+          "compatible with Node 18"
+        ]
+      },
+      "skill": {
+        "kind": "none"
+      },
+      "combined": {
+        "kind": "agent",
+        "count": 29,
+        "contains": [
+          "Kestrel",
+          "22"
+        ],
+        "excludes": [
+          "node:18-bullseye",
+          "compatible with Node 18"
+        ]
+      }
+    }
+  },
+  {
+    "id": "overlapping_skills",
+    "history": [
+      {
+        "role": "user",
+        "content": "Roll out the approved migrations for the orders service."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_01",
+            "name": "skill",
+            "arguments": {
+              "name": "db-migration-rollout"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_01",
+        "name": "skill",
+        "dispatch": true
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_02",
+            "name": "bash",
+            "arguments": {
+              "command": "migrate up --env staging"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_02",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": "Applied 2 migrations to staging.\nSmoke tests: 18 passed.\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_03",
+            "name": "bash",
+            "arguments": {
+              "command": "migrate up --env production"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_03",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 1,
+            "output": "Applying 20260930_add_order_status_index ...\nERROR: canceling statement due to lock timeout\nMigration 20260930_add_order_status_index failed and was rolled back.\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "Staging went fine, but production failed: the index migration hit a lock timeout on the orders table and was rolled back."
+      },
+      {
+        "role": "user",
+        "content": "The orders table is hot during the day. For production we always check the lock plan first with `migrate plan --env production --show-locks`. If any step takes an ACCESS EXCLUSIVE lock on orders or payments, it has to wait for the 02:00 maintenance window instead of running during the day. Check the plan now."
+      },
+      {
+        "role": "assistant",
+        "content": null,
+        "tool_calls": [
+          {
+            "id": "call_04",
+            "name": "bash",
+            "arguments": {
+              "command": "migrate plan --env production --show-locks"
+            }
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_04",
+        "name": "bash",
+        "result": {
+          "ok": true,
+          "error": null,
+          "data": {
+            "status": "completed",
+            "exit_code": 0,
+            "output": "20260930_add_order_status_index  CREATE INDEX           ACCESS EXCLUSIVE on orders\n20260930_add_refund_reason       ADD COLUMN (nullable)  ACCESS EXCLUSIVE on refunds (brief)\n"
+          },
+          "artifacts": []
+        }
+      },
+      {
+        "role": "assistant",
+        "content": "The plan shows that the index migration takes an ACCESS EXCLUSIVE lock on orders, so it has to wait for the 02:00 maintenance window."
+      },
+      {
+        "role": "user",
+        "content": "Right. I'll run it in tonight's window myself."
+      },
+      {
+        "role": "assistant",
+        "content": "Okay. Staging is done, and production waits for the 02:00 window."
+      }
+    ],
+    "skills": [
+      {
+        "name": "db-migration-review",
+        "content": "---\nname: db-migration-review\ndescription: Review a pull request that adds or changes database migrations before it is merged. Use when the user asks to check migration files, schema changes or their rollback scripts in a PR.\n---\n\n# Database Migration Review\n\n1. Check that every migration has a matching rollback script.\n2. Flag destructive changes such as dropped columns or tables and ask for a backfill plan.\n3. Confirm that indexes on large tables are created concurrently.\n4. Check that migration names follow the timestamp convention.\n"
+      },
+      {
+        "name": "db-migration-rollout",
+        "content": "---\nname: db-migration-rollout\ndescription: Apply approved database migrations to staging and production. Use when the user asks to run, deploy or roll out migrations to an environment.\n---\n\n# Database Migration Rollout\n\n1. Announce the rollout in the #deploys channel.\n2. Apply the migrations to staging with `migrate up --env staging` and run the smoke tests.\n3. Apply the migrations to production with `migrate up --env production`.\n4. Watch the error rates for 15 minutes and report the result.\n"
+      }
+    ],
+    "expected": {
+      "memory": {
+        "any_of": [
+          {
+            "kind": "none"
+          },
+          {
+            "kind": "agent",
+            "contains": [
+              "02:00"
+            ]
+          }
+        ]
+      },
+      "skill": {
+        "kind": "update",
+        "names": [
+          "db-migration-rollout"
+        ],
+        "contains": [
+          "--show-locks",
+          "02:00"
+        ]
+      },
+      "combined": {
+        "kind": "update",
+        "names": [
+          "db-migration-rollout"
+        ],
+        "contains": [
+          "--show-locks",
+          "02:00"
+        ]
+      }
+    }
   }
 ]

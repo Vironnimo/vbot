@@ -355,13 +355,20 @@ SKILL_HELP = {
     "read": "Read editable skills in a global or private agent scope",
     "create": "Create a skill in a global or private agent scope",
     "update": "Replace a skill's SKILL.md in an editable scope",
-    "delete": "Delete a skill from an editable scope",
+    "delete": "Delete a skill from an editable scope into its archive",
     "write-file": "Write one supporting file inside an editable skill",
     "remove-file": "Remove one supporting file from an editable skill",
     "disable": "Disable one skill everywhere (master switch)",
     "enable": "Re-enable a disabled skill",
     "share": "Share one agent's private skill with other agents",
     "unshare": "Stop sharing one agent's private skill",
+    "history": "List recorded changes of an editable scope's skills, newest first",
+    "revert": "Take back the changes of one or more skill revisions",
+    "archived": "List the deleted skills kept in an editable scope's archive",
+    "restore": "Restore an archived skill under its name",
+    "purge": "Permanently delete one archived skill",
+    "pin": "Pin a skill so background reviews leave it unchanged",
+    "unpin": "Unpin a skill so background reviews may change it again",
 }
 
 

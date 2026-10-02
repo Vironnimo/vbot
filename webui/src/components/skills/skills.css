@@ -357,6 +357,35 @@
 .skills-page-description--empty {
   color: var(--text-lo);
 }
+/* Who created and last changed the package and its last use: quiet label and
+   value pairs under the description. */
+.skills-page-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 12px 0 0;
+  color: var(--text-med);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+}
+.skills-page-fact {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.skills-page-fact dt {
+  color: var(--text-lo);
+}
+.skills-page-fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* The pin toggle fills its pin while pressed. */
+.skills-pin[aria-pressed='true'] {
+  color: var(--accent);
+}
+.skills-pin[aria-pressed='true'] .skills-pin__head {
+  fill: currentColor;
+}
 .skills-page-note {
   margin: 6px 0 0;
   max-width: 72ch;
@@ -456,6 +485,47 @@
 .skills-content pre {
   max-width: 100%;
   overflow-x: auto;
+}
+/* A package's revisions, newest first: one head line (number, what, when and
+   who, Revert at the end) with the changed files below. */
+.skills-history {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.skills-history__item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.skills-history__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+}
+.skills-history__id {
+  color: var(--text-lo);
+  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+}
+.skills-history__what {
+  color: var(--text-hi);
+  font-weight: 500;
+}
+.skills-history__meta {
+  color: var(--text-lo);
+}
+.skills-history__revert {
+  margin-left: auto;
+}
+.skills-history__files {
+  margin: 2px 0 0;
+  padding-left: 20px;
+  color: var(--text-med);
+  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+  overflow-wrap: anywhere;
 }
 .skills-diagnostics summary,
 .skills-notice summary {

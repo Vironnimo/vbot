@@ -1,9 +1,11 @@
 <script>
   // The page of one Skill package, opened in place of its collection: Back
   // and a breadcrumb to return, a header with where it lives, its status and
-  // actions (Edit, Turn off everywhere / Turn on, Delete), the description as
-  // body text (the one place that shows it as content), who gets it
-  // (editable), requirement notes and its instructions.
+  // actions (Edit, Turn off everywhere / Turn on, Pin, Delete), the
+  // description as body text (the one place that shows it as content), who
+  // created and last changed it and its last use, who gets it (editable),
+  // requirement notes, its instructions and, for an editable package, its
+  // history.
   import { t } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import MarkdownContent from '../chat/MarkdownContent.svelte';
@@ -14,7 +16,9 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TabList from '../ui/TabList.svelte';
   import SkillAccessSection from './SkillAccessSection.svelte';
+  import SkillHistory from './SkillHistory.svelte';
   import { skillDuplicateNotes } from './skillAccess.js';
+  import { skillPageFacts } from './skillRecords.js';
   import {
     skillDiagnosticLines,
     skillInstructionBody,
@@ -43,6 +47,8 @@
     onEdit = noop,
     onDelete = noop,
     onSetDisabled = noop,
+    onSetPinned = noop,
+    onRevert = noop,
     onAgentAccess = noop,
     onShare = noop,
     onProjectSkills = noop,
@@ -53,10 +59,17 @@
   let duplicates = $derived(
     skillDuplicateNotes(entry, { inventory, agents, projects }),
   );
+  let facts = $derived(skillPageFacts(entry));
   let contentTabs = $derived([
     { id: 'instructions', label: t('skills.instructions') },
     { id: 'original', label: t('skills.original') },
+    ...(entry.editable_scope
+      ? [{ id: 'history', label: t('skills.history') }]
+      : []),
   ]);
+  let showHistory = $derived(
+    contentTab === 'history' && Boolean(entry.editable_scope),
+  );
 
   export function focus() {
     element?.focus();
@@ -117,6 +130,8 @@
               use:tooltip={skillReadOnlyReason(entry)}
               ><Badge>{t('skills.readOnly')}</Badge></span
             >{/if}
+          {#if entry.pinned}<Badge variant="info">{t('skills.pinned')}</Badge
+            >{/if}
         </p>
       </div>
       <div class="view-header__actions">
@@ -145,6 +160,34 @@
         {/if}
         {#if entry.editable_scope}
           <Button
+            variant="secondary"
+            icon
+            class="skills-pin"
+            disabled={busy}
+            aria-pressed={entry.pinned ? 'true' : 'false'}
+            ariaLabel={t('skills.pin.label', { name: entry.name })}
+            tooltip={entry.pinned
+              ? t('skills.pin.unpinHint')
+              : t('skills.pin.pinHint')}
+            onClick={() => onSetPinned(entry, !entry.pinned)}
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.3"
+              stroke-linejoin="round"
+              stroke-linecap="round"
+              aria-hidden="true"
+              ><path
+                class="skills-pin__head"
+                d="M10 1.8 14.2 6l-2 .9-2.6 2.6-.5 3.1L3.4 6.9l3.1-.5 2.6-2.6z"
+              /><path d="M6.3 9.7 2 14" /></svg
+            >
+          </Button>
+          <Button
             variant="danger"
             icon
             disabled={busy}
@@ -171,6 +214,16 @@
     >
       {entry.description || t('skills.noDescription')}
     </p>
+    {#if facts.length}
+      <dl class="skills-page-facts">
+        {#each facts as fact (fact.id)}
+          <div class="skills-page-fact" data-fact={fact.id}>
+            <dt>{fact.label}</dt>
+            <dd>{fact.value}</dd>
+          </div>
+        {/each}
+      </dl>
+    {/if}
     {#each duplicates as note, index (index)}
       <p class="skills-page-note">{note}</p>
     {/each}
@@ -214,7 +267,7 @@
         ariaLabel={t('skills.contentView')}
         onChange={onTab}
       />
-      {#if inspected}<CopyButton
+      {#if inspected && !showHistory}<CopyButton
           text={inspected.content}
           label={t('skills.copyContent')}
         />{/if}
@@ -226,7 +279,12 @@
       aria-labelledby={`skill-content-tab-${contentTab}`}
       tabindex="0"
     >
-      {#if inspectLoading}<Banner variant="neutral"
+      {#if showHistory}<SkillHistory
+          {entry}
+          {busy}
+          onRevert={(revision) => onRevert(entry, revision)}
+        />
+      {:else if inspectLoading}<Banner variant="neutral"
           >{t('skills.loadingContent')}</Banner
         >
       {:else if inspectError}<Banner variant="error" role="alert"

@@ -1,0 +1,48 @@
+# Skill History, Archive and Pins
+
+Task-gated reference for the revision log, archive and pins of the writable Skill homes: `core/skills/_history.py` (`SkillHistory`, the file format), `core/skills/_revert.py` (revert planning), the history methods of `SkillAuthoringService` (`core/skills/authoring.py`), their RPC and CLI surfaces, and the `skill` Tool's answer for an archived name. Read it when changing how Skill writes are recorded, reverted, archived, restored, purged or pinned, or a client of those operations. Vocabulary: `skills.md` -> Terms (Skill History, Skill Archive, Pinned Skill, Background Writer).
+
+## Files
+
+- One history and one archive per writable home, beside it and outside every scan root: global `<data_dir>/skill-history.jsonl` and `<data_dir>/skill-archive/`; private `<data_dir>/agents/<id>/skill-history.jsonl` and `agents/<id>/skill-archive/`, which move with the Agent tree on rename and archive (`agent.md`). Both are created on first need. They are JSON Lines and package folders outside the JSON document contract (`settings.md`), and no data snapshot holds them.
+- Each line is one revision of one Skill (`v` 1): sequential `id`, `at` (canonical UTC), `skill`, `kind`, `actor`, `files` (`path`, `change` `created`/`updated`/`deleted`, SHA-256 `before`/`after` of the bytes, and `text` after the change when it is UTF-8 and at most 1 MiB), then, only when set, `session_id`, `run_id`, `run_kind`, `origin`, `created_at`, `pinned`, `live`, `reason`, `absorbed_into`, `archive_id`, `reverts`. The text before a change is never stored again: it is the stored text of an earlier revision with that hash, so each written version of a file is held once.
+- Appends fsync. An append after a last line without its newline starts a new line, so a torn fragment stays separate; an unreadable line (torn write, hand edit, other `v`, unknown kind or actor, duplicate id) is skipped with one WARNING per load. The parsed log is cached per file and revalidated by size and modification time; stored texts are read back by line offset. Callers hold the authoring write lock; the history has its own lock, always taken last.
+
+## Revisions and records
+
+- Kinds: `baseline` (a package found without a live lineage: its whole package, actor `external`, origin `agent` when its `SKILL.md` declares `metadata.vbot.author: agent`, else `human`), `create` (origin = the writer's actor), `change`, `external` (files changed outside the write owner; `live: false` when the package vanished), `archive`, `restore`, `revert` (`reverts` names the reverted id), `pin`, `unpin`.
+- `SkillHistory.observe(skill, package)` records `baseline`/`external` before every write, every `history` read and every revert, so an outside edit never passes for a vBot writer's. The inventory's record read (`records`) adds only missing baselines.
+- Actors: `human`, `agent`, `reflection`, `librarian` (`SKILL_ACTORS`), plus `external` for baseline and external revisions. `metadata.vbot.author`, stamped into a written `SKILL.md`, is `human` for a person and `agent` for every other writer.
+- `SkillRecord` (live Skills only): `origin`, `pinned`, `created_at` (first revision of the lineage), `changed_at`/`changed_by` (last revision that changed package files, if any). A restore carries origin, `created_at` and pin back from the archive.
+- Public projection (`SkillRevision.to_dict`, used by RPC and CLI): no hashes or texts; `files` as `{path, change}`; `session_id`, `run_id`, `run_kind`, `origin`, `pinned`, `live`, `reason`, `absorbed_into`, `archive_id` and `reverts` when set. `live` appears only on a revision that moved the Skill into (true) or out of (false) the home.
+
+## Write rules
+
+- Every authoring mutation names a `SkillWriter(actor, session_id, run_id, run_kind)`; people pass `HUMAN_WRITER` (also the `install` default). After the write it records one revision; a `change` that left every file as it was records nothing. A history that cannot be written after the write only logs a WARNING and leaves the result's `revision` `None`; it never fails the write.
+- Before the write, `_observe` enforces the Background Writer rules for an existing Skill: pinned -> `SkillProtectedError` reason `pinned`; origin outside `BACKGROUND_WRITABLE_ORIGINS` (`agent`, `reflection`, `librarian`) -> `user`; an unreadable history -> `unknown` (fail closed). `check_writable` runs the same check without writing. The error text (`Skill '<name>' is protected from background changes: the user pinned it.` / `a person created it.` / `its history cannot be read.`) serves people; `skill_manage` maps the reason to its own Agent text (`skills.md` -> Agent-facing text).
+- `set_pinned` is a person's call only (`Only a person can pin or unpin a Skill.`). It records `pin`/`unpin` only when the state changes, and it fails when the history cannot be written, because the pin lives there.
+
+## Archive, restore and purge
+
+- `delete(root, name, writer, reason=None, absorbed_into=None)` moves the package to `<archive>/<archive_id>` (`<name>_<12 base32 characters>`, `core.utils.ids.new_id`) and records `archive` with `live: false`, `reason` and `archive_id`. Reasons: `deleted` (default), `absorbed` (requires `absorbed_into`, another Skill of the same home, never the Skill itself), `inactive` (retired for disuse). The result reports every regular file as deleted and carries `archive_id`.
+- `archived(root)` lists a home's archived packages newest first as `ArchivedSkill` (`archive_id`, `name`, `archived_at`, `reason`, `absorbed_into`, `archived_by`, `origin`, `description`); a package the history does not know takes name, origin and description from its `SKILL.md`. `archived_skill(root, name)` returns the newest entry of a name, including an absorbed Skill whose files were purged (`available: false`), so its merge target stays known.
+- `restore(root, archive_id, writer)` moves the package back under its Skill name and records `restore` (`live: true`, origin, `created_at` and pin from the archive). It is refused while that name exists in the home: `A Skill named '<name>' already exists. Delete or rename it first, then restore this one.`
+- `purge(root, archive_id)` deletes the archived package permanently and records no revision (INFO log). Reverting its `archive` revision afterwards fails: no package is left.
+
+## Revert
+
+`revert(root, revision_ids, writer)` refuses background writers (`Background writers cannot revert Skill revisions.`) and is all or none: it observes each named Skill, checks every revision, plans and simulates every inverse before changing anything, runs the inverses newest first, and undoes the steps already taken when one fails. Inverses: a file change writes the earlier stored texts back (a missing earlier text - not UTF-8 or over 1 MiB - refuses), `create` archives with reason `deleted`, `archive` restores, `restore` archives again under its archive id, and a pin flips. Each reverted revision records one `revert` revision. A `baseline` cannot be reverted, nor an outside removal (no archived package exists).
+
+Conflict rule (conservative): a revision is refused while a later revision outside the request changed the same file, the pin or the presence of that Skill - `SkillRevertConflictError` (`revision`, `later`, `skill`) with `Revision <n> cannot be reverted: revision <later> later changed the same part of Skill '<skill>'. Revert revision <later> together with it.` An earlier revert counts as such a later change, so reverting a chain names every revision of it together; the WebUI accumulates them (`webui/settings.md` -> Skill manager).
+
+## Surfaces
+
+- RPC (`server/rpc/skill_methods.py`; scopes `global`/`agent:<id>`; unknown params are refused; writes are serialized with the other Skill writes): `skill.history {scope, name?, limit 1-500, default 50}` -> `{scope, revisions}` newest first; `skill.revert {scope, revisions}` (a non-empty list of positive integers) -> `{scope, revisions}` as recorded, a conflict -> `domain_error` with `data {revision, later, skill}`; `skill.archived {scope}` -> `{scope, archived}`; `skill.restore {scope, archive_id}` and `skill.set_pinned {scope, name, pinned}` -> the write response `{name, operation, warnings, revision}` (plus `archive_id` for delete and restore); `skill.purge {scope, archive_id}` -> `{scope, purged}`. Every success publishes `resource_changed(kind="skills")`; pins skip the registry invalidation because no registry reads them.
+- CLI (`cli/skill_management.py`, `cli.md`): `vbot skill history|revert|archived|restore|purge --yes|pin|unpin`; `delete` prints the archive id and the restore command; `inventory` prints creator, pin and last use of editable packages and lists the archived ones. Agents learn these from the bundled `vbot-cli/references/skills.md`.
+- WebUI: pins, the History tab with revert together, and the Archived collection (`webui/settings.md` -> Skill manager).
+- Inventory: editable entries carry `created_by`, `created_at`, `changed_at`, `changed_by`, `pinned`; `archived` lists every writable home's archive (`skills/manager.md`).
+- `skill` Tool: after its miss rescan, `Runtime.archived_skill(agent_id, name)` (own home first, then global) explains an archived name or follows an absorbed one to its target (`tools/skill.md`).
+
+## Tests
+
+`tests/core/skills/test_skill_history.py` (format, outside changes, background rules, pins, archive, revert), `tests/core/tools/test_skill_manage.py` (background guards, `absorbed_into`), `tests/core/tools/test_skill.py` (archived names), `tests/server/rpc/test_skill_methods.py`, `tests/cli/test_cli_skill.py`, and the WebUI `components/skills/__tests__/skillsView.test.js`.

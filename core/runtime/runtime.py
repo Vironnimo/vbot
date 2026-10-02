@@ -34,6 +34,7 @@ from core.extensions import (
     InteractionEvent,
     InteractionResponder,
 )
+from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -91,7 +92,7 @@ from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.settings.settings import effective_timezone_name
-from core.skills.authoring import SkillAuthoringService
+from core.skills.authoring import ArchivedSkill, SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
@@ -158,6 +159,8 @@ class Runtime:
         # Lives as long as the Runtime: a restart keeps coordinating with a
         # data snapshot that is still copying.
         self._snapshot_barrier = SnapshotBarrier()
+        # Lives as long as the Runtime: the server binds its callback URL once.
+        self.oauth_redirects = OAuthRedirects()
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -259,6 +262,7 @@ class Runtime:
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
                     resolve_cwd=self._extension_cwd,
+                    oauth_redirects=self.oauth_redirects,
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,
@@ -588,6 +592,9 @@ class Runtime:
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_own_skills(project_id)
 
+    def archived_skill(self, agent_id: str | None, name: str) -> ArchivedSkill | None:
+        return self._skill_operations().archived_skill(agent_id, name)
+
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
 
@@ -868,7 +875,9 @@ class Runtime:
                 )
         if self._tools is not None:
             self._tools.unregister("skill")
-            register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
+            register_skill_tool(
+                self._tools, self.skills_for, self.reload_skills_async, self.archived_skill
+            )
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")
                 register_skill_manage_tool(

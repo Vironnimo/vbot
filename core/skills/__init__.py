@@ -1,10 +1,17 @@
 """core.skills — local skill metadata registry."""
 
 from core.skills.authoring import (
+    HUMAN_WRITER,
     SKILL_ARCHIVE_MAX_BYTES,
+    ArchivedSkill,
     SkillAuthor,
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillProtectedError,
+    SkillRecord,
+    SkillRevertConflictError,
+    SkillRevision,
+    SkillWriter,
     SkillWriteResult,
     normalize_skill_file_path,
 )
@@ -35,6 +42,7 @@ from core.skills.skills import (
 )
 
 __all__ = [
+    "HUMAN_WRITER",
     "SKILL_ARCHIVE_MAX_BYTES",
     "FRONT_MATTER_DELIMITER",
     "POLICY_FORMAT_VERSION",
@@ -42,9 +50,15 @@ __all__ = [
     "SKILL_ORIGIN_BUNDLED",
     "SKILL_ORIGIN_GLOBAL",
     "SKILL_ORIGIN_PROJECT_PREFIX",
+    "ArchivedSkill",
     "SkillAuthor",
     "SkillAuthoringError",
     "SkillAuthoringService",
+    "SkillProtectedError",
+    "SkillRecord",
+    "SkillRevertConflictError",
+    "SkillRevision",
+    "SkillWriter",
     "SkillAvailability",
     "SkillMetadata",
     "SkillPolicy",

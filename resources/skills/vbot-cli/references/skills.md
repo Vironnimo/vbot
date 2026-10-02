@@ -39,13 +39,22 @@ vbot skill disable <name>
 vbot skill enable <name>
 vbot skill share <agent-id> <name> --to <receiver-agent-id> [--to <receiver>...]
 vbot skill unshare <agent-id> <name>
+vbot skill history [<name>] --scope <scope> [--limit <n>]
+vbot skill revert <revision>... --scope <scope>
+vbot skill archived --scope <scope>
+vbot skill restore <archive-id> --scope <scope>
+vbot skill purge <archive-id> --scope <scope> --yes
+vbot skill pin <name> --scope <scope>
+vbot skill unpin <name> --scope <scope>
 ```
 
 - `inventory` exposes exact source-package ids and `editable_scope` (`read-only` when unavailable). `inspect <inventory-id>` reads that package’s original full `SKILL.md`, including bundled and Project sources, without activating it.
 - Prefer `read <name> --scope ...` for a single editable Skill; omitting the name returns every complete `SKILL.md` in that scope. Neither read proves an Agent’s effective availability.
 - `create` and `update` validate the full `SKILL.md` through the shared Skill authoring service and apply the change live. Prefer `--file` for multiline content.
 - `file write` and `file remove` manage supporting files such as `references/schema.md`; paths are relative to the named Skill and traversal is rejected server-side.
-- `delete` and `file remove` require `--yes`. Their operations are destructive within the editable scope, though deleting an Identity Agent moves its complete private Skill home into the archive with the Agent, from where `vbot archive restore` brings it back.
+- `delete` moves the Skill into its scope's Skill archive; `archived` lists that archive and `restore <archive-id>` puts a Skill back under its name while no other Skill in the scope has that name. `purge <archive-id>` deletes an archived Skill permanently. `delete`, `file remove` and `purge` require `--yes`. Deleting an Identity Agent moves its private Skills, their history and their archive into the archive with the Agent, from where `vbot archive restore` brings them back.
+- `history` lists the recorded changes of a scope's Skills, newest first, with who made them (`human`, `agent`, or a background `reflection` review) and the changed files. `revert <revision>...` takes back the named revisions, all or none; when a later revision changed the same part of that Skill, it refuses and names that revision, which you can revert together with it.
+- `pin <name>` protects a Skill from background reviews; `unpin` lifts it. Pins do not limit attended Agents or the user. `inventory` shows each editable Skill's creator (`created_by`), pin state and last use.
 - Mutation output includes the normalized Skill name, operation, scope, and validation warnings. Run `skill read <name> --scope ...` to verify content. `skill list` reports the global pool; use the `skill` Tool in the target Agent to verify its scoped availability.
 
 ## Disable and share policy

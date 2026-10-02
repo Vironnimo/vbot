@@ -36,14 +36,23 @@ older Sessions without catalog metadata remain visible in
 timestamp. Because ``never_used_skills`` means "zero activations *ever*" while
 ``used_skills`` means ">=1 activation *in window*", the accumulator tracks
 activations both windowed and unwindowed.
+
+**Background Sessions are not use.** A Session whose Runs are all unattended
+kinds (``core.runs.UNATTENDED_RUN_KINDS``: reflection reviews) contributes no
+offers and no activations: :func:`counts_as_skill_use` is the one rule the
+report and the per-Agent :func:`load_skill_use` query share.
 """
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
+from core.runs import is_unattended_run_kind
+from core.sessions import SESSION_RUN_KINDS_META_KEY
 from core.utils.timestamps import parse_canonical_timestamp
 
 # The session-metadata sidecar key holding the skills a session was offered
@@ -125,6 +134,67 @@ class SkillsSection:
     # separate because absence of evidence is not evidence of disuse.
     skills_without_offer_data: int
     skills: list[SkillUsageStat]
+
+
+@dataclass(frozen=True)
+class SkillUse:
+    """One Agent's use of one Skill name over its surviving Sessions.
+
+    ``count`` is the number of Sessions that activated the Skill (an activation
+    counts once per Session); ``last_activated`` is the latest activation time.
+    """
+
+    last_activated: str
+    count: int
+
+
+def counts_as_skill_use(summary: Mapping[str, object]) -> bool:
+    """Return whether a Session's Skill offers and activations count as use.
+
+    A Session counts unless every Run kind it recorded is unattended (a
+    background review using Skills is not a person or Agent at work). A Session
+    without recorded Run kinds counts.
+    """
+    kinds = summary.get(SESSION_RUN_KINDS_META_KEY)
+    if not isinstance(kinds, list) or not kinds:
+        return True
+    return not all(isinstance(kind, str) and is_unattended_run_kind(kind) for kind in kinds)
+
+
+def load_skill_use(
+    connection: sqlite3.Connection, owners: Mapping[int, str]
+) -> dict[tuple[str, str], SkillUse]:
+    """Return Skill use by ``(agent id, Skill name)`` from the reconciled index.
+
+    ``owners`` maps the index key of each Session that counts as use (see
+    :func:`counts_as_skill_use`) to its Agent id; activations of other Sessions
+    are ignored.
+    """
+    latest: dict[tuple[str, str], tuple[int, str, int]] = {}
+    for session_key, name, instant, timestamp in connection.execute(
+        # SQLite takes the bare ``timestamp`` from the row holding MAX(instant).
+        """
+        SELECT k.session_key, k.name, MAX(r.instant), r.timestamp
+        FROM stat_skills k
+        JOIN stat_records r ON r.session_key = k.session_key AND r.seq = k.seq
+        GROUP BY k.session_key, k.name
+        """
+    ):
+        agent_id = owners.get(session_key)
+        if agent_id is None:
+            continue
+        key = (agent_id, name)
+        current = latest.get(key)
+        if current is None:
+            latest[key] = (instant, timestamp, 1)
+        elif instant > current[0]:
+            latest[key] = (instant, timestamp, current[2] + 1)
+        else:
+            latest[key] = (current[0], current[1], current[2] + 1)
+    return {
+        key: SkillUse(last_activated=timestamp, count=count)
+        for key, (_instant, timestamp, count) in latest.items()
+    }
 
 
 # ---------------------------------------------------------------------------

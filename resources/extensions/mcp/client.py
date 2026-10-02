@@ -39,10 +39,10 @@ from mcp.shared.message import SessionMessage
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
 from core.utils.errors import VBotError
-from core.utils.tls import shared_ssl_context
 
 from ._callbacks import ServerRequests
 from ._events import ConnectionEvents, dump
+from ._network import http_client
 from ._oauth import ConnectionOAuth
 from .interactions import InputRequests
 
@@ -133,7 +133,7 @@ class _ObservedHTTPClient(httpx2.AsyncClient):
     ended the connection's session, which the SDK reports only as error text.
     """
 
-    def __init__(self, observer: ConnectionRunner | None, **kwargs: Any) -> None:
+    def __init__(self, observer: ConnectionRunner, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._observer = observer
 
@@ -142,33 +142,10 @@ class _ObservedHTTPClient(httpx2.AsyncClient):
         try:
             response = await super().send(request, **kwargs)
         except Exception as error:
-            if self._observer is not None:
-                self._observer._http_failed(request, error)
+            self._observer._http_failed(request, error)
             raise
-        if self._observer is not None:
-            await self._observer._http_answered(request, response)
+        await self._observer._http_answered(request, response)
         return response
-
-
-def _sse_http_client(
-    headers: dict[str, str] | None = None,
-    timeout: httpx2.Timeout | None = None,
-    auth: httpx2.Auth | None = None,
-    *,
-    observer: ConnectionRunner | None = None,
-) -> httpx2.AsyncClient:
-    """The legacy SSE transport's client: vBot's shared TLS context, no proxy environment.
-
-    ``sse_client`` always passes its own timeouts.
-    """
-    return _ObservedHTTPClient(
-        observer,
-        headers=headers,
-        timeout=timeout,
-        auth=auth,
-        trust_env=False,
-        verify=shared_ssl_context(),
-    )
 
 
 def _batch_argument_problem(command: str, args: list[str]) -> str | None:
@@ -404,7 +381,12 @@ class ConnectionRunner:
         self._http_marks_delivery = False
         self._events = ConnectionEvents(host, lambda: self.config)
         self._requests = ServerRequests(
-            self.id, host, inputs, self._events, self._attributed_context
+            self.id,
+            host,
+            inputs,
+            self._events,
+            self._attributed_context,
+            config=lambda: self.config,
         )
         self._refreshing = asyncio.Lock()
         self._published: str | None = None
@@ -643,16 +625,20 @@ class ConnectionRunner:
                     transport = _ObservedTransport(
                         transport, self, marks_delivery=not self._http_marks_delivery
                     )
+                # A capability the connection's policy turns off is not offered at all.
+                sampling = self.config.get("sampling", "off") != "off"
                 client = Client(
                     transport,
                     read_timeout_seconds=self.config["timeout"],
                     mode="legacy" if self.config["transport"] == "sse" else "auto",
-                    sampling_callback=self._requests.sample,
-                    sampling_capabilities=types.SamplingCapability(
-                        tools=types.SamplingToolsCapability()
+                    sampling_callback=self._requests.sample if sampling else None,
+                    sampling_capabilities=(
+                        types.SamplingCapability(tools=types.SamplingToolsCapability())
+                        if sampling
+                        else None
                     ),
                     elicitation_callback=self._requests.elicit,
-                    list_roots_callback=self._requests.roots,
+                    list_roots_callback=self._requests.roots if self._offers_roots() else None,
                     logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
@@ -836,26 +822,38 @@ class ConnectionRunner:
             if self.config.get("oauth")
             else None
         )
+        url = self.config["url"]
         self._http_marks_delivery = True
+        observed = functools.partial(_ObservedHTTPClient, self)
         if self.config["transport"] == "sse":
+
+            def sse_http_client(
+                headers: dict[str, str] | None = None,
+                timeout: httpx2.Timeout | None = None,
+                auth: httpx2.Auth | None = None,
+            ) -> httpx2.AsyncClient:
+                # ``sse_client`` always passes its own timeouts.
+                return http_client(
+                    url, headers=headers, timeout=timeout, auth=auth, factory=observed
+                )
+
             return sse_client(
-                self.config["url"],
+                url,
                 headers=headers,
                 timeout=self.config["timeout"],
                 auth=auth,
-                httpx_client_factory=functools.partial(_sse_http_client, observer=self),
+                httpx_client_factory=sse_http_client,
             )
         http = await stack.enter_async_context(
-            _ObservedHTTPClient(
-                self,
+            http_client(
+                url,
                 headers=headers,
                 auth=auth,
-                trust_env=False,
                 timeout=httpx2.Timeout(self.config["timeout"], connect=15.0),
-                verify=shared_ssl_context(),
+                factory=observed,
             )
         )
-        return streamable_http_client(self.config["url"], http_client=http)
+        return streamable_http_client(url, http_client=http)
 
     def _credential(self, key: str) -> str:
         value = self.host.resolve_credential(key)
@@ -1248,9 +1246,12 @@ class ConnectionRunner:
         session._stamp({"method": method, "params": arguments}, options)
         return dict(await session._dispatcher.send_raw_request(method, arguments, options))
 
+    def _offers_roots(self) -> bool:
+        return self.config.get("roots") == "workspace"
+
     async def _notify_roots_changed(self) -> None:
         client = self._client()
-        if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+        if self._offers_roots() and client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
             await self._legacy("roots", client.send_roots_list_changed)
 
     async def _legacy[Result](

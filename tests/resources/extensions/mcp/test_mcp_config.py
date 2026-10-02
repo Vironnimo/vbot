@@ -32,6 +32,9 @@ def saved_connections(store):
     [
         {"id": "../bad", "transport": "stdio", "command": "python"},
         {"id": "example", "transport": "http", "url": "https://user:secret@example.com"},
+        # Plain http only reaches this machine; anything else needs https.
+        {"id": "example", "transport": "http", "url": "http://example.com/mcp"},
+        {"id": "example", "transport": "sse", "url": "http://192.168.1.10/sse"},
         {"id": "example", "transport": "stdio"},
         {"id": "example", "transport": "stdio", "command": "python", "cwd": "relative"},
         connection(description="x" * 201),

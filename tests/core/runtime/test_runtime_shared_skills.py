@@ -233,6 +233,30 @@ def test_installed_private_and_global_skills_refresh_live_visibility(
     assert runtime.skills_for(None, "main").get("global-import")
     assert "global-import" not in _allowed(runtime.skills_for(None, "main"), [])
 
+    # The inventory carries each writable package's history record.
+    [entry] = [
+        entry
+        for entry in runtime.skill_inventory()["skills"]
+        if entry["name"] == "imported" and entry["editable_scope"] == "agent:main"
+    ]
+    assert (entry["created_by"], entry["changed_by"], entry["pinned"]) == ("human", "human", False)
+
+    # Deleting archives the package: it leaves every registry, the inventory lists
+    # it under its home, and the skill Tool's archive lookup finds it.
+    asyncio.run(
+        call_rpc(handlers, "skill.delete", state, {"scope": "agent:main", "name": "imported"})
+    )
+    assert "imported" not in _names(runtime.skills_for(None, "receiver"))
+    [archived] = runtime.skill_inventory()["archived"]
+    assert (archived["scope"], archived["name"], archived["reason"]) == (
+        "agent:main",
+        "imported",
+        "deleted",
+    )
+    found = runtime.archived_skill("main", "imported")
+    assert found is not None and found.archive_id == archived["archive_id"]
+    assert runtime.archived_skill("receiver", "imported") is None
+
 
 def test_manager_lists_inspects_and_evaluates_each_same_name_package(
     config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

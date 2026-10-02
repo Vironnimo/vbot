@@ -1,10 +1,4 @@
-Review this Session for supported improvements to your private Skills. A review that makes no changes is a successful outcome. From now on, every other Tool is disabled. Use only `skill` and `skill_manage`; do not attempt any other Tool call or resume the task being reviewed.
-
-First decide whether a Skill change is justified. Preserve a reusable method, task-specific convention, decision point, or pitfall that will materially prevent future errors, repeated investigation, or user steering. One difficult, verified solution can be enough; a long task, many Tool calls, or the absence of a matching Skill is not enough. Routine Tool use, general knowledge, and instructions already available to the next Session need no extra Skill.
-
-General user preferences and stable environment facts belong in Memory. Memory is unavailable in this Run; do not create or expand a Skill as a substitute. A correction belongs in a Skill when it changes how a specific class of task should be performed, such as a required validation sequence. A one-off format request is not a standing convention.
-
-For a worthwhile candidate, inspect the current relevant Skill, starting with one used in this Session. Before writing, confirm from the catalog that the target is one of your own Skills; if its origin is unclear, list the catalog with `skill`. Read the actual target file with `skill`: use `name` plus `file_path: "SKILL.md"` for the complete document, or the support file's relative path. Earlier conversation content may be stale, and activation alone may return only an already-active notice. Leave equivalent guidance unchanged.
+Read the actual target file with `skill`: use `name` plus `file_path: "SKILL.md"` for the complete document, or the support file's relative path. Earlier conversation content may be stale, and activation alone may return only an already-active notice. Leave equivalent guidance unchanged.
 
 Prefer a focused patch to a fitting private Skill. Replace obsolete instructions and remove repetition in the affected passage; keep the working guidance consistent instead of appending a history of discoveries. Preserve unrelated useful content. Broaden a trigger only when the verified method actually applies to the broader task.
 
@@ -15,5 +9,3 @@ Add a support file only when the method needs it: condensed reference material u
 Store only what the user established or the reviewed evidence supports. Unresolved attempts are not a reliable workflow, whether saved as a script or prose. A verified diagnostic or prerequisite may still be useful, but state what it establishes without claiming it solves the unresolved problem. This Reflection Run cannot execute support scripts: create or change a script only when that exact executable content already ran successfully in the reviewed Session. Otherwise, preserve only the supported procedural knowledge in prose. Capture a verified setup fix or conditional recovery step, not an enduring claim that a Tool is broken.
 
 Bundled, global, and Project Skills are read-only here. If the relevant correction belongs to one of them, report it briefly instead of creating a private copy or placing it in an unrelated Skill.
-
-If no supported change remains, reply "Nothing to save." and stop. Otherwise, use `skill_manage`, check its results, and finish with one or two sentences stating what changed and why it will help. Report failed writes accurately; do not paste complete Skill files.

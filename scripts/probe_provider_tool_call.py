@@ -6,6 +6,9 @@ tool_first_use supplies natural tasks and competing production Tools, executes
 disposable effects, and retains full synthetic evidence in --first-use-report.
 live_tools runs the Live call backend model on voice-style requests against a
 scripted vBot and judges its first Tool call; transcripts go to --live-report.
+reflection_workflow evaluates Reflection reviews and /learn in disposable vBot
+fixtures with repeated attempts; text packs and report comparison live in
+scripts/provider_probe/learning_eval.py.
 Credentials are never included in reports.
 
 Examples:
@@ -16,6 +19,9 @@ Examples:
         --connection openai:subscription --model gpt-5.6-luna --wire openai \
         --profile explicit_non_strict --scenario optional_booleans
     python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
+    python scripts/probe_provider_tool_call.py --scenario reflection_workflow \
+        --reflection-case standing_preference --reflection-scope memory --repetitions 3 \
+        --reflection-report arm-a.json
 """
 
 from __future__ import annotations
@@ -124,7 +130,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--swarm-case", default="all")
     parser.add_argument("--swarm-instructions-file", type=Path)
     parser.add_argument("--swarm-report", type=Path)
-    parser.add_argument("--reflection-case", default="all")
+    parser.add_argument(
+        "--reflection-case", default="all", help="Reflection case ids, comma-separated, or all."
+    )
+    parser.add_argument(
+        "--reflection-report",
+        type=Path,
+        help="Write every reflection attempt with its transcript as a JSON report.",
+    )
+    parser.add_argument(
+        "--reflection-workers",
+        type=int,
+        default=3,
+        help="Disposable vBot fixtures running reflection attempts concurrently.",
+    )
+    parser.add_argument(
+        "--text-pack",
+        type=Path,
+        help=(
+            "Replace the learning texts (Memory and Skill prompt blocks, memory/skill/"
+            "skill_manage Tool descriptions, review and /learn brief fragments) with a "
+            "text pack."
+        ),
+    )
     parser.add_argument("--recall-case", default="all")
     parser.add_argument(
         "--live-case", default="all", help="Live case ids, comma-separated, or all."
@@ -378,6 +406,10 @@ async def _run(args: argparse.Namespace) -> int:
                     result = await _probe_live_tools(
                         ModelFacingAdapter(adapter), args, models=runtime.models
                     )
+                elif args.scenario == "reflection_workflow":
+                    result = await _probe_reflection_workflow(
+                        ModelFacingAdapter(adapter), args, models=runtime.models
+                    )
                 else:
                     probe = (
                         _probe_first_use
@@ -392,8 +424,6 @@ async def _run(args: argparse.Namespace) -> int:
                         if args.scenario == "terminal"
                         else _probe_apply_patch
                         if args.scenario == "apply_patch"
-                        else _probe_reflection_workflow
-                        if args.scenario == "reflection_workflow"
                         else _probe_swarm_tool
                         if args.scenario == "swarm_tool"
                         else _probe_mcp_workflow

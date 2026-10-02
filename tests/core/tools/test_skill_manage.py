@@ -11,7 +11,8 @@ from typing import Any, cast
 import pytest
 
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
-from core.skills.authoring import SkillAuthoringService
+from core.runs import RunKind
+from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
@@ -32,7 +33,7 @@ def _skill_md(
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
-def _context(agent_id: str, root: Path) -> ToolContext:
+def _context(agent_id: str, root: Path, run_kind: RunKind | None = None) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
         session_id="session-one",
@@ -44,6 +45,7 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         vbot_root=root,
         data_root=root,
         cwd=root,
+        run_kind=run_kind,
     )
 
 
@@ -58,9 +60,10 @@ class _Harness:
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
         self.tools = ToolRegistry()
+        self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
             self.tools,
-            SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"]),
+            self.authoring,
             self.home,
             self.invalidated.append,
             lambda agent_id, name: (
@@ -76,8 +79,13 @@ class _Harness:
     def document(self, name: str = "demo", agent_id: str = "main") -> Path:
         return self.home(agent_id) / name / "SKILL.md"
 
-    def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
-        context = _context(agent_id, self.root)
+    def run(
+        self,
+        arguments: dict[str, object],
+        agent_id: str = "main",
+        run_kind: RunKind | None = None,
+    ) -> dict[str, Any]:
+        context = _context(agent_id, self.root, run_kind)
         try:
             result = cast(
                 dict[str, Any],
@@ -139,7 +147,8 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
         return create(*args, **kwargs)
 
     monkeypatch.setattr(service, "create", blocked_create)
-    register_skill_manage_tool(registry, service, lambda _: tmp_path, invalidated.append)
+    home = tmp_path / "skills"
+    register_skill_manage_tool(registry, service, lambda _: home, invalidated.append)
     task = asyncio.create_task(
         registry.dispatch(
             _context("main", tmp_path),
@@ -150,7 +159,7 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert not task.done()
-        assert not (tmp_path / "demo").exists()
+        assert not (home / "demo").exists()
         assert invalidated == []
         if cancel:
             task.cancel()
@@ -170,7 +179,7 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    assert SkillRegistry.load(tmp_path).get("demo") is not None
+    assert SkillRegistry.load(home).get("demo") is not None
     assert invalidated == ["main"]
 
 
@@ -300,6 +309,102 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     assert not harness.home("main").exists()
     assert harness.invalidated == []
     assert harness.changes == []
+
+
+# --- Background reviews -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("setup", "arguments", "code", "message"),
+    [
+        pytest.param(
+            "user",
+            {"action": "patch", "name": "demo", "old_string": "# Demo", "new_string": "# New"},
+            "skill_protected",
+            "Skill 'demo' comes from the user, so this review cannot change it; nothing "
+            "changed. Leave it as it is.",
+            id="user-skill",
+        ),
+        pytest.param(
+            "pinned",
+            {"action": "edit", "name": "demo", "content": _skill_md(body="# New\n")},
+            "skill_protected",
+            "Skill 'demo' is pinned by the user, so this review cannot change it; nothing "
+            "changed. Leave it as it is.",
+            id="pinned-skill",
+        ),
+        pytest.param(
+            "shared",
+            {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "#"},
+            "skill_protected",
+            "Skill 'deploy' is shared with you by another Agent, so this review cannot change "
+            "it; nothing changed. Leave it as it is.",
+            id="shared-skill",
+        ),
+        pytest.param(
+            "agent",
+            {"action": "delete", "name": "demo"},
+            "invalid_arguments",
+            "delete in this review needs absorbed_into: the name of another of your own Skills "
+            "that now holds the instructions of 'demo'; nothing changed. Merge the instructions "
+            "into that Skill with patch or edit first, then call delete with absorbed_into. If "
+            "no other Skill holds them, leave 'demo' as it is.",
+            id="delete-without-absorbed-into",
+        ),
+    ],
+)
+def test_background_reviews_refuse_skills_they_may_not_change(
+    tmp_path: Path, setup: str, arguments: dict[str, object], code: str, message: str
+) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    if setup == "user":
+        harness.authoring.create(home, "demo", _skill_md(), writer=HUMAN_WRITER)
+    elif setup == "shared":
+        harness.share()
+    else:
+        harness.create()
+    if setup == "pinned":
+        harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
+
+    result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
+
+    assert result == tool_failure(code, message, retryable=False)
+    assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
+    # An attended Run is not limited by pins or by who created the Skill.
+    if setup in ("user", "pinned"):
+        assert harness.run(arguments)["ok"] is True
+
+
+def test_background_reviews_change_and_merge_skills_agents_created(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(name="old")
+    review = RunKind.REFLECTION
+
+    created = harness.run(
+        {"action": "create", "name": "new", "content": _skill_md("new")}, run_kind=review
+    )
+    patched = harness.run(
+        {"action": "patch", "name": "new", "old_string": "# Demo", "new_string": "# Merged"},
+        run_kind=review,
+    )
+    deleted = harness.run(
+        {"action": "delete", "name": "old", "absorbed_into": "new"}, run_kind=review
+    )
+
+    assert all(result["ok"] for result in (created, patched, deleted))
+    home = harness.home("main")
+    record = harness.authoring.record(home, "new")
+    assert record is not None and record.origin == "reflection"
+    [archived] = harness.authoring.archived(home)
+    assert (archived.reason, archived.absorbed_into, archived.archived_by) == (
+        "absorbed",
+        "new",
+        "reflection",
+    )
+    revision = harness.authoring.history(home, "new")[0]
+    assert (revision.actor, revision.run_kind) == ("reflection", "reflection")
 
 
 # --- Patch tolerance --------------------------------------------------------
@@ -581,7 +686,7 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     assert "New body." in text
 
 
-def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
+def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     harness.run(
         {
@@ -595,13 +700,70 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
 
     result = harness.run({"action": "delete", "name": "demo"})
 
-    assert result["data"] == {"content": "Deleted Skill 'demo' and its files."}
+    assert result["data"] == {
+        "content": "Deleted Skill 'demo'. Its files are kept in the archive, where the user "
+        "can restore it."
+    }
     assert [(path, change) for path, change, _added, _removed in harness.changed_files()] == [
         ("SKILL.md", "deleted"),
         ("references/notes.md", "deleted"),
     ]
     assert not skill_file.parent.exists()
     assert harness.invalidated == ["main"]
+    [archived] = harness.authoring.archived(harness.home("main"))
+    assert (archived.name, archived.reason, archived.archived_by) == ("demo", "deleted", "agent")
+    latest = harness.authoring.history(harness.home("main"), "demo")[0]
+    assert (latest.kind, latest.session_id, latest.run_id) == ("archive", "session-one", "run-one")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code", "message"),
+    [
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "new"},
+            None,
+            "Deleted Skill 'old'; its instructions now live in Skill 'new'. Its files are "
+            "kept in the archive, where the user can restore it.",
+            id="absorbed",
+        ),
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "old"},
+            "invalid_arguments",
+            "absorbed_into names 'old' itself; nothing changed. Name the other Skill that now "
+            "holds its instructions.",
+            id="itself",
+        ),
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "missing"},
+            "invalid_arguments",
+            "absorbed_into names 'missing', which is not one of your own Skills; nothing "
+            "changed. Name one of your own Skills that now holds the instructions of 'old'.",
+            id="unknown-target",
+        ),
+        pytest.param(
+            {"action": "edit", "name": "old", "content": _skill_md("old"), "absorbed_into": "new"},
+            "invalid_arguments",
+            "absorbed_into is used only by delete; nothing changed. Omit absorbed_into for edit.",
+            id="other-action",
+        ),
+    ],
+)
+def test_delete_names_the_skill_that_absorbed_it(
+    tmp_path: Path, arguments: dict[str, object], code: str | None, message: str
+) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(name="old")
+    harness.create(name="new")
+
+    result = harness.run(arguments)
+
+    if code is None:
+        assert result["data"] == {"content": message}
+        [archived] = harness.authoring.archived(harness.home("main"))
+        assert (archived.reason, archived.absorbed_into) == ("absorbed", "new")
+    else:
+        assert result == tool_failure(code, message, retryable=False)
+        assert harness.document("old").is_file()
 
 
 # --- Names and scopes -------------------------------------------------------

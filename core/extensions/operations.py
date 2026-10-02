@@ -10,6 +10,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
+from core.extensions.oauth_redirects import OAuthRedirects
 from core.tools.tools import Tool, ToolContext, ToolRegistry
 
 JsonObject = dict[str, Any]
@@ -52,6 +53,9 @@ class ExtensionHost:
     # ``ToolContext.attach_result_payload``. Returns ``None`` unless the calling
     # Tool call's Session currently shows the Tool Result that payload belongs to.
     load_result_payload: Callable[[ToolContext, str], Awaitable[Any]] | None = None
+    # API v11: browser redirects the server receives for OAuth sign-ins
+    # (``core/extensions/oauth_redirects.py``); ``None`` without a Runtime.
+    oauth_redirects: OAuthRedirects | None = None
 
 
 @dataclass(frozen=True)

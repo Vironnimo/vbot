@@ -26,10 +26,9 @@ def create_prompt_resources(resources_dir: Path, *, include_compaction: bool = T
     prompts_dir.mkdir(parents=True)
     prompt_names = [
         *EDITABLE_FRAGMENTS,
-        # Backend-only fragments, always bundled (like compaction/handoff/learn).
-        "reflect-memory.md",
-        "reflect-skill.md",
-        "reflect.md",
+        # Backend-only brief fragments, always bundled (like compaction/handoff).
+        "learn-intro.md",
+        "reflect-skill-method.md",
     ]
     if include_compaction:
         prompt_names.append("compaction.md")
@@ -51,7 +50,7 @@ def storage(tmp_path: Path) -> StorageManager:
         ("runtime.md", "custom runtime"),
         ("skills.md", "skills.md bundled"),
         ("skill_maintenance.md", "skill_maintenance.md bundled"),
-        ("reflect.md", "reflect.md bundled"),
+        ("reflect-skill-method.md", "reflect-skill-method.md bundled"),
     ],
 )
 def test_read_prompt_fragment_prefers_the_user_copy_over_the_bundled_resource(

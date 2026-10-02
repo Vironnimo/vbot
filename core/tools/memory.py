@@ -264,6 +264,7 @@ def _mutate(
         actor="tool",
         session_id=context.session_id,
         run_id=context.run_id,
+        run_kind=None if context.run_kind is None else context.run_kind.value,
     )
     content = arguments.get("content")
     old_text = arguments.get("old_text")

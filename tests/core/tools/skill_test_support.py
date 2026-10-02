@@ -15,6 +15,7 @@ from core.tools import (
     ToolSkillActivationHook,
     register_skill_tool,
 )
+from core.tools.skill import ArchivedSkillResolver
 
 RegistryResolver = Callable[[str | None, str | None], SkillRegistry]
 
@@ -27,6 +28,7 @@ class SkillTool:
         workspace: Path,
         registry: SkillRegistry | RegistryResolver,
         refresh: Callable[[], None] = lambda: None,
+        archived: ArchivedSkillResolver | None = None,
     ) -> None:
         self.workspace = workspace
         resolver = (
@@ -35,7 +37,7 @@ class SkillTool:
             else registry
         )
         self.tools = ToolRegistry()
-        register_skill_tool(self.tools, resolver, refresh)
+        register_skill_tool(self.tools, resolver, refresh, archived)
 
     def details(self, arguments: dict[str, object], result: dict[str, Any]) -> list[Any]:
         """Return the detail blocks the user sees for one call."""

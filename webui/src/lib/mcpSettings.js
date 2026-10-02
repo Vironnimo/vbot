@@ -10,6 +10,15 @@ const mappings = [
   'credential_environment',
   'credential_headers',
 ];
+// Settings of a pre-registered OAuth client; they exist only with OAuth.
+const oauthClientFields = [
+  'oauth_redirect_uri',
+  'oauth_client_id',
+  'oauth_client_secret',
+  'oauth_scopes',
+];
+export const MCP_SAMPLING_POLICIES = ['off', 'ask', 'allow'];
+export const MCP_ROOTS_POLICIES = ['off', 'workspace'];
 
 export function mcpDraft(configuration = null) {
   const source = configuration ?? {
@@ -26,6 +35,11 @@ export function mcpDraft(configuration = null) {
     url: source.url ?? '',
     oauth: source.oauth ?? false,
     oauth_redirect_uri: source.oauth_redirect_uri ?? '',
+    oauth_client_id: source.oauth_client_id ?? '',
+    oauth_client_secret: source.oauth_client_secret ?? '',
+    oauth_scopes: (source.oauth_scopes ?? []).join(' '),
+    sampling: source.sampling ?? 'off',
+    roots: source.roots ?? 'off',
     timeout: String(source.timeout ?? DEFAULT_TIMEOUT_SECONDS),
     ...Object.fromEntries(
       mappings.map((field) => [
@@ -54,18 +68,24 @@ export function mcpConfiguration(draft) {
     }
     record[field] = Object.fromEntries(entries);
   }
+  record.oauth_client_id = (draft.oauth_client_id ?? '').trim();
+  record.oauth_client_secret = (draft.oauth_client_secret ?? '').trim();
+  record.oauth_scopes = [
+    ...new Set((draft.oauth_scopes ?? '').split(/\s+/).filter(Boolean)),
+  ];
   if (record.transport === 'stdio') {
     delete record.url;
     delete record.oauth;
-    delete record.oauth_redirect_uri;
   } else {
     delete record.command;
     delete record.args;
     delete record.cwd;
-    if (!record.oauth) delete record.oauth_redirect_uri;
   }
+  if (!record.oauth)
+    for (const field of oauthClientFields) delete record[field];
   if (!record.cwd) delete record.cwd;
-  if (!record.oauth_redirect_uri) delete record.oauth_redirect_uri;
+  for (const field of oauthClientFields)
+    if (!record[field]?.length) delete record[field];
   return record;
 }
 
@@ -74,6 +94,9 @@ export function mcpCredentialNames(configuration) {
     ...new Set([
       ...Object.values(configuration.credential_environment ?? {}),
       ...Object.values(configuration.credential_headers ?? {}),
+      ...(configuration.oauth_client_secret
+        ? [configuration.oauth_client_secret]
+        : []),
     ]),
   ];
 }
