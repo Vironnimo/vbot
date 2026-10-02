@@ -133,7 +133,7 @@ function makeOverviewSeries() {
   ];
 }
 
-/** Costs & tokens' day series: full Totals per day. */
+/** Costs & tokens' day series: full Totals and the Runs started per day. */
 function makeUsageSeries() {
   return [
     {
@@ -146,6 +146,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2,
         estimated_cost_usd: 3,
       }),
+      runs: 6,
     },
     {
       date: '2026-06-13',
@@ -157,6 +158,7 @@ function makeUsageSeries() {
         reported_cost_usd: 2.5,
         estimated_cost_usd: 5,
       }),
+      runs: 4,
     },
   ];
 }

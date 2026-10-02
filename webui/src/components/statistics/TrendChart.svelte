@@ -3,7 +3,9 @@
   // calendar day, week or month, or per hour in a short window, as stacked
   // columns, with the numbers behind the chart in a collapsed table. The
   // series comes from the server with every day or hour of the window
-  // filled in; `bucket` says which (the report's `window.bucket`).
+  // filled in; `bucket` says which (the report's `window.bucket`). Rows that
+  // count the Runs started per period show them beside a cost or token
+  // metric, in the tooltip and the table.
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import EmptyState from '../ui/EmptyState.svelte';
   import DataTable from '../ui/DataTable.svelte';
@@ -39,6 +41,10 @@
   );
   const chart = $derived(trendColumns(series, activeMetric, period));
   const segmentIds = $derived(trendSegments(activeMetric));
+  const withRuns = $derived(
+    activeMetric !== 'runs' &&
+      series.some((row) => typeof row?.runs === 'number'),
+  );
 
   const METRIC_LABELS = {
     cost: () => t('statistics.chart.metric.cost'),
@@ -77,10 +83,20 @@
   function columnTooltip(column) {
     return {
       title: `${periodLabel(column, true)} · ${exactText(column.total)}`,
-      rows: column.segments.map((segment) => ({
-        label: SEGMENT_LABELS[segment.id](),
-        value: exactText(segment.value),
-      })),
+      rows: [
+        ...column.segments.map((segment) => ({
+          label: SEGMENT_LABELS[segment.id](),
+          value: exactText(segment.value),
+        })),
+        ...(withRuns
+          ? [
+              {
+                label: METRIC_LABELS.runs(),
+                value: formatInteger(column.row.runs, locale),
+              },
+            ]
+          : []),
+      ],
     };
   }
 
@@ -105,6 +121,17 @@
       sortValue: (column) => column.total,
       format: (column) => exactText(column.total),
     },
+    ...(withRuns
+      ? [
+          {
+            id: 'runs',
+            label: METRIC_LABELS.runs(),
+            align: 'end',
+            sortValue: (column) => column.row.runs ?? 0,
+            format: (column) => formatInteger(column.row.runs, locale),
+          },
+        ]
+      : []),
   ]);
 </script>
 

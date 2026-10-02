@@ -382,6 +382,28 @@ describe('StatisticsView', () => {
     ).toHaveLength(1);
   });
 
+  it('lists the Runs started per period beside the Costs & tokens trend', async () => {
+    rpcMock.mockImplementation(routedRpc());
+    const navigation = createStandaloneNavigation(['usage']);
+    suite.mountedComponent = mount(StatisticsView, {
+      target: document.body,
+      props: { navigation },
+    });
+    await waitForCondition(() => panel()?.querySelector('.stats-trend table'));
+
+    const table = panel().querySelector('.stats-trend table');
+    const headers = [...table.querySelectorAll('th')].map((cell) =>
+      cell.textContent.trim(),
+    );
+    expect(headers.at(-1)).toBe(t('statistics.chart.metric.runs'));
+    // Newest period first: Jun 13 started 4 Runs, Jun 12 six.
+    expect(
+      [...table.querySelectorAll('tbody tr')].map((row) =>
+        row.lastElementChild.textContent.trim(),
+      ),
+    ).toEqual(['4', '6']);
+  });
+
   it('lists the insights it knows, links each to its tab and flags an uncertain cost', async () => {
     rpcMock.mockImplementation(routedRpc());
     const navigation = createStandaloneNavigation(['overview']);

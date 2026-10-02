@@ -1,8 +1,9 @@
-"""Costs and tokens: Totals by dimension, the day series, top Runs and Sessions, recent calls.
+"""Costs and tokens: Totals by dimension, the series, top Runs and Sessions, recent calls.
 
 Every figure comes from the ledger's usage cube and Run rows; ``runs`` per
 breakdown row counts the in-window Runs (by start) that touch the key, and
-``sessions`` the Session addresses with in-window requests.
+``sessions`` the Session addresses with in-window requests. A series point
+holds its bucket's Totals and the Runs that started in it.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 
-from core.statistics._projection import UNKNOWN_COST
+from core.statistics._projection import MICROSECONDS_PER_HOUR, UNKNOWN_COST
 from core.statistics._rollups import USAGE_ORIGIN_SQL
 from core.statistics._sections.common import (
     RUN_COST_ORDER,
@@ -118,10 +119,21 @@ def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list
 def _series(context: ReportContext) -> list[JsonObject]:
     buckets = context.buckets
     hourly = grouped_totals(context, "a.hour")
-    points = {key: Totals() for key in buckets.keys(hourly)}
+    run_hours: dict[int, int] = dict(
+        context.query(
+            f"SELECT r.start_instant / {MICROSECONDS_PER_HOUR} AS hour, COUNT(*) FROM agg_runs r "
+            f"WHERE {context.instant_condition('r.start_instant')} GROUP BY hour"
+        )
+    )
+    points = {key: Totals() for key in buckets.keys({*hourly, *run_hours})}
+    runs = dict.fromkeys(points, 0)
     for hour, totals in hourly.items():
         points[buckets.key(hour)].merge(totals)
-    return [{buckets.field: key, **totals.json()} for key, totals in points.items()]
+    for hour, count in run_hours.items():
+        runs[buckets.key(hour)] += count
+    return [
+        {buckets.field: key, **totals.json(), "runs": runs[key]} for key, totals in points.items()
+    ]
 
 
 def _top_sessions(context: ReportContext, units: str, runs: Counter[int]) -> list[JsonObject]:

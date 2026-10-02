@@ -230,13 +230,16 @@ async def test_a_window_of_at_most_two_days_has_hour_buckets_in_every_series(
     manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
 ) -> None:
     # A failed Run with one Model call and an error at 12:00 (BASE).
-    address = _runs(manager, [("r1", "failed", 1000, 1)])
-    await _call(ledger, {"reported_cost_usd": 0.5}, address=address, run_id="r1", at=BASE)
-    _write_session(
-        manager,
-        "main",
-        [ChatMessage.error("timeout", "slow", timestamp=BASE + timedelta(seconds=2))],
+    address = manager.create("main").address
+    _admit(manager, address, "r1")
+    seed_history(
+        manager.get(address),
+        [
+            ChatMessage.error("timeout", "slow", timestamp=BASE + timedelta(seconds=2)),
+            _summary("r1", status="failed", duration_ms=5000),
+        ],
     )
+    await _call(ledger, {"reported_cost_usd": 0.5}, address=address, run_id="r1", at=BASE)
     service = statistics(usage_recorder=ledger, clock=_clock)
     until = BASE + timedelta(minutes=30)
 
@@ -252,9 +255,12 @@ async def test_a_window_of_at_most_two_days_has_hour_buckets_in_every_series(
         (hours[1], 0, 0, 0),
         (hours[2], 1, 1, 1),
     ]
-    assert [(p["hour_start"], p["calls"]) for p in usage] == list(
-        zip(hours, [0, 0, 1], strict=True)
-    )
+    # The usage series counts the Runs that started in each bucket too.
+    assert [(p["hour_start"], p["calls"], p["runs"]) for p in usage] == [
+        (hours[0], 0, 0),
+        (hours[1], 0, 0),
+        (hours[2], 1, 1),
+    ]
     assert [(p["hour_start"], p["runs"], p["failed"]) for p in runs["daily"]] == [
         (hours[0], 0, 0),
         (hours[1], 0, 0),
