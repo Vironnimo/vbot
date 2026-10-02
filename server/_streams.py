@@ -62,7 +62,7 @@ async def _stream_websocket_events(
     ended and ``False`` when the client disconnected first.
     """
     stream_iter = stream.__aiter__()
-    disconnect_task = asyncio.create_task(websocket.receive())
+    disconnect_task = asyncio.create_task(websocket.receive(), name="websocket-receive")
     # The pending stream read survives across loop iterations: cancelling it to
     # handle a stray client frame would finalize the async generator and
     # silently end server-push delivery.
@@ -70,7 +70,9 @@ async def _stream_websocket_events(
     try:
         while True:
             if event_task is None:
-                event_task = asyncio.create_task(stream_iter.__anext__())
+                event_task = asyncio.create_task(
+                    stream_iter.__anext__(), name="websocket-stream-next"
+                )
             done, _pending = await asyncio.wait(
                 {event_task, disconnect_task},
                 timeout=WS_HEARTBEAT_INTERVAL_SECONDS,
@@ -94,7 +96,7 @@ async def _stream_websocket_events(
                     on_text(text)
                 # Keep listening for the disconnect without disturbing the
                 # pending stream read.
-                disconnect_task = asyncio.create_task(websocket.receive())
+                disconnect_task = asyncio.create_task(websocket.receive(), name="websocket-receive")
 
             if event_task in done:
                 completed_event_task = event_task
@@ -283,7 +285,9 @@ async def _sse_run_events(
         try:
             while True:
                 if event_task is None:
-                    event_task = asyncio.create_task(anext(event_iterator))
+                    event_task = asyncio.create_task(
+                        anext(event_iterator), name=f"sse-next:{run.id}"
+                    )
                 done, _pending = await asyncio.wait(
                     {event_task},
                     timeout=heartbeat_interval_seconds,

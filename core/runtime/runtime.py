@@ -433,7 +433,9 @@ class Runtime:
         later call reports the same outcome without running any step again.
         """
         if self._close_task is None:
-            self._close_task = asyncio.create_task(run_shutdown_async(self))
+            self._close_task = asyncio.create_task(
+                run_shutdown_async(self), name="runtime-shutdown"
+            )
         task = self._close_task
         try:
             await asyncio.shield(task)

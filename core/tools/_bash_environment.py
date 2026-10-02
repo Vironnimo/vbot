@@ -63,7 +63,7 @@ async def get_shell_env() -> dict[str, str]:
         # First-ever probe — same concurrent-dedup logic as before.
         probe_task = _shell_env_probe_task
         if probe_task is None:
-            probe_task = asyncio.create_task(_probe_shell_env())
+            probe_task = asyncio.create_task(_probe_shell_env(), name="shell-environment-probe")
             _shell_env_probe_task = probe_task
         try:
             probed_env = await asyncio.shield(probe_task)

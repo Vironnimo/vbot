@@ -892,7 +892,8 @@ class SwarmExtension:
         current = self._wake_tasks.get(swarm_id)
         if current is None or current.done():
             current = asyncio.create_task(
-                self._run_background(swarm_id, self._drain_wakes(swarm_id))
+                self._run_background(swarm_id, self._drain_wakes(swarm_id)),
+                name=f"swarm-wakes:{swarm_id}",
             )
             self._wake_tasks[swarm_id] = current
             current.add_done_callback(
@@ -905,13 +906,17 @@ class SwarmExtension:
         await asyncio.shield(current)
 
     def _enqueue_wakes(self, swarm_id: str) -> None:
-        task = asyncio.create_task(self._schedule_wakes(swarm_id))
+        task = asyncio.create_task(
+            self._schedule_wakes(swarm_id), name=f"swarm-wake-schedule:{swarm_id}"
+        )
         self._cleanup_tasks.add(task)
         task.add_done_callback(self._observe_cleanup_task)
 
     def _enqueue_title(self, swarm_id: str, prompt: str, revision: int) -> None:
         """Name a started Run from its goal without delaying the Start reply."""
-        task = asyncio.create_task(self._title_swarm(swarm_id, prompt, revision))
+        task = asyncio.create_task(
+            self._title_swarm(swarm_id, prompt, revision), name=f"swarm-title:{swarm_id}"
+        )
         self._title_tasks.add(task)
         task.add_done_callback(self._observe_title_task)
 

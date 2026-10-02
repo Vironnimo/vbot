@@ -313,7 +313,9 @@ class ConnectionRunner:
                 self.error = None
                 self._log_connected()
                 self._ready.set()
-                self._subscriptions["catalog"] = asyncio.create_task(self._watch_catalog())
+                self._subscriptions["catalog"] = asyncio.create_task(
+                    self._watch_catalog(), name=f"mcp-catalog-watch:{self.id}"
+                )
                 try:
                     await self._serve()
                 finally:
@@ -459,7 +461,8 @@ class ConnectionRunner:
                     continue
             self.context = invocation.context
             self._active = asyncio.create_task(
-                self._perform_with_retries(invocation.operation, invocation.arguments)
+                self._perform_with_retries(invocation.operation, invocation.arguments),
+                name=f"mcp-call:{self.id}:{invocation.operation}",
             )
             active = self._active
 
@@ -633,7 +636,9 @@ class ConnectionRunner:
             existing = self._subscriptions.get(uri)
             if existing is None or existing.done():
                 ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-                subscription_task = asyncio.create_task(self._watch_resource(uri, ready))
+                subscription_task = asyncio.create_task(
+                    self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                )
                 self._subscriptions[uri] = subscription_task
                 await ready
             return {"subscribed": uri}

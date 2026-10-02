@@ -193,7 +193,7 @@ class LocalSetup:
         if self.status()["state"] == "ready":
             return self.status()
         self._state, self._phase, self._error, self._progress = "installing", "checking", "", None
-        self._task = asyncio.create_task(self._install())
+        self._task = asyncio.create_task(self._install(), name=f"local-setup:{self._name}")
         return self.status()
 
     async def cancel(self) -> dict[str, Any]:

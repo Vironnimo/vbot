@@ -450,7 +450,8 @@ class LocalSpeechExecutor:
             return "loading"
         state.preparing_key = key
         state.preparing = asyncio.get_running_loop().create_task(
-            self._prepare_in_worker(state, local_id, merged)
+            self._prepare_in_worker(state, local_id, merged),
+            name=f"local-speech-prepare:{local_id}",
         )
         return "loading"
 
@@ -644,7 +645,7 @@ class LocalSpeechExecutor:
             for state in self._states.values():
                 if state.preparing is not None:
                     state.preparing.cancel()
-            self._close_task = asyncio.create_task(self._finish_close())
+            self._close_task = asyncio.create_task(self._finish_close(), name="local-speech-close")
         # Cleanup may still be waiting for the inference worker. Cancellation
         # must never shut down its executor before the model can be unloaded.
         await settle_before_cancelling(self._close_task, on_late_failure=_log_close_failure)

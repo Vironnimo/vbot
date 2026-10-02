@@ -698,7 +698,9 @@ class LogViewer:
             catalog=catalog,
             directory_modified_ns=directory_modified_ns,
         )
-        watcher.task = asyncio.create_task(self._run_watcher(watcher))
+        watcher.task = asyncio.create_task(
+            self._run_watcher(watcher), name=f"log-watcher:{file_name}"
+        )
 
         def on_done(task: asyncio.Task[None], file_name: str = file_name) -> None:
             _log_watcher_task_result(file_name, task)

@@ -229,7 +229,13 @@ class ServerMonitor:
     async def _stream(
         self, url: str, connection: ClientConnection, cursor: tuple[str, int] | None
     ) -> tuple[str, int] | None:
-        retarget = None if self._local else asyncio.create_task(self._watch_target(url, connection))
+        retarget = (
+            None
+            if self._local
+            else asyncio.create_task(
+                self._watch_target(url, connection), name="application-monitor-retarget"
+            )
+        )
         try:
             async for frame in connection:
                 try:

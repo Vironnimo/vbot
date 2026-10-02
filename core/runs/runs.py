@@ -988,7 +988,7 @@ class ChatRunManager:
         run._started_from_queue_item_id = queue_item_id  # noqa: SLF001 - run carries its own start origin.
         # Create the task before registering the Run: a failure here leaves no
         # active Session entry behind. The task cannot run before this returns.
-        task = asyncio.create_task(self._execute(run, address, executor))
+        task = asyncio.create_task(self._execute(run, address, executor), name=f"run:{run.id}")
         self._active_by_session[address] = run
         self._runs[run.id] = run
         run.set_task(task)

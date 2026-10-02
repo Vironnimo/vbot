@@ -45,6 +45,7 @@ class _FakeRun:
         tool_call_names: set[str] | None = None,
         final_content: str = "Saved a memory about the user.",
     ) -> None:
+        self.id = "run_test"
         self.agent_id = agent_id
         self.session_id = session_id
         self.project_id = project_id
