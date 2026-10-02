@@ -68,7 +68,7 @@ Core terms Provider, Model, and Reasoning live in `.vorch/GLOSSARY.md`; Model-DB
 - Shared reasoning decision policy: `core/providers/reasoning.py`
 - Shared non-strict Tool-schema rendering: `core/providers/tool_schema.py`
 - Adapter selector map (`ADAPTER_TYPES`, re-exported by `runtime.py`) and the OpenAI-compatible task base URL lookup: `core/providers/adapter_types.py`
-- Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates
+- Adapter construction, token access, local Context resolution, and local-catalog refresh: `core/providers/runtime.py::ProviderRuntime`; `Runtime.get_adapter()` and related methods are stable composition-facade delegates. Wire profile reads for accessors go through the same owner: `wire_profile(provider, local_connection, model)` returns the resolved profile requests use (learned facts included), `wire_status(...)` its `(status, verification)` without resolving the profile (`WireProfiles.status`: the Model entry and matching rules only, so `model.list` can ask for every catalog Model), and `learned_wire_facts(...)` the `ObservedFacts` live traffic recorded
 - Model discovery integration: `core/models/discovery.py`; Model data semantics remain in `models.md`
 
 ## Conventions and gotchas

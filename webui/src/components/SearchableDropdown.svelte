@@ -9,6 +9,7 @@
   import { t } from '$lib/i18n.js';
   import { isImeComposing } from '$lib/keyboard.js';
   import { tooltip } from '$lib/tooltip.js';
+  import OptionMarker from './OptionMarker.svelte';
 
   const SEARCH_HEADER_HEIGHT = 44;
   const noop = () => {};
@@ -384,7 +385,10 @@
     <span
       class="searchable-dropdown__option-label"
       class:searchable-dropdown__label--code={option.code}>{option.label}</span
-    >
+    >{#if option.marker}<OptionMarker
+        label={option.marker.label}
+        tooltip={option.marker.tooltip}
+      />{/if}
     {#if option.secondaryLabel}
       <span class="searchable-dropdown__option-meta">
         {option.secondaryLabel}

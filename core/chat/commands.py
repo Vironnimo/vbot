@@ -13,6 +13,7 @@ from core.chat.content_blocks import ContentBlock, TextBlock
 from core.chat.messages import ReplySurface
 from core.chat.status_report import (
     ReasoningRenderDescriber,
+    WireProfileDescriber,
 )
 from core.database import SnapshotBarrier
 from core.extensions.extensions import invoke_extension_handler
@@ -404,6 +405,7 @@ class CommandDispatcher:
         storage: Any | None = None,
         terminal_manager: TerminalManager | None = None,
         reasoning_render_describer: ReasoningRenderDescriber | None = None,
+        wire_profile_describer: WireProfileDescriber | None = None,
         automation_references: AutomationReferences | None = None,
         snapshot_barrier: SnapshotBarrier | None = None,
     ) -> None:
@@ -476,6 +478,7 @@ class CommandDispatcher:
                 sessions=sessions,
                 started_at=started_at,
                 storage=storage,
+                wire_profile_describer=wire_profile_describer,
             ),
             "stop": self._execute_stop,
         }

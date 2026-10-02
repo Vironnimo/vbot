@@ -377,6 +377,8 @@ export default Object.freeze({
   'models.filter.contextUnknown': 'context unknown',
   'models.filter.showAll': 'Show all models ({count} hidden)',
   'models.filter.showSuitable': 'Show only suitable models',
+  'models.wire.verified': 'Wire profile verified',
+  'models.wire.verifiedOn': 'Wire profile verified on {date}',
   'agents.form.editAgentPrompt': "Edit this agent's prompt",
   'agents.form.thinkingEffortOption.none': 'none',
   'agents.form.thinkingEffortOption.minimal': 'minimal',

@@ -34,7 +34,12 @@ from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.error_mapping import _map_expected_error
 from server.rpc.errors import RPC_ERROR_DOMAIN, RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.event_bridge import publish_resource_changed
-from server.rpc.payloads import _model_detail_response, _model_response
+from server.rpc.payloads import (
+    _model_detail_response,
+    _model_response,
+    _wire_profile_detail_response,
+    _wire_status_response,
+)
 from server.rpc.provider_access import (
     _connection_models_endpoint,
     _connection_reachability,
@@ -123,6 +128,12 @@ async def _list_models(state: Any, params: JsonObject) -> JsonObject:
                 provider_config=_provider_config_or_none(runtime, provider_id),
                 local_context_windows=local_context_windows,
             )
+            response["wire_profiles"] = {
+                connection.id: _wire_status_response(
+                    *runtime.wire_status(provider_id, connection.id, model.model_id)
+                )
+                for connection in allowed_connections
+            }
             reachable = _model_reachability(runtime, provider_id, allowed_connections)
             if reachable is not None:
                 response["reachable"] = reachable
@@ -185,6 +196,13 @@ async def _get_model(state: Any, params: JsonObject) -> JsonObject:
             f"{provider_id}:{connection.id}",
         )
     ]
+    response["wire_profiles"] = {
+        connection_id: _wire_profile_detail_response(
+            runtime.wire_profile(provider_id, connection_id, model.model_id),
+            runtime.learned_wire_facts(provider_id, connection_id, model.model_id),
+        )
+        for connection_id in response["usable_connections"]
+    }
     reachable = _model_reachability(runtime, provider_id, allowed_connections)
     if reachable is not None:
         response["reachable"] = reachable

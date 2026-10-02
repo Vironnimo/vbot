@@ -16,6 +16,8 @@ from core.chat.status_report import (
     STATUS_PLACEHOLDER,
     ReasoningIntent,
     StatusModelDetails,
+    StatusWireProfile,
+    WireProfileDescriber,
     build_status_text,
     resolve_actual_thinking_effort,
     resolve_reported_thinking_effort,
@@ -27,6 +29,7 @@ from core.chat.status_report import (
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import AgentResolver, ProjectStore
 from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR, ProviderConfig
+from core.providers.wire_observations import ObservedFacts
 from core.runs import ChatRunManager, Run
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.chat.commands_test_support import (
@@ -138,6 +141,7 @@ def _status_dispatcher(
     resolver: _StubResolver | None = None,
     messages: list[ChatMessage] | None = None,
     model: Model | None = None,
+    wire_profile_describer: WireProfileDescriber | None = None,
 ) -> tuple[CommandDispatcher, _StubResolver, _RecordingModels]:
     resolver = resolver or _StubResolver(_make_agent())
     models = _RecordingModels(model or _make_model())
@@ -148,6 +152,7 @@ def _status_dispatcher(
         models=cast(ModelRegistry, models),
         projects=cast(ProjectStore, _StubProjects(_StubProject("vbot", "vBot"))),
         started_at=_APP_STARTED,
+        wire_profile_describer=wire_profile_describer,
     )
     return dispatcher, resolver, models
 
@@ -227,6 +232,80 @@ def test_status_reports_the_model_recommended_temperature() -> None:
 
     assert result.feedback is not None
     assert "Temperature: 1 (model recommendation)" in result.feedback.text
+
+
+def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
+    raise RuntimeError("profile files unavailable")
+
+
+@pytest.mark.parametrize(
+    ("described", "expected"),
+    [
+        pytest.param(
+            StatusWireProfile("openai:api-key", "verified", "2026-09-30", ObservedFacts()),
+            ["Wire profile: verified on 2026-09-30 (Connection openai:api-key)"],
+            id="verified",
+        ),
+        pytest.param(
+            StatusWireProfile(
+                "openai:api-key:work",
+                "configured",
+                None,
+                ObservedFacts(
+                    reasoning_field="reasoning_content",
+                    rejected_parameters=("temperature", "top_p"),
+                    rejected_efforts=("xhigh",),
+                    reasoning_returned=True,
+                ),
+            ),
+            [
+                "Wire profile: configured, unverified (Connection openai:api-key:work)",
+                "Learned wire facts: reasoning arrives in reasoning_content; "
+                "rejected parameters: temperature, top_p; rejected reasoning efforts: xhigh",
+            ],
+            id="configured-with-learned-facts",
+        ),
+        pytest.param(
+            StatusWireProfile(
+                "openai:api-key", "inferred", None, ObservedFacts(reasoning_returned=True)
+            ),
+            [
+                "Wire profile: inferred from defaults, unverified (Connection openai:api-key)",
+                "Learned wire facts: reasoning is returned",
+            ],
+            id="inferred-with-returned-reasoning",
+        ),
+        pytest.param(None, [f"Wire profile: {STATUS_PLACEHOLDER}"], id="no-usable-connection"),
+        pytest.param(
+            _wire_profile_fails, [f"Wire profile: {STATUS_PLACEHOLDER}"], id="describer-fails"
+        ),
+    ],
+)
+def test_status_reports_the_wire_profile_of_the_models_connection(
+    described: Any, expected: list[str]
+) -> None:
+    described_agents: list[str] = []
+
+    def describe(agent: Any) -> StatusWireProfile | None:
+        described_agents.append(agent.model)
+        if callable(described):
+            return cast("StatusWireProfile | None", described(agent))
+        return cast("StatusWireProfile | None", described)
+
+    dispatcher, _, _ = _status_dispatcher(
+        resolver=_StubResolver(_make_agent(model="openai/gpt-5.2::api-key:work")),
+        wire_profile_describer=describe,
+    )
+
+    result = _execute_sync(dispatcher, "/status")
+
+    assert result.feedback is not None
+    assert described_agents == ["openai/gpt-5.2::api-key:work"]
+    assert [
+        line
+        for line in result.feedback.text.splitlines()
+        if line.startswith(("Wire profile:", "Learned wire facts:"))
+    ] == expected
 
 
 @pytest.mark.asyncio

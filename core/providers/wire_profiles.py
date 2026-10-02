@@ -41,6 +41,7 @@ from core.providers.wire_profile import (
     ReplayRules,
     RequestRules,
     ResponseRules,
+    Verification,
     WireProfile,
 )
 from core.utils.config import VBOT_ROOT
@@ -193,6 +194,31 @@ class WireProfiles:
             profile=profile,
         )
         return profile
+
+    def status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        """Return ``(status, verification)`` of one target without resolving its profile.
+
+        Equals the ``status`` and ``verification`` of :meth:`resolve`: they
+        depend only on the Model entry and the matching rules, never on learned
+        observations, so a listing of every catalog Model stays cheap.
+        """
+
+        bare_id = model_id.split("::", 1)[0]
+        file = self._files.get(provider_id)
+        resolution = _Resolution(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            model_id=bare_id,
+            model=self._model_resolver(provider_id, bare_id),
+            file=file,
+            protocols=None,
+            observed=None,
+            report=self._report,
+        )
+        entry = file.models.get(bare_id) if file is not None else None
+        return resolution._status(entry, resolution._matching_rules())
 
     def bind(self, provider_id: str, connection_id: str) -> WireBinding:
         """Return the profile and observation view of one Connection (for Adapters)."""

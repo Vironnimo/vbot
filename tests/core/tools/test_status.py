@@ -23,7 +23,7 @@ from core.chat import (
     ReplySurface,
 )
 from core.chat.messages import ChatMessage
-from core.chat.status_report import ReasoningIntent, status_session_facts
+from core.chat.status_report import STATUS_PLACEHOLDER, ReasoningIntent, status_session_facts
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.projects import (
     AgentResolutionError,
@@ -269,9 +269,15 @@ def test_status_tool_reports_the_current_session_like_the_status_command(tmp_pat
             if not line.startswith(("Session started:", "App uptime:", "Current time:"))
         ]
 
-    assert _without_live_time_lines(data["text"]) == _without_live_time_lines(
-        command_result.feedback.text
-    )
+    # Only the user's /status reports the wire profile; Agents cannot act on it.
+    wire_lines = ("Wire profile:", "Learned wire facts:")
+    assert _without_live_time_lines(data["text"]) == [
+        line
+        for line in _without_live_time_lines(command_result.feedback.text)
+        if not line.startswith(wire_lines)
+    ]
+    assert f"Wire profile: {STATUS_PLACEHOLDER}" in command_result.feedback.text.splitlines()
+    assert not any(line.startswith(wire_lines) for line in data["text"].splitlines())
     assert "Agent: Coder (openai/gpt-5.2)" in data["text"]
     assert "Activity: idle" in data["text"]
     assert "Session cache: read 800 / 1234 (64.8% hit), write 100, turns 1" in data["text"]

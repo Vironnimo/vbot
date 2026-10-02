@@ -5,7 +5,7 @@ Reports current or targeted agent/session/runtime status through the same status
 ## Interfaces
 
 - Tool name: `status`
-- Registration: `register_status_tool(registry, agent_resolver, sessions, models, chat_runs, started_at, providers=None, projects=None)` - resolves the target agent through the run-path `AgentResolver` seam (so a project session reports the resolved config agent), and uses the optional `ProjectStore` to label the session's project.
+- Registration: `register_status_tool(registry, agent_resolver, sessions, models, chat_runs, started_at, providers=None, projects=None, local_context_windows_loader=None, reasoning_render_describer=None, timezone_name_loader=None)` - resolves the target agent through the run-path `AgentResolver` seam (so a project session reports the resolved config agent), and uses the optional `ProjectStore` to label the session's project.
 - The model-facing schema is one flat object with optional `session_id` and `agent_id` (no `minLength`), `required: []`, and no `additionalProperties` keyword. Descriptions explain all three targeting forms; dispatch rejects unknown arguments; the handler rejects malformed ones and requires `session_id` when selecting another Agent.
 - Targeting rules:
   - No arguments checks the calling Agent's current Tool Context Session.

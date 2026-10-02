@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from core.chat.messages import ChatMessage, usage_token_is_estimated
@@ -28,6 +29,7 @@ from core.providers.reasoning import (
     ReasoningIntent,
     resolve_reasoning_intent,
 )
+from core.providers.wire_observations import ObservedFacts
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -50,6 +52,13 @@ STATUS_PLACEHOLDER = "—"
 # ``/status`` reports whether reasoning is on or off for the selection.
 REASONING_STATE_ON = "on"
 REASONING_STATE_OFF = "off"
+
+# ``/status`` wording of a wire profile status other than ``verified``, which
+# names its verification date instead.
+_WIRE_STATUS_TEXT = {
+    "configured": "configured, unverified",
+    "inferred": "inferred from defaults, unverified",
+}
 
 # Runtime-wired seam: ``(provider_id, model_id, effort)`` -> the provider-neutral
 # intent the target adapter would render, or ``None`` when it cannot resolve.
@@ -101,6 +110,33 @@ class StatusModelDetails:
     reasoning_budget_max: int | None = None
     recommended_temperature: float | None = None
     provider_default_temperature: float | None = None
+
+
+@dataclass(frozen=True)
+class StatusWireProfile:
+    """Wire profile of the Connection the Agent's Model resolves to.
+
+    ``connection_id`` is the ``provider:connection[:account]`` id chat uses,
+    ``status`` is ``verified`` / ``configured`` / ``inferred``, ``verified_at``
+    the date a verified profile was checked, and ``learned`` what live traffic
+    showed for the Model on that Connection.
+    """
+
+    connection_id: str
+    status: str
+    verified_at: str | None
+    learned: ObservedFacts
+
+
+# Runtime-wired seam: Agent -> the wire profile of the Connection its Model
+# resolves to as chat resolves it, or ``None`` when it resolves to none.
+WireProfileDescriber = Callable[[RuntimeAgent], StatusWireProfile | None]
+
+
+class _WireProfileOmitted(Enum):
+    """Default of the status renderers' ``wire_profile``: the report has no wire lines."""
+
+    OMITTED = "omitted"
 
 
 @dataclass(frozen=True)
@@ -326,6 +362,20 @@ def resolve_status_temperature(
     return "default"
 
 
+def resolve_status_wire_profile(
+    agent: RuntimeAgent | None,
+    describe_wire_profile: WireProfileDescriber | None,
+) -> StatusWireProfile | None:
+    """Return the wire profile of the Agent's Connection, ``None`` when unavailable."""
+    if agent is None or describe_wire_profile is None:
+        return None
+    try:
+        return describe_wire_profile(agent)
+    except Exception:
+        _LOGGER.warning("Failed to describe the wire profile for %s", agent.model, exc_info=True)
+        return None
+
+
 def build_status_reply(
     agent: RuntimeAgent | None,
     messages: list[ChatMessage] | StatusSessionFacts,
@@ -337,6 +387,7 @@ def build_status_reply(
     project_label: str | None = None,
     temperature_status: str | None = None,
     timezone: tzinfo | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build status text while applying an optional model-display override."""
     with _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name):
@@ -350,6 +401,7 @@ def build_status_reply(
             project_label=project_label,
             temperature_status=temperature_status,
             timezone=timezone,
+            wire_profile=wire_profile,
         )
 
 
@@ -363,6 +415,7 @@ def build_status_text(
     project_label: str | None = None,
     temperature_status: str | None = None,
     timezone: tzinfo | None = None,
+    wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
     """Build human-readable status text for the current session and runtime state.
 
@@ -374,6 +427,11 @@ def build_status_text(
     configured agent value alone.
     ``project_label`` names the session's project (``None`` for an identity
     session, rendered as the placeholder).
+    ``wire_profile`` describes the Connection the Model resolves to (see
+    :class:`StatusWireProfile`), ``None`` rendering the placeholder when nothing
+    resolves; learned wire facts get a line only when any exist. Left out, the
+    text has no wire profile lines: the user's ``/status`` passes it, while the
+    status Tool does not, because Agents cannot act on wire profiles.
     """
     now_utc = datetime.now(UTC)
     now_local = now_utc.astimezone(timezone)
@@ -416,6 +474,7 @@ def build_status_text(
         f"Selected thinking effort: {selected_thinking_effort}",
         f"Actual model thinking effort: {actual_thinking_effort_text}",
         f"Temperature: {temperature}",
+        *_wire_profile_lines(wire_profile),
         f"Activity: {activity_name}",
         f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
         f"Run updated at: {run_updated_at or STATUS_PLACEHOLDER}",
@@ -476,6 +535,34 @@ def _actual_thinking_effort_text(value: str | None) -> str:
     if not value:
         return STATUS_PLACEHOLDER
     return value
+
+
+def _wire_profile_lines(wire_profile: StatusWireProfile | None | _WireProfileOmitted) -> list[str]:
+    if isinstance(wire_profile, _WireProfileOmitted):
+        return []
+    if wire_profile is None:
+        return [f"Wire profile: {STATUS_PLACEHOLDER}"]
+    status = _WIRE_STATUS_TEXT.get(wire_profile.status, wire_profile.status)
+    if wire_profile.status == "verified" and wire_profile.verified_at:
+        status = f"verified on {wire_profile.verified_at}"
+    lines = [f"Wire profile: {status} (Connection {wire_profile.connection_id})"]
+    learned = _learned_wire_facts_text(wire_profile.learned)
+    if learned:
+        lines.append(f"Learned wire facts: {learned}")
+    return lines
+
+
+def _learned_wire_facts_text(facts: ObservedFacts) -> str:
+    parts: list[str] = []
+    if facts.reasoning_field:
+        parts.append(f"reasoning arrives in {facts.reasoning_field}")
+    elif facts.reasoning_returned:
+        parts.append("reasoning is returned")
+    if facts.rejected_parameters:
+        parts.append(f"rejected parameters: {', '.join(facts.rejected_parameters)}")
+    if facts.rejected_efforts:
+        parts.append(f"rejected reasoning efforts: {', '.join(facts.rejected_efforts)}")
+    return "; ".join(parts)
 
 
 def _temperature_text(value: float | None) -> str:

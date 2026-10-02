@@ -36,8 +36,12 @@ from core.providers.token_getter import (
     TokenGetter,
 )
 from core.providers.token_store import TokenStore
-from core.providers.wire_observations import OBSERVATIONS_FILE_NAME, WireObservations
-from core.providers.wire_profile import Protocol, WireProfile
+from core.providers.wire_observations import (
+    OBSERVATIONS_FILE_NAME,
+    ObservedFacts,
+    WireObservations,
+)
+from core.providers.wire_profile import ProfileStatus, Protocol, Verification, WireProfile
 from core.providers.wire_profiles import (
     WireProfiles,
     bundled_wire_profile_files,
@@ -119,8 +123,27 @@ class ProviderRuntime:
         return self._wire_observations
 
     def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
-        """Return the resolved wire profile for one Model on one local Connection id."""
+        """Return the resolved wire profile for one Model on one local Connection id.
+
+        It is the profile requests use, learned facts included.
+        """
         return self._wire_profiles.resolve(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        """Return the wire profile ``(status, verification)`` for one local Connection id.
+
+        Equals ``wire_profile(...).status`` and ``.verification`` without
+        resolving the profile, so listing every catalog Model stays cheap.
+        """
+        return self._wire_profiles.status(provider_id, connection_id, model_id)
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        """Return what live traffic showed for one Model on one local Connection id."""
+        return self._wire_observations.facts_for(provider_id, connection_id, model_id)
 
     def close_wire_observations(self) -> None:
         """Write pending learned wire facts (called on Runtime shutdown)."""

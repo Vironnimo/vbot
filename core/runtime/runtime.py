@@ -28,6 +28,8 @@ from core.automation import (
 from core.calendar import CalendarService
 from core.channels import ChannelService
 from core.chat import ChatLoop, CommandDispatcher
+from core.chat.errors import ChatError
+from core.chat.status_report import StatusWireProfile
 from core.database import Database, SnapshotBarrier, UnregisteredDatabase
 from core.extensions import (
     ExtensionRegistry,
@@ -57,7 +59,7 @@ from core.prompts import (
     SkillPromptRegistry,
     SystemPromptManager,
 )
-from core.providers.accounts import ConnectionRef
+from core.providers.accounts import ConnectionRef, split_connection_id
 from core.providers.adapter import ProviderAdapter
 from core.providers.providers import ProviderRegistry
 from core.providers.reasoning import ReasoningIntent
@@ -65,6 +67,8 @@ from core.providers.runtime import ProviderRuntime
 from core.providers.token_getter import TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
+from core.providers.wire_observations import ObservedFacts
+from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.recall import RecallBackend
 from core.runs import ChatRunManager
 from core.runtime._agent_rename import (
@@ -109,6 +113,7 @@ from core.tools.process_manager import ProcessManager
 from core.tools.terminal_manager import TerminalManager
 from core.tools.tools import ToolPromptBlockRegistry, ToolRegistry
 from core.usage import UsageRecorder
+from core.utils.errors import ConfigError
 from core.utils.logging import LogManager
 from core.utils.version import BuildIdentity
 
@@ -1238,6 +1243,44 @@ class Runtime:
             provider_id,
             model_id,
             effort,
+        )
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        """Return the wire profile requests use for one Model on one local Connection id."""
+        return self._provider_operations().wire_profile(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        """Return the wire profile ``(status, verification)`` without resolving the profile."""
+        return self._provider_operations().wire_status(provider_id, connection_id, model_id)
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        """Return what live traffic showed for one Model on one local Connection id."""
+        return self._provider_operations().learned_wire_facts(provider_id, connection_id, model_id)
+
+    def describe_agent_wire_profile(self, agent: Any) -> StatusWireProfile | None:
+        """Describe the wire profile of the Connection the Agent's Model resolves to.
+
+        Resolves the Connection as chat does (a pinned ``::connection`` suffix,
+        else the first usable Connection) and returns ``None`` when the Model
+        cannot resolve to one.
+        """
+        from core.chat.model_resolution import resolve_agent_model_target
+
+        try:
+            provider_id, model_id, connection_id = resolve_agent_model_target(self, agent)
+            local_connection_id, _account = split_connection_id(provider_id, connection_id)
+        except ChatError, ConfigError, KeyError:
+            return None
+        profile = self.wire_profile(provider_id, local_connection_id, model_id)
+        return StatusWireProfile(
+            connection_id=connection_id,
+            status=profile.status,
+            verified_at=profile.verification.date if profile.verification is not None else None,
+            learned=self.learned_wire_facts(provider_id, local_connection_id, model_id),
         )
 
     def model_database_refresh(self) -> AbstractAsyncContextManager[None]:

@@ -1,5 +1,7 @@
 <script>
+  import { optionDecorations } from '$lib/dropdownPanel.js';
   import { t } from '$lib/i18n.js';
+  import OptionMarker from './OptionMarker.svelte';
 
   const noop = () => {};
 
@@ -73,6 +75,7 @@
         value: option.value,
         label: option.label ?? option.value,
         secondaryLabel: option.secondaryLabel ?? '',
+        marker: optionDecorations(option).marker,
         searchText:
           `${option.label ?? option.value} ${option.secondaryLabel ?? ''}`
             .trim()
@@ -119,7 +122,15 @@
         onmousedown={(event) => event.preventDefault()}
         onclick={() => onSelect(option)}
       >
-        <span class="model-autocomplete__label">{option.label}</span>
+        <span class="model-autocomplete__head">
+          <span class="model-autocomplete__label">{option.label}</span>
+          {#if option.marker}
+            <OptionMarker
+              label={option.marker.label}
+              tooltip={option.marker.tooltip}
+            />
+          {/if}
+        </span>
         {#if option.secondaryLabel}
           <span class="model-autocomplete__meta">{option.secondaryLabel}</span>
         {/if}
@@ -202,6 +213,13 @@
 
   .model-autocomplete__option.active {
     box-shadow: inset 2px 0 0 var(--accent);
+  }
+
+  .model-autocomplete__head {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
   }
 
   .model-autocomplete__label {

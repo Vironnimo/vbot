@@ -615,6 +615,7 @@ def bootstrap(runtime: Runtime) -> None:
             storage=runtime._storage,
             terminal_manager=runtime._terminal_manager,
             reasoning_render_describer=runtime.describe_reasoning_render,
+            wire_profile_describer=runtime.describe_agent_wire_profile,
             automation_references=runtime._automation_references,
             snapshot_barrier=runtime._snapshot_barrier,
         )

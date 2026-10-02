@@ -313,6 +313,37 @@ def _model_detail_response(
     return response
 
 
+def _wire_status_response(status: str, verification: Any) -> JsonObject:
+    """Return how far vBot trusts one Connection's wire profile of a Model."""
+
+    return {
+        "wire_status": status,
+        "verified_at": verification.date if verification is not None else None,
+    }
+
+
+def _wire_profile_detail_response(profile: Any, learned: Any) -> JsonObject:
+    """Return the compact wire profile of one Connection and its learned facts.
+
+    ``learned`` names only facts live traffic showed, never request or
+    response content.
+    """
+
+    return {
+        **_wire_status_response(profile.status, profile.verification),
+        "protocol": profile.protocol,
+        "reasoning_dialect": profile.reasoning.dialect,
+        "reasoning_ladder": list(profile.reasoning.ladder),
+        "replay_fidelity": profile.replay.fidelity,
+        "learned": {
+            "reasoning_field": learned.reasoning_field,
+            "rejected_parameters": list(learned.rejected_parameters),
+            "rejected_efforts": list(learned.rejected_efforts),
+            "reasoning_returned": learned.reasoning_returned,
+        },
+    }
+
+
 def _json_compatible(value: Any) -> Any:
     """Convert frozen Model mappings and sequences into JSON-native values."""
 
