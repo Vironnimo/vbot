@@ -77,6 +77,7 @@ from core.json_documents import (
     strip_unknown_fields,
     write_json_document,
 )
+from core.utils.file_status import exists_strict
 from core.utils.ids import new_id
 from core.utils.logging import get_logger
 
@@ -957,7 +958,7 @@ class CalendarService:
     def _ensure_storage_exists(self) -> None:
         try:
             self._calendar_dir.mkdir(parents=True, exist_ok=True)
-            if not self._events_path.exists():
+            if not exists_strict(self._events_path):
                 write_json_document(self._events_path, {"events": []}, CALENDAR_EVENTS_FORMAT)
         except OSError as error:
             raise CalendarStorageError(

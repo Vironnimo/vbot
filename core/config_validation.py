@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from core.utils.file_status import exists_strict
+
 DiagnosticSeverity = Literal["error", "warning"]
 JsonObject = dict[str, Any]
 JsonValidator = Callable[[Any], list["JsonDiagnostic"]]
@@ -249,7 +251,13 @@ def _load_and_validate_json_file(
     *,
     missing_ok: bool,
 ) -> _ValidatedDocument:
-    if not file_path.exists():
+    # A file that cannot even be checked exists as far as callers are concerned:
+    # reporting it missing would let a writer replace it unread.
+    try:
+        present = exists_strict(file_path)
+    except OSError as exc:
+        return _unreadable_document(file_path, exc)
+    if not present:
         diagnostics: tuple[JsonDiagnostic, ...] = ()
         if not missing_ok:
             diagnostics = (error_diagnostic("$", "File does not exist"),)
@@ -289,13 +297,7 @@ def _load_and_validate_json_file(
             )
         )
     except OSError as exc:
-        return _ValidatedDocument(
-            report=JsonValidationReport(
-                file_path=file_path,
-                exists=True,
-                diagnostics=(error_diagnostic("$", f"Cannot read file: {exc}"),),
-            )
-        )
+        return _unreadable_document(file_path, exc)
 
     return _ValidatedDocument(
         report=JsonValidationReport(
@@ -304,4 +306,14 @@ def _load_and_validate_json_file(
             diagnostics=tuple(validator(data)),
         ),
         data=data,
+    )
+
+
+def _unreadable_document(file_path: Path, error: OSError) -> _ValidatedDocument:
+    return _ValidatedDocument(
+        report=JsonValidationReport(
+            file_path=file_path,
+            exists=True,
+            diagnostics=(error_diagnostic("$", f"Cannot read file: {error}"),),
+        )
     )

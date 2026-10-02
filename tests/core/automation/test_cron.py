@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -337,22 +338,38 @@ async def test_invalid_job_is_skipped_and_preserved_when_valid_jobs_change(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("content", "message"),
+    ("content", "message", "denied"),
     [
-        pytest.param("{", "Invalid JSON", id="malformed"),
+        pytest.param("{", "Invalid JSON", False, id="malformed"),
         pytest.param(
             json.dumps({"format_version": 2, "jobs": []}),
             "written by a newer vBot",
+            False,
             id="newer-format",
+        ),
+        # A file that cannot be checked is not missing: it is never seeded over.
+        pytest.param(
+            json.dumps({"format_version": 1, "jobs": []}),
+            "Cannot initialize cron storage",
+            True,
+            id="access-denied",
         ),
     ],
 )
 async def test_unreadable_jobs_file_disables_cron_without_overwriting_it(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, content: str, message: str
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    content: str,
+    message: str,
+    denied: bool,
 ) -> None:
     jobs_path = tmp_path / "cron" / "jobs.json"
     jobs_path.parent.mkdir(parents=True)
     jobs_path.write_text(content, encoding="utf-8")
+    if denied:
+        deny_access(jobs_path.parent)
     service, _trigger_service = make_service(tmp_path)
 
     with caplog.at_level(logging.ERROR):
@@ -366,6 +383,7 @@ async def test_unreadable_jobs_file_disables_cron_without_overwriting_it(
         )
 
     assert caplog.records
+    monkeypatch.undo()
     assert jobs_path.read_text(encoding="utf-8") == content
 
 
