@@ -219,6 +219,221 @@ kbd {
   opacity: 0.55;
 }
 
+/* Data tables: Sans throughout, text columns start-aligned, numbers
+   end-aligned with tabular figures, Mono only for code-like columns. A
+   sortable header is a button whose hit area covers the whole header cell;
+   its chevron shows the active direction, and on hover or focus the direction
+   a click chooses. The header row sticks only while a bounded table
+   (`--data-table-max-height`) scrolls inside its own height. */
+.data-table {
+  --data-table-pad-y: 10px;
+  --data-table-pad-x: 12px;
+  min-width: 0;
+}
+
+.data-table--dense {
+  --data-table-pad-y: 6px;
+  --data-table-pad-x: 10px;
+}
+
+.data-table__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-sm);
+}
+
+.data-table__filter {
+  width: min(100%, 280px);
+}
+
+.data-table__count {
+  color: var(--text-lo);
+  font-size: var(--fs-body-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table__scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.data-table--bounded .data-table__scroll {
+  max-height: var(--data-table-max-height);
+  overflow-y: auto;
+}
+
+.data-table__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-body-sm);
+}
+
+.data-table--dense .data-table__table {
+  font-size: var(--fs-label-sm);
+}
+
+.data-table__cell {
+  padding: var(--data-table-pad-y) var(--data-table-pad-x);
+  text-align: start;
+}
+
+/* The header line is a shadow, not a border: a collapsed border stays behind
+   when a sticky header cell scrolls. */
+th.data-table__cell {
+  position: relative;
+  box-shadow: inset 0 -1px 0 var(--border);
+  color: var(--text-lo);
+  font-size: var(--fs-label-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.data-table--bounded th.data-table__cell {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--data-table-head-surface, var(--surface));
+}
+
+td.data-table__cell {
+  border-bottom: 1px solid var(--border);
+  color: var(--text-hi);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+
+tbody > .data-table__row:last-child > td.data-table__cell {
+  border-bottom: 0;
+}
+
+tfoot td.data-table__cell {
+  border-top: 1px solid var(--border-2);
+  border-bottom: 0;
+  font-weight: 600;
+}
+
+.data-table__cell--end {
+  text-align: end;
+  white-space: nowrap;
+}
+
+.data-table__cell--mono {
+  font-family: var(--font-mono);
+}
+
+.data-table__row:hover {
+  background: var(--surface-2);
+}
+
+.data-table__row--action {
+  cursor: pointer;
+}
+
+.data-table__row--action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  background: var(--surface-2);
+}
+
+.data-table__head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-table__cell--end .data-table__head {
+  justify-content: flex-end;
+}
+
+.data-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.data-table__sort::after {
+  position: absolute;
+  inset: 0;
+  content: '';
+}
+
+/* The InfoHint stays clickable above the header's stretched sort target. */
+.data-table__hint {
+  position: relative;
+  z-index: 1;
+}
+
+/* In an end-aligned column the chevron leads, so the label ends flush with
+   the numbers below it. */
+.data-table__cell--end .data-table__sort {
+  flex-direction: row-reverse;
+}
+
+.data-table__sort:hover,
+.data-table__sort--active {
+  color: var(--text-hi);
+}
+
+.data-table__sort:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.data-table__sort-icon {
+  flex-shrink: 0;
+  width: 12px;
+  height: 12px;
+  stroke-width: 2;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.data-table__sort--asc .data-table__sort-icon {
+  transform: rotate(180deg);
+}
+
+.data-table__sort:hover .data-table__sort-icon,
+.data-table__sort:focus-visible .data-table__sort-icon {
+  opacity: 0.6;
+}
+
+.data-table__sort.data-table__sort--active .data-table__sort-icon {
+  opacity: 1;
+}
+
+.data-table__more {
+  margin-top: var(--space-xs);
+}
+
+.data-table__more svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .data-table__sort-icon {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .data-table__more {
+    min-height: 40px;
+  }
+}
+
 .master-detail-empty {
   margin: 24px;
 }

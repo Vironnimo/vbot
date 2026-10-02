@@ -1,17 +1,14 @@
-"""Immutable Statistics report records and their JSON projection."""
+"""Immutable records of Run activity and of Extension group usage, with their JSON form.
+
+``statistics.report`` sections are plain JSON built in ``core/statistics/_sections``;
+these records carry ``statistics.run_activity`` and the group usage contract of the
+Extension API (usage, Tools, Compactions and Runs of owned Runs).
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from core.statistics._costs import CostsSection
-    from core.statistics._extensions import ExtensionsSection
-
-from core.statistics.skills import (
-    SkillsSection,
-)
+from typing import Any
 
 JsonObject = dict[str, Any]
 
@@ -30,47 +27,6 @@ class RunStatusCounts:
     failed: int
     cancelled: int
     interrupted: int
-
-
-@dataclass(frozen=True)
-class AgentActivity:
-    agent_id: str
-    sessions: int
-    runs: int
-    chat_messages: int
-    session_records: int
-    errors: int
-    last_activity: str | None
-
-
-@dataclass(frozen=True)
-class DailyTrendPoint:
-    date: str
-    runs: int
-    completed: int
-    failed: int
-    cancelled: int
-    interrupted: int
-
-
-@dataclass(frozen=True)
-class OverviewSection:
-    total_agents: int
-    total_sessions: int
-    total_runs: int
-    open_run_groups: int
-    total_chat_messages: int
-    chat_messages_by_role: dict[str, int]
-    total_session_records: int
-    session_records_by_role: dict[str, int]
-    last_activity: str | None
-    run_status: RunStatusCounts
-    average_run_duration_ms: float | None
-    median_run_duration_ms: float | None
-    runs_with_tool_calls: int
-    total_tool_calls: int
-    agents: list[AgentActivity]
-    daily_trend: list[DailyTrendPoint]
 
 
 @dataclass(frozen=True)
@@ -403,23 +359,6 @@ class CountEntry:
 
 
 @dataclass(frozen=True)
-class HourCount:
-    hour: int
-    count: int
-
-
-@dataclass(frozen=True)
-class ErrorsSection:
-    total_errors: int
-    by_kind: list[CountEntry]
-    by_provider: list[CountEntry]
-    by_model: list[CountEntry]
-    by_agent: list[CountEntry]
-    by_hour: list[HourCount]
-    daily: list[DailyCount]
-
-
-@dataclass(frozen=True)
 class ToolStat:
     name: str
     calls: int
@@ -447,24 +386,3 @@ class ToolsSection:
     tools: list[ToolStat]
     by_agent: list[CountEntry]
     top_sessions: list[ToolSessionCount]
-
-
-@dataclass(frozen=True)
-class StatisticsReport:
-    """Full statistics report covering every Statistics sub-view."""
-
-    generated_at: str
-    window: WindowInfo
-    overview: OverviewSection
-    usage: UsageSection
-    runs: RunsSection
-    compactions: CompactionsSection
-    errors: ErrorsSection
-    tools: ToolsSection
-    skills: SkillsSection
-    costs: CostsSection
-    extensions: ExtensionsSection
-
-    def to_dict(self) -> JsonObject:
-        """Return a JSON-serializable dictionary of the whole report."""
-        return asdict(self)

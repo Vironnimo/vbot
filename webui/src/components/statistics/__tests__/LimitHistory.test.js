@@ -167,6 +167,38 @@ describe('LimitHistory', () => {
     expect(slots().map((slot) => slot.tabIndex)).toEqual([0, -1]);
   });
 
+  it('lists ten overlapping Runs until all are asked for', async () => {
+    rpcMock.mockImplementation(
+      routeHistory(
+        Array.from({ length: 12 }, (_, index) => ({
+          agent_id: 'main',
+          session_id: `s${index}`,
+          session_title: `Run ${index}`,
+          run_id: `r${index}`,
+          status: 'completed',
+          started_at: '2026-07-25T10:15:00+00:00',
+          duration_ms: 1000,
+          models: [],
+          tool_calls: 0,
+        })),
+      ),
+    );
+
+    mountedComponent = mount(LimitHistory, { target: document.body });
+    await waitForCondition(() => document.querySelector('.limit-runs'));
+    const runs = () => document.querySelectorAll('.limit-runs > li');
+    expect(runs()).toHaveLength(10);
+
+    const toggle = document.querySelector('.limit-runs__toggle');
+    expect(toggle.textContent.trim()).toBe(
+      t('statistics.limits.showAllRuns', { count: '12' }),
+    );
+    toggle.click();
+    flushSync();
+    expect(runs()).toHaveLength(12);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
   it('deletes the history only after confirmation', async () => {
     rpcMock.mockImplementation(routeHistory([]));
 

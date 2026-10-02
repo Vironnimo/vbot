@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,10 +11,17 @@ from typing import TYPE_CHECKING
 from core.models.pricing import TokenPricing
 from core.projects.address import format_agent_address
 from core.sessions import OwnedRunRecord, SessionAddress
-from core.statistics._aggregation import ReportBuilder
+from core.statistics._aggregation import GroupReport, GroupReportBuilder
 from core.statistics._call_scan import account_run_activity
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._runs import load_run_activity
+from core.statistics._sections import (
+    SECTION_NAMES,
+    LiveSession,
+    ReportContext,
+    ReportWindow,
+    build_sections,
+)
 from core.statistics._sources import (
     AgentDirectory,
     ProjectDirectory,
@@ -33,16 +40,19 @@ from core.statistics.report import (
     JsonObject,
     RunActivity,
     RunActivityReport,
-    StatisticsReport,
     WindowInfo,
 )
 from core.statistics.skills import (
     SkillInventorySource,
     SkillUse,
+    _ResolvedInventory,
     counts_as_skill_use,
+    empty_inventory,
     load_skill_use,
     offered_skill_names,
+    resolve_inventory,
 )
+from core.utils.timestamps import format_canonical_timestamp
 
 if TYPE_CHECKING:
     from core.usage import UsageRecorder
@@ -57,6 +67,13 @@ class _ExtensionSession:
 
 
 MAX_RUN_ACTIVITY = 200
+
+# The sections of ``StatisticsService.report``, in report order.
+REPORT_SECTIONS = SECTION_NAMES
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class StatisticsService:
@@ -78,6 +95,8 @@ class StatisticsService:
     current skill set (see ``core/statistics/skills.py``). When omitted, the
     skills section still builds — against an empty inventory, so every observed
     usage drops and all counts are zero — keeping existing constructions valid.
+    ``clock`` supplies the report time (the open end of a window and the
+    previous window's length); it defaults to the wall clock.
     """
 
     def __init__(
@@ -90,6 +109,7 @@ class StatisticsService:
         pricing_lookup: Callable[[str], TokenPricing | None] | None = None,
         index: StatisticsIndex | None = None,
         usage_recorder: UsageRecorder | None = None,
+        clock: Callable[[], datetime] = _utc_now,
     ) -> None:
         self._sessions = chat_sessions
         self._agents = agents
@@ -98,13 +118,18 @@ class StatisticsService:
         self._pricing_lookup = pricing_lookup
         self._index = index if index is not None else StatisticsIndex(Path(chat_sessions.data_dir))
         self._usage_recorder = usage_recorder
+        self._clock = clock
 
     def warm_index(self) -> None:
         """Reconcile the disposable index without building a report."""
         self._import_session_usage()
         scopes = _index_scopes(self._statistics_scopes(), self._extension_sessions())
         self._index.read(
-            self._sessions, scopes, lambda _view: None, usage_recorder=self._usage_recorder
+            self._sessions,
+            scopes,
+            lambda _view: None,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
 
     async def warm_index_async(self) -> None:
@@ -112,54 +137,90 @@ class StatisticsService:
         await self._index.run_async(self.warm_index)
 
     async def report_async(
-        self, *, since: datetime | None = None, until: datetime | None = None
-    ) -> StatisticsReport:
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        timezone: str = "UTC",
+        sections: Iterable[str] | None = None,
+    ) -> JsonObject:
         """``report`` on the index database's worker pool."""
-        return await self._index.run_async(self.report, since=since, until=until)
+        return await self._index.run_async(
+            self.report, since=since, until=until, timezone=timezone, sections=sections
+        )
 
     async def run_activity_async(self, *, since: datetime, until: datetime) -> RunActivityReport:
         """``run_activity`` on the index database's worker pool."""
         return await self._index.run_async(self.run_activity, since=since, until=until)
 
     def report(
-        self, *, since: datetime | None = None, until: datetime | None = None
-    ) -> StatisticsReport:
-        """Reconcile all Session scopes and return the aggregated report."""
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        timezone: str = "UTC",
+        sections: Iterable[str] | None = None,
+    ) -> JsonObject:
+        """Reconcile all Session scopes once and return the requested report sections.
+
+        ``since`` is floored and ``until`` ceiled to whole UTC hours; day
+        series use calendar days of the IANA ``timezone``. ``sections`` names
+        sections from ``REPORT_SECTIONS`` (default: all). The result is
+        ``{generated_at, window: {since, until, timezone}, <section>: {...}}``.
+        Unknown sections, an unknown zone or ``since`` after ``until`` raise
+        ``ValueError``.
+        """
+        names = report_sections(sections)
+        now = self._clock()
+        window = ReportWindow.create(since=since, until=until, timezone=timezone, now=now)
         self._import_session_usage()
         scopes = self._statistics_scopes()
         extension_sessions = self._extension_sessions()
+        inventory = self._resolve_skills(scopes, extension_sessions) if "skills" in names else None
 
-        def consume(view: IndexView) -> ReportBuilder:
-            builder = ReportBuilder(since=since, until=until, pricing_lookup=self._pricing_lookup)
-            for scope in scopes:
-                builder.register_scope(agent_id=scope.agent_id, project_id=scope.project_id)
-                surviving: list[JsonObject] = []
-                for indexed, session_id in _surviving(view, scope):
-                    _add_unit(builder, scope, session_id, indexed)
-                    surviving.append(indexed.summary)
-                builder.register_agent(scope.display_key, surviving)
-            # Extension-owned Sessions count once per owner under its reserved
-            # actor key, never under their synthetic participant Agent ids.
-            owner_summaries: dict[str, list[JsonObject]] = {}
-            for entry in extension_sessions:
-                builder.register_scope(agent_id=None, project_id=entry.scope.project_id)
-                surviving = owner_summaries.setdefault(entry.key.owner_name, [])
-                for indexed, session_id in _surviving(view, entry.scope):
-                    _add_unit(builder, entry.scope, session_id, indexed, extension=entry.key)
-                    surviving.append(indexed.summary)
-            for owner_name, summaries in owner_summaries.items():
-                if summaries:
-                    builder.register_agent(extension_actor_key(owner_name), summaries)
-            builder.aggregate(view.connection, durable_usage=self._usage_recorder is not None)
-            return builder
+        def consume(view: IndexView) -> JsonObject:
+            context = ReportContext(
+                view.connection,
+                window,
+                _live_sessions(view, scopes, extension_sessions),
+                skill_inventory=inventory,
+            )
+            return build_sections(context, names)
 
-        builder = self._index.read(
+        built = self._index.read(
             self._sessions,
             _index_scopes(scopes, extension_sessions),
             consume,
             usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
-        return builder.build(self._skill_inventory)
+        return {
+            "generated_at": format_canonical_timestamp(now),
+            "window": window.echo(),
+            **built,
+        }
+
+    def _resolve_skills(
+        self,
+        scopes: tuple[StatisticsScope, ...],
+        extension_sessions: tuple[_ExtensionSession, ...],
+    ) -> _ResolvedInventory:
+        # Extension participant Agents own no private Skills, but their
+        # Project contributes its Skills.
+        if self._skill_inventory is None:
+            return empty_inventory()
+        return resolve_inventory(
+            self._skill_inventory,
+            agent_ids=frozenset(scope.agent_id for scope in scopes),
+            project_ids=frozenset(
+                project_id
+                for project_id in (
+                    *(scope.project_id for scope in scopes),
+                    *(entry.scope.project_id for entry in extension_sessions),
+                )
+                if project_id is not None
+            ),
+        )
 
     def run_activity(
         self,
@@ -191,7 +252,11 @@ class StatisticsService:
             return total, runs
 
         total_runs, runs = self._index.read(
-            self._sessions, scopes, consume, usage_recorder=self._usage_recorder
+            self._sessions,
+            scopes,
+            consume,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
         return RunActivityReport(
             generated_at=datetime.now(UTC).isoformat(),
@@ -210,6 +275,7 @@ class StatisticsService:
         Session counts for its bare Agent id. Extension participant Sessions
         belong to no roster Agent and are left out. No time window applies.
         """
+        self._import_session_usage()
         scopes = self._statistics_scopes()
 
         def consume(view: IndexView) -> dict[tuple[str, str], SkillUse]:
@@ -223,7 +289,11 @@ class StatisticsService:
 
         # Every scope is passed so the read never prunes Extension Sessions.
         return self._index.read(
-            self._sessions, _index_scopes(scopes, self._extension_sessions()), consume
+            self._sessions,
+            _index_scopes(scopes, self._extension_sessions()),
+            consume,
+            usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
 
     async def skill_usage_async(self) -> dict[tuple[str, str], SkillUse]:
@@ -302,7 +372,7 @@ class StatisticsService:
 
     def _group_report(
         self, owner_name: str, group_id: str, records: list[OwnedRunRecord]
-    ) -> tuple[StatisticsReport, dict[str, StatisticsReport]]:
+    ) -> tuple[GroupReport, dict[str, GroupReport]]:
         summaries = {
             owned.address: extension_session_summary(owned)
             for owned in self._sessions.list_owned_session_summaries(
@@ -313,7 +383,7 @@ class StatisticsService:
         for record in records:
             by_address.setdefault(record.address, []).append(record)
 
-        def consume(view: IndexView) -> tuple[StatisticsReport, dict[str, StatisticsReport]]:
+        def consume(view: IndexView) -> tuple[GroupReport, dict[str, GroupReport]]:
             # Only an owned Run of the Session generation it was recorded in
             # counts, and only its own records: a reused Session is never
             # treated as wholly owned.
@@ -328,8 +398,8 @@ class StatisticsService:
                         owned.append(record)
                         slices.append((indexed.session_key, record.run_id))
             present = materialize_run_slices(view.connection, slices)
-            overall = _group_builder()
-            participants: dict[str, ReportBuilder] = {}
+            overall = GroupReportBuilder()
+            participants: dict[str, GroupReportBuilder] = {}
             for position, record in enumerate(owned):
                 if position not in present and self._usage_recorder is None:
                     continue
@@ -341,29 +411,23 @@ class StatisticsService:
                     address=record.address,
                     run_id=record.run_id,
                 )
-                peer = participants.setdefault(display_key, _group_builder())
-                for target in (overall, peer):
-                    target.register_agent(display_key, [{"id": record.address.session_id}])
-                    target.add_unit(unit)
-            overall.aggregate(
-                view.connection, durable_usage=self._usage_recorder is not None, group_usage=True
-            )
+                overall.add_unit(unit)
+                participants.setdefault(display_key, GroupReportBuilder()).add_unit(unit)
+            durable_usage = self._usage_recorder is not None
+            overall.aggregate(view.connection, durable_usage=durable_usage)
             for peer in participants.values():
-                peer.aggregate(
-                    view.connection,
-                    durable_usage=self._usage_recorder is not None,
-                    group_usage=True,
-                )
-            return overall.build(None), {
-                peer_id: peer.build(None) for peer_id, peer in participants.items()
+                peer.aggregate(view.connection, durable_usage=durable_usage)
+            return overall.build(), {
+                peer_id: peer.build() for peer_id, peer in participants.items()
             }
 
         return self._index.read(
             self._sessions,
-            _owner_scopes(records, summaries),
+            _owner_scopes(records, owner_name, summaries, self._sessions.summary),
             consume,
             prune=False,
             usage_recorder=self._usage_recorder,
+            pricing_lookup=self._pricing_lookup,
         )
 
     def _import_session_usage(self) -> None:
@@ -427,6 +491,7 @@ class StatisticsService:
                         agent_id=owned.address.agent_id,
                         display_key=extension_actor_key(owned.owner_name),
                         summaries=(summary,),
+                        owner_name=owned.owner_name,
                     ),
                     key=ExtensionSliceKey(
                         owner_name=owned.owner_name,
@@ -460,35 +525,55 @@ def _surviving(view: IndexView, scope: StatisticsScope) -> list[tuple[IndexedSes
     return surviving
 
 
-def _add_unit(
-    builder: ReportBuilder,
-    scope: StatisticsScope,
-    session_id: str,
-    indexed: IndexedSession,
-    *,
-    extension: ExtensionSliceKey | None = None,
-) -> None:
-    created_at = indexed.summary.get("created_at")
-    builder.add_unit(
-        ReportUnit(
-            display_key=scope.display_key,
-            session_key=indexed.session_key,
-            session_id=session_id,
-            title=_title(indexed.summary),
-            extension=extension,
-            address=SessionAddress(scope.project_id, scope.agent_id, session_id),
-        ),
-        created_at=created_at if isinstance(created_at, str) else None,
-        offered_skills=offered_skill_names(indexed.summary),
-        skill_use=counts_as_skill_use(indexed.summary),
-    )
+def _live_sessions(
+    view: IndexView,
+    scopes: tuple[StatisticsScope, ...],
+    extension_sessions: tuple[_ExtensionSession, ...],
+) -> list[LiveSession]:
+    """The listed Sessions that survived reconciliation, in report listing order.
+
+    Extension-owned Sessions count once per owner under its reserved actor
+    key, never under their synthetic participant Agent ids.
+    """
+    entries: list[tuple[StatisticsScope, ExtensionSliceKey | None]] = [
+        (scope, None) for scope in scopes
+    ]
+    entries.extend((entry.scope, entry.key) for entry in extension_sessions)
+    sessions: list[LiveSession] = []
+    for scope, extension in entries:
+        for indexed, session_id in _surviving(view, scope):
+            created_at = indexed.summary.get("created_at")
+            sessions.append(
+                LiveSession(
+                    session_key=indexed.session_key,
+                    display_key=scope.display_key,
+                    address=SessionAddress(scope.project_id, scope.agent_id, session_id),
+                    title=_title(indexed.summary),
+                    created_at=created_at if isinstance(created_at, str) else None,
+                    offered_skills=tuple(offered_skill_names(indexed.summary)),
+                    skill_use=counts_as_skill_use(indexed.summary),
+                    extension=extension,
+                )
+            )
+    return sessions
+
+
+def report_sections(sections: Iterable[str] | None) -> tuple[str, ...]:
+    """Validate requested section names; ``None`` selects every section.
+
+    Unknown names and an empty selection raise ``ValueError``.
+    """
+    if sections is None:
+        return REPORT_SECTIONS
+    requested = list(sections)
+    unknown = sorted({str(name) for name in requested} - set(REPORT_SECTIONS))
+    if unknown:
+        raise ValueError(f"unknown statistics sections: {', '.join(unknown)}")
+    if not requested:
+        raise ValueError("at least one statistics section is required")
+    return tuple(name for name in REPORT_SECTIONS if name in requested)
 
 
 def _title(summary: JsonObject) -> str | None:
     title = summary.get("title")
     return title if isinstance(title, str) else None
-
-
-def _group_builder() -> ReportBuilder:
-    # Group usage exposes usage, Tools, Compactions and Runs only.
-    return ReportBuilder(since=None, until=None, include_costs=False, include_skills=False)

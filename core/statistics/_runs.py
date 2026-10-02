@@ -109,10 +109,6 @@ class RunAccumulator:
             ledger.unit_agent(unit).runs += 1
             session_runs[unit] = session_runs.get(unit, 0) + 1
             self.status_counts[status] += 1
-            unit_slice = ledger.slices[unit]
-            if unit_slice is not None:
-                unit_slice.runs += 1
-                unit_slice.status[status] += 1
             if duration is not None:
                 self.durations.append(duration)
             models = _json_models(models_json)

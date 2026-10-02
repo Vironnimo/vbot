@@ -26,7 +26,9 @@ from core.sessions._types import (
     JsonObject,
     SessionReadBatch,
     SessionReadCursor,
+    SessionRunRecord,
 )
+from core.sessions.errors import SessionNotFoundError
 
 if TYPE_CHECKING:
     from core.chat.messages import ChatMessage
@@ -544,6 +546,27 @@ def run_result(
         summary.message(summary.rows[0]),
         None if latest_tool is None else str(latest_tool[0]),
     )
+
+
+def run_records(
+    connection: sqlite3.Connection, address: SessionAddress, expected_generation_id: str | None
+) -> tuple[SessionRunRecord, ...]:
+    """Read the Runs the Session admitted itself, in start order.
+
+    Runs copied from a fork source are not the Session's own. With
+    *expected_generation_id*, another live generation counts as missing.
+    """
+    state = _store_values._require_live(connection, address)
+    if expected_generation_id is not None and str(state["generation_id"]) != expected_generation_id:
+        raise SessionNotFoundError(f"session generation changed: {address.session_id}")
+    rows = connection.execute(
+        "SELECT run_id, run_kind, status, started_at, completed_at, duration_ms, "
+        "timing_started_at, completion_reason, iteration_count, changed_files, lines_added, "
+        "lines_removed FROM runs WHERE session_key = ? AND inherited = 0 "
+        "ORDER BY start_seq, run_key",
+        (state["session_key"],),
+    ).fetchall()
+    return tuple(SessionRunRecord(*row) for row in rows)
 
 
 def reflection_runs(connection: sqlite3.Connection, address: SessionAddress) -> list[JsonObject]:
