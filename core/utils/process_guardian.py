@@ -18,7 +18,6 @@ from collections.abc import Sequence
 from contextlib import suppress
 from types import FrameType
 
-_POLL_INTERVAL_SECONDS = 0.2
 _READ_SIZE_BYTES = 1
 _HARD_KILL_SIGNAL = getattr(signal, "SIGKILL", 9)
 # Python ignores these at startup; a program it execs would inherit that.
@@ -73,21 +72,50 @@ def run_guardian(
         for terminal_signal in (signal.SIGINT, signal.SIGQUIT):
             signal.signal(terminal_signal, _leave_to_child)
     child = subprocess.Popen(list(argv), close_fds=True)
+    exit_fd = _child_exit_descriptor(child)
     try:
+        # Sleep without a timeout until the child exits or the server pipe closes,
+        # so the child's exit reaches the caller the moment it happens.
+        watched = select.poll()
+        watched.register(exit_fd, select.POLLIN)
+        watched.register(lifetime_fd, select.POLLIN)
         while True:
-            return_code = child.poll()
-            if return_code is not None:
+            ready = {descriptor for descriptor, _events in watched.poll()}
+            if exit_fd in ready:
+                return_code = child.wait()
                 # A child killed by signal N exits as a shell reports it: 128 + N.
                 return return_code if return_code >= 0 else 128 - return_code
-            readable, _, _ = select.select([lifetime_fd], [], [], _POLL_INTERVAL_SECONDS)
-            if not readable:
-                continue
-            if os.read(lifetime_fd, _READ_SIZE_BYTES):
-                continue
-            os.killpg(os.getpgrp(), _HARD_KILL_SIGNAL)
+            if lifetime_fd in ready and not os.read(lifetime_fd, _READ_SIZE_BYTES):
+                os.killpg(os.getpgrp(), _HARD_KILL_SIGNAL)
     finally:
+        for descriptor in (exit_fd, lifetime_fd):
+            with suppress(OSError):
+                os.close(descriptor)
+
+
+def _child_exit_descriptor(child: subprocess.Popen[bytes]) -> int:
+    """Return a descriptor that becomes readable once *child* has exited.
+
+    A pidfd on Linux 5.3 and later. Where the kernel lacks ``pidfd_open``, a
+    seccomp filter denies it, or on another system, a thread reaps the child and
+    then closes the write end of a pipe, which makes its read end readable.
+    """
+
+    if sys.platform == "linux":
         with suppress(OSError):
-            os.close(lifetime_fd)
+            return os.pidfd_open(child.pid)
+    import threading
+
+    read_fd, write_fd = os.pipe()
+
+    def reap() -> None:
+        try:
+            child.wait()
+        finally:
+            os.close(write_fd)
+
+    threading.Thread(target=reap, name="child-exit", daemon=True).start()
+    return read_fd
 
 
 def _leave_to_child(_signal_number: int, _frame: FrameType | None) -> None:
