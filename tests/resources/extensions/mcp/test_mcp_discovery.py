@@ -177,6 +177,8 @@ async def test_tool_selection_shows_connection_and_inspector_keeps_remote_names(
 @pytest.mark.asyncio
 async def test_search_and_describe_load_only_the_requested_definition(context_service, host):
     service, registry, runner, calls = context_service
+    # Metadata MCP itself reserves is no part of what describe shows.
+    runner.catalog["tools"][0]["_meta"] = {"io.modelcontextprotocol/ui": {"resourceUri": "ui://x"}}
     target = targets(
         await dispatch(registry, host, {"action": "search", "query": "inspection", "kind": "tool"})
     )[0]
@@ -557,8 +559,10 @@ async def test_fixed_entry_point_uses_real_tools_resources_and_prompts(host, ser
             )
             assert detail["ok"] and result["ok"]
             assert expected[kind] in result["data"]["content"]
-            # The SDK's structured copy of the returned value repeats the text.
+            # The SDK's structured copy of the returned value repeats the text, and the
+            # server information it stamps on every result is protocol metadata.
             assert "structuredContent" not in result["data"]
+            assert "_meta" not in result["data"]
         assert _definitions(registry) == before
     finally:
         await service.close()

@@ -36,7 +36,7 @@ from ._definitions import (
     TOOL_NAME_HASH_LENGTH,
     TOOL_NAME_LABEL_LENGTH,
 )
-from ._views import argument_problem, compact, schema_summary
+from ._views import argument_problem, compact, schema_summary, without_protocol_meta
 from .client import READ_OPERATIONS, operation_schema
 from .content import pointer_part
 
@@ -448,7 +448,9 @@ def describe_payload(entry: dict[str, Any], note: str | None) -> dict[str, Any]:
     if kind == "prompt":
         hidden.add("arguments")
     details = (
-        {key: value for key, value in entry["definition"].items() if key not in hidden}
+        without_protocol_meta(
+            {key: value for key, value in entry["definition"].items() if key not in hidden}
+        )
         if kind != "operation"
         else {}
     )
