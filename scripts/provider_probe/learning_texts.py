@@ -8,8 +8,8 @@ Memory and Skill learning, so two arms of an A/B evaluation differ only in them:
 - the ``memory``, ``skill`` and ``skill_manage`` Tool descriptions
   (``tools/<name>/description.md``) and their parameter descriptions
   (``tools/<name>/parameters.json``, JSON-pointer path to text),
-- every prompt fragment the Reflection review briefs and the ``/learn`` brief
-  are assembled from (``fragments/<name>``, the names in
+- every prompt fragment the Reflection review briefs, the ``/learn`` brief and
+  the Librarian brief are assembled from (``fragments/<name>``, the names in
   ``core.prompts.briefs.BRIEF_FRAGMENT_NAMES``).
 
 ``export-pack`` writes the current texts of this checkout; ``--text-pack DIR``
@@ -174,19 +174,31 @@ class _FragmentTexts:
             raise KeyError(f"No text for brief fragment {fragment_name}") from None
 
 
-def brief_text(scope: str, case: Mapping[str, Any], texts: LearningTexts) -> str:
+def brief_text(
+    scope: str,
+    case: Mapping[str, Any],
+    texts: LearningTexts,
+    *,
+    candidates: Sequence[Any] = (),
+) -> str:
     """Return the instruction the Model receives for one case in one scope.
 
     This is the single seam between the harness and production brief assembly:
     it calls production ``reflection_brief`` (a review without user focus, as
-    the cadence trigger starts it) or ``learn_brief`` with the case's request,
-    reading ``texts.fragments`` in place of Storage.
+    the cadence trigger starts it), ``learn_brief`` with the case's request, or
+    ``librarian_brief`` listing ``candidates`` (production
+    ``LibrarianCandidate``s) with the production Tool call limit, reading
+    ``texts.fragments`` in place of Storage.
     """
-    from core.prompts.briefs import learn_brief, reflection_brief
+    from core.prompts.briefs import learn_brief, librarian_brief, reflection_brief
 
     fragments = _FragmentTexts(texts.fragments)
     if scope == "learn":
         return learn_brief(fragments, case.get("learn_request"))
+    if scope == "librarian":
+        from core.automation.librarian import LIBRARIAN_TOOL_ITERATION_LIMIT
+
+        return librarian_brief(fragments, candidates, limit=LIBRARIAN_TOOL_ITERATION_LIMIT)
     if scope not in ("memory", "skill", "combined"):
         raise ValueError(f"Unknown evaluation scope: {scope}")
     return reflection_brief(fragments, scope)  # type: ignore[arg-type]

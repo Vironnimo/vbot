@@ -602,6 +602,12 @@ describe('RPC wrappers', () => {
       { scope: 'global', revisions: [7, 9] },
     ],
     [
+      'librarian.status',
+      (o) => api.librarianStatus('main', o),
+      { agent_id: 'main' },
+    ],
+    ['librarian.run', (o) => api.runLibrarian('main', o), { agent_id: 'main' }],
+    [
       'skill.restore',
       (o) => api.restoreSkill('global', 'deploy_01', o),
       { scope: 'global', archive_id: 'deploy_01' },

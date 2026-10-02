@@ -109,6 +109,9 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
 
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills("main")
+    # Background maintenance of the owner keeps the Skills it shares.
+    assert runtime.shared_skill_names("main") == {"deploy"}
+    assert runtime.shared_skill_names("two") == frozenset()
 
     registry = runtime.skills_for(None, "two")
     assert "deploy" in _names(registry)
@@ -181,6 +184,7 @@ def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(
     runtime.skill_policy.set_shared("main", "deploy", shared=False)
     runtime.invalidate_agent_skills(None)
     assert "deploy" not in _names(runtime.skills_for(None, "two"))
+    assert runtime.shared_skill_names("main") == frozenset()
 
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills(None)

@@ -38,6 +38,7 @@ from cli.debug_management import (
     debug_trace_list,
     debug_trace_show,
 )
+from cli.librarian_management import librarian_run, librarian_status
 from cli.log_management import log_read
 from cli.memory_management import (
     memory_add,
@@ -313,6 +314,19 @@ def dispatch_memory_command(
     if args.command == "revert":
         return memory_revert(instance, args.agent, args.revisions)
     raise ValueError(f"Unsupported memory command: {args.command}")
+
+
+def dispatch_librarian_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+) -> CommandResult:
+    """Dispatch one parsed Librarian command against the server RPC client."""
+
+    if args.command == "status":
+        return librarian_status(instance, args.agent)
+    if args.command == "run":
+        return librarian_run(instance, args.agent)
+    raise ValueError(f"Unsupported librarian command: {args.command}")
 
 
 def dispatch_cron_command(

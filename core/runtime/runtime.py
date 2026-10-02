@@ -23,6 +23,7 @@ from core.automation import (
     BootstrapService,
     CronService,
     LearningChanges,
+    LibrarianService,
     ReflectionService,
     TriggerService,
 )
@@ -68,7 +69,7 @@ from core.providers.token_getter import TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.recall import RecallBackend
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunNotFoundError
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -221,6 +222,7 @@ class Runtime:
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
         self._learning_changes: LearningChanges | None = None
+        self._librarian_service: LibrarianService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._chat_loop: ChatLoop | None = None
@@ -531,6 +533,9 @@ class Runtime:
     def _start_archive_retention(self) -> None:
         start_event_loop_service(self._archive, "Archive is not available")
 
+    def _start_librarian(self) -> None:
+        start_event_loop_service(self._librarian_service, "Librarian service not available")
+
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
 
@@ -607,6 +612,23 @@ class Runtime:
 
     def background_skill_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         return self._skill_operations().background_protection(agent_id, names)
+
+    def shared_skill_names(self, owner_id: str) -> frozenset[str]:
+        """Name the Skills the Identity Agent ``owner_id`` shares with other Agents."""
+        return self._skill_operations().shared_skill_names(owner_id)
+
+    def run_started_at(self, run_id: str) -> str | None:
+        """When the Run ``run_id`` was created, while the Run manager still holds it."""
+        if self._chat_run_manager is None:
+            return None
+        try:
+            return self._chat_run_manager.get(run_id).created_at
+        except RunNotFoundError:
+            return None
+
+    def automation_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
+        """Name the Skills the live automations of the Identity Agent ``agent_id`` trigger."""
+        return self.automation_references.agent_triggered_skill_names(agent_id)
 
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
@@ -906,6 +928,9 @@ class Runtime:
                     self._resolve_external_skill_scope,
                     lifecycle_guard=self.agents.lifecycle_guard,
                     on_changed=self._notify_skills_changed,
+                    triggered_skill_names=self.automation_triggered_skill_names,
+                    shared_skill_names=self.shared_skill_names,
+                    run_started_at=self.run_started_at,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
@@ -1184,6 +1209,10 @@ class Runtime:
 
     learning_changes: _StartedService[LearningChanges] = _StartedService(
         lambda runtime: runtime._learning_changes, "Learning changes service not available"
+    )
+
+    librarian: _StartedService[LibrarianService] = _StartedService(
+        lambda runtime: runtime._librarian_service, "Librarian service not available"
     )
 
     streaming_chat_loop: _StartedService[ChatLoop] = _StartedService(

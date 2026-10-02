@@ -8,10 +8,10 @@ Prompt comes from production prompt assembly with the attempt's pinned Memory
 and Skill catalog, the Model is offered the Agent's full effective Tool
 definitions, and Tool calls run through the production Tool executor; a scope's
 Tool restriction and its denial answer apply only at dispatch, as in a
-Reflection review. Calls carry the production Run kind (a review kind, or
-``user`` for ``/learn`` and the source Session's own calls), so background
-guards such as ``skill_manage``'s protection of user-created and pinned Skills
-apply as in production.
+Reflection review or a Librarian pass. Calls carry the production Run kind (a
+review kind, ``librarian``, or ``user`` for ``/learn`` and the source Session's
+own calls), so background guards such as ``skill_manage``'s protection of
+user-created and pinned Skills apply as in production.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 
 from scripts.provider_probe.learning_texts import (
     AppliedTexts,
@@ -42,6 +42,12 @@ TOOL_ROUTE_NOTE = (
     "while no image-understanding Model task is configured."
 )
 _TOOL_CONTENT_SEPARATORS = (",", ":")
+# The Run kind each seeded Skill origin was written under, as production records it.
+_SEED_RUN_KINDS: dict[str, str | None] = {
+    "agent": None,
+    "reflection": "skill_reflection",
+    "librarian": "librarian",
+}
 
 
 @dataclass
@@ -261,10 +267,52 @@ class EvalWorker:
                     )
         return {"memory": memory, "files": files}
 
+    def _seed_skills(self, case: Mapping[str, Any]) -> None:
+        """Create the case's Skills with their origin as writer, then pin the pinned ones."""
+        from core.skills import HUMAN_WRITER, SkillWriter
+        from core.skills.authoring import SkillActor
+
+        runtime = self.runtime
+        for skill in case.get("skills", []):
+            readonly = bool(skill.get("readonly"))
+            origin = "human" if readonly else str(skill.get("origin", "agent"))
+            if origin != "human" and origin not in _SEED_RUN_KINDS:
+                raise ValueError(f"Unsupported Skill origin in case {case['id']}: {origin}")
+            home = (
+                runtime.global_skills_dir if readonly else runtime.agent_skills_dir(EVAL_AGENT_ID)
+            )
+            writer = HUMAN_WRITER
+            if origin != "human":
+                actor = cast(SkillActor, origin)
+                writer = SkillWriter(actor=actor, run_kind=_SEED_RUN_KINDS[origin])
+            runtime.skill_authoring.create(home, skill["name"], skill["content"], writer=writer)
+            if skill.get("pinned"):
+                runtime.skill_authoring.set_pinned(home, skill["name"], True, writer=HUMAN_WRITER)
+
+    def librarian_candidates(self) -> tuple[Any, ...]:
+        """Return the Skills a Librarian pass may change, as production lists them.
+
+        The fixture has no Skill use and no schedules, so every candidate reads
+        as never used and not named by a schedule.
+        """
+        from core.automation.librarian import librarian_candidates
+
+        runtime = self.runtime
+        return librarian_candidates(
+            runtime.skill_authoring,
+            runtime.agent_skills_dir(EVAL_AGENT_ID),
+            usage={},
+            scheduled=frozenset(),
+        )
+
     async def prepare(
         self, case: Mapping[str, Any], scope: str, *, attempt_id: str
     ) -> PreparedAttempt:
         """Seed one attempt's state and build its first request like production."""
+        from core.automation.librarian import (
+            LIBRARIAN_TOOL_RESTRICTION,
+            librarian_tool_denial_resolver,
+        )
         from core.automation.reflection import (
             REFLECTION_RUN_KINDS,
             REFLECTION_TOOL_RESTRICTIONS,
@@ -275,7 +323,7 @@ class EvalWorker:
         from core.chat.messages import ToolCall as CanonicalToolCall
         from core.projects.resolver import runtime_agent_body
         from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY
-        from core.skills import HUMAN_WRITER, SkillWriter
+        from core.runs import RunKind
 
         if self.applied is None:
             raise RuntimeError("EvalWorker is not started")
@@ -292,16 +340,7 @@ class EvalWorker:
         for memory_scope in ("user", "agent"):
             for entry in case.get("memory", {}).get(memory_scope, []):
                 runtime.memory.add_entry(workspace, memory_scope, entry)
-        for skill in case.get("skills", []):
-            readonly = bool(skill.get("readonly"))
-            origin = "human" if readonly else str(skill.get("origin", "agent"))
-            if origin not in ("agent", "human"):
-                raise ValueError(f"Unsupported Skill origin in case {case['id']}: {origin}")
-            home = (
-                runtime.global_skills_dir if readonly else runtime.agent_skills_dir(EVAL_AGENT_ID)
-            )
-            writer = HUMAN_WRITER if origin == "human" else SkillWriter(actor="agent")
-            runtime.skill_authoring.create(home, skill["name"], skill["content"], writer=writer)
+        self._seed_skills(case)
         self._invalidate_skills()
         agent = self._agent()
         if pinned_memory is None:
@@ -317,9 +356,15 @@ class EvalWorker:
             skill_catalog=runtime.system_prompts.render_skill_catalog(agent, registry),
             effective_tool_definitions=definitions,
         )
+        candidates: tuple[Any, ...] = ()
         if scope == "learn":
             restriction, denial_resolver = LEARN_DISPATCH_TOOLS, None
             run_kind = "user"
+        elif scope == "librarian":
+            restriction = tuple(LIBRARIAN_TOOL_RESTRICTION)
+            denial_resolver = librarian_tool_denial_resolver()
+            run_kind = RunKind.LIBRARIAN.value
+            candidates = self.librarian_candidates()
         else:
             restriction = tuple(REFLECTION_TOOL_RESTRICTIONS[scope])  # type: ignore[index]
             denial_resolver = _review_tool_denial_resolver(scope)  # type: ignore[arg-type]
@@ -381,9 +426,12 @@ class EvalWorker:
                 )
             else:
                 raise ValueError(f"Unsupported history role in case {case['id']}: {role}")
-        # The review or /learn instruction persists as a plain note, rendered as a
-        # System Reminder at the end of the request.
-        session.append(ChatMessage.note(brief_text(scope, case, self.applied.texts)))
+        # The review, /learn or Librarian instruction persists as a plain note,
+        # rendered as a System Reminder at the end of the request. A Librarian
+        # pass starts a new Session, so its case history is empty.
+        session.append(
+            ChatMessage.note(brief_text(scope, case, self.applied.texts, candidates=candidates))
+        )
         prepared.messages = _prepare_request_messages(
             system_prompt=system_prompt,
             agent_model=model,

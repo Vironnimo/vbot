@@ -1389,5 +1389,105 @@
         ]
       }
     }
+  },
+  {
+    "id": "librarian_overlapping_cluster",
+    "note": "Three narrow deploy Skills made in the background repeat the same frame and differ in one service rule each; a healthy library holds one deploy Skill with a section per service. The unrelated report Skill stays.",
+    "history": [],
+    "skills": [
+      {
+        "name": "deploy-api-service",
+        "origin": "reflection",
+        "content": "---\nname: deploy-api-service\ndescription: Deploy the API service to production. Use when the user asks to ship or release the API.\n---\n\n# Deploy the API Service\n\n1. Announce the deploy in the #deploys channel.\n2. Run `./scripts/check-migrations.sh` and stop if it reports pending migrations.\n3. Run `make deploy-api`.\n4. Watch the error dashboard for 15 minutes and report the result.\n"
+      },
+      {
+        "name": "deploy-web-frontend",
+        "content": "---\nname: deploy-web-frontend\ndescription: Deploy the web frontend to production. Use when the user asks to ship or release the website.\n---\n\n# Deploy the Web Frontend\n\n1. Announce the deploy in the #deploys channel.\n2. Run `make deploy-web`.\n3. Purge the CDN cache with `cdnctl purge --all` so users get the new assets.\n4. Watch the error dashboard for 15 minutes and report the result.\n"
+      },
+      {
+        "name": "deploy-worker-queue",
+        "origin": "reflection",
+        "content": "---\nname: deploy-worker-queue\ndescription: Deploy the queue worker to production after the stuck-jobs incident. Use when the user asks to ship the worker.\n---\n\n# Deploy the Queue Worker\n\nLearned on 2026-08-14 when jobs got stuck during a deploy.\n\n1. Announce the deploy in the #deploys channel.\n2. Drain the queue with `queuectl drain --timeout 300` before deploying, or running jobs are lost.\n3. Run `make deploy-worker`.\n4. Watch the error dashboard for 15 minutes and report the result.\n"
+      },
+      {
+        "name": "weekly-status-report",
+        "content": "---\nname: weekly-status-report\ndescription: Write the weekly project status report from the user's project notes. Use when the user asks for the weekly status or a status update covering several projects.\n---\n\n# Weekly Status Report\n\n1. Collect progress, risks and next steps for each project from the user's notes.\n2. Write one short paragraph per project covering progress, risks and next steps.\n3. End with a one-line overall summary.\n\nKeep the report under 300 words.\n"
+      }
+    ],
+    "expected": {
+      "librarian": {
+        "kind": "consolidate",
+        "cluster": [
+          "deploy-api-service",
+          "deploy-web-frontend",
+          "deploy-worker-queue"
+        ],
+        "contains": [
+          "check-migrations.sh",
+          "make deploy-api",
+          "make deploy-web",
+          "cdnctl purge",
+          "make deploy-worker",
+          "queuectl drain"
+        ]
+      }
+    }
+  },
+  {
+    "id": "librarian_protected_cluster",
+    "note": "The sales report Skills overlap, but the weekly one was written by the user and the monthly one is pinned; the quarterly one is the only Skill of the group the pass may change, so there is nothing to merge.",
+    "history": [],
+    "skills": [
+      {
+        "name": "sales-report-weekly",
+        "origin": "human",
+        "content": "---\nname: sales-report-weekly\ndescription: Write the weekly sales report from the CRM export. Use when the user asks for this week's sales numbers.\n---\n\n# Weekly Sales Report\n\n1. Export the closed deals of the last seven days from the CRM as CSV.\n2. Sum the revenue per region and compare it with the previous week.\n3. List the three largest deals.\n"
+      },
+      {
+        "name": "sales-report-monthly",
+        "pinned": true,
+        "content": "---\nname: sales-report-monthly\ndescription: Write the monthly sales report for the leadership meeting. Use when the user asks for the monthly sales report.\n---\n\n# Monthly Sales Report\n\n1. Export the closed deals of the previous calendar month from the CRM as CSV.\n2. Sum the revenue per region and compare it with the same month last year.\n3. Add a chart of revenue per week.\n"
+      },
+      {
+        "name": "sales-report-quarterly",
+        "origin": "reflection",
+        "content": "---\nname: sales-report-quarterly\ndescription: Write the quarterly sales report for the board. Use when the user asks for the quarterly sales report or the board numbers.\n---\n\n# Quarterly Sales Report\n\n1. Export the closed deals of the previous quarter from the CRM as CSV.\n2. Sum the revenue per region and product line.\n3. Compare the totals with the quarterly targets from the finance sheet.\n"
+      },
+      {
+        "name": "git-branch-cleanup",
+        "content": "---\nname: git-branch-cleanup\ndescription: Delete merged and stale Git branches in a repository. Use when the user asks to clean up, prune or tidy branches.\n---\n\n# Git Branch Cleanup\n\n1. Run `git fetch --prune` to drop remote branches that no longer exist.\n2. List local branches merged into main with `git branch --merged main`.\n3. Delete each merged branch except main and release branches with `git branch -d`.\n4. Report which branches were deleted.\n"
+      }
+    ],
+    "expected": {
+      "librarian": {
+        "kind": "none"
+      }
+    }
+  },
+  {
+    "id": "librarian_healthy_library",
+    "note": "Three distinct, well-described Skills: the pass changes nothing.",
+    "history": [],
+    "skills": [
+      {
+        "name": "weekly-status-report",
+        "content": "---\nname: weekly-status-report\ndescription: Write the weekly project status report from the user's project notes. Use when the user asks for the weekly status or a status update covering several projects.\n---\n\n# Weekly Status Report\n\n1. Collect progress, risks and next steps for each project from the user's notes.\n2. Write one short paragraph per project covering progress, risks and next steps.\n3. End with a one-line overall summary.\n\nKeep the report under 300 words.\n"
+      },
+      {
+        "name": "git-branch-cleanup",
+        "origin": "reflection",
+        "content": "---\nname: git-branch-cleanup\ndescription: Delete merged and stale Git branches in a repository. Use when the user asks to clean up, prune or tidy branches.\n---\n\n# Git Branch Cleanup\n\n1. Run `git fetch --prune` to drop remote branches that no longer exist.\n2. List local branches merged into main with `git branch --merged main`.\n3. Delete each merged branch except main and release branches with `git branch -d`.\n4. Report which branches were deleted.\n"
+      },
+      {
+        "name": "invoice-reminder",
+        "content": "---\nname: invoice-reminder\ndescription: Write a polite payment reminder for an overdue invoice. Use when the user asks to chase, remind or follow up on an unpaid invoice.\n---\n\n# Invoice Reminder\n\n1. Name the invoice number, amount and original due date.\n2. Ask for payment within 14 days and give the bank details from the invoice.\n3. Offer a call in case the invoice is disputed.\n\nKeep a friendly tone; never threaten fees in a first reminder.\n"
+      }
+    ],
+    "expected": {
+      "librarian": {
+        "kind": "none",
+        "reply_contains": "Nothing to change"
+      }
+    }
   }
 ]

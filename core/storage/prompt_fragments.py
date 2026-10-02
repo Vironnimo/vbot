@@ -35,10 +35,11 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "compaction-continuation.md",
         "compaction-continuation-manual.md",
         "handoff.md",
-        # Learning-Run brief fragments, composed by ``core/prompts/briefs.py``.
+        # Learning-Run and Librarian brief fragments, composed by ``core/prompts/briefs.py``.
         "learn-intro.md",
         "learn-method.md",
         "learning-routing.md",
+        "librarian.md",
         "review-closing.md",
         "review-intro-combined.md",
         "review-intro-memory.md",

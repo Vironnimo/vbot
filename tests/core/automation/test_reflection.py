@@ -11,6 +11,11 @@ from typing import Any, cast
 
 import pytest
 
+from core.automation.librarian import (
+    LIBRARIAN_TOOL_ITERATION_LIMIT,
+    LIBRARIAN_TOOL_RESTRICTION,
+    librarian_tool_denial_resolver,
+)
 from core.automation.reflection import (
     COUNTER_GENERATION_KEY,
     MEMORY_REFLECTION_TOOL_RESTRICTION,
@@ -22,7 +27,12 @@ from core.automation.reflection import (
     ReflectionUnavailableError,
 )
 from core.chat import ChatMessage
-from core.prompts.briefs import learn_brief, reflection_brief
+from core.prompts.briefs import (
+    LibrarianCandidate,
+    learn_brief,
+    librarian_brief,
+    reflection_brief,
+)
 from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
@@ -147,10 +157,12 @@ def _make_service(
     skill_model_step_interval: int = 10,
     chat_sessions: ChatSessionManager | None = None,
     agent: Any = None,
+    librarian_running: set[str] | None = None,
 ) -> tuple[ReflectionService, _FakeSessions, _FakeLoop]:
     """Build the service over the fake Sessions, or over real ``chat_sessions``.
 
-    ``agent`` is the effective Agent a review resolves when it starts. Every
+    ``agent`` is the effective Agent a review resolves when it starts, and
+    ``librarian_running`` names the Agents a Librarian pass curates. Every
     prompt fragment reads as its bracketed name.
     """
     sessions = _FakeSessions()
@@ -174,7 +186,9 @@ def _make_service(
         streaming_chat_loop=loop,
         tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
     )
-    return ReflectionService(cast("Any", runtime)), sessions, loop
+    curated = librarian_running if librarian_running is not None else set()
+    service = ReflectionService(cast("Any", runtime), librarian_running=curated.__contains__)
+    return service, sessions, loop
 
 
 def _counters(sessions: _FakeSessions, session_id: str = "s1") -> dict[str, int]:
@@ -674,6 +688,40 @@ async def test_in_flight_guard_skips_review_but_keeps_counters() -> None:
 
 
 @pytest.mark.asyncio
+async def test_skill_review_waits_while_a_librarian_pass_curates_the_skills() -> None:
+    curated = {"main"}
+    service, sessions, loop = _make_service(
+        memory_turn_interval=1, skill_model_step_interval=1, librarian_running=curated
+    )
+
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=2)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    # Only Memory is reviewed; the Skill counts stay due for the next Run end.
+    assert [review["run_kind"] for review in loop.started] == [RunKind.MEMORY_REFLECTION]
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 0,
+        "iterations_since_skill_review": 2,
+    }
+    curated.clear()
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=1)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    assert loop.started[-1]["run_kind"] is RunKind.REFLECTION
+    assert _counters(sessions)["iterations_since_skill_review"] == 0
+
+
+@pytest.mark.asyncio
 async def test_failed_review_releases_guard_and_keeps_cycle_due_for_next_run(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -857,47 +905,77 @@ async def test_run_review_narrows_to_the_callable_scope_or_refuses_before_forkin
         ("memory", "`memory`"),
         ("skill", "`skill` and `skill_manage`"),
         ("combined", "`memory`, `skill`, and `skill_manage`"),
+        ("librarian", "`skill` and `skill_manage`"),
     ],
 )
 async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     tmp_path: Path, scope: str, callable_tools: str
 ) -> None:
-    service, _sessions, loop = _make_service()
     bundled = StorageManager(data_dir=tmp_path / "data")
-    service._runtime.storage.read_prompt_fragment = bundled.read_prompt_fragment  # type: ignore[method-assign]
+    if scope == "librarian":
+        # A Librarian pass runs its own brief over the Skills it can change.
+        tools: tuple[str, ...] = LIBRARIAN_TOOL_RESTRICTION
+        limit = LIBRARIAN_TOOL_ITERATION_LIMIT
+        review: dict[str, Any] = {
+            "message": librarian_brief(bundled, [_LIBRARIAN_CANDIDATE], limit=limit),
+            "tool_denial_resolver": librarian_tool_denial_resolver(),
+        }
+        boundary = "in this maintenance pass. This pass"
+    else:
+        service, _sessions, loop = _make_service()
+        service._runtime.storage.read_prompt_fragment = bundled.read_prompt_fragment  # type: ignore[method-assign]
 
-    await service.run_review("main", "s1", review_scope=cast("Any", scope))
+        await service.run_review("main", "s1", review_scope=cast("Any", scope))
 
-    [review] = loop.started
-    tools = _REVIEWS[scope][0]
-    assert review["tool_restriction"] == tools
+        [review] = loop.started
+        tools = _REVIEWS[scope][0]
+        limit = REFLECTION_TOOL_ITERATION_LIMIT
+        assert review["tool_restriction"] == tools
+        assert review["max_tool_iterations"] == limit
+        # A review that can write Skills learns that the list marks the ones it cannot change.
+        assert (
+            "does not mark as read-only; all other Skills are read-only" in review["message"]
+        ) == ("skill_manage" in tools)
+        boundary = "in this review. This review"
     # The production brief names exactly the Tools its Run can call: backticked
     # identifiers are Tool names unless they are parameters of those Tools or
-    # values those parameters take.
+    # values those parameters take. ``skill_manage`` accepts ``absorbed_into``
+    # without advertising it; the briefs that need it teach it.
     properties = [
         (name, schema)
         for tool in tools
         for name, schema in _TOOL_PARAMETERS[tool]["properties"].items()
     ]
     parameters = {name for name, _schema in properties}
+    if "skill_manage" in tools:
+        parameters.add("absorbed_into")
     values = {value for _name, schema in properties for value in schema.get("enum", ())}
     identifiers = {token for token in review["message"].split("`")[1::2] if token.isidentifier()}
     assert identifiers - parameters - values == set(tools)
-    # The brief states the limits the Run enforces: its Tool-call limit and, when
-    # it can write Skills, that the list marks the Skills it cannot change.
-    assert review["max_tool_iterations"] == REFLECTION_TOOL_ITERATION_LIMIT
-    assert f"at most {REFLECTION_TOOL_ITERATION_LIMIT} calls" in review["message"]
-    assert ("does not mark as read-only; all other Skills are read-only" in review["message"]) == (
-        "skill_manage" in tools
-    )
+    # The brief states the Tool-call limit the Run enforces.
+    assert f"at most {limit} calls" in review["message"]
     # Any other Tool is refused before it runs, naming what the review can call.
     deny = review["tool_denial_resolver"]
     assert [deny(tool) for tool in tools] == [None] * len(tools)
     for other in sorted({"read", *REFLECTION_TOOL_RESTRICTION} - set(tools)):
         assert deny(other) == (
-            f"Nothing was run: `{other}` is not available in this review. "
-            f"This review can call only {callable_tools}. Do not retry this call."
+            f"Nothing was run: `{other}` is not available {boundary} "
+            f"can call only {callable_tools}. Do not retry this call."
         )
+
+
+_LIBRARIAN_CANDIDATE = LibrarianCandidate(
+    name="deploy-web",
+    description="Deploy the web app.",
+    origin="reflection",
+    created="2026-05-01",
+    changed="2026-06-01",
+    last_used=None,
+    uses=0,
+    skill_md_chars=1200,
+    support_files=("references/env.md",),
+    scheduled=False,
+)
 
 
 _TOOL_PARAMETERS: dict[str, Any] = {

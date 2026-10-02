@@ -669,7 +669,7 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
     )
 
 
-def _scan_skill_resources(skill_dir: Path) -> list[str]:
+def scan_skill_resources(skill_dir: Path) -> list[str]:
     """List regular package resources, including non-conventional support directories."""
     from core.skills._packages import excluded, is_redirect
 

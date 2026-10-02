@@ -317,6 +317,10 @@ def test_report_joins_seen_skills_and_activation_notes_per_agent_key(
     )
     # A background review offers and activates Skills without counting as use.
     _review_session(manager, broken, ("deploy", "teach"), [_skill_note("teach", BASE)])
+    # So does a Librarian pass, whose Session is labelled when it is created.
+    librarian = manager.create("main", run_kind=RunKind.LIBRARIAN)
+    librarian.append(_skill_note("teach", BASE))
+    manager.record_seen_skills(librarian.address, SeenSkillsUpdate(baseline=("teach",)))
     inventory = _FakeInventory(global_skills=[("deploy", "bundled"), ("teach", "global")])
 
     skills = statistics(["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory).report(

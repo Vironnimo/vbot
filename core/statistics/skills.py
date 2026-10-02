@@ -41,9 +41,10 @@ text, whose fixed width orders them as text; any other form is bad data and
 raises ``ValueError``.
 
 **Background Sessions are not use.** A Session whose Runs are all unattended
-kinds (``core.runs.UNATTENDED_RUN_KINDS``: reflection reviews) contributes no
-offers and no activations: :func:`counts_as_skill_use` is the one rule the
-report and the per-Agent :func:`load_skill_use` query share.
+kinds (``core.runs.UNATTENDED_RUN_KINDS``: reflection reviews and Librarian
+passes) contributes no offers and no activations: :func:`counts_as_skill_use`
+is the one rule the report and the per-Agent :func:`load_skill_use` query
+share.
 """
 
 from __future__ import annotations

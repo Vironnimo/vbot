@@ -135,6 +135,8 @@ export {
   setSkillPinned,
   skillHistory,
   revertSkillRevisions,
+  librarianStatus,
+  runLibrarian,
   restoreSkill,
   purgeSkill,
   shareSkill,

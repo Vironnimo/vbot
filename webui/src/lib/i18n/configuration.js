@@ -69,7 +69,7 @@ export default Object.freeze({
     'Speaking, listening, live conversations, and voice activation.',
   'settings.pages.memory': 'Memory',
   'settings.pages.memoryDescription':
-    'How Agents learn from conversations and find past ones.',
+    'How Agents learn from conversations, tidy up their Skills, and find past conversations.',
   'settings.pages.tools': 'Tools',
   'settings.pages.toolsDescription':
     'How Agents search and read the web, create media, and delegate work.',
@@ -272,6 +272,27 @@ export default Object.freeze({
     'Agent steps per conversation between Skill reviews.',
   'settings.reflection.skillIntervalHelp':
     'A Skill review becomes due after this many Agent steps in one conversation. Every Model response is one step, including each round of Tool calls, so one message can add several steps. When the Agent edits a Skill on its own, the count starts over. Default: 10.',
+  'settings.librarian.title': 'Skill maintenance',
+  'settings.librarian.enabled': 'Scheduled Skill maintenance',
+  'settings.librarian.enabledDescription':
+    'The Librarian tidies up the Skills each Agent made for itself.',
+  'settings.librarian.enabledHelp':
+    'From time to time, the Librarian goes through the Skills of one Agent. It retires Skills that background reviews made and that went unused for a long time, and it lets the Agent merge overlapping Skills. Pinned Skills and Skills you created are never changed.\n\nA pass starts only while the Agent has no active or queued Run, and only for Agents that can use the skill and skill_manage Tools. Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
+  'settings.librarian.interval': 'Maintenance interval',
+  'settings.librarian.intervalDescription':
+    'Days between scheduled passes of one Agent.',
+  'settings.librarian.intervalHelp':
+    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. From 1 to 3650 days. Default: 7.',
+  'settings.librarian.archiveAfter': 'Retire unused Skills after',
+  'settings.librarian.archiveAfterDescription':
+    'Days without use or change before a Skill made in the background is retired.',
+  'settings.librarian.archiveAfterHelp':
+    'A pass retires an unpinned Skill that a background review or an earlier pass created once it was neither used nor changed in a conversation or by you for this many days. Changes by background reviews and earlier passes do not count. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays, and so does a Skill the Agent shares with other Agents. From 1 to 3650 days. Default: 90.',
+  'settings.librarian.consolidate': 'Merge overlapping Skills',
+  'settings.librarian.consolidateDescription':
+    'Each pass lets the Agent merge and correct the Skills it made.',
+  'settings.librarian.consolidateHelp':
+    'After retiring unused Skills, a pass shows the Agent the unpinned Skills that it or a background review created and that it does not share with other Agents. The Agent merges overlapping ones into one Skill and corrects outdated instructions. Merged Skills move to the archive.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run with the Agent’s own Model, so it uses tokens. Default: on.',
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':

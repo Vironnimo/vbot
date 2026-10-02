@@ -14,6 +14,7 @@ from core.settings.normalizers import (
     REFLECTION_SETTING_DEFAULTS,
     normalize_appearance_settings,
     normalize_compaction_settings,
+    normalize_librarian_settings,
     normalize_notification_settings,
     normalize_reflection_settings,
 )
@@ -78,6 +79,12 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "enabled": True,
                 "memory_turn_interval": 5,
                 "skill_model_step_interval": 40,
+            },
+            "librarian": {
+                "enabled": False,
+                "interval_days": 14,
+                "archive_after_days": 30,
+                "consolidate": False,
             },
             # ``null`` marks a context window for removal.
             "local_models": {
@@ -144,6 +151,12 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "memory_turn_interval": 5,
             "skill_model_step_interval": 40,
         },
+        "librarian": {
+            "enabled": False,
+            "interval_days": 14,
+            "archive_after_days": 30,
+            "consolidate": False,
+        },
         "local_models": {
             "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
         },
@@ -180,6 +193,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
         pytest.param({"archive": {"retention_days": None}}, None, id="retention-disabled"),
         pytest.param({"reflection": {}}, None, id="empty-reflection"),
         pytest.param({"reflection": {"memory_turn_interval": 3}}, None, id="one-interval"),
+        pytest.param({"librarian": {"interval_days": 1}}, None, id="librarian-one-field"),
         pytest.param({"server": {}}, None, id="empty-server"),
         pytest.param({"notifications": {}}, None, id="empty-notifications"),
         pytest.param({"local_models": {"context_windows": {}}}, None, id="no-context-windows"),
@@ -464,6 +478,17 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
             {"reflection": {"skill_model_step_interval": 0}},
             "params.reflection.skill_model_step_interval must be a positive integer",
         ),
+        ({"librarian": []}, "params.librarian must be an object"),
+        ({"librarian": {"extra": 1}}, "unsupported librarian settings: extra"),
+        ({"librarian": {"consolidate": 1}}, "params.librarian.consolidate must be a boolean"),
+        (
+            {"librarian": {"archive_after_days": 0}},
+            "params.librarian.archive_after_days must be an integer from 1 to 3650",
+        ),
+        (
+            {"librarian": {"interval_days": 3651}},
+            "params.librarian.interval_days must be an integer from 1 to 3650",
+        ),
         ({"local_models": []}, "params.local_models must be an object"),
         ({"local_models": {}}, "params.local_models requires context_windows"),
         (
@@ -533,6 +558,17 @@ def test_stored_reflection_section_fills_defaults(
     assert normalize_reflection_settings(section) == expected
 
 
+def test_stored_librarian_section_fills_defaults() -> None:
+    defaults = {"enabled": True, "interval_days": 7, "archive_after_days": 90, "consolidate": True}
+
+    assert normalize_librarian_settings(None) == defaults
+    assert normalize_librarian_settings({"consolidate": False, "interval_days": 3}) == {
+        **defaults,
+        "consolidate": False,
+        "interval_days": 3,
+    }
+
+
 @pytest.mark.parametrize(
     ("normalize", "value", "message"),
     [
@@ -552,6 +588,14 @@ def test_stored_reflection_section_fills_defaults(
             normalize_reflection_settings,
             {"memory_turn_interval": 0},
             "memory_turn_interval must be positive",
+        ),
+        (normalize_librarian_settings, "on", "Expected settings.librarian to be an object"),
+        (normalize_librarian_settings, {"consolidate": "yes"}, "consolidate must be a boolean"),
+        (normalize_librarian_settings, {"interval_days": 1.5}, "interval_days must be an integer"),
+        (
+            normalize_librarian_settings,
+            {"archive_after_days": 3651},
+            "archive_after_days must be an integer from 1 to 3650",
         ),
         (
             normalize_notification_settings,

@@ -1101,6 +1101,178 @@ describe('Skills manager', () => {
     expect(calls('skill.history').length).toBeGreaterThan(historyReads);
   });
 
+  it('shows an Agent’s last Librarian pass, links its changes, reverts them together and starts a pass', async () => {
+    const change = (id, skill, kind, extra = {}) => ({
+      id,
+      at: `2026-09-30T10:0${id - 6}:00.000000Z`,
+      skill,
+      kind,
+      actor: 'librarian',
+      files: [],
+      ...extra,
+    });
+    archived = [
+      {
+        scope: 'agent:main',
+        archive_id: 'old-deploy_01',
+        name: 'old-deploy',
+        archived_at: '2026-09-30T10:03:00.000000Z',
+        reason: 'absorbed',
+        absorbed_into: 'deploy',
+        archived_by: 'librarian',
+        description: 'Purpose of old-deploy',
+      },
+    ];
+    const mainStatus = {
+      agent_id: 'main',
+      settings: {
+        enabled: true,
+        interval_days: 7,
+        archive_after_days: 90,
+        consolidate: true,
+      },
+      available: true,
+      running: false,
+      running_since: null,
+      last_pass: {
+        started_at: '2026-09-30T10:00:00.000000Z',
+        finished_at: '2026-09-30T10:04:00.000000Z',
+        trigger: 'schedule',
+        archived: 1,
+        candidates: 3,
+        consolidation: 'ran',
+        created: 0,
+        changed: 1,
+        merged: 1,
+      },
+      next_due_at: '2999-10-07T10:04:00.000000Z',
+      changes: [
+        change(9, 'old-deploy', 'archive', {
+          reason: 'absorbed',
+          absorbed_into: 'deploy',
+        }),
+        change(8, 'deploy', 'change'),
+        change(7, 'stale', 'archive', { reason: 'inactive' }),
+      ],
+    };
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'librarian.status' && params.agent_id === 'main')
+        return mainStatus;
+      if (method === 'librarian.status')
+        return { ...mainStatus, agent_id: params.agent_id, last_pass: null };
+      if (method === 'librarian.run' && params.agent_id === 'main')
+        return {
+          ...mainStatus,
+          running: true,
+          running_since: '2026-10-01T09:00:00.000000Z',
+          last_pass: { ...mainStatus.last_pass, outcome: 'interrupted' },
+        };
+      if (method === 'librarian.run')
+        throw Object.assign(new Error('busy-sentinel'), {
+          code: 'agent_busy',
+        });
+      if (method === 'skill.history') return { revisions: [] };
+      return defaultRpc(method, params);
+    });
+    const section = () => document.querySelector('.skills-librarian');
+    const facts = () =>
+      [...section().querySelectorAll('.skills-page-fact')].map((fact) => [
+        fact.querySelector('dt').textContent.trim(),
+        fact.querySelector('dd').textContent.trim(),
+      ]);
+    await render();
+    collection('Main');
+    await settle();
+    expect(calls('librarian.status')).toContainEqual({ agent_id: 'main' });
+    expect(facts()).toEqual([
+      ['Schedule', 'Every 7 days while the Agent is idle'],
+      ['Next pass', expect.stringContaining('2999')],
+      ['Last pass', expect.stringContaining('(scheduled)')],
+      ['Retired as unused', '1'],
+      ['Merging', '1 merged away, 1 changed, 0 created'],
+    ]);
+    expect(texts('.skills-librarian .skills-history__what')).toEqual([
+      'Merged into deploy',
+      'Changed',
+      'Retired as unused',
+    ]);
+    // A purged Skill has neither a page nor an archive entry to link to.
+    expect(
+      section().querySelector('span.skills-librarian__skill').textContent,
+    ).toBe('stale');
+
+    click(button('Revert together', section()));
+    let dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('skills.revert.pass', { revisions: '7, 8, 9' }),
+    );
+    click(button('Revert together', dialog));
+    await settle();
+    expect(calls('skill.revert')).toEqual([
+      { scope: 'agent:main', revisions: [7, 8, 9] },
+    ]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Revisions 7, 8, 9 reverted.',
+      variant: 'success',
+    });
+
+    click(button('Open the history of deploy'));
+    await settle();
+    expect(document.querySelector('#skill-page-title').textContent.trim()).toBe(
+      'deploy',
+    );
+    expect(
+      document
+        .querySelector('[role="tab"][aria-selected="true"]')
+        .textContent.trim(),
+    ).toBe('History');
+    expect(calls('skill.history')).toEqual([
+      { scope: 'agent:main', name: 'deploy', limit: 50 },
+    ]);
+    click(button('Back to Main'));
+    await settle();
+
+    click(button('Show old-deploy in Archived'));
+    await settle();
+    expect(
+      [...document.querySelectorAll('[data-archive-key]')].map(
+        (row) => row.dataset.archiveKey,
+      ),
+    ).toEqual(['agent:main/old-deploy_01']);
+    expect(document.querySelector('input[type="search"]').value).toBe(
+      'old-deploy',
+    );
+    input(document.querySelector('input[type="search"]'), '');
+
+    collection('Main');
+    await settle();
+    click(button('Run now', section()));
+    await settle();
+    expect(calls('librarian.run')).toEqual([{ agent_id: 'main' }]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: t('skills.librarian.started', { name: 'Main' }),
+      variant: 'success',
+    });
+    expect(facts()).toContainEqual(['Now', expect.stringContaining('Running')]);
+    // A pass that stopped early says so; a completed one shows no result row.
+    expect(facts()).toContainEqual([
+      'Result',
+      t('skills.librarian.resultInterrupted'),
+    ]);
+    expect(button('Run now', section()).disabled).toBe(true);
+
+    // Another Agent with no pass yet; its Run is refused while it works.
+    collection('Reviewer');
+    await settle();
+    expect(section().textContent).toContain('No pass has run yet.');
+    click(button('Run now', section()));
+    await settle();
+    expect(onToast).toHaveBeenCalledWith({
+      title: t('skills.librarian.busy'),
+      variant: 'warn',
+    });
+  });
+
   it('lists archived Skills newest first and restores or permanently deletes them from their menu', async () => {
     archived = [
       {

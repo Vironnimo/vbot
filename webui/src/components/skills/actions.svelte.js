@@ -44,9 +44,11 @@ export function createSkillActions(context) {
   // The package awaiting delete confirmation (null = dialog closed).
   let deleteTarget = $state(null);
 
-  // The revert awaiting confirmation: `{ scope, name, revisions, later }`;
-  // `later` is the revision the server named as changing the same part of
-  // the Skill afterwards, which the revert then includes (null at first).
+  // The revert awaiting confirmation: `{ scope, name, revisions, later,
+  // pass }`; `later` is the revision the server named as changing the same
+  // part of the Skill `name` afterwards, which the revert then includes (null
+  // at first). `pass` marks the changes of one Librarian pass, which can span
+  // several Skills (`name` is then null until the server names one).
   let revertTarget = $state(null);
 
   // The archived package awaiting permanent-delete confirmation.
@@ -215,6 +217,19 @@ export function createSkillActions(context) {
       name: entry.name,
       revisions: [revision.id],
       later: null,
+      pass: false,
+    };
+  }
+
+  // Takes back every change of one Librarian pass in an Agent's scope.
+  function requestRevertPass(scope, revisions) {
+    if (busy || !revisions.length) return;
+    revertTarget = {
+      scope,
+      name: null,
+      revisions: [...revisions].sort((a, b) => a - b),
+      later: null,
+      pass: true,
     };
   }
 
@@ -249,8 +264,10 @@ export function createSkillActions(context) {
       (error) => {
         const later = laterRevision(error, target.revisions);
         if (later === null) return false;
+        const skill = error.details.data.skill;
         revertTarget = {
           ...target,
+          name: typeof skill === 'string' && skill ? skill : target.name,
           revisions: [...target.revisions, later].sort((a, b) => a - b),
           later,
         };
@@ -387,6 +404,7 @@ export function createSkillActions(context) {
     confirmDelete,
     setPinned,
     requestRevert,
+    requestRevertPass,
     cancelRevert,
     confirmRevert,
     restoreArchived,

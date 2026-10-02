@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from functools import partial
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.projects.address import parse_agent_address
+from core.skills import triggered_skill_names
 
 if TYPE_CHECKING:
     from core.automation.bootstrap import BootstrapService
@@ -50,6 +52,28 @@ class AutomationReference:
 
     def to_dict(self) -> dict[str, str]:
         return {"kind": self.kind, "id": self.id, "name": self.name}
+
+
+@dataclass(frozen=True, slots=True)
+class _LiveAutomation:
+    """One live automation; ``texts`` returns the texts its Runs receive.
+
+    The texts are read only when asked for: a reference check needs the target alone.
+    """
+
+    reference: AutomationReference
+    texts: Callable[[], tuple[str, ...]]
+
+
+def _job_texts(job: Any) -> tuple[str, ...]:
+    return (job.prompt,)
+
+
+def _action_texts(action: dict[str, Any], event: Any | None) -> tuple[str, ...]:
+    texts = [action["prompt"]]
+    if event is not None:
+        texts.extend(text for text in (event.title, event.notes) if text)
+    return tuple(texts)
 
 
 class AutomationReferences:
@@ -95,16 +119,41 @@ class AutomationReferences:
         owner = (address.agent_id, address.project_id, address.session_id)
         return self._live(lambda agent, project, session: (agent, project, session) == owner)
 
+    def agent_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
+        """Return the Skill names the live automations of the Identity Agent ``agent_id`` trigger.
+
+        Each text an automation's Runs receive counts as one message, in which a
+        leading ``/name`` or any ``$name`` triggers the Skill ``name``: a
+        Bootstrap or Cron job's prompt, and a Calendar action's prompt plus the
+        title and notes of its event.
+        """
+        automations = self._live_automations(
+            lambda agent, project, _session: (agent, project) == (agent_id, None)
+        )
+        return frozenset(
+            name
+            for automation in automations
+            for text in automation.texts()
+            for name in triggered_skill_names(text)
+        )
+
     def _live(self, selects: _Selector) -> tuple[AutomationReference, ...]:
         """Return the live automations whose target ``selects`` accepts, sorted by label."""
-        references = [
-            AutomationReference("bootstrap", job.id, job.name)
+        references = [automation.reference for automation in self._live_automations(selects)]
+        return tuple(sorted(references, key=lambda reference: reference.label))
+
+    def _live_automations(self, selects: _Selector) -> list[_LiveAutomation]:
+        """Return the live automations whose target ``selects`` accepts."""
+        automations = [
+            _LiveAutomation(
+                AutomationReference("bootstrap", job.id, job.name), partial(_job_texts, job)
+            )
             for job in self._bootstrap.list_jobs()
             if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_BOOTSTRAP_STATUSES
         ]
-        references.extend(
-            AutomationReference("cron", job.id, job.name)
+        automations.extend(
+            _LiveAutomation(AutomationReference("cron", job.id, job.name), partial(_job_texts, job))
             for job in self._cron.list_jobs()
             if selects(job.agent_id, job.project_id, job.session_id)
             and job.status not in TERMINAL_CRON_JOB_STATUSES
@@ -116,14 +165,17 @@ class AutomationReferences:
             and self._calendar.actions.can_fire(action["id"])
         ]
         if actions:
-            titles = {event.id: event.title for event in self._calendar.list_events()}
-            references.extend(
-                AutomationReference(
-                    "calendar", action["id"], titles.get(action["event_id"], action["event_id"])
+            events = {event.id: event for event in self._calendar.list_events()}
+            for action in actions:
+                event = events.get(action["event_id"])
+                name = event.title if event is not None else action["event_id"]
+                automations.append(
+                    _LiveAutomation(
+                        AutomationReference("calendar", action["id"], name),
+                        partial(_action_texts, action, event),
+                    )
                 )
-                for action in actions
-            )
-        return tuple(sorted(references, key=lambda reference: reference.label))
+        return automations
 
 
 __all__ = ["AutomationKind", "AutomationReference", "AutomationReferences"]

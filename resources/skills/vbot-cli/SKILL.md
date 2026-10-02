@@ -38,7 +38,7 @@ For a focused question about a past conversation, use `session_search` and answe
 | First Telegram setup and chat-id discovery | `references/telegram-setup.md` |
 | Recurring or one-time scheduled Runs | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
-| Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills | `references/skills.md` |
+| Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |

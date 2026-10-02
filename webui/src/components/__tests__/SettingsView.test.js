@@ -259,7 +259,7 @@ describe('SettingsView', () => {
           'voice_controls',
           'transcription_audio',
         ],
-        memory: ['reflection', 'recall'],
+        memory: ['reflection', 'librarian', 'recall'],
         tools: [
           'web_search',
           'web_fetch',

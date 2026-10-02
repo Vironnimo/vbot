@@ -24,7 +24,7 @@ from core.skills.policy import (
     validate_skill_policy_file,
 )
 from core.skills.requirements import SkillAvailability, SkillRequirements
-from core.skills.skill_validator import FRONT_MATTER_DELIMITER
+from core.skills.skill_validator import FRONT_MATTER_DELIMITER, triggered_skill_names
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
@@ -79,4 +79,5 @@ __all__ = [
     "scan_project_skill_names",
     "scan_skill_names",
     "skill_origin_sort_key",
+    "triggered_skill_names",
 ]

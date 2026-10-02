@@ -6,9 +6,9 @@ tool_first_use supplies natural tasks and competing production Tools, executes
 disposable effects, and retains full synthetic evidence in --first-use-report.
 live_tools runs the Live call backend model on voice-style requests against a
 scripted vBot and judges its first Tool call; transcripts go to --live-report.
-reflection_workflow evaluates Reflection reviews and /learn in disposable vBot
-fixtures with repeated attempts; text packs and report comparison live in
-scripts/provider_probe/learning_eval.py.
+reflection_workflow evaluates Reflection reviews, /learn and Librarian passes in
+disposable vBot fixtures with repeated attempts; text packs and report
+comparison live in scripts/provider_probe/learning_eval.py.
 Credentials are never included in reports.
 
 Examples:
@@ -22,6 +22,8 @@ Examples:
     python scripts/probe_provider_tool_call.py --scenario reflection_workflow \
         --reflection-case standing_preference --reflection-scope memory --repetitions 3 \
         --reflection-report arm-a.json
+    python scripts/probe_provider_tool_call.py --scenario reflection_workflow \
+        --reflection-scope librarian --repetitions 3 --reflection-report librarian.json
 """
 
 from __future__ import annotations
@@ -167,7 +169,11 @@ def _parser() -> argparse.ArgumentParser:
         help="Write synthetic Recall interactions for independent review.",
     )
     parser.add_argument(
-        "--reflection-scope", choices=("all", "memory", "skill", "combined", "learn"), default="all"
+        "--reflection-scope",
+        nargs="+",
+        choices=("all", "memory", "skill", "combined", "learn", "librarian"),
+        default=["all"],
+        help="Learning evaluation scopes to run, or all.",
     )
     parser.add_argument(
         "--swarm-tool",

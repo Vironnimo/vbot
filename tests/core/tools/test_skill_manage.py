@@ -12,7 +12,8 @@ import pytest
 
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.runs import RunKind
-from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService
+from core.skills import _history as skill_history_module
+from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService, SkillWriter
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
@@ -59,6 +60,12 @@ class _Harness:
         self.changes: list[list[str | None]] = []
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
+        # Names the live automations of ``main`` trigger.
+        self.scheduled: set[str] = set()
+        # Names ``main`` shares with other Agents.
+        self.shared_out: set[str] = set()
+        # When each Run started, by Run id.
+        self.run_started: dict[str, str] = {}
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -71,6 +78,9 @@ class _Harness:
             ),
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
+            triggered_skill_names=lambda agent_id: self.scheduled if agent_id == "main" else (),
+            shared_skill_names=lambda agent_id: self.shared_out if agent_id == "main" else (),
+            run_started_at=self.run_started.get,
         )
 
     def home(self, agent_id: str) -> Path:
@@ -354,6 +364,25 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "absorbed_into. If no other Skill holds them, leave 'demo' as it is.",
             id="delete-without-absorbed-into",
         ),
+        pytest.param(
+            "scheduled",
+            {"action": "delete", "name": "demo", "absorbed_into": "other"},
+            "skill_protected",
+            "Skill 'demo' is used by one of your schedules, which loads it by its name, so it "
+            "cannot be deleted in the background; nothing changed. To merge it with other "
+            "Skills, move their instructions into 'demo' and delete them with absorbed_into "
+            "'demo'. Otherwise leave 'demo' as it is.",
+            id="scheduled-skill",
+        ),
+        pytest.param(
+            "shared-out",
+            {"action": "delete", "name": "demo", "absorbed_into": "other"},
+            "skill_protected",
+            "Skill 'demo' is shared with other Agents, so it cannot be deleted in the "
+            "background; nothing changed. Leave it as it is and name the needed change in "
+            "your closing reply.",
+            id="shared-out-skill",
+        ),
     ],
 )
 def test_background_reviews_refuse_skills_they_may_not_change(
@@ -369,21 +398,34 @@ def test_background_reviews_refuse_skills_they_may_not_change(
         harness.create()
     if setup == "pinned":
         harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
+    if setup == "scheduled":
+        harness.create(name="other")
+        harness.scheduled.add("demo")
+    if setup == "shared-out":
+        harness.create(name="other")
+        harness.shared_out.add("demo")
     before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
 
     result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
 
     assert result == tool_failure(code, message, retryable=False)
     assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
-    # An attended Run is not limited by pins or by who created the Skill.
-    if setup in ("user", "pinned"):
+    # An attended Run is not limited by pins, by who created the Skill, by
+    # schedules or by shares.
+    if setup in ("user", "pinned", "scheduled", "shared-out"):
         assert harness.run(arguments)["ok"] is True
 
 
-def test_background_reviews_change_and_merge_skills_agents_created(tmp_path: Path) -> None:
+# A Librarian pass writes under its own actor; every other background kind is a review.
+@pytest.mark.parametrize(
+    ("review", "actor"),
+    [(RunKind.REFLECTION, "reflection"), (RunKind.LIBRARIAN, "librarian")],
+)
+def test_background_reviews_change_and_merge_skills_agents_created(
+    tmp_path: Path, review: RunKind, actor: str
+) -> None:
     harness = _Harness(tmp_path)
     harness.create(name="old")
-    review = RunKind.REFLECTION
 
     created = harness.run(
         {"action": "create", "name": "new", "content": _skill_md("new")}, run_kind=review
@@ -399,15 +441,54 @@ def test_background_reviews_change_and_merge_skills_agents_created(tmp_path: Pat
     assert all(result["ok"] for result in (created, patched, deleted))
     home = harness.home("main")
     record = harness.authoring.record(home, "new")
-    assert record is not None and record.origin == "reflection"
+    assert record is not None and record.origin == actor
     [archived] = harness.authoring.archived(home)
     assert (archived.reason, archived.absorbed_into, archived.archived_by) == (
         "absorbed",
         "new",
-        "reflection",
+        actor,
     )
     revision = harness.authoring.history(home, "new")[0]
-    assert (revision.actor, revision.run_kind) == ("reflection", "reflection")
+    assert (revision.actor, revision.run_kind) == (actor, review.value)
+
+
+def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    clock = (f"2026-01-{day:02d}T00:00:00.000000Z" for day in range(1, 29))
+    monkeypatch.setattr(skill_history_module, "utc_now_timestamp", lambda: next(clock))
+    chat = SkillWriter(actor="agent", run_id="run-chat")
+    harness.authoring.create(home, "notes", _skill_md("notes"), writer=chat)
+    harness.authoring.create(home, "guide", _skill_md("guide"), writer=chat)
+    # The pass ("run-one") starts; then a review teaches "notes" a lesson.
+    harness.run_started["run-one"] = next(clock)
+    review = SkillWriter(actor="reflection", run_id="run-review", run_kind="reflection")
+    harness.authoring.edit(home, "notes", _skill_md("notes", body="# Lesson\n"), writer=review)
+    merge: dict[str, object] = {"action": "delete", "name": "notes", "absorbed_into": "guide"}
+
+    refused = harness.run(merge, run_kind=RunKind.LIBRARIAN)
+
+    assert refused == tool_failure(
+        "skill_changed",
+        "Skill 'notes' was changed outside this pass after the pass started; nothing "
+        "changed. Load 'notes' again with skill and build your change from that text, or "
+        "leave it as it is.",
+        retryable=False,
+    )
+    assert "notes" in harness.authoring.records(home)
+    # The pass's own changes and changes before it started are not refused.
+    for old, new in (("# Demo", "# All"), ("# All", "# Both")):
+        patch: dict[str, object] = {
+            "action": "patch",
+            "name": "guide",
+            "old_string": old,
+            "new_string": new,
+        }
+        assert harness.run(patch, run_kind=RunKind.LIBRARIAN)["ok"] is True
+    # Each outside change is reported once: the pass that read "notes" again goes on.
+    assert harness.run(merge, run_kind=RunKind.LIBRARIAN)["ok"] is True
 
 
 # --- Patch tolerance --------------------------------------------------------

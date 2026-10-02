@@ -21,9 +21,9 @@ from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SkillCatalogEntry,
     SkillRegistry,
-    _scan_skill_resources,
     format_skill_activation_context,
     format_skill_catalog_entries,
+    scan_skill_resources,
 )
 from core.tools._read_text import ReadPosition, render_text_window
 from core.tools.arguments import optional_int
@@ -403,8 +403,9 @@ def make_skill_handler(
                 resolve_archived, identity_agent_id, requested.strip().lstrip(_SKILL_NAME_MARKS)
             )
             if archived is not None:
-                target = archived.absorbed_into
-                date = archived.archived_at[:10]
+                # The Skill that holds the instructions now, after any later merges.
+                target = archived.holder
+                merged = (archived.holder_since or archived.archived_at)[:10]
                 loadable = target is not None and _is_loadable(
                     skill_registry, target, context.allowed_skills
                 )
@@ -412,19 +413,21 @@ def make_skill_handler(
                     return tool_failure(
                         "skill_not_found",
                         SKILL_ABSORBED_FILE_MESSAGE.format(
-                            name=archived.name, target=target, date=date
+                            name=archived.name, target=target, date=merged
                         ),
                     )
                 if target is not None and loadable:
                     notes.append(
-                        SKILL_ABSORBED_NOTE.format(name=archived.name, target=target, date=date)
+                        SKILL_ABSORBED_NOTE.format(name=archived.name, target=target, date=merged)
                     )
                     located = (target, None)
                 elif archived.available:
                     return tool_failure(
                         "skill_not_found",
                         SKILL_ARCHIVED_MESSAGE.format(
-                            name=archived.name, reason=_archive_reason(archived), date=date
+                            name=archived.name,
+                            reason=_archive_reason(archived),
+                            date=archived.archived_at[:10],
                         ),
                     )
         if located is None:
@@ -618,7 +621,7 @@ def load_skill_content(
     body, partial = _skill_instructions_window(skill_name, skill_file, ReadPosition(1))
     if partial:
         body = f"{SKILL_PARTIAL_INSTRUCTIONS_NOTE}\n\n{body}"
-    resources = _scan_skill_resources(skill_directory)
+    resources = scan_skill_resources(skill_directory)
     presented_resources = [_present_resource_path(resource, directory) for resource in resources]
     environment_access = ""
     if env_keys:

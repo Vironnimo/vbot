@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+import threading
+from collections.abc import Callable, Collection
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from core.runs import is_unattended_run_kind
+from core.runs import RunKind, is_unattended_run_kind
 from core.skills.authoring import (
     SkillActor,
     SkillAuthoringError,
@@ -51,11 +53,12 @@ from core.tools.tools import (
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
-    offload_tool_handler,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.timestamps import parse_timestamp
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     'Create, change or delete one of your own Skills (listed under "Your own skills"), '
@@ -74,8 +77,10 @@ SKILL_MANAGE_ABSORBED = (
 )
 # Refusals of a background Run (no user present: a reflection review or the
 # Librarian). It changes only Skills an Agent created that the user has not
-# pinned. The closing reply is where the Run reports what it could not change;
-# the review briefs ask for the same.
+# pinned, and never deletes a Skill that one of the Agent's live automations
+# triggers by name or that the Agent shares with other Agents. The closing reply
+# is where the Run reports what it could not change; the review briefs ask for
+# the same.
 _LEAVE_IT = "Leave it as it is and name the needed change in your closing reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
     "Skill '{name}' is pinned by the user, so it cannot be changed in the background; "
@@ -92,6 +97,23 @@ SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
 SKILL_MANAGE_SHARED_REFUSAL = (
     "Skill '{name}' is shared with you by another Agent, so it cannot be changed in the "
     f"background; nothing changed. {_LEAVE_IT}"
+)
+# A Librarian pass builds its changes from what it read; a Skill that someone else
+# changed after the pass started is read again first.
+SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL = (
+    "Skill '{name}' was changed outside this pass after the pass started; nothing changed. "
+    "Load '{name}' again with skill and build your change from that text, or leave it as "
+    "it is."
+)
+SKILL_MANAGE_SHARED_OUT_REFUSAL = (
+    "Skill '{name}' is shared with other Agents, so it cannot be deleted in the background; "
+    f"nothing changed. {_LEAVE_IT}"
+)
+SKILL_MANAGE_SCHEDULED_REFUSAL = (
+    "Skill '{name}' is used by one of your schedules, which loads it by its name, so it "
+    "cannot be deleted in the background; nothing changed. To merge it with other Skills, "
+    "move their instructions into '{name}' and delete them with absorbed_into '{name}'. "
+    "Otherwise leave '{name}' as it is."
 )
 SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
     "In the background, delete needs absorbed_into: the name of another of your own Skills "
@@ -117,15 +139,20 @@ _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
 # owner's package). ``create`` is own-home-only by definition; ``delete`` stays
 # owner/human-only so a receiver cannot remove someone else's playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
-# The Skill history actor of a Run without the user; every unattended kind so far
-# is a reflection review.
+# The Skill history actor of a Run without the user: a Librarian pass writes as
+# ``librarian``; every other unattended kind is a reflection review.
 _BACKGROUND_ACTOR: SkillActor = "reflection"
+_LIBRARIAN_ACTOR: SkillActor = "librarian"
 _PROTECTED_MESSAGES = {
     "pinned": SKILL_MANAGE_PINNED_REFUSAL,
     "user": SKILL_MANAGE_USER_SKILL_REFUSAL,
     "unknown": SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL,
 }
 _LOGGER = get_logger("tools.skill_manage")
+# How many (Run, Skill) pairs remember the outside change they were told about.
+_REPORTED_CHANGES_LIMIT = 1024
+# Revisions read back to find an outside change; a pass writes far fewer per Skill.
+_CHANGE_CHECK_REVISIONS = 100
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -270,8 +297,21 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-) -> Callable[[ToolContext, JsonObject], JsonObject]:
+    shared_skill_names: Callable[[str], Collection[str]] | None = None,
+) -> Callable[[ToolContext, JsonObject, Collection[str], str | None], JsonObject]:
     """Return the direct Skill-management handler.
+
+    The handler's third argument names the caller's Skills that its live
+    automations trigger by name; a background Run never deletes one of them,
+    because the automation would then trigger nothing. Nor does it delete one
+    that ``shared_skill_names(agent_id)`` names: the caller shares it with other
+    Agents, whose shares would then name no Skill.
+
+    The fourth argument is when the calling Run started, given for a Librarian
+    Run. Such a Run builds its changes from Skills it read during the Run, so a
+    change to an existing Skill that someone else changed after the Run started
+    is refused once per outside change; the Run reads the Skill again and
+    retries, or leaves it.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -289,7 +329,40 @@ def make_skill_manage_handler(
     affected scoped caches were invalidated, so open Skill views can refresh.
     """
 
-    def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    # (Run id, Skill name) -> the newest outside revision the Run was told about.
+    reported_changes: dict[tuple[str, str], int] = {}
+    reported_lock = threading.Lock()
+
+    def check_unchanged_since(root: Path, name: str, writer: SkillWriter, started: str) -> None:
+        """Refuse once per outside change to ``name`` after the Run started."""
+        try:
+            since = parse_timestamp(started)
+        except ValueError:
+            return
+        outside = [
+            revision.id
+            for revision in authoring.history(root, name, limit=_CHANGE_CHECK_REVISIONS)
+            if revision.run_id != writer.run_id and _after(revision.at, since)
+        ]
+        if not outside:
+            return
+        key = (writer.run_id or "", name)
+        with reported_lock:
+            if reported_changes.get(key, 0) >= max(outside):
+                return
+            reported_changes[key] = max(outside)
+            while len(reported_changes) > _REPORTED_CHANGES_LIMIT:
+                del reported_changes[next(iter(reported_changes))]
+        raise _RefusalError(
+            "skill_changed", SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL.format(name=name)
+        )
+
+    def skill_manage_handler(
+        context: ToolContext,
+        arguments: JsonObject,
+        scheduled: Collection[str] = (),
+        run_started_at: str | None = None,
+    ) -> JsonObject:
         writer = _writer(context)
         try:
             call = _read_call(arguments)
@@ -337,7 +410,25 @@ def make_skill_manage_handler(
                 raise _RefusalError("skill_not_found", _unknown_skill_message(call.name, own_root))
             if writer.background and call.action != "create":
                 authoring.check_writable(target_root, call.name, writer=writer)
+            if (
+                writer.actor == _LIBRARIAN_ACTOR
+                and run_started_at is not None
+                and call.action != "create"
+            ):
+                check_unchanged_since(target_root, call.name, writer, run_started_at)
             if call.action == "delete":
+                if writer.background and call.name in scheduled:
+                    raise _RefusalError(
+                        "skill_protected", SKILL_MANAGE_SCHEDULED_REFUSAL.format(name=call.name)
+                    )
+                if (
+                    writer.background
+                    and shared_skill_names is not None
+                    and call.name in shared_skill_names(context.agent_id)
+                ):
+                    raise _RefusalError(
+                        "skill_protected", SKILL_MANAGE_SHARED_OUT_REFUSAL.format(name=call.name)
+                    )
                 _check_absorbed_into(call, own_root, writer)
             result, summary = _apply(authoring, target_root, call, writer)
         except _RefusalError as refusal:
@@ -382,14 +473,27 @@ def make_skill_manage_handler(
 
 
 def _writer(context: ToolContext) -> SkillWriter:
-    """Name the call's writer: an attended Agent, or a background review."""
+    """Name the call's writer: an attended Agent, a Librarian pass or a review."""
     kind = context.run_kind
+    actor: SkillActor = "agent"
+    if kind is RunKind.LIBRARIAN:
+        actor = _LIBRARIAN_ACTOR
+    elif is_unattended_run_kind(kind):
+        actor = _BACKGROUND_ACTOR
     return SkillWriter(
-        actor=_BACKGROUND_ACTOR if is_unattended_run_kind(kind) else "agent",
+        actor=actor,
         session_id=context.session_id or None,
         run_id=context.run_id or None,
         run_kind=None if kind is None else kind.value,
     )
+
+
+def _after(timestamp: str, moment: datetime) -> bool:
+    """Whether ``timestamp`` is later than ``moment``; an unreadable one is not."""
+    try:
+        return parse_timestamp(timestamp) > moment
+    except ValueError:
+        return False
 
 
 def _check_absorbed_into(call: _Call, own_root: Path, writer: SkillWriter) -> None:
@@ -1024,8 +1128,18 @@ def register_skill_manage_tool(
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
+    triggered_skill_names: Callable[[str], Collection[str]] | None = None,
+    shared_skill_names: Callable[[str], Collection[str]] | None = None,
+    run_started_at: Callable[[str], str | None] | None = None,
 ) -> None:
-    """Register identity-only direct Skill management."""
+    """Register identity-only direct Skill management.
+
+    ``triggered_skill_names(agent_id)`` names the Skills an Identity Agent's live
+    automations trigger by name, and ``run_started_at(run_id)`` returns when a
+    Run started (``None`` when unknown). Both read Event Loop state, so they run
+    on the Loop, before the write moves to a worker. ``shared_skill_names(agent_id)``
+    names the Skills an Agent shares with other Agents; it runs on the worker.
+    """
     handler = make_skill_manage_handler(
         authoring,
         resolve_agent_skills_dir,
@@ -1033,17 +1147,36 @@ def register_skill_manage_tool(
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
         on_changed=on_changed,
+        shared_skill_names=shared_skill_names,
     )
 
-    def guarded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    def guarded_handler(
+        context: ToolContext,
+        arguments: JsonObject,
+        scheduled: Collection[str],
+        started: str | None,
+    ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments)
+            return handler(context, arguments, scheduled, started)
+
+    async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        scheduled: Collection[str] = ()
+        if (
+            triggered_skill_names is not None
+            and arguments.get("action") == "delete"
+            and is_unattended_run_kind(context.run_kind)
+        ):
+            scheduled = triggered_skill_names(context.agent_id)
+        started = None
+        if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
+            started = run_started_at(context.run_id)
+        return await run_tool_worker(guarded_handler, context, arguments, scheduled, started)
 
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
-        offload_tool_handler(guarded_handler),
+        offloaded_handler,
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,

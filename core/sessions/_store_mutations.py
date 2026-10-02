@@ -52,8 +52,13 @@ def create(
     created_at: str | None = None,
     *,
     generate_id: bool = False,
+    run_kind: str | None = None,
 ) -> SessionAddress:
-    """Create a live Session; with *generate_id*, allocate a fresh id in its scope."""
+    """Create a live Session; with *generate_id*, allocate a fresh id in its scope.
+
+    A *run_kind* labels the Session from its first write, so a background
+    Session is classified before any reader can list it.
+    """
     timestamp = (
         utc_now_timestamp()
         if created_at is None
@@ -62,9 +67,11 @@ def create(
     if generate_id:
         address = _store_values._allocate_address(connection, address)
     try:
-        _insert_session(connection, address, timestamp)
+        session_key = _insert_session(connection, address, timestamp)
     except sqlite3.IntegrityError as exc:
         raise ChatSessionError(f"session already exists: {address.session_id}") from exc
+    if run_kind is not None:
+        record_run_kind_by_key(connection, session_key, run_kind)
     return address
 
 

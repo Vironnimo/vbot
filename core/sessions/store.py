@@ -155,11 +155,16 @@ class SessionStore:
     # -- Session lifecycle -------------------------------------------------------
 
     def create(
-        self, address: SessionAddress, created_at: str | None = None, *, generate_id: bool = False
+        self,
+        address: SessionAddress,
+        created_at: str | None = None,
+        *,
+        generate_id: bool = False,
+        run_kind: str | None = None,
     ) -> SessionAddress:
         return self._execute_write(
             lambda connection: _store_mutations.create(
-                connection, address, created_at, generate_id=generate_id
+                connection, address, created_at, generate_id=generate_id, run_kind=run_kind
             )
         )
 

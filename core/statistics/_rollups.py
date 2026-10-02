@@ -25,7 +25,8 @@ Units and their tables:
 Every Run, Tool call and request has one origin; the first matching rule
 wins: ``extension`` (an Extension owns the Session, or the request names an
 owner), ``subagent`` (a Sub-Agent Run or Session), ``automation`` (cron and
-calendar Runs), ``channel``, ``reflection`` (all reflection kinds),
+calendar Runs), ``channel``, ``reflection`` (background learning: the
+unattended kinds of Reflection reviews and Librarian passes),
 ``system``, ``user`` (user Runs and unknown kinds) and ``background`` (a
 request without a Run that is not a chat or Compaction request). A request of
 an indexed Run takes the Run's origin; any other request in an Extension or
@@ -45,6 +46,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.runs import UNATTENDED_RUN_KINDS
 from core.statistics._projection import CACHE_SQL, MICROSECONDS_PER_HOUR, REASONING_SQL
 
 ROLLUP_SCHEMA = """
@@ -394,6 +396,12 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
     )
 
 
+# Background learning Runs (Reflection reviews, Librarian passes) share one origin.
+_UNATTENDED_KINDS_SQL = (
+    "(" + ", ".join(sorted(f"'{kind.value}'" for kind in UNATTENDED_RUN_KINDS)) + ")"
+)
+
+
 def run_origin_sql(session: str, run_kind: str) -> str:
     """The origin of a Run of ``run_kind`` in the ``stat_sessions`` row ``session``."""
     return (
@@ -401,8 +409,7 @@ def run_origin_sql(session: str, run_kind: str) -> str:
         f"WHEN {run_kind} = 'subagent' OR {session}.is_subagent = 1 THEN 'subagent' "
         f"WHEN {run_kind} IN ('cron', 'calendar') THEN 'automation' "
         f"WHEN {run_kind} = 'channel' THEN 'channel' "
-        f"WHEN {run_kind} IN ('reflection', 'memory_reflection', 'skill_reflection') "
-        "THEN 'reflection' "
+        f"WHEN {run_kind} IN {_UNATTENDED_KINDS_SQL} THEN 'reflection' "
         f"WHEN {run_kind} = 'system' THEN 'system' "
         "ELSE 'user' END"
     )

@@ -26,6 +26,13 @@ from core.automation.learning import (
     LearningUndoResult,
     RunLearningChanges,
 )
+from core.automation.librarian import (
+    LibrarianBusyError,
+    LibrarianError,
+    LibrarianService,
+    LibrarianUnavailableError,
+    validate_librarian_state_file,
+)
 from core.automation.references import AutomationReference, AutomationReferences
 from core.automation.reflection import (
     REFLECTION_COUNTERS_META_KEY,
@@ -53,6 +60,10 @@ __all__ = [
     "RunLearningChanges",
     "CronService",
     "BootstrapService",
+    "LibrarianBusyError",
+    "LibrarianError",
+    "LibrarianService",
+    "LibrarianUnavailableError",
     "ReflectionResult",
     "ReflectionService",
     "TriggerService",
@@ -61,4 +72,5 @@ __all__ = [
     "validate_cron_jobs_file",
     "validate_bootstrap_jobs_data",
     "validate_bootstrap_jobs_file",
+    "validate_librarian_state_file",
 ]
