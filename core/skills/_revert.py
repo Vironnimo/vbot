@@ -4,12 +4,14 @@ A revert is all or none: every named revision is checked and its inverse planned
 before anything changes, the inverses run newest first, and a failure undoes the
 steps already taken. A revision cannot be reverted while a later revision outside
 the request changed the same part of that Skill: one of its files, its pin, or
-its presence in the home. Each reverted revision records one ``revert`` revision.
+its presence in the home. Revisions the caller names as related (such as earlier
+reverts of the same change) never block. Each reverted revision records one
+``revert`` revision.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -79,30 +81,35 @@ class _Step:
         return self.target.skill
 
 
+def check_revert(
+    history: SkillHistory,
+    root: Path,
+    revision_ids: Sequence[int],
+    *,
+    related: Collection[int] = (),
+) -> None:
+    """Check that :func:`revert_revisions` would run now; change no package.
+
+    Raises what the revert raises before changing anything. Outside changes of
+    the named Skills are recorded first. The caller holds the authoring write lock.
+    """
+    _plan(history, root, revision_ids, related)
+
+
 def revert_revisions(
     history: SkillHistory,
     root: Path,
     revision_ids: Sequence[int],
     actor: RevertActor,
+    *,
+    related: Collection[int] = (),
 ) -> list[SkillRevision]:
     """Revert *revision_ids* in the home *root*; return the recorded revisions.
 
-    The caller holds the authoring write lock.
+    A later revision in *related* does not block the revert. The caller holds
+    the authoring write lock.
     """
-    if not revision_ids:
-        raise RevertError("Name at least one revision to revert.")
-    targets: list[SkillRevision] = []
-    for revision_id in sorted(set(revision_ids), reverse=True):
-        revision = history.revision(revision_id)
-        if revision is None:
-            raise RevertError(f"Revision {revision_id} does not exist in this Skill home.")
-        targets.append(revision)
-    for skill in {target.skill for target in targets}:
-        _skill_path(root, skill)
-        history.observe(skill, live_package(root, skill))
-    _check_conflicts(history, targets)
-    steps = [_inverse(history, root, target) for target in targets]
-    _simulate(root, history.archive_root, steps)
+    steps = _plan(history, root, revision_ids, related)
     _execute(root, history.archive_root, steps)
     recorded: list[SkillRevision] = []
     for step in steps:
@@ -131,6 +138,30 @@ def revert_revisions(
             _LOGGER.warning("Skill revert of %s not recorded: %s", root, error)
             break
     return recorded
+
+
+def _plan(
+    history: SkillHistory,
+    root: Path,
+    revision_ids: Sequence[int],
+    related: Collection[int],
+) -> list[_Step]:
+    """Check the named revisions and plan their inverses, newest first."""
+    if not revision_ids:
+        raise RevertError("Name at least one revision to revert.")
+    targets: list[SkillRevision] = []
+    for revision_id in sorted(set(revision_ids), reverse=True):
+        revision = history.revision(revision_id)
+        if revision is None:
+            raise RevertError(f"Revision {revision_id} does not exist in this Skill home.")
+        targets.append(revision)
+    for skill in {target.skill for target in targets}:
+        _skill_path(root, skill)
+        history.observe(skill, live_package(root, skill))
+    _check_conflicts(history, targets, related)
+    steps = [_inverse(history, root, target) for target in targets]
+    _simulate(root, history.archive_root, steps)
+    return steps
 
 
 def live_package(root: Path, skill: str) -> Path | None:
@@ -163,8 +194,10 @@ def _overlaps(revision: SkillRevision, later: SkillRevision) -> bool:
     return bool({item.path for item in revision.files} & {item.path for item in later.files})
 
 
-def _check_conflicts(history: SkillHistory, targets: list[SkillRevision]) -> None:
-    requested = {target.id for target in targets}
+def _check_conflicts(
+    history: SkillHistory, targets: list[SkillRevision], related: Collection[int]
+) -> None:
+    requested = {target.id for target in targets} | set(related)
     revisions = history.revisions()
     for target in targets:
         if target.kind == "baseline":

@@ -190,19 +190,24 @@ def test_revert_refuses_to_overwrite_later_changes_and_changes_nothing(
     service.replace_matching(workspace, "agent", "New wording", "Newest wording.", writer=_TOOL)
     before = (workspace / "MEMORY.md").read_text(encoding="utf-8")
 
-    with pytest.raises(MemoryRevertError) as conflict:
-        service.revert(workspace, [3, 4], writer=_RPC)
+    # The check refuses exactly like the revert would, before it writes.
+    for attempt in (service.check_revert, service.revert):
+        with pytest.raises(MemoryRevertError) as conflict:
+            attempt(workspace, [3, 4], writer=_RPC)
 
-    assert [(c.revision, c.text, c.later) for c in conflict.value.conflicts] == [
-        (4, "New wording.", (5,))
-    ]
-    assert "revision 5 changed it since" in str(conflict.value)
+        assert [(c.revision, c.text, c.later) for c in conflict.value.conflicts] == [
+            (4, "New wording.", (5,))
+        ]
+        assert "revision 5 changed it since" in str(conflict.value)
     assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == before
     with pytest.raises(MemoryError, match="where the history starts"):
         service.revert(workspace, [1], writer=_RPC)
     with pytest.raises(MemoryError, match="revision 9 does not exist; revisions run from 1 to 5"):
         service.revert(workspace, [9], writer=_RPC)
 
+    assert service.check_revert(workspace, [2, 4, 5], writer=_RPC) == ("agent",)
+    assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == before
+    assert len(service.recorded_revisions("coder")) == 5
     service.revert(workspace, [2, 4, 5], writer=_RPC)
 
     assert service.entries_at(workspace, "coder", None)["agent"] == ["Baseline.", "Unrelated."]

@@ -13,6 +13,18 @@ from core.automation.cron import (
     validate_cron_jobs_data,
     validate_cron_jobs_file,
 )
+from core.automation.learning import (
+    LaterChange,
+    LearningChange,
+    LearningChanges,
+    LearningError,
+    LearningSummary,
+    LearningUndoConflictError,
+    LearningUndoError,
+    LearningUndoFailedError,
+    LearningUndoResult,
+    RunLearningChanges,
+)
 from core.automation.references import AutomationReference, AutomationReferences
 from core.automation.reflection import (
     REFLECTION_COUNTERS_META_KEY,
@@ -27,6 +39,16 @@ __all__ = [
     "AutomationReference",
     "AutomationReferences",
     "CronOccurrence",
+    "LaterChange",
+    "LearningChange",
+    "LearningChanges",
+    "LearningError",
+    "LearningSummary",
+    "LearningUndoConflictError",
+    "LearningUndoError",
+    "LearningUndoFailedError",
+    "LearningUndoResult",
+    "RunLearningChanges",
     "CronService",
     "BootstrapService",
     "ReflectionResult",
