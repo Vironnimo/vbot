@@ -109,15 +109,22 @@ class RunKind(StrEnum):
     REFLECTION = "reflection"
     MEMORY_REFLECTION = "memory_reflection"
     SKILL_REFLECTION = "skill_reflection"
+    LIBRARIAN = "librarian"
     SUBAGENT = "subagent"
     SYSTEM = "system"
 
 
 # Run kinds that act for the Agent while no person is attending the Session:
-# background learning Runs. Tool guards and Statistics share this one definition,
-# so a new background kind is added here only.
+# background learning Runs (Reflection reviews and Librarian passes). Tool guards
+# and Statistics share this one definition, so a new background kind is added
+# here only.
 UNATTENDED_RUN_KINDS: frozenset[RunKind] = frozenset(
-    {RunKind.REFLECTION, RunKind.MEMORY_REFLECTION, RunKind.SKILL_REFLECTION}
+    {
+        RunKind.REFLECTION,
+        RunKind.MEMORY_REFLECTION,
+        RunKind.SKILL_REFLECTION,
+        RunKind.LIBRARIAN,
+    }
 )
 
 

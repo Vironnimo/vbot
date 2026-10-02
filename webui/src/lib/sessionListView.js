@@ -1,11 +1,14 @@
 import { t } from './i18n.js';
 import { asOptionalText, isPlainObject } from './values.js';
 
+// A Librarian pass is background-only too, and no filter reveals it: the
+// server never lists its Sessions, so only a stale row could reach this view.
 const BACKGROUND_ONLY_RUN_KINDS = new Set([
   'cron',
   'reflection',
   'memory_reflection',
   'skill_reflection',
+  'librarian',
 ]);
 
 // Category toggles that reveal hidden-by-default sessions. `allAgents` is a

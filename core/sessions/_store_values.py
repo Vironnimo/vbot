@@ -92,6 +92,7 @@ _SESSION_LIST_BACKGROUND_KINDS = (
     "reflection",
     "memory_reflection",
     "skill_reflection",
+    "librarian",
 )
 _RECALL_VALID_RUN_KINDS = (
     "user",
@@ -101,6 +102,7 @@ _RECALL_VALID_RUN_KINDS = (
     "reflection",
     "memory_reflection",
     "skill_reflection",
+    "librarian",
     "subagent",
     "system",
 )
@@ -128,6 +130,8 @@ _LIST_VISIBILITY_VALID_RUN_KINDS = 1 << 6
 _LIST_VISIBILITY_USER_FACING = 1 << 7
 _LIST_VISIBILITY_SUBAGENT_RUN_KIND = 1 << 8
 _LIST_VISIBILITY_SUBAGENT_PARENT = 1 << 9
+# A Librarian pass Session: never listed, never recalled.
+_LIST_VISIBILITY_LIBRARIAN = 1 << 10
 
 # Metadata facade keys stored in dedicated columns.
 _TITLE_KEYS = ("title", "auto_title")
@@ -208,6 +212,8 @@ def _session_list_visibility_mask(metadata: JsonObject) -> int:
         mask |= _LIST_VISIBILITY_REFLECTION
     if "subagent" in kinds:
         mask |= _LIST_VISIBILITY_SUBAGENT_RUN_KIND
+    if "librarian" in kinds:
+        mask |= _LIST_VISIBILITY_LIBRARIAN
 
     platform = metadata.get("platform")
     platform_conversation = metadata.get("platform_conv_id")
@@ -391,6 +397,7 @@ def _session_list_visibility_sql(
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
+        f"(s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 AND "
         "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
         "WHERE owner_binding.session_key = s.session_key) AND "
         "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "
@@ -416,15 +423,16 @@ _RECALL_SUBAGENT_MASK = _LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUB
 def _recall_visibility_case(alias: str) -> str:
     """The one definition of ``SessionRecallVisibility`` over ``list_visibility_mask``.
 
-    Reflection kinds hide a Session even when it also carries User or Sub-Agent
-    markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
+    Reflection and Librarian kinds hide a Session even when it also carries User
+    or Sub-Agent markers. Sub-Agent markers (flag or Run kind) make it a delegated Session.
     Otherwise Sessions without valid Run kinds and Sessions with a User-facing
     Run kind are conversations; the rest (system-only) stay hidden.
     """
     mask = f"{alias}.list_visibility_mask"
     return (
         "CASE"
-        f" WHEN ({mask} & {_LIST_VISIBILITY_REFLECTION}) != 0 THEN 'hidden'"
+        f" WHEN ({mask} & {_LIST_VISIBILITY_REFLECTION | _LIST_VISIBILITY_LIBRARIAN}) != 0"
+        " THEN 'hidden'"
         f" WHEN ({mask} & {_RECALL_SUBAGENT_MASK}) != 0 THEN 'subagent'"
         f" WHEN ({mask} & {_LIST_VISIBILITY_VALID_RUN_KINDS}) = 0"
         f" OR ({mask} & {_LIST_VISIBILITY_USER_FACING}) != 0 THEN 'conversation'"

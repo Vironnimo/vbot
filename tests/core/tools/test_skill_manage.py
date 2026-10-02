@@ -377,10 +377,16 @@ def test_background_reviews_refuse_skills_they_may_not_change(
         assert harness.run(arguments)["ok"] is True
 
 
-def test_background_reviews_change_and_merge_skills_agents_created(tmp_path: Path) -> None:
+# A Librarian pass writes under its own actor; every other background kind is a review.
+@pytest.mark.parametrize(
+    ("review", "actor"),
+    [(RunKind.REFLECTION, "reflection"), (RunKind.LIBRARIAN, "librarian")],
+)
+def test_background_reviews_change_and_merge_skills_agents_created(
+    tmp_path: Path, review: RunKind, actor: str
+) -> None:
     harness = _Harness(tmp_path)
     harness.create(name="old")
-    review = RunKind.REFLECTION
 
     created = harness.run(
         {"action": "create", "name": "new", "content": _skill_md("new")}, run_kind=review
@@ -396,15 +402,15 @@ def test_background_reviews_change_and_merge_skills_agents_created(tmp_path: Pat
     assert all(result["ok"] for result in (created, patched, deleted))
     home = harness.home("main")
     record = harness.authoring.record(home, "new")
-    assert record is not None and record.origin == "reflection"
+    assert record is not None and record.origin == actor
     [archived] = harness.authoring.archived(home)
     assert (archived.reason, archived.absorbed_into, archived.archived_by) == (
         "absorbed",
         "new",
-        "reflection",
+        actor,
     )
     revision = harness.authoring.history(home, "new")[0]
-    assert (revision.actor, revision.run_kind) == ("reflection", "reflection")
+    assert (revision.actor, revision.run_kind) == (actor, review.value)
 
 
 # --- Patch tolerance --------------------------------------------------------

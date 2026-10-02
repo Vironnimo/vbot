@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from core.runs import is_unattended_run_kind
+from core.runs import RunKind, is_unattended_run_kind
 from core.skills.authoring import (
     SkillActor,
     SkillAuthoringError,
@@ -114,9 +114,10 @@ _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
 # owner's package). ``create`` is own-home-only by definition; ``delete`` stays
 # owner/human-only so a receiver cannot remove someone else's playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
-# The Skill history actor of a Run without the user; every unattended kind so far
-# is a reflection review.
+# The Skill history actor of a Run without the user: a Librarian pass writes as
+# ``librarian``; every other unattended kind is a reflection review.
 _BACKGROUND_ACTOR: SkillActor = "reflection"
+_LIBRARIAN_ACTOR: SkillActor = "librarian"
 _PROTECTED_MESSAGES = {
     "pinned": SKILL_MANAGE_PINNED_REFUSAL,
     "user": SKILL_MANAGE_USER_SKILL_REFUSAL,
@@ -379,10 +380,15 @@ def make_skill_manage_handler(
 
 
 def _writer(context: ToolContext) -> SkillWriter:
-    """Name the call's writer: an attended Agent, or a background review."""
+    """Name the call's writer: an attended Agent, a Librarian pass or a review."""
     kind = context.run_kind
+    actor: SkillActor = "agent"
+    if kind is RunKind.LIBRARIAN:
+        actor = _LIBRARIAN_ACTOR
+    elif is_unattended_run_kind(kind):
+        actor = _BACKGROUND_ACTOR
     return SkillWriter(
-        actor=_BACKGROUND_ACTOR if is_unattended_run_kind(kind) else "agent",
+        actor=actor,
         session_id=context.session_id or None,
         run_id=context.run_id or None,
         run_kind=None if kind is None else kind.value,

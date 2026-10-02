@@ -455,6 +455,7 @@ describe('sessionListView helpers', () => {
       { id: 'memory-reflection-session', run_kinds: ['memory_reflection'] },
       { id: 'skill-reflection-session', run_kinds: ['skill_reflection'] },
       { id: 'subagent-session', is_subagent_session: true },
+      { id: 'librarian-session', run_kinds: ['librarian'] },
     ]);
 
     const visibleIds = (filters) =>
@@ -493,6 +494,8 @@ describe('sessionListView helpers', () => {
       skillReflections: true,
       cron: true,
     };
+    // No filter reveals a Librarian pass Session.
+    expect(visibleIds(everyFilter)).not.toContain('librarian-session');
     expect(visibleIds(everyFilter)).toHaveLength(6);
   });
 
