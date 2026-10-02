@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import socket
 import sys
 from dataclasses import replace
@@ -14,6 +15,7 @@ import pytest
 import uvicorn
 from mcp.client.auth import OAuthFlowError
 from mcp.server import Server
+from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
 from resources.extensions.mcp._callbacks import sampling_messages
@@ -255,19 +257,24 @@ async def test_modern_input_required_round_trips_all_callbacks(host, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_legacy_server_sampling_and_roots(host, monkeypatch):
+async def test_legacy_server_sampling_and_roots(host, monkeypatch, caplog, recwarn):
     from mcp import Client
 
     async def call(server_context, params):
-        roots = await server_context.session.list_roots()
-        sample = await server_context.session.create_message(
-            [
-                types.SamplingMessage(
-                    role="user", content=types.TextContent(type="text", text="sample")
-                )
-            ],
-            max_tokens=20,
-        )
+        # The test server's own SDK flags these legacy requests; vBot's client must not.
+        with pytest.warns(MCPDeprecationWarning):
+            listing = server_context.session.list_roots()
+        roots = await listing
+        with pytest.warns(MCPDeprecationWarning):
+            sampling = server_context.session.create_message(
+                [
+                    types.SamplingMessage(
+                        role="user", content=types.TextContent(type="text", text="sample")
+                    )
+                ],
+                max_tokens=20,
+            )
+        sample = await sampling
         return types.CallToolResult(
             content=[
                 types.TextContent(
@@ -284,24 +291,69 @@ async def test_legacy_server_sampling_and_roots(host, monkeypatch):
             tools=[types.Tool(name="callbacks", input_schema={"type": "object"})]
         )
 
+    async def set_level(server_context, params):
+        return types.EmptyResult()
+
     def legacy_client(*args, **kwargs):
         kwargs["mode"] = "legacy"
         return Client(*args, **kwargs)
 
     monkeypatch.setattr("resources.extensions.mcp.client.Client", legacy_client)
-    runner = runner_for(
-        host, Server("legacy", on_call_tool=call, on_list_tools=list_tools), monkeypatch
-    )
-    try:
-        result = await asyncio.wait_for(
-            runner.invoke("tools/call", {"name": "callbacks"}, context(host)), 10
+    with pytest.warns(MCPDeprecationWarning):
+        legacy = Server(
+            "legacy", on_call_tool=call, on_list_tools=list_tools, on_set_logging_level=set_level
         )
+    runner = runner_for(host, legacy, monkeypatch)
+    try:
+        with caplog.at_level(logging.INFO, logger="vbot.extensions.mcp"):
+            result = await asyncio.wait_for(
+                runner.invoke("tools/call", {"name": "callbacks"}, context(host)), 10
+            )
+            await asyncio.wait_for(runner.invoke("ping", {}), 10)
+            await asyncio.wait_for(runner.invoke("logging/setLevel", {"level": "debug"}), 10)
         assert json.loads(result["content"][0]["text"]) == {
             "root": host.data_dir.as_uri(),
             "sample": "sampled",
         }
     finally:
         await runner.close()
+    # Roots changes went out before and after the call: each deprecated feature the
+    # legacy connection uses is logged once, and none surfaces as a warning.
+    features = [
+        match[1]
+        for record in caplog.records
+        if (match := re.search(r"deprecated since protocol .* feature=(\w+)", record.getMessage()))
+    ]
+    assert features == ["roots", "ping", "logging"]
+    assert [f"{item.filename}:{item.lineno}: {item.message}" for item in recwarn] == []
+
+
+@pytest.mark.asyncio
+async def test_requests_carry_a_log_level_only_after_one_is_set(host, monkeypatch):
+    levels = []
+
+    async def call(server_context, params):
+        levels.append((params.meta or {}).get(types.LOG_LEVEL_META_KEY))
+        return types.CallToolResult(content=[])
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[types.Tool(name="levels", input_schema={"type": "object"})]
+        )
+
+    runner = runner_for(
+        host, Server("levels", on_call_tool=call, on_list_tools=list_tools), monkeypatch
+    )
+    try:
+        async with asyncio.timeout(10):
+            await runner.invoke("tools/call", {"name": "levels"}, context(host))
+            await runner.invoke("logging/setLevel", {"level": "debug"})
+            await runner.invoke("tools/call", {"name": "levels"}, context(host))
+    finally:
+        await runner.close()
+
+    # Without an explicit level the server applies its own default.
+    assert levels == [None, "debug"]
 
 
 @pytest.mark.asyncio

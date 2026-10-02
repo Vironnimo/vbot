@@ -8,7 +8,8 @@ import os
 import random
 import threading
 import time
-from collections.abc import Callable
+import warnings
+from collections.abc import Callable, Coroutine
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from typing import Any, cast
@@ -23,7 +24,7 @@ from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.dispatcher import CallOptions
-from mcp.shared.exceptions import MCPError
+from mcp.shared.exceptions import MCPDeprecationWarning, MCPError
 
 from core.extensions.operations import ExtensionHost
 from core.tools.tools import ToolContext
@@ -147,7 +148,11 @@ class ConnectionRunner:
         self._requests = ServerRequests(self.id, host, inputs, self._events, lambda: self.context)
         self._catalog_pages: dict[str, list[dict[str, Any]]] = {}
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
-        self._log_level = "info"
+        # The log level an Agent chose with logging/setLevel; until then requests
+        # carry none and the server applies its own default.
+        self._log_level: str | None = None
+        # Protocol features removed in 2026-07-28 that this legacy connection used.
+        self._legacy_features: set[str] = set()
         # A failing stretch spans lazy reconnects until one connection comes up.
         self._failures = 0
         self._failing_since: float | None = None
@@ -594,7 +599,7 @@ class ConnectionRunner:
             self._log_level = level
             if client.protocol_version >= DISCOVERY_PROTOCOL_VERSION:
                 return {"level": level, "scope": "subsequent_requests"}
-            return dump(await client.set_logging_level(level))
+            return dump(await self._legacy("logging", lambda: client.set_logging_level(level)))
         if operation == "ping":
             if client.protocol_version >= DISCOVERY_PROTOCOL_VERSION:
                 await self._refresh()
@@ -602,7 +607,7 @@ class ConnectionRunner:
                     "verified": "catalog",
                     "reason": "ping is not defined in the negotiated protocol",
                 }
-            return dump(await client.send_ping())
+            return dump(await self._legacy("ping", client.send_ping))
         if operation == "events":
             return self.events(arguments.get("after", 0))
         if operation.startswith("tasks/"):
@@ -610,7 +615,7 @@ class ConnectionRunner:
         raise ValueError(f"Unknown MCP operation: {operation}")
 
     def _request_meta(self) -> types.RequestParamsMeta | None:
-        if self._client().protocol_version < DISCOVERY_PROTOCOL_VERSION:
+        if self._log_level is None or self._client().protocol_version < DISCOVERY_PROTOCOL_VERSION:
             return None
         return cast(types.RequestParamsMeta, {types.LOG_LEVEL_META_KEY: self._log_level})
 
@@ -640,7 +645,32 @@ class ConnectionRunner:
     async def _notify_roots_changed(self) -> None:
         client = self._client()
         if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
-            await client.send_roots_list_changed()
+            await self._legacy("roots", client.send_roots_list_changed)
+
+    async def _legacy[Result](
+        self, feature: str, call: Callable[[], Coroutine[Any, Any, Result]]
+    ) -> Result:
+        """Run an SDK call that a server older than protocol 2026-07-28 still needs.
+
+        The SDK flags such calls with ``MCPDeprecationWarning`` (SEP-2577). A
+        legacy connection depends on them, so the connection logs each feature
+        once instead. The warnings filter is process-wide and the SDK warns only
+        while the call starts, so just that synchronous start runs inside it.
+        """
+        if feature not in self._legacy_features:
+            self._legacy_features.add(feature)
+            _LOGGER.info(
+                "MCP connection uses a feature deprecated since protocol %s "
+                "(connection=%s feature=%s protocol=%s)",
+                DISCOVERY_PROTOCOL_VERSION,
+                self.id,
+                feature,
+                self._client().protocol_version,
+            )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", MCPDeprecationWarning)
+            started = asyncio.create_task(call(), eager_start=True)
+        return await started
 
     async def _message(self, message: Any) -> None:
         if isinstance(message, types.ServerNotification):
