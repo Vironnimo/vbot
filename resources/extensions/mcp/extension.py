@@ -15,6 +15,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from http import HTTPStatus
 from typing import Any
 
 from core.extensions import ExtensionAPI
@@ -387,7 +388,7 @@ class MCPService:
             try:
                 await runner.invoke("catalog", {})
             except ValueError as error:
-                return self._unreachable(runner, error)
+                return self._not_sent(runner, error)
             # Reconnecting can publish new Tools; resolve followers against that catalog.
             gone = self._gone(runner.id)
             if gone is not None:
@@ -440,8 +441,17 @@ class MCPService:
             return tool_failure("invalid_arguments", str(error))
         return tool_success(page)
 
-    def _unreachable(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
+    def _not_sent(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
+        """The failure for a request that never ran: refused by the server, or not sent."""
         detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
+        refused = error.refused if isinstance(error, InvocationNotSentError) else None
+        if refused is not None:
+            message = "rate_limited" if refused == HTTPStatus.TOO_MANY_REQUESTS else "refused"
+            return tool_failure(
+                "mcp_request_refused",
+                MCP_MESSAGES[message].format(connection=runner.id, detail=detail),
+                retryable=message == "rate_limited",
+            )
         return tool_failure(
             "mcp_request_failed",
             MCP_MESSAGES["unreachable"].format(connection=runner.id, detail=detail),
@@ -519,7 +529,7 @@ class MCPService:
         except InvocationNotSentError as error:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
-            return self._unreachable(runner, error)
+            return self._not_sent(runner, error)
         except InvalidToolResultError as error:
             return await self._invalid_result(runner, context, error, source=source)
         except TaskEndedError as error:

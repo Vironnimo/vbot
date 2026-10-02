@@ -525,18 +525,42 @@ async def test_calls_without_a_result_are_not_repeated_and_say_whether_repeating
 
 
 @pytest.mark.asyncio
-async def test_unreachable_connection_on_discovery_invites_one_retry(
-    context_service, host, monkeypatch
+@pytest.mark.parametrize(
+    ("refused", "expected"),
+    [
+        (
+            None,
+            "mcp_request_failed): The MCP connection example is not available "
+            "(test-owned-connection-error), so nothing was run. The next call reconnects: try "
+            "once more, and if it fails again, tell the user that the MCP server example "
+            "cannot be reached.\nretryable: true",
+        ),
+        (
+            403,
+            "mcp_request_refused): The MCP server example refused this request "
+            "(test-owned-connection-error), so nothing was run. If the refusal concerns the "
+            "call, correct it and send it again; otherwise tell the user that the MCP server "
+            "example refuses it.\nretryable: false",
+        ),
+        (
+            429,
+            "mcp_request_refused): The MCP server example refused this request because it "
+            "receives too many (test-owned-connection-error), so nothing was run. Wait a "
+            "moment, then send it again.\nretryable: true",
+        ),
+    ],
+    ids=["unreachable", "refused", "rate-limited"],
+)
+async def test_a_request_that_never_ran_says_why(
+    context_service, host, monkeypatch, refused, expected
 ):
     service, registry, runner, calls = context_service
     runner.state = "failed"
 
-    async def unreachable(*args):
-        raise InvocationNotSentError("test-owned-connection-error")
+    async def not_sent(*args):
+        raise InvocationNotSentError("test-owned-connection-error", refused=refused)
 
-    monkeypatch.setattr(runner, "invoke", unreachable)
+    monkeypatch.setattr(runner, "invoke", not_sent)
     result = await dispatch(registry, host, {"action": "search"})
 
-    assert result["error"]["code"] == "mcp_request_failed"
-    assert result["error"]["retryable"] is True
-    assert "(test-owned-connection-error), so nothing was run" in result["error"]["message"]
+    assert model_text(result) == f"Error ({expected}"

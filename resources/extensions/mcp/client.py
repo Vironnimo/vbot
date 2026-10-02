@@ -18,6 +18,7 @@ import warnings
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast, override
@@ -187,11 +188,17 @@ def _batch_argument_problem(command: str, args: list[str]) -> str | None:
 
 
 class InvocationNotSentError(ValueError):
-    """An invocation that never reached the server, so it changed nothing there."""
+    """An invocation that never reached the server, so it changed nothing there.
 
-    def __init__(self, message: str, *, denied: bool = False) -> None:
+    *denied*: vBot refused it (Tool access). *refused*: the HTTP status with which
+    the server refused it unprocessed (3xx or 4xx); *message* then describes that
+    answer.
+    """
+
+    def __init__(self, message: str, *, denied: bool = False, refused: int | None = None) -> None:
         super().__init__(message)
         self.denied = denied
+        self.refused = refused
 
 
 class InvalidToolResultError(ValueError):
@@ -222,6 +229,8 @@ class _Call:
     task: asyncio.Task[None] | None = None
     # A read that may run again: it failed transiently or lost its connection.
     retry: bool = False
+    # The HTTP status of the last answer of 300 or more to a request of this call.
+    http_status: int | None = None
 
 
 # The call a task serves; transports carry it into the server requests of that call.
@@ -949,8 +958,13 @@ class ConnectionRunner:
             return
         # A redirect or a 4xx refusal leaves the request unprocessed; a 5xx may
         # come after the server began to process it.
-        if (status < 300 or status >= 500) and _carries_request(request):
-            self._mark_delivered()
+        if _carries_request(request):
+            if status < 300 or status >= 500:
+                self._mark_delivered()
+            if status >= 300:
+                call = _CURRENT_CALL.get()
+                if call is not None and call.runner is self:
+                    call.http_status = status
         if self.config["transport"] == "sse" and not 200 <= status < 300:
             # The legacy SSE transport stops sending after a refused message.
             self._lose(f"the MCP server refused a message with HTTP {status}")
@@ -1067,13 +1081,24 @@ class ConnectionRunner:
                 safe,
                 exc_info=error,
             )
-        call.retry = isinstance(error, OSError | TimeoutError) or (
-            isinstance(error, httpx2.HTTPError)
-            and (
-                not isinstance(error, httpx2.HTTPStatusError)
-                or error.response.status_code in RETRYABLE_READ_STATUSES
+        status = call.http_status
+        call.retry = (
+            isinstance(error, OSError | TimeoutError)
+            or status in RETRYABLE_READ_STATUSES
+            or (
+                isinstance(error, httpx2.HTTPError)
+                and (
+                    not isinstance(error, httpx2.HTTPStatusError)
+                    or error.response.status_code in RETRYABLE_READ_STATUSES
+                )
             )
         )
+        if status is not None and status < 500 and not call.delivered:
+            # Every request of the call was redirected or refused, none processed.
+            call.result.set_exception(
+                InvocationNotSentError(self.redact(_refusal(status, error)), refused=status)
+            )
+            return
         call.result.set_exception(ValueError(safe))
 
     def _attributed_context(self) -> ToolContext | None:
@@ -1535,6 +1560,18 @@ class ConnectionRunner:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
+
+
+def _refusal(status: int, error: Exception) -> str:
+    """The server's HTTP *status* answer to a call, with its JSON-RPC error message if any."""
+    try:
+        text = f"HTTP {status} {HTTPStatus(status).phrase}"
+    except ValueError:
+        text = f"HTTP {status}"
+    # The SDK turns an answer without a JSON-RPC error into this placeholder.
+    if isinstance(error, MCPError) and error.message != "Server returned an error response":
+        text += f": {error.message}"
+    return text
 
 
 def _carries_request(request: httpx2.Request) -> bool:

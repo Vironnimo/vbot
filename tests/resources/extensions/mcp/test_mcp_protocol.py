@@ -166,40 +166,71 @@ async def test_http_transports(host, server, transport):
         await _stop_sse_shutdown_watcher()
 
 
-class _ExpiringSessions:
-    """ASGI middleware that ends sessions the way a restarted legacy server does."""
+class _HTTPFaults:
+    """ASGI middleware that ends sessions the way a restarted legacy server does.
+
+    It also refuses the next POST of each method in ``refuse`` with that HTTP status
+    and a JSON-RPC error, without passing it on.
+    """
 
     def __init__(self, app):
         self.app = app
         self.expired: set[bytes] = set()
         self.current: bytes | None = None
+        self.refuse: dict[str, int] = {}
+        self.passed: list[str] = []
 
     async def __call__(self, scope, receive, send):
         session = dict(scope.get("headers", [])).get(b"mcp-session-id")
         if session is not None:
             self.current = session
             if session in self.expired:
-                body = {
-                    "jsonrpc": "2.0",
-                    "id": None,
-                    "error": {"code": -32600, "message": "Session not found"},
-                }
-                await send(
-                    {
-                        "type": "http.response.start",
-                        "status": 404,
-                        "headers": [(b"content-type", b"application/json")],
-                    }
-                )
-                await send({"type": "http.response.body", "body": json.dumps(body).encode()})
+                await self._error(send, 404, None, "Session not found")
                 return
-        await self.app(scope, receive, send)
+        if scope["type"] != "http" or scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+        messages = [await receive()]
+        while messages[-1].get("more_body"):
+            messages.append(await receive())
+        message = json.loads(b"".join(item.get("body", b"") for item in messages))
+        status = self.refuse.pop(message.get("method"), None)
+        if status is not None:
+            await self._error(send, status, message.get("id"), "test-owned-refusal")
+            return
+        self.passed.append(message.get("method"))
+
+        async def replay():
+            return messages.pop(0) if messages else await receive()
+
+        await self.app(scope, replay, send)
+
+    @staticmethod
+    async def _error(send, status, request_id, text):
+        body = {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32600, "message": text}}
+        await send(
+            {
+                "type": "http.response.start",
+                "status": status,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": json.dumps(body).encode()})
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ["tools/call", "resources/read"])
-async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
-    host, server, monkeypatch, operation
+@pytest.mark.parametrize(
+    ("operation", "fault"),
+    [
+        ("tools/call", "ended"),
+        ("resources/read", "ended"),
+        ("tools/call", 403),
+        ("resources/read", 429),
+    ],
+    ids=["ended-call", "ended-read", "refused-call", "rate-limited-read"],
+)
+async def test_an_unprocessed_http_request_is_not_run_and_only_a_read_runs_again(
+    host, server, monkeypatch, operation, fault
 ):
     from mcp import Client
 
@@ -215,7 +246,7 @@ async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
     port = listener.getsockname()[1]
-    sessions = _ExpiringSessions(server.streamable_http_app())
+    sessions = _HTTPFaults(server.streamable_http_app())
     http_server = uvicorn.Server(
         uvicorn.Config(sessions, log_config=None, access_log=False, timeout_graceful_shutdown=1)
     )
@@ -237,6 +268,28 @@ async def test_an_ended_http_session_reconnects_without_replaying_a_mutation(
                 await asyncio.sleep(0)
             await runner.invoke("tools/call", echo)
             assert sessions.current is not None
+            session = sessions.current
+            if fault == 403:
+                # Refused unprocessed: never sent, and the connection stays.
+                sessions.refuse["tools/call"] = 403
+                with pytest.raises(InvocationNotSentError) as refused:
+                    await runner.invoke("tools/call", echo, context(host))
+                assert str(refused.value) == "HTTP 403 Forbidden: test-owned-refusal"
+                assert refused.value.refused == 403
+                assert sessions.passed.count("tools/call") == 1
+            elif fault == 429:
+                # A read the server refused for its rate runs again.
+                sessions.refuse["resources/read"] = 429
+                result = await runner.invoke("resources/read", {"uri": "test://scene"})
+                assert result["contents"][0]["text"] == "test-owned-scene"
+                kinds = [event["kind"] for event in runner.events()["events"]]
+                assert kinds.count("read_retry") == 1
+            if fault != "ended":
+                assert sessions.current == session
+                assert "connection_failed" not in [
+                    event["kind"] for event in runner.events()["events"]
+                ]
+                return
             sessions.expired.add(sessions.current)
             if operation == "tools/call":
                 # Refused without being processed: reported as never sent, not repeated.
