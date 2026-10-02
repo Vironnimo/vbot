@@ -63,7 +63,13 @@ def test_every_pin_names_the_one_python_version_the_packages_bundle() -> None:
         header = lock.read_text(encoding="utf-8").splitlines()[1]
         assert f" --python-version {PYTHON_VERSION} " in header, lock.name
 
-    workflows = sorted((ROOT / ".github/workflows").glob("*.yml"))
+    workflows = sorted(
+        [
+            *(ROOT / ".github/workflows").glob("*.yml"),
+            *(ROOT / ".github/actions").glob("*/action.yml"),
+        ]
+    )
+    assert any(workflow.name == "action.yml" for workflow in workflows)
     versions = {
         (workflow.name, value)
         for workflow in workflows

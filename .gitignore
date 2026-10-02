@@ -1,6 +1,7 @@
 .claude/
 .github/*
 !.github/workflows/
+!.github/actions/
 !.github/assets/
 !.github/ISSUE_TEMPLATE/
 !.github/pull_request_template.md

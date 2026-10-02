@@ -1,0 +1,30 @@
+name: Packaged Python
+description: >-
+  Put the Python the packages bundle on PATH: on Linux the python-build-standalone
+  runtime scripts/linux/python.lock.json pins, on Windows CPython with the SQLite
+  library scripts/windows/sqlite.lock.json pins. Their SQLite decides the journal
+  mode vBot's databases run in, so tests run in the mode installations use.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      if: runner.os == 'Windows'
+      with:
+        python-version: "3.14"
+        cache: pip
+    - name: Install the SQLite library the Windows packages bundle
+      if: runner.os == 'Windows'
+      shell: bash
+      run: python -c "import sys; from pathlib import Path; from cli.application.runtime_sqlite import provision_runtime_sqlite; provision_runtime_sqlite(Path(sys.base_prefix), Path.cwd())"
+    - name: Install the Python runtime the Linux packages bundle
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        read -r url sha256 < <(python3 -c 'import json, platform; spec = json.load(open("scripts/linux/python.lock.json"))["runtimes"]["linux-" + platform.machine()]; print(spec["url"], spec["sha256"])')
+        curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/python.tar.gz"
+        echo "$sha256  $RUNNER_TEMP/python.tar.gz" | sha256sum -c -
+        tar -xzf "$RUNNER_TEMP/python.tar.gz" -C "$RUNNER_TEMP"
+        echo "$RUNNER_TEMP/python/bin" >> "$GITHUB_PATH"
+    - name: Show the Python and SQLite versions
+      shell: bash
+      run: python -c "import sqlite3, sys; print(sys.executable, sys.version, '| SQLite', sqlite3.sqlite_version)"

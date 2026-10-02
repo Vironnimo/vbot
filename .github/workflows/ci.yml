@@ -67,10 +67,7 @@ jobs:
       VBOT_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-          cache: pip
+      - uses: ./.github/actions/packaged-python
       - name: Install backend development dependencies
         run: python -m pip install -e ".[dev]"
       - name: Provision the pinned search engine
