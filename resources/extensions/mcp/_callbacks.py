@@ -121,7 +121,7 @@ class ServerRequests:
                 self._connection,
                 "sampling",
                 {"message": self._approval_message(request, max_tokens)},
-                invocation.session_id,
+                _session(invocation),
             )
             if answer.get("action") != "accept":
                 return self._refuse(
@@ -208,15 +208,20 @@ class ServerRequests:
         return types.ListRootsResult(roots=roots)
 
     async def elicit(self, context: Any, params: Any) -> Any:
-        invocation = self._invocation()
-        session_id = invocation.session_id if invocation is not None else None
         response = await self._inputs.request(
-            self._connection, "elicitation", dump(params), session_id
+            self._connection, "elicitation", dump(params), _session(self._invocation())
         )
         return types.ElicitResult.model_validate(response)
 
     async def log(self, params: Any) -> None:
         self._events.record("log", dump(params))
+
+
+def _session(invocation: Any) -> str | None:
+    """The Session a pending input belongs to; ``None`` for a call outside any Session."""
+    if invocation is None or not invocation.result_payloads_available:
+        return None
+    return str(invocation.session_id)
 
 
 def _preview(request: dict[str, Any]) -> str:
