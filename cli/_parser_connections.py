@@ -285,6 +285,17 @@ def _add_provider_parsers(subparsers: argparse._SubParsersAction[argparse.Argume
         metavar="<model-id>",
         help="Manual chat Model id; repeat to add several",
     )
+    wire_source = custom_save_parser.add_mutually_exclusive_group()
+    wire_source.add_argument(
+        "--wire-file",
+        metavar="<path>",
+        help="JSON file with the wire block that replaces the stored one",
+    )
+    wire_source.add_argument(
+        "--clear-wire",
+        action="store_true",
+        help="Remove the stored wire block",
+    )
     custom_delete_parser = _add_command_parser(
         provider_subparsers,
         "custom-delete",

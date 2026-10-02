@@ -77,8 +77,32 @@ def provider_custom_save(
     api_key: str | None = None,
     models_endpoint: str | None = None,
     model_ids: Sequence[str] = (),
+    wire: Mapping[str, Any] | None = None,
+    clear_wire: bool = False,
 ) -> CommandResult:
-    """Create or replace one Custom Provider through RPC."""
+    """Create or replace one Custom Provider through RPC.
+
+    The command-line options replace the record's endpoint, authentication,
+    discovery path and Model list. What they cannot express survives a
+    replacement of an existing record: its sampling ``defaults``, its ``wire``
+    block (unless ``wire`` replaces or ``clear_wire`` removes it), and the
+    stored capabilities of every Model id that stays in the list.
+    """
+
+    listing = _rpc_call(instance, "provider.custom_list", {})
+    if not listing.ok:
+        return listing.to_command_result()
+    stored = next(
+        (
+            item
+            for item in listing.data.get("providers") or ()
+            if isinstance(item, Mapping) and item.get("id") == provider_id
+        ),
+        {},
+    )
+    stored_models = stored.get("models")
+    if not isinstance(stored_models, Mapping):
+        stored_models = {}
 
     provider: dict[str, Any] = {
         "id": provider_id,
@@ -86,10 +110,21 @@ def provider_custom_save(
         "adapter": adapter,
         "base_url": base_url,
         "auth": auth,
-        "models": {model_id: {"name": model_id, "capabilities": {}} for model_id in model_ids},
+        "models": {
+            model_id: dict(stored_models[model_id])
+            if isinstance(stored_models.get(model_id), Mapping)
+            else {"name": model_id, "capabilities": {}}
+            for model_id in model_ids
+        },
     }
     if models_endpoint is not None:
         provider["models_endpoint"] = models_endpoint
+    if isinstance(stored.get("defaults"), Mapping) and stored["defaults"]:
+        provider["defaults"] = dict(stored["defaults"])
+    if wire is not None:
+        provider["wire"] = dict(wire)
+    elif not clear_wire and isinstance(stored.get("wire"), Mapping):
+        provider["wire"] = dict(stored["wire"])
     params: dict[str, Any] = {"provider": provider}
     if api_key is not None:
         params["api_key"] = api_key

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -343,10 +344,19 @@ def test_oauth_commands_surface_server_errors(rpc: FakeRpc, run_cli: RunCli) -> 
     assert "rpc_method: provider.connect" in err
 
 
+_STORED_LOCAL_AI = {
+    "id": "local-ai",
+    "defaults": {"temperature": 0.4},
+    "models": {"chat-model": {"name": "Chat", "capabilities": {"vision": True}}},
+    "wire": {"defaults": {"reasoning": {"dialect": "thinking_toggle"}}},
+}
+
+
 @pytest.mark.parametrize(
-    ("options", "stdin", "provider", "api_key", "saved", "expected"),
+    ("stored", "options", "stdin", "provider", "api_key", "saved", "expected"),
     [
         pytest.param(
+            [],
             ("--api-key-stdin", "--models-endpoint", "/models", "--model", "chat-model"),
             "secret-sentinel\n",
             {
@@ -360,6 +370,7 @@ def test_oauth_commands_surface_server_errors(rpc: FakeRpc, run_cli: RunCli) -> 
             id="api-key-from-stdin",
         ),
         pytest.param(
+            [],
             ("--auth", "none", "--model", "chat-model", "--model", "image-model"),
             None,
             {
@@ -374,12 +385,41 @@ def test_oauth_commands_surface_server_errors(rpc: FakeRpc, run_cli: RunCli) -> 
             "saved Custom Provider local-ai (2 models, not usable)",
             id="keyless",
         ),
+        pytest.param(
+            [_STORED_LOCAL_AI],
+            ("--auth", "none", "--model", "chat-model", "--model", "image-model"),
+            None,
+            {
+                "auth": "none",
+                "defaults": {"temperature": 0.4},
+                "models": {
+                    "chat-model": {"name": "Chat", "capabilities": {"vision": True}},
+                    "image-model": {"name": "image-model", "capabilities": {}},
+                },
+                "wire": {"defaults": {"reasoning": {"dialect": "thinking_toggle"}}},
+            },
+            {},
+            {"id": "local-ai", "model_count": 2, "usable": True},
+            "saved Custom Provider local-ai (2 models, usable)",
+            id="replacement-keeps-what-options-cannot-express",
+        ),
+        pytest.param(
+            [_STORED_LOCAL_AI],
+            ("--auth", "none", "--clear-wire"),
+            None,
+            {"auth": "none", "defaults": {"temperature": 0.4}, "models": {}},
+            {},
+            {"id": "local-ai", "model_count": 0, "usable": True},
+            "saved Custom Provider local-ai (0 models, usable)",
+            id="clear-wire",
+        ),
     ],
 )
 def test_custom_provider_save_sends_the_definition_and_the_key_once(
     rpc: FakeRpc,
     run_cli: RunCli,
     monkeypatch: pytest.MonkeyPatch,
+    stored: list[dict[str, Any]],
     options: tuple[str, ...],
     stdin: str | None,
     provider: dict[str, Any],
@@ -389,6 +429,7 @@ def test_custom_provider_save_sends_the_definition_and_the_key_once(
 ) -> None:
     if stdin is not None:
         monkeypatch.setattr(sys, "stdin", io.StringIO(stdin))
+    rpc.reply("provider.custom_list", {"providers": stored})
     rpc.reply("provider.custom_save", {"provider": saved})
 
     code, out, err = run_cli(
@@ -405,9 +446,31 @@ def test_custom_provider_save_sends_the_definition_and_the_key_once(
         "adapter": "openai_compatible",
         "base_url": "http://127.0.0.1:8080/v1",
     }
-    assert rpc.calls == [("provider.custom_save", {"provider": definition | provider} | api_key)]
+    assert rpc.calls == [
+        ("provider.custom_list", {}),
+        ("provider.custom_save", {"provider": definition | provider} | api_key),
+    ]
     assert out.splitlines() == [expected]
     assert "secret-sentinel" not in out + err
+
+
+def test_custom_provider_save_replaces_the_wire_block_from_a_file(
+    rpc: FakeRpc, run_cli: RunCli, tmp_path: Path
+) -> None:
+    wire_file = tmp_path / "wire.json"
+    wire_file.write_text('{"defaults": {"reasoning": {"supported": false}}}', encoding="utf-8")
+    rpc.reply("provider.custom_list", {"providers": [_STORED_LOCAL_AI]})
+    rpc.reply("provider.custom_save", {"provider": {"id": "local-ai", "usable": True}})
+
+    code, _out, _err = run_cli(
+        "provider", "custom", "save", "local-ai",
+        "--name", "Local AI",
+        "--base-url", "http://127.0.0.1:8080/v1",
+        "--wire-file", str(wire_file),
+    )  # fmt: skip
+
+    assert code == 0
+    assert rpc.calls[-1][1]["provider"]["wire"] == {"defaults": {"reasoning": {"supported": False}}}
 
 
 @pytest.mark.parametrize(

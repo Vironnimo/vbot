@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Callable, Sequence
+from pathlib import Path
 from typing import Any
 
 from cli._input import (
@@ -216,6 +218,18 @@ def dispatch_provider_command(
             return CommandResult(
                 ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
             )
+        wire = None
+        if args.wire_file is not None:
+            try:
+                wire = json.loads(Path(args.wire_file).read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, ValueError) as exc:
+                return CommandResult(
+                    ok=False, message=f"cannot read wire file: {exc}", instance=instance
+                )
+            if not isinstance(wire, dict):
+                return CommandResult(
+                    ok=False, message="wire file must hold a JSON object", instance=instance
+                )
         return custom_save_fn(
             instance,
             args.provider,
@@ -226,6 +240,8 @@ def dispatch_provider_command(
             api_key=api_key,
             models_endpoint=args.models_endpoint,
             model_ids=args.model,
+            wire=wire,
+            clear_wire=args.clear_wire,
         )
     if args.command == "custom-delete":
         return custom_delete_fn(instance, args.provider)

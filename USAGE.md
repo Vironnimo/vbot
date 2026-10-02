@@ -319,7 +319,7 @@ vbot model refresh local-ai
 vbot provider custom delete local-ai
 ```
 
-`custom save` replaces the complete Custom Provider record, including a `wire` block; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+`custom save` replaces the Custom Provider's endpoint, authentication, discovery path and Model list; repeated `--model` flags create conservative chat Model entries. What its options cannot express survives the replacement: the sampling defaults, the capabilities already stored for a Model id that stays in the list, and the `wire` block. `--wire-file <path>` replaces the `wire` block with the JSON object in that file, and `--clear-wire` removes it. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
 
 #### Wire profile
 
