@@ -54,6 +54,15 @@
     { value: 'http', label: t('mcp.http') },
     { value: 'sse', label: t('mcp.sse') },
   ]);
+  let samplingOptions = $derived([
+    { value: 'off', label: t('mcp.samplingOff') },
+    { value: 'ask', label: t('mcp.samplingAsk') },
+    { value: 'allow', label: t('mcp.samplingAllow') },
+  ]);
+  let rootsOptions = $derived([
+    { value: 'off', label: t('mcp.rootsOff') },
+    { value: 'workspace', label: t('mcp.rootsWorkspace') },
+  ]);
   let mappingFields = $derived([
     {
       key: 'environment',
@@ -284,6 +293,16 @@
                   ? connection.configuration.command
                   : connection.configuration.url}
               </p>
+              {#if connection.oauth}
+                <p>
+                  {connection.oauth.signed_in
+                    ? t('mcp.signedIn')
+                    : t('mcp.signedOut')}
+                </p>
+                <p class="mcp-redirect">
+                  {t('mcp.redirectUri', { uri: connection.oauth.redirect_uri })}
+                </p>
+              {/if}
               {#if connection.counts}
                 <p class="mcp-catalog-counts">
                   {t('mcp.catalogCounts', {
@@ -321,6 +340,15 @@
                   disabled={blocked}
                   onClick={() => openCredentials(connection)}
                   >{t('mcp.credentials')}</Button
+                >
+              {/if}
+              {#if connection.configuration.oauth}
+                <Button
+                  variant="tertiary"
+                  disabled={blocked}
+                  onClick={() =>
+                    controller.mutate('reauthorize', connection.id)}
+                  >{t('mcp.reauthorize')}</Button
                 >
               {/if}
               <Button
@@ -668,6 +696,34 @@
                   />{/snippet}
               </FormField>
             </div>
+            <FormField
+              controlId={`${componentId}-sampling`}
+              label={t('mcp.sampling')}
+              help={t('mcp.samplingHelp')}
+            >
+              {#snippet children(field)}<Dropdown
+                  id={field.controlId}
+                  value={draft.sampling}
+                  options={samplingOptions}
+                  disabled={state.busy}
+                  ariaLabel={t('mcp.sampling')}
+                  onValueChange={(value) => set('sampling', value)}
+                />{/snippet}
+            </FormField>
+            <FormField
+              controlId={`${componentId}-roots`}
+              label={t('mcp.roots')}
+              help={t('mcp.rootsHelp')}
+            >
+              {#snippet children(field)}<Dropdown
+                  id={field.controlId}
+                  value={draft.roots}
+                  options={rootsOptions}
+                  disabled={state.busy}
+                  ariaLabel={t('mcp.roots')}
+                  onValueChange={(value) => set('roots', value)}
+                />{/snippet}
+            </FormField>
             {#if draft.transport === 'stdio'}
               <FormField
                 controlId={`${componentId}-cwd`}
@@ -684,13 +740,57 @@
               <FormField
                 controlId={`${componentId}-redirect`}
                 label={t('mcp.redirect')}
+                help={t('mcp.redirectHelp')}
               >
                 {#snippet children(field)}<TextField
                     id={field.controlId}
+                    aria-describedby={field.describedBy}
                     type="url"
                     value={draft.oauth_redirect_uri}
                     disabled={state.busy}
                     onInput={(value) => set('oauth_redirect_uri', value)}
+                  />{/snippet}
+              </FormField>
+              <FormField
+                controlId={`${componentId}-client-id`}
+                label={t('mcp.oauthClientId')}
+                help={t('mcp.oauthClientIdHelp')}
+              >
+                {#snippet children(field)}<TextField
+                    id={field.controlId}
+                    aria-describedby={field.describedBy}
+                    value={draft.oauth_client_id}
+                    disabled={state.busy}
+                    onInput={(value) => set('oauth_client_id', value)}
+                  />{/snippet}
+              </FormField>
+              {#if draft.oauth_client_id.trim()}
+                <FormField
+                  controlId={`${componentId}-client-secret`}
+                  label={t('mcp.oauthClientSecret')}
+                  help={t('mcp.oauthClientSecretHelp')}
+                >
+                  {#snippet children(field)}<TextField
+                      id={field.controlId}
+                      aria-describedby={field.describedBy}
+                      value={draft.oauth_client_secret}
+                      disabled={state.busy}
+                      pattern="[A-Za-z_][A-Za-z0-9_]*"
+                      onInput={(value) => set('oauth_client_secret', value)}
+                    />{/snippet}
+                </FormField>
+              {/if}
+              <FormField
+                controlId={`${componentId}-scopes`}
+                label={t('mcp.oauthScopes')}
+                help={t('mcp.oauthScopesHelp')}
+              >
+                {#snippet children(field)}<TextField
+                    id={field.controlId}
+                    aria-describedby={field.describedBy}
+                    value={draft.oauth_scopes}
+                    disabled={state.busy}
+                    onInput={(value) => set('oauth_scopes', value)}
                   />{/snippet}
               </FormField>
             {/if}

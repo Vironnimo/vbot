@@ -1,4 +1,4 @@
-"""Resumable MCP user input and OAuth without blocking a management command."""
+"""Pending MCP user inputs (OAuth sign-ins, sampling approvals, elicitation), answered later."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ class InputRequests:
         pending = self._pending.get(identifier)
         if pending is None or pending.response.done():
             raise ValueError("MCP input request no longer exists")
-        if pending.kind == "elicitation":
+        if pending.kind in {"elicitation", "sampling"}:
             action = response.get("action")
             if action not in {"accept", "decline", "cancel"}:
                 raise ValueError("MCP input response requires accept, decline, or cancel")

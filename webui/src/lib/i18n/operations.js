@@ -72,15 +72,39 @@ export default Object.freeze({
   'mcp.nameHelp':
     'Lowercase letters, numbers and underscores; start with a letter.',
   'mcp.oauth': 'Sign in with OAuth',
+  'mcp.oauthClientId': 'OAuth client ID (optional)',
+  'mcp.oauthClientIdHelp':
+    "Only for a server that does not let vBot register itself. Register vBot with the server's sign-in service using the redirect URL shown in this connection's details, then enter the client ID it issues.",
+  'mcp.oauthClientSecret': 'Credential name for the client secret (optional)',
+  'mcp.oauthClientSecretHelp':
+    'Use a credential name, not the secret. After saving, open Credentials to set its value.',
+  'mcp.oauthScopes': 'OAuth scopes (optional)',
+  'mcp.oauthScopesHelp':
+    'Space-separated scopes vBot requests in addition to the ones the server asks for.',
   'mcp.program': 'Program',
   'mcp.programHelp':
     'Executable on the vBot host, for example uvx, npx or an absolute path.',
+  'mcp.reauthorize': 'Sign in again',
   'mcp.redirect': 'OAuth redirect URL (optional)',
+  'mcp.redirectHelp':
+    "Leave empty to use vBot's own address, where the browser completes the sign-in automatically.",
+  'mcp.redirectUri': 'Sign-in redirect URL: {uri}',
   'mcp.removeArgument': 'Remove argument {number}',
   'mcp.removeBody':
     'Agents will lose access to this connection. The external application and installed software will remain.',
   'mcp.removeEntry': 'Remove {group} entry {number}',
   'mcp.removeTitle': 'Remove {name}?',
+  'mcp.roots': 'Share the work directory',
+  'mcp.rootsHelp':
+    'Tells the server the work directory of the Agent it currently serves (MCP roots), for example so it can find project files.',
+  'mcp.rootsOff': 'Off',
+  'mcp.rootsWorkspace': "The Agent's work directory",
+  'mcp.sampling': 'Model requests from the server',
+  'mcp.samplingAllow': 'Allow',
+  'mcp.samplingAsk': 'Ask me each time',
+  'mcp.samplingHelp':
+    "Lets the server ask the Agent's Model for a reply while it serves that Agent (MCP sampling). Replies are limited in length and frequency and count toward the Agent's usage.",
+  'mcp.samplingOff': 'Off',
   'mcp.save': 'Save connection',
   'mcp.saveCredential': 'Save credential',
   'mcp.saveHelp':
@@ -91,6 +115,8 @@ export default Object.freeze({
   'mcp.secretValue': 'New secret value',
   'mcp.secretsHelp':
     'Use credential names here, not secret values. After saving, open Credentials to set their values.',
+  'mcp.signedIn': 'Signed in',
+  'mcp.signedOut': 'Not signed in',
   'mcp.sse': 'Server URL (legacy SSE)',
   'mcp.test': 'Test connection',
   'mcp.testCancelled': 'Connection test cancelled.',

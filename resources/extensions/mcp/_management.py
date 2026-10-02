@@ -30,13 +30,20 @@ from .interactions import InputRequests
 
 _DESCRIPTIONS = {
     "list": "List saved connections, live connection state, and effective Agent access.",
-    "requests": "List pending server inputs, including OAuth and elicitation; answer with respond.",
+    "requests": (
+        "List pending server inputs: OAuth sign-ins, sampling approvals and elicitation; "
+        "answer with respond."
+    ),
     "status": "Read one connection's saved configuration, live state, and Agent access.",
     "remove": "Remove a saved connection and stop its client and published Tools.",
     "enable": "Enable a saved connection and start connecting; inspect status for readiness.",
     "disable": "Disable a saved connection and stop its client and published Tools.",
     "connect": "Start connecting an enabled connection; inspect status for readiness.",
     "disconnect": "Close the current client without disabling the saved connection.",
+    "reauthorize": (
+        "Sign an OAuth connection out: delete its stored tokens and registered client, "
+        "then reconnect an enabled connection, which starts a new sign-in."
+    ),
     "test": "Start a catalog/health check; use the returned job_id with job for its outcome.",
     "save": "Create or replace a complete connection; read status before replacing one.",
     "events": "Read sequenced connection events after a cursor; inspect reported gaps.",
@@ -76,7 +83,17 @@ def register_management(
     schemas: dict[str, dict[str, Any]] = {
         **{name: {} for name in ("list", "requests")},
         **dict.fromkeys(
-            ("status", "remove", "enable", "disable", "connect", "disconnect", "test"), base
+            (
+                "status",
+                "remove",
+                "enable",
+                "disable",
+                "connect",
+                "disconnect",
+                "reauthorize",
+                "test",
+            ),
+            base,
         ),
         "save": {"connection": CONNECTION_SCHEMA},
         "events": {**base, "after": {"type": "integer", "minimum": 0}},

@@ -224,13 +224,27 @@ async def test_known_tool_names_survive_restarts_and_leave_with_the_connection(h
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "referencing",
+    [
+        {**_CONNECTION, "credential_environment": {"TOKEN": "EXAMPLE_TOKEN"}},
+        {
+            "id": "example",
+            "transport": "http",
+            "url": "https://mcp.example.com/mcp",
+            "oauth": True,
+            "oauth_client_id": "vbot",
+            "oauth_client_secret": "EXAMPLE_TOKEN",
+        },
+    ],
+    ids=["environment", "oauth-client-secret"],
+)
 async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
-    host, monkeypatch, caplog
+    host, monkeypatch, caplog, referencing
 ):
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
     service, _registry = await start_service(host)
     try:
-        referencing = {**_CONNECTION, "credential_environment": {"TOKEN": "EXAMPLE_TOKEN"}}
         await service.manage("save", {"connection": referencing})
 
         with caplog.at_level(logging.INFO):

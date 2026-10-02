@@ -72,9 +72,10 @@
 .mcp-facts > p {
   margin: 0;
 }
-/* The connection id and its command or URL are code values. */
+/* The connection id, its command or URL and its sign-in redirect are code values. */
 .mcp-connection__name,
-.mcp-endpoint {
+.mcp-endpoint,
+.mcp-redirect {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }

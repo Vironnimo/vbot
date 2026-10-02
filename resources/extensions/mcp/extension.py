@@ -58,6 +58,7 @@ from ._discovery import (
     target_arguments,
 )
 from ._management import ManagementJobs, check_connection, invoke_for_agent, register_management
+from ._oauth import forget_sign_in, sign_in_status
 from ._views import compact
 from .client import READ_OPERATIONS, ConnectionRunner, InvocationNotSentError
 from .config import ConnectionStore, validate_connection
@@ -557,6 +558,8 @@ class MCPService:
                 sources = set(config.get("credential_environment", {}).values()) | set(
                     config.get("credential_headers", {}).values()
                 )
+                if config.get("oauth_client_secret"):
+                    sources.add(config["oauth_client_secret"])
                 if arguments["key"] not in sources:
                     raise ValueError("Credential must be referenced by this MCP connection")
                 self._host().set_credential(arguments["key"], arguments["value"])
@@ -574,6 +577,16 @@ class MCPService:
                     "credential": arguments["key"],
                     "set": bool(arguments["value"]),
                 }
+            if operation == "reauthorize":
+                if not config.get("oauth"):
+                    raise ValueError("MCP connection does not sign in with OAuth")
+                await self._stop(identifier)
+                forget_sign_in(self._host(), identifier)
+                self.api.logger.info("MCP connection signed out (connection=%s)", identifier)
+                runner = self._runner(config)
+                if config["enabled"]:
+                    runner.start()
+                return self._status(identifier)
             if operation == "disconnect":
                 previous = self.runners.get(identifier)
                 await self._stop(identifier)
@@ -608,13 +621,16 @@ class MCPService:
             if runner is not None
             else {"id": identifier, "state": "disconnected", "error": None}
         )
-        return {
+        result = {
             **status,
             "configuration": copy.deepcopy(config),
             "pending_requests": [
                 item for item in self.inputs.list() if item["connection"] == identifier
             ],
         }
+        if config.get("oauth"):
+            result["oauth"] = sign_in_status(self._host(), config)
+        return result
 
     def _inspect(self, identifier: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """The cached Tool catalog and guidance of a connection, one page of Tools at a time."""
@@ -664,6 +680,8 @@ class MCPService:
                 self._publish(runner, runner.catalog or None)
             else:
                 await self._stop(identifier)
+                if previous is not None and _signs_in_elsewhere(previous, config):
+                    forget_sign_in(self._host(), identifier)
                 if config["enabled"]:
                     self._runner(config).start()
         self.api.logger.info("MCP connection configured (connection=%s)", identifier)
@@ -685,6 +703,8 @@ class MCPService:
                 self.catalogs.forget(identifier)
             if operation in {"disable", "remove"}:
                 await self._stop(identifier)
+            if operation == "remove":
+                forget_sign_in(self._host(), identifier)
             elif config["enabled"]:
                 self._runner(config).start()
         self.api.logger.info(
@@ -714,6 +734,13 @@ class MCPService:
 
 def _without_description(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key != "description"}
+
+
+def _signs_in_elsewhere(previous: dict[str, Any], config: dict[str, Any]) -> bool:
+    """Whether a sign-in stored for *previous* no longer belongs to *config*."""
+    return not config.get("oauth") or any(
+        previous.get(key) != config.get(key) for key in ("url", "oauth_client_id")
+    )
 
 
 def register(api: ExtensionAPI) -> None:

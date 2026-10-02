@@ -17,6 +17,7 @@ from core.attachments.attachments import (
     AttachmentTypeNotAllowedError,
 )
 from core.extensions.extensions import ExtensionUnavailableError
+from core.extensions.oauth_redirects import CALLBACK_PATH as OAUTH_CALLBACK_PATH
 from core.model_tasks import (
     SpeechConfigurationError,
     SpeechError,
@@ -78,6 +79,8 @@ from server._http_dependencies import (
     WebSocket,
     WebSocketDisconnect,
 )
+from server._oauth_callback import callback_url as oauth_callback_url
+from server._oauth_callback import oauth_callback_response
 from server._origins import _BrowserOriginGuardMiddleware, _configured_browser_origins
 from server._streams import (
     REPLAY_STATUS_RESUMED,
@@ -283,6 +286,9 @@ def create_app(
     async def lifespan(app: FastAPIType) -> AsyncIterator[None]:
         app_runtime.start()
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
+        oauth_redirects = getattr(app_runtime, "oauth_redirects", None)
+        if oauth_redirects is not None:
+            oauth_redirects.bind(oauth_callback_url(resolved_server_bind))
         app.state.control_token = shutdown_token
         app.state.request_restart = request_restart
         app.state.activity.start()
@@ -361,6 +367,11 @@ def create_app(
     @app.get("/health")
     async def health() -> JsonObject:
         return {"status": "ok"}
+
+    @app.get(OAUTH_CALLBACK_PATH, include_in_schema=False)
+    async def oauth_callback(request: Request) -> Response:
+        redirects = getattr(request.app.state.runtime, "oauth_redirects", None)
+        return oauth_callback_response(redirects, request.query_params.multi_items())
 
     @app.post(CONTROL_SHUTDOWN_PATH, status_code=202, include_in_schema=False)
     async def shutdown(request: Request) -> JsonObject:

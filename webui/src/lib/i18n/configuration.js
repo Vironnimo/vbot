@@ -4,7 +4,7 @@ export default Object.freeze({
   'extensions.reviewInput': 'Review request',
   'extensions.inputTitle': 'Request from {name}',
   'extensions.signInHelp':
-    'Open the sign-in page. After signing in, paste the complete redirected address below.',
+    'Open the sign-in page and sign in. vBot completes the sign-in when the browser returns to it. If the browser shows an error page instead, paste its complete address below.',
   'extensions.openRequest': 'Open requested page',
   'extensions.redirectUrl': 'Redirected address',
   'extensions.sendResponse': 'Send response',
