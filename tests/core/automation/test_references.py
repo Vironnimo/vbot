@@ -21,6 +21,7 @@ class _Automations:
         self.bootstrap_jobs: list[Any] = []
         self.cron_jobs: list[Any] = []
         self.actions: list[dict[str, Any]] = []
+        self.event_notes: str | None = None
         self.bootstrap = SimpleNamespace(list_jobs=lambda: list(self.bootstrap_jobs))
         self.cron = SimpleNamespace(list_jobs=lambda: list(self.cron_jobs))
         self.calendar = SimpleNamespace(
@@ -33,7 +34,9 @@ class _Automations:
                     )
                 ),
             ),
-            list_events=lambda: [SimpleNamespace(id="evt-1", title="Weekly review")],
+            list_events=lambda: [
+                SimpleNamespace(id="evt-1", title="Weekly review", notes=self.event_notes)
+            ],
         )
 
     def references(self) -> AutomationReferences:
@@ -54,6 +57,7 @@ def _job(**fields: Any) -> Any:
             "project_id": None,
             "session_id": "s1",
             "status": "active",
+            "prompt": "Report.",
             **fields,
         }
     )
@@ -68,7 +72,14 @@ def _cron(**fields: Any) -> Callable[[_Automations], None]:
 
 
 def _calendar(**fields: Any) -> Callable[[_Automations], None]:
-    action = {"id": "act-1", "event_id": "evt-1", "target": "builder", "session": "s1", **fields}
+    action = {
+        "id": "act-1",
+        "event_id": "evt-1",
+        "target": "builder",
+        "session": "s1",
+        "prompt": "Prepare.",
+        **fields,
+    }
     return lambda automations: automations.actions.append(action)
 
 
@@ -173,3 +184,24 @@ def test_agent_and_project_references_name_the_live_automations_of_their_target(
     arrange(automations)
 
     assert [reference.label for reference in query(automations.references())] == labels
+
+
+def test_agent_triggered_skill_names_read_every_live_text_of_the_identity_agent() -> None:
+    automations = _Automations()
+    automations.event_notes = "Bring $agenda."
+    for arrange in (
+        _cron(prompt="/deploy the release"),
+        _bootstrap(id="boot-1", prompt="Warm up with $warmup, then $deploy."),
+        _calendar(prompt="Use /triage only when asked."),
+        # Terminal history and another Agent's automations trigger nothing here.
+        _cron(id="cron-2", prompt="$retired", status="completed"),
+        _cron(id="cron-3", prompt="$project-only", project_id="vbot"),
+    ):
+        arrange(automations)
+
+    # ``/name`` counts only at the start of a text; ``$name`` anywhere.
+    assert automations.references().agent_triggered_skill_names("builder") == {
+        "deploy",
+        "warmup",
+        "agenda",
+    }
