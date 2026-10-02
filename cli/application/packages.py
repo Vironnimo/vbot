@@ -6,6 +6,7 @@ import base64
 import contextlib
 import hashlib
 import logging
+import ntpath
 import os
 import re
 import shutil
@@ -101,16 +102,11 @@ def relative_path(name: str) -> str:
         or any(part in {"", ".", ".."} or part.endswith((".", " ")) for part in name.split("/"))
     ):
         raise ApplicationError("Unsafe release archive path")
-    for part in path.parts:
-        if part.split(".")[0].lower() in {
-            "con",
-            "prn",
-            "aux",
-            "nul",
-            *[f"com{i}" for i in range(1, 10)],
-            *[f"lpt{i}" for i in range(1, 10)],
-        }:
-            raise ApplicationError("Reserved Windows filename in release")
+    # Device names such as CON, CONIN$ or COM¹, also with an extension or trailing
+    # spaces ("nul .txt"), and characters Windows cannot store. ntpath.isreserved
+    # misses a ':' after a single letter, which reads as a drive; that is refused above.
+    if any(ntpath.isreserved(part) for part in path.parts):
+        raise ApplicationError("Reserved Windows filename in release")
     return path.as_posix()
 
 
