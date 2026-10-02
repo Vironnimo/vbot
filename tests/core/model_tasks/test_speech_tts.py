@@ -68,7 +68,7 @@ class _Fetch:
         self.seen: list[dict] = []
         self.setup: LocalSpeechSetup | None = None
 
-    def __call__(self, model, directory, *, progress, cancelled) -> None:
+    def __call__(self, model, directory, *, progress, cancelled, reuse=()) -> None:
         self.models.append(model)
         directory.mkdir(parents=True, exist_ok=True)
         progress(model.download_bytes // 2)
@@ -341,12 +341,15 @@ def test_process_adapter_keeps_audio_and_text_off_arguments_and_cleans_up(tmp_pa
     popen = Mock(return_value=process)
     monkeypatch.setattr(speech_local.subprocess, "Popen", popen)
     setup = LocalSpeechSetup(engine="qwen3-tts", directory=tmp_path)
-    engine = _TtsEngine(setup, {})
+    engine = _TtsEngine(setup, {"model_path": "installed"})
     token = _PROGRESS.set(SpeechProgress())
     try:
         result = engine.synthesize("private test text", {})
         assert result.audio == output.getvalue()
         assert "private test text" not in str(popen.call_args)
+        request = json.loads(process.stdin.write.call_args.args[0])
+        # The installed model reaches the worker with every request.
+        assert request["options"]["model_path"] == "installed"
         assert _PROGRESS.get().snapshot()["phase"] == "loading"
         assert not Path(json.loads(process.stdin.write.call_args.args[0])["output"]).exists()
     finally:

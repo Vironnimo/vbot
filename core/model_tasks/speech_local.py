@@ -886,6 +886,8 @@ class _TtsEngine:
     def __init__(self, setup: LocalSpeechSetup, options: Mapping[str, Any]) -> None:
         from core.utils.processes import subprocess_creation_flags
 
+        # The worker loads this model directory with the first request.
+        self._model_path = options["model_path"]
         self._process = subprocess.Popen(
             [
                 str(setup.python),
@@ -914,7 +916,13 @@ class _TtsEngine:
             with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
                 output = Path(directory) / "speech.wav"
                 process.stdin.write(
-                    json.dumps({"text": text, "options": dict(options), "output": str(output)})
+                    json.dumps(
+                        {
+                            "text": text,
+                            "options": {**options, "model_path": self._model_path},
+                            "output": str(output),
+                        }
+                    )
                     + "\n"
                 )
                 process.stdin.flush()
