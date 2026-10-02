@@ -1,0 +1,58 @@
+{
+  "format_version": 1,
+  "_comment": "StepFun Chat Completions (direct API and Step Plan). Only documented parameters are accepted: undocumented OpenAI parameters and out-of-range values are refused before sending. Exactly one output limit goes out as max_tokens. Each Model has its own reasoning_effort ladder. Images are carried natively (vBot has no StepFun video encoder).",
+  "defaults": {
+    "request": {
+      "output_limit_collapse": true,
+      "parameters": {
+        "logit_bias": {"mode": "reject"},
+        "logprobs": {"mode": "reject"},
+        "parallel_tool_calls": {"mode": "reject"},
+        "presence_penalty": {"mode": "reject"},
+        "seed": {"mode": "reject"},
+        "stream_options": {"mode": "reject"},
+        "top_k": {"mode": "reject"},
+        "top_logprobs": {"mode": "reject"},
+        "temperature": {"minimum": 0, "maximum": 2, "out_of_range": "reject"},
+        "top_p": {"minimum": 0, "exclusive_minimum": true, "maximum": 1, "out_of_range": "reject"},
+        "frequency_penalty": {"minimum": -2, "maximum": 2, "out_of_range": "reject"},
+        "n": {"values": [1], "out_of_range": "reject"},
+        "reasoning_format": {"values": ["general", "deepseek-style"], "out_of_range": "reject"}
+      }
+    },
+    "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
+  },
+  "rules": [
+    {
+      "when": {"ids": ["step-3.5-flash"]},
+      "set": {"reasoning": {"levels": []}},
+      "note": "Step 3.5 Flash takes no reasoning_effort."
+    },
+    {
+      "when": {"ids": ["step-3.5-flash-2603"]},
+      "set": {"reasoning": {"levels": ["low", "high"]}},
+      "note": "Step 3.5 Flash 2603 takes reasoning_effort low or high."
+    },
+    {
+      "when": {"ids": ["step-3.7-flash", "step-router-v1"]},
+      "set": {"reasoning": {"levels": ["low", "medium", "high"]}},
+      "note": "Step 3.7 Flash and Step Router V1 take reasoning_effort low, medium or high."
+    },
+    {
+      "when": {"ids": ["step-router-v1"]},
+      "set": {
+        "admission": {
+          "state": "restricted",
+          "message": "Step Router V1 is available only through the Step Plan connection"
+        },
+        "request": {"output_limit_cap": 250000}
+      },
+      "note": "The routing Model serves Step Plan requests only, with at most 250,000 output tokens."
+    },
+    {
+      "when": {"ids": ["step-router-v1"], "connections": ["step-plan"]},
+      "set": {"admission": {"state": "available", "message": null}},
+      "note": "The Step Plan Connection may use Step Router V1."
+    }
+  ]
+}

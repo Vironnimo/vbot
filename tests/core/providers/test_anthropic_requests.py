@@ -79,7 +79,8 @@ async def test_selected_connection_auth_replaces_the_api_key_header() -> None:
 
 @pytest.mark.asyncio
 async def test_compatible_wire_keeps_native_policy_opt_in_and_borrowed_client_open() -> None:
-    """Only the native Adapter adds PDF input, the version header and cache markers."""
+    """Only the native Adapter sends the version header; only the anthropic wire profile adds
+    PDF input and cache markers."""
     borrowed = httpx.AsyncClient(base_url="https://minimal.anthropic.example/v1")
     compatible = AnthropicCompatibleAdapter(NO_DEFAULTS_CONFIG, API_KEY, client=borrowed)
 

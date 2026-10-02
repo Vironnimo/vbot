@@ -1,8 +1,12 @@
-"""MiniMax provider adapter."""
+"""MiniMax provider adapter.
+
+The API-key Connections speak Chat Completions and the subscription Connection
+speaks Anthropic Messages; ``resources/wire/minimax.json`` selects the protocol
+per Connection and owns the reasoning, sampling, prompt-cache and media rules.
+"""
 
 from __future__ import annotations
 
-import math
 from collections.abc import AsyncIterator, Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
@@ -13,46 +17,19 @@ from core.providers._chat_completions_catalog import (
 )
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import AnthropicCompatibleAdapter
-from core.providers.errors import ProviderError
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
 )
 from core.providers.providers import AuthConfig, ProviderConfig
-from core.providers.reasoning import (
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_DEFAULT,
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
-    REASONING_INTENT_ON,
-    ReasoningIntent,
-    model_reasoning_control,
-    model_reasoning_levels,
-    model_reasoning_supported,
-    remove_reasoning_kwargs,
-    resolve_reasoning_intent,
-)
 from core.providers.token_getter import TokenGetter
 from core.providers.wire_profile import Protocol
+from core.providers.wire_profiles import WireBinding
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
 
 
 MINIMAX_M3_MODEL_ID = "MiniMax-M3"
-MINIMAX_ANTHROPIC_MODE = "anthropic_messages"
-MINIMAX_MESSAGES_REASONING_KEYS = (
-    "thinking_effort",
-    "reasoning_effort",
-    "thinking",
-    "output_config",
-    "reasoning_split",
-)
-
-# MiniMax M3 engages reasoning as a binary thinking toggle (``adaptive`` on /
-# ``disabled`` off), not a per-level effort, so the resolver only needs to tell
-# active efforts from ``none``. This floor lets any active effort resolve to an
-# ``effort`` intent (rendered as adaptive) while ``none`` resolves to ``off``.
-MINIMAX_M3_EFFORT_FLOOR = ("minimal", "low", "medium", "high", "xhigh", "max")
 MINIMAX_M2_SUPPORTED_PARAMETERS = (
     "max_tokens",
     "reasoning_split",
@@ -70,8 +47,6 @@ MINIMAX_M3_SUPPORTED_PARAMETERS = (
     "tools",
     "top_p",
 )
-MINIMAX_REASONING_PAYLOAD_KEYS = ("reasoning", "reasoning_effort", "include_reasoning")
-
 # MiniMax publishes a *recommended* and a *hard-max* output allowance per model
 # (https://platform.minimax.io/docs/api-reference/text-chat-openai). vBot pins
 # the output ceiling to the RECOMMENDED value, not the hard max: for the M2.x
@@ -144,59 +119,13 @@ MINIMAX_MODEL_FACTS: dict[str, dict[str, Any]] = {
 }
 
 
-class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
-    """MiniMax's Anthropic-compatible M2.x wire."""
-
-    @override
-    def _apply_reasoning(
-        self,
-        payload: dict[str, Any],
-        request_kwargs: dict[str, Any],
-        model_id: str,
-        *,
-        reasoning_supported: bool | None,
-        max_tokens: int | None,
-    ) -> None:
-        # M2.x reasons by default and MiniMax does not expose Anthropic's
-        # adaptive/effort/budget controls. Keep historical signed thinking
-        # blocks, but do not send Claude-specific request controls.
-        del payload, model_id, reasoning_supported, max_tokens
-        remove_reasoning_kwargs(request_kwargs, *MINIMAX_MESSAGES_REASONING_KEYS)
-
-    @override
-    def _build_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        payload = super()._build_payload(messages, model_id, **kwargs)
-        _validate_minimax_temperature(payload.get("temperature"))
-        return payload
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the Messages render: M2.x reasons by default and accepts no control.
-
-        :meth:`_apply_reasoning` strips every reasoning control — nothing is
-        sent, and the Model's always-on reasoning stays on regardless of the
-        selected effort.
-        """
-
-        del model_lookup, model_id, effort, provider_config
-        return ReasoningIntent(REASONING_INTENT_ON)
-
-
 class MiniMaxAdapter(OpenAICompatibleAdapter):
-    """MiniMax adapter for direct OpenAI and subscription Messages wires."""
+    """MiniMax adapter for direct OpenAI and subscription Messages wires.
+
+    Requests whose wire profile selects the ``messages`` protocol go through an
+    inner Messages Adapter that shares this Adapter's HTTP client and wire
+    profiles.
+    """
 
     WIRE_PROTOCOLS: ClassVar[tuple[Protocol, ...]] = ("chat_completions", "messages")
 
@@ -221,7 +150,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             connection_mode=connection_mode,
         )
         selected_auth_config = auth_config or config.connections[0].auth
-        self._messages = _MiniMaxMessagesAdapter(
+        self._messages = AnthropicCompatibleAdapter(
             config,
             self._token_getter,
             base_url=base_url,
@@ -229,20 +158,18 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             model_lookup=model_lookup,
             debug_recorder=debug_recorder,
             client=self._client,
-            wire_media_types=frozenset(),
-            prompt_caching=True,
         )
+        self._messages.bind_wire_profiles(self.wire)
+
+    @override
+    def bind_wire_profiles(self, binding: WireBinding) -> None:
+        super().bind_wire_profiles(binding)
+        self._messages.bind_wire_profiles(binding)
 
     @override
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        if self._uses_anthropic_messages:
-            return self._messages.wire_media_support(model_id)
-        return super().wire_media_support(model_id)
 
     @override
     async def send(
@@ -252,7 +179,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        if self._uses_anthropic_messages:
+        if self._uses_messages(model_id):
             request_kwargs = dict(kwargs)
             self._apply_model_output_limit(request_kwargs, model_id, messages)
             return await self._messages.send(messages, model_id=model_id, **request_kwargs)
@@ -266,7 +193,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncIterator[dict[str, Any]]:
-        if self._uses_anthropic_messages:
+        if self._uses_messages(model_id):
             request_kwargs = dict(kwargs)
             self._apply_model_output_limit(request_kwargs, model_id, messages)
             return self._messages.stream(messages, model_id=model_id, **request_kwargs)
@@ -310,81 +237,10 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         )
 
     @override
-    def _build_payload(
-        self,
-        messages: list[dict[str, Any]],
-        model_id: str,
-        **kwargs: Any,
-    ) -> dict[str, Any]:
-        """Build a MiniMax payload without unsupported OpenAI reasoning controls."""
-
-        thinking_effort = kwargs.pop("thinking_effort", "")
-        reasoning_effort = kwargs.pop("reasoning_effort", "")
-        payload = super()._build_payload(messages, model_id, **kwargs)
-        for key in MINIMAX_REASONING_PAYLOAD_KEYS:
-            payload.pop(key, None)
-
-        if self._model_reasoning_supported(model_id) is False:
-            payload.pop("thinking", None)
-            payload.pop("reasoning_split", None)
-            _validate_minimax_temperature(payload.get("temperature"))
-            return payload
-
-        if model_id != MINIMAX_M3_MODEL_ID:
-            # M2.x reasons by default; split the trace into reasoning_details so
-            # it is captured separately (not inline <think>) and stays replayable
-            # across runs under the full_history policy.
-            payload.pop("thinking", None)
-            payload.setdefault("reasoning_split", True)
-            _validate_minimax_temperature(payload.get("temperature"))
-            return payload
-
-        intent = resolve_reasoning_intent(
-            supported=self._model_reasoning_supported(model_id),
-            control=model_reasoning_control(self._model_lookup, model_id),
-            levels=model_reasoning_levels(self._model_lookup, model_id) or MINIMAX_M3_EFFORT_FLOOR,
-            effort=thinking_effort or reasoning_effort,
-        )
-        _render_minimax_m3_thinking(payload, intent)
-        _validate_minimax_temperature(payload.get("temperature"))
-        return payload
-
-    @classmethod
-    @override
-    def describe_reasoning_render(
-        cls,
-        *,
-        model_lookup: ModelLookup | None,
-        model_id: str,
-        effort: str | None,
-        provider_config: ProviderConfig | None = None,
-    ) -> ReasoningIntent:
-        """Describe the MiniMax OpenAI-wire reasoning render.
-
-        Mirrors :meth:`_build_payload`: M2.x reasons by default and takes no
-        reasoning control at all, and M3's render is the binary adaptive
-        thinking switch — no effort level ever reaches the wire, so every
-        active intent describes as plain ``on``.
-        """
-
-        del provider_config
-        if model_id != MINIMAX_M3_MODEL_ID:
-            return ReasoningIntent(REASONING_INTENT_ON)
-        intent = resolve_reasoning_intent(
-            supported=model_reasoning_supported(model_lookup, model_id),
-            control=model_reasoning_control(model_lookup, model_id),
-            levels=model_reasoning_levels(model_lookup, model_id) or MINIMAX_M3_EFFORT_FLOOR,
-            effort=effort,
-        )
-        if intent.kind in (REASONING_INTENT_EFFORT, REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
-            return ReasoningIntent(REASONING_INTENT_ON)
-        return intent
-
-    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
-        if self._uses_anthropic_messages:
+        if self._uses_messages(model_id):
             return self._messages.normalize_response(response, model_id=model_id)
         normalized = super().normalize_response(response, model_id=model_id)
         if normalized.get("reasoning") is None:
@@ -393,29 +249,8 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
                 normalized["reasoning"] = reasoning
         return normalized
 
-    @property
-    def _uses_anthropic_messages(self) -> bool:
-        return self._connection_mode == MINIMAX_ANTHROPIC_MODE
-
-
-def _render_minimax_m3_thinking(payload: dict[str, Any], intent: ReasoningIntent) -> None:
-    """Render a reasoning intent onto a MiniMax M3 payload.
-
-    M3 has a binary thinking toggle and a ``reasoning_split`` capture flag, no
-    native token budget — so ``budget``/``on`` intents render the same as an
-    ``effort`` (adaptive thinking). ``off`` disables thinking and drops the
-    split; ``default`` (no effort selected) keeps M3's reason-by-default with the
-    split on. A caller-set value is left untouched (``setdefault``/guarded pop).
-    """
-
-    if intent.kind == REASONING_INTENT_OFF:
-        payload.setdefault("thinking", {"type": "disabled"})
-        payload.pop("reasoning_split", None)
-    elif intent.kind == REASONING_INTENT_DEFAULT:
-        payload.setdefault("reasoning_split", True)
-    else:
-        payload.setdefault("thinking", {"type": "adaptive"})
-        payload.setdefault("reasoning_split", True)
+    def _uses_messages(self, model_id: str | None) -> bool:
+        return self.wire_profile(model_id or "").protocol == "messages"
 
 
 def _extract_reasoning_details_text(reasoning_meta: Any) -> str | None:
@@ -435,19 +270,3 @@ def _extract_reasoning_details_text(reasoning_meta: Any) -> str | None:
             parts.append(text)
 
     return "".join(parts) or None
-
-
-def _validate_minimax_temperature(value: Any) -> None:
-    if value is None:
-        return
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ProviderError(
-            "MiniMax temperature must be a finite number in the range (0, 1]",
-            retryable=False,
-        )
-    normalized = float(value)
-    if not math.isfinite(normalized) or normalized <= 0 or normalized > 1:
-        raise ProviderError(
-            "MiniMax temperature must be a finite number in the range (0, 1]",
-            retryable=False,
-        )

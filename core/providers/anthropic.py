@@ -1,9 +1,12 @@
-"""Native Anthropic provider policy layered over the reusable Messages wire."""
+"""Native Anthropic provider policy layered over the reusable Messages wire.
+
+Request shaping (sampling parameters, reasoning, media, prompt caching) lives in
+``resources/wire/anthropic.json``; this Adapter owns discovery and the catalog."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
@@ -14,7 +17,7 @@ from core.models.models import (
     Model,
     ReasoningCapabilities,
 )
-from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, ModelLookup
+from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
     ANTHROPIC_VERSION,
@@ -58,8 +61,6 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
             connection_mode=connection_mode,
             client=client,
             api_version=ANTHROPIC_VERSION,
-            wire_media_types=IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"},
-            prompt_caching=True,
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
 
@@ -144,22 +145,6 @@ class AnthropicAdapter(AnthropicCompatibleAdapter):
                 }
             },
         )
-
-    @override
-    def _model_supports_temperature(self, model_id: str) -> bool:
-        """Read Anthropic's discovery-derived per-model sampling policy."""
-
-        if self._model_lookup is None:
-            return True
-        model = self._model_lookup(model_id.split("::", 1)[0])
-        if model is None:
-            return True
-        provider_metadata = model.metadata.get(ANTHROPIC_METADATA_KEY)
-        if isinstance(provider_metadata, Mapping):
-            value = provider_metadata.get(SUPPORTS_TEMPERATURE_METADATA_FIELD)
-            if isinstance(value, bool):
-                return value
-        return True
 
 
 def _anthropic_reasoning_control(

@@ -135,6 +135,17 @@ def _string_list(*, values: tuple[str, ...] | None = None, nullable: bool = Fals
     return _Leaf(check, expected + (" or null" if nullable else ""))
 
 
+def _scalar_list() -> _Leaf:
+    def check(value: Any) -> bool:
+        return (
+            isinstance(value, list)
+            and bool(value)
+            and all(item is None or isinstance(item, str | int | float | bool) for item in value)
+        )
+
+    return _Leaf(check, "a non-empty list of JSON scalars")
+
+
 _EFFORT_LEVELS = tuple(THINKING_EFFORT_ORDER)
 
 
@@ -158,6 +169,7 @@ _PARAMETER_RULE: dict[str, Any] = {
     "maximum": _number(),
     "exclusive_minimum": _bool(),
     "out_of_range": _enum(OUT_OF_RANGE_POLICIES),
+    "values": _scalar_list(),
 }
 
 PROFILE_SCHEMA: dict[str, Any] = {
@@ -170,6 +182,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "output_limit_field": _enum(OUTPUT_LIMIT_FIELDS, nullable=True),
         "output_limit_default": _positive_int(),
         "output_limit_cap": _positive_int(),
+        "output_limit_collapse": _bool(),
         "allowed_parameters": _string_list(nullable=True),
         "parameters": _MapOf(_PARAMETER_RULE),
         "body_defaults": _MapOf(_Json()),

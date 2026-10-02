@@ -10,13 +10,10 @@ import pytest
 import respx
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
-from core.providers.errors import ProviderError
-from core.providers.kimi import (
-    KIMI_CODING_MODE,
-    KIMI_IMAGE_VIDEO_MEDIA_TYPES,
-    KimiAdapter,
-)
+from core.providers.kimi import KIMI_CODING_MODE, KimiAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+
+from .adapter_test_support import bind_connection
 
 PLATFORM_URL = "https://api.moonshot.ai/v1/chat/completions"
 CODING_URL = "https://api.kimi.com/coding/v1/chat/completions"
@@ -74,14 +71,20 @@ MODELS["plain-model"] = Model(
 
 def _adapter(connection: str) -> KimiAdapter:
     if connection == "coding":
-        return KimiAdapter(
+        adapter = KimiAdapter(
             CONFIG,
             "kimi-coding-secret",
             base_url="https://api.kimi.com/coding/v1",
             model_lookup=MODELS.get,
             connection_mode=KIMI_CODING_MODE,
         )
-    return KimiAdapter(CONFIG, "kimi-secret", model_lookup=MODELS.get)
+        connection_id = "coding-plan"
+    else:
+        adapter = KimiAdapter(CONFIG, "kimi-secret", model_lookup=MODELS.get)
+        connection_id = "api-key"
+    return bind_connection(
+        adapter, provider_id="kimi", connection_id=connection_id, model_lookup=MODELS.get
+    )
 
 
 async def _sent_body(
@@ -252,25 +255,28 @@ async def test_image_and_video_content_use_kimi_data_url_parts() -> None:
         {"type": "image_url", "image_url": {"url": "data:image/webp;base64,aW1n"}},
         {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,dmlk"}},
     ]
-    assert _adapter("platform").wire_media_support("kimi-k3") == KIMI_IMAGE_VIDEO_MEDIA_TYPES
+    assert _adapter("platform").wire_media_support("kimi-k3") == frozenset(
+        {
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/webp",
+            "video/mp4",
+            "video/quicktime",
+            "video/webm",
+        }
+    )
 
 
-@pytest.mark.asyncio
-async def test_multimodal_body_over_the_connection_limit_fails_before_io(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("core.providers.kimi.KIMI_CODING_MAX_REQUEST_BODY_BYTES", 10)
-    adapter = _adapter("coding")
-    image = {"type": "media", "media_type": "image/png", "base64": "bGFyZ2UtZW5vdWdo"}
-
-    with respx.mock:
-        route = respx.post(CODING_URL).mock(return_value=httpx.Response(200, json=CHAT_SUCCESS))
-        with pytest.raises(ProviderError, match="multimodal size limit") as caught:
-            await adapter.send([{"role": "user", "content": [image]}], model_id="k3")
-    await adapter.aclose()
-
-    assert caught.value.retryable is False
-    assert route.call_count == 0
+@pytest.mark.parametrize(
+    ("connection", "limit"),
+    [
+        pytest.param("coding", 80 * 1024 * 1024, id="coding-plan-80-mib"),
+        pytest.param("platform", 100_000_000, id="platform-100-mb"),
+    ],
+)
+def test_request_body_limit_follows_the_connection(connection: str, limit: int) -> None:
+    assert _adapter(connection).request_body_limit("kimi-k3") == limit
 
 
 def test_catalog_normalization_applies_current_kimi_facts() -> None:

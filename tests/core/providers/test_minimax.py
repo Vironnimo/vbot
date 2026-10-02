@@ -14,6 +14,8 @@ from core.providers.errors import ProviderError
 from core.providers.minimax import MiniMaxAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
+from .adapter_test_support import bind_connection
+
 API_KEY = "test-minimax-key"
 CHAT_URL = "https://api.minimax.io/v1/chat/completions"
 MESSAGES_URL = "https://api.minimax.io/anthropic/v1/messages"
@@ -53,13 +55,19 @@ def _catalog_lookup(model_id: str) -> Model:
 
 def _adapter(wire: str, *, catalog: bool = False) -> MiniMaxAdapter:
     if wire == "messages":
-        return MiniMaxAdapter(
+        adapter = MiniMaxAdapter(
             CONFIG,
             API_KEY,
             base_url="https://api.minimax.io/anthropic/v1",
             auth_config=AuthConfig(header="Authorization", prefix="Bearer "),
             model_lookup=_catalog_lookup,
             connection_mode="anthropic_messages",
+        )
+        return bind_connection(
+            adapter,
+            provider_id="minimax",
+            connection_id="subscription",
+            model_lookup=_catalog_lookup,
         )
     return MiniMaxAdapter(CONFIG, API_KEY, model_lookup=_catalog_lookup if catalog else None)
 

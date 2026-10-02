@@ -21,6 +21,8 @@ from core.providers.stepfun import (
     StepFunAdapter,
 )
 
+from .adapter_test_support import bind_connection
+
 STEPFUN_DIRECT_CHAT_URL = "https://api.stepfun.com/v1/chat/completions"
 STEPFUN_PLAN_CHAT_URL = "https://api.stepfun.com/step_plan/v1/chat/completions"
 HELLO = [{"role": "user", "content": "Hello"}]
@@ -81,13 +83,17 @@ def _models() -> dict[str, Model]:
 def _adapter(connection_id: str) -> StepFunAdapter:
     config = _config()
     connection = config.get_connection(connection_id)
-    return StepFunAdapter(
+    models = _models()
+    adapter = StepFunAdapter(
         config,
         "plan-secret" if connection_id == "step-plan" else "direct-secret",
         base_url=connection.base_url or config.base_url,
         auth_config=connection.auth,
-        model_lookup=_models().get,
+        model_lookup=models.get,
         connection_mode=connection.mode,
+    )
+    return bind_connection(
+        adapter, provider_id="stepfun", connection_id=connection_id, model_lookup=models.get
     )
 
 
@@ -172,7 +178,7 @@ async def test_request_follows_the_model_policy(
             "direct-api", "step-3.7-flash", {"frequency_penalty": -2.1}, "frequency_penalty"
         ),
         pytest.param("direct-api", "step-3.7-flash", {"n": 2}, "exactly 1"),
-        pytest.param("direct-api", "step-3.7-flash", {"seed": 7}, "does not document"),
+        pytest.param("direct-api", "step-3.7-flash", {"seed": 7}, "does not accept"),
         pytest.param(
             "direct-api", "step-3.7-flash", {"reasoning_format": "future"}, "reasoning_format"
         ),

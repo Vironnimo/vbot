@@ -1,0 +1,30 @@
+{
+  "format_version": 1,
+  "_comment": "Native Anthropic Messages. Stable prefixes carry prompt-cache breakpoints, PDFs ride as document blocks, and sampling parameters are not sent while thinking is active (protocol default). Models without sampling drop it always; adaptive-only Models cannot disable thinking, so off sends nothing.",
+  "defaults": {
+    "request": {"prompt_cache": "anthropic_breakpoints"},
+    "media": {
+      "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
+    }
+  },
+  "rules": [
+    {
+      "when": {"metadata": {"supports_temperature": false}},
+      "set": {
+        "request": {
+          "parameters": {
+            "temperature": {"mode": "drop"},
+            "top_p": {"mode": "drop"},
+            "top_k": {"mode": "drop"}
+          }
+        }
+      },
+      "note": "The catalog marks Models whose API removed sampling parameters; they are never sent."
+    },
+    {
+      "when": {"metadata": {"requires_adaptive_thinking": true}},
+      "set": {"reasoning": {"off": "omit"}},
+      "note": "Adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
+    }
+  ]
+}

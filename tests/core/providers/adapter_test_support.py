@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
+from core.providers.adapter import ProviderAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
+from core.providers.wire_profiles import standalone_wire_binding
 
 TOKEN = "test-token"
 
@@ -28,6 +30,26 @@ class AdapterHookDefaults:
 
     def set_debug_context(self, context: Any) -> None:
         del context
+
+
+def bind_connection[A: ProviderAdapter](
+    adapter: A,
+    *,
+    provider_id: str,
+    connection_id: str,
+    model_lookup: Callable[[str], Model | None] | None,
+) -> A:
+    """Bind ``adapter`` to the bundled wire profiles of one Connection, as the Runtime does."""
+
+    adapter.bind_wire_profiles(
+        standalone_wire_binding(
+            provider_id=provider_id,
+            connection_id=connection_id,
+            protocols=type(adapter).WIRE_PROTOCOLS,
+            model_lookup=model_lookup,
+        )
+    )
+    return adapter
 
 
 def bearer_config(

@@ -1,0 +1,101 @@
+{
+  "format_version": 1,
+  "_comment": "Kimi Chat Completions on the Coding Plan and the Platform. Sampling and foreign reasoning controls are never sent; exactly one output limit goes out as max_completion_tokens. Reasoning is controlled per Model family (K3 reasoning_effort ladder, K2.x thinking toggle); history replays readable reasoning_content and drops it whenever the request turns thinking off. Images and mp4/mov/webm video are carried natively.",
+  "defaults": {
+    "request": {
+      "output_limit_field": "max_completion_tokens",
+      "output_limit_collapse": true,
+      "parameters": {
+        "temperature": {"mode": "drop"},
+        "top_p": {"mode": "drop"},
+        "n": {"mode": "drop"},
+        "reasoning": {"mode": "drop"},
+        "include_reasoning": {"mode": "drop"},
+        "thinking": {"mode": "drop"},
+        "output_config": {"mode": "drop"}
+      }
+    },
+    "reasoning": {"dialect": "none"},
+    "replay": {"fidelity": "readable_only", "strip_when_off": true},
+    "media": {
+      "types": [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "video/mp4",
+        "video/quicktime",
+        "video/webm"
+      ]
+    }
+  },
+  "connections": {
+    "coding-plan": {"media": {"request_max_bytes": 83886080}},
+    "api-key": {"media": {"request_max_bytes": 100000000}},
+    "api-key-cn": {"media": {"request_max_bytes": 100000000}}
+  },
+  "rules": [
+    {
+      "when": {"ids": ["kimi-k3", "k3", "k3-256k"]},
+      "set": {
+        "reasoning": {
+          "dialect": "thinking_toggle_with_effort",
+          "effort_map": {
+            "minimal": "low",
+            "low": "low",
+            "medium": "high",
+            "high": "high",
+            "xhigh": "max",
+            "max": "max"
+          },
+          "off": "low"
+        }
+      },
+      "note": "K3 takes reasoning_effort low|high|max; the Platform cannot disable thinking, so off is the low effort."
+    },
+    {
+      "when": {"ids": ["kimi-k3", "k3", "k3-256k"], "connections": ["coding-plan"]},
+      "set": {"reasoning": {"off": "auto"}},
+      "note": "The Coding Plan disables K3 thinking with thinking type disabled."
+    },
+    {
+      "when": {"ids": ["kimi-k2.6"]},
+      "set": {
+        "reasoning": {"dialect": "thinking_toggle", "unset": "enabled", "options": {"keep": "all"}}
+      },
+      "note": "K2.6 thinks unless thinking is disabled and keeps every earlier thinking trace."
+    },
+    {
+      "when": {
+        "ids": [
+          "kimi-k2.7-code",
+          "kimi-k2.7-code-highspeed",
+          "kimi-for-coding",
+          "kimi-for-coding-highspeed"
+        ]
+      },
+      "set": {
+        "reasoning": {
+          "dialect": "thinking_toggle",
+          "unset": "enabled",
+          "off": "enabled",
+          "options": {"keep": "all"}
+        }
+      },
+      "note": "K2.7 Code always thinks on the Platform and keeps every earlier thinking trace."
+    },
+    {
+      "when": {
+        "ids": [
+          "kimi-k2.7-code",
+          "kimi-k2.7-code-highspeed",
+          "kimi-for-coding",
+          "kimi-for-coding-highspeed"
+        ],
+        "connections": ["coding-plan"]
+      },
+      "set": {"reasoning": {"off": "auto"}},
+      "note": "The Coding Plan lets K2.7 Code disable thinking."
+    }
+  ]
+}

@@ -24,6 +24,7 @@ from core.providers.wire_profile import (
     WireProfile,
 )
 from core.providers.wire_profiles import WireProfiles
+from core.utils.errors import ProviderError
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
 
@@ -549,6 +550,9 @@ def test_an_unreadable_observation_cache_starts_empty(tmp_path: Path, content: s
     assert store.snapshot() == {}
 
 
+REFUSED = object()
+
+
 @pytest.mark.parametrize(
     ("rule", "reasoning_active", "value", "expected"),
     [
@@ -559,6 +563,10 @@ def test_an_unreadable_observation_cache_starts_empty(tmp_path: Path, content: s
         (ParameterRule(minimum=0.0, maximum=1.0, out_of_range="drop"), False, 1.5, None),
         (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.0, None),
         (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.1, 0.1),
+        (ParameterRule(mode="reject"), False, 0.5, REFUSED),
+        (ParameterRule(minimum=0.0, maximum=1.0, out_of_range="reject"), False, 1.5, REFUSED),
+        (ParameterRule(values=(0.5,), out_of_range="reject"), False, 0.5, 0.5),
+        (ParameterRule(values=(0.5,), out_of_range="reject"), False, 0.7, REFUSED),
     ],
     ids=[
         "drop",
@@ -568,16 +576,27 @@ def test_an_unreadable_observation_cache_starts_empty(tmp_path: Path, content: s
         "out-of-range-dropped",
         "exclusive-bound-dropped",
         "inside-exclusive-bound",
+        "rejected-parameter-refused",
+        "out-of-range-refused",
+        "listed-value-kept",
+        "unlisted-value-refused",
     ],
 )
 def test_parameter_rules_shape_the_request_fields(
-    rule: ParameterRule, reasoning_active: bool, value: float, expected: float | None
+    rule: ParameterRule, reasoning_active: bool, value: float, expected: object
 ) -> None:
     payload: dict[str, Any] = {"temperature": value, "model": "m"}
+    rules = RequestRules(parameters={"temperature": rule})
 
-    RequestRules(parameters={"temperature": rule}).shape_parameters(
-        payload, reasoning_active=reasoning_active
-    )
+    def shape() -> None:
+        rules.shape_parameters(payload, reasoning_active=reasoning_active, provider_label="Acme")
+
+    if expected is REFUSED:
+        with pytest.raises(ProviderError, match="Acme .*temperature") as refused:
+            shape()
+        assert refused.value.retryable is False
+        return
+    shape()
 
     assert payload.get("temperature") == expected
     assert payload["model"] == "m"

@@ -13,7 +13,6 @@ import json
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from logging import Logger
 from typing import TYPE_CHECKING, Any, override
 
 import httpx
@@ -305,7 +304,8 @@ def unsupported_sampling_parameter(detail: str) -> str | None:
     Matches provider wordings such as ``Unsupported parameter: 'temperature'``,
     ``temperature is not supported when thinking is enabled``, or ``Unknown
     parameter: top_k``. Detection never changes status classification; it only
-    gates the one-shot strip-and-retry in :func:`execute_with_sampling_fallback`.
+    gates the learn-and-retry of
+    :func:`core.providers._wire_learning.execute_learning_from_rejections`.
     """
     lowered = detail.lower()
     if not any(marker in lowered for marker in _UNSUPPORTED_PARAMETER_DETAIL_MARKERS):
@@ -314,39 +314,6 @@ def unsupported_sampling_parameter(detail: str) -> str | None:
         if parameter_name in lowered:
             return parameter_name
     return None
-
-
-async def execute_with_sampling_fallback[T](
-    execute_attempt: Callable[[], Awaitable[T]],
-    payload: dict[str, Any],
-    *,
-    logger: Logger,
-    provider_label: str,
-) -> T:
-    """Run one adapter request, retrying once without a rejected sampling parameter.
-
-    ``execute_attempt`` must perform one full ``retry_async``-wrapped request
-    over ``payload`` (the dict is shared, so a later attempt sees the strip).
-    A fatal ``ProviderError`` whose message blames a sampling parameter that is
-    actually present in ``payload`` removes exactly that parameter and retries
-    once; every other error — auth, rate limit, network, and rejections of
-    parameters we never sent — propagates unchanged.
-    """
-    try:
-        return await execute_attempt()
-    except ProviderError as error:
-        if error.retryable or isinstance(error, ProviderAuthError):
-            raise
-        blamed_parameter = unsupported_sampling_parameter(str(error))
-        if blamed_parameter is None or blamed_parameter not in payload:
-            raise
-        payload.pop(blamed_parameter, None)
-        logger.warning(
-            "%s rejected sampling parameter %r; retrying once without it",
-            provider_label,
-            blamed_parameter,
-        )
-        return await execute_attempt()
 
 
 # ---------------------------------------------------------------------------

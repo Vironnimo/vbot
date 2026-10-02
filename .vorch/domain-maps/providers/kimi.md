@@ -4,7 +4,7 @@ This supplementary map covers Kimi Coding Plan and Moonshot Platform Connections
 
 ## Boundary
 
-`core/providers/kimi.py` owns Kimi-specific Connection mode, Model facts, request shaping, reasoning replay, output-limit aliases, cache affinity, and multimodal limits while reusing the deep OpenAI-compatible transport. Provider and Connection declarations live in `resources/providers/kimi.json`; durable Model facts, exact wire ids, and Connection allowlists live in `resources/models/kimi.overrides.json`. Generic credential resolution, discovery, HTTP retries, Tool rendering, and Chat response normalization stay in their shared owners.
+`core/providers/kimi.py` owns Kimi-specific Connection mode, Model facts and catalog normalization, the video part encoder, and cache affinity while reusing the deep OpenAI-compatible transport. Request rules - reasoning dialects per Model family and Connection, the output-limit field and alias collapse, sampling drops, replay fidelity, media types, and the per-Connection request body limit - live in the wire profile `resources/wire/kimi.json`. Provider and Connection declarations live in `resources/providers/kimi.json`; durable Model facts, exact wire ids, and Connection allowlists live in `resources/models/kimi.overrides.json`. Generic credential resolution, discovery, HTTP retries, Tool rendering, and Chat response normalization stay in their shared owners.
 
 ## Connections and discovery
 
@@ -18,16 +18,16 @@ This supplementary map covers Kimi Coding Plan and Moonshot Platform Connections
 
 - All Connections use OpenAI-compatible `/chat/completions` and `max_completion_tokens`; deprecated `max_tokens` and vBot's output aliases are collapsed to the smallest valid requested limit. K3 uses a 131072-token default ceiling; K2.6/K2.7 use 32768 because Kimi rate limiting accounts for the requested output allowance.
 - Kimi's current Models have Model-specific sampling constraints, so `temperature`, `top_p`, and `n` are omitted rather than forwarding generic Provider defaults.
-- K3 uses `reasoning_effort: low|high|max`: vBot `minimal|low` maps to `low`, `medium|high` to `high`, and `xhigh|max` to `max`. Platform K3 always reasons, so `none` degrades to `low`; Coding Plan `none` sends `thinking.type: disabled`, which Kimi documents as routing the request to K2.6.
-- K2.6 uses `thinking.type: enabled|disabled`; enabled requests set `thinking.keep: all` so persisted `reasoning_content` remains valid across turns. Platform K2.7 Code is fixed to enabled/all. Coding Plan's K2.7 aliases honor `none` by disabling thinking, with the same documented K2.6 routing consequence.
-- Reasoning-capable Models replay canonical Assistant reasoning as `reasoning_content` across same-Model history under the declared `readable_only` fidelity (the wire has no meta class; stray meta keys are stripped defensively). A non-reasoning Model strips replay; an unprofiled discovered Model inherits the shared `full_history` default unless a Provider or Model override narrows it.
+- K3 uses `reasoning_effort: low|high|max` (`thinking_toggle_with_effort` dialect with an `effort_map`): vBot `minimal|low` maps to `low`, `medium|high` to `high`, and `xhigh|max` to `max`. Platform K3 always reasons, so `none` degrades to `low`; Coding Plan `none` sends `thinking.type: disabled`, which Kimi documents as routing the request to K2.6.
+- K2.6 uses `thinking.type: enabled|disabled` (`thinking_toggle` dialect); enabled requests set `thinking.keep: all` so persisted `reasoning_content` remains valid across turns. Platform K2.7 Code is fixed to enabled/all. Coding Plan's K2.7 aliases honor `none` by disabling thinking, with the same documented K2.6 routing consequence.
+- Reasoning-capable Models replay canonical Assistant reasoning as `reasoning_content` across same-Model history under the declared `readable_only` fidelity (the wire has no meta class; stray meta keys are stripped defensively). A non-reasoning Model strips replay, and so does a request that turns thinking off (`replay.strip_when_off`); an unprofiled discovered Model inherits the shared `full_history` default unless a Provider or Model override narrows it.
 - `prompt_cache_key` is derived from the cache-affinity id, falling back to stable Agent/Session identity. Keep it on Coding Plan requests: Kimi requires it for effective Subscription caching and recommends it for coding agents generally.
 
 ## Multimodal policy
 
 - Kimi accepts vBot's recognized JPEG, PNG, GIF, and WebP images and MP4, MOV, and WebM videos when the selected Model advertises that input modality. `k3-256k` is image-only; the other statically profiled Kimi Models accept image and video.
 - Images encode as base64 `image_url` parts and videos as base64 `video_url` parts. Native video resolution is provider-scoped: other OpenAI-compatible Adapters continue rejecting video unless they explicitly override the user-content encoder and advertise a matching wire type.
-- Only current-turn media bytes are sent natively; historical video remains a stored-path note. The request body is rejected locally above 100,000,000 bytes on Platform Connections and above the conservative 80 MiB Coding Plan limit. vBot's attachment store may impose a lower per-file limit first.
+- Only current-turn media bytes are sent natively; historical video remains a stored-path note. Any serialized request body above 100,000,000 bytes on Platform Connections or above the conservative 80 MiB Coding Plan limit (`media.request_max_bytes` per Connection) is refused before network I/O with `ProviderRequestTooLargeError`, so Chat can retire already delivered images and resubmit. vBot's attachment store may impose a lower per-file limit first.
 
 ## Verification
 

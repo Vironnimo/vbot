@@ -586,6 +586,7 @@ def _build_request(values: Mapping[str, Any]) -> RequestRules:
             "output_limit_field",
             "output_limit_default",
             "output_limit_cap",
+            "output_limit_collapse",
             "allowed_parameters",
             "tool_schema",
             "tool_call_ids",

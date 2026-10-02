@@ -6,12 +6,10 @@ from __future__ import annotations
 import asyncio
 import gzip
 import json
-import logging
 import zlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, override
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -26,7 +24,6 @@ from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
-    execute_with_sampling_fallback,
     format_http_error_detail,
     iter_sse_events,
     iter_stream_lines,
@@ -189,78 +186,6 @@ def test_error_detail_is_status_and_body_or_the_bare_status() -> None:
     assert format_http_error_detail(502, "gateway boom") == "502 gateway boom"
     assert format_http_error_detail(502, "") == "502"
     assert format_http_error_detail(502, None) == "502"
-
-
-# ---------------------------------------------------------------------------
-# Sampling-parameter fallback
-# ---------------------------------------------------------------------------
-
-_SAMPLED_PAYLOAD = {"model": "m", "temperature": 0.7, "top_p": 0.9, "top_k": 40}
-
-
-@pytest.mark.parametrize(
-    ("detail", "blamed"),
-    [
-        ("Provider error: 400 Unsupported parameter: 'temperature'", "temperature"),
-        ("Provider error: 400 Unknown parameter: top_k", "top_k"),
-    ],
-)
-@pytest.mark.asyncio
-async def test_sampling_rejection_strips_the_blamed_parameter_and_retries_once(
-    detail: str, blamed: str
-) -> None:
-    payload = dict(_SAMPLED_PAYLOAD)
-    attempts: list[dict[str, Any]] = []
-
-    async def attempt() -> str:
-        attempts.append(dict(payload))
-        if len(attempts) == 1:
-            raise ProviderError(detail, retryable=False)
-        return "ok"
-
-    result = await execute_with_sampling_fallback(
-        attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
-    )
-
-    assert result == "ok"
-    assert attempts == [
-        _SAMPLED_PAYLOAD,
-        {key: value for key, value in _SAMPLED_PAYLOAD.items() if key != blamed},
-    ]
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        ProviderError("400 Unsupported parameter: 'temperature'", retryable=False),
-        ProviderError("400 Unsupported parameter: 'max_tokens'", retryable=False),
-        ProviderError("400 top_p", retryable=False),
-        ProviderAuthError("Unsupported parameter top_p for this credential"),
-        ProviderRateLimitError("Unsupported parameter top_p: backend overloaded"),
-    ],
-    ids=[
-        "parameter-not-sent",
-        "not-a-sampling-parameter",
-        "no-rejection-marker",
-        "auth-failure",
-        "retryable-failure",
-    ],
-)
-@pytest.mark.asyncio
-async def test_other_failures_pass_through_the_sampling_fallback_unchanged(
-    error: ProviderError,
-) -> None:
-    payload = {"model": "m", "top_p": 0.9}
-    attempt = AsyncMock(side_effect=error)
-
-    with pytest.raises(ProviderError) as raised:
-        await execute_with_sampling_fallback(
-            attempt, payload, logger=logging.getLogger("test"), provider_label="stub"
-        )
-
-    assert raised.value is error
-    attempt.assert_awaited_once()
-    assert payload == {"model": "m", "top_p": 0.9}
 
 
 # ---------------------------------------------------------------------------

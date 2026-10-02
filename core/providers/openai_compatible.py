@@ -9,7 +9,6 @@ provider-specific behavior can subclass this adapter."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from dataclasses import replace
 from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
@@ -114,7 +113,11 @@ from core.providers.reasoning import (
     warn_effort_swallowed,
     warn_rejected_effort,
 )
-from core.providers.reasoning_dialects import describe_reasoning, render_reasoning
+from core.providers.reasoning_dialects import (
+    describe_reasoning,
+    dialect_request_fields,
+    render_reasoning,
+)
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import ReasoningWire
@@ -148,6 +151,9 @@ __all__ = [
 
 _LOGGER = get_logger("providers.openai_compatible")
 
+_PROFILE_DESCRIBED_PROTOCOLS = frozenset({"chat_completions", "messages"})
+"""Protocols whose codecs render reasoning only from the wire profile's plan."""
+
 
 class OpenAICompatibleAdapter(ProviderAdapter):
     """Adapter for OpenAI-compatible API providers.
@@ -163,7 +169,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     """
 
     DESCRIBES_REASONING_FROM_PROFILE: ClassVar[bool] = True
-    """Whether Chat Completions requests carry exactly the profile's reasoning plan.
+    """Whether Chat Completions (and routed Messages) requests carry exactly the profile's plan.
 
     True when reasoning reaches the wire only through :meth:`_apply_reasoning`
     (the profile's plan in its dialect), so :meth:`describe_reasoning_render`
@@ -424,8 +430,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # ``None``-valued caller kwargs mean "not specified" — drop them so they
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
+        self._refuse_unadmitted_model(model_id)
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
-        rules = self.wire_profile(model_id).request
+        profile = self.wire_profile(model_id)
+        rules = profile.request
         id_profile = WIRE_TOOL_CALL_ID_PROFILES.get(rules.tool_call_ids)
         if id_profile is not None:
             messages = normalize_tool_call_ids(messages, id_profile)
@@ -439,7 +447,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ],
         }
         _apply_openai_tools(payload, request_kwargs, profile=rules.tool_schema)
+        unrendered = set(payload)
         self._apply_reasoning(payload, request_kwargs, model_id)
+        rendered = set(payload) - unrendered
+        if rules.parameters:
+            # Shape caller values first so a dropped caller value never
+            # displaces a field the reasoning dialect rendered.
+            rules.shape_parameters(
+                request_kwargs, reasoning_active=False, provider_label=self._config.name
+            )
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
             for key, value in self._config.defaults.items():
@@ -455,13 +471,27 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         payload.update(request_kwargs)
         for key, value in rules.extra_body.items():
             payload[key] = thaw_json(value)
+        if rules.output_limit_collapse and rules.output_limit_field is not None:
+            _collapse_output_limit(payload, rules.output_limit_field)
+        described = self._describe_reasoning(model_id, selected_effort or None)
         if rules.parameters:
             rules.shape_parameters(
                 payload,
-                reasoning_active=self._describe_reasoning(
-                    model_id, selected_effort or None
-                ).requests_reasoning,
+                reasoning_active=described.requests_reasoning,
+                protected=rendered - set(request_kwargs) - set(rules.extra_body),
+                provider_label=self._config.name,
             )
+        replay = profile.replay
+        if (
+            replay.strip_when_off
+            and replay.history_field is not None
+            and (profile.reasoning.supported is False or described.kind == REASONING_INTENT_OFF)
+        ):
+            # Reasoning is off for this request: earlier turns' readable
+            # reasoning must not reach the wire either.
+            for message in payload["messages"]:
+                if isinstance(message, dict):
+                    message.pop(replay.history_field, None)
         return payload
 
     def _apply_model_output_limit(
@@ -581,25 +611,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     def _model_reasoning_supported(self, model_id: str) -> bool | None:
         return model_reasoning_supported(self._model_lookup, model_id)
 
-    def _supported_reasoning_efforts(self, model_id: str) -> set[str] | tuple[str, ...]:
-        """Return the effort ladder to snap against for one model.
-
-        The wire profile's effective ladder (explicit wire levels, then the
-        catalog ladder, then the protocol floor) minus learned rejections.
-        """
-        return self.wire_profile(model_id).reasoning.ladder
-
-    def _reasoning_wire(self, model_id: str) -> ReasoningWire:
-        """The profile's reasoning wire, snapping against this Adapter's ladder."""
-
-        wire = self.wire_profile(model_id).reasoning
-        ladder = tuple(self._supported_reasoning_efforts(model_id))
-        return wire if ladder == wire.ladder else replace(wire, levels=ladder)
-
     def _describe_reasoning(self, model_id: str, effort: str | None) -> ReasoningIntent:
         """The reasoning decision a request with ``effort`` carries on this wire."""
 
-        wire = self._reasoning_wire(model_id)
+        wire = self.wire_profile(model_id).reasoning
         return describe_reasoning(wire, wire.plan(effort))
 
     def _apply_reasoning(
@@ -613,14 +628,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Consumes ``thinking_effort``/``reasoning_effort`` from ``request_kwargs``;
         :meth:`ReasoningWire.plan` decides, :meth:`_render_reasoning` spells the
         decision in the profile's dialect. A Model known not to reason has the
-        raw reasoning controls stripped and gets nothing.
+        raw reasoning controls (including the dialect's own fields) stripped
+        and gets nothing.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
         reasoning_effort = request_kwargs.pop("reasoning_effort", "")
-        wire = self._reasoning_wire(model_id)
+        wire = self.wire_profile(model_id).reasoning
         if wire.supported is False:
-            remove_reasoning_kwargs(request_kwargs, *REASONING_PARAMETER_NAMES)
+            remove_reasoning_kwargs(
+                request_kwargs,
+                *REASONING_PARAMETER_NAMES,
+                *dialect_request_fields(wire.dialect),
+            )
             return
         self._render_reasoning(payload, wire.plan(thinking_effort or reasoning_effort), wire=wire)
 
@@ -648,9 +668,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Describe the reasoning a request with ``effort`` carries for ``model_id``.
 
         A Model the catalog marks as non-reasoning reports ``off``. On Chat
-        Completions the Provider's wire profile plans the effort exactly like
-        :meth:`_apply_reasoning`, and its dialect reports what the rendered
-        request carries. Other protocols of subclasses (Responses) and
+        Completions and Messages the Provider's wire profile plans the effort
+        exactly like the codec renders it, and its dialect reports what the
+        rendered request carries. Other protocols of subclasses (Responses) and
         subclasses that spell reasoning themselves
         (:attr:`DESCRIBES_REASONING_FROM_PROFILE`) keep the declared-control
         description against the profile's ladder, reporting an ``on``/``budget``
@@ -663,7 +683,10 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             model_lookup=model_lookup, provider_config=provider_config, model_id=model_id
         )
         wire = profile.reasoning
-        if profile.protocol == "chat_completions" and cls.DESCRIBES_REASONING_FROM_PROFILE:
+        if (
+            profile.protocol in _PROFILE_DESCRIBED_PROTOCOLS
+            and cls.DESCRIBES_REASONING_FROM_PROFILE
+        ):
             return describe_reasoning(wire, wire.plan(effort))
         intent = resolve_reasoning_intent(
             supported=model_reasoning_supported(model_lookup, model_id),
@@ -986,3 +1009,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             tool_call_slots,
             normalization_state=normalization_state,
         )
+
+
+def _collapse_output_limit(payload: dict[str, Any], field: str) -> None:
+    """Send exactly one output-limit field: the smallest positive alias value."""
+
+    limits = [
+        value
+        for key in OUTPUT_LIMIT_PARAMETER_NAMES
+        if (value := _positive_int(payload.pop(key, None))) is not None
+    ]
+    if limits:
+        payload[field] = min(limits)

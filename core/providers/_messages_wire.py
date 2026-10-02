@@ -26,6 +26,7 @@ from core.providers.reasoning import (
     reasoning_token_count,
 )
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import ToolSchemaProfile
 
 
 def _to_anthropic_messages(
@@ -252,14 +253,13 @@ def _is_supported_reasoning_block(block: Any) -> bool:
 def _apply_anthropic_tools(
     payload: dict[str, Any],
     kwargs: dict[str, Any],
+    *,
+    profile: ToolSchemaProfile = "omit_strict",
 ) -> None:
     tools = kwargs.pop("tools", None)
     if not tools:
         return
-    rendered = render_tool_definitions(
-        tools,
-        profile="omit_strict",
-    )
+    rendered = render_tool_definitions(tools, profile=profile)
     payload["tools"] = [
         {
             "name": tool["name"],

@@ -20,7 +20,9 @@ from core.models.models import (
     ReasoningCapabilities,
 )
 from core.providers.adapter import ProviderAdapter
-from core.providers.minimax import MINIMAX_M3_MODEL_ID, MiniMaxAdapter, _MiniMaxMessagesAdapter
+from core.providers.anthropic import AnthropicAdapter
+from core.providers.kimi import KimiAdapter
+from core.providers.minimax import MINIMAX_M3_MODEL_ID, MiniMaxAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openrouter import OpenRouterAdapter
@@ -32,6 +34,9 @@ from core.providers.reasoning import (
     REASONING_INTENT_ON,
     ReasoningIntent,
 )
+from core.providers.stepfun import StepFunAdapter
+
+from .adapter_test_support import bearer_config
 
 
 def _model(
@@ -40,6 +45,7 @@ def _model(
     control: str | None = REASONING_CONTROL_ON_OFF,
     levels: tuple[str, ...] = (),
     budget_max: int | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> Model:
     return Model(
         model_id=model_id,
@@ -57,6 +63,7 @@ def _model(
         ),
         context_window=1_048_576,
         max_output_tokens=None,
+        metadata=metadata or {},
     )
 
 
@@ -135,37 +142,6 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
             ReasoningIntent(REASONING_INTENT_BUDGET, budget_tokens=24_000),
             id="base-budget-tokens",
         ),
-        # M3's render is the binary adaptive switch; no level is sent.
-        pytest.param(
-            MiniMaxAdapter,
-            _model(MINIMAX_M3_MODEL_ID, control=None),
-            "high",
-            ReasoningIntent(REASONING_INTENT_ON),
-            id="minimax-m3-on",
-        ),
-        pytest.param(
-            MiniMaxAdapter,
-            _model(MINIMAX_M3_MODEL_ID, control=None),
-            "none",
-            ReasoningIntent(REASONING_INTENT_OFF),
-            id="minimax-m3-off",
-        ),
-        # M2.x reasons by default and takes no reasoning control.
-        pytest.param(
-            MiniMaxAdapter,
-            _model("MiniMax-M2.7", control=None),
-            "high",
-            ReasoningIntent(REASONING_INTENT_ON),
-            id="minimax-m2-always-on",
-        ),
-        # The Anthropic-compatible M2.x wire strips every reasoning control.
-        pytest.param(
-            _MiniMaxMessagesAdapter,
-            _model("MiniMax-M2.7"),
-            "high",
-            ReasoningIntent(REASONING_INTENT_ON),
-            id="minimax-messages-always-on",
-        ),
     ],
 )
 def test_describe_reasoning_render_reports_what_the_wire_carries(
@@ -181,6 +157,89 @@ def test_describe_reasoning_render_reports_what_the_wire_carries(
         model_lookup=model_lookup,
         model_id=record.model_id,
         effort=effort,
+    )
+
+    assert intent == expected
+
+
+@pytest.mark.parametrize(
+    ("adapter_class", "provider_id", "record", "effort", "expected"),
+    [
+        # M3's render is the binary adaptive switch; no level is sent.
+        pytest.param(
+            MiniMaxAdapter,
+            "minimax",
+            _model(MINIMAX_M3_MODEL_ID),
+            "high",
+            ReasoningIntent(REASONING_INTENT_ON),
+            id="minimax-m3-on",
+        ),
+        pytest.param(
+            MiniMaxAdapter,
+            "minimax",
+            _model(MINIMAX_M3_MODEL_ID),
+            "none",
+            ReasoningIntent(REASONING_INTENT_OFF),
+            id="minimax-m3-off",
+        ),
+        # M2.x reasons on every request and takes no reasoning control.
+        pytest.param(
+            MiniMaxAdapter,
+            "minimax",
+            _model("MiniMax-M2.7", control=None),
+            "none",
+            ReasoningIntent(REASONING_INTENT_ON),
+            id="minimax-m2-always-on",
+        ),
+        # The Platform cannot disable K3 thinking: off is sent as the low effort.
+        pytest.param(
+            KimiAdapter,
+            "kimi",
+            _model("kimi-k3", control=REASONING_CONTROL_LEVELS, levels=("low", "high", "max")),
+            "none",
+            ReasoningIntent(REASONING_INTENT_EFFORT, effort_level="low"),
+            id="kimi-k3-platform-off-is-low",
+        ),
+        # Step 3.5 Flash takes no reasoning_effort at all.
+        pytest.param(
+            StepFunAdapter,
+            "stepfun",
+            _model("step-3.5-flash", control=None),
+            "high",
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="stepfun-flash-sends-nothing",
+        ),
+        # Adaptive-only Claude Models cannot disable thinking: off sends nothing.
+        pytest.param(
+            AnthropicAdapter,
+            "anthropic",
+            _model(
+                "claude-adaptive-only",
+                control=REASONING_CONTROL_LEVELS,
+                levels=("low", "medium", "high"),
+                metadata={"anthropic": {"requires_adaptive_thinking": True}},
+            ),
+            "none",
+            ReasoningIntent(REASONING_INTENT_DEFAULT),
+            id="anthropic-adaptive-only-off-sends-nothing",
+        ),
+    ],
+)
+def test_profile_driven_wires_describe_the_providers_wire_profile(
+    adapter_class: type[ProviderAdapter],
+    provider_id: str,
+    record: Model,
+    effort: str,
+    expected: ReasoningIntent,
+) -> None:
+    def model_lookup(model_id: str) -> Model | None:
+        return record if model_id == record.model_id else None
+
+    intent = adapter_class.describe_reasoning_render(
+        model_lookup=model_lookup,
+        model_id=record.model_id,
+        effort=effort,
+        provider_config=bearer_config(provider_id),
     )
 
     assert intent == expected

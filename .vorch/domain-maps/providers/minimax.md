@@ -16,8 +16,8 @@ MiniMax owns three Connections behind one Adapter: global and China API/Token Pl
 ## Wire Contract
 
 - Global/China Chat requests use MiniMax's OpenAI-compatible `/v1/chat/completions` API with `Authorization: Bearer <key>`. Pay-as-you-go and Token Plan keys use the matching key Connection.
-- Browser-login requests use `/anthropic/v1/messages` with `Authorization: Bearer <OAuth access token>`. The inner `_MiniMaxMessagesAdapter` reuses Messages Tool, streaming, signed-thinking replay, Usage, and prompt-cache mechanics while suppressing Claude-specific effort/budget controls.
-- MiniMax accepts `temperature` only in `(0, 1]`; both wires reject non-finite, zero, negative, or above-one values locally before network I/O.
+- Browser-login requests use `/anthropic/v1/messages` with `Authorization: Bearer <OAuth access token>`. An inner `AnthropicCompatibleAdapter` that shares the outer Adapter's HTTP client and wire-profile binding reuses Messages Tool, streaming, signed-thinking replay, Usage, and prompt-cache mechanics. `resources/wire/minimax.json` selects the `messages` protocol for the `subscription` Connection and there drops Claude-specific thinking/effort controls (dialect `none`), sets prompt-cache breakpoints, and declares no media.
+- MiniMax accepts `temperature` only in `(0, 1]`; both wires reject non-finite, zero, negative, or above-one values locally before network I/O (wire profile parameter rule with `out_of_range: reject`).
 
 ## Models And Discovery
 
@@ -31,12 +31,12 @@ MiniMax owns three Connections behind one Adapter: global and China API/Token Pl
 
 ## Reasoning
 
-- MiniMax's OpenAI-compatible API does not use OpenAI-style `reasoning_effort`. `MiniMaxAdapter` strips generic OpenAI reasoning payload keys before applying MiniMax controls.
-- For `MiniMax-M3`, the shared `resolve_reasoning_intent(...)` (see `providers/request-policy.md` -> Reasoning intent) classifies the selection, then `_render_minimax_m3_thinking` maps it onto MiniMax's binary toggle: an active effort (incl. a degraded `budget`/`on` intent - M3 has no native token budget) -> `thinking: {type: adaptive}`, `none`/off -> `thinking: {type: disabled}`, no effort selected -> reason-by-default (no `thinking` key).
-- For M2.x models the adapter suppresses `thinking` (those models reason by default).
+- MiniMax's OpenAI-compatible API does not use OpenAI-style `reasoning_effort`. The Chat Completions protocol of `resources/wire/minimax.json` drops generic reasoning keys (`reasoning`, `reasoning_effort`, `include_reasoning`, `thinking`) and renders MiniMax controls through its dialects.
+- For `MiniMax-M3` on the key Connections, `ReasoningWire.plan()` (see `providers/request-policy.md` -> Reasoning intent) classifies the selection and the `minimax_thinking` dialect maps it onto MiniMax's binary toggle: an active effort (incl. `budget`/`on` - M3 has no native token budget) -> `thinking: {type: adaptive}`, `none`/off -> `thinking: {type: disabled}`, no effort selected -> reason-by-default (no `thinking` key).
+- M2.x and unknown Models use the `minimax_split` dialect: `thinking` is dropped (those models reason by default).
 - The adapter defaults `reasoning_split: true` whenever reasoning is active (M2.x always; M3 unless thinking is disabled), so the thinking trace is returned separately as `reasoning_details` instead of inline reasoning-delimiter markup in `content`. A caller-set `reasoning_split` is left alone; catalog reasoning-unsupported strips it. This is the capture half of the replay policy below - `reasoning_details` is what gets persisted in `reasoning_meta` and replayed.
 - Non-streaming responses with `reasoning_details` expose their text as visible `reasoning` while preserving the original details in `reasoning_meta`.
-- Reasoning replay inherits the shared `full_history` default for known and unknown Models unless an explicit top-level override narrows it, with the inherited `meta_preferred` fidelity: on key Connections the OpenAI wire replays captured `reasoning_details` without duplicating the visible plaintext; on the subscription Connection the Messages wire round-trips complete signed `thinking` blocks. **Neither path has been probed against the live MiniMax API in this environment**; wire behavior is pinned by unit tests and live verification remains deferred in `.vorch/FLAGGED.md`.
+- Reasoning replay inherits the shared `full_history` default for known and unknown Models unless an explicit top-level override narrows it, with the inherited `meta_preferred` fidelity: on key Connections the OpenAI wire replays captured `reasoning_details` without duplicating the visible plaintext; on the subscription Connection the Messages wire round-trips complete signed `thinking` blocks. The Messages protocol entry of `resources/wire/minimax.json` keeps the Chat Completions declaration (`meta_preferred`, history field `reasoning_content`) only because the outer Adapter budgets the subscription's output allowance and Context against the Chat Completions rendering of the history; the Messages serializer ignores fidelity and sends only signed blocks. Declaring `meta_only` there (or estimating with the Messages rendering) changes `max_tokens` on context-clamped requests - a wire change that needs live evidence. **Neither path has been probed against the live MiniMax API in this environment**; wire behavior is pinned by unit tests and live verification remains deferred in `.vorch/FLAGGED.md`.
 
 ## Subscription OAuth
 
@@ -57,7 +57,7 @@ The MiniMax usage fetcher in `core/providers/usage.py` (see `providers/usage.md`
 
 ## Constraints & Gotchas
 
-- Connection mode selects the wire. Do not route the subscription through OpenAI Chat or direct keys through the subscription's bearer-Messages profile without live evidence.
+- The wire profile selects the wire: `resources/wire/minimax.json` sets the `messages` protocol for the `subscription` Connection, and `MiniMaxAdapter` routes a request to its inner Messages Adapter when the resolved profile's protocol is `messages`. Do not route the subscription through OpenAI Chat or direct keys through the subscription's bearer-Messages profile without live evidence.
 - The output allowance rides on the wire as `max_tokens` for every MiniMax model. M3's OpenAI-compatible endpoint documents `max_completion_tokens` as the current key and marks `max_tokens` deprecated, but still accepts `max_tokens`; vBot sends `max_tokens` uniformly (the shared base builder) rather than branching the field name per model.
-- `MiniMax-M3` documents image and video input only on the direct OpenAI path. The Messages compatibility endpoint is declared text-only and degrades media before the wire.
+- `MiniMax-M3` documents image and video input only on the direct OpenAI path. The Messages compatibility endpoint is declared text-only (`media.types: []` on the Messages protocol) and degrades media before the wire.
 - Durable MiniMax catalog facts belong in `MiniMaxAdapter.normalize_catalog_entry()`/`MINIMAX_MODEL_FACTS` and `minimax.overrides.json`, never in hand edits to generated `resources/models/minimax.json`.

@@ -33,7 +33,9 @@ shaped it, ``inferred`` when only defaults, catalog facts and observations did.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import json
+import math
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal
@@ -54,6 +56,7 @@ from core.providers.reasoning import (
     normalize_thinking_effort,
     snap_effort,
 )
+from core.utils.errors import ProviderError
 
 Protocol = Literal["chat_completions", "messages", "responses", "gemini", "ollama_chat"]
 """Wire protocol families vBot implements.
@@ -138,11 +141,27 @@ AdmissionState = Literal["available", "restricted", "retired"]
 """
 ADMISSION_STATES: tuple[AdmissionState, ...] = ("available", "restricted", "retired")
 
-ParameterMode = Literal["send", "drop", "drop_while_thinking"]
-PARAMETER_MODES: tuple[ParameterMode, ...] = ("send", "drop", "drop_while_thinking")
+ParameterMode = Literal["send", "drop", "drop_while_thinking", "reject"]
+PARAMETER_MODES: tuple[ParameterMode, ...] = ("send", "drop", "drop_while_thinking", "reject")
+"""Whether an optional request parameter is sent.
 
-OutOfRange = Literal["clamp", "drop"]
-OUT_OF_RANGE_POLICIES: tuple[OutOfRange, ...] = ("clamp", "drop")
+- ``send``: sent (subject to its bounds and allowed values).
+- ``drop``: never sent.
+- ``drop_while_thinking``: not sent while the request asks for reasoning.
+- ``reject``: the Provider does not accept it; a request carrying it is refused
+  before network I/O.
+"""
+
+OutOfRange = Literal["clamp", "drop", "reject"]
+OUT_OF_RANGE_POLICIES: tuple[OutOfRange, ...] = ("clamp", "drop", "reject")
+"""What happens to a parameter value outside its bounds or allowed values.
+
+- ``clamp``: a number is clamped into the range (a value outside ``values`` or
+  below an exclusive minimum cannot be clamped and is dropped).
+- ``drop``: the parameter is not sent.
+- ``reject``: the request is refused before network I/O; a value that is not a
+  finite number is out of range for bounded parameters.
+"""
 
 OutputLimitField = Literal["max_tokens", "max_completion_tokens", "max_output_tokens"]
 OUTPUT_LIMIT_FIELDS: tuple[OutputLimitField, ...] = (
@@ -194,10 +213,11 @@ _EMPTY: Mapping[str, Any] = MappingProxyType({})
 class ParameterRule:
     """What happens to one optional request parameter (for example ``temperature``).
 
-    ``mode`` decides whether the value is sent at all; ``minimum``/``maximum``
-    bound it (``exclusive_minimum`` makes the lower bound exclusive) and
-    ``out_of_range`` decides whether an out-of-range value is clamped into the
-    range or dropped.
+    ``mode`` decides whether the value is sent at all (see :data:`PARAMETER_MODES`);
+    ``minimum``/``maximum`` bound a number (``exclusive_minimum`` makes the lower
+    bound exclusive), ``values`` lists the only accepted values (compared by
+    JSON type and value), and ``out_of_range`` decides what happens to a value
+    outside them (see :data:`OUT_OF_RANGE_POLICIES`).
     """
 
     mode: ParameterMode = "send"
@@ -205,6 +225,7 @@ class ParameterRule:
     maximum: float | None = None
     exclusive_minimum: bool = False
     out_of_range: OutOfRange = "clamp"
+    values: tuple[JsonValue, ...] | None = None
 
     def bounded(self, value: float) -> float | None:
         """Return ``value`` within the bounds, or ``None`` when it must be dropped."""
@@ -218,6 +239,25 @@ class ParameterRule:
             return None
         return low if too_low else high
 
+    def range_text(self) -> str:
+        """The accepted numeric range in interval notation, for example ``(0, 1]``."""
+
+        low = "(-inf" if self.minimum is None else f"{'(' if self.exclusive_minimum else '['}"
+        if self.minimum is not None:
+            low += _number_text(self.minimum)
+        high = "inf)" if self.maximum is None else f"{_number_text(self.maximum)}]"
+        return f"{low}, {high}"
+
+
+def _number_text(value: float) -> str:
+    return str(int(value)) if isinstance(value, float) and value.is_integer() else str(value)
+
+
+def _same_json_value(left: Any, right: Any) -> bool:
+    """JSON equality that keeps booleans, integers and floats apart."""
+
+    return type(left) is type(right) and left == right
+
 
 @dataclass(frozen=True)
 class RequestRules:
@@ -228,11 +268,15 @@ class RequestRules:
     allows every parameter the codec knows. ``parameters`` refines individual
     parameters. ``body_defaults`` are set when the caller supplied no value;
     ``extra_body`` and ``extra_headers`` are always added.
+    ``output_limit_collapse`` sends exactly one output-limit field: every
+    output-limit alias a caller supplies collapses into ``output_limit_field``
+    and the smallest positive value wins.
     """
 
     output_limit_field: OutputLimitField | None = "max_tokens"
     output_limit_default: int | None = None
     output_limit_cap: int | None = None
+    output_limit_collapse: bool = False
     allowed_parameters: tuple[str, ...] | None = None
     parameters: Mapping[str, ParameterRule] = field(default_factory=lambda: _EMPTY)
     body_defaults: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
@@ -244,29 +288,82 @@ class RequestRules:
     prompt_cache: PromptCacheStyle = "none"
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
 
-    def shape_parameters(self, payload: dict[str, Any], *, reasoning_active: bool) -> None:
+    def shape_parameters(
+        self,
+        payload: dict[str, Any],
+        *,
+        reasoning_active: bool,
+        protected: Collection[str] = (),
+        provider_label: str = "The Provider",
+    ) -> None:
         """Apply ``parameters`` to the top-level request fields of ``payload``.
 
         ``drop`` removes the field, ``drop_while_thinking`` removes it while the
-        request asks for reasoning, and numeric values outside the bounds are
-        clamped into range or dropped (an exclusive lower bound cannot be
-        clamped onto, so such a value is dropped).
+        request asks for reasoning, and a value outside the bounds or allowed
+        values is clamped into range, dropped or rejected (an exclusive lower
+        bound or an allowed-value list cannot be clamped onto, so such a value
+        is dropped unless the rule rejects it). ``protected`` fields (the
+        reasoning dialect's own output) are never shaped.
+
+        Raises:
+            ProviderError: (not retryable) when the payload carries a ``reject``
+                parameter or a value a ``reject`` rule refuses; nothing was sent.
         """
 
+        refused = sorted(
+            name
+            for name, rule in self.parameters.items()
+            if rule.mode == "reject" and name in payload and name not in protected
+        )
+        if refused:
+            raise ProviderError(
+                f"{provider_label} does not accept the request parameter(s): {', '.join(refused)}",
+                retryable=False,
+            )
         for name, rule in self.parameters.items():
-            if name not in payload:
+            if name not in payload or name in protected:
                 continue
             if rule.mode == "drop" or (rule.mode == "drop_while_thinking" and reasoning_active):
                 del payload[name]
                 continue
-            value = payload[name]
-            if isinstance(value, bool) or not isinstance(value, int | float):
-                continue
-            bounded = rule.bounded(value)
-            if bounded is None:
-                del payload[name]
-            else:
-                payload[name] = bounded
+            self._shape_value(payload, name, rule, provider_label)
+
+    @staticmethod
+    def _shape_value(
+        payload: dict[str, Any], name: str, rule: ParameterRule, provider_label: str
+    ) -> None:
+        value = payload[name]
+        if rule.values is not None and not any(
+            _same_json_value(value, allowed) for allowed in rule.values
+        ):
+            if rule.out_of_range == "reject":
+                allowed_text = ", ".join(json.dumps(item) for item in rule.values)
+                requirement = (
+                    f"exactly {allowed_text}" if len(rule.values) == 1 else f"one of {allowed_text}"
+                )
+                raise ProviderError(
+                    f"{provider_label} {name} must be {requirement}", retryable=False
+                )
+            del payload[name]
+            return
+        if rule.minimum is None and rule.maximum is None:
+            return
+        is_number = not isinstance(value, bool) and isinstance(value, int | float)
+        if rule.out_of_range == "reject":
+            if not is_number or not math.isfinite(value) or rule.bounded(value) != value:
+                raise ProviderError(
+                    f"{provider_label} {name} must be a finite number in the range "
+                    f"{rule.range_text()}",
+                    retryable=False,
+                )
+            return
+        if not is_number:
+            return
+        bounded = rule.bounded(value)
+        if bounded is None:
+            del payload[name]
+        else:
+            payload[name] = bounded
 
 
 @dataclass(frozen=True)

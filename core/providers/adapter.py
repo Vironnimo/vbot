@@ -50,6 +50,7 @@ from core.providers.reasoning import (
 )
 from core.providers.wire_profile import Protocol, WireProfile
 from core.providers.wire_profiles import WireBinding, standalone_wire_binding
+from core.utils.errors import ProviderError
 
 if TYPE_CHECKING:
     from core.debug import DebugContext, ProviderDebugRecorder
@@ -307,11 +308,27 @@ class ProviderAdapter(ABC):
         """Resolve ``model_id``'s profile without an Adapter instance.
 
         For class-level descriptions such as :meth:`describe_reasoning_render`:
-        the bundled profile data on the Provider's first configured Connection,
-        without learned facts, exactly like a directly constructed Adapter.
+        the bundled profile data, without learned facts, on the Provider's
+        first configured Connection the Model may run on (the first configured
+        Connection when the Model is unknown or allowed nowhere).
         """
 
-        return cls._standalone_wire_binding(provider_config, model_lookup).profile(model_id)
+        connections = getattr(provider_config, "connections", ()) or ()
+        model = model_lookup(model_id.split("::", 1)[0]) if model_lookup is not None else None
+        connection_id = next(
+            (
+                str(connection.id)
+                for connection in connections
+                if model is None or model.allows_connection(str(connection.id))
+            ),
+            str(getattr(connections[0], "id", "")) if connections else "",
+        )
+        return standalone_wire_binding(
+            provider_id=str(getattr(provider_config, "id", "") or ""),
+            connection_id=connection_id,
+            protocols=cls.WIRE_PROTOCOLS,
+            model_lookup=model_lookup,
+        ).profile(model_id)
 
     @classmethod
     def _standalone_wire_binding(
@@ -323,6 +340,25 @@ class ProviderAdapter(ABC):
             connection_id=str(getattr(connections[0], "id", "")) if connections else "",
             protocols=cls.WIRE_PROTOCOLS,
             model_lookup=model_lookup,
+        )
+
+    def _refuse_unadmitted_model(self, model_id: str) -> None:
+        """Refuse a request the wire profile does not admit, before any network I/O.
+
+        Raises:
+            ProviderError: (not retryable) when the Model is restricted or
+                retired on this Adapter's Connection; the profile's admission
+                message explains why.
+        """
+
+        profile = self.wire_profile(model_id)
+        admission = profile.admission
+        if admission.state == "available":
+            return
+        raise ProviderError(
+            admission.message
+            or f"Model '{profile.model_id}' is {admission.state} on this Connection",
+            retryable=False,
         )
 
     # ------------------------------------------------------------------

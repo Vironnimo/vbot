@@ -7,6 +7,9 @@ reasoning (a :class:`ReasoningIntent`). A dialect only spells that decision:
 carries, so ``/status`` and the swallowed-effort diagnostics describe exactly
 what was sent. A dialect that cannot express part of an intent (for example a
 budget on an effort-only wire) degrades it, and its description says so.
+:func:`dialect_request_fields` names the request fields a dialect writes, so a
+codec can keep caller-supplied copies of them away from a Model that cannot
+reason.
 """
 
 from __future__ import annotations
@@ -25,29 +28,51 @@ from core.providers.reasoning import (
     ReasoningIntent,
 )
 from core.providers.wire_profile import ReasoningDialect, ReasoningWire
+from core.utils.logging import get_logger
 
-__all__ = ["describe_reasoning", "render_reasoning"]
+__all__ = ["describe_reasoning", "dialect_request_fields", "render_reasoning"]
+
+_LOGGER = get_logger("providers.reasoning_dialects")
 
 _SENDS_NOTHING = ReasoningIntent(REASONING_INTENT_DEFAULT)
 _ACTIVE_KINDS = (REASONING_INTENT_EFFORT, REASONING_INTENT_ON, REASONING_INTENT_BUDGET)
 
+_Render = Callable[[ReasoningWire, ReasoningIntent, dict[str, Any], int | None], None]
+
 
 @dataclass(frozen=True)
 class _Dialect:
-    render: Callable[[ReasoningWire, ReasoningIntent, dict[str, Any]], None]
+    render: _Render
     describe: Callable[[ReasoningWire, ReasoningIntent], ReasoningIntent]
+    fields: tuple[str, ...] = ()
 
 
-def render_reasoning(wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]) -> None:
-    """Write ``intent`` onto ``payload`` in the profile's reasoning dialect."""
+def render_reasoning(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    *,
+    output_allowance: int | None = None,
+) -> None:
+    """Write ``intent`` onto ``payload`` in the profile's reasoning dialect.
 
-    _dialect(wire.dialect).render(wire, intent, payload)
+    ``output_allowance`` is the request's resolved output-token limit; dialects
+    that spell a thinking budget keep it below that limit.
+    """
+
+    _dialect(wire.dialect).render(wire, intent, payload, output_allowance)
 
 
 def describe_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
     """Return the reasoning decision a request rendered from ``intent`` carries."""
 
     return _dialect(wire.dialect).describe(wire, intent)
+
+
+def dialect_request_fields(dialect: ReasoningDialect) -> tuple[str, ...]:
+    """The top-level request fields ``dialect`` may write."""
+
+    return _dialect(dialect).fields
 
 
 def _dialect(name: ReasoningDialect) -> _Dialect:
@@ -57,11 +82,21 @@ def _dialect(name: ReasoningDialect) -> _Dialect:
     return dialect
 
 
+def _describe_as_planned(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire
+    return intent
+
+
 # -- none ---------------------------------------------------------------------
 
 
-def _render_nothing(wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]) -> None:
-    del wire, intent, payload
+def _render_nothing(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del wire, intent, payload, output_allowance
 
 
 def _describe_nothing(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
@@ -82,9 +117,12 @@ def _effort_level(intent: ReasoningIntent) -> str | None:
 
 
 def _render_reasoning_effort(
-    wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
 ) -> None:
-    del wire
+    del wire, output_allowance
     level = _effort_level(intent)
     if level is not None:
         payload["reasoning_effort"] = level
@@ -106,9 +144,12 @@ def _describe_reasoning_effort(wire: ReasoningWire, intent: ReasoningIntent) -> 
 
 
 def _render_nous_reasoning(
-    wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
 ) -> None:
-    del wire
+    del wire, output_allowance
     if intent.kind not in _ACTIVE_KINDS:
         return
     reasoning: dict[str, Any] = {"enabled": True}
@@ -124,6 +165,173 @@ def _describe_nous_reasoning(wire: ReasoningWire, intent: ReasoningIntent) -> Re
     if intent.effort_level is None:
         return ReasoningIntent(REASONING_INTENT_ON)
     return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
+
+
+# -- thinking_toggle -------------------------------------------------------------
+# ``thinking: {type: enabled|disabled}``: every active decision is the same
+# switch (levels and budgets cannot be expressed). ``reasoning.options.keep``
+# adds ``keep`` to the enabled switch (Kimi's history retention).
+
+
+def _thinking_enabled(wire: ReasoningWire) -> dict[str, Any]:
+    thinking: dict[str, Any] = {"type": "enabled"}
+    keep = wire.options.get("keep")
+    if keep is not None:
+        thinking["keep"] = keep
+    return thinking
+
+
+def _render_thinking_toggle(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del output_allowance
+    if intent.kind in _ACTIVE_KINDS:
+        payload["thinking"] = _thinking_enabled(wire)
+    elif intent.kind == REASONING_INTENT_OFF:
+        payload["thinking"] = {"type": "disabled"}
+
+
+def _describe_thinking_toggle(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire
+    if intent.kind in _ACTIVE_KINDS:
+        return ReasoningIntent(REASONING_INTENT_ON)
+    if intent.kind == REASONING_INTENT_OFF:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    return _SENDS_NOTHING
+
+
+# -- thinking_toggle_with_effort ---------------------------------------------------
+# An active decision with a level is ``reasoning_effort: <level>``; one without
+# a level is the plain ``thinking`` switch, and off is ``thinking`` disabled.
+
+
+def _render_thinking_toggle_with_effort(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del output_allowance
+    if intent.kind in _ACTIVE_KINDS:
+        if intent.effort_level is not None:
+            payload["reasoning_effort"] = intent.effort_level
+        else:
+            payload["thinking"] = _thinking_enabled(wire)
+    elif intent.kind == REASONING_INTENT_OFF:
+        payload["thinking"] = {"type": "disabled"}
+
+
+def _describe_thinking_toggle_with_effort(
+    wire: ReasoningWire, intent: ReasoningIntent
+) -> ReasoningIntent:
+    del wire
+    if intent.kind in _ACTIVE_KINDS:
+        if intent.effort_level is not None:
+            return ReasoningIntent(REASONING_INTENT_EFFORT, effort_level=intent.effort_level)
+        return ReasoningIntent(REASONING_INTENT_ON)
+    if intent.kind == REASONING_INTENT_OFF:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    return _SENDS_NOTHING
+
+
+# -- minimax_split ----------------------------------------------------------------
+# MiniMax M2.x reasons on every request and takes no reasoning control;
+# ``reasoning_split: true`` only returns the trace as ``reasoning_details``
+# instead of inline ``<think>`` text, so it is sent whatever the decision.
+
+
+def _render_minimax_split(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del wire, intent, output_allowance
+    payload["reasoning_split"] = True
+
+
+def _describe_minimax_split(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire, intent
+    return ReasoningIntent(REASONING_INTENT_ON)
+
+
+# -- minimax_thinking ---------------------------------------------------------------
+# MiniMax M3: ``thinking: {type: adaptive}`` for every active decision (no level
+# or budget), ``thinking: {type: disabled}`` for off, plus ``reasoning_split``
+# whenever the Model reasons (also by default).
+
+
+def _render_minimax_thinking(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    del wire, output_allowance
+    if intent.kind == REASONING_INTENT_OFF:
+        payload["thinking"] = {"type": "disabled"}
+        return
+    if intent.kind in _ACTIVE_KINDS:
+        payload["thinking"] = {"type": "adaptive"}
+    payload["reasoning_split"] = True
+
+
+def _describe_minimax_thinking(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    del wire
+    if intent.kind in _ACTIVE_KINDS:
+        return ReasoningIntent(REASONING_INTENT_ON)
+    if intent.kind == REASONING_INTENT_OFF:
+        return ReasoningIntent(REASONING_INTENT_OFF)
+    return _SENDS_NOTHING
+
+
+# -- anthropic_thinking ---------------------------------------------------------------
+# Anthropic Messages ``thinking``: an effort is adaptive thinking (summarized)
+# with ``output_config.effort`` above ``minimal``; a budget is ``enabled`` with
+# ``budget_tokens``; a plain ``on`` is the minimum budget, skipped when it does
+# not fit below the output allowance; off is ``disabled``.
+
+_ANTHROPIC_MINIMAL_EFFORT = "minimal"
+
+
+def _render_anthropic_thinking(
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
+) -> None:
+    if intent.kind == REASONING_INTENT_EFFORT:
+        payload["thinking"] = {"type": "adaptive", "display": "summarized"}
+        if intent.effort_level != _ANTHROPIC_MINIMAL_EFFORT:
+            payload["output_config"] = {"effort": intent.effort_level}
+    elif intent.kind == REASONING_INTENT_BUDGET:
+        payload["thinking"] = {"type": "enabled", "budget_tokens": intent.budget_tokens}
+    elif intent.kind == REASONING_INTENT_ON:
+        budget = wire.budget.minimum
+        if output_allowance is not None and output_allowance <= budget:
+            _LOGGER.warning(
+                "Skipping reasoning: the minimum thinking budget (%d) does not fit "
+                "the output allowance (%d)",
+                budget,
+                output_allowance,
+            )
+            return
+        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    elif intent.kind == REASONING_INTENT_OFF:
+        payload["thinking"] = {"type": "disabled"}
+
+
+def _describe_anthropic_thinking(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
+    # A budget or plain ``on`` carries only ``budget_tokens``; no level reaches the wire.
+    del wire
+    if intent.kind == REASONING_INTENT_BUDGET:
+        return ReasoningIntent(REASONING_INTENT_BUDGET, budget_tokens=intent.budget_tokens)
+    if intent.kind == REASONING_INTENT_ON:
+        return ReasoningIntent(REASONING_INTENT_ON)
+    return intent
 
 
 # -- ollama_think -----------------------------------------------------------------
@@ -147,8 +355,12 @@ def _ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> bool | str | 
 
 
 def _render_ollama_think(
-    wire: ReasoningWire, intent: ReasoningIntent, payload: dict[str, Any]
+    wire: ReasoningWire,
+    intent: ReasoningIntent,
+    payload: dict[str, Any],
+    output_allowance: int | None,
 ) -> None:
+    del output_allowance
     think = _ollama_think(wire, intent)
     if think is not None:
         payload["think"] = think
@@ -167,7 +379,22 @@ def _describe_ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> Reas
 
 _DIALECTS: dict[str, _Dialect] = {
     "none": _Dialect(_render_nothing, _describe_nothing),
-    "reasoning_effort": _Dialect(_render_reasoning_effort, _describe_reasoning_effort),
-    "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning),
-    "ollama_think": _Dialect(_render_ollama_think, _describe_ollama_think),
+    "reasoning_effort": _Dialect(
+        _render_reasoning_effort, _describe_reasoning_effort, ("reasoning_effort",)
+    ),
+    "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning, ("reasoning",)),
+    "thinking_toggle": _Dialect(_render_thinking_toggle, _describe_thinking_toggle, ("thinking",)),
+    "thinking_toggle_with_effort": _Dialect(
+        _render_thinking_toggle_with_effort,
+        _describe_thinking_toggle_with_effort,
+        ("thinking", "reasoning_effort"),
+    ),
+    "minimax_split": _Dialect(_render_minimax_split, _describe_minimax_split, ("reasoning_split",)),
+    "minimax_thinking": _Dialect(
+        _render_minimax_thinking, _describe_minimax_thinking, ("thinking", "reasoning_split")
+    ),
+    "anthropic_thinking": _Dialect(
+        _render_anthropic_thinking, _describe_anthropic_thinking, ("thinking", "output_config")
+    ),
+    "ollama_think": _Dialect(_render_ollama_think, _describe_ollama_think, ("think",)),
 }
