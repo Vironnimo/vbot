@@ -98,7 +98,7 @@ describe('ChatComposer speech input', () => {
       await record();
 
       const { onProgress } = transcribeSpeech.mock.calls[0][1];
-      for (const phase of ['downloading', 'loading', 'transcribing']) {
+      for (const phase of ['queued', 'loading', 'transcribing']) {
         onProgress({ phase, elapsed_seconds: 12 });
         await settle();
         const microphone = buttonLabelled(`chat.voice.progress.${phase}`);

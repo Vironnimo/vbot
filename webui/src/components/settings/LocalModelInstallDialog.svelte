@@ -9,6 +9,7 @@
   import { createLocalSetupJob } from './localSetupJob.svelte.js';
   import Button from '../ui/Button.svelte';
   import Modal from '../ui/Modal.svelte';
+  import ProgressBar from '../ui/ProgressBar.svelte';
   import { t } from '$lib/i18n.js';
   import { describeLocalModelSetup } from '$lib/settingsView.js';
 
@@ -59,18 +60,11 @@
       >
         <span>{view.message}</span>
         {#if view.progress}
-          <div
-            class="local-model-dialog__bar"
-            role="progressbar"
-            aria-label={t('settings.localModel.progressLabel')}
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow={view.progress.percent}
-            aria-valuetext={view.progress.text}
-          >
-            <span style:width={`${view.progress.percent}%`}></span>
-          </div>
-          <span class="local-model-dialog__facts">{view.progress.text}</span>
+          <ProgressBar
+            label={t('settings.localModel.progressLabel')}
+            percent={view.progress.percent}
+            text={view.progress.text}
+          />
         {/if}
       </div>
     </div>
@@ -132,19 +126,5 @@
 
   .local-model-dialog__status--warn > span:first-child {
     color: var(--amber);
-  }
-
-  .local-model-dialog__bar {
-    height: 4px;
-    overflow: hidden;
-    border-radius: 2px;
-    background: var(--border);
-  }
-
-  .local-model-dialog__bar > span {
-    display: block;
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.4s ease;
   }
 </style>

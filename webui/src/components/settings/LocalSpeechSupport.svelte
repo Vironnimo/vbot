@@ -1,17 +1,28 @@
 <script>
+  // One local speech target's installation on the vBot server: what installing
+  // downloads, the running installation with its download progress, the
+  // restart a development checkout needs, and a voice preview once a local
+  // voice is ready.
   import { onDestroy } from 'svelte';
   import { createLocalSetupJob } from './localSetupJob.svelte.js';
   import Banner from '../ui/Banner.svelte';
   import AudioPlayer from '../ui/AudioPlayer.svelte';
   import Button from '../ui/Button.svelte';
   import FormField from '../ui/FormField.svelte';
+  import ProgressBar from '../ui/ProgressBar.svelte';
   import TextArea from '../ui/TextArea.svelte';
   import { restartAfterLocalSpeechSetup, previewSpeech } from '$lib/api.js';
   import { t, tOr } from '$lib/i18n.js';
+  import {
+    describeDownloadProgress,
+    describeLocalModelDownload,
+  } from '$lib/settingsView.js';
 
   const componentId = $props.id();
   let {
     target,
+    // The target's metadata from the catalog: download size and license.
+    metadata = null,
     tts = false,
     taskSurfaceBusy = false,
     onReady = () => {},
@@ -32,6 +43,12 @@
   let localSetup = $derived(job.status);
   let localSetupError = $derived(job.error);
   let setupState = $derived(job.state);
+  let download = $derived(describeLocalModelDownload(metadata));
+  let progress = $derived(
+    setupState === 'installing' && localSetup?.phase === 'downloading'
+      ? describeDownloadProgress(localSetup.progress)
+      : null,
+  );
 
   async function playPreview() {
     if (previewBusy || taskSurfaceBusy || !previewText.trim()) return;
@@ -69,7 +86,7 @@
 <Banner
   variant={localSetupError || setupState === 'failed' ? 'warn' : 'neutral'}
 >
-  <div role="status" aria-live="polite">
+  <div class="speech-setup-status" role="status" aria-live="polite">
     {#if localSetupError}
       {tOr(
         `settings.localSpeech.error.${localSetupError}`,
@@ -81,10 +98,12 @@
         t('settings.localSpeech.error.install_failed'),
       )}
     {:else if setupState === 'installing'}
-      {tOr(
-        `settings.localSpeech.phase.${localSetup.phase}`,
-        t('settings.localSpeech.phase.installing'),
-      )}
+      {progress
+        ? t('settings.localSpeech.downloadingModel')
+        : tOr(
+            `settings.localSpeech.phase.${localSetup.phase}`,
+            t('settings.localSpeech.phase.installing'),
+          )}
     {:else if setupState === 'ready'}
       {tts
         ? t('settings.localSpeech.ttsReady')
@@ -95,6 +114,17 @@
       {tts && setupState === 'missing'
         ? t('settings.localSpeech.ttsMissing')
         : t(`settings.localSpeech.state.${setupState}`)}
+    {/if}
+    {#if progress}
+      <ProgressBar
+        label={t('settings.localModel.progressLabel')}
+        percent={progress.percent}
+        text={progress.text}
+      />
+    {:else if download && (setupState === 'missing' || setupState === 'failed')}
+      <span class="speech-setup-facts" data-local-speech-download
+        >{download}</span
+      >
     {/if}
   </div>
   {#if localSetupError === 'connection' || localSetupError === 'restart_timeout'}
@@ -172,6 +202,15 @@
 {/if}
 
 <style>
+  .speech-setup-status {
+    display: grid;
+    gap: 6px;
+  }
+  .speech-setup-facts {
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+    font-variant-numeric: tabular-nums;
+  }
   .speech-preview {
     display: grid;
     gap: var(--space-sm);

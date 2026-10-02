@@ -63,6 +63,7 @@ export {
   formatDownloadSize,
   describeLocalModelDownload,
   describeLocalModelSetup,
+  describeDownloadProgress,
 } from './settingsView/localModels.js';
 export {
   getWebSearchSettings,

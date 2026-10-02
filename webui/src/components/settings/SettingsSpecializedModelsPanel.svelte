@@ -179,6 +179,7 @@
           {#key binding.target}
             <LocalSpeechSupport
               target={binding.target}
+              metadata={selectedTarget?.metadata}
               tts={row.taskType === 'text_to_speech'}
               taskSurfaceBusy={editor.surfaceBusy}
               onReady={() => editor.refreshTargets(row.taskType)}

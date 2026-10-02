@@ -523,9 +523,6 @@ export default Object.freeze({
   'chat.voice.progress.uploading': 'Sending recording…',
   'chat.voice.progress.preparing': 'Preparing recording…',
   'chat.voice.progress.queued': 'Waiting for the speech engine…',
-  'chat.voice.progress.checking_model': 'Checking model files…',
-  'chat.voice.progress.downloading':
-    'Downloading speech model. The first download can take several minutes…',
   'chat.voice.progress.loading': 'Loading speech model into memory…',
   'chat.voice.progress.transcribing': 'Transcribing recording…',
   'chat.composerArea': 'Message composer',

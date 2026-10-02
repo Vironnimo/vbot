@@ -42,7 +42,7 @@ async function flush() {
     flushSync();
   }
 }
-function render(target = 'local/qwen3-tts', extra = {}) {
+function render(target = 'local/qwen3-tts-1.7b', extra = {}) {
   const component = mount(LocalSpeechSupport, {
     target: document.body,
     props: { target, tts: true, ...extra },
@@ -74,7 +74,7 @@ it('streams preview status and exposes a playable result, then unlocks retry', a
   const options = preview.mock.calls[0][1];
   expect(options.signal.aborted).toBe(false);
   expect(button('settings.localSpeech.previewButton').disabled).toBe(true);
-  options.onProgress({ phase: 'downloading', elapsed_seconds: 42 });
+  options.onProgress({ phase: 'queued', elapsed_seconds: 42 });
   await flush();
   expect(
     [...document.querySelectorAll('[role="status"]')].some((node) =>
@@ -118,17 +118,35 @@ it('recovers after a generation error and aborts a preview when leaving', async 
   expect(signal.aborted).toBe(true);
 });
 
-it('installs only the selected engine and refreshes availability without restarting', async () => {
+it('installs only the selected model with its size and download progress, without restarting', async () => {
   vi.useFakeTimers();
   status.mockResolvedValue({ state: 'missing' });
+  install.mockResolvedValue({
+    state: 'installing',
+    phase: 'downloading',
+    error: '',
+    progress: { completed: 1_000_000_000, total: 4_000_000_000 },
+  });
   const onReady = vi.fn();
-  render('local/chatterbox', { onReady });
+  render('local/chatterbox', {
+    onReady,
+    metadata: { download_bytes: 4_000_000_000, license: 'MIT' },
+  });
   await flush();
   expect(status).toHaveBeenCalledWith('local/chatterbox');
+  expect(
+    document.querySelector('[data-local-speech-download]').textContent,
+  ).toContain('MIT');
   button('settings.localSpeech.installButton').click();
   await flush();
   expect(install).toHaveBeenCalledExactlyOnceWith('local/chatterbox');
   expect(button('settings.localSpeech.installingButton').disabled).toBe(true);
+  expect(document.body.textContent).toContain(
+    t('settings.localSpeech.downloadingModel'),
+  );
+  const bar = document.querySelector('[role="progressbar"]');
+  expect(bar.getAttribute('aria-valuenow')).toBe('25');
+  expect(bar.getAttribute('aria-valuetext')).toMatch(/1 GB.*4 GB/);
   status.mockResolvedValue({ state: 'ready' });
   await vi.advanceTimersByTimeAsync(1500);
   await flush();

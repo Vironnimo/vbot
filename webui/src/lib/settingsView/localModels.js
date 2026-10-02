@@ -44,7 +44,9 @@ export function describeLocalModelDownload(metadata) {
     .join(' · ');
 }
 
-function downloadProgress(progress) {
+// "1.2 GB of 4.1 GB" with its percentage from an installation's byte
+// progress; null when the status reports none.
+export function describeDownloadProgress(progress) {
   const completed = finiteOrNull(progress?.completed);
   const total = finiteOrNull(progress?.total);
   if (completed === null || total === null || total <= 0) {
@@ -95,7 +97,7 @@ export function describeLocalModelSetup(job) {
   }
   switch (job?.state) {
     case 'installing': {
-      const progress = downloadProgress(status?.progress);
+      const progress = describeDownloadProgress(status?.progress);
       return {
         tone: 'neutral',
         message: installingMessage(status, progress),

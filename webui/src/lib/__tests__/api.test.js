@@ -581,8 +581,8 @@ describe('RPC wrappers', () => {
     ['speech.local_memory_status', (o) => api.getLocalSpeechMemory(o), {}],
     [
       'speech.local_unload',
-      (o) => api.unloadLocalSpeech('local/qwen3-asr', o),
-      { target: 'local/qwen3-asr' },
+      (o) => api.unloadLocalSpeech('local/qwen3-asr-1.7b', o),
+      { target: 'local/qwen3-asr-1.7b' },
     ],
     [
       'speech.prepare_transcription',
@@ -812,7 +812,7 @@ describe('HTTP media transfers', () => {
 
   it('reports streamed transcription phases across chunk boundaries before the transcript', async () => {
     const events = [
-      { type: 'progress', phase: 'downloading', elapsed_seconds: 1 },
+      { type: 'progress', phase: 'queued', elapsed_seconds: 1 },
       { type: 'progress', phase: 'loading', elapsed_seconds: 2 },
       { type: 'progress', phase: 'transcribing', elapsed_seconds: 3 },
       { type: 'result', result: { text: 'Grüße' } },
@@ -841,7 +841,7 @@ describe('HTTP media transfers', () => {
     ).resolves.toEqual({ text: 'Grüße' });
 
     expect(onProgress.mock.calls.map(([event]) => event.phase)).toEqual([
-      'downloading',
+      'queued',
       'loading',
       'transcribing',
     ]);

@@ -359,7 +359,7 @@ describe('SettingsSpecializedModelsPanel', () => {
   describe('options', () => {
     it.each([
       {
-        target: 'local/qwen3-tts',
+        target: 'local/qwen3-tts-1.7b',
         name: 'instructions',
         type: 'textarea',
         value: 'test-owned style',
@@ -436,7 +436,7 @@ describe('SettingsSpecializedModelsPanel', () => {
 
     it('shows the new model options immediately when switching local TTS engines', async () => {
       const targets = [
-        { id: 'local/qwen3-tts', label: 'Qwen3-TTS', kind: 'local' },
+        { id: 'local/qwen3-tts-1.7b', label: 'Qwen3-TTS', kind: 'local' },
         { id: 'local/chatterbox', label: 'Chatterbox', kind: 'local' },
       ];
       targetsFor('text_to_speech', targets);
