@@ -327,11 +327,53 @@ export default Object.freeze({
     'Take back revision {revision} of skill "{name}"? The revert is recorded as a new revision that you can revert in turn.',
   'skills.revert.together':
     'Revision {later} later changed the same part of skill "{name}", so revisions {revisions} can only be reverted together. Revert them together?',
+  'skills.revert.pass':
+    'Take back all changes of the last Skill maintenance pass, revisions {revisions}? Each revert is recorded as a new revision that you can revert in turn.',
   'skills.revert.action': 'Revert',
   'skills.revert.togetherAction': 'Revert together',
   'skills.revert.doneOne': 'Revision {revision} reverted.',
   'skills.revert.doneMany': 'Revisions {revisions} reverted.',
   'skills.revert.error': 'The change could not be reverted.',
+  'skills.librarian.title': 'Skill maintenance',
+  'skills.librarian.help':
+    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that a background review or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule.',
+  'skills.librarian.run': 'Run now',
+  'skills.librarian.schedule': 'Schedule',
+  'skills.librarian.daily': 'Every day while the Agent is idle',
+  'skills.librarian.everyDays': 'Every {days} days while the Agent is idle',
+  'skills.librarian.scheduleOff': 'Off; Run now still works',
+  'skills.librarian.next': 'Next pass',
+  'skills.librarian.due': 'Due; starts once the Agent is idle',
+  'skills.librarian.now': 'Now',
+  'skills.librarian.runningSince': 'Running since {time}',
+  'skills.librarian.lastPass': 'Last pass',
+  'skills.librarian.passValue': '{time} ({trigger})',
+  'skills.librarian.triggerSchedule': 'scheduled',
+  'skills.librarian.triggerManual': 'started by hand',
+  'skills.librarian.retired': 'Retired as unused',
+  'skills.librarian.merging': 'Merging',
+  'skills.librarian.mergeRan':
+    '{merged} merged away, {changed} changed, {created} created',
+  'skills.librarian.mergeFailed':
+    'Did not finish: {merged} merged away, {changed} changed, {created} created',
+  'skills.librarian.mergeUnchanged':
+    'Skipped; no Skill changed since the last merge',
+  'skills.librarian.mergeTooFew': 'Skipped; fewer than two Skills to compare',
+  'skills.librarian.mergeOff': 'Off',
+  'skills.librarian.never': 'No pass has run yet.',
+  'skills.librarian.noChanges': 'The last pass changed no Skill.',
+  'skills.librarian.changes': 'Changes of the last pass: {count}',
+  'skills.librarian.openHistory': 'Open the history of {name}',
+  'skills.librarian.openArchived': 'Show {name} in Archived',
+  'skills.librarian.unavailable':
+    'This Agent cannot use the skill and skill_manage Tools, so its Skills are not maintained.',
+  'skills.librarian.alreadyRunning': 'A pass is running.',
+  'skills.librarian.busy':
+    'Skill maintenance starts only while the Agent is idle and no other pass of it runs. Try again later.',
+  'skills.librarian.started':
+    'Skill maintenance of {name} started. Its result appears here when the pass ends.',
+  'skills.librarian.runError': 'Skill maintenance could not start.',
+  'skills.librarian.loadError': 'Skill maintenance could not be loaded.',
   'inherit.option': 'Inherited: {value} (global default)',
   'inherit.optionNotConfigured': 'Inherit (not configured)',
   'inherit.optionProviderDefault': 'Inherit (provider default)',

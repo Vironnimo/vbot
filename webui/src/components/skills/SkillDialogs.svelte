@@ -161,17 +161,22 @@
 {#if actions.revertTarget}
   <ConfirmDialog
     title={t('skills.revert.title')}
-    body={actions.revertTarget.later === null
-      ? t('skills.revert.confirm', {
-          revision: actions.revertTarget.revisions[0],
-          name: actions.revertTarget.name,
-        })
-      : t('skills.revert.together', {
+    body={actions.revertTarget.later !== null
+      ? t('skills.revert.together', {
           later: actions.revertTarget.later,
           name: actions.revertTarget.name,
           revisions: actions.revertTarget.revisions.join(', '),
-        })}
-    confirmLabel={actions.revertTarget.later === null
+        })
+      : actions.revertTarget.pass
+        ? t('skills.revert.pass', {
+            revisions: actions.revertTarget.revisions.join(', '),
+          })
+        : t('skills.revert.confirm', {
+            revision: actions.revertTarget.revisions[0],
+            name: actions.revertTarget.name,
+          })}
+    confirmLabel={actions.revertTarget.later === null &&
+    !actions.revertTarget.pass
       ? t('skills.revert.action')
       : t('skills.revert.togetherAction')}
     danger={false}

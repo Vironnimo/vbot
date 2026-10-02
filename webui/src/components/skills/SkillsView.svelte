@@ -12,6 +12,7 @@
   import { contextMenuAnchor } from '../ui/contextMenu.js';
   import TextField from '../ui/TextField.svelte';
   import AgentSkillsPanel from './AgentSkillsPanel.svelte';
+  import LibrarianSection from './LibrarianSection.svelte';
   import SkillAddMenu from './SkillAddMenu.svelte';
   import SkillArchiveList from './SkillArchiveList.svelte';
   import SkillCollectionNav from './SkillCollectionNav.svelte';
@@ -112,6 +113,9 @@
   let lastOpenedId = $state(null);
   // The open row context menu (components/ui/ContextMenu.svelte), or null.
   let menu = $state(null);
+  // The content tab the next opened package page starts on, when a link
+  // asked for one (the Librarian's changes open a Skill's history).
+  let pendingContentTab = null;
 
   const actions = createSkillActions({
     get agents() {
@@ -381,7 +385,8 @@
     selectedId = entry.id;
     if (inspected?.id !== entry.id) inspected = null;
     if (focus) {
-      contentTab = 'instructions';
+      contentTab = pendingContentTab ?? 'instructions';
+      pendingContentTab = null;
       const request = inspect(entry, false);
       await tick();
       skillPage?.focus();
@@ -394,6 +399,17 @@
   function openPackage(item) {
     const entry = packageOf(item);
     if (entry) showSkill(entry);
+  }
+
+  function openHistory(entry) {
+    pendingContentTab = 'history';
+    showSkill(entry);
+  }
+
+  // The archived packages, searched for one name.
+  function openArchived(name) {
+    changeSearch(name);
+    navigation.navigate([ARCHIVED_COLLECTION]);
   }
 
   async function loadInventory() {
@@ -772,6 +788,16 @@
             />
           {:else if scopeAgent}
             <div class="skills-panel-scroll">
+              <LibrarianSection
+                agent={scopeAgent}
+                {inventory}
+                {archived}
+                busy={actions.busy}
+                onOpenHistory={openHistory}
+                onOpenArchived={openArchived}
+                onRevertPass={actions.requestRevertPass}
+                {onToast}
+              />
               <AgentSkillsPanel
                 agent={scopeAgent}
                 access={skillAccessOf(scopeAgent)}

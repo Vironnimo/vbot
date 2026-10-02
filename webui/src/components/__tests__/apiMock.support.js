@@ -79,6 +79,9 @@ export function rpcBackedApiMock(rpcMock, overrides = {}) {
       call('skill.history', { scope, name, limit }),
     revertSkillRevisions: (scope, revisions) =>
       call('skill.revert', { scope, revisions }),
+    librarianStatus: (agentId) =>
+      call('librarian.status', { agent_id: agentId }),
+    runLibrarian: (agentId) => call('librarian.run', { agent_id: agentId }),
     restoreSkill: (scope, archiveId) =>
       call('skill.restore', { scope, archive_id: archiveId }),
     purgeSkill: (scope, archiveId) =>

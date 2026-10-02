@@ -227,6 +227,27 @@ export function revertSkillRevisions(scope, revisions, options = {}) {
   return rpc('skill.revert', { scope, revisions }, options);
 }
 
+// An Identity Agent's Librarian settings, its last pass with the Skill
+// revisions that pass recorded, and the next scheduled pass.
+export function librarianStatus(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'librarian.status',
+  );
+  return rpc('librarian.status', { agent_id: agentId }, options);
+}
+
+// Starts a Librarian pass of an Agent now; returns its status.
+export function runLibrarian(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'librarian.run',
+  );
+  return rpc('librarian.run', { agent_id: agentId }, options);
+}
+
 export function restoreSkill(scope, archiveId, options = {}) {
   requireSkillScope(scope, 'skill.restore');
   requireNonEmptyString(

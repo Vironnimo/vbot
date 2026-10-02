@@ -527,6 +527,55 @@
   font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
   overflow-wrap: anywhere;
 }
+/* An Agent's Skill maintenance (the Librarian) above its Skill selection. */
+.skills-librarian {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.skills-librarian__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.skills-librarian__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md)/1.4 var(--font-ui);
+}
+.skills-librarian__run {
+  margin-left: auto;
+}
+.skills-librarian .skills-page-facts {
+  margin-top: 8px;
+}
+.skills-librarian__changes {
+  margin-top: 8px;
+}
+.skills-librarian__changes .skills-history {
+  margin-bottom: 10px;
+}
+.skills-librarian__skill {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  background: transparent;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+button.skills-librarian__skill {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.skills-librarian__skill:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.skills-librarian__changes summary,
 .skills-diagnostics summary,
 .skills-notice summary {
   cursor: pointer;
