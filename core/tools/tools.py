@@ -18,6 +18,7 @@ from core.tools._tool_context import (
     ToolCallCancelCheck,
     ToolCallCancelRegistrar,
     ToolCallResultPersistedRegistrar,
+    ToolCancelCallback,
     ToolCancelCheckHook,
     ToolCancellationHook,
     ToolCancelRegistrationHook,
@@ -988,7 +989,7 @@ def _build_per_call_cancel_hooks(
     if config.tool_call_cancel_registrar is not None:
         registrar = config.tool_call_cancel_registrar
 
-        def registration_hook(callback: Callable[[], None]) -> None:
+        def registration_hook(callback: ToolCancelCallback) -> None:
             registrar(tool_call_id, callback)
 
     else:
@@ -1016,6 +1017,7 @@ __all__ = [
     "TOOL_EXECUTION_ERROR_CODE",
     "Tool",
     "ToolCall",
+    "ToolCancelCallback",
     "ToolCancelCheckHook",
     "ToolCancelRegistrationHook",
     "ToolCancellationHook",

@@ -7,7 +7,6 @@ import contextlib
 import logging
 import sys
 from collections import ChainMap
-from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -17,8 +16,11 @@ import pytest
 
 import core.tools.bash as bash_module
 import core.tools.process_manager as process_manager_module
+from core.runs import ChatRunManager, Run, RunCancelledError
+from core.sessions import SessionAddress
 from core.tools.bash import bash_handler
 from core.tools.process_manager import ProcessManager
+from core.tools.tools import ToolCancelCallback
 from tests.core.tools.bash_test_support import (
     AGENT_ID,
     RecordingTrigger,
@@ -88,6 +90,45 @@ async def test_run_cancellation_stops_foreground_without_handoff(
 
 
 @pytest.mark.asyncio
+async def test_a_cancelled_run_ends_only_after_its_foreground_process_is_killed(
+    manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(bash_module, "_shell_argv", python_command)
+    runs = ChatRunManager()
+    spawned = asyncio.Event()
+
+    async def executor(run: Run) -> object:
+        run.begin_tool_call("call-a")
+        context = replace(
+            make_context(
+                tmp_path,
+                cancellation_hook=lambda: run.cancel_requested,
+                cancel_registration_hook=lambda callback: run.register_tool_cancel(
+                    "call-a", callback
+                ),
+                cancel_check_hook=lambda: run.tool_call_cancelled("call-a"),
+            ),
+            background_registration_hook=lambda _callback: spawned.set(),
+        )
+        return await bash_handler(context, {"command": _SLEEP}, manager)
+
+    try:
+        run = await runs.start(
+            SessionAddress(project_id=None, agent_id=AGENT_ID, session_id="session-a"), executor
+        )
+        await asyncio.wait_for(spawned.wait(), timeout=10)
+        (process,) = manager.list_processes(AGENT_ID)
+
+        run.request_cancel()
+        with pytest.raises(RunCancelledError):
+            await run.wait()
+
+        assert process.status == "killed"
+    finally:
+        await runs.aclose()
+
+
+@pytest.mark.asyncio
 async def test_direct_process_cancel_returns_user_abort_without_run_cancel(
     manager: ProcessManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -118,15 +159,16 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
 ) -> None:
     user_cancelled = False
     cancel_calls: list[tuple[str, str]] = []
-    kill_event = asyncio.Event()
-    registered_callbacks: list[Callable[[], None]] = []
+    kills: list[asyncio.Future[object]] = []
 
-    def cancel_registration_hook(callback: Callable[[], None]) -> None:
-        registered_callbacks.append(callback)
-        # The runtime marks the call as user-cancelled and fires the callback.
+    def cancel_registration_hook(callback: ToolCancelCallback) -> None:
+        # The Run marks the call as user-cancelled, fires the callback and awaits
+        # the kill it returns within its cancellation cleanup.
         nonlocal user_cancelled
         user_cancelled = True
-        callback()
+        kill = callback()
+        assert kill is not None
+        kills.append(asyncio.ensure_future(kill))
 
     original_cancel_for_user = manager.cancel_for_user
 
@@ -134,10 +176,7 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
         process_id: str, agent_id: str, *, project_id: str | None = None
     ) -> Any:
         cancel_calls.append((process_id, agent_id))
-        try:
-            return await original_cancel_for_user(process_id, agent_id, project_id=project_id)
-        finally:
-            kill_event.set()
+        return await original_cancel_for_user(process_id, agent_id, project_id=project_id)
 
     monkeypatch.setattr(manager, "cancel_for_user", tracking_cancel_for_user)
     monkeypatch.setattr(bash_module, "_shell_argv", python_command)
@@ -148,7 +187,8 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
     )
 
     result = await bash_handler(context, {"command": _SLEEP, "mode": "foreground"}, manager)
-    await asyncio.wait_for(kill_event.wait(), timeout=2)
+    (kill,) = kills
+    await asyncio.wait_for(kill, timeout=2)
 
     assert result["ok"] is False
     assert result["error"]["code"] == "cancelled_by_user"
@@ -156,7 +196,6 @@ async def test_user_cancel_during_foreground_returns_cancelled_by_user_envelope(
     ((process_id, agent_id),) = cancel_calls
     assert agent_id == AGENT_ID
     assert manager.get_process(process_id, AGENT_ID).cancelled_by_user is True
-    assert len(registered_callbacks) == 1
 
 
 @pytest.mark.asyncio
@@ -166,15 +205,12 @@ async def test_user_cancel_kill_failure_is_logged(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    kill_failed = asyncio.Event()
-
     async def failing_cancel_for_user(
         process_id: str, agent_id: str, *, project_id: str | None = None
     ) -> None:
-        kill_failed.set()
         raise RuntimeError("kill exploded")
 
-    captured_callback: list[Callable[[], None]] = []
+    captured_callback: list[ToolCancelCallback] = []
     monkeypatch.setattr(manager, "cancel_for_user", failing_cancel_for_user)
     context = make_context(
         tmp_path,
@@ -187,16 +223,15 @@ async def test_user_cancel_kill_failure_is_logged(
     assert captured_callback
 
     with caplog.at_level(logging.ERROR, logger="vbot.tools.bash"):
-        captured_callback[0]()
-        await asyncio.wait_for(kill_failed.wait(), timeout=2)
-        # Let the scheduled kill task finish so its done-callback runs.
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        kill = captured_callback[0]()
+        assert kill is not None
+        # The Run awaits the kill; its failure is logged, not raised into the cleanup.
+        await asyncio.wait_for(kill, timeout=2)
 
     kill_errors = [
         record
         for record in caplog.records
-        if record.levelno == logging.ERROR and "user-cancel kill failed" in record.getMessage()
+        if record.levelno == logging.ERROR and "process-x" in record.getMessage()
     ]
     assert kill_errors
     assert kill_errors[0].exc_info is not None

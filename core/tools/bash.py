@@ -816,33 +816,32 @@ def _register_user_cancel_callback(
 
     Every owning-Run cancellation kills the process. A user cancellation also
     marks the process as user-cancelled so any already-handed-off completion report can
-    use explicit user-abort wording. The kill coroutine is scheduled on the
-    running event loop because the callback type is synchronous.
+    use explicit user-abort wording. The callback returns the kill, which the Run
+    awaits within its cancellation cleanup budget, so a cancelled Run ends only
+    after its process is gone. The user origin is read when the callback fires,
+    while the call's cancellation mark still exists.
     """
 
-    def cancel_callback() -> None:
-        kill_coro = (
-            process_manager.cancel_for_user(
-                process_id, context.agent_id, project_id=context.project_id
-            )
-            if context.was_cancelled_by_user()
-            else process_manager.kill(process_id, context.agent_id, project_id=context.project_id)
-        )
+    async def kill(by_user: bool) -> None:
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            asyncio.run(kill_coro)
-        else:
-            kill_task = loop.create_task(kill_coro)
-            kill_task.add_done_callback(
-                lambda completed: log_background_task_result(
-                    completed,
-                    f"Bash user-cancel kill failed for "
-                    f"agent={context.agent_id} process={process_id}",
+            if by_user:
+                await process_manager.cancel_for_user(
+                    process_id, context.agent_id, project_id=context.project_id
                 )
+            else:
+                await process_manager.kill(
+                    process_id, context.agent_id, project_id=context.project_id
+                )
+        except Exception as error:
+            _LOGGER.error(
+                "Bash cancel kill failed (agent=%s process=%s): %s",
+                context.agent_id,
+                process_id,
+                error,
+                exc_info=(type(error), error, error.__traceback__),
             )
 
-    context.on_cancel(cancel_callback)
+    context.on_cancel(lambda: kill(context.was_cancelled_by_user()))
 
 
 def _parse_arguments(arguments: JsonObject) -> JsonObject | str:
