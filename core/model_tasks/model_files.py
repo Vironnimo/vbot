@@ -198,7 +198,9 @@ def _adopt(
             try:
                 os.link(candidate.resolve(), partial)
             except OSError:
-                shutil.copyfile(candidate, partial)
+                # The system copy routine clones blocks where the file system can
+                # (CopyFile2 on Windows, reflink or copy_file_range on Linux).
+                candidate.copy(partial)
             if _sha256(partial, cancelled, report) == item.sha256:
                 os.replace(partial, target)
                 return True
