@@ -15,44 +15,91 @@ from typing import Literal, Protocol
 
 ReflectionScope = Literal["memory", "skill", "combined"]
 
-_MEMORY_INTRO = "reflect-memory-intro.md"
-_SKILL_INTRO = "reflect-skill-intro.md"
-_COMBINED_INTRO = "reflect-combined-intro.md"
-_COMBINED_SKILL_LEAD = "reflect-combined-skill-lead.md"
-_MEMORY_METHOD = "reflect-memory-method.md"
-_SKILL_OWNERSHIP_CHECK = "skill-ownership-check.md"
-_SKILL_METHOD = "reflect-skill-method.md"
-_MEMORY_CLOSING = "reflect-memory-closing.md"
-_SKILL_CLOSING = "reflect-skill-closing.md"
-_COMBINED_CLOSING = "reflect-combined-closing.md"
+_COMBINED_INTRO = "review-intro-combined.md"
+_MEMORY_INTRO = "review-intro-memory.md"
+_SKILL_INTRO = "review-intro-skill.md"
+_SIGNALS_LEAD = "review-signals-lead.md"
+_SKILL_SIGNALS = "review-signals-skill.md"
+_MEMORY_SIGNALS = "review-signals-memory.md"
+_SIGNALS_END = "review-signals-end.md"
+_ROUTING = "learning-routing.md"
+_MEMORY_ONLY_ROUTING = "review-routing-memory-only.md"
+_SKILL_ONLY_ROUTING = "review-routing-skill-only.md"
+_SKIP = "review-skip.md"
+_MEMORY_METHOD = "review-memory.md"
+_SKILL_SHAPE = "skill-shape.md"
+_SKILL_LADDER = "skill-ladder.md"
+_SKILL_READ = "skill-read-current.md"
+_SKILL_LIMITS = "review-skill-limits.md"
+_CLOSING = "review-closing.md"
 _LEARN_INTRO = "learn-intro.md"
 _LEARN_METHOD = "learn-method.md"
 
-# A recipe is a sequence of paragraph groups. The fragments of one group continue
-# a paragraph (joined by one space); each group starts a new paragraph (joined by
-# one blank line). A fragment is whole sentences and may hold several paragraphs.
-_Recipe = tuple[tuple[str, ...], ...]
+# A recipe is a sequence of groups; groups are joined by one blank line. A group
+# joins its fragments with its joiner: ``_PROSE`` continues a paragraph (one
+# space), ``_LINES`` continues a list (one newline). A fragment is whole sentences
+# or whole list items and may hold several paragraphs.
+_PROSE = " "
+_LINES = "\n"
+_Group = tuple[str, tuple[str, ...]]
+_Recipe = tuple[_Group, ...]
+
+
+def _signals(*lists: str) -> _Group:
+    return (_LINES, (_SIGNALS_LEAD, *lists))
+
+
+_SKILL_PART: tuple[_Group, ...] = (
+    (_PROSE, (_SKILL_SHAPE,)),
+    (_PROSE, (_SKILL_LADDER,)),
+    (_PROSE, (_SKILL_READ, _SKILL_LIMITS)),
+)
 _REFLECTION_RECIPES: dict[ReflectionScope, _Recipe] = {
     "memory": (
-        (_MEMORY_INTRO, _MEMORY_METHOD),
-        (_MEMORY_CLOSING,),
+        (_PROSE, (_MEMORY_INTRO,)),
+        _signals(_MEMORY_SIGNALS),
+        (_PROSE, (_SIGNALS_END,)),
+        (_PROSE, (_ROUTING, _MEMORY_ONLY_ROUTING)),
+        (_PROSE, (_SKIP,)),
+        (_PROSE, (_MEMORY_METHOD,)),
+        (_PROSE, (_CLOSING,)),
     ),
     "skill": (
-        (_SKILL_INTRO, _SKILL_OWNERSHIP_CHECK, _SKILL_METHOD),
-        (_SKILL_CLOSING,),
+        (_PROSE, (_SKILL_INTRO,)),
+        _signals(_SKILL_SIGNALS),
+        (_PROSE, (_SIGNALS_END,)),
+        (_PROSE, (_ROUTING, _SKILL_ONLY_ROUTING)),
+        (_PROSE, (_SKIP,)),
+        *_SKILL_PART,
+        (_PROSE, (_CLOSING,)),
     ),
     "combined": (
-        (_COMBINED_INTRO, _MEMORY_METHOD),
-        (_COMBINED_SKILL_LEAD, _SKILL_OWNERSHIP_CHECK, _SKILL_METHOD),
-        (_COMBINED_CLOSING,),
+        (_PROSE, (_COMBINED_INTRO,)),
+        _signals(_SKILL_SIGNALS, _MEMORY_SIGNALS),
+        (_PROSE, (_SIGNALS_END,)),
+        (_PROSE, (_ROUTING,)),
+        (_PROSE, (_SKIP,)),
+        (_PROSE, (_MEMORY_METHOD,)),
+        *_SKILL_PART,
+        (_PROSE, (_CLOSING,)),
     ),
 }
-_LEARN_RECIPE: _Recipe = ((_LEARN_INTRO, _SKILL_OWNERSHIP_CHECK, _LEARN_METHOD),)
+_LEARN_RECIPE: _Recipe = (
+    (_PROSE, (_LEARN_INTRO,)),
+    (_PROSE, (_SKILL_SHAPE,)),
+    (_PROSE, (_SKILL_LADDER,)),
+    (_PROSE, (_SKILL_READ,)),
+    (_PROSE, (_LEARN_METHOD,)),
+)
+
+REVIEW_TOOL_CALL_LIMIT = 16
+"""Tool calls one review Run can dispatch; its brief states the same number."""
+_TOOL_CALL_LIMIT_MARK = "{tool_call_limit}"
 
 BRIEF_FRAGMENT_NAMES: frozenset[str] = frozenset(
     name
     for recipe in (*_REFLECTION_RECIPES.values(), _LEARN_RECIPE)
-    for group in recipe
+    for _joiner, group in recipe
     for name in group
 )
 """Every prompt fragment a brief reads; Storage must allowlist and bundle each."""
@@ -81,7 +128,9 @@ def reflection_brief(
     focus: str | None = None,
 ) -> str:
     """Return the review brief for ``scope``, with an optional user focus appended."""
-    brief = _assemble(fragments, _REFLECTION_RECIPES[scope])
+    brief = _assemble(fragments, _REFLECTION_RECIPES[scope]).replace(
+        _TOOL_CALL_LIMIT_MARK, str(REVIEW_TOOL_CALL_LIMIT)
+    )
     cleaned = (focus or "").strip()
     if not cleaned:
         return brief
@@ -99,5 +148,6 @@ def learn_brief(fragments: BriefFragmentReader, request: str | None) -> str:
 
 def _assemble(fragments: BriefFragmentReader, recipe: _Recipe) -> str:
     return "\n\n".join(
-        " ".join(fragments.read_prompt_fragment(name).strip() for name in group) for group in recipe
+        joiner.join(fragments.read_prompt_fragment(name).strip() for name in group)
+        for joiner, group in recipe
     )

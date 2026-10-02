@@ -1,1 +1,0 @@
-If no supported change remains, reply "Nothing to save." and stop. Otherwise, make the changes with `memory`, then finish with one or two sentences stating what changed and why it will help. Report a failed write as a failure, not as saved knowledge; do not reproduce Memory or Session contents in full.
