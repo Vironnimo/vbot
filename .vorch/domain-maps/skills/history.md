@@ -35,7 +35,7 @@ Task-gated reference for the revision log, archive and pins of the writable Skil
 
 Conflict rule (conservative): a revision is refused while a later revision outside the request changed the same file, the pin or the presence of that Skill - `SkillRevertConflictError` (`revision`, `later`, `skill`) with `Revision <n> cannot be reverted: revision <later> later changed the same part of Skill '<skill>'. Revert revision <later> together with it.` An earlier revert counts as such a later change, so reverting a chain names every revision of it together; the WebUI accumulates them (`webui/settings.md` -> Skill manager). A caller may name `related` revisions (`revert(..., related=)`): a later one among them does not block. The undo of a Run's changes passes the Run's own revisions and their revert chains, so it can run again after an earlier partial undo (`automation.md` -> Reflection).
 
-`check_revert(root, revision_ids, writer, related=)` plans the same revert (observing each named Skill first) and raises what `revert` would raise, without writing; `recorded_revisions(root)` returns the home's recorded revisions oldest first.
+`check_revert(root, revision_ids, writer, related=)` plans the same revert (observing each named Skill first) and raises what `revert` would raise, without writing; `recorded_revisions(root)` returns the home's recorded revisions oldest first. A failure while changing packages takes the steps back and raises `SkillAuthoringError`, or `SkillRevertIncompleteError` (`skill_names`) when a step cannot be taken back. Once every package changed, each named revision records one `revert` revision; when the history cannot append one, the packages stay changed and the returned list is shorter.
 
 ## Surfaces
 
