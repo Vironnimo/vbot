@@ -134,6 +134,7 @@ async def test_double_escape_interrupts_a_batch_between_input_events(computer: H
     assert message.endswith("\n1. left_click at [200, 150]")
     assert computer.target.inputs == [("click", 200, 150, "left", 1, [])]
     assert computer.hotkey.armed is None
+    assert computer.target.activity == [True, False]  # a stop takes the sign down
 
 
 async def test_control_reports_and_stops_only_the_active_call(computer: Harness) -> None:
@@ -200,3 +201,23 @@ async def test_run_end_releases_a_mouse_button_the_run_left_pressed(computer: Ha
     assert computer.target.released == 0
     await computer.service.run_end(SimpleNamespace(run_id="run"), outcome="completed")
     assert computer.target.released == 1
+
+
+async def test_the_activity_sign_lasts_from_the_first_call_to_the_end_of_the_run(
+    computer: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await computer.call("computer_apps", {"action": "list"})
+    assert computer.target.activity == []
+    await computer.computer(action="screenshot")
+    await computer.computer(action="type", text="x")
+    assert computer.target.activity == [True]
+    await computer.service.run_end(SimpleNamespace(run_id="other"))
+    assert computer.target.activity == [True]
+    await computer.service.run_end(SimpleNamespace(run_id="run"))
+    assert computer.target.activity == [True, False]
+
+    # A Run that stops calling loses the sign after the idle time.
+    monkeypatch.setattr(computer_use, "ACTIVITY_IDLE_SECONDS", 0)
+    await computer.computer(action="screenshot")
+    await asyncio.sleep(0.01)
+    assert computer.target.activity == [True, False, True, False]

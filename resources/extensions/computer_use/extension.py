@@ -64,6 +64,9 @@ STEP_SETTLE_SECONDS = 0.2
 OPEN_SETTLE_SECONDS = 1.5
 # A cached "not ready" is checked again at most this often.
 READINESS_RECHECK_SECONDS = 30.0
+# The activity sign stays up between the calls of a Run; without a call for this long
+# (a Run that waits on something else, or one whose end was missed) it goes away.
+ACTIVITY_IDLE_SECONDS = 120.0
 _LIST_LIMIT = 25
 ASK_SETTING = "ask_per_app"
 _STOPPED_BY = {
@@ -162,6 +165,10 @@ class ComputerUseService:
         self._inputs_revision = 0
         # The Run whose left_mouse_down still holds the left button.
         self._held_run: str | None = None
+        # Runs that took the desktop since the activity sign went up.
+        self._activity_runs: set[str] = set()
+        self._activity_shown = False
+        self._activity_timer: asyncio.TimerHandle | None = None
 
     # Lifecycle
 
@@ -187,6 +194,7 @@ class ComputerUseService:
         self._closed = True
         self.stop(source="shutdown")
         self.access.cancel_all()
+        self._end_activity()
         if self._hotkey is not None:
             self._hotkey.close()
         executor, target = self._executor, self._target
@@ -199,12 +207,22 @@ class ComputerUseService:
                     await asyncio.wait_for(release, 2)
                 except Exception:
                     self.api.logger.warning("Computer Use could not release input", exc_info=True)
+                try:
+                    target.close()
+                except Exception:
+                    self.api.logger.warning(
+                        "Computer Use could not close its target", exc_info=True
+                    )
             executor.shutdown(wait=False, cancel_futures=True)
         self.sessions.clear()
 
     async def run_end(self, context: Any, **_: Any) -> None:
-        """Release a mouse button the ending Run left pressed."""
+        """Release a mouse button the ending Run left pressed; end its activity sign."""
         run_id = getattr(context, "run_id", None)
+        if run_id in self._activity_runs:
+            self._activity_runs.discard(run_id)
+            if not self._activity_runs:
+                self._end_activity()
         if self._held_run is None or self._held_run != run_id or self._target is None:
             return
         async with self._lock:
@@ -285,6 +303,9 @@ class ComputerUseService:
                     loop.call_soon_threadsafe(stopped.set)
             self.api.logger.debug("Computer Use call stopped (source=%s)", source)
             self._control_changed(active)
+            if loop is not None:
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(self._end_activity)
 
     async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
         action = arguments.get("action", "status")
@@ -329,6 +350,31 @@ class ComputerUseService:
     async def respond(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return self.access.respond(arguments.get("request_id"), arguments.get("response"))
 
+    # Activity sign
+
+    def _begin_activity(self, run_id: str | None) -> None:
+        """Show the sign for a call that takes the desktop; it stays until the Run ends."""
+        if self._activity_timer is not None:
+            self._activity_timer.cancel()
+            self._activity_timer = None
+        self._activity_runs.add(run_id or "")
+        if not self._activity_shown and self._target is not None:
+            self._activity_shown = True
+            self._target.set_activity(True)
+
+    def _call_done(self) -> None:
+        if self._activity_shown and self._loop is not None:
+            self._activity_timer = self._loop.call_later(ACTIVITY_IDLE_SECONDS, self._end_activity)
+
+    def _end_activity(self) -> None:
+        if self._activity_timer is not None:
+            self._activity_timer.cancel()
+            self._activity_timer = None
+        self._activity_runs.clear()
+        if self._activity_shown and self._target is not None:
+            self._activity_shown = False
+            self._target.set_activity(False)
+
     @asynccontextmanager
     async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
         """Hold the desktop for one call: stoppable, with the hotkey armed."""
@@ -351,8 +397,11 @@ class ComputerUseService:
             try:
                 if context.is_cancelled() or context.was_cancelled_by_user():
                     self.stop(owner, source="run_cancel")
+                else:
+                    self._begin_activity(context.run_id)
                 yield
             finally:
+                self._call_done()
                 with self._control_lock:
                     if self._active == owner:
                         if self._hotkey is not None:

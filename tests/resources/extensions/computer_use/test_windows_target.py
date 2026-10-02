@@ -1,19 +1,21 @@
 """Computer Use on Windows: the platform-independent rules of the Windows desktop target.
 
 Key and text planning, SendInput coordinates, app identity and categories, the
-Start-menu index and display naming. Nothing here sends input, takes screenshots
-or starts processes, so the suite runs on every platform.
+Start-menu index, display naming and the activity frame's glow. Nothing here sends
+input, takes screenshots, starts processes or opens windows, so the suite runs on
+every platform.
 """
 
 from __future__ import annotations
 
 import ctypes
+import itertools
 import logging
 import threading
 
 import pytest
 
-from resources.extensions.computer_use import _keys, _win_apps, _win_input
+from resources.extensions.computer_use import _keys, _win_apps, _win_input, _win_overlay
 from resources.extensions.computer_use._win32 import Monitor
 from resources.extensions.computer_use._win_apps import StartApps, StartIndex, StartRow
 from resources.extensions.computer_use.target import AppInfo
@@ -256,6 +258,16 @@ def test_displays_are_ordered_primary_first_with_unique_names():
     ]
     assert (displays[0].width, displays[0].height, displays[0].scale_percent) == (2560, 1440, 125)
     assert (displays[1].left, displays[1].top, displays[1].scale_percent) == (-1920, 270, 100)
+
+
+@pytest.mark.parametrize("scale", [1.0, 2.0])
+def test_activity_glow_is_a_crisp_edge_line_fading_to_nothing_inward(scale):
+    profile = _win_overlay.glow_profile(scale)
+
+    assert profile[0] == profile[1] >= 200  # a solid line of at least two pixels
+    assert all(outer >= inner for outer, inner in itertools.pairwise(profile))
+    assert profile[-1] <= 2
+    assert 12 * scale <= len(profile) <= 20 * scale  # wider on scaled displays
 
 
 def _join_discovery() -> None:

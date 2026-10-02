@@ -16,6 +16,7 @@ from PIL import Image
 
 from . import _win32, _win_apps
 from ._win_input import WindowsInput
+from ._win_overlay import ActivityOverlay
 from .target import AppInfo, Display, TargetError, WindowInfo
 
 _LOCKED = (
@@ -64,6 +65,7 @@ class WindowsTarget(WindowsInput):
         self._descriptions: dict[str, str | None] = {}
         self._own_integrity: int | None = None
         self._display_names: tuple[tuple[str, ...], dict[str, str]] = ((), {})
+        self._overlay = ActivityOverlay()
 
     def readiness(self) -> str | None:
         if sys.platform != "win32":
@@ -148,6 +150,15 @@ class WindowsTarget(WindowsInput):
         resolver = self._resolver(index)
         running = [resolver.window(handle)[0] for handle in self._app_windows()]
         return _win_apps.merge_apps(index.apps, running)
+
+    def set_activity(self, active: bool) -> None:
+        if active:
+            self._overlay.show()
+        else:
+            self._overlay.hide()
+
+    def close(self) -> None:
+        self._overlay.close()
 
     def open(self, app: AppInfo) -> None:
         _win32.enter_thread()

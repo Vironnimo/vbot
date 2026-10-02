@@ -137,3 +137,14 @@ class DesktopTarget(Protocol):
     def set_stop_event(self, event: threading.Event) -> None:
         """Input checks *event* between events and raises ``InputInterrupted``."""
         ...
+
+    def set_activity(self, active: bool) -> None:
+        """Show or hide the on-screen sign that an Agent controls the computer.
+
+        Quick and safe from any thread; captures never contain the sign.
+        """
+        ...
+
+    def close(self) -> None:
+        """Remove the activity sign and release what the target holds besides input."""
+        ...

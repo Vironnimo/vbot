@@ -105,6 +105,9 @@ class FakeTarget:
     inputs: list[tuple[Any, ...]] = field(default_factory=list)
     opened: list[str] = field(default_factory=list)
     released: int = 0
+    # Each set_activity call: True shows the activity sign, False hides it.
+    activity: list[bool] = field(default_factory=list)
+    closed: bool = False
     stop_event: threading.Event | None = None
     # Called with each input record before it is recorded, on the worker thread.
     on_input: Callable[[tuple[Any, ...]], None] | None = None
@@ -195,6 +198,12 @@ class FakeTarget:
 
     def set_stop_event(self, event: threading.Event) -> None:
         self.stop_event = event
+
+    def set_activity(self, active: bool) -> None:
+        self.activity.append(active)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class FakeHotkey:
