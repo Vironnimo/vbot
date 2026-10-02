@@ -751,7 +751,9 @@ Qwen3 ASR (1.7B or 0.6B), Parakeet TDT v3 and Nemotron 3.5 ASR run on the **vBot
 the WebUI or Desktop connects from another computer. They require no paid API
 or subscription. Each is its own Model: in **Settings → Voice → Speech models → Speech to text**,
 select one and choose **Install**; Settings shows its download size and license first.
-Setup runs on the server and continues if you leave Settings. The first local
+Setup runs on the server and continues if you leave Settings; **Settings → General →
+Background activity** lists every running installation, where **Cancel** stops one and keeps
+what it already downloaded. The first local
 speech-to-text install prepares the speech engine (environment checks, downloads,
 installation and verification); every install then downloads the selected Model
 with a progress bar, so another local speech-to-text Model reuses the engine and
