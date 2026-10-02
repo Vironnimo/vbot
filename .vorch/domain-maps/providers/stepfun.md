@@ -19,13 +19,13 @@ Read `providers.md` first. This reference owns vBot's explicit StepFun Direct AP
 
 ## Catalog policy
 
-- Both Connections discover through their own authenticated `/models` endpoint. Discovery persists the full raw response, exposes only the current agentic Chat allowlist, and stamps each normalized Model with the Connection that returned it.
-- The bundled fallback contains exact wire ids only: `step-3.5-flash`, `step-3.5-flash-2603`, and `step-3.7-flash` on both Connections, plus `step-router-v1` on Step Plan only. Audio, realtime, image-generation, legacy, unknown, and retired ids stay in raw discovery but are not projected into vBot's Chat Model picker.
+- Both Connections discover through their own authenticated `/models` endpoint. Discovery projects only the current agentic Chat allowlist (`STEPFUN_MODEL_POLICIES` in `core/providers/stepfun.py`) and stamps each normalized Model with the Connection that returned it. Audio, realtime, image-generation, legacy, unknown, and retired ids are skipped and never reach vBot's Chat Model picker.
+- The hand catalog is the override file `resources/models/stepfun.overrides.json`; there is no bundled generated `stepfun.json`. It lists exact wire ids only: `step-3.5-flash`, `step-3.5-flash-2603`, and `step-3.7-flash` on both Connections, plus `step-router-v1` on Step Plan only, so they load without credentials and no refresh overwrites them. The Step Flash entries join their canonical records for names, limits, and prices; `step-3.5-flash` deliberately has no effort ladder (the canonical record carries `low`/`high`); `step-router-v1` is a complete record. Because the entries pin `connections` and the reasoning control, discovered values for those facts do not change these four Models; discovered facts apply only where the entries are silent. Changing the code allowlist therefore also means changing this file.
 - `step-router-v1` is a visible Plan-only routing Model, not an alias or fallback. StepFun currently routes it between `deepseek-v4-pro` and `step-3.7-flash`; vBot never rewrites the requested id or silently substitutes another Model. Its documented `max_tokens` ceiling is 250,000 (wire-profile `output_limit_cap`) and image/document input is not offered. The wire profile admits it only on `step-plan`; a Direct API request is refused before network I/O.
-- Connection-scoped catalog replacement removes only the refreshed Connection membership from an existing entry, preserves memberships from other Connections, and unions them back when the refreshed Model is shared. Refreshing one StepFun surface therefore cannot erase the other surface's allowlist.
+- Connection-scoped catalog replacement removes only the refreshed Connection membership from an existing generated entry, preserves memberships from other Connections, and unions them back when the refreshed Model is shared. Refreshing one StepFun surface therefore cannot erase the other surface's generated entries.
 
 ## Verification
 
 - Request, sampling, reasoning, media, response, cache-usage, SSE, and error policy: `tests/core/providers/test_stepfun.py`
 - Connection-scoped discovery, exact allowlist, and shared-membership merge: `tests/core/models/test_discovery_projection.py`
-- Bundled Connection config, fallback Catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py`
+- Bundled Connection config, hand catalog, and Runtime Adapter selection: `tests/core/runtime/test_runtime_providers.py`

@@ -30,7 +30,7 @@ from core.models.assembly import (
     CANONICAL_POINTER_KEY,
     load_canonical_layer,
 )
-from core.models.models import OVERRIDES_FILE_SUFFIX, RAW_FILE_SUFFIX, is_provider_file
+from core.models.database import OVERRIDES_FILE_SUFFIX, RAW_FILE_SUFFIX, is_provider_file
 
 DEAD_POINTER = "dead_pointer"
 REDUNDANT_MANUAL_JOIN = "redundant_manual_join"
@@ -66,7 +66,9 @@ def validate_model_db(resources_dir: Path) -> list[ValidationFinding]:
     """
 
     models_dir = resources_dir / "models"
-    canonical_layer = load_canonical_layer(models_dir)
+    canonical_layer = load_canonical_layer(
+        models_dir / CANONICAL_FILE_NAME, models_dir / CANONICAL_OVERRIDES_FILE_NAME
+    )
     findings: list[ValidationFinding] = []
 
     for provider_id, wire_id, pointer, is_manual in _iter_pointers(models_dir):

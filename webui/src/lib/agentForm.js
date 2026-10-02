@@ -166,14 +166,19 @@ export function reasoningForModelValue(modelValue, models) {
 // it must not hide options that may be valid. A model with a published ladder
 // shows only its possible efforts: the default (provider default, '') and "none"
 // (reasoning off) always apply; the rest are exactly the model's levels, kept in
-// canonical order so the dropdown reads consistently.
+// canonical order so the dropdown reads consistently. A model whose reasoning
+// is mandatory cannot turn it off, so it never offers "none".
 export function effortOptionsForReasoning(reasoning) {
   const levels = Array.isArray(reasoning?.levels) ? reasoning.levels : [];
+  const offered =
+    reasoning?.mandatory === true
+      ? THINKING_EFFORT_OPTIONS.filter((option) => option !== 'none')
+      : THINKING_EFFORT_OPTIONS;
   if (levels.length === 0) {
-    return THINKING_EFFORT_OPTIONS;
+    return offered;
   }
   const allowed = new Set(['', 'none', ...levels]);
-  return THINKING_EFFORT_OPTIONS.filter((option) => allowed.has(option));
+  return offered.filter((option) => allowed.has(option));
 }
 
 function normalizeValues(values = {}) {

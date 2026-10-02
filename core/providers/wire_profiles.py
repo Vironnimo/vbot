@@ -449,7 +449,7 @@ class _Resolution:
         budget_max = reasoning.budget_max
         if isinstance(budget_max, int) and not isinstance(budget_max, bool) and budget_max > 0:
             reasoning_values["budget_max"] = budget_max
-        if _reasoning_mandatory(self.provider_id, model):
+        if reasoning.mandatory:
             reasoning_values["mandatory"] = True
         if reasoning_values:
             partial["reasoning"] = reasoning_values
@@ -575,13 +575,6 @@ def _provider_metadata(provider_id: str, model: Model | None) -> Mapping[str, An
 
 def _catalog_hint(provider_id: str, model: Model | None, key: str) -> Any:
     return _provider_metadata(provider_id, model).get(key)
-
-
-def _reasoning_mandatory(provider_id: str, model: Model) -> bool:
-    mandatory = getattr(model.capabilities.reasoning, "mandatory", None)
-    if isinstance(mandatory, bool):
-        return mandatory
-    return _catalog_hint(provider_id, model, "reasoning_mandatory") is True
 
 
 def _thaw(value: Any) -> Any:

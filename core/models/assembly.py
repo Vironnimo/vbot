@@ -8,7 +8,7 @@ canonical join, **live at load, with no network and no key**.
 
 ``ModelRegistry.load()`` stays the single public read surface; everything here is
 hidden behind it. The two public entry points are :func:`load_canonical_layer`
-(reads the provider-agnostic base once per selected Model DB root) and
+(reads the provider-agnostic base once per Load) and
 :func:`assemble_provider_model` (builds one effective per-model record from the
 layers + the join). Callers outside ``core/models/`` should not import this module.
 
@@ -16,9 +16,10 @@ layers + the join). Callers outside ``core/models/`` should not import this modu
 THE ON-DISK FILE-FORMAT CONTRACT  (Phase 3 must produce exactly this shape)
 ================================================================================
 
-Generated files live in one already-selected ``models/`` root. Hand-maintained
-override files come from the bundled system ``models/`` root so a newer runtime
-catalog cannot hide a correction shipped or edited after that catalog refresh.
+Each generated file is selected from the system or the runtime ``models/`` root
+(:mod:`core.models.database`). Hand-maintained override files come from the
+bundled system ``models/`` root so a newer runtime catalog cannot hide a
+correction shipped or edited after that catalog refresh.
 
 Three layers, each a different home with a clear responsibility:
 
@@ -28,7 +29,7 @@ Three layers, each a different home with a clear responsibility:
      (incl. the lifted lab-spec ``reasoning`` ladder), ``context_window``,
      ``max_output_tokens``. NO ``provider_id`` (it is not a provider file).
    - ``models.overrides.json`` is keyed the same way and is a field-level patch
-     over ``models.json`` (override wins, nested objects wholesale).
+     over ``models.json`` (override wins, by the merge rules below).
    - BOTH files may be ABSENT — Phase 3 generates ``models.json``; until then the
      canonical layer is simply empty and assembly runs on provider+override only.
    - Shape::
@@ -99,16 +100,25 @@ Rules (:func:`merge_layers`):
 * For each top-level field, take the value from the HIGHEST layer that defines it.
   A ``null`` does NOT count as defining the field — it never overwrites a value a
   lower layer already supplied (so a provider's ``context_window: null`` lets the
-  canonical window flow through, "fill, don't overwrite, don't un-fill").
+  canonical window flow through, "fill, don't overwrite, don't un-fill"). The
+  same null rule holds at every nested level below.
 * ``capabilities`` is merged ONE LEVEL DEEP: each capability sub-field
   (``vision``, ``tools``, ``json_mode``, ``reasoning``, ``input_modalities``, …)
   is taken from the highest layer that defines THAT sub-field. This lets a
   provider model inherit ``reasoning`` from canonical while keeping its own other
   capabilities.
-* Any nested object or list is taken WHOLESALE from the highest layer that defines
-  it — never deep-merged or concatenated. In particular ``reasoning`` (the whole
-  ``{supported, control, levels|budget_max}`` object) is replaced wholesale, and
-  modality lists are replaced wholesale.
+* ``capabilities.reasoning`` splits into two parts. Its control description
+  (``supported``, ``control``, ``levels``, ``budget_max``) is ONE unit taken
+  wholesale from the highest layer that defines any of those keys, so a ladder
+  never mixes layers (a higher ``{"supported": true}`` without a ladder does not
+  inherit a lower ladder). Every other reasoning fact (``mandatory``) merges per
+  field, so a provider fact survives under an inherited canonical ladder.
+* ``metadata`` is merged per Provider key, then per field:
+  ``metadata.<key>.<field>`` is taken from the highest layer that defines it. A
+  non-object value under a Provider key is taken wholesale.
+* Any other nested object or list is taken WHOLESALE from the highest layer that
+  defines it — never deep-merged or concatenated (modality lists, ``pricing``,
+  ``connections``, ``task_options``, the field values inside ``metadata``).
 
 The merged record is then stripped of ``"canonical"`` and handed to the typed
 ``Model`` construction in ``models.py``. It MUST satisfy the loader's required
@@ -149,37 +159,43 @@ def log_model_data_issue(message: str) -> None:
 # attribute, never on the wire (GLOSSARY: canonical id "geht nie auf den Draht").
 CANONICAL_POINTER_KEY = "canonical"
 
-# Canonical layer files inside one complete Model DB root. Both may be absent
-# (Phase 3 generates them); an absent file contributes an empty layer.
+# Canonical layer files of a Model DB root. Both may be absent; an absent file
+# contributes an empty layer.
 CANONICAL_FILE_NAME = "models.json"
 CANONICAL_OVERRIDES_FILE_NAME = "models.overrides.json"
 
-# The capabilities sub-object is the one place we merge a level deeper than the
-# top level, so a provider model can inherit ``reasoning`` from canonical while
-# overriding its own other capability sub-fields.
+# The capabilities sub-object merges a level deeper than the top level, so a
+# provider model can inherit ``reasoning`` from canonical while overriding its own
+# other capability sub-fields.
 CAPABILITIES_FIELD = "capabilities"
+REASONING_FIELD = "reasoning"
+# ``metadata`` merges per Provider key, then per field.
+METADATA_FIELD = "metadata"
+# The reasoning control description: taken as one unit from one layer. Every
+# other reasoning key is an independent fact merged per field.
+REASONING_CONTROL_FIELDS = frozenset({"supported", "control", "levels", "budget_max"})
+
+_Merge = Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]]
 
 
 def load_canonical_layer(
-    models_dir: Path,
+    canonical_file: Path | None,
+    overrides_file: Path | None,
     *,
-    overrides_models_dir: Path | None = None,
     report: ModelDataIssueReport = log_model_data_issue,
 ) -> dict[str, dict[str, Any]]:
     """Load and merge the canonical base + canonical overrides, keyed by canonical id.
 
-    Reads ``models.json`` and applies ``models.overrides.json`` on top (override
-    wins per field, nested objects wholesale — the same merge rule used between
-    provider layers). Both files are optional: an absent ``models.json`` yields an
-    empty layer; an absent overrides file leaves the base untouched. This is the
-    DEFENSIVE behavior the handoff requires — Phase 3 has not yet generated these
-    files, and assembly must still load every provider model without error.
+    Reads the generated ``models.json`` and applies the hand-maintained
+    ``models.overrides.json`` on top (override wins per field — the same merge
+    rule used between provider layers). Both files are optional: an absent base
+    yields an empty layer; an absent overrides file leaves the base untouched, so
+    assembly still loads every provider model without a canonical layer.
 
     Args:
-        models_dir: The selected Model DB directory containing ``models.json``.
-        overrides_models_dir: The authoritative directory containing
-            ``models.overrides.json``. Defaults to ``models_dir`` for standalone
-            assembly and validation callers.
+        canonical_file: The selected ``models.json``, or ``None`` when no root
+            has one.
+        overrides_file: The authoritative ``models.overrides.json``.
         report: Receives each ignored invalid file or entry.
 
     Returns:
@@ -187,9 +203,8 @@ def load_canonical_layer(
         no canonical file exists.
     """
 
-    overrides_dir = overrides_models_dir or models_dir
-    base = _read_models_map(models_dir / CANONICAL_FILE_NAME, report)
-    overrides = _read_models_map(overrides_dir / CANONICAL_OVERRIDES_FILE_NAME, report)
+    base = _read_models_map(canonical_file, report) if canonical_file is not None else {}
+    overrides = _read_models_map(overrides_file, report) if overrides_file is not None else {}
 
     canonical: dict[str, dict[str, Any]] = {
         canonical_id: dict(record) for canonical_id, record in base.items()
@@ -281,8 +296,10 @@ def merge_layers(layers: list[Mapping[str, Any]]) -> dict[str, Any]:
 
     ``layers`` is ordered lowest-precedence first. For every top-level field the
     value from the highest layer that defines it wins. ``capabilities`` is merged
-    one level deep (each capability sub-field from its highest definer); every
-    other nested object or list is taken wholesale.
+    one level deep (each capability sub-field from its highest definer), with the
+    reasoning control description as one unit and other reasoning facts per
+    field; ``metadata`` merges per Provider key, then per field. Every other
+    nested object or list is taken wholesale.
 
     Args:
         layers: Layer records ordered from lowest to highest precedence.
@@ -298,40 +315,68 @@ def merge_layers(layers: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _merge_two(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
-    """Field-level merge of two layers; ``high`` wins per field.
+    """Field-level merge of two layers; ``high`` wins per field (see the module rules)."""
 
-    ``capabilities`` is merged one level deep; all other fields (including any
-    other nested object or list) are taken wholesale from whichever layer defines
-    them, with ``high`` winning. Neither input is mutated.
+    return _merge_fields(low, high, _record_field_merge)
+
+
+def _merge_fields(
+    low: Mapping[str, Any],
+    high: Mapping[str, Any],
+    nested: Callable[[str], _Merge | None],
+) -> dict[str, Any]:
+    """Merge two objects per key; ``high`` wins unless its value is ``null``.
+
+    A higher ``null`` means "unknown", not "erase": it fills an absent key but
+    never clobbers a value a lower layer supplied (e.g. a provider's
+    ``context_window: null`` never shadows the canonical window). ``nested``
+    names the merge for a key whose two values are both objects; ``None`` takes
+    the higher value wholesale. Neither input is mutated.
     """
 
     result: dict[str, Any] = {key: _plain(value) for key, value in low.items()}
     for key, value in high.items():
-        if value is None and result.get(key) is not None:
-            # A higher layer's ``null`` means "unknown", not "erase": it must not
-            # clobber a value a lower layer already supplied. This keeps the merge
-            # "fill, don't overwrite" — e.g. a provider's ``context_window: null``
-            # never shadows the canonical base's real window (the join's purpose).
+        current = result.get(key)
+        if value is None:
+            if current is None:
+                result[key] = None
             continue
-        if (
-            key == CAPABILITIES_FIELD
-            and isinstance(value, Mapping)
-            and isinstance(result.get(key), Mapping)
-        ):
-            # One-level-deep capabilities merge: each sub-field (vision, tools,
-            # reasoning, modality lists, …) is replaced wholesale by the higher
-            # layer, but sub-fields the higher layer omits are inherited.
-            result[key] = {
-                **result[key],
-                **{
-                    k: _plain(v)
-                    for k, v in value.items()
-                    if v is not None or result[key].get(k) is None
-                },
-            }
+        merge = nested(key)
+        if merge is not None and isinstance(value, Mapping) and isinstance(current, Mapping):
+            result[key] = merge(current, value)
         else:
             result[key] = _plain(value)
     return result
+
+
+def _record_field_merge(key: str) -> _Merge | None:
+    if key == CAPABILITIES_FIELD:
+        return _merge_capabilities
+    if key == METADATA_FIELD:
+        return _merge_metadata
+    return None
+
+
+def _merge_capabilities(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
+    return _merge_fields(
+        low, high, lambda key: _merge_reasoning if key == REASONING_FIELD else None
+    )
+
+
+def _merge_reasoning(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
+    """Take the control description as one unit; merge other reasoning facts per field."""
+
+    if any(high.get(key) is not None for key in REASONING_CONTROL_FIELDS):
+        low = {key: value for key, value in low.items() if key not in REASONING_CONTROL_FIELDS}
+    return _merge_flat(low, high)
+
+
+def _merge_metadata(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
+    return _merge_fields(low, high, lambda key: _merge_flat)
+
+
+def _merge_flat(low: Mapping[str, Any], high: Mapping[str, Any]) -> dict[str, Any]:
+    return _merge_fields(low, high, lambda key: None)
 
 
 def _read_models_map(path: Path, report: ModelDataIssueReport) -> dict[str, Any]:

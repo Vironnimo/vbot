@@ -15,14 +15,16 @@ import pytest
 import respx
 
 from core.models.discovery import refresh_models
-from core.models.models import ModelRegistry
+from core.models.models import ModelRegistry, ReasoningCapabilities
 from core.models.models_dev import ModelsDevCatalog, refresh_canonical_layer
 from core.models.query import ModelQuery
+from core.providers.providers import ProviderConfig
 
 from .discovery_test_support import (
     API_KEY,
     FIXTURES_DIR,
     OPENROUTER_MODELS_URL,
+    api_key_connection,
     fixture_models_dev_catalog,
     mock_openrouter_image_catalog,
     openrouter_config,
@@ -66,30 +68,92 @@ async def test_lab_provider_gets_an_auto_pointer_and_inherits_the_canonical_ladd
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_field(
+async def test_a_ladder_the_provider_reports_survives_the_canonical_join(tmp_path: Path) -> None:
+    resources_dir = tmp_path / "resources"
+    raw_catalog = json.loads((FIXTURES_DIR / "models_dev_catalog.json").read_text("utf-8"))
+    lab_model = raw_catalog["providers"]["deepseek"]["models"]["deepseek-v4-pro"]
+    raw_catalog["models"]["anthropic/claude-x"] = {
+        **raw_catalog["models"]["deepseek/deepseek-v4-pro"],
+        "id": "anthropic/claude-x",
+        "name": "Claude X",
+    }
+    raw_catalog["providers"]["anthropic"] = {
+        "id": "anthropic",
+        "models": {
+            "claude-x": {
+                **lab_model,
+                "id": "claude-x",
+                "reasoning_options": [{"type": "effort", "values": ["low", "high", "max"]}],
+            }
+        },
+    }
+    catalog = ModelsDevCatalog(raw_catalog)
+    await refresh_canonical_layer(resources_dir, catalog=catalog)
+    config = ProviderConfig(
+        id="anthropic",
+        name="Anthropic",
+        adapter="anthropic",
+        base_url="https://api.anthropic.com/v1",
+        connections=[api_key_connection("ANTHROPIC_API_KEY")],
+        defaults={"max_tokens": 8192},
+        models_endpoint="/models",
+    )
+    respx.get(url__startswith="https://api.anthropic.com/v1/models").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "claude-x",
+                        "display_name": "Claude X",
+                        "capabilities": {
+                            "thinking": {
+                                "supported": True,
+                                "types": {"adaptive": {"supported": True}},
+                            },
+                            "effort": {"low": {"supported": True}, "high": {"supported": True}},
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    await refresh_models(config, API_KEY, resources_dir, models_dev_catalog=catalog)
+
+    written = read_models_file(resources_dir, "anthropic.json")["models"]["claude-x"]
+    assert written["canonical"] == "anthropic/claude-x"
+    assert written["capabilities"]["reasoning"] == {
+        "supported": True,
+        "control": "levels",
+        "levels": ["low", "high"],
+    }
+    loaded = ModelRegistry.load(resources_dir).get("anthropic", "claude-x")
+    assert loaded.capabilities.reasoning.levels == ("low", "high")
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_facts(
     tmp_path: Path,
 ) -> None:
     resources_dir = tmp_path / "resources"
     catalog = fixture_models_dev_catalog()
     await refresh_canonical_layer(resources_dir, catalog=catalog)
     mock_openrouter_image_catalog()
+    deviating = raw_openrouter_model(
+        model_id="deepseek/deepseek-v4-pro",
+        name="DeepSeek V4 Pro",
+        input_modalities=["text"],
+        supported_parameters=["tools", "reasoning"],
+    )
+    # models.dev publishes no ladder for this one, so it inherits the canonical record.
+    inheriting = raw_openrouter_model(model_id="deepseek/deepseek-r1", name="DeepSeek R1")
+    for raw in (deviating, inheriting):
+        raw["reasoning"] = {"mandatory": True}
+    gemini = raw_openrouter_model(model_id="google/gemini-2.5-flash", name="Gemini 2.5 Flash")
     respx.get(OPENROUTER_MODELS_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "data": [
-                    raw_openrouter_model(
-                        model_id="deepseek/deepseek-v4-pro",
-                        name="DeepSeek V4 Pro",
-                        input_modalities=["text"],
-                        supported_parameters=["tools", "reasoning"],
-                    ),
-                    raw_openrouter_model(
-                        model_id="google/gemini-2.5-flash", name="Gemini 2.5 Flash"
-                    ),
-                ]
-            },
-        )
+        return_value=httpx.Response(200, json={"data": [deviating, inheriting, gemini]})
     )
 
     await refresh_models(openrouter_config(), API_KEY, resources_dir, models_dev_catalog=catalog)
@@ -105,12 +169,18 @@ async def test_gateway_provider_records_its_deviating_ladder_and_reasoning_field
     assert "reasoning_response_field" not in (
         written["google/gemini-2.5-flash"].get("metadata", {}).get("openrouter", {})
     )
-    deepseek = ModelRegistry.load(resources_dir).get("openrouter", "deepseek/deepseek-v4-pro")
-    assert (deepseek.capabilities.reasoning.control, deepseek.capabilities.reasoning.levels) == (
-        "levels",
-        ("high", "xhigh"),
+    # The inheriting Model drops only its bare flag; the reported fact stays.
+    assert written["deepseek/deepseek-r1"]["capabilities"]["reasoning"] == {"mandatory": True}
+    registry = ModelRegistry.load(resources_dir)
+    deepseek = registry.get("openrouter", "deepseek/deepseek-v4-pro")
+    assert deepseek.capabilities.reasoning == ReasoningCapabilities(
+        supported=True, control="levels", levels=("high", "xhigh"), mandatory=True
     )
     assert deepseek.metadata["openrouter"]["reasoning_response_field"] == "reasoning_content"
+    # ... and merges under the inherited canonical reasoning.
+    assert registry.get(
+        "openrouter", "deepseek/deepseek-r1"
+    ).capabilities.reasoning == ReasoningCapabilities(supported=True, mandatory=True)
 
 
 @respx.mock

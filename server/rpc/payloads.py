@@ -266,6 +266,7 @@ def _model_response(
                 "supported": model.capabilities.reasoning.supported,
                 "control": model.capabilities.reasoning.control,
                 "levels": list(model.capabilities.reasoning.levels),
+                "mandatory": model.capabilities.reasoning.mandatory,
             },
             "input_modalities": list(model.capabilities.input_modalities),
             "output_modalities": list(model.capabilities.output_modalities),

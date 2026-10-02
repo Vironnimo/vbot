@@ -79,7 +79,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": True,
                     "tools": True,
                     "json_mode": False,
-                    "reasoning": {"supported": True, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": True,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text", "image"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -106,7 +111,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": False,
                     "tools": True,
                     "json_mode": False,
-                    "reasoning": {"supported": False, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": False,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -128,7 +138,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": False,
                     "tools": True,
                     "json_mode": True,
-                    "reasoning": {"supported": False, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": False,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -150,7 +165,12 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                     "vision": True,
                     "tools": True,
                     "json_mode": True,
-                    "reasoning": {"supported": True, "control": None, "levels": []},
+                    "reasoning": {
+                        "supported": True,
+                        "control": None,
+                        "levels": [],
+                        "mandatory": False,
+                    },
                     "input_modalities": ["text", "image"],
                     "output_modalities": ["text"],
                     "supported_parameters": [],
@@ -383,6 +403,13 @@ async def test_model_get_returns_complete_model_data(
         "en-us-harper:mai-voice-2",
     ]
     assert model["capabilities"]["task_options"] == {"text_to_speech": {"codec": "mp3"}}
+    assert model["capabilities"]["reasoning"] == {
+        "supported": False,
+        "control": None,
+        "levels": [],
+        "budget_max": None,
+        "mandatory": False,
+    }
     assert model["usable_connections"] == ["api-key"]
 
 

@@ -11,6 +11,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -62,6 +63,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -113,6 +115,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -170,6 +173,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -228,6 +232,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -1289,6 +1294,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -1359,6 +1365,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -1421,6 +1428,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -1472,6 +1480,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -2323,6 +2332,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -2386,6 +2396,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -2897,6 +2908,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -2960,6 +2972,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -3156,6 +3169,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -6288,6 +6304,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -6343,6 +6362,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -7777,6 +7797,7 @@
         "reasoning": {
           "budget_max": 32768,
           "control": "budget",
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -7860,6 +7881,7 @@
         "reasoning": {
           "budget_max": 32768,
           "control": "budget",
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -7940,6 +7962,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -8130,6 +8153,9 @@
           "image",
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -8236,6 +8262,9 @@
           "image",
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "include_reasoning",
           "max_tokens",
@@ -8951,6 +8980,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9041,6 +9071,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9124,6 +9155,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9190,6 +9222,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9267,6 +9300,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9337,6 +9371,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9394,6 +9429,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9494,6 +9530,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9564,6 +9601,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9627,6 +9665,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9697,6 +9736,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9760,6 +9800,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -9958,6 +9999,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -12864,6 +12906,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -13592,6 +13635,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -13707,6 +13751,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -13780,6 +13825,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -13853,6 +13899,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -13927,6 +13974,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -14001,6 +14049,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -15243,6 +15292,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -15350,6 +15400,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -15409,6 +15460,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -15473,6 +15525,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -17535,6 +17588,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -17768,6 +17824,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -20480,6 +20539,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20542,6 +20602,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20661,6 +20722,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20786,6 +20848,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20847,6 +20910,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20905,6 +20969,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -20966,6 +21031,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21021,6 +21087,7 @@
           "levels": [
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21080,6 +21147,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21203,6 +21271,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21267,6 +21336,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21567,6 +21637,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21631,6 +21702,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -21690,6 +21762,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -22309,6 +22382,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -22379,6 +22453,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -22565,6 +22640,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -22634,6 +22710,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -23527,6 +23604,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -23586,6 +23664,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -23668,6 +23747,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -23742,6 +23822,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -23793,6 +23874,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -24380,6 +24462,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -24462,6 +24545,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25218,6 +25302,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25282,6 +25367,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25341,6 +25427,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25405,6 +25492,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25464,6 +25552,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -25784,6 +25873,7 @@
           "levels": [
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -26053,6 +26143,7 @@
           "levels": [
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -27230,6 +27321,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -28389,6 +28481,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -28566,6 +28659,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -29468,6 +29562,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -29592,6 +29687,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -29717,6 +29813,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -29899,6 +29996,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -31107,6 +31205,7 @@
             "medium",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -31391,6 +31490,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -31467,6 +31567,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -32805,6 +32906,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -33203,6 +33305,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -33265,6 +33368,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -33337,6 +33441,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -34017,6 +34122,7 @@
           "image"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -34146,6 +34252,7 @@
           "image"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -34287,6 +34394,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -34342,6 +34450,9 @@
         "output_modalities": [
           "text"
         ],
+        "reasoning": {
+          "mandatory": true
+        },
         "supported_parameters": [
           "frequency_penalty",
           "include_reasoning",
@@ -34399,6 +34510,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -36213,6 +36325,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -36424,6 +36537,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -36505,6 +36619,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -36588,6 +36703,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -36662,6 +36778,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38269,6 +38386,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38342,6 +38460,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38413,6 +38532,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38478,6 +38598,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38542,6 +38663,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38602,6 +38724,7 @@
           "text"
         ],
         "reasoning": {
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38724,6 +38847,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38857,6 +38981,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -38928,6 +39053,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39211,6 +39337,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39287,6 +39414,7 @@
             "medium",
             "high"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39451,6 +39579,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39683,6 +39812,7 @@
             "xhigh",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39878,6 +40008,7 @@
             "high",
             "xhigh"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -39958,6 +40089,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [
@@ -40033,6 +40165,7 @@
             "high",
             "max"
           ],
+          "mandatory": true,
           "supported": true
         },
         "supported_parameters": [

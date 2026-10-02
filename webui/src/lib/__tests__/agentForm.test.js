@@ -311,4 +311,13 @@ describe('thinking-effort gating', () => {
       'xhigh',
     ]);
   });
+
+  it('never offers turning mandatory reasoning off', () => {
+    expect(
+      effortOptionsForReasoning({ supported: true, mandatory: true }),
+    ).toEqual(THINKING_EFFORT_OPTIONS.filter((option) => option !== 'none'));
+    expect(
+      effortOptionsForReasoning({ ...reasoning, mandatory: true }),
+    ).toEqual(['', 'high', 'xhigh']);
+  });
 });

@@ -1,4 +1,6 @@
 {
+  "_comment": "Hand layer for StepFun: the current agentic Chat allowlist (core/providers/stepfun.py) with its Connection memberships. The Step Flash entries join their canonical records (names, limits, prices); step-3.5-flash deliberately has no effort ladder because StepFun documents none; step-router-v1 is a complete Step Plan-only record. Discovered facts apply only where these entries are silent.",
+  "provider_id": "stepfun",
   "models": {
     "step-3.5-flash": {
       "canonical": "stepfun/step-3.5-flash",
@@ -29,14 +31,6 @@
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
-      },
-      "pricing": {
-        "rates": {
-          "cache_read": 0.02,
-          "input": 0.1,
-          "output": 0.3
-        },
-        "source": "models.dev:stepfun/step-3.5-flash"
       }
     },
     "step-3.5-flash-2603": {
@@ -74,14 +68,6 @@
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
-      },
-      "pricing": {
-        "rates": {
-          "cache_read": 0.02,
-          "input": 0.1,
-          "output": 0.3
-        },
-        "source": "models.dev:stepfun/step-3.5-flash-2603"
       }
     },
     "step-3.7-flash": {
@@ -120,14 +106,6 @@
           "prompt_cache": "automatic",
           "prompt_cache_min_tokens": 256
         }
-      },
-      "pricing": {
-        "rates": {
-          "cache_read": 0.037,
-          "input": 0.185,
-          "output": 1.11
-        },
-        "source": "models.dev:stepfun/step-3.7-flash"
       }
     },
     "step-router-v1": {
@@ -181,6 +159,5 @@
       },
       "name": "Step Router V1 (Step Plan routing)"
     }
-  },
-  "provider_id": "stepfun"
+  }
 }
