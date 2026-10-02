@@ -36,13 +36,18 @@ Prices = dict[str, TokenPricing | None]
 
 _PARTICIPANT = SessionAddress(None, "temporary", "participant")
 # Each aggregate table's unit key and the address columns that replace it.
+_SESSION_ADDRESS = ("session_key", "stat_sessions", ("project_id", "agent_id", "session_id"))
 _ADDRESSES = {
-    "agg_runs": ("session_key", "stat_sessions", ("project_id", "agent_id", "session_id")),
-    "agg_tools": ("session_key", "stat_sessions", ("project_id", "agent_id", "session_id")),
-    "agg_tool_latency": (
-        "session_key",
-        "stat_sessions",
-        ("project_id", "agent_id", "session_id"),
+    **dict.fromkeys(
+        (
+            "agg_runs",
+            "agg_tools",
+            "agg_tool_latency",
+            "agg_records",
+            "agg_cache",
+            "agg_cache_breaks",
+        ),
+        _SESSION_ADDRESS,
     ),
     "agg_usage": (
         "unit_key",
@@ -181,10 +186,15 @@ async def test_incremental_maintenance_equals_a_full_rebuild(
                 model="chat/m",
                 at=_at(2),
                 content=None,
-                usage={"input_tokens": 100, "output_tokens": 10},
+                usage={"input_tokens": 4000, "output_tokens": 10, "cache_read_tokens": 0},
             ),
             _tool(name="read", at=_at(3), envelope=tool_success({}), duration_ms=250),
-            _assistant(model="chat/m", at=_at(4), usage={"input_tokens": 120, "output_tokens": 5}),
+            # A cache read far below the previous prompt: a suspected cache break.
+            _assistant(
+                model="chat/m",
+                at=_at(4),
+                usage={"input_tokens": 4100, "output_tokens": 5, "cache_read_tokens": 100},
+            ),
             _run_summary(status="completed", at=_at(5), duration_ms=4000, run_id="a1"),
         ],
     )

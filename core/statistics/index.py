@@ -78,8 +78,10 @@ _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
 # The kernel discards and rebuilds an index built for another projection
-# version. Bump it when the fact tables or the meaning of their rows change.
-_PROJECTION_VERSION = 3
+# version. Bump it when the fact or aggregate tables or the meaning of their
+# rows change; the kernel adds a new table empty, so a new aggregate needs a
+# bump to be filled.
+_PROJECTION_VERSION = 4
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 
@@ -744,13 +746,14 @@ def _append(
         session_key,
         {str(record[5]) for record in rows.records if record[5]} | changed_runs,
     )
-    if rows.tools:
-        changes.tool_sessions.add(session_key)
+    if rows.records:
+        # New records extend the Session's per-Session cubes.
+        changes.fact_sessions.add(session_key)
     if {record.run_id: record.run_kind for record in runs} != {
         run_id: str(values[2]) for run_id, values in stored.items()
     }:
         # Run identities decide the origin of this Session's Tools and requests.
-        changes.tool_sessions.add(session_key)
+        changes.fact_sessions.add(session_key)
         changes.addresses.add(key)
 
 

@@ -13,8 +13,13 @@ Units and their tables:
   (Model steps, Tool calls, Compactions, errors) and its requests. Requests
   are the ledger requests recorded for its Session address and Run id; a Run
   without any uses the usage saved in its own records instead.
-- A Session's Tool calls (``agg_tools`` per hour and ``agg_tool_latency``, a
-  duration histogram with ``bucket = floor(4 * log2(duration_ms + 1))``).
+- A Session's per-hour cubes over its own records: Tool calls (``agg_tools``
+  and ``agg_tool_latency``, a duration histogram with
+  ``bucket = floor(4 * log2(duration_ms + 1))``), records by role with their
+  visible chat steps (``agg_records``), and prompt-cache turns (``agg_cache``
+  per hour, ``agg_cache_breaks`` per suspected break). Each cache-reporting
+  turn is judged against its predecessor in the whole Session, so the
+  judgement does not depend on a report window.
 - A ledger unit's requests (``agg_usage``, per hour).
 
 Every Run, Tool call and request has one origin; the first matching rule
@@ -143,9 +148,50 @@ CREATE TABLE agg_tool_latency (
     PRIMARY KEY (hour, session_key, origin, name, bucket)
 ) WITHOUT ROWID;
 CREATE INDEX agg_tool_latency_session ON agg_tool_latency(session_key);
+CREATE TABLE agg_records (
+    hour INTEGER NOT NULL,
+    session_key INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    records INTEGER NOT NULL,
+    visible_steps INTEGER NOT NULL,
+    PRIMARY KEY (hour, session_key, role)
+) WITHOUT ROWID;
+CREATE INDEX agg_records_session ON agg_records(session_key);
+CREATE TABLE agg_cache (
+    hour INTEGER NOT NULL,
+    session_key INTEGER NOT NULL,
+    turns INTEGER NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    cache_write_tokens INTEGER NOT NULL,
+    evaluated_turns INTEGER NOT NULL,
+    suspected_turns INTEGER NOT NULL,
+    last_instant INTEGER NOT NULL,
+    PRIMARY KEY (hour, session_key)
+) WITHOUT ROWID;
+CREATE INDEX agg_cache_session ON agg_cache(session_key);
+CREATE TABLE agg_cache_breaks (
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    instant INTEGER NOT NULL,
+    model_key TEXT NOT NULL,
+    previous_input_tokens INTEGER NOT NULL,
+    cache_read_tokens INTEGER NOT NULL,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID;
 """
 
-ROLLUP_TABLES = ("agg_runs", "agg_usage", "agg_tools", "agg_tool_latency")
+ROLLUP_TABLES = (
+    "agg_runs",
+    "agg_usage",
+    "agg_tools",
+    "agg_tool_latency",
+    "agg_records",
+    "agg_cache",
+    "agg_cache_breaks",
+)
+# Aggregates recomputed whole per Session from its own records.
+_SESSION_CUBES = ("agg_tools", "agg_tool_latency", "agg_records", "agg_cache", "agg_cache_breaks")
 
 ORIGINS = (
     "extension",
@@ -167,7 +213,9 @@ class RollupChanges:
     """The aggregate units one reconcile touched.
 
     ``rebuild`` recomputes every aggregate. ``sessions`` recompute a Session's
-    Runs and Tools whole (also after its removal); ``addresses`` recompute the
+    Runs and per-Session cubes whole (also after its removal);
+    ``fact_sessions`` recompute only the cubes of a Session whose records grew
+    or whose Run identities changed; ``addresses`` recompute the
     ledger units at a Session address, whose requests take their origin from
     that Session. ``runs`` are ``(session_key, run_id)``; ``units`` are ledger
     unit keys; ``unit_runs`` are ``(unit_key, run_id)`` of changed requests,
@@ -178,7 +226,7 @@ class RollupChanges:
     sessions: set[int] = field(default_factory=set)
     addresses: set[SessionKey] = field(default_factory=set)
     runs: set[tuple[int, str]] = field(default_factory=set)
-    tool_sessions: set[int] = field(default_factory=set)
+    fact_sessions: set[int] = field(default_factory=set)
     units: set[int] = field(default_factory=set)
     unit_runs: set[tuple[int, str]] = field(default_factory=set)
 
@@ -212,7 +260,7 @@ class RollupChanges:
                 self.sessions,
                 self.addresses,
                 self.runs,
-                self.tool_sessions,
+                self.fact_sessions,
                 self.units,
                 self.unit_runs,
             )
@@ -223,7 +271,7 @@ class RollupChanges:
 _WORK_TABLES = {
     "rollup_sessions": "session_key INTEGER",
     "rollup_runs": "session_key INTEGER, run_id TEXT",
-    "rollup_tool_sessions": "session_key INTEGER",
+    "rollup_fact_sessions": "session_key INTEGER",
     "rollup_units": "unit_key INTEGER",
     "rollup_addresses": "project_id TEXT, agent_id TEXT, session_id TEXT",
     "rollup_unit_runs": "unit_key INTEGER, run_id TEXT",
@@ -246,13 +294,15 @@ def maintain_rollups(connection: sqlite3.Connection, changes: RollupChanges) -> 
             "INSERT INTO temp.rollup_runs SELECT session_key, run_id FROM stat_run_records"
         )
         connection.execute(
-            "INSERT INTO temp.rollup_tool_sessions SELECT session_key FROM stat_sessions"
+            "INSERT INTO temp.rollup_fact_sessions SELECT session_key FROM stat_sessions"
         )
         connection.execute("INSERT INTO temp.rollup_units SELECT session_key FROM stat_usage_units")
     else:
         _collect(connection, changes)
     _recompute_runs(connection)
     _recompute_tools(connection)
+    _recompute_records(connection)
+    _recompute_cache(connection)
     _recompute_usage(connection)
     for name in _WORK_TABLES:
         connection.execute(f"DROP TABLE temp.{name}")
@@ -273,7 +323,7 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
 
     insert("rollup_sessions", ((key,) for key in changes.sessions))
     insert("rollup_runs", changes.runs)
-    insert("rollup_tool_sessions", ((key,) for key in changes.sessions | changes.tool_sessions))
+    insert("rollup_fact_sessions", ((key,) for key in changes.sessions | changes.fact_sessions))
     insert("rollup_units", ((key,) for key in changes.units))
     insert("rollup_addresses", changes.addresses)
     insert("rollup_unit_runs", changes.unit_runs)
@@ -304,10 +354,10 @@ def _collect(connection: sqlite3.Connection, changes: RollupChanges) -> None:
         "DELETE FROM agg_runs WHERE (session_key, run_id) IN "
         "(SELECT session_key, run_id FROM temp.rollup_runs)"
     )
-    for table in ("agg_tools", "agg_tool_latency"):
+    for table in _SESSION_CUBES:
         connection.execute(
             f"DELETE FROM {table} WHERE session_key IN "
-            "(SELECT session_key FROM temp.rollup_tool_sessions)"
+            "(SELECT session_key FROM temp.rollup_fact_sessions)"
         )
     connection.execute(
         "DELETE FROM agg_usage WHERE unit_key IN (SELECT unit_key FROM temp.rollup_units)"
@@ -334,6 +384,82 @@ def session_origin_sql(session: str) -> str:
         f"CASE WHEN {session}.owner_name <> '' THEN 'extension' "
         f"WHEN {session}.is_subagent = 1 THEN 'subagent' ELSE 'user' END"
     )
+
+
+# Prompt-cache-break heuristic (best-effort, derived). A measured turn is
+# evaluated against its predecessor only when no legitimate prefix change
+# explains a cache miss; the thresholds keep false positives low rather than
+# catching every break.
+CACHE_BREAK_READ_RATIO = 0.5
+"""A cache read below this share of the previous turn's prompt is a suspected break."""
+CACHE_BREAK_MAX_GAP_SECONDS = 300
+"""Provider prompt caches expire after ~5 idle minutes; longer gaps are expected misses."""
+CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS = 2048
+"""Below provider minimum cacheable prompt sizes an empty cache read is legitimate."""
+_MICROSECONDS_PER_SECOND = 1_000_000
+
+
+def judged_cache_turns_sql(source: str, where: str, unit: str) -> str:
+    """Select every measured, cache-reporting Assistant turn of ``source`` with its judgement.
+
+    ``source`` is a FROM clause yielding ``stat_records r`` rows, ``where``
+    filters them and ``unit`` names the partition the turns are ordered in.
+    Only measured Assistant turns set an expectation baseline; a Compaction
+    checkpoint, an Agent takeover, a turn without Usage or an estimated turn
+    clears it. A cache-reporting turn is evaluated against the immediately
+    preceding measured turn when that turn also reported cache fields, used
+    the same Model, sent a prompt of at least the minimum cacheable size and
+    ran within the cache lifetime; a read below the break ratio of the
+    previous prompt is a suspected break (``incident``). Columns: ``unit, seq,
+    timestamp, instant, model_key, input_tokens, cache_read_tokens,
+    cache_write_tokens, previous_input_tokens, evaluated, incident``.
+    """
+    return f"""
+        WITH stream AS (
+            SELECT {unit} AS unit, r.seq, r.timestamp, r.instant, c.model_key, c.has_cache,
+                COALESCE(c.input_tokens, 0) AS input_tokens,
+                COALESCE(c.cache_read_tokens, 0) AS cache_read_tokens,
+                COALESCE(c.cache_write_tokens, 0) AS cache_write_tokens,
+                (r.role = 'assistant' AND c.has_usage = 1
+                    AND c.input_estimated = 0 AND c.output_estimated = 0) AS measured
+            FROM {source}
+            LEFT JOIN stat_calls c
+                ON c.session_key = r.session_key AND c.seq = r.seq AND c.kind = 0
+            WHERE {where}
+                AND r.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
+        ),
+        turns AS (
+            SELECT unit, seq, timestamp, instant, model_key, has_cache, input_tokens,
+                cache_read_tokens, cache_write_tokens, measured,
+                LAG(measured) OVER turn_order AS previous_measured,
+                LAG(has_cache) OVER turn_order AS previous_has_cache,
+                LAG(model_key) OVER turn_order AS previous_model_key,
+                LAG(input_tokens) OVER turn_order AS previous_input_tokens,
+                LAG(instant) OVER turn_order AS previous_instant
+            FROM stream
+            WINDOW turn_order AS (PARTITION BY unit ORDER BY seq)
+        ),
+        judged AS (
+            SELECT unit, seq, timestamp, instant, model_key, input_tokens,
+                cache_read_tokens, cache_write_tokens, previous_input_tokens, COALESCE(
+                previous_measured = 1
+                AND previous_has_cache = 1
+                AND previous_model_key = model_key
+                AND previous_input_tokens >= {CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS}
+                AND instant - previous_instant
+                    BETWEEN 0 AND {CACHE_BREAK_MAX_GAP_SECONDS * _MICROSECONDS_PER_SECOND},
+                0
+            ) AS evaluated
+            FROM turns
+            WHERE measured = 1 AND has_cache = 1
+        )
+        SELECT unit, seq, timestamp, instant, model_key, input_tokens, cache_read_tokens,
+            cache_write_tokens, previous_input_tokens, evaluated,
+            (evaluated = 1
+                AND cache_read_tokens < previous_input_tokens * {CACHE_BREAK_READ_RATIO}
+            ) AS incident
+        FROM judged
+    """
 
 
 # The origin of a ledger request: ``r`` its record, ``c`` its call, ``u`` its
@@ -524,7 +650,7 @@ def _recompute_tools(connection: sqlite3.Connection) -> None:
         f"ELSE {session_origin_sql('s')} END"
     )
     source = """
-        FROM temp.rollup_tool_sessions d
+        FROM temp.rollup_fact_sessions d
         CROSS JOIN stat_sessions s ON s.session_key = d.session_key
         CROSS JOIN stat_tools r ON r.session_key = d.session_key
         LEFT JOIN stat_run_records rr ON rr.session_key = r.session_key AND rr.run_id = r.run_id
@@ -552,6 +678,58 @@ def _recompute_tools(connection: sqlite3.Connection) -> None:
         GROUP BY hour, r.session_key, origin, r.name, r.latency_bucket
         """
     )
+
+
+def _recompute_records(connection: sqlite3.Connection) -> None:
+    """Records by hour and role; ``visible_steps`` are visible chat Model steps."""
+    connection.execute(
+        f"""
+        INSERT INTO agg_records (hour, session_key, role, records, visible_steps)
+        SELECT {_HOUR} AS hour, r.session_key, r.role, COUNT(*), COUNT(c.seq)
+        FROM temp.rollup_fact_sessions d
+        CROSS JOIN stat_records r ON r.session_key = d.session_key
+        LEFT JOIN stat_calls c ON c.session_key = r.session_key AND c.seq = r.seq
+            AND c.kind = 0 AND c.visible = 1
+        GROUP BY hour, r.session_key, r.role
+        """
+    )
+
+
+def _recompute_cache(connection: sqlite3.Connection) -> None:
+    connection.execute("DROP TABLE IF EXISTS temp.rollup_cache_turns")
+    connection.execute(
+        "CREATE TEMP TABLE rollup_cache_turns AS "
+        + judged_cache_turns_sql(
+            "temp.rollup_fact_sessions d "
+            "CROSS JOIN stat_records r ON r.session_key = d.session_key",
+            "1",
+            "r.session_key",
+        )
+    )
+    connection.execute(
+        f"""
+        INSERT INTO agg_cache (
+            hour, session_key, turns, input_tokens, cache_read_tokens, cache_write_tokens,
+            evaluated_turns, suspected_turns, last_instant
+        )
+        SELECT t.instant / {MICROSECONDS_PER_HOUR} AS hour, t.unit, COUNT(*),
+            SUM(t.input_tokens), SUM(t.cache_read_tokens), SUM(t.cache_write_tokens),
+            SUM(t.evaluated), SUM(t.incident), MAX(t.instant)
+        FROM temp.rollup_cache_turns t
+        GROUP BY hour, t.unit
+        """
+    )
+    connection.execute(
+        """
+        INSERT INTO agg_cache_breaks (
+            session_key, seq, instant, model_key, previous_input_tokens, cache_read_tokens
+        )
+        SELECT t.unit, t.seq, t.instant, t.model_key, t.previous_input_tokens,
+            t.cache_read_tokens
+        FROM temp.rollup_cache_turns t WHERE t.incident = 1
+        """
+    )
+    connection.execute("DROP TABLE temp.rollup_cache_turns")
 
 
 def _recompute_usage(connection: sqlite3.Connection) -> None:

@@ -5,7 +5,11 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import timedelta
 
-from core.statistics._cache import TOP_CACHE_BREAK_INCIDENTS, cache_section, load_cache_facts
+from core.statistics._cache import (
+    MIN_CACHE_SESSION_TURNS,
+    TOP_CACHE_BREAK_INCIDENTS,
+    TOP_CACHE_SESSIONS,
+)
 from core.statistics._compactions import CompactionAccumulator
 from core.statistics._sections.common import (
     RUN_COST_ORDER,
@@ -16,8 +20,9 @@ from core.statistics._sections.common import (
     usd,
 )
 from core.statistics._sections.overview import RUNAWAY_ITERATIONS
-from core.statistics._sections.window import hour_timestamp
+from core.statistics._sections.window import hour_timestamp, instant_timestamp
 from core.statistics._units import ReportUnit, UnitScan
+from core.statistics.report import CacheBreakIncident, SessionCacheUsage
 
 TOP_FAILED_HOURS = 10
 # A Run is a cost outlier at this multiple of the median positive Run cost.
@@ -62,10 +67,9 @@ def build(context: ReportContext) -> JsonObject:
     )
     compactions = CompactionAccumulator()
     compactions.load(scan, [unit.title for unit in units])
-    cache = cache_section(load_cache_facts(scan, top_incidents=TOP_CACHE_BREAK_INCIDENTS))
     return {
         "compactions": asdict(compactions.build()),
-        "cache": asdict(cache),
+        "cache": _cache(context),
         "data_quality": _data_quality(context),
         "failed_attempts": _failed_attempts(context),
         "runaway_runs": _runaway_runs(context),
@@ -76,6 +80,80 @@ def build(context: ReportContext) -> JsonObject:
             )
         ),
         "roles": _roles(context),
+    }
+
+
+def _cache(context: ReportContext) -> JsonObject:
+    """Prompt-cache health of listed Sessions from the cache cubes.
+
+    The lowest hit rates need at least two cache-reporting turns with a
+    prompt; suspected breaks are the largest read shortfalls first.
+    """
+    sessions: list[SessionCacheUsage] = []
+    evaluated = suspected = 0
+    for key, turns, input_tokens, read, write, judged, flagged, last_instant in context.query(
+        f"""
+        SELECT c.session_key, SUM(c.turns), SUM(c.input_tokens), SUM(c.cache_read_tokens),
+            SUM(c.cache_write_tokens), SUM(c.evaluated_turns), SUM(c.suspected_turns),
+            MAX(c.last_instant)
+        FROM agg_cache c WHERE {context.hour_condition("c")}
+        GROUP BY c.session_key
+        """
+    ):
+        session = context.by_key.get(key)
+        if session is None:
+            continue
+        evaluated += judged
+        suspected += flagged
+        if turns < MIN_CACHE_SESSION_TURNS or input_tokens <= 0:
+            continue
+        sessions.append(
+            SessionCacheUsage(
+                agent_id=session.display_key,
+                session_id=session.address.session_id,
+                cache_turns=turns,
+                input_tokens=input_tokens,
+                cache_read_tokens=read,
+                cache_write_tokens=write,
+                hit_rate=read / input_tokens,
+                last_activity=instant_timestamp(last_instant),
+                session_title=session.title,
+            )
+        )
+    # Worst hit rate first; equal rates surface the bigger Session first.
+    sessions.sort(key=lambda row: (row.hit_rate, -row.input_tokens, row.session_id))
+    # Largest read shortfall first, then Session id, time and position.
+    breaks: list[tuple[tuple[int, str, int, int, int], CacheBreakIncident]] = []
+    for key, seq, instant, model, previous_input, read in context.query(
+        f"""
+        SELECT b.session_key, b.seq, b.instant, b.model_key, b.previous_input_tokens,
+            b.cache_read_tokens
+        FROM agg_cache_breaks b WHERE {context.instant_condition("b.instant")}
+        """
+    ):
+        session = context.by_key.get(key)
+        if session is None:
+            continue
+        incident = CacheBreakIncident(
+            agent_id=session.display_key,
+            session_id=session.address.session_id,
+            timestamp=instant_timestamp(instant),
+            model=model,
+            previous_input_tokens=previous_input,
+            cache_read_tokens=read,
+            session_title=session.title,
+        )
+        breaks.append(((read - previous_input, incident.session_id, instant, key, seq), incident))
+    breaks.sort(key=lambda item: item[0])
+    return {
+        "lowest_hit_rate_sessions": [asdict(row) for row in sessions[:TOP_CACHE_SESSIONS]],
+        "suspected_breaks": {
+            "evaluated_turns": evaluated,
+            "suspected_turns": suspected,
+            "incidents": [
+                asdict(incident) for _order, incident in breaks[:TOP_CACHE_BREAK_INCIDENTS]
+            ],
+        },
     }
 
 
@@ -177,17 +255,15 @@ def _runaway_runs(context: ReportContext) -> list[JsonObject]:
 
 
 def _roles(context: ReportContext) -> JsonObject:
-    records = dict(
-        context.query(
-            f"SELECT r.role, COUNT(*) FROM stat_records r "
-            f"WHERE {context.instant_condition('r.instant')} GROUP BY r.role"
-        )
-    )
-    visible = context.scalar(
-        "SELECT COUNT(*) FROM stat_calls c WHERE c.kind = 0 AND c.visible = 1 AND "
-        + context.instant_condition("c.instant")
-    )
+    records: dict[str, int] = {}
+    visible = 0
+    for role, count, steps in context.query(
+        f"SELECT r.role, SUM(r.records), SUM(r.visible_steps) FROM agg_records r "
+        f"WHERE {context.hour_condition('r')} GROUP BY r.role"
+    ):
+        records[role] = count
+        visible += steps
     return {
-        "chat_messages_by_role": {"user": records.get("user", 0), "assistant": int(visible)},
+        "chat_messages_by_role": {"user": records.get("user", 0), "assistant": visible},
         "session_records_by_role": {role: records.get(role, 0) for role in SESSION_RECORD_ROLES},
     }

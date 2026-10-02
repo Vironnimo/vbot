@@ -139,7 +139,7 @@ def test_a_corrupt_kernel_projection_is_discarded_and_rebuilt_once(
     expected_identity = {
         "application_id": APPLICATION_IDS["statistics"],
         "database_name": "statistics",
-        "projection_version": "3",
+        "projection_version": "4",
     }
     assert _index_identity(tmp_path).items() >= expected_identity.items()
     # Corrupt at rest: under WAL an open connection keeps reading its own pages.
@@ -544,7 +544,7 @@ def test_an_index_of_another_shape_is_discarded_and_rebuilt(
     report = statistics().report()
 
     assert _run_input_tokens(report) == 10
-    assert _index_identity(tmp_path)["projection_version"] == "3"
+    assert _index_identity(tmp_path)["projection_version"] == "4"
     with closing(sqlite3.connect(_index_path(tmp_path))) as connection:
         error_columns = {
             row[1]: row[3] for row in connection.execute("PRAGMA table_info(stat_errors)")

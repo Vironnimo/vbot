@@ -306,12 +306,14 @@ class ReportContext:
     # -- window conditions ---------------------------------------------------
 
     def hour_condition(self, alias: str, window: ReportWindow | None = None) -> str:
-        low, high = (window or self.window).hours
-        return f"{alias}.hour >= {low} AND {alias}.hour < {high}"
+        selected = window or self.window
+        low, high = selected.hours
+        return _bounds(f"{alias}.hour", selected, low, high)
 
     def instant_condition(self, column: str, window: ReportWindow | None = None) -> str:
-        low, high = (window or self.window).instants
-        return f"{column} >= {low} AND {column} < {high}"
+        selected = window or self.window
+        low, high = selected.instants
+        return _bounds(column, selected, low, high)
 
     # -- rows ------------------------------------------------------------------
 
@@ -362,6 +364,20 @@ RUN_COST_ORDER = (
     "(r.calls > 0 AND r.unpriced_calls >= r.calls), "
     "r.reported_nusd + r.estimated_nusd DESC, r.calls DESC"
 )
+
+
+def _bounds(column: str, window: ReportWindow, low: int, high: int) -> str:
+    """``column`` within ``[low, high)``, naming only the bounded sides.
+
+    An open side adds no condition, so an all-time read scans its table
+    instead of walking a time index row by row.
+    """
+    conditions = []
+    if window.since is not None:
+        conditions.append(f"{column} >= {low}")
+    if window.until is not None:
+        conditions.append(f"{column} < {high}")
+    return " AND ".join(conditions) or "1"
 
 
 def _address_key(address: SessionAddress) -> _AddressKey:

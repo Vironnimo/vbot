@@ -4,26 +4,24 @@ from __future__ import annotations
 
 import math
 from collections import Counter
-from typing import Any
+from typing import Any, NamedTuple
 
 from core.statistics._extensions import EXTENSION_ACTOR_PREFIX
+from core.statistics._projection import MICROSECONDS_PER_HOUR
 from core.statistics._rollups import ORIGINS
 from core.statistics._sections.common import (
+    RUN_STATUSES,
     JsonObject,
     ReportContext,
-    RunFact,
     Totals,
     cost_order,
     failed_calls_sql,
     grouped_totals,
-    load_runs,
     percentile,
-    sorted_values,
-    status_counts,
     usage_totals,
     usd,
 )
-from core.statistics._sections.window import hour_timestamp
+from core.statistics._sections.window import ReportWindow, hour_timestamp
 
 TOP_ROWS = 5
 
@@ -39,20 +37,68 @@ TOOL_FAILURE_MIN_CALLS = 20
 TOOL_FAILURE_RATE = 0.25
 
 
+# A Run's known cost in nano-USD; NULL when every one of its requests is unpriced.
+_KNOWN_COST = (
+    "CASE WHEN r.calls > 0 AND r.unpriced_calls >= r.calls "
+    "THEN NULL ELSE r.reported_nusd + r.estimated_nusd END"
+)
+
+
+class RunGroup(NamedTuple):
+    """In-window Runs that share a start hour, origin, status and Session."""
+
+    hour: int
+    origin: str
+    status: str
+    session_key: int
+    runs: int
+    runaway: int
+    priced_runs: int
+    cost: int
+
+
+def _run_groups(context: ReportContext, window: ReportWindow | None = None) -> list[RunGroup]:
+    """The window's Runs aggregated in SQL; Python only folds the small groups."""
+    return [
+        RunGroup(*row)
+        for row in context.query(
+            f"""
+            SELECT r.start_instant / {MICROSECONDS_PER_HOUR} AS hour, r.origin, r.status,
+                r.session_key, COUNT(*), SUM(COALESCE(r.iterations, 0) >= {RUNAWAY_ITERATIONS}),
+                COUNT({_KNOWN_COST}), COALESCE(SUM({_KNOWN_COST}), 0)
+            FROM agg_runs r WHERE {context.instant_condition("r.start_instant", window)}
+            GROUP BY hour, r.origin, r.status, r.session_key
+            """
+        )
+    ]
+
+
+def _status_counts(groups: list[RunGroup]) -> JsonObject:
+    counts = dict.fromkeys(RUN_STATUSES, 0)
+    total = 0
+    for group in groups:
+        total += group.runs
+        if group.status in counts:
+            counts[group.status] += group.runs
+    return {"total": total, **counts}
+
+
 def build(context: ReportContext) -> JsonObject:
     window = context.window
     previous = window.previous()
     totals = usage_totals(context)
-    runs = load_runs(context)
-    previous_runs = load_runs(context, previous) if previous is not None else None
+    runs = _run_groups(context)
+    previous_runs = _run_groups(context, previous) if previous is not None else None
     models = grouped_totals(context, "a.model_key")
     return {
         "totals": totals.json(),
         "previous": usage_totals(context, previous).json() if previous is not None else None,
-        "runs": status_counts(runs),
-        "previous_runs": status_counts(previous_runs) if previous_runs is not None else None,
-        "user_runs": _user_runs(runs),
-        "previous_user_runs": _user_runs(previous_runs) if previous_runs is not None else None,
+        "runs": _status_counts(runs),
+        "previous_runs": _status_counts(previous_runs) if previous_runs is not None else None,
+        "user_runs": _user_runs(context, runs),
+        "previous_user_runs": (
+            _user_runs(context, previous_runs, previous) if previous_runs is not None else None
+        ),
         "active_agents": _active_agents(context),
         "active_sessions": _active_sessions(context),
         "series": _series(context, runs),
@@ -78,20 +124,40 @@ def build(context: ReportContext) -> JsonObject:
     }
 
 
-def _user_runs(runs: list[RunFact]) -> JsonObject:
+def _user_runs(
+    context: ReportContext, groups: list[RunGroup], window: ReportWindow | None = None
+) -> JsonObject:
     """Percentiles of user Runs; durations and costs of finished Runs only."""
-    user = [run for run in runs if run.origin == "user"]
-    finished = [run for run in user if run.status != "running"]
-    durations = sorted_values(run.duration_ms for run in finished)
-    costs = sorted_values(run.cost for run in finished)
+
+    def values(value_sql: str, finished: bool) -> list[int]:
+        condition = " AND r.status <> 'running'" if finished else ""
+        return [
+            row[0]
+            for row in context.query(
+                f"SELECT {value_sql} AS value FROM agg_runs r "
+                f"WHERE r.origin = 'user' AND "
+                f"{context.instant_condition('r.start_instant', window)}{condition} "
+                "AND value IS NOT NULL ORDER BY value"
+            )
+        ]
+
+    count = sum(group.runs for group in groups if group.origin == "user")
+    if not count:
+        durations: list[int] = []
+        costs: list[int] = []
+        first_visible: list[int] = []
+    else:
+        durations = values("r.duration_ms", finished=True)
+        costs = values(_KNOWN_COST, finished=True)
+        first_visible = values("r.first_visible_ms", finished=False)
     cost_p50, cost_p90 = percentile(costs, 50), percentile(costs, 90)
     return {
-        "count": len(user),
+        "count": count,
         "duration_p50_ms": percentile(durations, 50),
         "duration_p90_ms": percentile(durations, 90),
         "cost_p50_usd": None if cost_p50 is None else usd(cost_p50),
         "cost_p90_usd": None if cost_p90 is None else usd(cost_p90),
-        "first_visible_p50_ms": percentile(sorted_values(run.first_visible_ms for run in user), 50),
+        "first_visible_p50_ms": percentile(first_visible, 50),
     }
 
 
@@ -134,18 +200,19 @@ def _active_sessions(context: ReportContext) -> int:
     )
 
 
-def _series(context: ReportContext, runs: list[RunFact]) -> list[JsonObject]:
+def _series(context: ReportContext, runs: list[RunGroup]) -> list[JsonObject]:
     hourly = grouped_totals(context, "a.hour")
-    run_hours = [run.start_hour for run in runs]
+    run_hours = {group.hour for group in runs}
     active = [*hourly, *run_hours]
     hours = context.window.series_hours(min(active, default=None), max(active, default=None))
     days = {day: (Totals(), Counter[str]()) for day in context.calendar.days(hours)}
     for hour, totals in hourly.items():
         days[context.calendar.date(hour)][0].merge(totals)
-    for run in runs:
-        counts = days[context.calendar.date(run.start_hour)][1]
-        counts["runs"] += 1
-        counts["failed_runs"] += run.status == "failed"
+    for group in runs:
+        counts = days[context.calendar.date(group.hour)][1]
+        counts["runs"] += group.runs
+        if group.status == "failed":
+            counts["failed_runs"] += group.runs
     points = []
     for day, (totals, counts) in days.items():
         values = totals.json()
@@ -172,9 +239,11 @@ _SERIES_FIELDS = (
 )
 
 
-def _by_origin(context: ReportContext, runs: list[RunFact]) -> list[JsonObject]:
+def _by_origin(context: ReportContext, runs: list[RunGroup]) -> list[JsonObject]:
     usage = grouped_totals(context, "a.origin")
-    run_counts = Counter(run.origin for run in runs)
+    run_counts: Counter[str] = Counter()
+    for group in runs:
+        run_counts[group.origin] += group.runs
     return [
         {
             "origin": origin,
@@ -190,15 +259,15 @@ def _by_origin(context: ReportContext, runs: list[RunFact]) -> list[JsonObject]:
     ]
 
 
-def _top_agents(context: ReportContext, runs: list[RunFact]) -> list[JsonObject]:
+def _top_agents(context: ReportContext, runs: list[RunGroup]) -> list[JsonObject]:
     usage = grouped_totals(
         context, "u.actor", f"JOIN {context.units_table} u ON u.unit_key = a.unit_key"
     )
     run_counts: Counter[str] = Counter()
-    for run in runs:
-        session = context.by_key.get(run.session_key)
+    for group in runs:
+        session = context.by_key.get(group.session_key)
         if session is not None:
-            run_counts[session.display_key] += 1
+            run_counts[session.display_key] += group.runs
     rows = [
         {
             "agent_id": actor,
@@ -217,7 +286,7 @@ def _top_agents(context: ReportContext, runs: list[RunFact]) -> list[JsonObject]
 
 
 def _insights(
-    context: ReportContext, totals: Totals, runs: list[RunFact], models: dict[str, Totals]
+    context: ReportContext, totals: Totals, runs: list[RunGroup], models: dict[str, Totals]
 ) -> list[JsonObject]:
     insights: list[JsonObject] = []
 
@@ -232,8 +301,8 @@ def _insights(
             "uncached_value",
             {"share": uncached / estimated, "cost_usd": usd(uncached), "top_model": top_model},
         )
-    cancelled = [run for run in runs if run.status == "cancelled"]
-    cancelled_cost = sum(run.cost or 0 for run in cancelled)
+    cancelled = [group for group in runs if group.status == "cancelled"]
+    cancelled_cost = sum(group.cost for group in cancelled)
     if (
         totals.cost_nusd > 0
         and cancelled_cost > 0
@@ -244,14 +313,23 @@ def _insights(
             {
                 "share": cancelled_cost / totals.cost_nusd,
                 "cost_usd": usd(cancelled_cost),
-                "runs": len(cancelled),
+                "runs": sum(group.runs for group in cancelled),
             },
         )
-    costs = sorted((run.cost for run in runs if run.cost is not None), reverse=True)
-    run_cost = sum(costs)
-    if len(costs) >= TOP_RUNS_MIN_RUNS and run_cost > 0:
-        top = math.ceil(len(costs) * TOP_RUNS_FRACTION)
-        share = sum(costs[:top]) / run_cost
+    priced_runs = sum(group.priced_runs for group in runs)
+    run_cost = sum(group.cost for group in runs)
+    if priced_runs >= TOP_RUNS_MIN_RUNS and run_cost > 0:
+        top = math.ceil(priced_runs * TOP_RUNS_FRACTION)
+        top_cost = context.scalar(
+            f"""
+            SELECT SUM(cost) FROM (
+                SELECT {_KNOWN_COST} AS cost FROM agg_runs r
+                WHERE {context.instant_condition("r.start_instant")} AND cost IS NOT NULL
+                ORDER BY cost DESC LIMIT {top}
+            )
+            """
+        )
+        share = top_cost / run_cost
         if share >= TOP_RUNS_SHARE:
             emit("top_runs_share", {"share": share, "runs": top}, severity="info")
     burst = context.query(
@@ -275,9 +353,7 @@ def _insights(
             "failed_attempt_burst",
             {"hour_start": hour_timestamp(hour), "failed": failed, "model": model},
         )
-    runaway = sum(
-        run.iterations is not None and run.iterations >= RUNAWAY_ITERATIONS for run in runs
-    )
+    runaway = sum(group.runaway for group in runs)
     if runaway:
         emit("runaway_runs", {"runs": runaway})
     failing = [

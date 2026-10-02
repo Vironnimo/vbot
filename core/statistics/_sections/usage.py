@@ -29,47 +29,73 @@ TOP_SESSIONS = 50
 RECENT_CALLS = 50
 
 
+# Each breakdown's key over usage cube rows ``a`` and their report units ``u``.
+_DIMENSIONS = {
+    "agent": "u.actor",
+    "model": "a.model_key",
+    "provider": provider_sql("a.model_key"),
+    "project": "u.project",
+    "origin": "a.origin",
+    "kind": "a.kind",
+}
+
+
 def build(context: ReportContext) -> JsonObject:
     units = context.units_table
-    sessions = context.sessions_table
-    in_window = context.instant_condition("r.start_instant")
-    run_models = f"FROM agg_runs r, json_each(r.models) m WHERE {in_window}"
-    run_sessions = (
-        f"FROM agg_runs r JOIN {sessions} s ON s.session_key = r.session_key WHERE {in_window}"
-    )
-    dimensions = {
-        "agent": ("u.actor", f"SELECT s.actor, COUNT(*) {run_sessions} GROUP BY s.actor"),
-        "model": ("a.model_key", f"SELECT m.value, COUNT(*) {run_models} GROUP BY m.value"),
-        "provider": (
-            provider_sql("a.model_key"),
-            f"SELECT provider, COUNT(*) FROM (SELECT DISTINCT r.session_key, r.run_id, "
-            f"{provider_sql('m.value')} AS provider {run_models}) GROUP BY provider",
-        ),
-        "project": ("u.project", f"SELECT s.project, COUNT(*) {run_sessions} GROUP BY s.project"),
-        "origin": (
-            "a.origin",
-            f"SELECT r.origin, COUNT(*) FROM agg_runs r WHERE {in_window} GROUP BY r.origin",
-        ),
-        "kind": (
-            "a.kind",
-            f"SELECT k.value, COUNT(*) FROM agg_runs r, json_each(r.kinds) k "
-            f"WHERE {in_window} GROUP BY k.value",
-        ),
-    }
+    runs, session_runs = _run_counts(context)
     return {
         "totals": usage_totals(context).json(),
         "breakdowns": {
-            name: _breakdown(context, key_sql, runs_sql)
-            for name, (key_sql, runs_sql) in dimensions.items()
+            name: _breakdown(context, key_sql, runs[name]) for name, key_sql in _DIMENSIONS.items()
         },
         "series": _series(context),
         "top_runs": context.run_rows("1", RUN_COST_ORDER, TOP_RUNS),
-        "top_sessions": _top_sessions(context, units, run_sessions),
+        "top_sessions": _top_sessions(context, units, session_runs),
         "recent_calls": _recent_calls(context, units),
     }
 
 
-def _breakdown(context: ReportContext, key_sql: str, runs_sql: str) -> list[JsonObject]:
+def _run_counts(context: ReportContext) -> tuple[dict[str, Counter[str]], Counter[int]]:
+    """In-window Runs per breakdown key and per listed Session address, from one scan.
+
+    A Run counts once under each Model, Provider and request kind it used;
+    Agent, Project and Session counts cover listed Sessions only.
+    """
+    counts: dict[str, Counter[str]] = {name: Counter() for name in _DIMENSIONS}
+    by_address: Counter[int] = Counter()
+    context.sessions_table  # noqa: B018 - resolves the Session address ids.
+    parsed: dict[str, list[str]] = {}
+
+    def values(text: str) -> list[str]:
+        cached = parsed.get(text)
+        if cached is None:
+            cached = parsed[text] = json.loads(text)
+        return cached
+
+    for session_key, origin, models, kinds, runs in context.query(
+        f"""
+        SELECT r.session_key, r.origin, r.models, r.kinds, COUNT(*) FROM agg_runs r
+        WHERE {context.instant_condition("r.start_instant")}
+        GROUP BY r.session_key, r.origin, r.models, r.kinds
+        """
+    ):
+        counts["origin"][origin] += runs
+        run_models = values(models)
+        for model in run_models:
+            counts["model"][model] += runs
+        for provider in {model.split("/", 1)[0] for model in run_models}:
+            counts["provider"][provider] += runs
+        for kind in values(kinds):
+            counts["kind"][kind] += runs
+        session = context.by_key.get(session_key)
+        if session is not None:
+            counts["agent"][session.display_key] += runs
+            counts["project"][session.address.project_id or ""] += runs
+            by_address[context.session_addresses[session_key]] += runs
+    return counts, by_address
+
+
+def _breakdown(context: ReportContext, key_sql: str, runs: Counter[str]) -> list[JsonObject]:
     usage: dict[str, tuple[int, Totals]] = {
         row[0]: (row[1], Totals(row[2:]))
         for row in context.query(
@@ -81,7 +107,6 @@ def _breakdown(context: ReportContext, key_sql: str, runs_sql: str) -> list[Json
             """
         )
     }
-    runs = Counter({str(key): count for key, count in context.query(runs_sql)})
     rows = []
     for key in {*usage, *runs}:
         sessions, totals = usage.get(key, (0, Totals()))
@@ -99,13 +124,12 @@ def _series(context: ReportContext) -> list[JsonObject]:
     return [{"date": day, **totals.json()} for day, totals in days.items()]
 
 
-def _top_sessions(context: ReportContext, units: str, run_sessions: str) -> list[JsonObject]:
+def _top_sessions(context: ReportContext, units: str, runs: Counter[int]) -> list[JsonObject]:
     usage = grouped_totals(
         context,
         "u.address",
         f"JOIN {units} u ON u.unit_key = a.unit_key AND u.address IS NOT NULL",
     )
-    runs = dict(context.query(f"SELECT s.address, COUNT(*) {run_sessions} GROUP BY s.address"))
     ranked = sorted(
         usage.items(),
         key=lambda item: cost_order(
