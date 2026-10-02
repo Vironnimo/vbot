@@ -20,7 +20,9 @@ from core.memory import (
 )
 from core.memory._history import MemoryHistory
 
-_TOOL = MemoryWriter(agent_id="coder", actor="tool", session_id="s-1", run_id="r-1")
+_TOOL = MemoryWriter(
+    agent_id="coder", actor="tool", session_id="s-1", run_id="r-1", run_kind="user"
+)
 _RPC = MemoryWriter(agent_id="coder", actor="rpc")
 
 
@@ -63,7 +65,12 @@ def test_changes_are_recorded_with_their_writer_and_replay_to_every_state(
         (3, "agent", "edit", "tool"),
         (4, "user", "edit", "tool"),
     ]
-    assert (revisions[0].session_id, revisions[0].run_id) == ("s-1", "r-1")
+    assert (revisions[0].session_id, revisions[0].run_id, revisions[0].run_kind) == (
+        "s-1",
+        "r-1",
+        "user",
+    )
+    assert revisions[1].run_kind is None
     assert [_changes(r.to_dict()) for r in revisions] == [
         [("added", None, "Uses pytest.")],
         [("added", None, "Prefers German.")],
@@ -81,6 +88,12 @@ def test_changes_are_recorded_with_their_writer_and_replay_to_every_state(
     # One JSON object per revision beside the Agent's Workspace, outside it.
     lines = (agents_root / "coder" / "memory-history.jsonl").read_text(encoding="utf-8")
     assert [json.loads(line)["id"] for line in lines.splitlines()] == [1, 2, 3, 4]
+    assert [json.loads(line).get("run_kind") for line in lines.splitlines()] == [
+        "user",
+        None,
+        "user",
+        "user",
+    ]
 
 
 def test_edits_outside_the_service_are_recorded_when_next_noticed(

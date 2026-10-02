@@ -75,7 +75,8 @@ class MemoryRevision:
 
     ``actor`` names who changed it (``tool``, ``rpc``, ``internal``, or
     ``external`` for a change outside the service); ``session_id``/``run_id``
-    name the Run of a Tool change. ``entries`` holds the complete state of a
+    name the Run of a Tool change and ``run_kind`` its Run kind (such as
+    ``user`` or ``memory_reflection``). ``entries`` holds the complete state of a
     ``baseline`` or ``external`` revision; ``reverts`` the revisions a
     ``revert`` took back.
     """
@@ -90,6 +91,7 @@ class MemoryRevision:
     entries: tuple[str, ...] | None = None
     session_id: str | None = None
     run_id: str | None = None
+    run_kind: str | None = None
     reverts: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -107,6 +109,8 @@ class MemoryRevision:
             data["session_id"] = self.session_id
         if self.run_id is not None:
             data["run_id"] = self.run_id
+        if self.run_kind is not None:
+            data["run_kind"] = self.run_kind
         if self.reverts:
             data["reverts"] = list(self.reverts)
         return data
@@ -187,6 +191,7 @@ class MemoryHistory:
         entries: Sequence[str],
         session_id: str | None = None,
         run_id: str | None = None,
+        run_kind: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision | None:
         """Append one revision whose ``changes`` led to ``entries``."""
@@ -206,6 +211,7 @@ class MemoryHistory:
                 state=list(entries),
                 session_id=session_id,
                 run_id=run_id,
+                run_kind=run_kind,
                 reverts=list(reverts),
             )
 
@@ -279,6 +285,7 @@ class MemoryHistory:
         state: Sequence[str] | None = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        run_kind: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision:
         after = list(entries if entries is not None else state or ())
@@ -293,6 +300,7 @@ class MemoryHistory:
             entries=tuple(entries) if entries is not None else None,
             session_id=session_id,
             run_id=run_id,
+            run_kind=run_kind,
             reverts=tuple(reverts),
         )
         line = json.dumps(
@@ -510,6 +518,7 @@ def _parse_revision(line: bytes) -> MemoryRevision | None:
             entries=None if entries is None else tuple(_text(item) for item in _array(entries)),
             session_id=_optional_text(data.get("session_id")),
             run_id=_optional_text(data.get("run_id")),
+            run_kind=_optional_text(data.get("run_kind")),
             reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is

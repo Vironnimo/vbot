@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from core.memory import MemoryService
+from core.runs import RunKind
 from core.tools.memory import MEMORY_TOOL_NAME, register_memory_tool
 from core.tools.tools import (
     ToolCall,
@@ -179,7 +180,8 @@ def test_the_user_sees_each_changed_entry_and_its_memory_revision(
 ) -> None:
     (tmp_path / "agents" / "main").mkdir(parents=True)
     registry = ToolRegistry()
-    register_memory_tool(registry, MemoryService(history_root=tmp_path / "agents"))
+    service = MemoryService(history_root=tmp_path / "agents")
+    register_memory_tool(registry, service)
 
     def details(arguments: JsonObject) -> list[JsonObject]:
         context = ToolContext(
@@ -192,6 +194,7 @@ def test_the_user_sees_each_changed_entry_and_its_memory_revision(
             workspace=workspace,
             vbot_root=workspace.parent,
             data_root=workspace.parent,
+            run_kind=RunKind.MEMORY_REFLECTION,
         )
         result = asyncio.run(registry.dispatch(context, arguments, [MEMORY_TOOL_NAME]))
         display = registry.display_for_call(
@@ -235,6 +238,9 @@ def test_the_user_sees_each_changed_entry_and_its_memory_revision(
     ]
     # A list call shows its result itself.
     assert listed == []
+    # Each Tool revision names the Run that made it, including its Run kind.
+    tool_revisions = [r for r in service.history(workspace, "main") if r.actor == "tool"]
+    assert {(r.run_id, r.run_kind) for r in tool_revisions} == {("run-1", "memory_reflection")}
 
 
 def test_replace_without_scope_uses_the_only_matching_scope(workspace: Path) -> None:

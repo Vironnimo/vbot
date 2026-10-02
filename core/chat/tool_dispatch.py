@@ -752,6 +752,7 @@ async def _dispatch_tool_calls(
             # The run's effective skill project (rooted-aware) so the skill tool
             # resolves the same pool the run's catalog advertises.
             skill_project_id=context.skill_project_id,
+            run_kind=run.run_kind,
             allowed_tools=_dispatch_allowed_tools(
                 agent,
                 context.registry,

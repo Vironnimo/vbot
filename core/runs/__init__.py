@@ -34,6 +34,7 @@ from core.runs.runs import (
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
     TRANSIENT_EVENT_TYPES,
+    UNATTENDED_RUN_KINDS,
     USER_MESSAGE_EVENT,
     ActiveRunError,
     CancelCallback,
@@ -53,6 +54,7 @@ from core.runs.runs import (
     RunStatus,
     WaitingWorkAdmission,
     WaitingWorkLimitError,
+    is_unattended_run_kind,
 )
 
 __all__ = [
@@ -107,5 +109,7 @@ __all__ = [
     "TOOL_CALL_STDERR_EVENT",
     "TOOL_CALL_STDOUT_EVENT",
     "TRANSIENT_EVENT_TYPES",
+    "UNATTENDED_RUN_KINDS",
     "USER_MESSAGE_EVENT",
+    "is_unattended_run_kind",
 ]
