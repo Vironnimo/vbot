@@ -73,3 +73,5 @@ Skill-first learning texts (`learning-texts`, 2026-10-02) against the texts at `
 | `ollama-cloud/glm-5.3-flash` | 137/174 | 153/174 |
 
 Writes without a current Memory list fell from 19 and 27 to 1 and 5, duplicated preferences from 7 to 0. A focused rerun after the last text fix (6 Skill cases) met every expected effect except `human_skill_wrong` on glm-5.3-flash (1 of 6). Known weakness: glm-5.3-flash patches its own Skills from the conversation without reading the current file in about a third of Skill writes (14 of 45 attempts in the focused rerun); the patches had the expected effect, and writes to protected Skills are refused by the handler. If real reviews show collateral loss from such patches, enforce read-before-write for background Runs in `skill_manage`.
+
+Librarian brief (`librarian`, 2026-10-02), 3 repetitions of the three `librarian` cases: `opencode-go/deepseek-v4.1-flash` 9/9, `ollama-cloud/glm-5.3-flash` 8/9 (every expected effect met). glm-5.3-flash omitted `absorbed_into` on 3 deletes and repeated them correctly after the refusal.
