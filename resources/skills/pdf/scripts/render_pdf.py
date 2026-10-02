@@ -47,7 +47,7 @@ def _render_with_poppler(pdf: Path, output_dir: Path, stem: str, dpi: int) -> li
 
 def _render_with_pdfium(pdf: Path, output_dir: Path, stem: str, dpi: int) -> list[Path] | None:
     try:
-        import pypdfium2 as pdfium  # type: ignore[import-not-found]
+        import pypdfium2 as pdfium
     except ImportError:
         return None
     document = pdfium.PdfDocument(str(pdf))
