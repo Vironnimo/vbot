@@ -1,5 +1,5 @@
 {
-  "_comment": "Hand layer for StepFun: the current agentic Chat allowlist (core/providers/stepfun.py) with its Connection memberships. The Step Flash entries join their canonical records (names, limits, prices); step-3.5-flash deliberately has no effort ladder because StepFun documents none; step-router-v1 is a complete Step Plan-only record. Discovered facts apply only where these entries are silent.",
+  "_comment": "Hand layer for StepFun: the agentic Chat Models vBot admits (resources/wire/stepfun.json refuses every other id) with names, limits, modalities, reasoning units, supported parameters and Connection memberships; these win over whatever a refresh discovers. step-3.5-flash deliberately has no effort ladder because StepFun documents none; step-router-v1 is a Step Plan-only record.",
   "provider_id": "stepfun",
   "models": {
     "step-3.5-flash": {
@@ -20,12 +20,23 @@
           "tool_choice",
           "tools",
           "top_p"
-        ]
+        ],
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "vision": false
       },
       "connections": [
         "direct-api",
         "step-plan"
-      ]
+      ],
+      "name": "Step 3.5 Flash",
+      "context_window": 256000,
+      "max_output_tokens": 256000
     },
     "step-3.5-flash-2603": {
       "canonical": "stepfun/step-3.5-flash-2603",
@@ -51,12 +62,23 @@
           "tool_choice",
           "tools",
           "top_p"
-        ]
+        ],
+        "input_modalities": [
+          "text"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "vision": false
       },
       "connections": [
         "direct-api",
         "step-plan"
-      ]
+      ],
+      "name": "Step 3.5 Flash 2603",
+      "context_window": 256000,
+      "max_output_tokens": 256000
     },
     "step-3.7-flash": {
       "canonical": "stepfun/step-3.7-flash",
@@ -83,12 +105,25 @@
           "tool_choice",
           "tools",
           "top_p"
-        ]
+        ],
+        "input_modalities": [
+          "text",
+          "image",
+          "video"
+        ],
+        "output_modalities": [
+          "text"
+        ],
+        "tools": true,
+        "vision": true
       },
       "connections": [
         "direct-api",
         "step-plan"
-      ]
+      ],
+      "name": "Step 3.7 Flash",
+      "context_window": 256000,
+      "max_output_tokens": 256000
     },
     "step-router-v1": {
       "capabilities": {

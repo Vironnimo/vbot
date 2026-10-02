@@ -23,7 +23,7 @@ from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.openrouter import OpenRouterAdapter
 from core.providers.reasoning_dialects import describe_profile_reasoning
 from core.providers.runtime import ADAPTER_TYPES
-from core.providers.stepfun import STEPFUN_DIRECT_MODE, STEPFUN_PLAN_MODE, StepFunAdapter
+from core.providers.stepfun import StepFunAdapter
 from core.providers.token_getter import OAuthTokenGetter, StaticTokenGetter
 from core.providers.token_store import OAuthToken
 from core.providers.xai import XAIAdapter
@@ -134,11 +134,11 @@ def test_bundled_provider_configs_expose_their_connections(shared_runtime: Runti
         "step-plan",
     ]
     stepfun_direct = stepfun_config.get_connection("direct-api")
-    assert stepfun_direct.mode == STEPFUN_DIRECT_MODE
+    assert stepfun_direct.mode == "direct_api"
     assert stepfun_direct.auth.credential_key == "STEPFUN_DIRECT_API_KEY"
     assert stepfun_direct.models_endpoint == "/models"
     stepfun_plan = stepfun_config.get_connection("step-plan")
-    assert stepfun_plan.mode == STEPFUN_PLAN_MODE
+    assert stepfun_plan.mode == "step_plan"
     assert stepfun_plan.base_url == "https://api.stepfun.com/step_plan/v1"
     assert stepfun_plan.auth.credential_key == "STEPFUN_API_KEY"
     assert stepfun_plan.models_endpoint == "/models"
@@ -373,7 +373,7 @@ _ADAPTER_WIRING: list[tuple[str, type, Callable[[Any], bool]]] = [
         "stepfun:step-plan",
         StepFunAdapter,
         lambda adapter: (
-            adapter._connection_mode == STEPFUN_PLAN_MODE
+            adapter._connection_mode == "step_plan"
             and str(adapter._client.base_url) == "https://api.stepfun.com/step_plan/v1/"
         ),
     ),
