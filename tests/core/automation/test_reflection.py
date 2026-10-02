@@ -887,7 +887,7 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     # it can write Skills, that the list marks the Skills it cannot change.
     assert review["max_tool_iterations"] == REFLECTION_TOOL_ITERATION_LIMIT
     assert f"at most {REFLECTION_TOOL_ITERATION_LIMIT} calls" in review["message"]
-    assert ("marks Skills you cannot change here as read-only" in review["message"]) == (
+    assert ("does not mark as read-only; all other Skills are read-only" in review["message"]) == (
         "skill_manage" in tools
     )
     # Any other Tool is refused before it runs, naming what the review can call.
