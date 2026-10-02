@@ -3,6 +3,8 @@
 Verification must judge the wire profile data, not facts an earlier session
 learned, so the Adapter is rebound to profiles that use an empty in-memory
 observation store. Whatever the checks teach it is reported, never persisted.
+The profile data is what the Runtime uses: the bundled files plus the ``wire``
+blocks of the data directory's Custom Providers.
 """
 
 from __future__ import annotations
@@ -21,8 +23,8 @@ from core.providers.token_store import TokenStore
 from core.providers.wire_observations import WireObservations
 from core.providers.wire_profiles import (
     WireProfiles,
-    bundled_wire_profile_files,
     log_wire_profile_issue,
+    wire_profile_files,
 )
 from core.storage.storage import StorageManager
 from core.utils.config import read_env_file
@@ -41,6 +43,9 @@ class VerificationTarget:
     model: Model | None
     adapter: ProviderAdapter
     observations: WireObservations
+    storage: StorageManager
+    custom: bool
+    """Whether the Provider is a Custom Provider (its profile data lives in Settings)."""
 
 
 def open_target(
@@ -76,6 +81,7 @@ def open_target(
         storage=storage,
         resources_path=RESOURCES_DIR,
         logger=logging.getLogger("vbot.wire_verify"),
+        custom_providers=custom_providers,
     )
     config = providers.get(provider_id)
     connection = connection_id or _usable_connection(credentials, provider_id, config)
@@ -91,7 +97,7 @@ def open_target(
 
     observations = WireObservations(None, save_delay=None)
     profiles = WireProfiles(
-        files=bundled_wire_profile_files(),
+        files=wire_profile_files(custom_providers),
         protocol_support=lambda _provider_id: type(adapter).WIRE_PROTOCOLS,
         model_resolver=resolve_model,
         report=log_wire_profile_issue,
@@ -105,6 +111,8 @@ def open_target(
         model=resolve_model(provider_id, bare_model),
         adapter=adapter,
         observations=observations,
+        storage=storage,
+        custom=config.custom,
     )
 
 

@@ -87,6 +87,17 @@ def test_custom_provider_crud_preserves_other_provider_settings(tmp_path: Path) 
     _update_routing(storage, {**ROUTING, "mode": "automatic", "providers": []})
     assert "local-ai" in storage.load_custom_providers_settings()
 
+    # An update transforms the stored record in one transaction and keeps the rest.
+    wire = {"defaults": {"reasoning": {"dialect": "thinking_toggle"}}}
+    updated = storage.update_custom_provider_settings(
+        "local-ai", lambda record: {**record, "wire": wire}
+    )
+    assert updated["wire"] == wire
+    assert storage.load_custom_providers_settings()["local-ai"] == updated
+    assert storage.load_openrouter_routing_settings()["default"]["mode"] == "automatic"
+    with pytest.raises(StorageError, match="does not exist"):
+        storage.update_custom_provider_settings("other-ai", lambda record: record)
+
     assert storage.delete_custom_provider_settings("local-ai") is not None
     assert storage.delete_custom_provider_settings("local-ai") is None
     assert storage.load_custom_providers_settings() == {}

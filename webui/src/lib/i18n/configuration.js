@@ -866,6 +866,37 @@ export default Object.freeze({
     'Model ids must be unique.',
   'settings.providers.custom.validationPositiveInteger':
     '{label} must be a positive whole number.',
+  'settings.providers.custom.wireTitle': 'Advanced: wire profile',
+  'settings.providers.custom.wireIntro':
+    'Tells vBot how this endpoint expects reasoning and request fields. Leave it empty to use the OpenAI Chat Completions defaults. Fill it in when reasoning has no effect, its text does not appear, or the endpoint rejects a request field.',
+  'settings.providers.custom.wireLabel': 'Wire profile JSON',
+  'settings.providers.custom.wireHint':
+    'A JSON object with "defaults" for every Model, "rules" for the Models a "when" condition matches (for example "when": {"prefix": "qwen"}) with their values under "set", and "models" with a "set" per Model id. Model entries win over rules, rules over defaults. Empty removes the profile.',
+  'settings.providers.custom.wirePlaceholder':
+    '{\n  "defaults": {\n    "reasoning": {"dialect": "thinking_toggle"},\n    "response": {"reasoning_fields": ["reasoning_content"]}\n  }\n}',
+  'settings.providers.custom.wireFieldsTitle': 'Common fields',
+  'settings.providers.custom.wireFieldDialect':
+    'reasoning.dialect: how an effort is sent. reasoning_effort (the default) sends "reasoning_effort": "high"; thinking_toggle sends "thinking": {"type": "enabled"} or {"type": "disabled"}; thinking_toggle_with_effort sends reasoning_effort for a level and the thinking switch otherwise; openrouter_reasoning sends a "reasoning" object; none sends nothing.',
+  'settings.providers.custom.wireFieldLevels':
+    'reasoning.levels: the effort levels the endpoint accepts, for example ["low", "high"]. Other efforts snap to an accepted level.',
+  'settings.providers.custom.wireFieldOff':
+    'reasoning.off: what the effort none sends (auto, omit, enabled, lowest or a level). reasoning.unset: what is sent when no effort is chosen (omit, enabled or a level).',
+  'settings.providers.custom.wireFieldResponse':
+    'response.reasoning_fields: the response fields that carry reasoning text, in the order vBot checks them, for example ["reasoning_content"].',
+  'settings.providers.custom.wireFieldReplay':
+    'replay.history_field: the message field that sends earlier reasoning back with the conversation, for example "reasoning_content". replay.scope picks the turns (none, current_run or full_history), replay.fidelity the kind of reasoning state (meta_preferred, meta_only or readable_only).',
+  'settings.providers.custom.wireFieldRequest':
+    'request.output_limit_field: the field that limits output (max_tokens or max_completion_tokens). request.parameters: rules per request parameter, for example "temperature": {"mode": "drop"}.',
+  'settings.providers.custom.wireFieldSupported':
+    'A Model whose Reasoning switch is off never gets reasoning fields, whatever "defaults" says. Turn the switch on, or set "reasoning": {"supported": true} in a rule or Model entry.',
+  'settings.providers.custom.wireInvalidJson':
+    'The wire profile is not valid JSON: {detail}',
+  'settings.providers.custom.wireNotObject':
+    'The wire profile must be a JSON object.',
+  'settings.providers.custom.wireIssues':
+    'vBot would ignore these wire profile entries. Fix or remove them:',
+  'settings.providers.custom.wireIssuesHint':
+    'Check the wire profile entries listed under Advanced.',
   'settings.providers.custom.saved': 'Custom Provider saved.',
   'settings.providers.custom.saveError': 'Custom Provider could not be saved.',
   'settings.providers.custom.deleted': 'Custom Provider deleted.',

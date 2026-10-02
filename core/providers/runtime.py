@@ -44,8 +44,8 @@ from core.providers.wire_observations import (
 from core.providers.wire_profile import ProfileStatus, Protocol, Verification, WireProfile
 from core.providers.wire_profiles import (
     WireProfiles,
-    bundled_wire_profile_files,
     log_wire_profile_issue,
+    wire_profile_files,
 )
 from core.storage import StorageManager
 from core.utils.errors import ConfigError, StorageError
@@ -74,6 +74,7 @@ class ProviderRuntime:
         storage: StorageManager,
         resources_path: Path,
         logger: Any,
+        custom_providers: Mapping[str, Mapping[str, Any]] | None = None,
     ) -> None:
         self._providers = providers
         self._models = models
@@ -88,7 +89,7 @@ class ProviderRuntime:
         self._connection_reachability: dict[str, bool] = {}
         self._wire_observations = self._load_wire_observations(storage)
         self._wire_profiles = WireProfiles(
-            files=bundled_wire_profile_files(),
+            files=wire_profile_files(custom_providers),
             protocol_support=self._adapter_protocols,
             model_resolver=self._resolve_model,
             report=log_wire_profile_issue,
@@ -116,6 +117,16 @@ class ProviderRuntime:
             self._wire_profiles.set_observations(self._wire_observations)
         self._storage = storage
         self._logger = logger
+
+    def reload_custom_wire_profiles(
+        self, custom_providers: Mapping[str, Mapping[str, Any]]
+    ) -> None:
+        """Apply the Custom Providers' current ``wire`` blocks to every Adapter.
+
+        Adapters resolve profiles through this Runtime's shared wire profiles,
+        so already built Adapters use the new blocks from their next request.
+        """
+        self._wire_profiles.replace_files(wire_profile_files(custom_providers))
 
     @property
     def wire_observations(self) -> WireObservations:

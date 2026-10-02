@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { ApiClientError } from '../../lib/api/transport.js';
 import { init } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
 
@@ -136,6 +137,71 @@ describe('CustomProviderModal', () => {
     expect(params.api_key).toBeUndefined();
     expect(params.provider.name).toBe('Renamed Gateway');
     expect(params.provider.defaults).toEqual({ temperature: 0 });
+    expect(params.provider).not.toHaveProperty('wire');
+  });
+
+  it('edits the wire profile JSON and shows the entries the server refuses', async () => {
+    const wire = { defaults: { reasoning: { dialect: 'thinking_toggle' } } };
+    mountedComponent = mount(CustomProviderModal, {
+      target: document.body,
+      props: {
+        provider: {
+          id: 'gateway',
+          name: 'Gateway',
+          adapter: 'openai_compatible',
+          base_url: 'https://gateway.example/v1',
+          auth: 'none',
+          models_endpoint: null,
+          defaults: {},
+          models: {},
+          wire,
+        },
+      },
+    });
+    flushSync();
+
+    expect(document.querySelector('details.custom-wire').open).toBe(true);
+    expect(
+      JSON.parse(document.getElementById('custom-provider-wire').value),
+    ).toEqual(wire);
+
+    input('custom-provider-wire', '{"defaults": ');
+    expect(
+      document.getElementById('custom-provider-wire-error').textContent,
+    ).toContain('not valid JSON');
+    button('Save').click();
+    flushSync();
+    expect(rpcMock).not.toHaveBeenCalled();
+
+    const issue =
+      'wire.connections.api-key: unknown Connection (this Provider has default), ignoring it';
+    rpcMock.mockRejectedValueOnce(
+      new ApiClientError('invalid_request', 'not saved', {
+        details: {
+          code: 'invalid_request',
+          message: 'not saved',
+          data: { wire_issues: [issue] },
+        },
+      }),
+    );
+    input('custom-provider-wire', '{"connections": {"api-key": {}}}');
+    expect(document.getElementById('custom-provider-wire-error')).toBeNull();
+    button('Save').click();
+
+    await waitForCondition(() =>
+      document
+        .querySelector('.custom-wire__issues')
+        ?.textContent.includes(issue),
+    );
+    expect(rpcMock.mock.calls[0][1].provider.wire).toEqual({
+      connections: { 'api-key': {} },
+    });
+
+    // Clearing the field removes the profile.
+    input('custom-provider-wire', '  ');
+    button('Save').click();
+    await waitForCondition(() => rpcMock.mock.calls.length === 2);
+    expect(rpcMock.mock.calls[1][1].provider).not.toHaveProperty('wire');
   });
 });
 

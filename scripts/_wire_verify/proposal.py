@@ -17,6 +17,8 @@ from typing import Any
 from core.providers._wire_profile_files import WIRE_PROFILE_FORMAT_VERSION
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import WireProfile
+from core.storage.storage import StorageManager
+from core.utils.errors import StorageError
 from scripts._wire_verify.checks import CheckResult
 
 
@@ -59,7 +61,7 @@ def propose_entry(
 
 
 def write_entry(wire_dir: Path, provider_id: str, model_id: str, entry: Mapping[str, Any]) -> Path:
-    """Merge ``entry`` into ``models[model_id]`` of the Provider's wire file."""
+    """Merge ``entry`` into ``models[model_id]`` of a bundled Provider's wire file."""
 
     path = wire_dir / f"{provider_id}.json"
     document: dict[str, Any] = (
@@ -67,14 +69,44 @@ def write_entry(wire_dir: Path, provider_id: str, model_id: str, entry: Mapping[
         if path.is_file()
         else {"format_version": WIRE_PROFILE_FORMAT_VERSION}
     )
+    _merge_entry(document, model_id, entry)
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return path
+
+
+def write_custom_provider_entry(
+    storage: StorageManager, provider_id: str, model_id: str, entry: Mapping[str, Any]
+) -> str:
+    """Merge ``entry`` into ``wire.models[model_id]`` of a Custom Provider's Settings.
+
+    Returns the Settings path written. Refuses a ``wire`` value that is not an
+    object instead of replacing it.
+    """
+
+    def update(record: dict[str, Any]) -> dict[str, Any]:
+        wire = record.get("wire")
+        if wire is not None and not isinstance(wire, Mapping):
+            raise StorageError(
+                f"providers.custom.{provider_id}.wire is not an object; "
+                "fix it before writing a verified entry"
+            )
+        document = dict(wire or {})
+        _merge_entry(document, model_id, entry)
+        return {**record, "wire": document}
+
+    storage.update_custom_provider_settings(provider_id, update)
+    return f"providers.custom.{provider_id}.wire.models.{model_id.split('::', 1)[0]}"
+
+
+def _merge_entry(document: dict[str, Any], model_id: str, entry: Mapping[str, Any]) -> None:
+    """Merge ``entry`` into ``document["models"][model_id]`` in place."""
+
     models = document.setdefault("models", {})
     current = models.setdefault(model_id.split("::", 1)[0], {})
     if "set" in entry:
         current["set"] = _merged(current.get("set", {}), entry["set"])
     if "verified" in entry:
         current["verified"] = dict(entry["verified"])
-    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
-    return path
 
 
 def _merged(base: Mapping[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:

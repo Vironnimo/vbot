@@ -15,6 +15,7 @@ from core.providers.accounts import (
     validate_account_id,
 )
 from core.providers.providers import custom_provider_credential_key
+from core.providers.wire_profiles import custom_provider_wire_file
 from core.settings.normalizers import (
     normalize_custom_provider_id,
     normalize_custom_provider_settings,
@@ -176,6 +177,7 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
         if isinstance(exc, RpcError):
             raise
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    _reject_ignored_wire_entries(provider_id, provider)
 
     api_key = params.get("api_key")
     if api_key is not None and (not isinstance(api_key, str) or not api_key.strip()):
@@ -230,6 +232,25 @@ def _save_custom_provider(state: Any, params: JsonObject) -> JsonObject:
         len(provider["models"]),
     )
     return {"provider": item}
+
+
+def _reject_ignored_wire_entries(provider_id: str, provider: JsonObject) -> None:
+    """Refuse a ``wire`` block with entries the Runtime would ignore.
+
+    A hand-edited ``settings.json`` degrades gracefully (the Runtime logs and
+    ignores invalid entries); a save names every problem instead, and
+    ``data.wire_issues`` lists them for inline display.
+    """
+
+    issues: list[str] = []
+    custom_provider_wire_file(provider_id, provider, report=issues.append, source="wire")
+    if issues:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"Custom Provider '{provider_id}' was not saved: its wire block has entries "
+            f"vBot would ignore: {'; '.join(issues)}",
+            data={"wire_issues": issues},
+        )
 
 
 def _delete_custom_provider(state: Any, params: JsonObject) -> JsonObject:

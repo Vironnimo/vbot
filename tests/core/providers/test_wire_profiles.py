@@ -23,7 +23,11 @@ from core.providers.wire_profile import (
     RequestRules,
     WireProfile,
 )
-from core.providers.wire_profiles import WireProfiles
+from core.providers.wire_profiles import (
+    WireProfiles,
+    custom_provider_wire_file,
+    wire_profile_files,
+)
 from core.utils.errors import ProviderError
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
@@ -353,6 +357,65 @@ def test_bundled_wire_profile_files_are_valid(tmp_path: Path) -> None:
     assert set(loaded) == {"acme"}
     assert len(issues) == 1
     assert all(name == files[name].provider_id for name in files)
+
+
+def test_a_custom_provider_wire_block_is_its_file_within_the_providers_limits() -> None:
+    """The block has a file's body; names of other Connections or protocols are dropped."""
+
+    issues: list[str] = []
+    record = {
+        "adapter": "openai_compatible",
+        "wire": {
+            "format_version": 1,
+            "defaults": {"protocol": "responses", "reasoning": {"dialect": "thinking_toggle"}},
+            "protocols": {"messages": {}},
+            "connections": {"default": {"request": {"output_limit_cap": 10}}, "api-key": {}},
+            "rules": [
+                {"when": {"connections": "api-key"}, "set": {}},
+                {"when": {"prefix": "m"}, "set": {"replay": {"fidelity": "readable_only"}}},
+            ],
+            "models": {
+                "m": {
+                    "set": {"response": {"reasoning_fields": ["thinking"]}},
+                    "verified": {"date": "2026-10-02", "connections": ["default"]},
+                },
+                "n": {"verified": {"date": "2026-10-02", "connections": ["api-key"]}},
+            },
+        },
+    }
+
+    parsed = custom_provider_wire_file("acme", record, report=issues.append, source="wire")
+    files = wire_profile_files({"acme": record, "plain": {"adapter": "openai_compatible"}})
+
+    assert parsed is not None
+    assert dict(parsed.defaults) == {"reasoning": {"dialect": "thinking_toggle"}}
+    assert (dict(parsed.protocols), list(parsed.connections)) == ({}, ["default"])
+    assert [rule.index for rule in parsed.rules] == [1]
+    assert parsed.models["m"].verification is not None
+    assert parsed.models["n"].verification is None
+    assert issues == [
+        "wire.format_version: a wire block has no format_version (only wire profile files "
+        "do), ignoring it",
+        "wire.defaults.protocol: expected a protocol this Provider's Adapter speaks "
+        "(chat_completions), ignoring 'responses'",
+        "wire.protocols.messages: not spoken by this Provider's Adapter (chat_completions), "
+        "ignoring it",
+        "wire.connections.api-key: unknown Connection (this Provider has default), ignoring it",
+        "wire.rules[0].when.connections: unknown Connection(s) ['api-key'] (this Provider has "
+        "default), ignoring the rule",
+        "wire.models.n.verified.connections: unknown Connection(s) ['api-key'] (this Provider "
+        "has default), ignoring the verification",
+    ]
+    assert files["acme"] == parsed
+    assert "plain" not in files
+    assert "openai" in files  # bundled files stay
+
+    issues.clear()
+    not_an_object = {"adapter": "openai_compatible", "wire": ["thinking_toggle"]}
+    assert custom_provider_wire_file("acme", not_an_object, report=issues.append) is None
+    assert issues == [
+        "settings.json:providers.custom.acme.wire: expected a JSON object, ignoring the block"
+    ]
 
 
 _LADDER = ("low", "medium", "high")

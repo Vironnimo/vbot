@@ -219,6 +219,7 @@ def bootstrap(runtime: Runtime) -> None:
             storage=runtime._storage,
             resources_path=resources_path,
             logger=runtime.logger,
+            custom_providers=custom_providers,
         )
         # Outbound HTTP clients share one TLS context and lazily imported
         # transport modules; prepare both off the Event Loop.

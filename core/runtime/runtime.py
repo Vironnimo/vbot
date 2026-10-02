@@ -904,7 +904,7 @@ class Runtime:
         self._skill_operations().reload_environment(data_dir_credentials)
 
     def reload_custom_providers(self) -> None:
-        """Reload Settings-owned Provider and Model overlays in place."""
+        """Reload Settings-owned Provider, Model and wire profile overlays in place."""
 
         self._ensure_started()
         resources_path = _resolve_resources_path(self.config)
@@ -919,6 +919,7 @@ class Runtime:
             runtime_models_dir=self.storage.layout.models,
             custom_providers=custom_providers,
         )
+        self._provider_operations().reload_custom_wire_profiles(custom_providers)
 
     # ------------------------------------------------------------------
     # Read-only registry access

@@ -319,7 +319,31 @@ vbot model refresh local-ai
 vbot provider custom delete local-ai
 ```
 
-`custom save` replaces the complete Custom Provider record; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+`custom save` replaces the complete Custom Provider record, including a `wire` block; repeated `--model` flags create conservative chat Model entries. Use the WebUI for the full manual capability editor. Deleting a Custom Provider removes its generated data-directory API keys but deliberately keeps Agent/default/task Model references, which remain visible as unavailable until reconfigured.
+
+#### Wire profile
+
+By default vBot speaks plain OpenAI Chat Completions to a Custom Provider: an effort goes out as `reasoning_effort`, and reasoning text is read from the usual response fields. When the endpoint ignores the effort, returns its reasoning in another field, or rejects a request field, describe its wire in the optional `wire` object of the record (**Settings → Providers → Edit → Advanced: wire profile**). It takes the body of vBot's bundled `resources/wire/<provider>.json` files - `defaults`, `protocols`, `connections` (only `default`), `rules`, and per-Model `models` entries - without `format_version`:
+
+```json
+"wire": {
+  "defaults": {
+    "reasoning": {"dialect": "thinking_toggle"},
+    "response": {"reasoning_fields": ["reasoning_content"]},
+    "request": {"parameters": {"temperature": {"mode": "drop"}}}
+  },
+  "rules": [
+    {"when": {"prefix": "qwen"}, "set": {"reasoning": {"levels": ["low", "high"]}}}
+  ],
+  "models": {
+    "chat-model": {"set": {"replay": {"history_field": "reasoning_content"}}}
+  }
+}
+```
+
+Later layers win: protocol defaults, `defaults`, `protocols`, `connections`, the Model's own facts (such as its Reasoning switch), matching `rules` in order, facts vBot learned from live traffic, the Model entry's `set`, and its `connections`. A manual Model whose Reasoning switch is off therefore sends no reasoning fields whatever `defaults` says; turn the switch on, or set `"reasoning": {"supported": true}` in a rule or Model entry.
+
+A WebUI/RPC save applies the block immediately and refuses entries vBot would ignore, listing each one. In a hand-edited `settings.json`, `vbot doctor settings` reports such entries as warnings, and vBot ignores them. To check a Model against the live endpoint, run `python scripts/verify_wire_profile.py --provider local-ai --model chat-model` from the vBot source tree; `--write` stores the entry the evidence supports under `wire.models` in the data directory's `settings.json`, which a running vBot applies after a restart.
 
 ## Data directory and configuration
 

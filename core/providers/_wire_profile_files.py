@@ -3,9 +3,10 @@
 A wire profile file (``resources/wire/<provider>.json``, or the ``wire`` block of
 a Custom Provider) holds *partial profiles*: nested objects whose keys mirror the
 fields of :class:`core.providers.wire_profile.WireProfile`. This module checks
-every partial profile against one schema and turns a file into an immutable
-:class:`WireProfileFile`. Invalid values, rules or Model entries are reported and
-omitted individually; an invalid top-level shape rejects the whole file.
+every partial profile against one schema and turns a file or block into an
+immutable :class:`WireProfileFile`. Invalid values, rules or Model entries are
+reported and omitted individually; an invalid top-level shape rejects the whole
+file or block.
 
 Merging semantics live in :mod:`core.providers._wire_profile_resolve`; this
 module only decides what is well formed.
@@ -14,7 +15,7 @@ module only decides what is well formed.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -277,17 +278,29 @@ def validate_partial_profile(
     where: str,
     report: WireIssueReport,
     allow_protocol: bool = True,
+    protocols: Sequence[str] | None = None,
 ) -> PartialProfile:
-    """Validate one partial profile, dropping (and reporting) every invalid value."""
+    """Validate one partial profile, dropping (and reporting) every invalid value.
+
+    ``protocols`` limits a ``protocol`` value to the protocols the Provider's
+    Adapter speaks (any known protocol when ``None``).
+    """
 
     if not isinstance(raw, Mapping):
         report(f"{where}: expected an object, ignoring it")
         return _EMPTY
-    schema = (
-        PROFILE_SCHEMA
-        if allow_protocol
-        else {k: v for k, v in PROFILE_SCHEMA.items() if k != "protocol"}
-    )
+    schema: Mapping[str, Any] = PROFILE_SCHEMA
+    if not allow_protocol:
+        schema = {k: v for k, v in PROFILE_SCHEMA.items() if k != "protocol"}
+    elif protocols is not None:
+        spoken = tuple(protocols)
+        schema = {
+            **PROFILE_SCHEMA,
+            "protocol": _Leaf(
+                lambda value: isinstance(value, str) and value in spoken,
+                "a protocol this Provider's Adapter speaks (" + ", ".join(spoken) + ")",
+            ),
+        }
     if not allow_protocol and "protocol" in raw:
         report(f"{where}: 'protocol' is not allowed here, ignoring it")
     return _validate_object(raw, schema, where=where, report=report)
@@ -441,6 +454,32 @@ class WireProfileFile:
     models: Mapping[str, WireModelEntry] = field(default_factory=lambda: _EMPTY)
 
 
+_BODY_FIELDS = frozenset({"defaults", "protocols", "connections", "rules", "models"})
+
+
+@dataclass(frozen=True)
+class _Limits:
+    """What one Provider offers: its Connection ids and its Adapter's protocols.
+
+    ``None`` accepts any id or known protocol (bundled files, which tests check
+    against their Provider instead).
+    """
+
+    connection_ids: frozenset[str] | None = None
+    protocols: tuple[str, ...] | None = None
+
+    def unknown_connections(self, connection_ids: Collection[str]) -> list[str]:
+        if self.connection_ids is None:
+            return []
+        return sorted(item for item in connection_ids if item not in self.connection_ids)
+
+    def describe_connections(self) -> str:
+        return ", ".join(sorted(self.connection_ids or ()))
+
+
+_NO_LIMITS = _Limits()
+
+
 def parse_wire_profile_file(
     provider_id: str,
     raw: Any,
@@ -457,13 +496,79 @@ def parse_wire_profile_file(
     if version != WIRE_PROFILE_FORMAT_VERSION:
         report(f"{source}: unsupported format_version {version!r}, ignoring the file")
         return None
-    known = {"format_version", "defaults", "protocols", "connections", "rules", "models"}
+    return _parse_body(
+        provider_id,
+        raw,
+        source=source,
+        report=report,
+        separator=":",
+        known=_BODY_FIELDS | {"format_version"},
+        limits=_NO_LIMITS,
+    )
+
+
+def parse_wire_profile_block(
+    provider_id: str,
+    raw: Any,
+    *,
+    source: str,
+    report: WireIssueReport,
+    connection_ids: Collection[str] | None = None,
+    protocols: Sequence[str] | None = None,
+) -> WireProfileFile | None:
+    """Validate a wire block embedded in another document; ``None`` rejects it.
+
+    A block has the body of a wire profile file without ``format_version``:
+    the enclosing document (``settings.json`` for a Custom Provider) carries
+    the version. ``connection_ids`` and ``protocols`` limit the block to the
+    Provider's Connections and the protocols its Adapter speaks; values naming
+    anything else are reported and omitted like every other invalid value.
+    Messages name a field as ``<source>.<path>`` (``wire.defaults.reasoning``).
+    """
+
+    if not isinstance(raw, Mapping):
+        report(f"{source}: expected a JSON object, ignoring the block")
+        return None
+    if "format_version" in raw:
+        report(
+            f"{source}.format_version: a wire block has no format_version (only wire profile "
+            "files do), ignoring it"
+        )
+        raw = {key: value for key, value in raw.items() if key != "format_version"}
+    return _parse_body(
+        provider_id,
+        raw,
+        source=source,
+        report=report,
+        separator=".",
+        known=_BODY_FIELDS,
+        limits=_Limits(
+            connection_ids=frozenset(connection_ids) if connection_ids is not None else None,
+            protocols=tuple(protocols) if protocols is not None else None,
+        ),
+    )
+
+
+def _parse_body(
+    provider_id: str,
+    raw: Mapping[str, Any],
+    *,
+    source: str,
+    report: WireIssueReport,
+    separator: str,
+    known: frozenset[str],
+    limits: _Limits,
+) -> WireProfileFile:
+    prefix = f"{source}{separator}"
     for key in raw:
         if isinstance(key, str) and not key.startswith("_") and key not in known:
             report(f"{source}: unknown top-level field {key!r}, ignoring it")
 
     defaults = validate_partial_profile(
-        raw.get("defaults", {}), where=f"{source}:defaults", report=report
+        raw.get("defaults", {}),
+        where=f"{prefix}defaults",
+        report=report,
+        protocols=limits.protocols,
     )
 
     protocols: dict[str, PartialProfile] = {}
@@ -471,27 +576,35 @@ def parse_wire_profile_file(
     if isinstance(raw_protocols, Mapping):
         for name, partial in raw_protocols.items():
             if name not in PROTOCOLS:
-                report(f"{source}:protocols.{name}: unknown protocol, ignoring it")
+                report(f"{prefix}protocols.{name}: unknown protocol, ignoring it")
+                continue
+            if limits.protocols is not None and name not in limits.protocols:
+                report(
+                    f"{prefix}protocols.{name}: not spoken by this Provider's Adapter "
+                    f"({', '.join(limits.protocols)}), ignoring it"
+                )
                 continue
             protocols[name] = validate_partial_profile(
-                partial, where=f"{source}:protocols.{name}", report=report, allow_protocol=False
+                partial, where=f"{prefix}protocols.{name}", report=report, allow_protocol=False
             )
     else:
-        report(f"{source}:protocols: expected an object, ignoring it")
+        report(f"{prefix}protocols: expected an object, ignoring it")
 
     connections = _parse_connection_map(
-        raw.get("connections", {}), where=f"{source}:connections", report=report
+        raw.get("connections", {}), where=f"{prefix}connections", report=report, limits=limits
     )
 
     rules: list[WireRule] = []
     raw_rules = raw.get("rules", [])
     if isinstance(raw_rules, list):
         for index, raw_rule in enumerate(raw_rules):
-            rule = _parse_rule(index, raw_rule, where=f"{source}:rules[{index}]", report=report)
+            rule = _parse_rule(
+                index, raw_rule, where=f"{prefix}rules[{index}]", report=report, limits=limits
+            )
             if rule is not None:
                 rules.append(rule)
     else:
-        report(f"{source}:rules: expected a list, ignoring it")
+        report(f"{prefix}rules: expected a list, ignoring it")
 
     models: dict[str, WireModelEntry] = {}
     raw_models = raw.get("models", {})
@@ -500,12 +613,12 @@ def parse_wire_profile_file(
             if not isinstance(model_id, str) or not model_id or model_id.startswith("_"):
                 continue
             entry = _parse_model_entry(
-                raw_entry, where=f"{source}:models.{model_id}", report=report
+                raw_entry, where=f"{prefix}models.{model_id}", report=report, limits=limits
             )
             if entry is not None:
                 models[model_id] = entry
     else:
-        report(f"{source}:models: expected an object, ignoring it")
+        report(f"{prefix}models: expected an object, ignoring it")
 
     return WireProfileFile(
         provider_id=provider_id,
@@ -518,7 +631,7 @@ def parse_wire_profile_file(
 
 
 def _parse_connection_map(
-    raw: Any, *, where: str, report: WireIssueReport
+    raw: Any, *, where: str, report: WireIssueReport, limits: _Limits
 ) -> Mapping[str, PartialProfile]:
     if not isinstance(raw, Mapping):
         report(f"{where}: expected an object, ignoring it")
@@ -527,20 +640,38 @@ def _parse_connection_map(
     for connection_id, partial in raw.items():
         if not isinstance(connection_id, str) or not connection_id or connection_id.startswith("_"):
             continue
+        if limits.unknown_connections((connection_id,)):
+            report(
+                f"{where}.{connection_id}: unknown Connection (this Provider has "
+                f"{limits.describe_connections()}), ignoring it"
+            )
+            continue
         result[connection_id] = validate_partial_profile(
-            partial, where=f"{where}.{connection_id}", report=report
+            partial, where=f"{where}.{connection_id}", report=report, protocols=limits.protocols
         )
     return MappingProxyType(result)
 
 
-def _parse_rule(index: int, raw: Any, *, where: str, report: WireIssueReport) -> WireRule | None:
+def _parse_rule(
+    index: int, raw: Any, *, where: str, report: WireIssueReport, limits: _Limits
+) -> WireRule | None:
     if not isinstance(raw, Mapping):
         report(f"{where}: expected an object, ignoring the rule")
         return None
     matcher = _parse_matcher(raw.get("when"), where=f"{where}.when", report=report)
     if matcher is None:
         return None
-    values = validate_partial_profile(raw.get("set", {}), where=f"{where}.set", report=report)
+    if matcher.connections is not None:
+        unknown = limits.unknown_connections(matcher.connections)
+        if unknown:
+            report(
+                f"{where}.when.connections: unknown Connection(s) {unknown} (this Provider "
+                f"has {limits.describe_connections()}), ignoring the rule"
+            )
+            return None
+    values = validate_partial_profile(
+        raw.get("set", {}), where=f"{where}.set", report=report, protocols=limits.protocols
+    )
     note = raw.get("note", "")
     return WireRule(
         index=index, when=matcher, values=values, note=note if isinstance(note, str) else ""
@@ -586,7 +717,9 @@ def _parse_matcher(raw: Any, *, where: str, report: WireIssueReport) -> RuleMatc
     return RuleMatcher(**values)
 
 
-def _parse_model_entry(raw: Any, *, where: str, report: WireIssueReport) -> WireModelEntry | None:
+def _parse_model_entry(
+    raw: Any, *, where: str, report: WireIssueReport, limits: _Limits
+) -> WireModelEntry | None:
     if not isinstance(raw, Mapping):
         report(f"{where}: expected an object, ignoring the entry")
         return None
@@ -594,12 +727,14 @@ def _parse_model_entry(raw: Any, *, where: str, report: WireIssueReport) -> Wire
     for key in raw:
         if isinstance(key, str) and not key.startswith("_") and key not in known:
             report(f"{where}: unknown field {key!r}, ignoring it")
-    values = validate_partial_profile(raw.get("set", {}), where=f"{where}.set", report=report)
+    values = validate_partial_profile(
+        raw.get("set", {}), where=f"{where}.set", report=report, protocols=limits.protocols
+    )
     connections = _parse_connection_map(
-        raw.get("connections", {}), where=f"{where}.connections", report=report
+        raw.get("connections", {}), where=f"{where}.connections", report=report, limits=limits
     )
     verification = _parse_verification(
-        raw.get("verified"), where=f"{where}.verified", report=report
+        raw.get("verified"), where=f"{where}.verified", report=report, limits=limits
     )
     note = raw.get("note", "")
     return WireModelEntry(
@@ -610,7 +745,9 @@ def _parse_model_entry(raw: Any, *, where: str, report: WireIssueReport) -> Wire
     )
 
 
-def _parse_verification(raw: Any, *, where: str, report: WireIssueReport) -> Verification | None:
+def _parse_verification(
+    raw: Any, *, where: str, report: WireIssueReport, limits: _Limits
+) -> Verification | None:
     if raw is None:
         return None
     if not isinstance(raw, Mapping):
@@ -625,6 +762,13 @@ def _parse_verification(raw: Any, *, where: str, report: WireIssueReport) -> Ver
         isinstance(item, str) and item for item in connections
     ):
         report(f"{where}.connections: expected a list of Connection ids, ignoring the verification")
+        return None
+    unknown = limits.unknown_connections(connections)
+    if unknown:
+        report(
+            f"{where}.connections: unknown Connection(s) {unknown} (this Provider has "
+            f"{limits.describe_connections()}), ignoring the verification"
+        )
         return None
     evidence = raw.get("evidence", "")
     if not isinstance(evidence, str):
