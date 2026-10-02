@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from contextlib import aclosing
-from typing import Any, cast
+from typing import Any, cast, override
 
 import httpx
 
@@ -58,6 +58,7 @@ from core.providers.token_getter import OAuthRequestRecovery
 class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     """Routing adapter for GitHub Copilot endpoint families."""
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Return the exact catalog-advertised image formats for this Model.
 
@@ -83,6 +84,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     # Payload / request helpers
     # ------------------------------------------------------------------
 
+    @override
     def image_size_limit(self, model_id: str) -> int | None:
         vision = self._runtime_metadata_for_model(model_id).get("vision")
         value = vision.get("max_prompt_image_size") if isinstance(vision, Mapping) else None
@@ -90,6 +92,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
         )
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -103,6 +106,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             **self._chat_request_kwargs(policy, kwargs),
         )
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -141,6 +145,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             **self._chat_request_kwargs(policy, kwargs),
         )
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -210,6 +215,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             async for delta in deltas:
                 yield delta
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -280,6 +286,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
                 request_kwargs.setdefault(key, value)
         return request_kwargs
 
+    @override
     def _apply_model_output_limit(
         self,
         request_kwargs: dict[str, Any],
@@ -315,6 +322,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             estimated_input_tokens=estimated_input_tokens,
         )
 
+    @override
     def estimate_request_input_tokens(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -334,6 +342,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             tools=tools,
         )
 
+    @override
     async def _build_request_headers(
         self,
         messages: list[dict[str, Any]],
@@ -499,6 +508,7 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
             await response.aclose()
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],

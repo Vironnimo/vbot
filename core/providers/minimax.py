@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import AsyncIterator, Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from core.models.models import Capabilities, Model, ReasoningCapabilities
 from core.providers._chat_completions_catalog import (
@@ -146,6 +146,7 @@ MINIMAX_MODEL_FACTS: dict[str, dict[str, Any]] = {
 class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
     """MiniMax's Anthropic-compatible M2.x wire."""
 
+    @override
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -161,6 +162,7 @@ class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
         del payload, model_id, reasoning_supported, max_tokens
         remove_reasoning_kwargs(request_kwargs, *MINIMAX_MESSAGES_REASONING_KEYS)
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -172,6 +174,7 @@ class _MiniMaxMessagesAdapter(AnthropicCompatibleAdapter):
         return payload
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -227,15 +230,18 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             prompt_caching=True,
         )
 
+    @override
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         if self._uses_anthropic_messages:
             return self._messages.wire_media_support(model_id)
         return super().wire_media_support(model_id)
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -249,6 +255,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             return await self._messages.send(messages, model_id=model_id, **request_kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
+    @override
     def stream(
         self,
         messages: list[dict[str, Any]],
@@ -263,6 +270,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         return super().stream(messages, model_id=model_id, **kwargs)
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -298,6 +306,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             max_output_tokens=int(facts["max_output_tokens"]),
         )
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -338,6 +347,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
         return payload
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,
@@ -367,6 +377,7 @@ class MiniMaxAdapter(OpenAICompatibleAdapter):
             return ReasoningIntent(REASONING_INTENT_ON)
         return intent
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:

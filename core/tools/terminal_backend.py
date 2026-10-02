@@ -17,7 +17,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, override
 
 import pyte
 
@@ -169,12 +169,14 @@ class _TerminalScreen(pyte.Screen):
         """Private modes currently enabled by the foreground program."""
         return frozenset(self._private_modes)
 
+    @override
     def index(self) -> None:
         top, bottom = self.margins or (0, self.lines - 1)
         if self.cursor.y == bottom and self._primary_state is None:
             self._on_scroll(_render_buffer_line(self.buffer[top], self.columns))
         super().index()
 
+    @override
     def set_mode(self, *modes: int, **kwargs: Any) -> None:
         private = kwargs.get("private")
         alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
@@ -188,6 +190,7 @@ class _TerminalScreen(pyte.Screen):
         self._alternate_modes.update(alternate)
         super().set_mode(*modes, **kwargs)
 
+    @override
     def reset_mode(self, *modes: int, **kwargs: Any) -> None:
         private = kwargs.get("private")
         alternate = _ALTERNATE_SCREEN_MODES.intersection(modes) if private else set()
@@ -207,6 +210,7 @@ class _TerminalScreen(pyte.Screen):
             return
         super().reset_mode(*modes, **kwargs)
 
+    @override
     def resize(self, lines: int | None = None, columns: int | None = None) -> None:
         if self._primary_state is None:
             super().resize(lines=lines, columns=columns)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, override
 from urllib.parse import urlsplit
 
 import httpx
@@ -51,6 +51,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
             )
         return result
 
+    @override
     async def _listen(self) -> None:
         identity = await self.api("auth.test", {})
         self._bot_id = identity["user_id"]
@@ -133,6 +134,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
             },
         )
 
+    @override
     async def download(self, file: dict[str, Any]) -> bytes:
         url = file.get("url")
         if not url and file.get("id"):
@@ -148,6 +150,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
             raise ChannelError("Slack attachment has an invalid download address")
         return await self.read_download(str(url), {"Authorization": f"Bearer {self._token}"})
 
+    @override
     async def send_text(
         self,
         platform_target: str,
@@ -158,6 +161,7 @@ class SlackChannelAdapter(NetworkChannelAdapter):
     ) -> None:
         await self.send(text, platform_target, thread_id=thread_id or reply_to_message_id)
 
+    @override
     async def send(
         self,
         message: str | None,

@@ -7,7 +7,7 @@ import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import AsyncMock
 
 import pytest
@@ -105,6 +105,7 @@ class GatedAccessRegistry(MemoryChannelAccessRegistry):
         self.cancelled = asyncio.Event()
         self._error = error
 
+    @override
     async def snapshot_participant_role(
         self, channel_id: str, access_scope_id: str, user_id: str, display_name: str
     ) -> GroupRole:

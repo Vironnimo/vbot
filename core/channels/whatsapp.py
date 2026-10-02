@@ -6,7 +6,7 @@ import asyncio
 import base64
 import json
 import time
-from typing import Any
+from typing import Any, override
 
 from core.channels._network_adapter import NetworkChannelAdapter, channel_io
 from core.channels._whatsapp_setup import (
@@ -33,6 +33,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         self._qr_deadline = 0.0
         self._pairing_state = "starting"
 
+    @override
     async def _listen(self) -> None:
         if not await channel_io(bridge_ready, self._state_dir):
             raise ChannelError("Install WhatsApp support from Channel settings before connecting")
@@ -111,6 +112,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             if not future.done():
                 future.set_exception(ChannelError("WhatsApp connection closed"))
 
+    @override
     async def stop(self) -> None:
         self._qr = None
         self._fail_pending_calls()
@@ -178,10 +180,12 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
         if event.get("event") == "message" and isinstance(event.get("id"), str):
             await self.receive(self.self_facts(event["id"]), event)
 
+    @override
     async def download(self, file: dict[str, Any]) -> bytes:
         response = await self.call_bridge({"action": "download", "message_id": file["id"]})
         return base64.b64decode(response["data"], validate=True)
 
+    @override
     async def send_text(
         self,
         platform_target: str,
@@ -192,6 +196,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
     ) -> None:
         await self.send(text, platform_target, thread_id=thread_id)
 
+    @override
     async def send(
         self,
         message: str | None,

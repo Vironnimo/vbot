@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from io import TextIOWrapper
 from pathlib import Path
+from typing import override
 
 from core.utils.log_conditions import LoggedConditions
 
@@ -162,6 +163,7 @@ def is_logs_websocket_lifecycle_record(record: logging.LogRecord) -> bool:
 class QuietLogsWebSocketLifecycleFilter(logging.Filter):
     """Suppress routine INFO lifecycle records of the server's websocket routes."""
 
+    @override
     def filter(self, record: logging.LogRecord) -> bool:
         return not is_logs_websocket_lifecycle_record(record)
 
@@ -213,6 +215,7 @@ class ManagedLoggerProxyHandler(logging.Handler):
         super().__init__()
         self._target_logger_name = target_logger_name
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         message = redact_live_websocket_path(record.getMessage())
         level = record.levelno
@@ -444,12 +447,14 @@ class DailyFileHandler(logging.FileHandler):
         self._active_date = self._current_date_provider()
         super().__init__(self._build_path(self._active_date), encoding=encoding, delay=True)
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         """Write *record*, reopening the file if the date rolled over."""
 
         self._rotate_if_needed()
         super().emit(record)
 
+    @override
     def close(self) -> None:
         """Wait for this handler's retention sweep, then close the file."""
 
@@ -463,6 +468,7 @@ class DailyFileHandler(logging.FileHandler):
         if retention is not None:
             wait((retention,), timeout=_RETENTION_CLOSE_WAIT_SECONDS)
 
+    @override
     def _open(self) -> TextIOWrapper:
         self._logs_dir.mkdir(parents=True, exist_ok=True)
         stream = super()._open()
@@ -554,6 +560,7 @@ class _VBotFormatter(logging.Formatter):
         "WARNING": "WARN",
     }
 
+    @override
     def format(self, record: logging.LogRecord) -> str:
         original_label = getattr(record, "vbot_level", None)
         record.vbot_level = self.LEVEL_LABELS.get(record.levelname, record.levelname)
@@ -594,6 +601,7 @@ class _OtherLoggerRouter(logging.Handler):
         super().__init__(level=logging.WARNING)
         self._targets = targets
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         if record.name == LOGGER_NAMESPACE or record.name.startswith(f"{LOGGER_NAMESPACE}."):
             return

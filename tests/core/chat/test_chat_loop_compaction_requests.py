@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -41,6 +41,7 @@ from tests.core.chat.chat_loop_support import (
 
 
 class _ContextAdapter(RecordingCompactionAdapter):
+    @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": {**context, "adapter": id(self)}}
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -103,6 +103,7 @@ class StepFunAdapter(OpenAICompatibleAdapter):
         return getattr(connection, "mode", None) == STEPFUN_PLAN_MODE
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -147,18 +148,21 @@ class StepFunAdapter(OpenAICompatibleAdapter):
             },
         )
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Carry StepFun's documented image formats; vBot has no video wire encoder."""
 
         del model_id
         return IMAGE_WIRE_MEDIA_TYPES
 
+    @override
     def _supported_reasoning_efforts(self, model_id: str) -> tuple[str, ...]:
         policy = STEPFUN_MODEL_POLICIES.get(model_id.split("::", 1)[0])
         if policy is not None:
             return policy.reasoning_levels
         return tuple(super()._supported_reasoning_efforts(model_id))
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -227,11 +231,13 @@ class StepFunAdapter(OpenAICompatibleAdapter):
             )
         return payload
 
+    @override
     def _prepare_stream_payload(self, payload: dict[str, Any]) -> None:
         """Enable SSE without the undocumented OpenAI ``stream_options`` extension."""
 
         payload["stream"] = True
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -103,6 +103,7 @@ async def test_compaction_accepts_only_a_completed_text_summary(
     strategy: str, tool_call: bool, finish: str | None
 ) -> None:
     class IncompleteAdapter(StubAdapter):
+        @override
         async def stream(
             self, messages: list[dict], **kwargs: Any
         ) -> AsyncIterator[dict[str, Any]]:
@@ -136,6 +137,7 @@ async def test_compaction_accepts_only_a_completed_text_summary(
 @pytest.mark.parametrize("rejected", [False, True], ids=["accepted", "rejected"])
 async def test_compaction_attempt_records_usage_before_checkpoint_acceptance(rejected):
     class UsageAdapter(StubAdapter):
+        @override
         async def stream(self, messages, **kwargs):
             # Providers split counters around the finish; every part is recorded.
             yield {"type": "content_delta", "text": "Summary"}
@@ -215,6 +217,7 @@ async def test_compaction_attempts_retain_usage_and_retry_a_transient_failure_on
         waits.append(delay)
 
     class FlakyAdapter(StubAdapter):
+        @override
         async def stream(self, messages, **kwargs):
             yield {"type": "usage", "input_tokens": 75}
             outcome = remaining.pop(0)

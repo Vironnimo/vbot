@@ -11,7 +11,7 @@ import json
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import httpx
 import respx
@@ -279,10 +279,12 @@ class BrokenStream(httpx.AsyncByteStream):
         self._failure = failure
         self.closed = False
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield self._first_frame.encode()
         raise self._failure
 
+    @override
     async def aclose(self) -> None:
         self.closed = True
 

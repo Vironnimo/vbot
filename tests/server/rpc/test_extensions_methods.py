@@ -10,7 +10,7 @@ import asyncio
 import logging
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 from unittest.mock import Mock
 
 import pytest
@@ -786,6 +786,7 @@ async def test_extension_page_run_reports_verified_replay_watermark(scenario: st
             )
 
     class Registry(_PageRegistry):
+        @override
         def current_page(self, identity: Any, page_id: str) -> tuple[Any, Path] | None:
             # Events the Run emits while ownership is re-verified belong to replay.
             if groups.reads:

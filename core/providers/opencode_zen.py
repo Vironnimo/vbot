@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, override
 
 import httpx
 
@@ -134,14 +134,17 @@ class _OpenCodeZenMessagesAdapter(AnthropicCompatibleAdapter):
     """Zen's Anthropic Messages route with Zen error semantics."""
 
     @staticmethod
+    @override
     def _build_error_detail(status_code: int, response_body: str = "") -> str:
         # Zen's error name/type determines entitlement vs authentication even
         # when the gateway omits the human-readable message.
         return f"{status_code} {response_body}".strip()
 
+    @override
     def wire_media_support(self, _model_id: str) -> frozenset[str]:
         return IMAGE_WIRE_MEDIA_TYPES | {"application/pdf"}
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -161,6 +164,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
     """Route OpenCode Zen Models across its four official wire protocols."""
 
     @classmethod
+    @override
     def accepts_discovered_model(
         cls,
         raw: Mapping[str, Any],
@@ -209,11 +213,13 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             extra_retryable_statuses=frozenset({ANTHROPIC_OVERLOADED_STATUS}),
         )
 
+    @override
     async def aclose(self) -> None:
         await self._messages.aclose()
         await super().aclose()
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -236,6 +242,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             metadata={**model.metadata, OPENCODE_ZEN_METADATA_KEY: profile},
         )
 
+    @override
     def request_context_kwargs(
         self,
         *,
@@ -247,6 +254,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         del agent_id, session_id, project_id, prompt_cache_affinity_id
         return {}
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         protocol = self._model_protocol(model_id)
         if protocol == PROTOCOL_GEMINI:
@@ -257,6 +265,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         # they do not establish native PDF/audio/video forwarding there.
         return IMAGE_WIRE_MEDIA_TYPES
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -271,6 +280,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             return await self._send_gemini(messages, model_id=model_id, **kwargs)
         return await super().send(messages, model_id=model_id, **kwargs)
 
+    @override
     def stream(
         self,
         messages: list[dict[str, Any]],
@@ -285,6 +295,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             return self._stream_gemini(messages, model_id=model_id, **kwargs)
         return super().stream(messages, model_id=model_id, **kwargs)
 
+    @override
     def normalize_response(
         self,
         response: dict[str, Any],
@@ -304,6 +315,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             return self._messages.normalize_response(response)
         return super().normalize_response(response)
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,
@@ -317,6 +329,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             response_headers=response_headers,
         )
 
+    @override
     def _model_wire_policy(self, model_id: str) -> Mapping[str, Any]:
         protocol = self._model_protocol(model_id)
         policy: dict[str, Any] = {}
@@ -352,6 +365,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             return profile.get(key) if isinstance(profile, Mapping) else None
         return None
 
+    @override
     def _apply_reasoning(
         self,
         payload: dict[str, Any],
@@ -372,6 +386,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         super()._apply_reasoning(payload, request_kwargs, model_id)
 
     @classmethod
+    @override
     def describe_reasoning_render(
         cls,
         *,

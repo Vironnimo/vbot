@@ -9,7 +9,7 @@ import threading
 from collections.abc import AsyncGenerator, Callable
 from contextlib import aclosing, suppress
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 import pytest
 from watchfiles import Change
@@ -370,6 +370,7 @@ class _ObservedLock(asyncio.Lock):
         super().__init__()
         self.attempts = 0
 
+    @override
     async def acquire(self) -> Literal[True]:
         self.attempts += 1
         return await super().acquire()

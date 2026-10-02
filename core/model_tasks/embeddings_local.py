@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from threading import Lock, Timer
-from typing import Any, Protocol
+from typing import Any, Protocol, override
 
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
 from core.model_tasks.local_setup import LocalSetup, environment_error
@@ -239,11 +239,13 @@ class LocalEmbeddingSetup(LocalSetup):
         self.embedding_model = model
         self._on_ready = on_ready
 
+    @override
     def _environment_error(self) -> str:
         if self.model_directory is None:
             return "environment_missing"
         return super()._environment_error()
 
+    @override
     def _model_error(self) -> str:
         if error := super()._model_error():
             return error
@@ -255,6 +257,7 @@ class LocalEmbeddingSetup(LocalSetup):
             return "environment_unreadable"
         return ""
 
+    @override
     async def _perform(self) -> None:
         assert self.directory is not None and self.model_directory is not None
         model = self.embedding_model

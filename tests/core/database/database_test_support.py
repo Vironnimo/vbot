@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Condition, Event, Semaphore
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -216,6 +216,7 @@ class FrozenMembers(Condition):
         self.waiting = Semaphore(0)
         self.capture: MemberCapture | None = None
 
+    @override
     def wait(self, timeout: float | None = None) -> bool:
         if timeout is None:  # only a held change waits without a budget
             self.waiting.release()

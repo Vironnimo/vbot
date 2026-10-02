@@ -4,6 +4,7 @@ import argparse
 import io
 import shlex
 import sys
+from typing import override
 
 import pytest
 
@@ -44,6 +45,7 @@ def test_every_area_and_command_has_discoverable_help_and_output_mode(capsys):
 class _Terminal(io.StringIO):
     encoding = "utf-8"
 
+    @override
     def isatty(self) -> bool:
         return True
 

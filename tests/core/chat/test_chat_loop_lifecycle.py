@@ -7,7 +7,7 @@ import asyncio
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -160,6 +160,7 @@ class _RecordingResolver(ContentBlockResolver):
         super().__init__(store)
         self.current_turns: list[str] = []
 
+    @override
     async def resolve_messages(
         self, messages: list[dict[str, Any]], *, current_user_message_id: str, **kwargs: Any
     ) -> list[dict[str, Any]]:

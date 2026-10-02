@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -43,11 +43,13 @@ class _FailingHookDispatch(ExtensionRegistry):
         super().__init__()
         self._failing_hook = failing_hook
 
+    @override
     async def dispatch_tool_call(self, ctx: HookContext, **payload: Any) -> Any:
         if self._failing_hook == "tool_call":
             raise RuntimeError("hook dispatch broke")
         return await super().dispatch_tool_call(ctx, **payload)
 
+    @override
     async def dispatch_tool_result(self, ctx: HookContext, **payload: Any) -> Any:
         if self._failing_hook == "tool_result":
             raise RuntimeError("hook dispatch broke")

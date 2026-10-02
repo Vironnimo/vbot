@@ -9,7 +9,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, override
 
 from core.agents import default_workspace_dir
 from core.chat._skill_activation import _active_skill_env_keys
@@ -244,16 +244,19 @@ class _EmittingToolRegistry(ToolRegistry):
             add_note=self._note_hook or (lambda _text: None),
         )
 
+    @override
     def is_parallel_safe(self, name: str) -> bool:
         """Delegate the wrapped Tool's execution policy."""
         resolver = getattr(self._registry, "is_parallel_safe", None)
         return bool(callable(resolver) and resolver(name))
 
+    @override
     def requires_execution_slot(self, name: str) -> bool:
         """Delegate the wrapped Tool's global execution-slot policy."""
         resolver = getattr(self._registry, "requires_execution_slot", None)
         return not callable(resolver) or bool(resolver(name))
 
+    @override
     def schema_fingerprint(self, name: str) -> str:
         """Return the wrapped registry's Tool schema fingerprint."""
         resolver = getattr(self._registry, "schema_fingerprint", None)
@@ -261,6 +264,7 @@ class _EmittingToolRegistry(ToolRegistry):
             return ""
         return str(resolver(name))
 
+    @override
     def validate_result(
         self, name: str, result: Any, *, contract: ToolContract | None = None
     ) -> JsonObject:
@@ -282,6 +286,7 @@ class _EmittingToolRegistry(ToolRegistry):
             return None
         return contract if isinstance(contract, ToolContract) else None
 
+    @override
     async def dispatch(
         self,
         context: ToolContext,

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, tzinfo
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, ClassVar, cast
+from typing import Any, ClassVar, cast, override
 
 from core.automation.cron import CronJob, CronService
 from core.calendar import CalendarEvent, CalendarService
@@ -158,6 +158,7 @@ def clock_at(moment: datetime) -> type[datetime]:
 
     class Clock(datetime):
         @classmethod
+        @override
         def now(cls, tz: tzinfo | None = None) -> Clock:
             return cast(Clock, moment.astimezone(tz))
 

@@ -6,7 +6,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 from fastapi.testclient import TestClient  # type: ignore[import-not-found]
@@ -356,6 +356,7 @@ class _GatedStubAdapter(StubAdapter):
 
     gate: Callable[[], Awaitable[None]] | None = None
 
+    @override
     async def stream(self, messages: list[Any], *, model_id: str, **kwargs: Any) -> Any:
         gate, self.gate = self.gate, None
         if gate is not None:

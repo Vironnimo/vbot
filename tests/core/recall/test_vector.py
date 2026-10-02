@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -231,6 +231,7 @@ async def test_search_answers_from_indexed_passages_while_new_ones_wait(
 
 
 class _UsageEmbeddings(StubEmbeddings):
+    @override
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         result = await super().embed(texts, purpose=purpose)
         return EmbeddingResult(
@@ -275,11 +276,13 @@ async def test_search_logs_the_usage_of_its_query_embedding(
 
 
 class _UnconfiguredEmbeddings(StubEmbeddings):
+    @override
     def resolve_space(self) -> EmbeddingSpaceIdentity:
         raise EmbeddingError("no text_embedding binding configured")
 
 
 class _FailingEmbeddings(StubEmbeddings):
+    @override
     async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
         raise EmbeddingError("provider unavailable")
 
@@ -313,6 +316,7 @@ async def test_search_cancellation_reaches_the_embedding_call(
     cancelled = asyncio.Event()
 
     class _SlowEmbeddings(StubEmbeddings):
+        @override
         async def embed(self, texts: list[str], *, purpose: str | None = None) -> EmbeddingResult:
             started.set()
             try:

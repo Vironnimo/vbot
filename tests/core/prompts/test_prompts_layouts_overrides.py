@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 
 from core.agents.temporary import TemporaryAgent
 from core.prompts.blocks import BlockDefinition, LayoutEntry
@@ -115,6 +116,7 @@ def test_request_local_data_does_not_read_persistent_override_paths(
     storage = PromptBlockStore(data_dir=tmp_path, ensure_directories=lambda: None)
 
     class RealOverrideStore(StubBlockStore):
+        @override
         def read_block_override(self, scope: str, block_id: str) -> str | None:
             return storage.read_block_override(None if scope == "default" else scope[6:], block_id)
 

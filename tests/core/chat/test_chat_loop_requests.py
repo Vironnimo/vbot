@@ -7,7 +7,7 @@ import json
 import logging
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -87,6 +87,7 @@ def _reminder(text: str) -> JsonObject:
 class _ContextAdapter(StubAdapter):
     """Carry each request's Session context into its kwargs as ``_test_context``."""
 
+    @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": context}
 
@@ -144,12 +145,14 @@ async def test_non_streaming_provider_normalization_runs_off_event_loop(tmp_path
             self.send_threads: list[int] = []
             self.normalize_threads: list[int] = []
 
+        @override
         async def send(
             self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
         ) -> JsonObject:
             self.send_threads.append(threading.get_ident())
             return await super().send(messages, model_id=model_id, **kwargs)
 
+        @override
         def normalize_response(
             self, response: JsonObject, *, model_id: str | None = None
         ) -> JsonObject:
@@ -412,6 +415,7 @@ async def test_queue_edit_preserves_sender_reply_surface_and_tool_restriction(
             self.first_request_started = asyncio.Event()
             self.release_first_request = asyncio.Event()
 
+        @override
         async def send(
             self, messages: list[JsonObject], *, model_id: str, **kwargs: Any
         ) -> JsonObject:

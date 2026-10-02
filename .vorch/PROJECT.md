@@ -102,6 +102,8 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 
 **Filesystem checks:** Since Python 3.14, `Path.exists`, `is_dir` and `is_file` return `False` when the check itself fails (permission or I/O error, an unresponsive share or cloud-file provider), so an entry that cannot be checked reads as missing. Where that answer decides about data (seeding, overwriting, deleting, restoring, adopting), use `exists_strict`, `is_dir_strict`, `is_file_strict` or `stat_or_none` from `core/utils/file_status.py`, which raise the `OSError` instead, or open the file and treat only `FileNotFoundError` as missing; an entry that cannot be checked is unavailable, never absent. The same module classifies unfollowed `lstat` results: `is_link_status` (symbolic links and junctions, for walking, moving and removing trees without following links) and `is_reparse_point` (every Windows reparse point, for package verification); do not add local copies.
 
+**Typing:** Every method that overrides a base class method, test doubles included, carries `@override` from `typing`; mypy's `explicit-override` error code requires it, so renaming or removing a base method fails the type check instead of silently orphaning its overrides. A hook looked up by name (`getattr(adapter, "hook", None)`) has no such protection.
+
 ## Development
 
 **Setup:** Python 3.14 (Python version below), Node.js for WebUI (Node.js >=22 plus npm on the server for optional WhatsApp Channels); editable install with dev extras:

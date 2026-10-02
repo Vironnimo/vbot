@@ -8,7 +8,7 @@ import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, cast, override
 
 from core.attachments.attachments import (
     AttachmentError,
@@ -145,10 +145,12 @@ class _SizeLimitedMultiPartParser(MultiPartParser):  # type: ignore[misc]
         self._upload_kind = upload_kind
         self._current_file_size_bytes = 0
 
+    @override
     def on_part_begin(self) -> None:
         super().on_part_begin()
         self._current_file_size_bytes = 0
 
+    @override
     def on_part_data(self, data: bytes, start: int, end: int) -> None:
         part_size_bytes = end - start
         if self._current_part.file is not None:

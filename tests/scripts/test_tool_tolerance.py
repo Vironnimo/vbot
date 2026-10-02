@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -262,6 +262,7 @@ def test_web_probe_retains_failed_dispatch_evidence() -> None:
     from scripts.provider_probe.workflow_web_tolerance import web_case, web_tolerance_cases
 
     class Adapter(_Adapter):
+        @override
         async def send(self, messages, **kwargs):
             return {
                 "tool_calls": [{"id": "fixture", "name": "web_fetch", "arguments": self.arguments}]

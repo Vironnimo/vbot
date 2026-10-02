@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -54,6 +54,7 @@ class StubAdapter(AdapterHookDefaults):
         self.closed = False
         self.debug_context: Any = None
 
+    @override
     def set_debug_context(self, context: Any) -> None:
         self.debug_context = context
 
@@ -154,6 +155,7 @@ async def test_aclose_cancels_and_drains_generated_title_tasks(manager) -> None:
     started = asyncio.Event()
 
     class BlockingAdapter(StubAdapter):
+        @override
         async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
             self.requests.append({"messages": messages, **kwargs})
             started.set()
@@ -269,6 +271,7 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
     """A rejected explicit disable retries once at the provider-default effort."""
 
     class RejectingAdapter(StubAdapter):
+        @override
         def request_context_kwargs(self, **kwargs: Any) -> dict[str, Any]:
             assert kwargs == {
                 "agent_id": "coder",
@@ -277,6 +280,7 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
             }
             return {"routing_sentinel": "title-session"}
 
+        @override
         async def send(self, messages: list[dict], **kwargs: Any) -> dict[str, Any]:
             self.requests.append({"messages": messages, **kwargs})
             if kwargs.get("thinking_effort") == "none":

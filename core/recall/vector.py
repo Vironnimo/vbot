@@ -20,7 +20,7 @@ import hashlib
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import TypeVar
+from typing import TypeVar, override
 
 from core.database import DatabaseError
 from core.model_tasks import EmbeddingError, EmbeddingResult, EmbeddingUsage
@@ -120,6 +120,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
         self.embeddings = context.embeddings
         self._on_waiting = on_waiting
 
+    @override
     def search_capabilities(self) -> RecallSearchCapabilities:
         return RecallSearchCapabilities(
             result_type="passage",
@@ -130,6 +131,7 @@ class VectorRecallBackend(CanonicalSessionRecallBackend):
             default_order="relevance",
         )
 
+    @override
     async def search_page(self, request: RecallSearchRequest) -> RecallSearchPage:
         prepared = await self.prepare_search(request)
         return await prepared.page(request.offset, request.limit)

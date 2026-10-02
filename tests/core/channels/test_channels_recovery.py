@@ -7,6 +7,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
+from typing import override
 
 import pytest
 
@@ -40,15 +41,18 @@ class CrashingAdapter(ChannelAdapter):
         self.started = asyncio.Event()
         self.stopped = asyncio.Event()
 
+    @override
     async def start(self) -> None:
         self.started.set()
         if self._while_running is not None:
             self._while_running()
         raise RuntimeError("adapter failed")
 
+    @override
     async def stop(self) -> None:
         self.stopped.set()
 
+    @override
     async def send(
         self,
         message: str | None,
@@ -60,6 +64,7 @@ class CrashingAdapter(ChannelAdapter):
     ) -> None:
         return
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:

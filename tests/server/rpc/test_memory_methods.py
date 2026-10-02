@@ -6,7 +6,7 @@ import asyncio
 import errno
 import threading
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 import pytest
 
@@ -224,6 +224,7 @@ async def test_memory_write_runs_off_the_loop_and_finishes_before_the_workspace_
     add_entry = memory.add_entry
 
     class ObservedLock(asyncio.Lock):
+        @override
         async def acquire(self) -> Literal[True]:
             attempted.set()
             return await super().acquire()

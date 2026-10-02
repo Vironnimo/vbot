@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 import httpx
 import pytest
@@ -639,10 +639,12 @@ class _BrokenStream(httpx.AsyncByteStream):
         self._failure = failure
         self.closed = False
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield sse(_delta_chunk(content="A"), done=False).encode()
         raise self._failure
 
+    @override
     async def aclose(self) -> None:
         self.closed = True
 

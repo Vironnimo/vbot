@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 
 import pytest
 
@@ -44,6 +44,7 @@ class _RecordingCompactionService(StubCompactionService):
         super().__init__(should_auto=True)
         self.compacted_contents: list[list[Any]] = []
 
+    @override
     async def compact(self, messages: list[ChatMessage], **_kwargs: Any) -> ChatMessage:
         self.compacted_contents.append([message.content for message in messages])
         return ChatMessage.compaction_checkpoint(
@@ -54,6 +55,7 @@ class _RecordingCompactionService(StubCompactionService):
 
 
 class _AffinityAdapter(StubAdapter):
+    @override
     def request_context_kwargs(self, **context: Any) -> JsonObject:
         return {"_test_context": context}
 

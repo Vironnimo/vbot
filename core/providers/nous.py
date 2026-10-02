@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import replace
-from typing import Any
+from typing import Any, override
 
 import httpx
 
@@ -41,6 +41,7 @@ class NousAdapter(OpenAICompatibleAdapter):
     """OpenAI Chat Completions plus Nous Portal's documented gateway limits."""
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -90,12 +91,14 @@ class NousAdapter(OpenAICompatibleAdapter):
             ),
         )
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """Declare no native media until the Portal wire documents multipart content."""
 
         del model_id
         return frozenset()
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -133,6 +136,7 @@ class NousAdapter(OpenAICompatibleAdapter):
         payload["max_tokens"] = min(payload["max_tokens"], NOUS_MAX_OUTPUT_TOKENS)
         return payload
 
+    @override
     def _render_reasoning(
         self,
         payload: dict[str, Any],
@@ -154,6 +158,7 @@ class NousAdapter(OpenAICompatibleAdapter):
             reasoning["effort"] = intent.effort_level
         payload["reasoning"] = reasoning
 
+    @override
     def _classify_http_status(
         self,
         status_code: int,

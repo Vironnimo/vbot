@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, Mock
 
 from core.channels import ChannelConfig
@@ -54,6 +54,7 @@ async def channel_case(
     adapter: Any, args: argparse.Namespace, case: dict[str, Any]
 ) -> dict[str, Any]:
     class FixtureContext(ToolContext):
+        @override
         def resolve_path(self, path: str | Path, *, follow_final_link: bool = True) -> Path:
             target = super().resolve_path(path, follow_final_link=follow_final_link)
             if not target.is_relative_to(self.workspace):

@@ -31,7 +31,7 @@ from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import sqlite_vec  # type: ignore[import-untyped]
 
@@ -356,6 +356,7 @@ class PassageIndex(PassageCatalog):
         """
         await self.write(_drop_vectors)
 
+    @override
     def _after_add(self, connection: sqlite3.Connection, passage_refs: list[int]) -> None:
         # A new Passage whose text already has a vector reuses it instead of
         # waiting for the provider.

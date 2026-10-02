@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from itertools import count
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import AsyncMock, Mock
 from weakref import WeakValueDictionary
 
@@ -90,6 +90,7 @@ class MemoryChannelAccessRegistry(ChannelAccessRegistry):
         self.admin_user_ids = set(admin_user_ids or [])
         self.participants: dict[str, dict[str, str]] = {}
 
+    @override
     async def snapshot_participant_role(
         self,
         channel_id: str,
@@ -101,6 +102,7 @@ class MemoryChannelAccessRegistry(ChannelAccessRegistry):
         self.participants.setdefault(access_scope_id, {})[user_id] = display_name
         return self.role_for("", access_scope_id, user_id)
 
+    @override
     def role_for(self, channel_id: str, access_scope_id: str, user_id: str) -> GroupRole:
         del channel_id, access_scope_id
         return "admin" if user_id in self.admin_user_ids else "member"

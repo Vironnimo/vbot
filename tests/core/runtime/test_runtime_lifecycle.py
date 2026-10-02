@@ -13,7 +13,7 @@ import time
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -823,6 +823,7 @@ class _ShutdownFailureLog(logging.Handler):
         super().__init__(logging.ERROR)
         self._events = events
 
+    @override
     def emit(self, record: logging.LogRecord) -> None:
         error = record.exc_info[1] if record.exc_info else None
         self._events.append((*cast(tuple[object, ...], record.args), error))

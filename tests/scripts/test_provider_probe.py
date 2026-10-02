@@ -9,7 +9,7 @@ import asyncio
 import json
 from argparse import Namespace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -182,6 +182,7 @@ def test_swarm_board_bounds_probe_passes_through_registered_handlers() -> None:
     from scripts.provider_probe.workflow_swarm import _probe_swarm_tool
 
     class Adapter(EchoAdapter):
+        @override
         async def send(self, messages: list[dict[str, Any]], **_kwargs: Any) -> dict[str, Any]:
             tool = messages[-1]["content"].split()[1]
             arguments = json.loads(messages[-1]["content"].split(": ", 1)[1])
@@ -203,6 +204,7 @@ def test_swarm_probe_treats_an_unrecognized_terminal_outcome_as_unfinished() -> 
     from scripts.provider_probe.workflow_swarm import _probe_swarm_tool
 
     class Adapter(EchoAdapter):
+        @override
         async def send(self, messages: list[dict[str, Any]], **_kwargs: Any) -> dict[str, Any]:
             return {"content": "", "terminal_outcome": ""}
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -208,9 +208,11 @@ async def test_establishment_and_stream_retries_do_not_multiply(tmp_path, stream
             self.attempts += 1
             raise ProviderError("503", retryable=True)
 
+        @override
         async def send(self, *args, **kwargs):
             return await retry_async(self.fail)
 
+        @override
         async def stream(self, *args, **kwargs):
             await retry_async(self.fail)
             yield {}
@@ -450,6 +452,7 @@ async def test_deadline_preserves_partial_and_prevents_further_fallback(tmp_path
     class StallingAdapter(StubAdapter):
         attempts = 0
 
+        @override
         async def stream(self, *args, **kwargs):
             self.attempts += 1
             if self.attempts == 1:

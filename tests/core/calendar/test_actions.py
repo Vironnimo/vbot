@@ -9,6 +9,7 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -187,6 +188,7 @@ async def test_finished_history_is_pruned_after_retention_without_refiring(tmp_p
 
     class Clock(datetime):
         @classmethod
+        @override
         def now(cls, tz=None):
             return later
 
@@ -275,6 +277,7 @@ async def test_move_during_admitted_run_keeps_claim_until_completion(
 
     class Clock(datetime):
         @classmethod
+        @override
         def now(cls, tz=None):
             return now
 
@@ -883,6 +886,7 @@ async def test_recurrences_each_request_a_fresh_session(tmp_path, monkeypatch):
 
             class Clock(datetime):
                 @classmethod
+                @override
                 def now(cls, tz=None, clock=clock):
                     return clock
 

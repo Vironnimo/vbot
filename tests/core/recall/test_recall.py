@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -77,6 +77,7 @@ def test_register_rejects_invalid_reserved_and_duplicate_names(name: str) -> Non
 
 
 class _InvalidCapabilities(CanonicalSessionRecallBackend):
+    @override
     def search_capabilities(self) -> Any:
         return {"result_unit": "message"}
 

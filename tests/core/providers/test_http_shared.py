@@ -10,7 +10,7 @@ import logging
 import zlib
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock
 
 import httpx
@@ -409,10 +409,12 @@ async def test_failed_error_body_read_closes_the_stream(
     class BrokenBody(httpx.AsyncByteStream):
         closed = False
 
+        @override
         async def __aiter__(self):  # type: ignore[no-untyped-def]
             yield b"partial error"
             raise failure("body interrupted")
 
+        @override
         async def aclose(self) -> None:
             self.closed = True
 

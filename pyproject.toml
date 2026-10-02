@@ -92,6 +92,9 @@ mypy_path = "scripts"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = false
+# Every overriding method carries `@typing.override`, so renaming or removing a
+# base method fails the check instead of silently orphaning its overrides.
+enable_error_code = ["explicit-override"]
 
 [[tool.mypy.overrides]]
 module = [

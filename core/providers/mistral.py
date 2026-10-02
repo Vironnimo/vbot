@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, override
 
 from core.models.models import (
     Capabilities,
@@ -82,6 +82,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
     """OpenAI-compatible adapter with Mistral-specific catalog and reasoning behavior."""
 
     @classmethod
+    @override
     def normalize_catalog_entry(
         cls,
         raw: Mapping[str, Any],
@@ -145,6 +146,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             max_output_tokens=None,
         )
 
+    @override
     def _build_payload(
         self,
         messages: list[dict[str, Any]],
@@ -209,11 +211,13 @@ class MistralAdapter(OpenAICompatibleAdapter):
             return False
         return mistral_metadata.get(PROMPT_MODE_METADATA_KEY) == PROMPT_MODE_REASONING
 
+    @override
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
         """Mistral replays structured thinking chunks only, never a text field."""
         del model_id
         return REASONING_REPLAY_FIDELITY_META_ONLY
 
+    @override
     def _format_assistant_message(
         self,
         message: dict[str, Any],
@@ -235,6 +239,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
                 wire["content"] = [dict(item) for item in stored_chunks]
         return wire
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -274,6 +279,7 @@ class MistralAdapter(OpenAICompatibleAdapter):
             normalized["usage"] = usage
         return normalized
 
+    @override
     def _normalize_stream_chunk(
         self,
         raw_chunk: dict[str, Any],

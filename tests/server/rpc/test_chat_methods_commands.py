@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -84,6 +84,7 @@ class _NoticeDispatcher(CommandDispatcher):
         super().__init__(ChatRunManager())
         self.calls: list[tuple[str, str, str, ReplySurface]] = []
 
+    @override
     async def execute(
         self, prepared: PreparedCommand, context: CommandExecutionContext
     ) -> CommandOutcome:

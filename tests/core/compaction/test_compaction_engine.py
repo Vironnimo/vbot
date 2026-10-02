@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import threading
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, override
 
 import pytest
 
@@ -254,6 +254,7 @@ async def test_compaction_keeps_sync_transforms_off_loop_and_model_io_on_loop(
             )
 
     class RecordingAdapter(StubAdapter):
+        @override
         async def stream(
             self, messages: list[dict], **kwargs: Any
         ) -> AsyncIterator[dict[str, Any]]:

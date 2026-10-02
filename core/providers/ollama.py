@@ -34,7 +34,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
 
@@ -173,6 +173,7 @@ class OllamaAdapter(ProviderAdapter):
         )
 
     @classmethod
+    @override
     def openai_compatible_base_url(cls, base_url: str) -> str:
         """Ollama serves its OpenAI-compatible API under ``/v1`` beside ``/api``."""
 
@@ -200,6 +201,7 @@ class OllamaAdapter(ProviderAdapter):
     # Lifecycle
     # ------------------------------------------------------------------
 
+    @override
     async def aclose(self) -> None:
         """Close the HTTP client and release resources."""
         await self._client.aclose()
@@ -214,6 +216,7 @@ class OllamaAdapter(ProviderAdapter):
     # Wire media capability
     # ------------------------------------------------------------------
 
+    @override
     def wire_media_support(self, model_id: str) -> frozenset[str]:
         """The Ollama chat wire carries base64 images (per-message ``images`` list)."""
         del model_id
@@ -268,6 +271,7 @@ class OllamaAdapter(ProviderAdapter):
         )
 
     @classmethod
+    @override
     def finalize_discovered_model(
         cls,
         model: Model,
@@ -447,6 +451,7 @@ class OllamaAdapter(ProviderAdapter):
     # Response normalization
     # ------------------------------------------------------------------
 
+    @override
     def normalize_response(
         self, response: dict[str, Any], *, model_id: str | None = None
     ) -> dict[str, Any]:
@@ -477,6 +482,7 @@ class OllamaAdapter(ProviderAdapter):
     # send() — non-streaming
     # ------------------------------------------------------------------
 
+    @override
     async def send(
         self,
         messages: list[dict[str, Any]],
@@ -515,6 +521,7 @@ class OllamaAdapter(ProviderAdapter):
     # stream() — NDJSON streaming
     # ------------------------------------------------------------------
 
+    @override
     async def stream(
         self,
         messages: list[dict[str, Any]],

@@ -8,6 +8,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -180,6 +181,7 @@ async def test_waiting_reader_does_not_block_input_resize_or_stop(
     reading = threading.Event()
 
     class WaitingAdapter(FakeTerminalAdapter):
+        @override
         def read(self, size: int) -> str:
             reading.set()
             return super().read(size)
@@ -320,6 +322,7 @@ class IdleTimeoutAdapter(FakeTerminalAdapter):
         super().__init__()
         self.idle_reads = 0
 
+    @override
     def read(self, _size: int) -> str:
         try:
             value = self._output.get(timeout=0.01)

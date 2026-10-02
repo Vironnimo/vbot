@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import override
 
 import httpx
 import pytest
@@ -191,6 +192,7 @@ async def test_failed_token_renewal_stops_the_refresh(
     route = respx.get(SIMPLE_MODELS_URL).mock(return_value=httpx.Response(401))
 
     class FailingGetter(_RecordingGetter):
+        @override
         async def refresh_after_rejection(
             self, rejected: str, *, status_code: int, response_body: str
         ) -> str | None:
@@ -217,6 +219,7 @@ async def test_token_getter_failure_is_not_a_rejected_request(tmp_path: Path) ->
     failure.status_code = 401
 
     class Getter(_RecordingGetter):
+        @override
         async def __call__(self) -> str:
             raise failure
 

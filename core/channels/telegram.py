@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, override
 
 from core.attachments import AttachmentStore
 from core.channels.adapter import (
@@ -161,6 +161,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             config.id, self._engine.handle_inbound_text, self._engine.handle_inbound_media
         )
 
+    @override
     async def start(self) -> None:
         """Start Telegram long-polling and wait until stop is requested."""
         if self._application is not None:
@@ -286,6 +287,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             telegram_ext.CallbackQueryHandler(self._handle_callback_query),
         ]
 
+    @override
     async def stop(self) -> None:
         """Stop polling, cancel engine workers and album tasks, and release resources."""
         self._stop_event.set()
@@ -308,6 +310,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             if application is not None:
                 await self._run_lifecycle_step(application.shutdown, "application.shutdown")
 
+    @override
     async def send(
         self,
         message: str | None,
@@ -322,6 +325,7 @@ class TelegramChannelAdapter(ChannelAdapter):
             message, platform_target, files=files, thread_id=thread_id, buttons=buttons
         )
 
+    @override
     async def relay_run(self, run: Run, reply_plan: ReplyPlanFacts) -> None:
         """Relay one background Run through the composed conversation engine."""
         await self._engine.relay_run(run, reply_plan)
@@ -751,6 +755,7 @@ class TelegramChannelAdapter(ChannelAdapter):
                 error,
             )
 
+    @override
     async def ensure_outbound_session(
         self, platform_target: str, *, thread_id: str | None = None
     ) -> RouteFacts:
@@ -858,6 +863,7 @@ class TelegramChannelAdapter(ChannelAdapter):
         # D8: empty allowed_chat_ids means deny all inbound chats.
         return chat_id in self._allowed_chat_ids
 
+    @override
     def denied_chats(self) -> list[DeniedChatFacts]:
         return self._denied_chat_log.entries()
 

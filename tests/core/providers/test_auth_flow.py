@@ -12,7 +12,7 @@ import hashlib
 import logging
 from collections.abc import AsyncIterator, Awaitable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, override
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -534,6 +534,7 @@ async def test_polling_crash_still_reports_failure_and_is_logged(
     logged = asyncio.Event()
 
     class _Signal(logging.Handler):
+        @override
         def emit(self, record: logging.LogRecord) -> None:
             if record.getMessage().startswith("OAuth polling task failed"):
                 logged.set()

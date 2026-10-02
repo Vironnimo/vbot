@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, override
 
 from core.model_tasks.live import live_failure, live_success
 from server.live._brief import (
@@ -42,6 +42,7 @@ class Contains:
 
 
 class _Absent:
+    @override
     def __repr__(self) -> str:
         return "ABSENT"
 

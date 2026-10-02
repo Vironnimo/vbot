@@ -9,6 +9,7 @@ import threading
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -120,6 +121,7 @@ def test_clean_builder_downloads_asset_without_site_packages(tmp_path):
                 self.end_headers()
                 self.wfile.write(archive)
 
+        @override
         def log_message(self, *args):
             pass
 

@@ -14,7 +14,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from logging import Logger
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, override
 
 import httpx
 
@@ -148,6 +148,7 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
         self._inner = inner
         self._recorder = recorder
 
+    @override
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         capture = self._recorder.begin_capture(
             method=request.method,
@@ -172,6 +173,7 @@ class _DebugCaptureTransport(httpx.AsyncBaseTransport):
             capture.finalize()
         return response
 
+    @override
     async def aclose(self) -> None:
         await self._inner.aclose()
 
@@ -188,11 +190,13 @@ class _CaptureByteStream(httpx.AsyncByteStream):
         self._inner = inner
         self._capture = capture
 
+    @override
     async def __aiter__(self) -> AsyncIterator[bytes]:
         async for chunk in self._inner:
             self._capture.feed_body(chunk)
             yield chunk
 
+    @override
     async def aclose(self) -> None:
         try:
             await self._inner.aclose()

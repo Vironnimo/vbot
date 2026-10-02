@@ -6,6 +6,7 @@ import asyncio
 import logging
 import threading
 from pathlib import Path
+from typing import override
 
 import pytest
 
@@ -169,6 +170,7 @@ async def test_adapter_replacement_drains_migration_before_loading_current_confi
     built_from: list[ChannelConfig] = []
 
     class MigratingAdapter(BlockingAdapter):
+        @override
         async def stop(self) -> None:
             stopping.set()
             await release.wait()
