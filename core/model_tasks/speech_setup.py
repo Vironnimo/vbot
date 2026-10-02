@@ -45,6 +45,12 @@ class LocalSpeechSetup(LocalSetup):
             return "" if _dependencies_available() else "dependencies_missing"
         return super()._availability_error()
 
+    def _python_version(self) -> str | None:
+        # The managed STT worker imports vBot's source, which needs the server's Python.
+        if self.engine:
+            return None
+        return f"{sys.version_info.major}.{sys.version_info.minor}"
+
     async def _perform(self) -> None:
         if self.engine:
             await self._install_tts()
@@ -150,7 +156,7 @@ class LocalSpeechSetup(LocalSetup):
         ]
         uv = [sys.executable, "-m", "uv"]
         self._phase = "python"
-        if not self.python.exists():
+        if self._environment_needed():
             install = self._packaged_installation()
             if install is None:
                 self._fail("setup_unavailable")

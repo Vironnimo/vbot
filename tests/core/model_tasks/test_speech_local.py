@@ -521,6 +521,12 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
     interpreter.touch()
     if os.name == "nt":
         (runtime / "python.exe").touch()
+    # An environment left from a removed installation: its base Python is gone.
+    _environment(setup, home=tmp_path / "removed-runtime", version="3.13.15")
+    stale = tmp_path / "speech-engines" / "stt" / "Lib" / "stale.py"
+    stale.parent.mkdir(parents=True)
+    stale.touch()
+    assert setup.status()["error"] == "python_missing"
     commands: list[list[str]] = []
 
     async def command(arguments: Any, **_kwargs: Any) -> int:
@@ -537,6 +543,7 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
     assert setup._task is not None
     await setup._task
     assert setup.available()
+    assert not stale.exists()
     assert not any(command[:3] == [sys.executable, "-m", "pip"] for command in commands)
     installs = [command for command in commands if "install" in command]
     assert installs
@@ -559,6 +566,39 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
         "--seed",
     ]
     await setup.aclose()
+
+
+def _environment(setup: LocalSpeechSetup, *, home: Path, version: str) -> None:
+    """Give *setup* a completed environment based on the Python in *home*."""
+    assert setup.directory is not None
+    setup.python.parent.mkdir(parents=True)
+    setup.python.touch()
+    (setup.directory / "pyvenv.cfg").write_text(
+        f"home = {home}\nimplementation = CPython\nversion_info = {version}\n", encoding="utf-8"
+    )
+    setup._write_marker(setup.directory / "verified.json")
+
+
+@pytest.mark.parametrize("engine", ["", "qwen3-tts"])
+@pytest.mark.parametrize("base", ["current", "gone", "other version"])
+def test_managed_speech_needs_setup_again_when_its_python_cannot_serve(
+    tmp_path: Path, engine: str, base: str
+) -> None:
+    setup = LocalSpeechSetup(engine=engine, directory=tmp_path / "speech-engines" / "stt")
+    current = f"{sys.version_info.major}.{sys.version_info.minor}.0"
+    home = tmp_path / "python"
+    if base != "gone":
+        home.mkdir()
+    _environment(setup, home=home, version="3.1.0" if base == "other version" else current)
+
+    # STT runs vBot's source and needs the server's Python; TTS keeps its recipe's.
+    expected = {
+        "current": "",
+        "gone": "python_missing",
+        "other version": "" if engine else "python_changed",
+    }[base]
+    assert setup.status()["error"] == expected
+    assert setup.available() is (expected == "")
 
 
 @pytest.mark.parametrize("engine", ["", "qwen3-tts", "chatterbox"])

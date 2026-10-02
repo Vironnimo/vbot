@@ -126,9 +126,13 @@ imports plus NVIDIA execution in a fresh process. Status is process-local and su
 navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
 reaps the package subprocess. Raw package output stays private. Local execution remains unavailable
 during installation, failure and the verified restart-required state. Development-checkout STT
-rechecks package metadata; managed STT/TTS require the environment interpreter and a
+rechecks package metadata; managed STT/TTS require the environment interpreter, the base
+Python its `pyvenv.cfg` names (`python_missing` once that is gone, e.g. after the application
+was installed again), for STT the server's `major.minor` Python version (`python_changed`,
+because its worker imports vBot source), and a
 `verified.json` completion receipt, written atomically only after successful verification
-and removed before package changes. Receipt contents are not runtime compatibility data:
+and removed before package changes. Setup removes and recreates an environment that fails one of
+these Python checks. Receipt contents are not runtime compatibility data:
 changed dependency declarations or worker source never invalidate a completed setup.
 Actual SDK, device and Model failures are handled at execution. Status reads neither
 import ML runtimes nor start subprocesses, rewrite receipts or run setup. Explicit

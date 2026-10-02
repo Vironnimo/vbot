@@ -102,7 +102,26 @@ class LocalSetup:
         """Return a stable reason code while the installation cannot execute."""
         if self.directory is None:
             return "environment_missing"
-        return environment_error(self.directory, self.python)
+        return environment_error(self.directory, self.python, self._python_version())
+
+    def _python_version(self) -> str | None:
+        """The ``major.minor`` the environment's Python must have, or None for any."""
+        return None
+
+    def _environment_needed(self) -> bool:
+        """Remove an environment whose Python cannot serve; return whether one must be created.
+
+        Its interpreter is gone, or the environment is based on a Python that no
+        longer exists or has the wrong version. Nothing in the environment
+        directory outlives its interpreter.
+        """
+        assert self.directory is not None
+        error = environment_error(self.directory, self.python, self._python_version())
+        if error not in {"python_missing", "python_changed"}:
+            return False
+        if self.directory.exists():
+            shutil.rmtree(self.directory)
+        return True
 
     def install(self) -> dict[str, Any]:
         if self._closed or self._state in {"installing", "restart_required"}:
@@ -181,7 +200,7 @@ class LocalSetup:
         uv = [sys.executable, "-m", "uv"]
         self._phase = "python"
         if (
-            not self.python.exists()
+            self._environment_needed()
             and await self._command(
                 [*uv, "venv", "--python", recipe["python"], "--managed-python", str(self.directory)]
             )
@@ -332,11 +351,23 @@ class LocalSetup:
             await asyncio.gather(self._task, return_exceptions=True)
 
 
-def environment_error(directory: Path, python: Path) -> str:
-    """Return why the managed environment in *directory* cannot run, or ``""``."""
+def environment_error(directory: Path, python: Path, python_version: str | None = None) -> str:
+    """Return why the managed environment in *directory* cannot run, or ``""``.
+
+    The environment's ``pyvenv.cfg`` names the Python it is based on: when that
+    Python is gone (``python_missing``) or *python_version* (``major.minor``)
+    differs from it (``python_changed``), the environment must be created again.
+    """
     try:
         if not python.is_file():
             return "python_missing"
+        base = _environment_base(directory)
+        if base is not None:
+            home, version = base
+            if not home.is_dir():
+                return "python_missing"
+            if python_version is not None and version != python_version:
+                return "python_changed"
         # This receipt proves that setup finished, not that the installed
         # packages or application source are identical to today's recipe.
         # Updates must not revoke a completed setup based on text or hashes.
@@ -345,6 +376,23 @@ def environment_error(directory: Path, python: Path) -> str:
     except OSError:
         return "environment_unreadable"
     return ""
+
+
+def _environment_base(directory: Path) -> tuple[Path, str] | None:
+    """Return the base Python's directory and ``major.minor`` from ``pyvenv.cfg``."""
+    config = directory / "pyvenv.cfg"
+    if not config.is_file():
+        return None
+    values: dict[str, str] = {}
+    for line in config.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip().lower()] = value.strip()
+    home = values.get("home")
+    if not home:
+        return None
+    version = ".".join(values.get("version_info", values.get("version", "")).split(".")[:2])
+    return Path(home), version
 
 
 def write_receipt(marker: Path, content: str = "{}\n") -> None:
