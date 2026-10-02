@@ -25,7 +25,7 @@ from core.providers.adapter import ProviderAdapter
 from core.providers.anthropic import AnthropicAdapter
 from core.providers.github_copilot import GitHubCopilotAdapter
 from core.providers.kimi import KimiAdapter
-from core.providers.minimax import MINIMAX_M3_MODEL_ID, MiniMaxAdapter
+from core.providers.minimax import MiniMaxAdapter
 from core.providers.ollama import OllamaAdapter
 from core.providers.openai import OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
@@ -150,7 +150,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         pytest.param(
             MiniMaxAdapter,
             "minimax",
-            _model(MINIMAX_M3_MODEL_ID),
+            _model("MiniMax-M3"),
             "high",
             ReasoningIntent(REASONING_INTENT_ON),
             id="minimax-m3-on",
@@ -158,7 +158,7 @@ _BUDGET_100K = _model("budget-model", control=REASONING_CONTROL_BUDGET, budget_m
         pytest.param(
             MiniMaxAdapter,
             "minimax",
-            _model(MINIMAX_M3_MODEL_ID),
+            _model("MiniMax-M3"),
             "none",
             ReasoningIntent(REASONING_INTENT_OFF),
             id="minimax-m3-off",
