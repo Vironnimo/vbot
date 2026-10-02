@@ -124,8 +124,13 @@ async def test_save_serializes_runner_access_until_replacement_is_ready(host, mo
         assert not accessing.done()
         other = await asyncio.wait_for(service.manage("connect", {"id": "other"}), 1)
         assert other["configuration"]["command"] == "other-command"
+        # Saving another connection does not wait for this one to close.
+        changed = {**connection, "id": "other", "command": "changed-command"}
+        other = await asyncio.wait_for(service.manage("save", {"connection": changed}), 1)
+        assert other["configuration"]["command"] == "changed-command"
         release.set()
         _, result = await asyncio.wait_for(asyncio.gather(saving, accessing), 1)
+        assert service.store.load()["other"]["command"] == "changed-command"
         assert service.store.load()["example"]["command"] == "new-command"
         assert service.connections["example"]["command"] == "new-command"
         assert service.runners["example"].config["command"] == "new-command"

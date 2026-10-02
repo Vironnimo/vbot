@@ -7,12 +7,13 @@ HTTP-calling Tools construct clients on the Event Loop, so under concurrent
 Runs that work serialized every Agent behind it.
 
 Every outbound ``httpx`` client and transport in the server therefore passes
-``verify=shared_ssl_context()``. The context carries exactly httpx's default
-verification (certifi bundle, or ``SSL_CERT_FILE``/``SSL_CERT_DIR`` from the
-environment) and is built once per process. ``ssl.SSLContext`` is safe to
-share between clients and threads; httpcore only (re)sets the HTTP/1.1 ALPN
-list on it before each handshake, which is idempotent while no client enables
-HTTP/2.
+``verify=shared_ssl_context()``, and so do the ``httpx2`` clients of the MCP
+SDK, whose default would verify through the system trust store instead. The
+context carries exactly httpx's default verification (certifi bundle, or
+``SSL_CERT_FILE``/``SSL_CERT_DIR`` from the environment) and is built once per
+process. ``ssl.SSLContext`` is safe to share between clients and threads;
+httpcore and httpcore2 only (re)set the HTTP/1.1 ALPN list on it before each
+handshake, which is idempotent while no client enables HTTP/2.
 
 httpx also imports its connection stack lazily: the first client imports
 httpcore, h11 and anyio, and the first request anyio's asyncio backend. On a
