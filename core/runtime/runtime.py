@@ -341,10 +341,18 @@ class Runtime:
         self.reload_environment_credentials()
 
     def _extension_tool_agent(self, context: Any) -> Any:
-        from core.sessions import SessionAddress
+        from core.sessions import SessionAddress, SessionNotFoundError
 
         address = SessionAddress(context.project_id, context.agent_id, context.session_id)
-        binding = self.chat_sessions.temporary_binding(address)
+        try:
+            binding = self.chat_sessions.temporary_binding(address)
+        except SessionNotFoundError:
+            # A temporary invocation needs its live Session. A call outside any
+            # Session (Extension management such as MCP ``invoke``) runs as the
+            # addressed Agent, which no Session overrides.
+            if context.execution_owner is not None:
+                raise ValueError("Temporary Tool invocation no longer owns this Session") from None
+            return self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
         if binding is not None:
             owner = context.execution_owner
             if owner is None or (
