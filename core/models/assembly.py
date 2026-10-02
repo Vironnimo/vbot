@@ -8,7 +8,7 @@ canonical join, **live at load, with no network and no key**.
 
 ``ModelRegistry.load()`` stays the single public read surface; everything here is
 hidden behind it. The two public entry points are :func:`load_canonical_layer`
-(reads the provider-agnostic base once per selected Model DB root) and
+(reads the provider-agnostic base once per Load) and
 :func:`assemble_provider_model` (builds one effective per-model record from the
 layers + the join). Callers outside ``core/models/`` should not import this module.
 
@@ -16,9 +16,10 @@ layers + the join). Callers outside ``core/models/`` should not import this modu
 THE ON-DISK FILE-FORMAT CONTRACT  (Phase 3 must produce exactly this shape)
 ================================================================================
 
-Generated files live in one already-selected ``models/`` root. Hand-maintained
-override files come from the bundled system ``models/`` root so a newer runtime
-catalog cannot hide a correction shipped or edited after that catalog refresh.
+Each generated file is selected from the system or the runtime ``models/`` root
+(:mod:`core.models.database`). Hand-maintained override files come from the
+bundled system ``models/`` root so a newer runtime catalog cannot hide a
+correction shipped or edited after that catalog refresh.
 
 Three layers, each a different home with a clear responsibility:
 
@@ -158,8 +159,8 @@ def log_model_data_issue(message: str) -> None:
 # attribute, never on the wire (GLOSSARY: canonical id "geht nie auf den Draht").
 CANONICAL_POINTER_KEY = "canonical"
 
-# Canonical layer files inside one complete Model DB root. Both may be absent
-# (Phase 3 generates them); an absent file contributes an empty layer.
+# Canonical layer files of a Model DB root. Both may be absent; an absent file
+# contributes an empty layer.
 CANONICAL_FILE_NAME = "models.json"
 CANONICAL_OVERRIDES_FILE_NAME = "models.overrides.json"
 
@@ -178,25 +179,23 @@ _Merge = Callable[[Mapping[str, Any], Mapping[str, Any]], dict[str, Any]]
 
 
 def load_canonical_layer(
-    models_dir: Path,
+    canonical_file: Path | None,
+    overrides_file: Path | None,
     *,
-    overrides_models_dir: Path | None = None,
     report: ModelDataIssueReport = log_model_data_issue,
 ) -> dict[str, dict[str, Any]]:
     """Load and merge the canonical base + canonical overrides, keyed by canonical id.
 
-    Reads ``models.json`` and applies ``models.overrides.json`` on top (override
-    wins per field — the same merge rule used between provider layers). Both
-    files are optional: an absent ``models.json`` yields an empty layer; an
-    absent overrides file leaves the base untouched. This is the
-    DEFENSIVE behavior the handoff requires — Phase 3 has not yet generated these
-    files, and assembly must still load every provider model without error.
+    Reads the generated ``models.json`` and applies the hand-maintained
+    ``models.overrides.json`` on top (override wins per field — the same merge
+    rule used between provider layers). Both files are optional: an absent base
+    yields an empty layer; an absent overrides file leaves the base untouched, so
+    assembly still loads every provider model without a canonical layer.
 
     Args:
-        models_dir: The selected Model DB directory containing ``models.json``.
-        overrides_models_dir: The authoritative directory containing
-            ``models.overrides.json``. Defaults to ``models_dir`` for standalone
-            assembly and validation callers.
+        canonical_file: The selected ``models.json``, or ``None`` when no root
+            has one.
+        overrides_file: The authoritative ``models.overrides.json``.
         report: Receives each ignored invalid file or entry.
 
     Returns:
@@ -204,9 +203,8 @@ def load_canonical_layer(
         no canonical file exists.
     """
 
-    overrides_dir = overrides_models_dir or models_dir
-    base = _read_models_map(models_dir / CANONICAL_FILE_NAME, report)
-    overrides = _read_models_map(overrides_dir / CANONICAL_OVERRIDES_FILE_NAME, report)
+    base = _read_models_map(canonical_file, report) if canonical_file is not None else {}
+    overrides = _read_models_map(overrides_file, report) if overrides_file is not None else {}
 
     canonical: dict[str, dict[str, Any]] = {
         canonical_id: dict(record) for canonical_id, record in base.items()

@@ -199,20 +199,21 @@ def test_layers_merge_field_by_field(
 
 
 def test_canonical_layer_applies_its_overrides(tmp_path: Path) -> None:
-    models_dir = tmp_path / "models"
-    models_dir.mkdir()
+    base_file = tmp_path / "models.json"
+    overrides_file = tmp_path / "models.overrides.json"
 
-    assert load_canonical_layer(models_dir) == {}
+    assert load_canonical_layer(base_file, overrides_file) == {}
+    assert load_canonical_layer(None, None) == {}
 
-    (models_dir / "models.json").write_text(
+    base_file.write_text(
         json.dumps({"models": {"lab/x": {"name": "Base", "family": "base"}}}), encoding="utf-8"
     )
-    (models_dir / "models.overrides.json").write_text(
+    overrides_file.write_text(
         json.dumps({"models": {"lab/x": {"name": "Corrected"}, "lab/y": {"name": "Y"}}}),
         encoding="utf-8",
     )
 
-    assert load_canonical_layer(models_dir) == {
+    assert load_canonical_layer(base_file, overrides_file) == {
         "lab/x": {"name": "Corrected", "family": "base"},
         "lab/y": {"name": "Y"},
     }

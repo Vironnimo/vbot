@@ -13,6 +13,7 @@ import pytest
 
 import core.models.discovery as discovery_module
 import core.providers.runtime as provider_runtime_module
+from core.models.database import read_model_database_manifest
 from core.models.discovery import ModelDiscoveryError
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
 from core.providers.accounts import ConnectionRef
@@ -286,6 +287,16 @@ async def test_local_catalog_refresh_signals_only_a_changed_model_catalog(
     assert signals == ["models"]
     assert runtime.models.get("ollama", "signal-a:latest").name == "Local"
     assert logger.error.call_count == 1
+    # The sweep publishes and records only the local catalog it fetched, so it
+    # never makes a bundled catalog look newer than a later vBot update's.
+    runtime_models_dir = runtime.storage.layout.models
+    assert sorted(path.name for path in runtime_models_dir.iterdir()) == [
+        "manifest.json",
+        "ollama.json",
+    ]
+    manifest = read_model_database_manifest(runtime_models_dir)
+    assert manifest is not None
+    assert set(manifest.catalogs) == {"ollama.json"}
 
     # Republishing the same catalog and a failed sweep leave it unchanged.
     await runtime.maybe_refresh_local_catalogs(force=True)

@@ -22,17 +22,13 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from core.models.assembly import (
-    CANONICAL_FILE_NAME,
     CANONICAL_OVERRIDES_FILE_NAME,
     ModelDataIssueReport,
     assemble_provider_model,
     load_canonical_layer,
     log_model_data_issue,
 )
-from core.models.database import (
-    MODEL_DATABASE_MANIFEST_FILE_NAME,
-    select_model_database_dir,
-)
+from core.models.database import OVERRIDES_FILE_SUFFIX, select_model_database_files
 from core.models.pricing import TokenPricing
 from core.utils.workers import BoundedWorkerPool
 
@@ -43,38 +39,7 @@ _MODEL_DATA_ERRORS = (AttributeError, KeyError, OSError, TypeError, UnicodeError
 # ``reload_async`` reads and assembles the catalog files here, off the Event Loop.
 _RELOAD_WORKERS = BoundedWorkerPool(name="model-registry", max_workers=1)
 
-# Provider-layer files under ``models/`` are ``<provider>.json``; these siblings
-# are never provider files and are excluded from the provider-file glob loop.
-# ``*.raw.json`` is a legacy inspection dump that older refreshes wrote (a
-# refresh no longer copies it forward); ``*.overrides.json`` is a hand layer
-# applied during assembly (not its own provider file); the canonical files are
-# loaded by the dedicated canonical loader. The suffixes/classifier are public
-# so the offline validator shares one definition of "what is a provider file".
-RAW_FILE_SUFFIX = ".raw.json"
-OVERRIDES_FILE_SUFFIX = ".overrides.json"
-_NON_PROVIDER_FILE_NAMES = frozenset(
-    {
-        CANONICAL_FILE_NAME,
-        CANONICAL_OVERRIDES_FILE_NAME,
-        MODEL_DATABASE_MANIFEST_FILE_NAME,
-    }
-)
 _REASONING_REPLAY_POLICIES = frozenset({"none", "current_run", "full_history"})
-
-
-def is_provider_file(file_name: str) -> bool:
-    """Return whether ``file_name`` is a provider-layer ``<provider>.json``.
-
-    Excludes a legacy ``*.raw.json`` inspection dump, the ``*.overrides.json`` hand
-    layer (applied during assembly, not its own provider file), the database
-    ``manifest.json``, and the canonical ``models.json`` /
-    ``models.overrides.json`` (loaded separately). Shared by the registry loader
-    and the offline validator so the classification can't drift.
-    """
-
-    if file_name.endswith(RAW_FILE_SUFFIX) or file_name.endswith(OVERRIDES_FILE_SUFFIX):
-        return False
-    return file_name not in _NON_PROVIDER_FILE_NAMES
 
 
 MODEL_TASK_ORDER = (
@@ -388,7 +353,6 @@ class _AssembledCatalog:
 
     models: dict[tuple[str, str], Model]
     provider_reasoning_replay: dict[str, str]
-    models_dir: Path
     cache_key: tuple[Path, Path | None] | None
 
 
@@ -396,13 +360,13 @@ class ModelRegistry:
     """Registry of model data, indexed by (provider_id, model_id).
 
     The single public read surface for model data. ``load()`` assembles each
-    effective model at load time from the selected canonical/provider catalog
+    effective model at load time from the selected canonical/provider catalogs
     plus the current bundled override layers (see :mod:`core.models.assembly`);
     ``get()`` / ``list_for_provider()`` / ``query()`` read the assembled result.
     Caches after first load —
     subsequent calls with the same system/runtime root pair return the cached
     instance until ``invalidate()`` clears it (e.g. after a refresh publishes a
-    new complete database).
+    new database root).
     """
 
     _cache: ClassVar[dict[tuple[Path, Path | None], ModelRegistry]] = {}
@@ -438,46 +402,31 @@ class ModelRegistry:
         provider-agnostic canonical base (joined deterministically), the
         ``<provider>.json`` provider layer, and the ``<provider>.overrides.json``
         hand layer — by :mod:`core.models.assembly`. The canonical files may be
-        absent (Phase 3 generates them); assembly then runs on provider + override
-        data alone. No network and no key are involved.
+        absent; assembly then runs on provider + override data alone. No network
+        and no key are involved.
 
         Args:
             resources_dir: Path to the system resources directory containing
                 the bundled complete ``models/`` database.
-            runtime_models_dir: Optional complete data-dir Model DB. When it
-                has a newer compatible refresh manifest than the system DB,
-                its generated catalog is loaded while bundled system overrides
-                remain authoritative.
+            runtime_models_dir: Optional data-dir Model DB. Each generated
+                catalog it fetched more recently than the system DB, or that the
+                system DB does not ship, is loaded from it (see
+                :mod:`core.models.database`); the bundled overrides remain
+                authoritative.
 
         Returns:
             A populated ModelRegistry instance.
         """
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
-        bundled_models_dir = resolved / "models"
         if custom_providers is not None:
-            models_dir = select_model_database_dir(resolved, resolved_runtime)
-            models, provider_reasoning_replay = cls._assemble_models(
-                models_dir,
-                bundled_models_dir,
-                custom_providers,
-            )
-            registry = cls(models, provider_reasoning_replay)
-            registry._active_models_dir = models_dir
-            return registry
+            return cls(*cls._assemble_models(resolved, resolved_runtime, custom_providers))
 
         cache_key = (resolved, resolved_runtime)
         if cache_key in cls._cache:
             return cls._cache[cache_key]
 
-        models_dir = select_model_database_dir(resolved, resolved_runtime)
-        models, provider_reasoning_replay = cls._assemble_models(
-            models_dir,
-            bundled_models_dir,
-            {},
-        )
-        registry = cls(models, provider_reasoning_replay)
-        registry._active_models_dir = models_dir
+        registry = cls(*cls._assemble_models(resolved, resolved_runtime, {}))
         cls._cache[cache_key] = registry
         return registry
 
@@ -485,21 +434,15 @@ class ModelRegistry:
     def validate(cls, resources_dir: Path) -> list[str]:
         """Assemble the Model DB under ``resources_dir`` and return what Load would ignore.
 
-        Validates a staged complete database before it is published: the root is
+        Validates a staged working copy before it is published: the root is
         assembled exactly like :meth:`load` without a runtime root or Custom
         Providers, but nothing is cached or logged. Each returned message names
         one invalid file, entry or value that Load omits; the live reload after
         publication logs them, so a refresh reports each issue once.
         """
 
-        resolved = resources_dir.resolve()
         issues: list[str] = []
-        cls._assemble_models(
-            select_model_database_dir(resolved, None),
-            resolved / "models",
-            {},
-            issues.append,
-        )
+        cls._assemble_models(resources_dir.resolve(), None, {}, issues.append)
         return issues
 
     def reload(
@@ -564,16 +507,14 @@ class ModelRegistry:
     ) -> _AssembledCatalog:
         resolved = resources_dir.resolve()
         resolved_runtime = runtime_models_dir.resolve() if runtime_models_dir is not None else None
-        models_dir = select_model_database_dir(resolved, resolved_runtime)
         models, provider_reasoning_replay = cls._assemble_models(
-            models_dir,
-            resolved / "models",
+            resolved,
+            resolved_runtime,
             custom_providers or {},
         )
         return _AssembledCatalog(
             models=models,
             provider_reasoning_replay=provider_reasoning_replay,
-            models_dir=models_dir,
             cache_key=(resolved, resolved_runtime) if custom_providers is None else None,
         )
 
@@ -587,7 +528,6 @@ class ModelRegistry:
             )
             self._models = assembled.models
             self._provider_reasoning_replay = assembled.provider_reasoning_replay
-            self._active_models_dir = assembled.models_dir
             if assembled.cache_key is not None:
                 type(self)._cache[assembled.cache_key] = self
             return changed
@@ -595,22 +535,25 @@ class ModelRegistry:
     @classmethod
     def _assemble_models(
         cls,
-        models_dir: Path,
-        bundled_models_dir: Path,
+        resources_dir: Path,
+        runtime_models_dir: Path | None,
         custom_providers: Mapping[str, Mapping[str, Any]],
         report: ModelDataIssueReport = log_model_data_issue,
     ) -> tuple[dict[tuple[str, str], Model], dict[str, str]]:
         """Assemble every effective model from the on-disk layers (no cache).
 
-        ``models_dir`` is the selected generated catalog root and
-        ``bundled_models_dir`` owns the authoritative hand-maintained overrides.
-        Shared by ``load``, ``reload`` and ``validate`` so every path assembles
+        Each generated catalog comes from the system root under ``resources_dir``
+        or from ``runtime_models_dir`` (:func:`select_model_database_files`); the
+        system root owns the authoritative hand-maintained overrides. Shared by
+        ``load``, ``reload`` and ``validate`` so every path assembles
         identically; ``report`` receives each ignored file, entry or value.
         """
 
+        files = select_model_database_files(resources_dir, runtime_models_dir, report=report)
+        bundled_models_dir = files.overrides_dir
         canonical_layer = load_canonical_layer(
-            models_dir,
-            overrides_models_dir=bundled_models_dir,
+            files.canonical,
+            bundled_models_dir / CANONICAL_OVERRIDES_FILE_NAME,
             report=report,
         )
         models: dict[tuple[str, str], Model] = {}
@@ -620,16 +563,7 @@ class ModelRegistry:
         override_sources: dict[str, Path] = {}
         provider_reasoning_replay: dict[str, str] = {}
 
-        try:
-            provider_files = sorted(models_dir.glob("*.json"))
-        except OSError as exc:
-            report(f"Could not scan Model DB provider files in '{models_dir}': {exc}")
-            provider_files = []
-
-        for json_file in provider_files:
-            if not is_provider_file(json_file.name):
-                continue
-
+        for json_file in files.providers:
             try:
                 provider_id, provider_models = cls._read_provider_file(json_file)
             except _MODEL_DATA_ERRORS as exc:
@@ -674,7 +608,7 @@ class ModelRegistry:
                 if provider_entry_present and not isinstance(provider_model, Mapping):
                     report(
                         f"Ignoring invalid Model DB provider entry '{provider_id}/{wire_id}' "
-                        f"in '{provider_sources.get(provider_id, models_dir)}': "
+                        f"in '{provider_sources[provider_id]}': "
                         "record must be an object"
                     )
                     provider_entry_present = False
@@ -682,7 +616,7 @@ class ModelRegistry:
                 if override_model is not None and not isinstance(override_model, Mapping):
                     report(
                         f"Ignoring invalid Model DB override entry '{provider_id}/{wire_id}' "
-                        f"in '{override_sources.get(provider_id, models_dir)}': "
+                        f"in '{override_sources[provider_id]}': "
                         "record must be an object"
                     )
                     override_model = None

@@ -283,7 +283,7 @@ class ProviderRuntime:
             # Filled on the worker thread, so a cancelled staging hop still
             # discards its copy.
             staged: list[ModelDatabaseRefresh] = []
-            refreshed_any = False
+            refreshed: set[str] = set()
             try:
                 await _LOCAL_CATALOG_WORKERS.run(
                     _stage_runtime_refresh,
@@ -341,12 +341,13 @@ class ProviderRuntime:
                             provider_id,
                             connection.id,
                         )
-                    refreshed_any = True
+                    refreshed.add(provider_id)
 
-                if refreshed_any:
+                if refreshed:
                     custom_providers = await _LOCAL_CATALOG_WORKERS.run(
                         self._publish_staged_catalog,
                         database_refresh,
+                        refreshed,
                     )
                     if await self._models.reload_async(
                         self._resources_path,
@@ -391,12 +392,17 @@ class ProviderRuntime:
     def _publish_staged_catalog(
         self,
         database_refresh: ModelDatabaseRefresh,
+        refreshed: set[str],
     ) -> dict[str, dict[str, Any]]:
-        """Validate and commit a staged Model DB; return the overlays to reload with."""
+        """Validate and commit a staged Model DB; return the overlays to reload with.
+
+        Only the ``refreshed`` local Providers are recorded as fetched now, so the
+        sweep never makes another catalog look newer than the bundled one.
+        """
         # The live reload after publication logs what Load ignores; validating
         # silently here keeps each entry to one log line per sweep.
         ModelRegistry.validate(database_refresh.resources_dir)
-        database_refresh.commit()
+        database_refresh.commit(providers=refreshed)
         return self._storage.load_custom_providers_settings()
 
     def connection_reachability(self, connection_id: str) -> bool | None:
