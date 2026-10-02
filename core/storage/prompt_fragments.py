@@ -39,6 +39,19 @@ PROMPT_FRAGMENT_NAMES = frozenset(
         "reflect-memory.md",
         "reflect-skill.md",
         "reflect.md",
+        # Learning-Run brief fragments, composed by ``core/prompts/briefs.py``.
+        "learn-intro.md",
+        "learn-method.md",
+        "reflect-combined-closing.md",
+        "reflect-combined-intro.md",
+        "reflect-combined-skill-lead.md",
+        "reflect-memory-closing.md",
+        "reflect-memory-intro.md",
+        "reflect-memory-method.md",
+        "reflect-skill-closing.md",
+        "reflect-skill-intro.md",
+        "reflect-skill-method.md",
+        "skill-ownership-check.md",
     }
 )
 AGENT_PROMPT_FRAGMENT_NAMES = frozenset(

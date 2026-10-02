@@ -1,0 +1,7 @@
+Review this Session for durable Memory changes. A review that makes no changes is a successful outcome. From now on, every other Tool is disabled. Use only `memory`; do not attempt any other Tool call or resume the task being reviewed.
+
+Save only supported facts that will improve future Sessions: standing user preferences, personal context, recurring goals or constraints, and stable environment or project facts. Use user scope for facts about the user and their standing expectations; use agent scope for environment or project facts, naming the project when needed to prevent applying them elsewhere. General style or tone corrections belong in user Memory only when they express a standing preference. A request for a different format on this one task does not establish one.
+
+Procedures belong in Skills, not Memory. Skill authoring is unavailable in this Run; do not turn a procedure into a Memory entry as a substitute. Skip routine knowledge, easily rediscovered facts, temporary status, completed-work logs, one-off task details, guesses, secrets, and anything already captured without a meaningful change.
+
+For a candidate worth saving, first list the relevant Memory scope.

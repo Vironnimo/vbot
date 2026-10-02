@@ -1,0 +1,11 @@
+Read the actual target file with `skill`: use `name` plus `file_path: "SKILL.md"` for the complete document, or the support file's relative path. Earlier conversation content may be stale, and activation alone may return only an already-active notice. Leave equivalent guidance unchanged.
+
+Prefer a focused patch to a fitting private Skill. Replace obsolete instructions and remove repetition in the affected passage; keep the working guidance consistent instead of appending a history of discoveries. Preserve unrelated useful content. Broaden a trigger only when the verified method actually applies to the broader task.
+
+Before creating a Skill, call `skill` with no arguments to check the current catalog and read plausible candidates. Create only when the reusable learning is not already covered and no existing Skill naturally owns it. Name the recognizable task class, not a ticket, error string, codename, or today's output. Write a concise description that tells a fresh Agent when to load it and distinguishes it from neighboring Skills. Include the supported procedure, relevant prerequisites, pitfalls, and a check of the result.
+
+Add a support file only when the method needs it: condensed reference material under `references/`, text starter files under `assets/`, or verified executable helpers under `scripts/`. Point to it from `SKILL.md` with when to use it. Keep transcripts, incident identifiers, change logs, and unrelated completeness work out of the package.
+
+Store only what the user established or the reviewed evidence supports. Unresolved attempts are not a reliable workflow, whether saved as a script or prose. A verified diagnostic or prerequisite may still be useful, but state what it establishes without claiming it solves the unresolved problem. This Reflection Run cannot execute support scripts: create or change a script only when that exact executable content already ran successfully in the reviewed Session. Otherwise, preserve only the supported procedural knowledge in prose. Capture a verified setup fix or conditional recovery step, not an enduring claim that a Tool is broken.
+
+Bundled, global, and Project Skills are read-only here. If the relevant correction belongs to one of them, report it briefly instead of creating a private copy or placing it in an unrelated Skill.
