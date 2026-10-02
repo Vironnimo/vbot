@@ -13,8 +13,11 @@ from jsonschema import Draft202012Validator
 
 from core.utils.ids import new_id
 
-# How long a pending input waits for the user before it expires.
+# How long a server's request for user input waits for the user before it expires.
 INPUT_REQUEST_TTL_SECONDS = 600.0
+# Inputs a server requested; an expired one answers the server with ``cancel``. A
+# sign-in bounds its own wait.
+_SERVER_REQUESTS = frozenset({"elicitation", "sampling"})
 _LOGGER = logging.getLogger("vbot.extensions.mcp")
 
 
@@ -31,8 +34,8 @@ class PendingInput:
 class InputRequests:
     """Pending inputs; ``on_change`` receives the id of each added or removed one.
 
-    An input nobody answers within *ttl* seconds expires: an elicitation is
-    cancelled, any other request fails.
+    A server's request (elicitation, sampling approval) nobody answers within
+    *ttl* seconds expires as cancelled.
     """
 
     def __init__(
@@ -58,7 +61,7 @@ class InputRequests:
             identifier, connection, kind, copy.deepcopy(payload), future, session_id
         )
         self._pending[identifier] = pending
-        expiry = asyncio.timeout(self._ttl)
+        expiry = asyncio.timeout(self._ttl if kind in _SERVER_REQUESTS else None)
         try:
             self._changed(identifier)
             async with expiry:
@@ -69,11 +72,7 @@ class InputRequests:
             _LOGGER.info(
                 "MCP input request expired unanswered (connection=%s kind=%s)", connection, kind
             )
-            if kind == "elicitation":
-                return {"action": "cancel"}
-            if kind == "oauth":
-                raise ValueError("MCP sign-in was not completed in time") from None
-            raise ValueError("MCP input request expired unanswered") from None
+            return {"action": "cancel"}
         finally:
             self._pending.pop(identifier, None)
             self._changed(identifier)

@@ -702,15 +702,18 @@ async def test_a_call_waits_for_its_connection_only_until_the_timeout(
 
 
 @pytest.mark.asyncio
-async def test_unanswered_inputs_expire(host):
+async def test_unanswered_server_requests_expire_but_a_sign_in_keeps_its_own_deadline(host):
     inputs = InputRequests(ttl=0)
+    sign_in = asyncio.create_task(inputs.request("example", "oauth", {"url": "test-owned"}))
+    try:
+        elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
+        sampled = await inputs.request("example", "sampling", {"message": "test-owned"})
 
-    elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
-    with pytest.raises(ValueError, match="sign-in was not completed in time"):
-        await inputs.request("example", "oauth", {})
-
-    assert elicited == {"action": "cancel"}
-    assert inputs.list() == []
+        assert elicited == sampled == {"action": "cancel"}
+        assert [item["kind"] for item in inputs.list()] == ["oauth"]
+    finally:
+        sign_in.cancel()
+        await asyncio.gather(sign_in, return_exceptions=True)
 
 
 @pytest.mark.asyncio
