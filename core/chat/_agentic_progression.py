@@ -108,6 +108,13 @@ class AgenticProgression:
         self._max_tool_iterations = max_tool_iterations
         self._streaming = streaming
 
+    def _tool_iteration_limit(self, context: _RunExecutionContext) -> int:
+        """Return the loop's iteration limit, narrowed by the Run's own limit."""
+        run_limit = context.request.max_tool_iterations
+        if run_limit is None:
+            return self._max_tool_iterations
+        return min(self._max_tool_iterations, run_limit)
+
     @asynccontextmanager
     async def _assistant_persistence_boundary(
         self,
@@ -682,10 +689,11 @@ class AgenticProgression:
 
                 finalization_violation = context.tool_progress.finalization_reason is not None
                 finalization_request_reason: str | None = None
+                tool_iteration_limit = self._tool_iteration_limit(context)
                 tool_limit_reached = (
                     not finalization_violation
                     and terminal_outcome == TERMINAL_OUTCOME_TOOL_CALLS
-                    and context.tool_progress.iteration_count >= self._max_tool_iterations
+                    and context.tool_progress.iteration_count >= tool_iteration_limit
                 )
 
                 session.begin_defer_notes()
@@ -737,14 +745,14 @@ class AgenticProgression:
                         elif tool_limit_reached:
                             finalization_request_reason = (
                                 "the Run reached its limit of "
-                                f"{self._max_tool_iterations} dispatched Tool iterations"
+                                f"{tool_iteration_limit} dispatched Tool iterations"
                             )
                             tool_messages = _fail_tool_calls_without_dispatch(
                                 tool_dispatch_context,
                                 assistant_message.tool_calls,
                                 code=TOOL_ITERATION_LIMIT_FAILURE_CODE,
                                 message=(
-                                    f"The Run reached its limit of {self._max_tool_iterations} "
+                                    f"The Run reached its limit of {tool_iteration_limit} "
                                     "dispatched Tool iterations. This Tool was not executed; "
                                     "provide the final answer without issuing another Tool Call."
                                 ),
