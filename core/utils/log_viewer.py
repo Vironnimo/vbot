@@ -70,6 +70,10 @@ _CURSOR_WINDOW_BYTES = 64 * 1024
 
 _LOG_WORKERS = BoundedWorkerPool(name="log-viewer", max_workers=2)
 
+# Daily files start with their date; the catalog lists them newest first and the
+# directory's other files, such as the crash log, after them by name.
+_DAILY_FILE_PREFIX = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
 # ``v1.<byte length>.<sha256 hex>``; both fields are bounded, so a forged cursor
 # costs one anchored match.
 _CURSOR_PATTERN = re.compile(r"v1\.(0|[1-9][0-9]{0,15})\.([0-9a-f]{64})")
@@ -832,10 +836,10 @@ class LogViewer:
     # Worker-pool operations: they touch the filesystem and never watcher state.
 
     def _list_files(self) -> JsonObject:
-        files = sorted(
-            (path.name for path in self._iter_log_files()),
-            reverse=True,
-        )
+        names = [path.name for path in self._iter_log_files()]
+        daily = sorted((name for name in names if _DAILY_FILE_PREFIX.match(name)), reverse=True)
+        other = sorted(name for name in names if not _DAILY_FILE_PREFIX.match(name))
+        files = daily + other
         return {"files": files, "default_file": files[0] if files else None}
 
     def _read_newest(self, file_name: str) -> tuple[str, _Page, str]:

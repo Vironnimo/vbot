@@ -8,7 +8,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
 
 ## Data Model
 
-- Daily log catalog: `{ files: string[], default_file: string | null }`
+- Log catalog: `{ files: string[], default_file: string | null }` - the daily files (names that start with their date) newest first, then the directory's other files by name, such as the crash log and its previous generation (`logging.md` -> Crash logs); `default_file` is the newest daily file, or the first file when there is none.
 - Read result: `{ file: string, entries: ParsedLogEntry[], next_before: int | null, cursor?: string }` - one page in file order: the newest `LOG_PAGE_ENTRIES` (500) visible entries that start before the page end. `next_before` is the byte offset to read the next older page before, `null` at the file start. Only a newest-page read (no `before`) carries `cursor`.
 - Parsed log entry:
   - `offset: int` - byte offset of the entry's first line. Unique and increasing within one file generation; it is the paging position and the WebUI row key.
@@ -30,7 +30,7 @@ The logs subsystem exposes application log files from `<data_dir>/logs/` for ins
   - `await LogViewer.read_file(file_name, *, before=None)` -> the newest page with a `cursor`, or with `before` the page ending there without one
   - `LogViewer.subscribe(file_name, cursor?)` -> async generator of entry and catalog events
 - Server RPC
-  - `log.list` - returns the daily log catalog sorted newest-first
+  - `log.list` - returns the log catalog
   - `log.read { file, before? }` - returns one page of parsed entries; without `before` the newest page plus a read cursor. `before` is a positive byte offset, normally a result's `next_before`; one greater than the file size -> `invalid_request`.
 - CLI: `vbot log read` pages older with `before` until `--limit` entries match, or through the file start for `--limit 0` (`cli/log_management.py`).
 - Server transport
