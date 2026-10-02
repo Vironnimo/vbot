@@ -1,12 +1,15 @@
 <script>
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
 
   import {
     backgroundBashStatusDetails,
     backgroundTasks,
     sessionChangeStats,
+    reflectionChangeItems,
     reflectionElapsedLabel,
+    reflectionHasChanges,
+    reflectionOutcomeLabel,
     subAgentStatusDetails,
   } from '$lib/chatTimelinePresentation.js';
   import { t } from '$lib/i18n.js';
@@ -27,6 +30,8 @@
     onNavigateToSubAgent = () => {},
     onNavigateToParentSession = () => {},
     onOpenReflection = () => {},
+    onLoadReflectionChanges = () => {},
+    onUndoReflection = async () => {},
     onCancelSubAgent = () => {},
     onCancelBackgroundProcess = () => {},
   } = $props();
@@ -37,6 +42,10 @@
     subagentTasks.length === 0 && reflectionTasks.length === 0,
   );
   const cancellingTaskIds = new SvelteSet();
+  // Finished reviews whose change list is open, and those asking to confirm
+  // their undo; both are view state only.
+  const expandedReviews = new SvelteSet();
+  const confirmingUndo = new SvelteSet();
   let tasks = $derived(
     backgroundTasks(
       timelineItems,
@@ -190,6 +199,31 @@
       scope: reflectionScopeLabel(row),
       status: statusLabel(row.status),
     });
+
+  const outcomeToggleId = (row) => `${panelId}-${row.runId}-outcome`;
+
+  const toggleReviewChanges = (row) => {
+    if (expandedReviews.has(row.runId)) {
+      expandedReviews.delete(row.runId);
+      confirmingUndo.delete(row.runId);
+      return;
+    }
+    expandedReviews.add(row.runId);
+    onLoadReflectionChanges(row);
+  };
+
+  // Leaving the confirmation removes its buttons; focus returns to the
+  // review's summary so keyboard users keep their place.
+  const leaveUndoConfirmation = async (row) => {
+    confirmingUndo.delete(row.runId);
+    await tick();
+    document.getElementById(outcomeToggleId(row))?.focus();
+  };
+
+  const confirmUndo = async (row) => {
+    await onUndoReflection(row);
+    await leaveUndoConfirmation(row);
+  };
 
   const parentSessionLabel = () =>
     t('chat.activity.openParentSession', {
@@ -396,6 +430,124 @@
       dotStatus: reflectionDotStatus(row.status),
     })}
   </div>
+  {#if row.status !== 'running' && row.outcome}
+    {@render reviewOutcome(row)}
+  {/if}
+{/snippet}
+
+{#snippet reviewOutcome(row)}
+  {#if !reflectionHasChanges(row.outcome)}
+    <p class="chat-activity__outcome">{reflectionOutcomeLabel(row.outcome)}</p>
+  {:else}
+    {@const expanded = expandedReviews.has(row.runId)}
+    {@const changesId = `${panelId}-${row.runId}-changes`}
+    <Button
+      id={outcomeToggleId(row)}
+      variant="tertiary"
+      class="chat-activity__outcome chat-activity__outcome-toggle"
+      aria-expanded={expanded}
+      aria-controls={expanded ? changesId : undefined}
+      onClick={() => toggleReviewChanges(row)}
+    >
+      <svg
+        class="chat-activity__disclosure"
+        viewBox="0 0 16 16"
+        width="12"
+        height="12"
+        aria-hidden="true"><path d="m6 4 4 4-4 4" /></svg
+      >
+      {reflectionOutcomeLabel(row.outcome)}
+    </Button>
+    {#if expanded}
+      <div id={changesId} class="chat-activity__changes">
+        {#if row.details?.changes}
+          <ul class="chat-activity__change-list">
+            {#each reflectionChangeItems(row.details?.changes) as item (item.key)}
+              <li
+                class="chat-activity__change"
+                class:chat-activity__change--undone={item.undone}
+              >
+                <span class="chat-activity__change-head">
+                  <span class="chat-activity__change-kind">{item.kind}</span>
+                  <span
+                    class="chat-activity__change-place"
+                    class:chat-activity__change-place--mono={item.mono}
+                    >{item.place}</span
+                  >
+                  {#if item.undone}
+                    <span class="chat-activity__change-undone"
+                      >{t('chat.activity.change.undone')}</span
+                    >
+                  {/if}
+                </span>
+                {#if item.detail}
+                  <span
+                    class="chat-activity__change-detail"
+                    class:chat-activity__change-detail--mono={item.mono}
+                    >{item.detail}</span
+                  >
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {:else if row.details?.loading}
+          <p class="chat-activity__changes-note">
+            {t('chat.activity.changes.loading')}
+          </p>
+        {/if}
+        {#if row.details?.loadError}
+          <p class="chat-activity__changes-error" role="alert">
+            {t('chat.activity.changes.loadError', {
+              message: row.details?.loadError,
+            })}
+          </p>
+        {/if}
+        {#if !row.outcome.undone}
+          {#if confirmingUndo.has(row.runId)}
+            <div
+              class="chat-activity__undo-confirm"
+              role="group"
+              aria-label={t('chat.activity.undoConfirm')}
+            >
+              <span class="chat-activity__undo-question"
+                >{t('chat.activity.undoConfirm')}</span
+              >
+              <Button
+                variant="danger"
+                class="chat-activity__undo-action"
+                loading={row.details?.undoing}
+                onClick={() => confirmUndo(row)}
+              >
+                {t('chat.activity.undoConfirmAction')}
+              </Button>
+              <Button
+                variant="tertiary"
+                class="chat-activity__undo-action"
+                disabled={row.details?.undoing}
+                onClick={() => leaveUndoConfirmation(row)}
+              >
+                {t('chat.activity.undoKeep')}
+              </Button>
+            </div>
+          {:else}
+            <Button
+              variant="secondary"
+              class="chat-activity__undo-action chat-activity__undo"
+              loading={row.details?.undoing}
+              onClick={() => confirmingUndo.add(row.runId)}
+            >
+              {t('chat.activity.undo')}
+            </Button>
+          {/if}
+        {/if}
+        {#if row.details?.undoError}
+          <p class="chat-activity__changes-error" role="alert">
+            {row.details?.undoError}
+          </p>
+        {/if}
+      </div>
+    {/if}
+  {/if}
 {/snippet}
 
 <div class:chat-activity--open={open} class="chat-activity">
@@ -901,7 +1053,123 @@
   .chat-activity__status--failed {
     color: var(--red);
   }
+  .chat-activity__outcome {
+    margin: 0;
+    padding: 0 8px 6px;
+    color: var(--text-med);
+    font-size: var(--fs-body-sm);
+    font-variant-numeric: tabular-nums;
+  }
+  :global(.chat-activity__outcome-toggle.btn-tertiary) {
+    min-height: 24px;
+    gap: 6px;
+    margin: 0 0 4px;
+    padding: 2px 8px;
+    border: 0;
+    border-radius: var(--r-sm);
+    color: var(--text-med);
+    font-weight: 400;
+  }
+  :global(.chat-activity__outcome-toggle.btn-tertiary:hover) {
+    background: var(--surface-2);
+    color: var(--text-hi);
+  }
+  :global(.chat-activity__outcome-toggle[aria-expanded='true'])
+    .chat-activity__disclosure {
+    transform: rotate(90deg);
+  }
+  .chat-activity__changes {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 0 8px 10px 26px;
+  }
+  .chat-activity__change-list {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .chat-activity__change {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--fs-body-sm);
+  }
+  .chat-activity__change-head {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 6px;
+  }
+  .chat-activity__change-kind,
+  .chat-activity__change-undone {
+    flex: 0 0 auto;
+    color: var(--text-lo);
+    font-size: var(--fs-label-sm);
+  }
+  .chat-activity__change-place {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text-hi);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-activity__change-place--mono,
+  .chat-activity__change-detail--mono {
+    font-family: var(--font-mono);
+    font-size: var(--fs-mono-xs);
+  }
+  .chat-activity__change-detail {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    color: var(--text-med);
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+  }
+  .chat-activity__change--undone .chat-activity__change-place,
+  .chat-activity__change--undone .chat-activity__change-detail {
+    color: var(--text-lo);
+    text-decoration: line-through;
+  }
+  .chat-activity__changes-note,
+  .chat-activity__changes-error {
+    margin: 0;
+    font-size: var(--fs-body-sm);
+    line-height: 1.4;
+  }
+  .chat-activity__changes-note {
+    color: var(--text-med);
+  }
+  .chat-activity__changes-error {
+    color: var(--red);
+    overflow-wrap: anywhere;
+  }
+  .chat-activity__undo-confirm {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .chat-activity__undo-question {
+    flex: 1 0 100%;
+    color: var(--text-hi);
+    font-size: var(--fs-body-sm);
+  }
+  :global(.chat-activity__undo-action) {
+    min-height: 26px;
+    padding: 2px 10px;
+    font-size: var(--fs-body-sm);
+  }
   :global(.chat-activity__rail.btn-tertiary:focus-visible),
+  :global(.chat-activity__outcome-toggle.btn-tertiary:focus-visible),
   summary:focus-visible,
   :global(.chat-activity__task-link.btn-tertiary:focus-visible),
   :global(.chat-activity__parent-link.btn-tertiary:focus-visible) {

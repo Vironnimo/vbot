@@ -39,6 +39,23 @@ export function loadReflectionRuns(params = {}, options = {}) {
   return rpc('chat.reflections', params, options);
 }
 
+// The Memory and Skill changes one Run of an Identity Agent made (a background
+// review, for example), and the undo of all of them.
+function requireLearningRun(agentId, runId, method) {
+  requireNonEmptyString(agentId, 'Agent id must be a non-empty string', method);
+  requireNonEmptyString(runId, 'Run id must be a non-empty string', method);
+}
+
+export function loadLearningChanges(agentId, runId, options = {}) {
+  requireLearningRun(agentId, runId, 'learning.changes');
+  return rpc('learning.changes', { agent_id: agentId, run_id: runId }, options);
+}
+
+export function undoLearningChanges(agentId, runId, options = {}) {
+  requireLearningRun(agentId, runId, 'learning.undo');
+  return rpc('learning.undo', { agent_id: agentId, run_id: runId }, options);
+}
+
 export function inspectSubAgentWork(params = {}, options = {}) {
   requirePlainObject(
     params,

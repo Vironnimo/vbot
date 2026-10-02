@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, cast
 
+from core.automation import LearningError
 from core.chat import (
     CommandExecutionContext,
     CommandOutcome,
@@ -219,6 +220,11 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
                 file_delivery=state.file_delivery,
             )
         )
+        reflection_runs = (
+            None
+            if read.reflection_runs is None
+            else await _with_learning_outcomes(state, address, read.reflection_runs)
+        )
     except Exception as exc:
         raise _map_expected_error(exc) from exc
     response: JsonObject = {
@@ -251,8 +257,8 @@ async def _chat_history(state: Any, params: JsonObject) -> JsonObject:
         )
         if before is None:
             response["background_bash_statuses"] = projection.background_bash_statuses
-    if read.reflection_runs is not None:
-        response["reflection_runs"] = read.reflection_runs
+    if reflection_runs is not None:
+        response["reflection_runs"] = reflection_runs
     if read.compaction_policy is not None:
         response["compaction_policy"] = read.compaction_policy
     if active_run is not None:
@@ -345,6 +351,39 @@ def _read_reflection_runs(session: ChatSession, active_reviews: list[Run]) -> li
     return list(rows.values())
 
 
+async def _with_learning_outcomes(
+    state: Any, address: SessionAddress, rows: list[JsonObject]
+) -> list[JsonObject]:
+    """Add each finished review's ``outcome``: what it changed in Memory and Skills.
+
+    The counts are derived from the Agent's Memory and Skill histories by the
+    review's Run id, so they stay current after an undo. Only Identity Agents
+    learn; rows of a Project Session and rows whose histories cannot be read
+    carry no outcome.
+    """
+    finished = [row["run_id"] for row in rows if row.get("status") != "running"]
+    if address.project_id is not None or not finished:
+        return rows
+    try:
+        summaries = await _CHAT_RPC_WORKERS.run(
+            state.runtime.learning_changes.summaries, address.agent_id, finished
+        )
+    except LearningError as exc:
+        _LOGGER.warning(
+            "Review outcomes unavailable (agent=%s session=%s): %s",
+            address.agent_id,
+            address.session_id,
+            exc,
+        )
+        return rows
+    return [
+        {**row, "outcome": summaries[row["run_id"]].to_dict()}
+        if row["run_id"] in summaries
+        else row
+        for row in rows
+    ]
+
+
 async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, {"agent_id", "session_id"}, "chat.reflections")
     agent_id, project_id = _required_agent_address(params, "agent_id")
@@ -359,7 +398,8 @@ async def _chat_reflections(state: Any, params: JsonObject) -> JsonObject:
         return _read_reflection_runs(session, active_reviews)
 
     try:
-        return {"reflection_runs": await state.runtime.chat_sessions.run_async(read)}
+        rows = await state.runtime.chat_sessions.run_async(read)
+        return {"reflection_runs": await _with_learning_outcomes(state, address, rows)}
     except Exception as exc:
         raise _map_expected_error(exc) from exc
 

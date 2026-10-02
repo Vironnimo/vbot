@@ -16,7 +16,8 @@ and the user has not pinned.
 from __future__ import annotations
 
 import shutil
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -43,7 +44,14 @@ from core.skills._history import (
 )
 from core.skills._installation import SkillInstallResult, install_package
 from core.skills._packages import MAX_DOWNLOAD_BYTES, PackageError, is_redirect
-from core.skills._revert import RevertActor, RevertConflictError, RevertError, revert_revisions
+from core.skills._revert import (
+    RevertActor,
+    RevertConflictError,
+    RevertError,
+    RevertIncompleteError,
+    check_revert,
+    revert_revisions,
+)
 from core.skills.requirements import (
     REQUIREMENTS_METADATA_KEY,
     RequirementParseError,
@@ -112,6 +120,17 @@ class SkillRevertConflictError(SkillAuthoringError):
         self.revision = revision
         self.later = later
         self.skill_name = skill_name
+
+
+class SkillRevertIncompleteError(SkillAuthoringError):
+    """A revert failed while changing packages and could not undo every step.
+
+    ``skill_names`` names the Skills whose packages may be left part-way.
+    """
+
+    def __init__(self, message: str, *, skill_names: Sequence[str]) -> None:
+        super().__init__(message)
+        self.skill_names = tuple(skill_names)
 
 
 @dataclass(frozen=True)
@@ -684,39 +703,72 @@ class SkillAuthoringService:
                 raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
             return list(reversed(revisions))[: max(limit, 0)]
 
+    def recorded_revisions(self, target_root: Path) -> list[SkillRevision]:
+        """Return the revisions a home's history holds, oldest first.
+
+        Unlike :meth:`history`, this reads only the history: outside changes of
+        the packages not noticed yet are not recorded first.
+        """
+        history = SkillHistory(self._resolve(target_root))
+        try:
+            return history.revisions()
+        except OSError as error:
+            raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+
+    def check_revert(
+        self,
+        target_root: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: SkillWriter,
+        related: Collection[int] = (),
+    ) -> None:
+        """Check that :meth:`revert` would succeed now; change no package.
+
+        Raises what the revert raises before changing anything. Outside changes
+        of the named Skills are recorded first, as every history read does.
+        """
+        with self._write_lock:
+            history = self._revert_history(target_root, writer)
+            with _revert_errors():
+                check_revert(history, history.home, revision_ids, related=related)
+
     def revert(
-        self, target_root: Path, revision_ids: Sequence[int], *, writer: SkillWriter
+        self,
+        target_root: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: SkillWriter,
+        related: Collection[int] = (),
     ) -> list[SkillRevision]:
         """Undo the named revisions, all or none; return the recorded revisions.
 
         Refused when a later revision outside the request changed the same file,
         pin or presence of that Skill (``SkillRevertConflictError`` names it), when
-        an earlier text is not stored, or when an archived package was purged.
+        an earlier text is not stored, or when an archived package was purged. A
+        later revision in *related* (an earlier revert of the same change) never
+        blocks. A failure while changing packages takes the steps back and
+        raises :class:`SkillAuthoringError`, or :class:`SkillRevertIncompleteError`
+        when a step cannot be taken back. Once every package changed, each named
+        revision records one ``revert`` revision; the list is shorter when the
+        history cannot record them all.
         """
         with self._write_lock:
-            _check_writer(writer)
-            if writer.background:
-                raise SkillAuthoringError("Background writers cannot revert Skill revisions.")
-            root = self._writable_root(target_root)
-            history = SkillHistory(root)
-            try:
+            history = self._revert_history(target_root, writer)
+            with _revert_errors():
                 return revert_revisions(
                     history,
-                    root,
+                    history.home,
                     revision_ids,
                     RevertActor(writer.actor, writer.session_id, writer.run_id, writer.run_kind),
+                    related=related,
                 )
-            except RevertConflictError as conflict:
-                raise SkillRevertConflictError(
-                    str(conflict),
-                    revision=conflict.revision,
-                    later=conflict.later,
-                    skill_name=conflict.skill,
-                ) from conflict
-            except RevertError as error:
-                raise SkillAuthoringError(str(error)) from error
-            except OSError as error:
-                raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+
+    def _revert_history(self, target_root: Path, writer: SkillWriter) -> SkillHistory:
+        _check_writer(writer)
+        if writer.background:
+            raise SkillAuthoringError("Background writers cannot revert Skill revisions.")
+        return SkillHistory(self._writable_root(target_root))
 
     def archived(self, target_root: Path) -> list[ArchivedSkill]:
         """Return the packages in a home's archive, newest first."""
@@ -1027,6 +1079,28 @@ class SkillAuthoringService:
         return _assemble_document(stamped, body), result
 
 
+@contextmanager
+def _revert_errors() -> Iterator[None]:
+    """Report a refused or failed revert as the authoring service's errors."""
+    try:
+        yield
+    except RevertConflictError as conflict:
+        raise SkillRevertConflictError(
+            str(conflict),
+            revision=conflict.revision,
+            later=conflict.later,
+            skill_name=conflict.skill,
+        ) from conflict
+    except RevertIncompleteError as incomplete:
+        raise SkillRevertIncompleteError(
+            str(incomplete), skill_names=incomplete.skills
+        ) from incomplete
+    except RevertError as error:
+        raise SkillAuthoringError(str(error)) from error
+    except OSError as error:
+        raise SkillAuthoringError(f"The Skill history cannot be read: {error}") from error
+
+
 def _check_writer(writer: SkillWriter) -> None:
     if not isinstance(writer, SkillWriter) or writer.actor not in SKILL_ACTORS:
         raise SkillAuthoringError(f"Unknown Skill writer: {writer!r}")
@@ -1282,6 +1356,7 @@ __all__ = [
     "SkillProtectedError",
     "SkillRecord",
     "SkillRevertConflictError",
+    "SkillRevertIncompleteError",
     "SkillRevision",
     "SkillWriteResult",
     "SkillWriter",

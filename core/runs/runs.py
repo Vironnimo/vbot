@@ -643,6 +643,11 @@ class ChatRunManager:
             return None
         return run
 
+    def is_running(self, run_id: str) -> bool:
+        """Whether the Run *run_id* is still running; an unknown Run is not."""
+        run = self._runs.get(run_id)
+        return run is not None and run.status == RunStatus.RUNNING
+
     def active_runs(self) -> list[Run]:
         """Return a snapshot of every currently running run across all sessions.
 

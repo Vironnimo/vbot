@@ -13,7 +13,12 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 from core.archive import ArchiveService, ArchiveServices
-from core.automation import AutomationReferences, ReflectionService, TriggerService
+from core.automation import (
+    AutomationReferences,
+    LearningChanges,
+    ReflectionService,
+    TriggerService,
+)
 from core.chat import (
     ChatMessage,
     ChatSessionManager,
@@ -35,6 +40,7 @@ from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
 from core.runtime._agent_rename import AgentRenameServices, rename_identity_agent
 from core.runtime.runtime import Runtime
+from core.skills import SkillAuthoringService
 from core.storage import StorageManager
 from core.tools import FileReadState, ToolRegistry
 from core.utils.errors import ConfigError
@@ -441,6 +447,13 @@ class StubRuntime:
             defaults_provider=lambda: self.storage.load_defaults().get("agent", {}),
         )
         self.memory = MemoryService(history_root=self.storage.layout.agents)
+        self.skill_authoring = SkillAuthoringService()
+        self.learning_changes = LearningChanges(
+            memory=self.memory,
+            skills=self.skill_authoring,
+            skill_home=lambda agent_id: self.storage.layout.agents / agent_id / "skills",
+            run_active=lambda run_id: self.chat_run_manager.is_running(run_id),
+        )
         self.projects = StubProjects()
         tmp_path.mkdir(parents=True, exist_ok=True)
         marker = tmp_path / "data-store.json"

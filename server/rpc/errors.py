@@ -40,6 +40,7 @@ RPC_ERROR_ARCHIVE_ENTRY_NOT_FOUND = "archive_entry_not_found"
 RPC_ERROR_ARCHIVE_ENTRY_BUSY = "archive_entry_busy"
 RPC_ERROR_ARCHIVE_RESTORE_CONFLICT = "archive_restore_conflict"
 RPC_ERROR_ARCHIVE_NOT_RESTORABLE = "archive_not_restorable"
+RPC_ERROR_LEARNING_UNDO_CONFLICT = "learning_undo_conflict"
 
 
 class RpcError(Exception):

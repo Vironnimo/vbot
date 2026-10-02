@@ -54,11 +54,13 @@ export function createChatRunStream({
   reconcileRunSession = async () => false,
   isDisplayedSession,
   updateSubAgentRunStatuses,
+  onReflectionFinished = () => {},
   reportStreamDiagnostic = defaultStreamDiagnostic,
 }) {
   const activity = createRunActivityProjection({
     chatState,
     updateSubAgentRunStatuses,
+    onReflectionFinished,
   });
   const activeSubscriptions = {};
   const pendingReconnects = {};

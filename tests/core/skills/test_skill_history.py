@@ -359,13 +359,19 @@ def test_revert_refuses_to_overwrite_a_later_change_and_changes_nothing(
     service.write_file(root, "demo", "references/a.md", "second\n", writer=AGENT)
     before = len(service.history(root))
 
-    with pytest.raises(SkillRevertConflictError) as conflict:
-        service.revert(root, [3, 4], writer=HUMAN_WRITER)
+    # The check refuses exactly like the revert would, before it writes.
+    for attempt in (service.check_revert, service.revert):
+        with pytest.raises(SkillRevertConflictError) as conflict:
+            attempt(root, [3, 4], writer=HUMAN_WRITER)
 
-    assert (conflict.value.revision, conflict.value.later) == (4, 5)
-    assert "revision 5" in str(conflict.value)
+        assert (conflict.value.revision, conflict.value.later) == (4, 5)
+        assert "revision 5" in str(conflict.value)
     assert (root / "other" / "references" / "a.md").is_file()
     assert len(service.history(root)) == before
+    # A later revision named as related (such as an earlier revert of the same
+    # change) does not block.
+    service.check_revert(root, [3, 4], writer=HUMAN_WRITER, related=[5])
+    assert len(service.recorded_revisions(root)) == before
     # Reverting the later change together with it succeeds.
     service.revert(root, [3, 4, 5], writer=HUMAN_WRITER)
     assert not (root / "demo" / "references").exists()

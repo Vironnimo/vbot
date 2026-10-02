@@ -211,6 +211,16 @@ describe('RPC wrappers', () => {
       subAgentWork,
     ],
     [
+      'learning.changes',
+      (o) => api.loadLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
+    ],
+    [
+      'learning.undo',
+      (o) => api.undoLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
+    ],
+    [
       'agent.rename',
       (o) => api.renameAgent('coder', 'researcher', o),
       { id: 'coder', new_id: 'researcher' },
@@ -685,6 +695,11 @@ describe('RPC wrappers', () => {
       'a non-positive Memory entry id',
       () => api.removeAgentMemory('coder', 'agent', 0),
       'memory.remove',
+    ],
+    [
+      'an undo without a Run id',
+      () => api.undoLearningChanges('coder', ''),
+      'learning.undo',
     ],
     [
       'a Project without cwd',
