@@ -256,6 +256,7 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         await harrier._task
 
         assert harrier.status()["state"] == "ready" and harrier.available()
+        assert harrier.activity() == {"state": "completed"}
         assert executor.targets.get(HARRIER.id).can_execute()
         assert ready == ["local/harrier-0.6b"]
         assert fetch.models == [HARRIER.pinned]

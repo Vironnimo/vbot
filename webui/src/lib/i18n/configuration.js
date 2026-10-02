@@ -358,6 +358,8 @@ export default Object.freeze({
     'WhatsApp support could not be installed. Open the Channel to try again.',
   'settings.activity.recallIndex': 'Conversation search index',
   'settings.activity.indexing': 'Indexing conversations…',
+  'settings.activity.retrying':
+    'Indexing paused after a problem; it retries automatically.',
   'settings.activity.downloadingModel': 'Downloading the model…',
   'settings.activity.completed': 'Finished.',
   'settings.activity.progressLabel': 'Progress of {title}',

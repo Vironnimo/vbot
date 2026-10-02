@@ -73,7 +73,8 @@ def test_finished_installation_shows_as_completed_briefly_and_only_changes_publi
     ]
 
     # A WhatsApp installation runs alongside; running entries come first.
-    work.speech = []
+    finished = {key: value for key, value in _INSTALL.items() if key != "progress"}
+    work.speech = [{**finished, "state": "completed", "phase": ""}]
     work.whatsapp = [{"channel_id": "wa", "state": "running"}]
     work.monitor.update()
     completed = work.monitor.activities[1]
@@ -83,10 +84,16 @@ def test_finished_installation_shows_as_completed_briefly_and_only_changes_publi
     ]
     assert "progress" not in completed and completed["phase"] == ""
 
+    # Finished work stays reported, but shows only briefly after it ran.
     work.now = COMPLETED_VISIBLE_S
     work.monitor.update()
     assert work.states() == [("whatsapp_setup:wa", "running")]
-    assert len(work.published) == 3
+
+    # Work that stops without finishing, such as a cancelled installation, leaves at once.
+    work.whatsapp = []
+    work.monitor.update()
+    assert work.monitor.activities == []
+    assert len(work.published) == 4
 
 
 def test_failed_and_restart_entries_stay_until_dismissed_or_run_again() -> None:
@@ -126,7 +133,7 @@ def test_failed_and_restart_entries_stay_until_dismissed_or_run_again() -> None:
     # A completed entry can be dismissed before it expires.
     work.speech = [_INSTALL]
     work.monitor.update()
-    work.speech = []
+    work.speech = [{**_INSTALL, "state": "completed"}]
     work.monitor.update()
     assert ("local_setup:local/parakeet", "completed") in work.states()
     work.monitor.dismiss("local_setup:local/parakeet")
@@ -149,10 +156,15 @@ def test_recall_indexing_shows_only_a_large_pass_and_failures() -> None:
     assert entry["progress"] == {"completed": 0, "total": RECALL_BACKLOG_SHOWN, "unit": "items"}
     assert entry["eta_seconds"] == 30
 
-    # Once shown, the pass stays until it ends, then shows as completed.
+    # Once shown, the pass stays until it ends, also while it waits to retry,
+    # then shows as completed.
     work.monitor.set_recall_status({"state": "indexing", "indexed": 45, "waiting": 5})
     work.monitor.update()
     assert work.monitor.activities[0]["progress"]["total"] == 50
+    work.monitor.set_recall_status({"state": "retrying", "indexed": 45, "waiting": 5})
+    work.monitor.update()
+    (retrying,) = work.monitor.activities
+    assert (retrying["state"], retrying["phase"]) == ("running", "retrying")
     work.monitor.set_recall_status({"state": "idle", "indexed": 50, "waiting": 0})
     work.monitor.update()
     assert work.states() == [("recall_index", "completed")]

@@ -803,15 +803,18 @@ class ChannelService:
         }
 
     def setup_activities(self) -> list[dict[str, Any]]:
-        """Each WhatsApp support installation that runs or failed, from memory only.
+        """Each WhatsApp support installation of this process, from memory only.
 
-        ``{channel_id, state: running}`` or ``{channel_id, state: failed,
-        error: "setup_failed", message}``.
+        ``{channel_id, state: running}``, ``{channel_id, state: completed}``
+        or ``{channel_id, state: failed, error: "setup_failed", message}``; a
+        cancelled installation reports nothing.
         """
         activities: list[dict[str, Any]] = []
         for channel_id, setup in self._whatsapp_setup_states.items():
             if setup.get("setup") == "installing":
                 activities.append({"channel_id": channel_id, "state": "running"})
+            elif setup.get("setup") == "ready":
+                activities.append({"channel_id": channel_id, "state": "completed"})
             elif setup.get("setup") == "failed":
                 activities.append(
                     {

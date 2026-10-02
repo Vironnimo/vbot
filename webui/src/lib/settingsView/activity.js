@@ -63,7 +63,11 @@ function runningText(entry) {
   if (entry.kind === 'whatsapp_setup') {
     return t('settings.channels.whatsapp.installing');
   }
-  if (entry.kind === 'recall_index') return t('settings.activity.indexing');
+  if (entry.kind === 'recall_index') {
+    return entry.phase === 'retrying'
+      ? t('settings.activity.retrying')
+      : t('settings.activity.indexing');
+  }
   if (entry.phase === 'downloading' && entry.progress) {
     return t('settings.activity.downloadingModel');
   }

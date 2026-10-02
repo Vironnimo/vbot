@@ -10,8 +10,11 @@ Each entry is ``{id, kind, label, state, phase, error, message, progress?,
 target?, task_type?, eta_seconds?}``:
 
 - ``state`` is ``running``, ``failed``, ``action_required`` (a restart is
-  due) or ``completed``. A running entry that disappears without failing is
-  shown as ``completed`` for ``COMPLETED_VISIBLE_S`` seconds.
+  due) or ``completed``. Owners keep reporting finished work as
+  ``completed``; the list shows it for ``COMPLETED_VISIBLE_S`` seconds only
+  when the same work was running a moment before. Work that stops running
+  without finishing or failing, such as a cancelled installation, leaves
+  the list.
 - ``failed`` and ``action_required`` entries stay until the work runs again
   or a client dismisses them; dismissing hides an entry for every client
   until it runs again and never changes the work itself.
@@ -82,13 +85,11 @@ class ActivityMonitor:
         """Collect the current activity and publish the list if it changed."""
         now = self._clock()
         current = self._collect()
+        for entry in current:
+            if entry["state"] == "completed" and entry["id"] in self._running:
+                self._completed[entry["id"]] = (now, entry)
+        current = [entry for entry in current if entry["state"] != "completed"]
         ids = {entry["id"] for entry in current}
-        for activity_id, entry in self._running.items():
-            if activity_id not in ids:
-                finished = {**entry, "state": "completed", "phase": ""}
-                finished.pop("progress", None)
-                finished.pop("eta_seconds", None)
-                self._completed[activity_id] = (now, finished)
         self._running = {entry["id"]: entry for entry in current if entry["state"] == "running"}
         # Running work clears its dismissal, and so does work that is no longer reported.
         self._dismissed &= ids - self._running.keys()
@@ -151,11 +152,18 @@ class ActivityMonitor:
                     "message": failure.get("message", ""),
                 },
             )
-        if status.get("state") != "indexing":
+        state = status.get("state")
+        if state not in {"indexing", "retrying"}:
             self._recall_pass_shown = False
-            return None
+            # A shown pass that ends with nothing waiting finished.
+            return (
+                _entry("recall_index", "recall_index", {"label": "", "state": "completed"})
+                if state == "idle"
+                else None
+            )
         waiting = int(status.get("waiting") or 0)
-        # Once shown, a pass stays until it ends, so its entry does not flicker.
+        # Once shown, a pass stays until it ends, also while it waits to retry,
+        # so its entry does not flicker.
         if not self._recall_pass_shown and waiting < RECALL_BACKLOG_SHOWN:
             return None
         self._recall_pass_shown = True
@@ -163,10 +171,10 @@ class ActivityMonitor:
         report: JsonObject = {
             "label": "",
             "state": "running",
-            "phase": "indexing",
+            "phase": state,
             "progress": {"completed": indexed, "total": indexed + waiting},
         }
-        if status.get("eta_seconds") is not None:
+        if state == "indexing" and status.get("eta_seconds") is not None:
             report["eta_seconds"] = status["eta_seconds"]
         return _entry("recall_index", "recall_index", report, unit="items")
 

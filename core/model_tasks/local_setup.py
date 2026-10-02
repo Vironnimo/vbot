@@ -118,9 +118,10 @@ class LocalSetup:
         """This installation as background activity, or None when there is nothing to show.
 
         ``{state: running, phase, progress?}`` while it installs, ``{state:
+        completed}`` once an installation in this process finished, ``{state:
         failed, error}`` after a failure and ``{state: action_required, phase:
-        restart_required}`` while a restart is due. Reads only in-memory state,
-        so it is cheap to poll.
+        restart_required}`` while a restart is due. A cancelled installation
+        reports nothing. Reads only in-memory state, so it is cheap to poll.
         """
         if self._state == "installing":
             activity: dict[str, Any] = {"state": "running", "phase": self._phase}
@@ -132,6 +133,8 @@ class LocalSetup:
             return {"state": "failed", "error": self._error}
         if self._state == "restart_required":
             return {"state": "action_required", "phase": "restart_required"}
+        if self._state == "ready":
+            return {"state": "completed"}
         return None
 
     @property

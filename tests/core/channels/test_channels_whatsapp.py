@@ -134,6 +134,7 @@ async def test_whatsapp_operation_blocks_channel_changes_until_it_ends(
             async with asyncio.timeout(2):
                 while (await service.whatsapp_status("wa"))["setup"] != "ready":
                     await asyncio.sleep(0)
+            assert service.setup_activities() == [{"channel_id": "wa", "state": "completed"}]
         await service.delete_channel("wa")
         assert service.list_channels() == []
     finally:
