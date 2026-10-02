@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { t } from '../i18n.js';
 import {
   createMcpSettings,
   mcpConfiguration,
   mcpCredentialNames,
   mcpDraft,
-  MCP_REFRESH_MS,
 } from '../mcpSettings.js';
 
 const configuration = {
@@ -39,10 +39,15 @@ const oauthConfiguration = {
   credential_headers: { Extra: 'EXTRA_KEY' },
 };
 const clone = (value) => structuredClone(value);
+const connectionsChange = {
+  resource: 'connections',
+  ids: ['example'],
+  revision: 1,
+};
+const jobChange = { resource: 'jobs', ids: ['test-job'], revision: 2 };
 let controller;
 afterEach(() => {
   controller?.dispose();
-  vi.useRealTimers();
 });
 
 function setup(operation) {
@@ -199,43 +204,49 @@ describe('MCP settings', () => {
     });
     expect(state().connections[0].configuration).toEqual(configuration);
   });
-  it('polls a pending test to completion without exposing its catalog', async () => {
-    vi.useFakeTimers();
-    let checks = 0;
+  it('finishes a pending test when its job change arrives, without exposing its catalog', async () => {
+    let finished = false;
     const operation = vi.fn(async (_extension, name) => {
       if (name === 'test') return { job_id: 'test-job', state: 'running' };
       if (name === 'job')
-        return ++checks === 1
-          ? { state: 'running' }
-          : {
+        return finished
+          ? {
               state: 'completed',
               result: {
                 verified: ['catalog'],
                 catalog: { secretSentinel: 'never-render' },
               },
-            };
+            }
+          : { state: 'running' };
       return { connections: [] };
     });
     const state = setup(operation);
     await controller.test('example');
     expect(state().job.job_id).toBe('test-job');
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS);
-    expect(state().job).toBeNull();
+    finished = true;
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    await vi.waitFor(() => expect(state().job).toBeNull());
     expect(JSON.stringify(state())).not.toContain('never-render');
-    expect(state().notice).toBeTruthy();
+    expect(state().notice).toBe(t('mcp.testPassed', { checks: 'catalog' }));
   });
-  it('reports test failure and stops background retries', async () => {
-    vi.useFakeTimers();
+  it('reports a failed test once and stops asking for its job', async () => {
     const operation = vi.fn(async (_extension, name) => {
       if (name === 'test') return { job_id: 'test-job', state: 'running' };
-      return { state: 'failed', error: 'test-owned-failure' };
+      if (name === 'job')
+        return { state: 'failed', error: 'test-owned-failure' };
+      return { connections: [] };
     });
     const state = setup(operation);
     await controller.test('example');
-    const calls = operation.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS * 3);
+    expect(operation).toHaveBeenCalledWith('mcp', 'job', {
+      job_id: 'test-job',
+    });
     expect(state().error).toBe('test-owned-failure');
-    expect(operation).toHaveBeenCalledTimes(calls);
+    const calls = operation.mock.calls.length;
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(calls + 1));
+    expect(operation.mock.calls.at(-1)[1]).toBe('list');
+    expect(state().error).toBe('test-owned-failure');
   });
   it('cancels a waiting job through the same backend contract', async () => {
     let cancelled = false;
@@ -264,8 +275,7 @@ describe('MCP settings', () => {
     });
     expect(JSON.stringify(state())).not.toContain('test-owned-secret');
   });
-  it('ignores stale refresh responses and releases timers on disposal', async () => {
-    vi.useFakeTimers();
+  it('ignores stale refresh responses and changes after disposal', async () => {
     let finish;
     const operation = vi
       .fn()
@@ -284,7 +294,56 @@ describe('MCP settings', () => {
     expect(state().connections).toEqual([]);
     controller.dispose();
     const count = operation.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS * 3);
+    controller.handleInvalidation({ owner: null, change: null });
+    await Promise.resolve();
     expect(operation).toHaveBeenCalledTimes(count);
+  });
+  it('reads again for its own connection and job changes, once after a burst', async () => {
+    const reads = [];
+    const operation = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    setup(operation);
+    controller.handleInvalidation({
+      owner: 'calendar',
+      change: connectionsChange,
+    });
+    controller.handleInvalidation({
+      owner: 'mcp',
+      change: { resource: 'pending_inputs', ids: ['input'], revision: 3 },
+    });
+    expect(operation).not.toHaveBeenCalled();
+    controller.handleInvalidation({ owner: 'mcp', change: connectionsChange });
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    controller.handleInvalidation({ owner: null, change: null });
+    expect(operation).toHaveBeenCalledTimes(1);
+    reads.shift()({ connections: [] });
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(2));
+    reads.shift()({ connections: [] });
+    await Promise.resolve();
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+  it('clears a failed read on the next read but keeps an action error', async () => {
+    let failRead = true;
+    const operation = vi.fn(async (_extension, name) => {
+      if (name === 'reconnect') throw new Error('test-owned-action-error');
+      if (failRead) throw new Error('test-owned-read-error');
+      return { connections: [] };
+    });
+    const state = setup(operation);
+    await controller.refresh();
+    expect(state().error).toBe('test-owned-read-error');
+    failRead = false;
+    await controller.refresh();
+    expect(state().error).toBe('');
+    expect(await controller.mutate('reconnect', 'example')).toBe(false);
+    expect(operation).toHaveBeenCalledWith('mcp', 'reconnect', {
+      id: 'example',
+    });
+    await controller.refresh();
+    expect(state().error).toBe('test-owned-action-error');
   });
 });

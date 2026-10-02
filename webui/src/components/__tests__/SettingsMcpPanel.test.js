@@ -85,13 +85,16 @@ function button(text) {
     (item) => item.textContent.trim() === text,
   );
 }
-function input(label, value) {
+function field(label) {
   const node = [...document.querySelectorAll('label')].find(
     (item) => item.textContent.replace('*', '').trim() === label,
   );
-  const field = document.getElementById(node.htmlFor);
-  field.value = value;
-  field.dispatchEvent(new Event('input', { bubbles: true }));
+  return document.getElementById(node.htmlFor);
+}
+function input(label, value) {
+  const control = field(label);
+  control.value = value;
+  control.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 }
 function submit() {
@@ -206,7 +209,7 @@ describe('MCP management surface', () => {
     button('Add MCP connection').click();
     await settle();
     input('Connection name', 'blender');
-    const nameInput = document.querySelector('[role="dialog"] input');
+    const nameInput = field('Connection name');
     expect(nameInput.pattern).toBe('[a-z][a-z0-9_]{0,31}');
     expect(nameInput.checkValidity()).toBe(true);
     input('Program', 'uvx');
@@ -281,9 +284,7 @@ describe('MCP management surface', () => {
     expect(
       document.querySelector('[role="dialog"] [role="alert"]').textContent,
     ).toContain('test-owned-save-error');
-    expect(document.querySelector('[role="dialog"] input').value).toBe(
-      'example',
-    );
+    expect(field('Connection name').value).toBe('example');
   });
   it('uses a write-only password field and clears it after saving', async () => {
     records = [
@@ -344,6 +345,40 @@ describe('MCP management surface', () => {
       operation: 'reauthorize',
       arguments: { id: 'remote' },
     });
+  });
+  it('reads the connections again when the Extension publishes a change', async () => {
+    let listener = null;
+    const subscribeInvalidations = (next) => {
+      listener = next;
+      return () => {
+        listener = null;
+      };
+    };
+    component = mount(Panel, {
+      target: document.body,
+      props: { subscribeInvalidations },
+    });
+    await settle();
+    expect(document.querySelector('article')).toBeNull();
+    records = [
+      {
+        id: 'example',
+        configuration: structuredClone(original),
+        state: 'connected',
+      },
+    ];
+    listener({
+      owner: 'mcp',
+      change: { resource: 'connections', ids: ['example'], revision: 1 },
+      revision: 1,
+    });
+    await settle();
+    expect(
+      document.querySelector('article[aria-label="example"]'),
+    ).toBeTruthy();
+    await unmount(component);
+    component = null;
+    expect(listener).toBeNull();
   });
   it('reconciles enablement and requires confirmation before removal', async () => {
     records = [

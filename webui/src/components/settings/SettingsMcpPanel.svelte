@@ -23,6 +23,9 @@
   import { tooltip } from '$lib/tooltip.js';
 
   const componentId = $props.id();
+  // The App's Extension invalidations; the connections refresh on their
+  // changes instead of on a timer.
+  let { subscribeInvalidations = null } = $props();
   let state = $state({
     connections: [],
     loading: true,
@@ -49,6 +52,7 @@
     },
   });
   let blocked = $derived(state.busy || Boolean(state.job));
+  let dialogOpen = $derived(Boolean(draft || secretConnection));
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
     { value: 'http', label: t('mcp.http') },
@@ -84,6 +88,7 @@
   onMount(() => {
     void controller.refresh();
   });
+  $effect(() => subscribeInvalidations?.(controller.handleInvalidation));
   onDestroy(() => controller.dispose());
 
   function edit(connection = null) {
@@ -184,7 +189,7 @@
       onClick={() => edit()}>{t('mcp.add')}</Button
     >
   </div>
-  {#if state.error && !draft && !secretConnection}
+  {#if state.error && !dialogOpen}
     <Banner variant="error" role="alert">
       {state.error}
       <Button
@@ -194,9 +199,8 @@
       >
     </Banner>
   {/if}
-  {#if state.notice && !draft && !secretConnection}<Banner
-      variant="success"
-      role="status">{state.notice}</Banner
+  {#if state.notice && !dialogOpen}<Banner variant="success" role="status"
+      >{state.notice}</Banner
     >{/if}
   {#if state.job}
     <Banner variant="warn" role="status">
