@@ -87,6 +87,42 @@ def test_opaque_file_ids_do_not_require_a_generation_format(value):
     assert ids.is_safe_id(value)
 
 
-@pytest.mark.parametrize("value", ["con", "prn", "aux", "nul", "com1", "com9", "lpt1", "lpt9"])
+@pytest.mark.parametrize(
+    "value", ["con", "prn", "aux", "nul", "com0", "com1", "com9", "lpt0", "lpt1", "lpt9"]
+)
 def test_file_ids_reject_windows_devices_even_with_a_sidecar_extension(value):
     assert not ids.is_safe_id(value)
+
+
+@pytest.mark.parametrize(
+    ("name", "reserved"),
+    [
+        ("con", True),
+        ("Aux.json", True),
+        ("nul .txt", True),
+        ("COM0", True),
+        ("lpt\u00b9.log", True),
+        ("CONIN$", True),
+        ("a:b", True),
+        ("a/b", True),
+        ("a\\b", True),
+        ("name.", True),
+        ("name ", True),
+        ("a|b", True),
+        ("a\x01", True),
+        ("console", False),
+        ("con-default.json", False),
+        ("com10", False),
+        (".", False),
+        ("..", False),
+    ],
+)
+def test_reserved_names_are_the_names_windows_cannot_store(name, reserved):
+    assert ids.is_reserved_name(name) is reserved
+
+
+def test_reserved_name_message_names_the_reason_and_the_way_out():
+    device = ids.reserved_name_message("Agent id", "aux.json")
+    assert device.startswith("The Agent id 'aux.json' is reserved on Windows: AUX is a device")
+    assert device.endswith("choose a different Agent id.")
+    assert "cannot contain" in ids.reserved_name_message("file or folder name", "a:b")

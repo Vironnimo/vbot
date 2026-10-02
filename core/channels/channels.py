@@ -35,6 +35,7 @@ from core.config_validation import (
     JsonObject,
 )
 from core.extensions import InteractionButton, InteractionEvent, InteractionResponder
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
@@ -454,6 +455,9 @@ class ChannelService:
         if not isinstance(config, ChannelConfig):
             raise ChannelConfigError("config must be a ChannelConfig instance")
         config.validate()
+        # The id names the Channel's directory; existing Channels keep theirs.
+        if is_reserved_name(config.id):
+            raise ChannelConfigError(reserved_name_message("Channel id", config.id))
         self._validate_agent_exists(config.agent_id)
         self._require_idle(config.id)
         had_enabled_channels = self.has_enabled_channels()

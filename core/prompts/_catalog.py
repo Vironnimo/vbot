@@ -51,6 +51,7 @@ from core.prompts.blocks import (
     resolve_layout,
 )
 from core.settings import is_valid_agent_id
+from core.utils.ids import is_reserved_name, reserved_name_message
 from core.utils.logging import get_logger
 
 _RESOURCES_PROMPTS_DIR = Path(__file__).resolve().parents[2] / "resources" / "prompts"
@@ -212,13 +213,16 @@ class PromptBlockCatalog:
         existing ``user:`` block in the scope, compared case-insensitively: the
         override file is named after the slug, and a case-insensitive filesystem
         would give ``Notes`` and ``notes`` one file. Comparing folded ids keeps the
-        rule the same on every platform. Writes the override (``content`` or
+        rule the same on every platform; for the same reason, a slug Windows
+        reserves (``con``, ``nul``) is refused everywhere. Writes the override (``content`` or
         empty) and inserts a layout entry at ``position`` (default: end). Owner
         ``always``, ``kind="text"``. Returns the new block's metadata.
         """
         prompt_scope = self._resolve_edit_scope(scope)
         if not is_valid_agent_id(slug):
             raise PromptError(f"invalid custom block slug: {slug!r}")
+        if is_reserved_name(slug):
+            raise PromptError(reserved_name_message("custom block slug", slug))
         block_id = f"{USER_BLOCK_ID_PREFIX}{slug}"
         scope_key = self.scope_key(prompt_scope)
         existing = self.resolve_layout(scope_key)

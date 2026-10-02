@@ -17,6 +17,7 @@ from core.database import write_bootstrap_marker
 from core.projects.paths import cwd_exists
 from core.projects.projects import (
     PROJECT_DEFAULT_ALLOWED_TOOLS,
+    InvalidProjectIdError,
     Project,
     ProjectAlreadyExistsError,
     ProjectError,
@@ -252,6 +253,8 @@ def test_restore_files_refuses_a_taken_id_or_a_claimed_repo_without_changes(
 
     with pytest.raises(ProjectAlreadyExistsError), store.restore_files(payload, "other"):
         pytest.fail("a taken id is refused before anything moves")
+    with pytest.raises(InvalidProjectIdError), store.restore_files(payload, "nul"):
+        pytest.fail("a new id Windows reserves is refused before anything moves")
     # Another Project claimed the repo meanwhile.
     store.create("again", "Again", repo)
     with (
@@ -429,6 +432,13 @@ def test_update_clears_a_field_with_its_empty_value(
             ProjectAlreadyExistsError,
             "A project already points at this folder: vbot",
             id="duplicate-cwd-trailing-separator",
+        ),
+        # Windows reserves the name for a device; it is refused on every platform.
+        pytest.param(
+            lambda store, repos: store.create("aux", "Aux", repos / "fresh"),
+            InvalidProjectIdError,
+            "The Project id 'aux' is reserved on Windows",
+            id="windows-reserved-id",
         ),
         pytest.param(
             lambda store, repos: store.update("other", cwd=str(repos / "vbot")),

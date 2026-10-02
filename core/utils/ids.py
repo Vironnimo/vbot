@@ -1,12 +1,15 @@
-"""Compact, typed object identities shared by kernel domains.
+"""Compact, typed object identities and the filesystem boundary for names.
 
-These are references, never secrets. Owners retain their ordinary authorization
-checks. A 12-character lowercase base32 suffix carries 60 random bits; prefixes
-identify the object kind without a second, session-local alias namespace.
+Generated ids are references, never secrets. Owners retain their ordinary
+authorization checks. A 12-character lowercase base32 suffix carries 60 random
+bits; prefixes identify the object kind without a second, session-local alias
+namespace. User-chosen names that become one file or folder name pass
+:func:`is_reserved_name` when they are created or renamed.
 """
 
 from __future__ import annotations
 
+import ntpath
 import os
 import re
 import secrets
@@ -15,7 +18,18 @@ from pathlib import Path
 
 _ALPHABET = "0123456789abcdefghjkmnpqrstvwxyz"
 _OPAQUE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,127}")
-_WINDOWS_DEVICE_ID = re.compile(r"con|prn|aux|nul|com[1-9]|lpt[1-9]")
+# ``ntpath.isreserved`` omits COM0 and LPT0, which Windows documents as reserved too.
+_WINDOWS_DEVICES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "CONIN$",
+        "CONOUT$",
+        *(f"{port}{digit}" for port in ("COM", "LPT") for digit in "0123456789¹²³"),
+    }
+)
 
 
 def new_id(prefix: str, *, claim: Callable[[str], bool] | None = None) -> str:
@@ -42,8 +56,58 @@ def is_safe_id(value: object) -> bool:
     return (
         isinstance(value, str)
         and _OPAQUE_ID.fullmatch(value) is not None
-        and _WINDOWS_DEVICE_ID.fullmatch(value) is None
+        and not is_reserved_name(value)
     )
+
+
+def is_reserved_name(name: str) -> bool:
+    """Return whether Windows cannot use ``name`` as one file or folder name.
+
+    Reserved are device names such as ``CON``, ``NUL``, ``COM0`` or ``LPT1``, also
+    with an extension (``aux.json``); names ending in a dot or space; and names
+    containing a control character or any of ``< > : " / \\ | ? *``. This is
+    ``ntpath.isreserved`` for one component, stricter by ``COM0``/``LPT0`` and by
+    a drive prefix (``a:b``) or separator that ``ntpath`` splits off first.
+    Owners refuse such names on every platform when a user creates or renames
+    something stored under that name, so data stays portable to Windows; readers
+    keep accepting existing names. ``"."`` and ``".."`` are not reserved here and
+    stay the caller's check.
+    """
+    return (
+        any(char in name for char in ":/\\")
+        or ntpath.isreserved(name)
+        or _windows_device(name) is not None
+    )
+
+
+def reserved_name_message(subject: str, name: str, *, advice: str | None = None) -> str:
+    """Explain why ``name`` was refused, for a ``name`` where :func:`is_reserved_name` holds.
+
+    ``subject`` names what the user chose, such as ``"Agent id"``; it appears as
+    ``The <subject> '<name>' ...``. ``advice`` replaces the closing
+    ``choose a different <subject>`` where the name is derived from other input.
+    """
+    device = _windows_device(name)
+    if device is not None:
+        reason = (
+            f"{device} is a device name there (like CON, PRN, AUX, NUL, COM1 or LPT1, "
+            "also with an extension such as .txt), so it cannot name a file or folder"
+        )
+    else:
+        reason = (
+            "a file or folder name there cannot contain a control character or any of "
+            '< > : " / \\ | ? *, and cannot end in a dot or space'
+        )
+    return (
+        f"The {subject} {name!r} is reserved on Windows: {reason}. vBot refuses it on "
+        "every system so the data stays usable on Windows; "
+        f"{advice or f'choose a different {subject}'}."
+    )
+
+
+def _windows_device(name: str) -> str | None:
+    stem = name.partition(".")[0].rstrip(" ").upper()
+    return stem if stem in _WINDOWS_DEVICES else None
 
 
 def has_id_entry(directory: Path, identifier: str) -> bool:

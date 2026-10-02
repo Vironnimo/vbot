@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from core.skills import SkillAuthoringError, SkillAuthoringService, SkillRegistry, _packages
+from tests.directory_links import cloud_placeholder_status
 
 DOCUMENT = b"---\nname: research\ndescription: Research a topic.\n---\n\nRead templates/guide.md.\n"
 FILES = {
@@ -108,7 +109,7 @@ def test_directory_hard_link_is_rejected_before_target_creation(tmp_path):
     assert outside.read_text() == "External content"
 
 
-def test_directory_install_preserves_files_but_not_generated_state(tmp_path):
+def test_directory_install_preserves_files_but_not_generated_state(tmp_path, monkeypatch):
     source = tmp_path / "input"
     source.mkdir()
     for name, content in {
@@ -119,6 +120,14 @@ def test_directory_install_preserves_files_but_not_generated_state(tmp_path):
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+    # A cloud-file placeholder (OneDrive) is a reparse point but an ordinary file.
+    placeholder = source / "templates" / "guide.md"
+    lstat = Path.lstat
+    monkeypatch.setattr(
+        Path,
+        "lstat",
+        lambda path: cloud_placeholder_status(lstat(path)) if path == placeholder else lstat(path),
+    )
     target = tmp_path / "skills"
     SkillAuthoringService().install(target, str(source))
     installed = target / "research"
@@ -242,6 +251,8 @@ def test_repeat_is_unchanged_and_overwrite_requires_explicit_replace(tmp_path):
                 "assets/COM¹.txt",
                 "assets/LPT².log",
                 "assets/COM³",
+                "assets/COM0.txt",
+                "assets/lpt0",
                 "assets/CONIN$",
                 "assets/CONOUT$",
                 "assets/CON .txt",

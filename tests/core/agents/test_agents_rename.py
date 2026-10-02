@@ -16,6 +16,7 @@ from core.agents import (
     AgentReferencedError,
     AgentRename,
     AgentStore,
+    InvalidAgentIdError,
 )
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.agents.agents_test_support import persisted
@@ -203,10 +204,11 @@ def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
 
 
 @pytest.mark.parametrize(
-    ("occupant", "refused"),
+    ("occupant", "destination", "refused"),
     [
         pytest.param(
             {"agent_id": "researcher", "name": "Researcher Agent"},
+            "researcher",
             AgentAlreadyExistsError,
             id="agent",
         ),
@@ -215,20 +217,27 @@ def test_rename_preserves_agent_order_position(store: AgentStore) -> None:
         # even the delegation grant a rename would otherwise remove.
         pytest.param(
             {"agent_id": "manager", "tools": {"subagent": {"allowed_agents": ["researcher"]}}},
+            "researcher",
             AgentReferencedError,
             id="references",
         ),
+        # Windows reserves the name for a device; it is refused on every platform.
+        pytest.param(None, "con", InvalidAgentIdError, id="windows-reserved"),
     ],
 )
-def test_rename_rejects_an_occupied_destination(
-    store: AgentStore, occupant: dict[str, Any], refused: type[AgentError]
+def test_rename_rejects_an_unusable_destination(
+    store: AgentStore,
+    occupant: dict[str, Any] | None,
+    destination: str,
+    refused: type[AgentError],
 ) -> None:
     store.create("coder", "Coder Agent")
-    store.create(**occupant)
+    if occupant is not None:
+        store.create(**occupant)
     before = {agent.id: agent for agent in store.list()}
 
     with pytest.raises(refused) as raised:
-        store.rename("coder", "researcher", external_references=("channel:tg-old",))
+        store.rename("coder", destination, external_references=("channel:tg-old",))
 
     if isinstance(raised.value, AgentReferencedError):
         assert raised.value.agent_id == "researcher"

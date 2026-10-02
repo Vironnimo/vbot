@@ -9,10 +9,10 @@ checks here instead: they report an entry that does not exist as missing and rai
 the ``OSError`` otherwise, so the caller can treat it as unavailable.
 
 The module also owns how vBot recognizes links in ``lstat`` results:
-:func:`is_link_status` (symbolic links and Windows junctions, as everything that
-walks or removes trees without following links needs) and :func:`is_reparse_point`
-(any Windows reparse point, for package verification that refuses every
-redirection, cloud-file placeholders included).
+:func:`is_link_status` reports symbolic links and Windows junctions, for
+everything that walks, verifies or removes trees without following links. Other
+Windows reparse points, such as cloud-file placeholders (OneDrive Files
+On-Demand), are ordinary files and directories everywhere.
 """
 
 from __future__ import annotations
@@ -74,23 +74,10 @@ def is_link_status(status: os.stat_result) -> bool:
     return stat.S_ISLNK(status.st_mode)
 
 
-def is_reparse_point(status: os.stat_result) -> bool:
-    """Whether an unfollowed status describes a symbolic link or any Windows reparse point.
-
-    Stricter than :func:`is_link_status`: every reparse point counts, cloud-file
-    placeholders (OneDrive Files On-Demand) included.
-    """
-
-    if sys.platform == "win32" and status.st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
-        return True
-    return stat.S_ISLNK(status.st_mode)
-
-
 __all__ = [
     "exists_strict",
     "is_dir_strict",
     "is_file_strict",
     "is_link_status",
-    "is_reparse_point",
     "stat_or_none",
 ]

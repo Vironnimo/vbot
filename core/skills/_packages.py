@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
-from core.utils.file_status import is_reparse_point
+from core.utils.file_status import is_link_status
+from core.utils.ids import is_reserved_name, reserved_name_message
 
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 MAX_PACKAGE_BYTES = 128 * 1024 * 1024
@@ -25,18 +26,6 @@ MAX_PACKAGE_ENTRIES = 10_000
 MAX_SKILL_DOCUMENT_BYTES = 1024 * 1024
 INSTALL_RECEIPT = ".vbot-install.json"
 EXCLUDED_PARTS = frozenset({".git", ".hg", ".svn", "__pycache__", "node_modules", INSTALL_RECEIPT})
-_DEVICES = frozenset(
-    {
-        "con",
-        "prn",
-        "aux",
-        "nul",
-        "conin$",
-        "conout$",
-        *(f"com{i}" for i in "0123456789¹²³"),
-        *(f"lpt{i}" for i in "0123456789¹²³"),
-    }
-)
 
 
 class PackageError(ValueError):
@@ -54,22 +43,22 @@ def package_path(value: str) -> str:
     if not value or len(value) > 1024 or "\\" in value:
         raise PackageError(f"Invalid package path: {value!r}")
     for part in value.split("/"):
-        if (
-            part in {"", ".", ".."}
-            or part.endswith((".", " "))
-            or any(
-                ord(char) < 32 or 0xD800 <= ord(char) <= 0xDFFF or char in '<>:"|?*'
-                for char in part
-            )
-            or part.split(".", 1)[0].rstrip(" ").casefold() in _DEVICES
-        ):
+        if part in {"", ".", ".."} or any(0xD800 <= ord(char) <= 0xDFFF for char in part):
             raise PackageError(f"Invalid package path: {value!r}")
+        if is_reserved_name(part):
+            raise PackageError(
+                f"Invalid package path {value!r}. "
+                + reserved_name_message("file or folder name", part)
+            )
     return value
 
 
 def is_redirect(path: Path) -> bool:
-    """Whether ``path`` is a symbolic link or any Windows reparse point, junctions included."""
-    return is_reparse_point(path.lstat())
+    """Whether ``path`` is a symbolic link or a Windows junction.
+
+    Other reparse points, such as cloud-file placeholders, are ordinary files here.
+    """
+    return is_link_status(path.lstat())
 
 
 def excluded(path: str) -> bool:

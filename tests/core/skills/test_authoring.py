@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -316,6 +317,20 @@ def test_support_files_are_written_and_removed_under_resource_directories(
     assert not resource.exists()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows maps the name to a device")
+def test_an_existing_support_file_under_a_windows_reserved_name_stays_writable(
+    service: SkillAuthoringService, tmp_path: Path
+) -> None:
+    service.create(tmp_path, "demo", skill_document(), author="agent")
+    resource = tmp_path / "demo" / "scripts" / "aux.py"
+    resource.parent.mkdir()
+    resource.write_text("old\n", encoding="utf-8")
+
+    service.write_file(tmp_path, "demo", "scripts/aux.py", "new\n")
+
+    assert resource.read_text(encoding="utf-8") == "new\n"
+
+
 @pytest.mark.parametrize(
     ("content", "stored", "warnings"),
     [
@@ -387,12 +402,15 @@ def test_invalid_documents_are_rejected(
     assert not (tmp_path / "demo").exists()
 
 
-@pytest.mark.parametrize("bad_name", ["../escape", "a/b", "..", ".", "a\\b"])
+# Names Windows reserves for devices are refused on every platform.
+@pytest.mark.parametrize("bad_name", ["../escape", "a/b", "..", ".", "a\\b", "con", "NUL", "com0"])
 def test_rejects_illegal_skill_names(
     service: SkillAuthoringService, tmp_path: Path, bad_name: str
 ) -> None:
     with pytest.raises(SkillAuthoringError):
         service.create(tmp_path, bad_name, skill_document(name=bad_name), author="agent")
+
+    assert not any(tmp_path.iterdir())
 
 
 @pytest.mark.parametrize(
@@ -404,6 +422,11 @@ def test_rejects_illegal_skill_names(
         "scripts/../SKILL.md",
         "SKILL.md",
         "other/data.txt",
+        # New names Windows cannot store are refused on every platform.
+        "scripts/nul.py",
+        "assets/con/x.txt",
+        "scripts/a:b.py",
+        "references/notes.",
     ],
 )
 def test_support_files_stay_inside_resource_directories(

@@ -595,6 +595,10 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
         bundled = await rpc_error(
             state, "provider.custom_save", provider=_custom_provider_payload(provider_id="openai")
         )
+        # Model discovery names files after the id; Windows reserves device names.
+        reserved = await rpc_error(
+            state, "provider.custom_save", provider=_custom_provider_payload(provider_id="con")
+        )
         saved = await rpc_result(
             state, "provider.custom_save", provider=_custom_provider_payload(), api_key="secret"
         )
@@ -603,6 +607,8 @@ async def test_custom_provider_crud_is_live_and_keeps_key_out_of_settings(
             "code": "invalid_request",
             "message": "Custom Provider id 'openai' conflicts with a bundled Provider",
         }
+        assert reserved["code"] == "invalid_request"
+        assert reserved["message"].startswith("The Custom Provider id 'con' is reserved on Windows")
         assert saved["provider"]["usable"] is True
         assert "api_key" not in saved["provider"]
         assert runtime.providers is providers

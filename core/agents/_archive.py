@@ -25,6 +25,7 @@ from core.agents._config import (
     _agent_from_dict,
     _apply_defaults,
     _validate_agent_id,
+    _validate_new_agent_id,
     load_validated_agent_json,
 )
 from core.agents._types import (
@@ -197,12 +198,16 @@ def restore_files(
     """
     with store._snapshot_barrier.compound_mutation(), store._change():
         _validate_agent_id(target_id)
+        data = load_validated_agent_json(source / "agent.json")
+        archived_id = str(data["id"])
+        if target_id != archived_id:
+            # Returning under a new id names a new directory; the archived id is
+            # existing data. Checked first: Windows reports a device name as taken.
+            _validate_new_agent_id(target_id)
         if restore_target_problem(store, target_id) is not None:
             raise AgentAlreadyExistsError(f"Agent already exists: {target_id}")
         agents_dir = store.data_dir / "agents"
         home = store._agent_dir(target_id)
-        data = load_validated_agent_json(source / "agent.json")
-        archived_id = str(data["id"])
         agent = _agent_from_dict(
             data,
             data_dir=store.data_dir,

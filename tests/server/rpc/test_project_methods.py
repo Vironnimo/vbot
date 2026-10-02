@@ -178,6 +178,8 @@ async def test_detect_reports_formats_and_context_files(tmp_path: Path) -> None:
         ),
         ("project.add", {"cwd": "{missing}"}, "invalid_request", "{missing}"),
         ("project.add", {"cwd": "{fresh}", "display_name": "!!!"}, "invalid_request", ""),
+        # The derived id would name a Windows device; another display_name helps.
+        ("project.add", {"cwd": "{fresh}", "display_name": "Aux"}, "invalid_request", "'Aux'"),
         ("project.add", {"cwd": "{fresh}", "bogus": 1}, "invalid_request", "bogus"),
         (
             "project.add",
