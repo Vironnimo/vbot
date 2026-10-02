@@ -18,6 +18,7 @@ import warnings
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from dataclasses import dataclass
+from http import HTTPStatus
 from pathlib import Path
 from types import TracebackType
 from typing import Any, Self, cast, override
@@ -28,6 +29,7 @@ import mcp.types as types
 from jsonschema import Draft202012Validator
 from mcp import Client
 from mcp.client.auth import OAuthFlowError
+from mcp.client.extension import ClaimContext
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import MCP_SESSION_ID, streamable_http_client
@@ -44,6 +46,18 @@ from ._callbacks import ServerRequests
 from ._events import ConnectionEvents, MissingCredentialError, dump
 from ._network import http_client
 from ._oauth import ConnectionOAuth
+from ._tasks import (
+    ExtensionWire,
+    LegacyWire,
+    TaskEndedError,
+    TaskHandle,
+    TasksExtension,
+    TaskState,
+    TaskWire,
+    cancel_quietly,
+    drive,
+    legacy_state,
+)
 from .interactions import InputRequests
 
 CONNECTION_QUEUE_LIMIT = 64
@@ -174,11 +188,17 @@ def _batch_argument_problem(command: str, args: list[str]) -> str | None:
 
 
 class InvocationNotSentError(ValueError):
-    """An invocation that never reached the server, so it changed nothing there."""
+    """An invocation that never reached the server, so it changed nothing there.
 
-    def __init__(self, message: str, *, denied: bool = False) -> None:
+    *denied*: vBot refused it (Tool access). *refused*: the HTTP status with which
+    the server refused it unprocessed (3xx or 4xx); *message* then describes that
+    answer.
+    """
+
+    def __init__(self, message: str, *, denied: bool = False, refused: int | None = None) -> None:
         super().__init__(message)
         self.denied = denied
+        self.refused = refused
 
 
 class InvalidToolResultError(ValueError):
@@ -209,6 +229,8 @@ class _Call:
     task: asyncio.Task[None] | None = None
     # A read that may run again: it failed transiently or lost its connection.
     retry: bool = False
+    # The HTTP status of the last answer of 300 or more to a request of this call.
+    http_status: int | None = None
 
 
 # The call a task serves; transports carry it into the server requests of that call.
@@ -395,6 +417,10 @@ class ConnectionRunner:
         # Background work of the current connection: catalog watch and refresh.
         self._subscriptions: dict[str, asyncio.Task[None]] = {}
         self._resource_watches: dict[str, tuple[asyncio.Task[None], asyncio.Future[None]]] = {}
+        # Resources subscribed through this runner; each connection subscribes them again.
+        self._resource_subscriptions: set[str] = set()
+        # Cancellations of server tasks whose calls stopped waiting.
+        self._task_cancels: set[asyncio.Task[None]] = set()
         self._catalog_stale = False
         self._transport_warned = False
         # The log level an Agent chose with logging/setLevel; until then requests
@@ -664,6 +690,11 @@ class ConnectionRunner:
                     logging_callback=self._requests.log,
                     message_handler=self._message,
                     client_info=types.Implementation(name="vbot", version="1"),
+                    # No response cache: every listing and read reaches the server (see the
+                    # MCP domain map, Compatibility boundary).
+                    cache=None,
+                    # Offered on 2026-07-28 connections only: legacy tasks need no declaration.
+                    extensions=[TasksExtension(self._resolve_task)],
                 )
                 self.client = await stack.enter_async_context(client)
                 self._check_results(self.client)
@@ -678,6 +709,10 @@ class ConnectionRunner:
                 self._subscriptions["catalog"] = asyncio.create_task(
                     self._watch_catalog(), name=f"mcp-catalog-watch:{self.id}"
                 )
+                # A server forgets subscriptions with its session; a failure is a
+                # ``subscription_failed`` event and the next connection tries again.
+                for uri in self._resource_subscriptions:
+                    self._watch(uri)
                 try:
                     await self._serve()
                 finally:
@@ -732,8 +767,16 @@ class ConnectionRunner:
         for task in background:
             task.cancel()
         tasks.update(background)
+        deadline = asyncio.get_running_loop().time() + CALL_STOP_SECONDS
         if tasks:
             await asyncio.wait(tasks, timeout=CALL_STOP_SECONDS)
+        # Stopped calls ask the server to cancel their tasks meanwhile; the
+        # transport ends after this, so later cancellations could not be sent.
+        if self._task_cancels:
+            remaining = deadline - asyncio.get_running_loop().time()
+            await asyncio.wait(set(self._task_cancels), timeout=max(0.0, remaining))
+            for task in self._task_cancels:
+                task.cancel()
 
     def _lose(self, reason: str) -> None:
         """End the current connection, which can no longer serve calls, because of *reason*."""
@@ -918,8 +961,13 @@ class ConnectionRunner:
             return
         # A redirect or a 4xx refusal leaves the request unprocessed; a 5xx may
         # come after the server began to process it.
-        if (status < 300 or status >= 500) and _carries_request(request):
-            self._mark_delivered()
+        if _carries_request(request):
+            if status < 300 or status >= 500:
+                self._mark_delivered()
+            if status >= 300:
+                call = _CURRENT_CALL.get()
+                if call is not None and call.runner is self:
+                    call.http_status = status
         if self.config["transport"] == "sse" and not 200 <= status < 300:
             # The legacy SSE transport stops sending after a refused message.
             self._lose(f"the MCP server refused a message with HTTP {status}")
@@ -1013,7 +1061,8 @@ class ConnectionRunner:
         self._events.record("request_failed", {"operation": call.operation, "error": safe})
         if call.result.done():
             return
-        if isinstance(error, InvalidToolResultError):
+        if isinstance(error, InvalidToolResultError | TaskEndedError):
+            # The server's own account of the call, whatever happens to the connection.
             call.result.set_exception(error)
             return
         owner = call.owner
@@ -1035,13 +1084,24 @@ class ConnectionRunner:
                 safe,
                 exc_info=error,
             )
-        call.retry = isinstance(error, OSError | TimeoutError) or (
-            isinstance(error, httpx2.HTTPError)
-            and (
-                not isinstance(error, httpx2.HTTPStatusError)
-                or error.response.status_code in RETRYABLE_READ_STATUSES
+        status = call.http_status
+        call.retry = (
+            isinstance(error, OSError | TimeoutError)
+            or status in RETRYABLE_READ_STATUSES
+            or (
+                isinstance(error, httpx2.HTTPError)
+                and (
+                    not isinstance(error, httpx2.HTTPStatusError)
+                    or error.response.status_code in RETRYABLE_READ_STATUSES
+                )
             )
         )
+        if status is not None and status < 500 and not call.delivered:
+            # Every request of the call was redirected or refused, none processed.
+            call.result.set_exception(
+                InvocationNotSentError(self.redact(_refusal(status, error)), refused=status)
+            )
+            return
         call.result.set_exception(ValueError(safe))
 
     def _attributed_context(self) -> ToolContext | None:
@@ -1067,7 +1127,7 @@ class ConnectionRunner:
         items: list[dict[str, Any]] = []
         pages: list[dict[str, Any]] = []
         while True:
-            page = await method(cursor=cursor, cache_mode="refresh")
+            page = await method(cursor=cursor)
             # The page's own metadata; its items are kept once, in the catalog's list.
             pages.append(
                 page.model_dump(mode="json", by_alias=True, exclude_none=True, exclude={field})
@@ -1165,12 +1225,11 @@ class ConnectionRunner:
                 ),
                 {},
             )
-            if tool.get("execution", {}).get("taskSupport") == "required" or "task" in arguments:
-                result = await self._task_send(
-                    "tools/call", {**arguments, "task": arguments.get("task", {})}
-                )
-                types.CreateTaskResult.model_validate(result)
-                return result
+            # From 2026-07-28 the server decides; the Tasks extension's claim drives its task.
+            if client.protocol_version < DISCOVERY_PROTOCOL_VERSION and (
+                tool.get("execution", {}).get("taskSupport") == "required" or "task" in arguments
+            ):
+                return await self._legacy_task_call(arguments)
             return dump(
                 await client.call_tool(
                     arguments["name"],
@@ -1180,11 +1239,7 @@ class ConnectionRunner:
                 )
             )
         if operation == "resources/read":
-            return dump(
-                await client.read_resource(
-                    arguments["uri"], cache_mode="refresh", meta=self._request_meta()
-                )
-            )
+            return dump(await client.read_resource(arguments["uri"], meta=self._request_meta()))
         if operation == "prompts/get":
             return dump(
                 await client.get_prompt(
@@ -1207,26 +1262,26 @@ class ConnectionRunner:
             )
         if operation == "resources/subscribe":
             uri = arguments["uri"]
-            watch = self._resource_watches.get(uri)
-            if watch is None or watch[0].done():
-                ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-                watch = (
-                    asyncio.create_task(
-                        self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
-                    ),
-                    ready,
-                )
-                self._resource_watches[uri] = watch
             # Concurrent subscribers share one acknowledgement; one that is
             # cancelled leaves it to the others.
-            await asyncio.shield(watch[1])
+            await asyncio.shield(self._watch(uri))
+            self._resource_subscriptions.add(uri)
             return {"subscribed": uri}
         if operation == "resources/unsubscribe":
-            watch = self._resource_watches.pop(arguments["uri"], None)
+            uri = arguments["uri"]
+            self._resource_subscriptions.discard(uri)
+            watch = self._resource_watches.pop(uri, None)
             if watch is not None:
                 watch[0].cancel()
                 await asyncio.gather(watch[0], return_exceptions=True)
-            return {"unsubscribed": arguments["uri"]}
+                subscribed = (
+                    watch[1].done() and not watch[1].cancelled() and not watch[1].exception()
+                )
+                if subscribed and client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+                    await self._legacy(
+                        "resource_subscriptions", lambda: client.unsubscribe_resource(uri)
+                    )
+            return {"unsubscribed": uri}
         if operation == "logging/setLevel":
             level = arguments["level"]
             types.LoggingMessageNotificationParams.model_validate({"level": level, "data": None})
@@ -1264,13 +1319,69 @@ class ConnectionRunner:
         if request_type is None:
             raise ValueError("Unknown MCP task operation")
         request_type.model_validate({"method": operation, "params": arguments})
+        client = self._client()
+        if client.protocol_version >= DISCOVERY_PROTOCOL_VERSION and operation in {
+            "tasks/get",
+            "tasks/cancel",
+        }:
+            return await ExtensionWire(client.session).request(operation, arguments["taskId"])
         return await self._task_send(operation, arguments)
+
+    async def _legacy_task_call(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Run a 2025-11-25 Tool call as a task and return the task's Tool result."""
+        started = await self._task_send(
+            "tools/call", {**arguments, "task": arguments.get("task", {})}
+        )
+        task = types.CreateTaskResult.model_validate(started).task
+        session = self._client().session
+        result = await self._drive_task(LegacyWire(session), legacy_state(task))
+        if not result.is_error:
+            # As ``call_tool`` does for a direct result.
+            await session.validate_tool_result(arguments["name"], result)
+        return dump(result)
+
+    async def _resolve_task(
+        self, handle: TaskHandle, context: ClaimContext
+    ) -> types.CallToolResult:
+        """Finish a task a 2026-07-28 server returned for a Tool call (Tasks extension)."""
+        return await self._drive_task(ExtensionWire(context.session), handle.state())
+
+    async def _drive_task(self, wire: TaskWire, state: TaskState) -> types.CallToolResult:
+        """Run a server task to its end; each status change becomes a ``task_status`` event."""
+        last: tuple[str, str | None] | None = None
+
+        def observe(state: TaskState) -> None:
+            nonlocal last
+            if (state.status, state.message) != last:
+                last = (state.status, state.message)
+                self._events.record(
+                    "task_status",
+                    {"task_id": state.task_id, "status": state.status, "message": state.message},
+                )
+
+        return await drive(
+            wire, state, observe=observe, abandon=functools.partial(self._abandon_task, wire)
+        )
+
+    def _abandon_task(self, wire: TaskWire, task_id: str) -> None:
+        """Cancel the server task of a call that stopped waiting, without blocking it."""
+
+        async def cancel() -> None:
+            # Part of no call: the call that started the task has ended.
+            _CURRENT_CALL.set(None)
+            await cancel_quietly(wire, task_id)
+
+        task = asyncio.create_task(cancel(), name=f"mcp-task-cancel:{self.id}")
+        self._task_cancels.add(task)
+        task.add_done_callback(self._task_cancels.discard)
 
     async def _task_send(self, method: str, arguments: dict[str, Any]) -> dict[str, Any]:
         # The pinned SDK's (2.2.0) typed send_request validates historical task handles
         # as CallToolResult and rejects them. Its pinned dispatcher retains the same
         # transport, cancellation and progress semantics without that wrong schema.
-        # Keep this one compatibility seam covered by the real stdio task test.
+        # Only the 2025-11-25 call that starts a task and the explicit task operations
+        # use it; ``_tasks`` drives tasks through public SDK requests. Keep this one
+        # compatibility seam covered by the real stdio task test.
         session = self._client().session
         options: CallOptions = {"timeout": self.config["timeout"], "on_progress": self._progress}
         session._stamp({"method": method, "params": arguments}, options)
@@ -1310,7 +1421,16 @@ class ConnectionRunner:
         return await started
 
     async def _message(self, message: Any) -> None:
-        if isinstance(message, types.ServerNotification):
+        client = self.client
+        if (
+            isinstance(message, types.ResourceUpdatedNotification)
+            and client is not None
+            and client.protocol_version < DISCOVERY_PROTOCOL_VERSION
+        ):
+            # A legacy subscription's change; a listen stream records its own.
+            uri = str(message.params.uri)
+            self._events.record("resource_changed", {"uri": uri, "event": dump(message)})
+        elif isinstance(message, types.ServerNotification):
             self._events.record("notification", dump(message))
             if isinstance(
                 message,
@@ -1392,15 +1512,39 @@ class ConnectionRunner:
         except Exception as error:
             self._events.record("subscription_failed", {"error": self.safe_error(error)})
 
+    def _watch(self, uri: str) -> asyncio.Future[None]:
+        """The acknowledgement of this connection's subscription to *uri*, started if needed."""
+        watch = self._resource_watches.get(uri)
+        if watch is None or watch[0].done():
+            ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+            # A restored subscription has no waiter; its failure is an event.
+            ready.add_done_callback(lambda done: done.cancelled() or done.exception())
+            watch = (
+                asyncio.create_task(
+                    self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                ),
+                ready,
+            )
+            self._resource_watches[uri] = watch
+        return watch[1]
+
     async def _watch_resource(self, uri: str, ready: asyncio.Future[None]) -> None:
+        """Subscribe to *uri* for this connection; changes become ``resource_changed`` events."""
         # The subscribing call created this task, but the watch outlives that call.
         _CURRENT_CALL.set(None)
+        client = self._client()
         try:
-            async with self._client().listen(resource_subscriptions=[uri]) as events:
-                if not ready.done():
+            if client.protocol_version < DISCOVERY_PROTOCOL_VERSION:
+                await self._legacy("resource_subscriptions", lambda: client.subscribe_resource(uri))
+                ready.set_result(None)
+                # Changes arrive as notifications (``_message``); like a listen
+                # stream, the subscription lasts while this task runs.
+                await asyncio.Event().wait()
+            else:
+                async with client.listen(resource_subscriptions=[uri]) as events:
                     ready.set_result(None)
-                async for event in events:
-                    self._events.record("resource_changed", {"uri": uri, "event": dump(event)})
+                    async for event in events:
+                        self._events.record("resource_changed", {"uri": uri, "event": dump(event)})
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -1415,6 +1559,18 @@ class ConnectionRunner:
         if isinstance(error, BaseExceptionGroup):
             return all(ConnectionRunner._expected(item) for item in error.exceptions)
         return isinstance(error, EXPECTED_FAILURES)
+
+
+def _refusal(status: int, error: Exception) -> str:
+    """The server's HTTP *status* answer to a call, with its JSON-RPC error message if any."""
+    try:
+        text = f"HTTP {status} {HTTPStatus(status).phrase}"
+    except ValueError:
+        text = f"HTTP {status}"
+    # The SDK turns an answer without a JSON-RPC error into this placeholder.
+    if isinstance(error, MCPError) and error.message != "Server returned an error response":
+        text += f": {error.message}"
+    return text
 
 
 def _carries_request(request: httpx2.Request) -> bool:

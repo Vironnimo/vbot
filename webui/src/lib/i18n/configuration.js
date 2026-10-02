@@ -13,6 +13,8 @@ export default Object.freeze({
   'extensions.cancelHelp': 'End the request without an answer.',
   'extensions.noChoice': 'No choice',
   'extensions.inputTimeZone': 'Time in {zone}.',
+  'extensions.inputExpires':
+    'Answer by {time} ({distance}); then the request ends unanswered.',
   'extensions.inputRequired': 'Enter a value.',
   'extensions.inputChoicesMin': 'Choose at least {count}.',
   'extensions.inputChoicesMax': 'Choose at most {count}.',

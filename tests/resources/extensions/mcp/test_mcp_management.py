@@ -50,7 +50,7 @@ _DISABLED = (
 _DISCONNECTED = (
     "Error (tool_not_ready): The MCP connection example is not connected, so nothing was run. "
     "Call this tool again through mcp_example, which reconnects first. If it cannot connect, "
-    "tell the user that the MCP server example cannot be reached.\nretryable: false"
+    "tell the user that the MCP server example cannot be reached.\nretryable: true"
 )
 
 
