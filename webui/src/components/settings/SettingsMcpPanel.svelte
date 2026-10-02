@@ -632,6 +632,7 @@
           >
             {#snippet children(field)}<Dropdown
                 id={field.controlId}
+                ariaLabelledby={field.labelId}
                 value={draft.transport}
                 options={transportOptions}
                 disabled={state.busy}
@@ -783,6 +784,7 @@
             >
               {#snippet children(field)}<Dropdown
                   id={field.controlId}
+                  ariaLabelledby={field.labelId}
                   value={draft.sampling}
                   options={samplingOptions}
                   disabled={state.busy}
@@ -797,6 +799,7 @@
             >
               {#snippet children(field)}<Dropdown
                   id={field.controlId}
+                  ariaLabelledby={field.labelId}
                   value={draft.roots}
                   options={rootsOptions}
                   disabled={state.busy}
@@ -992,6 +995,7 @@
         >
           {#snippet children(field)}<Dropdown
               id={field.controlId}
+              ariaLabelledby={field.labelId}
               value={secretKey}
               options={mcpCredentialNames(secretConnection.configuration)}
               disabled={state.busy}

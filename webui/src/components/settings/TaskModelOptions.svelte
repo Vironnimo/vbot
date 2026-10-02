@@ -58,6 +58,7 @@
       {#if field.type === 'select'}
         <Dropdown
           id={formField.controlId}
+          ariaLabelledby={formField.labelId}
           value={editor.optionValue(taskType, field)}
           options={editor.fieldChoices(taskType, field)}
           ariaLabel={field.label}

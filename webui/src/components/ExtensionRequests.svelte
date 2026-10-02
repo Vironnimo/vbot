@@ -277,6 +277,7 @@
                   {#if input.kind === 'select'}
                     <Dropdown
                       id={field.controlId}
+                      ariaLabelledby={field.labelId}
                       ariaDescribedby={field.describedBy}
                       value={drafts[input.key] ?? ''}
                       options={input.required
