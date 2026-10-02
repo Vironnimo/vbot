@@ -61,7 +61,9 @@ async def _request(adapter: OpenCodeZenAdapter, model_id: str, *, streaming: boo
     ("model_id", "protocol"),
     [
         ("gpt-6-sol", "responses"),
+        ("gpt-6.1-sol", "responses"),
         ("claude-opus-5-5", "messages"),
+        ("claude-sonnet-5-5", "messages"),
         ("glm-5.3-flash", "chat_completions"),
         ("qwen3.8-max", "chat_completions"),
         ("gemini-3.8-flash", "gemini_generate_content"),
@@ -78,6 +80,7 @@ def test_catalog_records_the_reviewed_wire_protocol(model_id: str, protocol: str
     [
         pytest.param("big-pickle", id="free-tier"),
         pytest.param("longcat-2.5-preview-free", id="longcat-free-tier"),
+        pytest.param("fledge-alpha-free", id="fledge-free-tier"),
         pytest.param("claude-opus-4-1", id="retired"),
         pytest.param("future-model", id="unreviewed"),
     ],
@@ -92,6 +95,7 @@ def test_catalog_skips_free_retired_and_unreviewed_models(model_id: str) -> None
     [
         pytest.param("big-pickle", True, False, id="free-tier-send"),
         pytest.param("longcat-2.5-preview-free", True, True, id="longcat-free-tier-stream"),
+        pytest.param("fledge-alpha-free", True, False, id="fledge-free-tier-send"),
         pytest.param("claude-opus-4-1", True, True, id="retired-stream"),
         pytest.param("openai/gpt-5.6-sol", False, False, id="unknown-alias-send"),
     ],
@@ -203,21 +207,45 @@ async def test_each_model_uses_its_reviewed_wire_and_auth_header(
     assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
 
 
+@pytest.mark.parametrize(
+    ("model_id", "selected_effort", "wire_effort"),
+    [
+        ("gpt-6-sol", "none", "none"),
+        ("gpt-6.1-sol", "none", "low"),
+        ("gpt-6.1-sol", "minimal", "low"),
+        ("gpt-6.1-sol", "max", "max"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort() -> None:
+async def test_bundled_gpt6_model_uses_the_responses_wire_with_its_effort(
+    model_id: str, selected_effort: str, wire_effort: str
+) -> None:
     adapter = OpenCodeZenAdapter(zen_config(), "zen-secret", model_lookup=_bundled_lookup())
+    response_format = {"type": "json_schema", "name": "answer", "schema": {"type": "object"}}
 
     with respx.mock:
         route = respx.post(RESPONSES_URL).mock(
             return_value=httpx.Response(200, json=_RESPONSES_BODY)
         )
-        response = await adapter.send(HELLO, model_id="gpt-6-sol", thinking_effort="none")
+        response = await adapter.send(
+            HELLO,
+            model_id=model_id,
+            thinking_effort=selected_effort,
+            response_format=response_format,
+        )
     await adapter.aclose()
 
     payload = json.loads(route.calls.last.request.content)
-    assert payload["model"] == "gpt-6-sol"
-    assert payload["reasoning"]["effort"] == "none"
-    assert adapter.normalize_response(response, model_id="gpt-6-sol")["content"] == "done"
+    assert payload["model"] == model_id
+    assert payload["reasoning"]["effort"] == wire_effort
+    if model_id == "gpt-6.1-sol":
+        assert payload["text"]["format"] == response_format
+        assert adapter.reasoning_replay_policy(model_id) == "none"
+    assert adapter.normalize_response(response, model_id=model_id)["content"] == "done"
+    intent = adapter.describe_reasoning_render(
+        model_lookup=_bundled_lookup(), model_id=model_id, effort=selected_effort
+    )
+    assert intent.effort_level == wire_effort
 
 
 @pytest.mark.parametrize(

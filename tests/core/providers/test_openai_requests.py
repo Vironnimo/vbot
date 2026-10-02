@@ -414,6 +414,7 @@ async def test_codex_effort_snaps_to_the_model_ladder_or_the_subscription_floor(
     assert payload["reasoning"] == {"effort": expected, "summary": "auto"}
 
 
+@pytest.mark.parametrize("model_id", ["gpt-6-astra", "gpt-6.1-sol"])
 @pytest.mark.parametrize(
     ("effort", "expected"),
     [
@@ -425,14 +426,16 @@ async def test_codex_effort_snaps_to_the_model_ladder_or_the_subscription_floor(
     ],
 )
 @pytest.mark.asyncio
-async def test_codex_gpt6_astra_uses_catalog_efforts_and_verified_minimum(effort, expected) -> None:
+async def test_codex_gpt6_uses_catalog_efforts_and_verified_minimum(
+    model_id, effort, expected
+) -> None:
     lookup = bundled_model_lookup()
     adapter = codex_adapter(model_lookup=lookup)
 
     try:
         payload = await codex_payload(
             adapter,
-            model_id="gpt-6-astra",
+            model_id=model_id,
             thinking_effort=effort,
             max_output_tokens=1234,
             top_p=0.9,
@@ -448,38 +451,66 @@ async def test_codex_gpt6_astra_uses_catalog_efforts_and_verified_minimum(effort
     assert "max_output_tokens" not in payload
     assert "top_p" not in payload
     assert all(tool["strict"] is False for tool in payload["tools"])
-    assert adapter.reasoning_replay_policy("gpt-6-astra") == "full_history"
+    assert adapter.reasoning_replay_policy(model_id) == "full_history"
     intent = OpenAIAdapter.describe_reasoning_render(
-        model_lookup=lookup, model_id="gpt-6-astra", effort=effort
+        model_lookup=lookup, model_id=model_id, effort=effort
     )
     assert intent.effort_level == expected
 
 
 @pytest.mark.parametrize(
-    ("make_adapter", "send_payload", "effort", "wire_effort"),
+    ("model_id", "make_adapter", "send_payload", "effort", "wire_effort"),
     [
         pytest.param(
-            platform_adapter, platform_payload, "none", "none", id="platform-explicit-none"
+            "gpt-6-sol",
+            platform_adapter,
+            platform_payload,
+            "none",
+            "none",
+            id="platform-explicit-none",
         ),
-        pytest.param(platform_adapter, platform_payload, "max", "max", id="platform-max"),
-        pytest.param(codex_adapter, codex_payload, "none", "low", id="codex-verified-minimum"),
+        pytest.param(
+            "gpt-6-sol", platform_adapter, platform_payload, "max", "max", id="platform-max"
+        ),
+        pytest.param(
+            "gpt-6-sol", codex_adapter, codex_payload, "none", "low", id="codex-verified-minimum"
+        ),
+        pytest.param(
+            "gpt-6.1-sol",
+            platform_adapter,
+            platform_payload,
+            "none",
+            "low",
+            id="gpt61-platform-minimum",
+        ),
+        pytest.param(
+            "gpt-6.1-sol",
+            platform_adapter,
+            platform_payload,
+            "minimal",
+            "low",
+            id="gpt61-platform-minimal",
+        ),
+        pytest.param(
+            "gpt-6.1-sol", platform_adapter, platform_payload, "max", "max", id="gpt61-platform-max"
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_gpt6_sol_renders_catalog_effort_per_connection(
-    make_adapter, send_payload, effort, wire_effort
+    model_id, make_adapter, send_payload, effort, wire_effort
 ) -> None:
-    """Bundled GPT-6 Sol/Luna profiles use public Responses or Codex Responses per Connection."""
+    """Bundled GPT-6 profiles select Responses and the supported effort per Connection."""
 
     adapter = make_adapter(model_lookup=bundled_model_lookup())
     try:
         payload = await send_payload(
-            adapter, model_id="gpt-6-sol", thinking_effort=effort, tools=CODEX_TOOLS
+            adapter, model_id=model_id, thinking_effort=effort, tools=CODEX_TOOLS
         )
     finally:
         await adapter.aclose()
 
-    assert payload["model"] == "gpt-6-sol"
+    assert payload["model"] == model_id
     assert payload["reasoning"] == {"effort": wire_effort, "summary": "auto"}
     assert payload["store"] is False
     assert all(tool["strict"] is False for tool in payload["tools"])

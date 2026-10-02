@@ -1,6 +1,18 @@
 {
-  "_comment": "Verified Zen Chat profiles: Space Bunny minimum effort (2026-09-24), Qwen3.8 Max binary thinking control (2026-09-28). Both return readable reasoning_content.",
+  "_comment": "Verified Zen profiles: GPT 6.1 Sol Responses minimum effort low, JSON schema support, and ignored historical Reasoning (2026-10-02); Space Bunny Chat minimum effort (2026-09-24), Qwen3.8 Max Chat binary thinking control (2026-09-28). Both Chat models return readable reasoning_content.",
   "models": {
+    "gpt-6.1-sol": {
+      "reasoning_replay": "none",
+      "capabilities": {
+        "json_mode": true
+      },
+      "metadata": {
+        "opencode_zen": {
+          "protocol": "responses",
+          "minimum_reasoning_effort": "low"
+        }
+      }
+    },
     "qwen3.8-max": {
       "name": "Qwen3.8 Max",
       "metadata": {

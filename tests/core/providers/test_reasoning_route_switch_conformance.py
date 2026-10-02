@@ -21,6 +21,7 @@ from core.providers.ollama import OLLAMA_CLOUD_MODE, OllamaAdapter, OllamaCloudA
 from core.providers.openai import CODEX_RESPONSES_MODE, OpenAIAdapter
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.opencode_go import OpenCodeGoAdapter
+from core.providers.opencode_zen import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig, ProviderRegistry
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 from core.sessions.sessions import ChatSessionManager
@@ -404,11 +405,13 @@ def _bundled_adapter(provider_id: str) -> ProviderAdapter:
         return OllamaCloudAdapter(
             config, "test-token", model_lookup=lookup, connection_mode=OLLAMA_CLOUD_MODE
         )
+    if provider_id == "opencode-zen":
+        return OpenCodeZenAdapter(config, "test-token", model_lookup=lookup)
     return OpenCodeGoAdapter(config, "test-token", model_lookup=lookup)
 
 
 def _native_response(provider_id: str, readable_field: str) -> dict[str, Any]:
-    if provider_id == "openai":
+    if provider_id in {"openai", "opencode-zen"}:
         return {"output": NATIVE_RESPONSES_OUTPUT, "status": "completed"}
     return {
         "choices": [
@@ -455,6 +458,8 @@ def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[Ch
     ("provider_id", "model_id", "connection"),
     [
         pytest.param("openai", "gpt-6-astra", "subscription", id="responses"),
+        pytest.param("openai", "gpt-6.1-sol", "subscription", id="gpt61-responses"),
+        pytest.param("opencode-zen", "gpt-6.1-sol", "api-key", id="zen-gpt61-no-replay"),
         pytest.param("opencode-go", "deepseek-flash", "api-key", id="chat-reasoning-content"),
         pytest.param("opencode-go", "longcat-2.5-preview-free", "api-key", id="longcat-replay"),
         pytest.param("ollama-cloud", "deepseek-v4.1-flash", "api-key", id="chat-reasoning"),
@@ -463,7 +468,7 @@ def _persist_and_restore(data_dir: Path, messages: list[ChatMessage]) -> list[Ch
 async def test_bundled_models_replay_persisted_tool_history_only_on_its_original_route(
     tmp_path: Path, provider_id: str, model_id: str, connection: str
 ) -> None:
-    """Native Reasoning replays on the original route and not after a route change.
+    """Native Reasoning follows the Model policy and never crosses a route change.
 
     Chat owns which route changes count (Provider, Model, Connection, account);
     one changed account stands for all of them here.
@@ -476,7 +481,9 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
     response = (
         codex_sse_response(COMPLETED_RESPONSE)
         if provider_id == "openai"
-        else httpx.Response(200, json=CHAT_RESPONSE)
+        else httpx.Response(
+            200, json=COMPLETED_RESPONSE if provider_id == "opencode-zen" else CHAT_RESPONSE
+        )
     )
     payloads: dict[bool, dict[str, Any]] = {}
     try:
@@ -510,14 +517,18 @@ async def test_bundled_models_replay_persisted_tool_history_only_on_its_original
     finally:
         await adapter.aclose()
 
-    profile = "responses" if provider_id == "openai" else "chat-completions"
+    profile = "responses" if provider_id in {"openai", "opencode-zen"} else "chat-completions"
     for same_route, payload in payloads.items():
         assert _wire_tool_ids(profile, payload) == (["call_native"], ["call_native"])
         serialized = json.dumps(payload)
-        assert READABLE_REASONING in serialized
+        if same_route and provider_id == "opencode-zen":
+            assert READABLE_REASONING not in serialized
+        else:
+            # A route change preserves portable Tool context as a quoted note.
+            assert READABLE_REASONING in serialized
         assert "foreign-encrypted" not in serialized
-        if provider_id == "openai":
-            if same_route:
+        if profile == "responses":
+            if same_route and provider_id == "openai":
                 assert payload["input"][1:4] == NATIVE_RESPONSES_OUTPUT
             else:
                 assert "native-encrypted" not in serialized

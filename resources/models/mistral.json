@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2026-09-28T10:08:37.467215+00:00",
+  "fetched_at": "2026-10-02T09:29:59.944510+00:00",
   "models": {
     "codestral-2508": {
       "capabilities": {
@@ -32,6 +32,60 @@
       "max_output_tokens": null,
       "name": "codestral-2508"
     },
+    "codestral-embed": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "codestral-embed"
+    },
+    "codestral-embed-2505": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "codestral-embed"
+    },
     "codestral-latest": {
       "canonical": "mistral/codestral-latest",
       "capabilities": {
@@ -63,6 +117,7 @@
       "name": "codestral-2508",
       "pricing": {
         "rates": {
+          "cache_read": 0.03,
           "input": 0.3,
           "output": 0.9
         },
@@ -497,6 +552,66 @@
       "max_output_tokens": null,
       "name": "codestral-2508"
     },
+    "mistral-embed": {
+      "canonical": "mistral/mistral-embed",
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "family": "mistral-embed",
+      "max_output_tokens": 3072,
+      "name": "mistral-embed-2312",
+      "pricing": {
+        "rates": {
+          "input": 0.1,
+          "output": 0.0
+        },
+        "source": "models.dev:mistral/mistral-embed"
+      }
+    },
+    "mistral-embed-2312": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "embeddings"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [],
+        "supported_voices": [],
+        "task_types": [
+          "text_embedding"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "connections": [
+        "api-key"
+      ],
+      "context_window": 8192,
+      "max_output_tokens": null,
+      "name": "mistral-embed-2312"
+    },
     "mistral-medium": {
       "capabilities": {
         "input_modalities": [
@@ -567,6 +682,7 @@
       "name": "mistral-medium-latest",
       "pricing": {
         "rates": {
+          "cache_read": 0.15,
           "input": 1.5,
           "output": 7.5
         },
@@ -745,6 +861,7 @@
       "name": "mistral-medium-latest",
       "pricing": {
         "rates": {
+          "cache_read": 0.15,
           "input": 1.5,
           "output": 7.5
         },
@@ -786,6 +903,7 @@
       "name": "mistral-small-2603",
       "pricing": {
         "rates": {
+          "cache_read": 0.015,
           "input": 0.15,
           "output": 0.6
         },
@@ -827,6 +945,7 @@
       "name": "mistral-small-2603",
       "pricing": {
         "rates": {
+          "cache_read": 0.015,
           "input": 0.15,
           "output": 0.6
         },

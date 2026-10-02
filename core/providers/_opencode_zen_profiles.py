@@ -20,6 +20,7 @@ _KNOWN_PROTOCOLS = frozenset(
 
 _RESPONSES_MODELS = frozenset(
     {
+        "gpt-6.1-sol",
         "gpt-6-astra",
         "gpt-6-sol",
         "gpt-6-luna",
@@ -54,6 +55,7 @@ _RESPONSES_MODELS = frozenset(
 
 _MESSAGES_MODELS = frozenset(
     {
+        "claude-sonnet-5-5",
         "claude-opus-5-5",
         "claude-fable-5-1",
         "qwen3.8-flash",
@@ -120,6 +122,7 @@ _PROTOCOL_BY_MODEL = {
 
 _FREE_MODELS = frozenset(
     {
+        "fledge-alpha-free",
         "big-pickle",
         "longcat-2.5-preview-free",
         "mimo-v2.6-flash-free",

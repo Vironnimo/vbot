@@ -3025,6 +3025,49 @@
       "release_date": "2026-06-30",
       "temperature": false
     },
+    "anthropic/claude-sonnet-5-5": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1000000,
+      "family": "claude-sonnet",
+      "knowledge": "2026-06",
+      "last_updated": "2026-09-28",
+      "max_output_tokens": 128000,
+      "name": "Claude Sonnet 5.5",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.2,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0
+        },
+        "source": "models.dev:anthropic/claude-sonnet-5-5"
+      },
+      "release_date": "2026-09-28",
+      "temperature": false
+    },
     "arcee-ai/trinity-large-preview": {
       "capabilities": {
         "input_modalities": [
@@ -3911,6 +3954,132 @@
       "release_date": "2026-06-09",
       "temperature": true
     },
+    "cohere/north-small-translate-1-0": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": false,
+        "vision": false
+      },
+      "context_window": 16000,
+      "family": "north",
+      "last_updated": "2026-09-09",
+      "max_output_tokens": 16000,
+      "name": "North Small Translate",
+      "release_date": "2026-09-09",
+      "temperature": true
+    },
+    "cohere/tiny-aya-earth": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 8000,
+      "last_updated": "2026-02-17",
+      "max_output_tokens": 8000,
+      "name": "Tiny Aya Earth",
+      "release_date": "2026-02-17",
+      "temperature": true
+    },
+    "cohere/tiny-aya-fire": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 8000,
+      "last_updated": "2026-02-17",
+      "max_output_tokens": 8000,
+      "name": "Tiny Aya Fire",
+      "release_date": "2026-02-17",
+      "temperature": true
+    },
+    "cohere/tiny-aya-global": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 8000,
+      "last_updated": "2026-02-17",
+      "max_output_tokens": 8000,
+      "name": "Tiny Aya Global",
+      "release_date": "2026-02-17",
+      "temperature": true
+    },
+    "cohere/tiny-aya-water": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": false
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 8000,
+      "last_updated": "2026-02-17",
+      "max_output_tokens": 8000,
+      "name": "Tiny Aya Water",
+      "release_date": "2026-02-17",
+      "temperature": true
+    },
     "deepreinforce/ornith-1.0-31b": {
       "capabilities": {
         "input_modalities": [
@@ -4636,6 +4805,34 @@
       },
       "release_date": "2026-04-21",
       "temperature": false
+    },
+    "google/diffusiongemma-26b-a4b-it": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "supported_parameters": [
+          "temperature"
+        ],
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 262144,
+      "family": "gemma",
+      "knowledge": "2025-01",
+      "last_updated": "2026-07-15",
+      "max_output_tokens": 32768,
+      "name": "DiffusionGemma 26B A4B IT",
+      "release_date": "2026-06-09",
+      "temperature": true
     },
     "google/gemini-2.0-flash": {
       "capabilities": {
@@ -6468,6 +6665,28 @@
       "name": "Ling 3.0 Flash Fin",
       "release_date": "2026-08-27"
     },
+    "inclusionai/ling-3.1-flash": {
+      "capabilities": {
+        "input_modalities": [
+          "text"
+        ],
+        "json_mode": false,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "supported": true
+        },
+        "tools": true,
+        "vision": false
+      },
+      "context_window": 262144,
+      "family": "ling",
+      "last_updated": "2026-09-29",
+      "max_output_tokens": 32768,
+      "name": "Ling 3.1 Flash",
+      "release_date": "2026-09-29"
+    },
     "meituan/longcat-2.0": {
       "capabilities": {
         "input_modalities": [
@@ -7396,6 +7615,7 @@
       "name": "Codestral (latest)",
       "pricing": {
         "rates": {
+          "cache_read": 0.03,
           "input": 0.3,
           "output": 0.9
         },
@@ -7907,6 +8127,7 @@
       "name": "Mistral Large 3",
       "pricing": {
         "rates": {
+          "cache_read": 0.05,
           "input": 0.5,
           "output": 1.5
         },
@@ -7942,6 +8163,7 @@
       "name": "Mistral Large (latest)",
       "pricing": {
         "rates": {
+          "cache_read": 0.05,
           "input": 0.5,
           "output": 1.5
         },
@@ -8016,6 +8238,7 @@
       "name": "Mistral Medium 3.5",
       "pricing": {
         "rates": {
+          "cache_read": 0.15,
           "input": 1.5,
           "output": 7.5
         },
@@ -8055,6 +8278,7 @@
       "name": "Mistral Medium (latest)",
       "pricing": {
         "rates": {
+          "cache_read": 0.15,
           "input": 1.5,
           "output": 7.5
         },
@@ -8164,6 +8388,7 @@
       "name": "Mistral Small 4",
       "pricing": {
         "rates": {
+          "cache_read": 0.015,
           "input": 0.15,
           "output": 0.6
         },
@@ -8232,6 +8457,7 @@
       "name": "Mistral Small (latest)",
       "pricing": {
         "rates": {
+          "cache_read": 0.015,
           "input": 0.15,
           "output": 0.6
         },
@@ -11004,6 +11230,61 @@
         "source": "models.dev:openai/gpt-6-sol"
       },
       "release_date": "2026-09-22",
+      "temperature": false
+    },
+    "openai/gpt-6.1-sol": {
+      "capabilities": {
+        "input_modalities": [
+          "text",
+          "image",
+          "pdf"
+        ],
+        "json_mode": true,
+        "output_modalities": [
+          "text"
+        ],
+        "reasoning": {
+          "control": "levels",
+          "levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "supported": true
+        },
+        "tools": true,
+        "vision": true
+      },
+      "context_window": 1050000,
+      "family": "gpt-sol",
+      "knowledge": "2026-04-30",
+      "last_updated": "2026-09-29",
+      "max_output_tokens": 128000,
+      "name": "GPT-6.1 Sol",
+      "pricing": {
+        "rates": {
+          "cache_read": 0.1,
+          "cache_write": 2.5,
+          "input": 2.0,
+          "output": 10.0,
+          "tiers": [
+            {
+              "cache_read": 0.2,
+              "cache_write": 5.0,
+              "input": 4.0,
+              "output": 15.0,
+              "tier": {
+                "size": 272000,
+                "type": "context"
+              }
+            }
+          ]
+        },
+        "source": "models.dev:openai/gpt-6.1-sol"
+      },
+      "release_date": "2026-09-29",
       "temperature": false
     },
     "openai/gpt-image-1": {

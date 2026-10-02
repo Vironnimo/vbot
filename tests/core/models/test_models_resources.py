@@ -232,10 +232,12 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "muse-spark-1.3-contributor",
         ),
         "openai": (
+            "glm-5.1",
             "glm-5.3-flash",
             "glm-5.3",
             "glm-5.2",
             "kimi-k3",
+            "kimi-k2.6",
             "kimi-k2.7-code",
             "longcat-2.0",
             "longcat-2.5-preview-free",
@@ -251,13 +253,17 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
             "hy4-preview",
             "hy3",
             "space-bunny-free",
+            "omen-alpha",
         ),
         "anthropic": (
+            "minimax-m2.5",
             "minimax-m3",
             "minimax-m2.7",
             "qwen3.8-max",
             "qwen3.8-flash",
             "qwen3.7-plus",
+            "qwen3.7-max",
+            "qwen3.6-plus",
         ),
     }
     expected = {
@@ -265,7 +271,7 @@ def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> 
         for protocol, model_ids in expected_by_protocol.items()
         for model_id in model_ids
     }
-    assert len(expected) == 30
+    assert len(expected) == 36
 
     assert {
         model_id: registry.get("opencode-go", model_id).metadata["opencode_go"]["protocol"]
@@ -280,9 +286,16 @@ def test_opencode_go_response_fields_are_not_history_field_guesses(
     """Profiles describe inbound response carriers, not outbound replay."""
 
     expected = {
-        **dict.fromkeys(("kimi-k3", "hy3", "hy4-preview"), "reasoning"),
+        **dict.fromkeys(("kimi-k2.6", "kimi-k3", "hy3", "hy4-preview"), "reasoning"),
         **dict.fromkeys(
-            ("mimo-v2.5", "mimo-v2.5-pro", "mimo-v2.6-flash", "mimo-v2.6-pro"),
+            (
+                "glm-5.1",
+                "omen-alpha",
+                "mimo-v2.5",
+                "mimo-v2.5-pro",
+                "mimo-v2.6-flash",
+                "mimo-v2.6-pro",
+            ),
             "reasoning_content",
         ),
     }
@@ -494,10 +507,11 @@ def test_gpt6_astra_profile_loads(registry: ModelRegistry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("model_id", "short_rates", "long_rates"),
+    ("model_id", "short_rates", "long_rates", "supports_none"),
     [
-        ("gpt-6-sol", (2.0, 0.2, 2.5, 10.0), (4.0, 0.4, 5.0, 15.0)),
-        ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75)),
+        ("gpt-6-sol", (2.0, 0.2, 2.5, 10.0), (4.0, 0.4, 5.0, 15.0), True),
+        ("gpt-6-luna", (0.1, 0.01, 0.125, 0.5), (0.2, 0.02, 0.25, 0.75), True),
+        ("gpt-6.1-sol", (2.0, 0.1, 2.5, 10.0), (4.0, 0.2, 5.0, 15.0), False),
     ],
 )
 def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider(
@@ -505,6 +519,7 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     model_id: str,
     short_rates: tuple[float, ...],
     long_rates: tuple[float, ...],
+    supports_none: bool,
 ) -> None:
     model = registry.get("openai", model_id)
 
@@ -516,9 +531,13 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     assert model.capabilities.output_modalities == ("text",)
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is True
-    assert model.capabilities.reasoning.levels == ("none", "low", "medium", "high", "xhigh", "max")
+    levels = ("low", "medium", "high", "xhigh", "max")
+    assert model.capabilities.reasoning.levels == (("none", *levels) if supports_none else levels)
+    api_policy = {"protocol": "responses"}
+    if not supports_none:
+        api_policy["minimum_reasoning_effort"] = "low"
     assert model.metadata["openai"]["wire_policies"] == {
-        "api-key": {"protocol": "responses"},
+        "api-key": api_policy,
         "subscription": {"protocol": "responses", "minimum_reasoning_effort": "low"},
     }
     assert model.pricing is not None
@@ -537,7 +556,12 @@ def test_gpt6_loads_with_official_limits_and_pricing_on_every_published_provider
     zen = registry.get("opencode-zen", model_id)
     assert zen.connections == ("api-key", "account")
     assert zen.metadata["opencode_zen"]["protocol"] == "responses"
+    assert zen.capabilities.reasoning.levels == model.capabilities.reasoning.levels
     assert zen.capabilities.tools is True
+    if not supports_none:
+        assert zen.metadata["opencode_zen"]["minimum_reasoning_effort"] == "low"
+        assert zen.capabilities.json_mode is True
+        assert zen.reasoning_replay == "none"
     openrouter = registry.get("openrouter", f"openai/{model_id}")
     assert openrouter.connections == ("api-key",)
     assert openrouter.capabilities.tools is True

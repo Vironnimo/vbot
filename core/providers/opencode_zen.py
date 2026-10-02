@@ -322,6 +322,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         policy: dict[str, Any] = {}
         if protocol == PROTOCOL_RESPONSES:
             policy["protocol"] = OPENAI_RESPONSES_PROTOCOL
+            minimum = self._profile_value(model_id, "minimum_reasoning_effort")
+            if minimum is not None:
+                policy["minimum_reasoning_effort"] = minimum
         return policy
 
     def _model_protocol(self, model_id: str) -> str:
