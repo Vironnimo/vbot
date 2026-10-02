@@ -667,8 +667,6 @@ def _read_skill_metadata(skill_file: Path) -> tuple[SkillMetadata | None, Valida
 
 def _scan_skill_resources(skill_dir: Path) -> list[str]:
     """List regular package resources, including non-conventional support directories."""
-    import os
-
     from core.skills._packages import excluded, is_redirect
 
     def ordinary_entry(path: Path) -> bool:
@@ -679,8 +677,8 @@ def _scan_skill_resources(skill_dir: Path) -> list[str]:
             return False
 
     resources: list[str] = []
-    for directory, subdirs, filenames in os.walk(skill_dir, followlinks=False):
-        base = Path(directory)
+    # Path.walk lists links, Windows junctions included, among the files.
+    for base, subdirs, filenames in skill_dir.walk():
         subdirs[:] = [
             name for name in subdirs if not excluded(name) and ordinary_entry(base / name)
         ]

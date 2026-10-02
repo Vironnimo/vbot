@@ -3,6 +3,7 @@ they go, source images, and what refused or failed calls say."""
 
 from __future__ import annotations
 
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -237,6 +238,17 @@ async def test_the_call_reaches_the_image_model(
                     ("data:image/png;base64,iVBORw0KGgo=", "data: URLs"),
                 ]
             )
+        ),
+        pytest.param(
+            {"prompt": "a", "source_images": ["file://fileserver.example/share/cat.png"]},
+            failure(
+                "invalid_arguments",
+                "source_images must be local image files; web addresses such as "
+                "file://fileserver.example/share/cat.png cannot be opened. Save the image to a "
+                "file first, then pass that file's path.",
+            ),
+            marks=pytest.mark.skipif(sys.platform == "win32", reason="a UNC path on Windows"),
+            id="file-url-of-another-computer",
         ),
     ],
 )

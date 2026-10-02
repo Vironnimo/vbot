@@ -7,7 +7,6 @@ import hashlib
 import hmac
 import html
 import json
-import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -434,11 +433,11 @@ class FileDelivery:
         entries: list[tuple[str, int, int]] = []
         count = 0
         try:
-            for directory, dirs, files in os.walk(root, followlinks=False):
+            # Path.walk lists links, Windows junctions included, among the files.
+            for base, dirs, files in root.walk():
                 count += len(dirs) + len(files)
                 if count > PREVIEW_MAX_ENTRIES:
                     raise ValueError("Preview folder is too large; use a dedicated website folder")
-                base = Path(directory)
                 dirs[:] = sorted(
                     name
                     for name in dirs

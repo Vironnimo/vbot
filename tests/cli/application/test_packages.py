@@ -297,6 +297,11 @@ def test_an_unsigned_or_forged_archive_stages_only_in_explicit_local_mode(
     ("archive_options", "message"),
     [
         pytest.param({"additions": {"../escape": b"x"}}, "Unsafe", id="path-escape"),
+        pytest.param({"additions": {"app/c:x.py": b"x"}}, "Unsafe", id="drive-colon"),
+        *(
+            pytest.param({"additions": {f"app/{name}": b"x"}}, "Reserved", id=f"reserved-{index}")
+            for index, name in enumerate(["aux.py", "CONIN$", "lpt¹.log", "nul .txt", "a|b"])
+        ),
         pytest.param({"additions": {"app/cli/main.py": b"duplicate"}}, "Duplicate", id="duplicate"),
         pytest.param({"additions": {"app/CLI/main.py": b"case"}}, "Duplicate", id="case-collision"),
         pytest.param({"additions": {"unexpected.txt": b"x"}}, "inventory", id="not-inventoried"),

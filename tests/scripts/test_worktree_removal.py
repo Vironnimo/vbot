@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests.directory_links import link_directory
 from tests.scripts.worktree_helpers import (
     _commit_file,
     _create_task_worktree,
@@ -351,7 +354,7 @@ def test_cmd_delete_deletes_only_the_branch_a_valid_marker_manages(
     assert commands == [known[step] for step in expected]
 
 
-def test_remove_directory_tree_clears_readonly_files(tmp_path):
+def test_remove_directory_tree_clears_readonly_files(tmp_path, monkeypatch):
     module = _load_worktree_module()
 
     tree = tmp_path / "tree"
@@ -359,11 +362,31 @@ def test_remove_directory_tree_clears_readonly_files(tmp_path):
     locked_file = tree / "readonly.txt"
     locked_file.write_text("x", encoding="utf-8")
     locked_file.chmod(0o444)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "kept.txt").write_text("kept", encoding="utf-8")
+    link_directory(tree / "link", outside)
+    # The link refuses its first removal, as a read-only link does on Windows; clearing
+    # that attribute must never reach the read-only directory the link points at.
+    outside.chmod(stat.S_IREAD | stat.S_IEXEC)
+    real_unlink, refused = os.unlink, []
+
+    def unlink(path, *args, **kwargs):
+        if Path(path).name == "link" and not refused:
+            refused.append(path)
+            raise PermissionError(errno.EACCES, "read-only link", str(path))
+        real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", unlink)
 
     result = module._remove_directory_tree(tree)
 
     assert result is None
     assert not tree.exists()
+    assert len(refused) == 1
+    assert not os.stat(outside).st_mode & stat.S_IWRITE
+    assert (outside / "kept.txt").read_text(encoding="utf-8") == "kept"
+    outside.chmod(stat.S_IRWXU)
 
 
 def test_sweep_trash_directories_removes_only_trash_dirs(tmp_path):

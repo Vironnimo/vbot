@@ -265,8 +265,11 @@ class SkillAuthoringService:
         """Delete a Skill directory and all support files."""
         with self._write_lock:
             skill_dir = self._existing_skill_dir(target_root, skill_name)
+            # Like rmtree, Path.walk never enters a link, Windows junctions included, so
+            # files behind one are neither reported nor read; rmtree removes only the link.
+            entries = (base / name for base, _, names in skill_dir.walk() for name in names)
             files = sorted(
-                (path for path in skill_dir.rglob("*") if path.is_file() and not path.is_symlink()),
+                (path for path in entries if path.is_file() and not path.is_symlink()),
                 key=lambda path: (path.name != SKILL_FILENAME or path.parent != skill_dir, path),
             )
             changes = tuple(

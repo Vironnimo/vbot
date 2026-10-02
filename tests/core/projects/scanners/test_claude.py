@@ -11,6 +11,7 @@ from core.projects.scanners.claude import (
     CLAUDE_FORMAT_KEY,
     ClaudeDetector,
 )
+from tests.directory_links import link_directory
 
 _BODY_WITH_BRACES = "# Reviewer\n\nUse {include:SOUL.md} and {project_files} literally.\n"
 
@@ -88,16 +89,21 @@ def test_detect_collects_nested_agents_only_inside_the_known_location(tmp_path: 
     # No .claude/agents/ at all is normal, not an error.
     assert ClaudeDetector().detect(tmp_path) == []
 
-    # Claude Code allows Agent subfolders; files elsewhere are never Agents.
+    # Claude Code allows Agent subfolders; files elsewhere, also behind a linked folder,
+    # are never Agents.
     _write_agent(tmp_path, "zeta.md", "---\nname: zeta\n---\nBody.\n")
     _write_agent(tmp_path, "sub/alpha.md", "---\nname: alpha\n---\nBody.\n")
     _write_agent(tmp_path, "beta.md", "---\nname: beta\n---\nBody.\n")
     (tmp_path / ".claude" / "notes.md").write_text("not an agent", encoding="utf-8")
     (tmp_path / "README.md").write_text("not an agent", encoding="utf-8")
+    agents_dir = tmp_path.joinpath(*CLAUDE_AGENTS_SUBPATH)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "linked.md").write_text("---\nname: linked\n---\nBody.\n", encoding="utf-8")
+    link_directory(agents_dir / "linked", elsewhere)
 
     detected = ClaudeDetector().detect(tmp_path)
 
-    agents_dir = tmp_path.joinpath(*CLAUDE_AGENTS_SUBPATH)
     assert [item.source_path.relative_to(agents_dir).as_posix() for item in detected] == [
         "beta.md",
         "sub/alpha.md",

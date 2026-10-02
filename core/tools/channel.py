@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
-from urllib.request import url2pathname
 
 from core.attachments.attachments import _sniff_mime
 from core.channels import (
@@ -53,6 +51,7 @@ from core.tools.tools import (
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.paths import file_url_path
 
 if TYPE_CHECKING:
     from core.channels import ChannelService
@@ -831,12 +830,16 @@ def _build_file_data(
             raise ChannelSendRefusedError(f"file_paths[{index}] must be a non-empty string")
         path_text = raw_path.strip()
         if path_text.lower().startswith("file://"):
-            path_text = url2pathname(urlsplit(path_text).path)
-        elif _WEB_ADDRESS.match(path_text):
+            # None for a file on another computer, which only Windows paths can name.
+            local_path = file_url_path(path_text)
+        else:
+            local_path = None if _WEB_ADDRESS.match(path_text) else path_text
+        if local_path is None:
             raise ChannelSendRefusedError(
                 f'{REFUSAL_PREFIX}file_paths "{path_text}" is a web address, not a file on this '
                 "computer. Send the file's local path, or put the link in message."
             )
+        path_text = local_path
         resolved_path = context.resolve_path(path_text)
         if resolved_path.is_dir():
             raise ChannelSendRefusedError(

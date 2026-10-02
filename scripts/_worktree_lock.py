@@ -9,7 +9,6 @@ window cannot end under the merge.
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import random
@@ -72,7 +71,7 @@ def _acquire_file_lock(lock_file) -> bool:
 
             msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
         else:
-            fcntl = importlib.import_module("fcntl")
+            import fcntl
 
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
@@ -89,7 +88,7 @@ def _release_file_lock(lock_file) -> None:
 
             msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
         else:
-            fcntl = importlib.import_module("fcntl")
+            import fcntl
 
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except OSError:

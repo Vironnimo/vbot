@@ -72,6 +72,10 @@ def test_move_tree_across_volumes_copies_then_removes_the_original(
     source = make_tree(tmp_path / "source")
     read_only = source / "sub" / "nested.txt"
     read_only.chmod(stat.S_IREAD)  # like ``.git`` objects, which block a plain rmtree on Windows
+    outside = make_tree(tmp_path / "outside")
+    outside_expected = contents(outside)
+    # Copied like a rename moves it: a link, even a Windows junction, stays a link.
+    _link_directory(source / "sub" / "linked", outside)
     expected = contents(source)
     volume = other_volume()
 
@@ -79,7 +83,11 @@ def test_move_tree_across_volumes_copies_then_removes_the_original(
     (volume / "moved" / "sub" / "nested.txt").chmod(stat.S_IWRITE | stat.S_IREAD)
 
     assert contents(volume / "moved") == expected
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["other"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["other", "outside"]
+    link = volume / "moved" / "sub" / "linked"
+    assert link.is_symlink() or link.is_junction()
+    assert link.resolve() == outside.resolve()
+    assert contents(outside) == outside_expected
 
 
 @pytest.mark.parametrize("failure", ["rename-refused", "copy-fails", "original-held-open"])

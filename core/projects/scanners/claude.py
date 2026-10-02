@@ -87,7 +87,8 @@ class ClaudeDetector:
         """Read ``.claude/agents/**/*.md`` under ``project_root``.
 
         Recursive within the known location only (Claude Code allows agent
-        subfolders); results are **sorted stably by relative POSIX path** so the
+        subfolders); a linked folder, Windows junctions included, is never
+        entered. Results are **sorted stably by relative POSIX path** so the
         order is deterministic across hosts. A missing location yields an empty
         list. Each file becomes either a parsed :class:`ScannedAgent` or a parse
         failure (unslugifiable name / unreadable file) for the report.
@@ -96,8 +97,9 @@ class ClaudeDetector:
         if not agents_dir.is_dir():
             return []
 
+        entries = (base / name for base, _, names in agents_dir.walk() for name in names)
         agent_files = sorted(
-            (path for path in agents_dir.rglob(_AGENT_FILE_GLOB) if path.is_file()),
+            (path for path in entries if path.match(_AGENT_FILE_GLOB) and path.is_file()),
             key=lambda path: path.relative_to(agents_dir).as_posix(),
         )
         return [self._read_agent_file(path) for path in agent_files]

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import os
 import shutil
 import sys
@@ -10,7 +9,7 @@ import threading
 import time
 from contextvars import ContextVar
 from types import TracebackType
-from typing import Any, Literal, Self, TextIO, cast
+from typing import Literal, Self, TextIO
 
 from cli.formatting import output_mode
 
@@ -34,17 +33,15 @@ def operation_progress(message: str) -> None:
 
 def _windows_color(stream: TextIO) -> bool:
     """Enable ANSI processing on a real Windows console, otherwise leave it plain."""
-    if os.name != "nt":
+    if sys.platform != "win32":
         return True
     import ctypes
-
-    msvcrt = importlib.import_module("msvcrt")
-    windows_ctypes = cast(Any, ctypes)
+    import msvcrt
 
     try:
         handle = ctypes.c_void_p(msvcrt.get_osfhandle(stream.fileno()))
         mode = ctypes.c_ulong()
-        kernel = windows_ctypes.windll.kernel32
+        kernel = ctypes.windll.kernel32
         return bool(
             kernel.GetConsoleMode(handle, ctypes.byref(mode))
             and kernel.SetConsoleMode(handle, mode.value | 0x0004)
