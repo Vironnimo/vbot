@@ -181,7 +181,11 @@ export function createChatReflections({
     try {
       const result = await operations.undoLearningChanges(agentId, runId);
       applyRunChanges(sessionState, runId, result);
-      updateDetails(sessionState, runId, { undoing: false, loading: false });
+      updateDetails(sessionState, runId, {
+        undoing: false,
+        loading: false,
+        loadError: '',
+      });
       return true;
     } catch (error) {
       const data = error?.details?.data;
