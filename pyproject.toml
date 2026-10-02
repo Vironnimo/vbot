@@ -100,7 +100,6 @@ module = [
     "pyopen_wakeword",
     "pyopen_wakeword.*",
     "onnxruntime",
-    "onnxruntime.*",
     "sounddevice",
     "soxr",
     "winpty",
