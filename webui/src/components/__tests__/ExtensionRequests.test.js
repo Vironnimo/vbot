@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { setApplicationTimeZone } from '../../lib/dateTimePrefs.svelte.js';
 import { init, t } from '../../lib/i18n.js';
+import { formatAbsoluteTime, formatRelativeTime } from '../../lib/timeText.js';
 
 const listRequests = vi.fn();
 const operation = vi.fn();
@@ -60,7 +61,7 @@ function mountRequests() {
 }
 
 // Mounts the request surface with one pending elicitation and opens it.
-async function openRequest(payload) {
+async function openRequest(payload, fields = {}) {
   listRequests.mockResolvedValue({
     requests: [
       {
@@ -70,6 +71,7 @@ async function openRequest(payload) {
         response_operation: 'respond',
         kind: 'elicitation',
         payload,
+        ...fields,
       },
     ],
   });
@@ -185,17 +187,28 @@ describe('Extension requests', () => {
 
   it('converts typed answers into an accepted response and closes the dialog', async () => {
     operation.mockResolvedValue({ answered: true });
-    const dialog = await openRequest({
-      message: 'test-owned-question',
-      requestedSchema: {
-        properties: {
-          name: { type: 'string', title: 'Name' },
-          count: { type: 'integer' },
-          selected: { type: 'boolean' },
-          values: { type: 'array' },
+    const expiresAt = new Date(Date.now() + 3 * 3600 * 1000).toISOString();
+    const dialog = await openRequest(
+      {
+        message: 'test-owned-question',
+        requestedSchema: {
+          properties: {
+            name: { type: 'string', title: 'Name' },
+            count: { type: 'integer' },
+            selected: { type: 'boolean' },
+            values: { type: 'array' },
+          },
         },
       },
-    });
+      { expires_at: expiresAt },
+    );
+    // The time the request stops waiting, absolute and from now.
+    expect(dialog.textContent).toContain(
+      t('extensions.inputExpires', {
+        time: formatAbsoluteTime(expiresAt),
+        distance: formatRelativeTime(expiresAt),
+      }),
+    );
     expect(document.body.textContent).toContain(
       t('extensions.inputWaiting', {
         count: 1,

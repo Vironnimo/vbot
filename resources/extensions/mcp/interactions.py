@@ -7,11 +7,13 @@ import copy
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jsonschema import Draft202012Validator
 
 from core.utils.ids import new_id
+from core.utils.timestamps import format_canonical_timestamp
 
 # How long a server's request for user input waits for the user before it expires.
 INPUT_REQUEST_TTL_SECONDS = 600.0
@@ -29,6 +31,8 @@ class PendingInput:
     payload: dict[str, Any]
     response: asyncio.Future[dict[str, Any]]
     session_id: str | None = None
+    # When the input stops waiting for an answer (canonical UTC), if it does.
+    expires_at: str | None = None
 
 
 class InputRequests:
@@ -54,14 +58,29 @@ class InputRequests:
         kind: str,
         payload: dict[str, Any],
         session_id: str | None = None,
+        *,
+        expires_in: float | None = None,
     ) -> dict[str, Any]:
+        """Wait for the user's answer to a new pending input.
+
+        A server's request expires after the configured ttl; any other input
+        waits until its caller stops, and *expires_in* states when that will be
+        (a sign-in's own deadline), shown as ``expires_at``.
+        """
         identifier = new_id("req", claim=lambda candidate: candidate not in self._pending)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        ttl = self._ttl if kind in _SERVER_REQUESTS else None
+        lifetime = expires_in if ttl is None else ttl
+        expires_at = (
+            None
+            if lifetime is None
+            else format_canonical_timestamp(datetime.now(UTC) + timedelta(seconds=lifetime))
+        )
         pending = PendingInput(
-            identifier, connection, kind, copy.deepcopy(payload), future, session_id
+            identifier, connection, kind, copy.deepcopy(payload), future, session_id, expires_at
         )
         self._pending[identifier] = pending
-        expiry = asyncio.timeout(self._ttl if kind in _SERVER_REQUESTS else None)
+        expiry = asyncio.timeout(ttl)
         try:
             self._changed(identifier)
             async with expiry:
@@ -89,6 +108,7 @@ class InputRequests:
                 "kind": item.kind,
                 "payload": copy.deepcopy(item.payload),
                 "session_id": item.session_id,
+                "expires_at": item.expires_at,
             }
             for item in self._pending.values()
         ]

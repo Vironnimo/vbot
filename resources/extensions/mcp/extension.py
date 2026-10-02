@@ -15,6 +15,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
+from http import HTTPStatus
 from typing import Any
 
 from core.extensions import ExtensionAPI
@@ -67,6 +68,7 @@ from ._management import (
     register_management,
 )
 from ._oauth import forget_sign_in, sign_in_status
+from ._tasks import TaskEndedError
 from ._views import compact
 from .client import (
     READ_OPERATIONS,
@@ -232,11 +234,11 @@ class MCPService:
         about = self.connections.get(runner.id, runner.config).get("description")
         disabled = MCP_MESSAGES["disabled"].format(connection=runner.id)
         # A remote Tool is ready while its connection is up; naming one before
-        # tells the Agent why it cannot run and what to do.
+        # tells the Agent why it cannot run and what to do. A disconnected one
+        # can run again through the connection Tool, which reconnects.
+        enabled = bool(self.connections.get(runner.id, runner.config).get("enabled"))
         follower_hint = (
-            disabled
-            if not self.connections.get(runner.id, runner.config).get("enabled")
-            else MCP_MESSAGES["disconnected"].format(connection=runner.id)
+            MCP_MESSAGES["disconnected"].format(connection=runner.id) if enabled else disabled
         )
         declarations = [
             {
@@ -264,6 +266,7 @@ class MCPService:
                     "handler": self._handler(runner.id, tool["name"], copy.deepcopy(parameters)),
                     "ready": lambda: runner.state == "connected",
                     "readiness_hint": follower_hint,
+                    "readiness_retryable": enabled,
                     "parallel_safe": False,
                     "open_input_schema": True,
                     "deferred": True,
@@ -386,7 +389,7 @@ class MCPService:
             try:
                 await runner.invoke("catalog", {})
             except ValueError as error:
-                return self._unreachable(runner, error)
+                return self._not_sent(runner, error)
             # Reconnecting can publish new Tools; resolve followers against that catalog.
             gone = self._gone(runner.id)
             if gone is not None:
@@ -439,8 +442,17 @@ class MCPService:
             return tool_failure("invalid_arguments", str(error))
         return tool_success(page)
 
-    def _unreachable(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
+    def _not_sent(self, runner: ConnectionRunner, error: Exception) -> dict[str, Any]:
+        """The failure for a request that never ran: refused by the server, or not sent."""
         detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
+        refused = error.refused if isinstance(error, InvocationNotSentError) else None
+        if refused is not None:
+            message = "rate_limited" if refused == HTTPStatus.TOO_MANY_REQUESTS else "refused"
+            return tool_failure(
+                "mcp_request_refused",
+                MCP_MESSAGES[message].format(connection=runner.id, detail=detail),
+                retryable=message == "rate_limited",
+            )
         return tool_failure(
             "mcp_request_failed",
             MCP_MESSAGES["unreachable"].format(connection=runner.id, detail=detail),
@@ -518,9 +530,12 @@ class MCPService:
         except InvocationNotSentError as error:
             if error.denied:
                 return tool_failure("mcp_access_denied", MCP_MESSAGES["access_denied"])
-            return self._unreachable(runner, error)
+            return self._not_sent(runner, error)
         except InvalidToolResultError as error:
             return await self._invalid_result(runner, context, error, source=source)
+        except TaskEndedError as error:
+            detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
+            return tool_failure("mcp_task_ended", MCP_MESSAGES["task_ended"].format(detail=detail))
         except ValueError as error:
             detail = runner.redact(str(error))[:_DETAIL_CHARACTERS]
             if operation in READ_OPERATIONS:

@@ -11,6 +11,7 @@
     validateInput,
   } from '$lib/extensionInputs.js';
   import { t } from '$lib/i18n.js';
+  import { formatAbsoluteTime, formatRelativeTime } from '$lib/timeText.js';
   import Banner from './ui/Banner.svelte';
   import Button from './ui/Button.svelte';
   import Checkbox from './ui/Checkbox.svelte';
@@ -186,6 +187,14 @@
         {:else}
           <p class="extension-input__message">
             {selected.payload?.message ?? t('extensions.signInHelp')}
+          </p>
+        {/if}
+        {#if selected.expires_at}
+          <p class="extension-input__hint">
+            {t('extensions.inputExpires', {
+              time: formatAbsoluteTime(selected.expires_at),
+              distance: formatRelativeTime(selected.expires_at),
+            })}
           </p>
         {/if}
         {#if selected.kind === 'oauth'}

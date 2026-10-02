@@ -199,6 +199,15 @@ MCP_MESSAGES = {
         "The next call reconnects: try once more, and if it fails again, tell the user that "
         "the MCP server {connection} cannot be reached."
     ),
+    "refused": (
+        "The MCP server {connection} refused this request ({detail}), so nothing was run. If "
+        "the refusal concerns the call, correct it and send it again; otherwise tell the user "
+        "that the MCP server {connection} refuses it."
+    ),
+    "rate_limited": (
+        "The MCP server {connection} refused this request because it receives too many "
+        "({detail}), so nothing was run. Wait a moment, then send it again."
+    ),
     "disconnected": (
         "The MCP connection {connection} is not connected, so nothing was run. Call this tool "
         "again through mcp_{connection}, which reconnects first. If it cannot connect, tell the "
@@ -230,6 +239,12 @@ MCP_MESSAGES = {
         "{detail}. No result came back, so whether the call changed the application is "
         "unknown. Before you repeat a call that changes something, check the application's "
         "current state. A call that only reads is safe to repeat."
+    ),
+    "task_ended": (
+        "{detail}. The MCP server ran this call in the background, and it ended without a "
+        "result. Work it did before it ended may remain: before you repeat a call that "
+        "changes something, check the application's current state. A call that only reads "
+        "is safe to repeat."
     ),
     "read_unconfirmed": (
         "{detail}. This read returned no result and changed nothing; try it once more, and "
