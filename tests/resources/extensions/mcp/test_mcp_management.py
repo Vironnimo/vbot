@@ -279,6 +279,8 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
     service, _registry = await start_service(host)
     try:
         await service.manage("save", {"connection": referencing})
+        status = await service.manage("status", {"id": "example"})
+        assert status["missing_credentials"] == ["EXAMPLE_TOKEN"]
 
         with caplog.at_level(logging.INFO):
             result = await service.manage(
@@ -287,7 +289,74 @@ async def test_setting_a_credential_logs_its_variable_name_but_never_its_value(
             )
 
         assert result["set"] is True
+        assert (await service.manage("status", {"id": "example"}))["missing_credentials"] == []
         assert "EXAMPLE_TOKEN" in caplog.text
         assert "secret-sentinel" not in caplog.text
     finally:
         await service.close()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_one(
+    host, monkeypatch, caplog
+):
+    started: list[ConnectionRunner] = []
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
+    service, registry = await start_service(host)
+    try:
+        await service.manage("save", {"connection": _CONNECTION})
+        first = service.runners["example"]
+        first.catalog = dict(_CATALOG)
+        service._publish(first, first.catalog)
+        remote = remote_tool_name("example", "get_scene_info")
+
+        with caplog.at_level(logging.INFO):
+            await service.manage("reconnect", {"id": "example"})
+
+        # A new client, and for a local server a new process, replaces the old one.
+        assert started == [first, service.runners["example"]]
+        assert service.runners["example"] is not first
+        assert "MCP connection restarted (connection=example)" in caplog.text
+        # Its Tools stay registered meanwhile, not ready until it is connected again.
+        assert registry.get(remote) is not None
+        assert remote not in _tool_names(registry, ready_only=True)
+        await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
+        with pytest.raises(ValueError, match="disabled"):
+            await service.manage("reconnect", {"id": "example"})
+    finally:
+        await service.close()
+
+
+@pytest.mark.asyncio
+async def test_connection_and_job_changes_reach_accessors_in_revision_order(host, monkeypatch):
+    changes: list[tuple[str, list[str], int]] = []
+    monkeypatch.setattr(ConnectionRunner, "start", lambda runner: None)
+    service, _registry = await start_service(
+        replace(host, publish_change=lambda *change: changes.append(change))
+    )
+    try:
+        await service.manage("save", {"connection": _CONNECTION})
+        runner = service.runners["example"]
+
+        async def invoke(operation, arguments, invocation_context=None):
+            return {"tools": []} if operation == "catalog" else {}
+
+        monkeypatch.setattr(runner, "invoke", invoke)
+        runner.state = "connected"
+        runner.state = "connected"
+        job = await service.manage("test", {"id": "example"})
+        assert (await service.jobs.wait(job["job_id"]))["state"] == "completed"
+    finally:
+        await service.close()
+    closed = len(changes)
+    runner.state = "failed"
+
+    # A saved connection, a new state (not a repeated one) and a finished job each
+    # tell accessors what to read again; a closed service publishes nothing.
+    assert [(resource, ids) for resource, ids, _revision in changes] == [
+        ("connections", ["example"]),
+        ("connections", ["example"]),
+        ("jobs", [job["job_id"]]),
+    ]
+    assert [revision for *_change, revision in changes] == [1, 2, 3]
+    assert len(changes) == closed

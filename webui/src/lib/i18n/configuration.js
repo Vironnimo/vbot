@@ -5,10 +5,49 @@ export default Object.freeze({
   'extensions.inputTitle': 'Request from {name}',
   'extensions.signInHelp':
     'Open the sign-in page and sign in. vBot completes the sign-in when the browser returns to it. If the browser shows an error page instead, paste its complete address below.',
-  'extensions.openRequest': 'Open requested page',
   'extensions.redirectUrl': 'Redirected address',
   'extensions.sendResponse': 'Send response',
   'extensions.declineInput': 'Decline',
+  'extensions.declineHelp': 'Refuse the request.',
+  'extensions.cancelInput': 'Cancel request',
+  'extensions.cancelHelp': 'End the request without an answer.',
+  'extensions.noChoice': 'No choice',
+  'extensions.inputTimeZone': 'Time in {zone}.',
+  'extensions.inputRequired': 'Enter a value.',
+  'extensions.inputChoicesMin': 'Choose at least {count}.',
+  'extensions.inputChoicesMax': 'Choose at most {count}.',
+  'extensions.inputJson': 'Enter a valid JSON value.',
+  'extensions.inputNumber': 'Enter a number.',
+  'extensions.inputInteger': 'Enter a whole number.',
+  'extensions.inputMinimum': 'Enter {minimum} or more.',
+  'extensions.inputMaximum': 'Enter {maximum} or less.',
+  'extensions.inputMinLength': 'Enter at least {count} characters.',
+  'extensions.inputMaxLength': 'Enter at most {count} characters.',
+  'extensions.inputEmail': 'Enter an email address.',
+  'extensions.inputUri':
+    'Enter a complete address, such as https://example.com.',
+  'extensions.inputDate': 'Enter a valid date.',
+  'extensions.inputDateTime': 'Enter a valid date and time.',
+  'extensions.urlRequest':
+    '{name} asks you to open a page in your browser. Check where the address leads before you open it.',
+  'extensions.urlConsent':
+    'Opening the page accepts the request. Decline refuses it.',
+  'extensions.urlAddress': 'Full address',
+  'extensions.urlOpensOn': 'Opens on',
+  'extensions.urlInsecure':
+    'This address does not use HTTPS: others on the network can read or change the page.',
+  'extensions.urlInternational':
+    'This address contains international characters (xn--), which can imitate the name of another site.',
+  'extensions.urlCredentials':
+    'This address has text before an @ sign, which can look like a site name. The page opens on the site named under Opens on.',
+  'extensions.urlIpAddress':
+    'This address names a numeric IP address instead of a site name.',
+  'extensions.urlInvalid':
+    'The requested address is not a web address and cannot be opened.',
+  'extensions.openPage': 'Open page',
+  'extensions.openSignIn': 'Open sign-in page',
+  'extensions.openFailed':
+    'The page could not be opened. Copy the address into your browser instead.',
   'settings.providers.opencode.sharedKey':
     'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
   'settings.providers.opencode.sharedKeyShort':

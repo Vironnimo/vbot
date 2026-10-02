@@ -97,6 +97,7 @@ const COMPOSED_KEYS = {
   'chat.voice.progress.*': 'tOr', // speech job phase
   'live.tool.*': 'tOr', // Live Tool name in an action update
   'logs.level.*': 'tOr', // log record level
+  'mcp.problem.*': 'tOr', // MCP connection problem code
   'projects.report.group.*': 'tOr', // Project scan finding type
   'settings.language.*': 'tOr', // server language id
   'settings.localModel.error.*': 'tOr', // local setup error code
