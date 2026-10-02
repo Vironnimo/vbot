@@ -164,6 +164,9 @@ export default Object.freeze({
   'mcp.reconnect': 'Reconnect',
   'mcp.reconnectHelp':
     'Close the connection and connect again. A local program is restarted.',
+  'mcp.sseDeprecated': 'Deprecated in MCP',
+  'mcp.sseHint':
+    'Legacy SSE is deprecated in MCP. Choose Server URL (HTTP) unless the server only offers SSE.',
   'mcp.missingCredentials': 'Credentials without a value: {names}.',
   'mcp.technicalDetails': 'Technical details',
   'mcp.serverOutput': 'Server output (last {count} lines)',

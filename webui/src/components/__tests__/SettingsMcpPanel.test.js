@@ -570,6 +570,7 @@ describe('MCP management surface', () => {
     expect(field('Connection name').value).toBe('studio');
     expect(field('Server URL').value).toBe('https://mcp.example.com/sse');
     expect(dialog.textContent).toContain('test-owned-warning');
+    expect(dialog.textContent).toContain('Legacy SSE is deprecated');
     input('Command line or URL (optional)', 'test-owned-setup');
     button('Fill in').click();
     await settle();

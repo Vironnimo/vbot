@@ -65,7 +65,11 @@
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
     { value: 'http', label: t('mcp.http') },
-    { value: 'sse', label: t('mcp.sse') },
+    {
+      value: 'sse',
+      label: t('mcp.sse'),
+      secondaryLabel: t('mcp.sseDeprecated'),
+    },
   ]);
   let samplingOptions = $derived([
     { value: 'off', label: t('mcp.samplingOff') },
@@ -636,6 +640,9 @@
               />{/snippet}
           </FormField>
         </div>
+        {#if draft.transport === 'sse'}
+          <Banner variant="warn">{t('mcp.sseHint')}</Banner>
+        {/if}
         <FormField
           controlId={`${componentId}-description`}
           label={t('mcp.description')}
