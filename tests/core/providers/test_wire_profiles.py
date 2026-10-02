@@ -16,7 +16,13 @@ from core.providers._wire_profile_files import (
 )
 from core.providers.reasoning import ReasoningIntent
 from core.providers.wire_observations import ObservedFacts, WireObservations
-from core.providers.wire_profile import BudgetRule, ReasoningWire, WireProfile
+from core.providers.wire_profile import (
+    BudgetRule,
+    ParameterRule,
+    ReasoningWire,
+    RequestRules,
+    WireProfile,
+)
 from core.providers.wire_profiles import WireProfiles
 
 RESOURCES = Path(__file__).resolve().parents[3] / "resources"
@@ -139,6 +145,7 @@ def test_layers_apply_in_order_and_record_their_provenance() -> None:
             "defaults": {
                 "request": {"output_limit_cap": 1000, "body_defaults": {"a": 1, "b": 1}},
                 "reasoning": {"control": "budget"},
+                "replay": {"echo_response_field": True},
             },
             "protocols": {"chat_completions": {"request": {"output_limit_cap": 2000}}},
             "connections": {"api-key": {"request": {"body_defaults": {"b": 2}}}},
@@ -372,9 +379,14 @@ _LADDER = ("low", "medium", "high")
         ),
         (ReasoningWire(dialect="reasoning_effort", floor=_LADDER), "none", ("off", None)),
         (
-            ReasoningWire(dialect="reasoning_effort", floor=("none", *_LADDER)),
+            ReasoningWire(dialect="reasoning_effort", supported=True, floor=("none", *_LADDER)),
             "none",
             ("off", "none"),
+        ),
+        (
+            ReasoningWire(dialect="reasoning_effort", floor=("none", *_LADDER)),
+            "none",
+            ("off", None),
         ),
         (
             ReasoningWire(dialect="thinking_toggle", control="on_off", floor=("none", *_LADDER)),
@@ -454,7 +466,9 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     profiles, _ = _profiles(None, models)
     profiles.set_observations(store)
     before = _resolve(profiles, "m")
+    assert _resolve(profiles, "unknown").reasoning.supported is None
 
+    store.record_reasoning_returned("acme", "api-key", "unknown")
     store.record_reasoning_field("acme", "api-key", "m", "reasoning_content")
     store.record_rejected_effort("acme", "api-key", "m::pinned", "xhigh")
     store.record_rejected_parameter("acme", "api-key", "m", "temperature")
@@ -473,6 +487,7 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert after.reasoning.ladder == ("none", "low", "high")
     assert after.reasoning.plan("max").effort_level == "high"
     assert set(after.request.parameters) == {"temperature"}
+    assert _resolve(profiles, "unknown").reasoning.supported is True
 
     reloaded = WireObservations.load(path, save_delay=None)
     assert reloaded.facts_for("acme", "api-key", "m") == store.facts_for("acme", "api-key", "m")
@@ -481,12 +496,26 @@ def test_learned_facts_shape_unconfigured_profiles_and_survive_a_restart(tmp_pat
     assert reloaded.facts_for("acme", "other", "m").rejected_parameters == ("top_p",)
 
 
-def test_learned_facts_never_override_a_model_entry() -> None:
+@pytest.mark.parametrize(
+    ("document", "metadata"),
+    [
+        (
+            {
+                "format_version": 1,
+                "models": {"m": {"set": {"replay": {"history_field": "reasoning_content"}}}},
+            },
+            None,
+        ),
+        (None, {"acme": {"interleaved_field": "reasoning_content"}}),
+    ],
+    ids=["model-entry", "catalog-hint"],
+)
+def test_learned_facts_never_override_a_known_history_carrier(
+    document: Mapping[str, Any] | None, metadata: Mapping[str, Any] | None
+) -> None:
     profiles, _ = _profiles(
-        {
-            "format_version": 1,
-            "models": {"m": {"set": {"replay": {"history_field": "reasoning_content"}}}},
-        },
+        document,
+        {"m": _model("m", metadata=metadata)},
         observed=ObservedFacts(reasoning_field="reasoning"),
     )
 
@@ -504,3 +533,37 @@ def test_an_unreadable_observation_cache_starts_empty(tmp_path: Path, content: s
     store = WireObservations.load(path, save_delay=None)
 
     assert store.snapshot() == {}
+
+
+@pytest.mark.parametrize(
+    ("rule", "reasoning_active", "value", "expected"),
+    [
+        (ParameterRule(mode="drop"), False, 0.5, None),
+        (ParameterRule(mode="drop_while_thinking"), True, 0.5, None),
+        (ParameterRule(mode="drop_while_thinking"), False, 0.5, 0.5),
+        (ParameterRule(minimum=0.0, maximum=1.0), False, 1.5, 1.0),
+        (ParameterRule(minimum=0.0, maximum=1.0, out_of_range="drop"), False, 1.5, None),
+        (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.0, None),
+        (ParameterRule(minimum=0.0, exclusive_minimum=True), False, 0.1, 0.1),
+    ],
+    ids=[
+        "drop",
+        "drop-while-thinking",
+        "kept-without-thinking",
+        "clamped",
+        "out-of-range-dropped",
+        "exclusive-bound-dropped",
+        "inside-exclusive-bound",
+    ],
+)
+def test_parameter_rules_shape_the_request_fields(
+    rule: ParameterRule, reasoning_active: bool, value: float, expected: float | None
+) -> None:
+    payload: dict[str, Any] = {"temperature": value, "model": "m"}
+
+    RequestRules(parameters={"temperature": rule}).shape_parameters(
+        payload, reasoning_active=reasoning_active
+    )
+
+    assert payload.get("temperature") == expected
+    assert payload["model"] == "m"

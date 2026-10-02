@@ -11,12 +11,6 @@ import httpx
 from core.models.models import Model, ReasoningCapabilities
 from core.providers.errors import CatalogEntrySkipped, ProviderError
 from core.providers.openai_compatible import OpenAICompatibleAdapter
-from core.providers.reasoning import (
-    REASONING_INTENT_BUDGET,
-    REASONING_INTENT_EFFORT,
-    REASONING_INTENT_ON,
-    ReasoningIntent,
-)
 
 NOUS_MAX_OUTPUT_TOKENS = 32_000
 NOUS_HERMES_MODEL_MARKER = "hermes"
@@ -135,28 +129,6 @@ class NousAdapter(OpenAICompatibleAdapter):
         )
         payload["max_tokens"] = min(payload["max_tokens"], NOUS_MAX_OUTPUT_TOKENS)
         return payload
-
-    @override
-    def _render_reasoning(
-        self,
-        payload: dict[str, Any],
-        intent: ReasoningIntent,
-        *,
-        reasoning_supported: bool | None,
-    ) -> None:
-        """Render Nous' reasoning object; disabled reasoning is represented by omission."""
-
-        del reasoning_supported
-        if intent.kind not in (
-            REASONING_INTENT_BUDGET,
-            REASONING_INTENT_EFFORT,
-            REASONING_INTENT_ON,
-        ):
-            return
-        reasoning: dict[str, Any] = {"enabled": True}
-        if intent.effort_level is not None:
-            reasoning["effort"] = intent.effort_level
-        payload["reasoning"] = reasoning
 
     @override
     def _classify_http_status(

@@ -38,9 +38,7 @@ from core.providers._tool_result_text import (
     tool_result_text,
 )
 from core.providers.reasoning import (
-    DEFAULT_REASONING_REPLAY_FIDELITY,
     DEFAULT_REASONING_REPLAY_POLICY,
-    REASONING_REPLAY_POLICIES,
     ReasoningIntent,
     ReasoningReplayFidelity,
     ReasoningReplayPolicy,
@@ -316,13 +314,13 @@ class ProviderAdapter(ABC):
         Model Override, then Provider Override, then the system
         ``full_history`` default. ``model_id`` is part of the contract because
         one Provider can explicitly narrow an individual older Model without
-        reducing every other Model on the same Adapter.
+        reducing every other Model on the same Adapter. The wire profile's
+        ``replay.scope`` decides; the Provider-level default applies only where
+        no profile layer set a scope.
         """
-        model_lookup = getattr(self, "_model_lookup", None)
-        if model_lookup is not None:
-            model = model_lookup(model_id.split("::", 1)[0])
-            if model is not None and model.reasoning_replay in REASONING_REPLAY_POLICIES:
-                return cast(ReasoningReplayPolicy, model.reasoning_replay)
+        profile = self.wire_profile(model_id)
+        if profile.source_of("replay.scope") is not None:
+            return profile.replay.scope
         return getattr(self, "_reasoning_replay_default", DEFAULT_REASONING_REPLAY_POLICY)
 
     def reasoning_replay_fidelity(self, model_id: str) -> ReasoningReplayFidelity:
@@ -334,12 +332,9 @@ class ProviderAdapter(ABC):
         never both. Adapters must not re-implement class filtering on top of
         the declaration. ``model_id`` is part of the contract for parity with
         ``reasoning_replay_policy`` because one adapter can route models to
-        different wires. The default ``meta_preferred`` matches OpenRouter's
-        documented contract (``reasoning_details`` supersede plaintext) and
-        degrades safely for raw-string-only wires.
+        different wires. The wire profile's ``replay.fidelity`` decides.
         """
-        del model_id
-        return DEFAULT_REASONING_REPLAY_FIDELITY
+        return self.wire_profile(model_id).replay.fidelity
 
     # ------------------------------------------------------------------
     # Reasoning render description
@@ -394,11 +389,9 @@ class ProviderAdapter(ABC):
         ``model_id`` is part of the contract for parity with
         ``reasoning_replay_policy`` and because one adapter can route models to
         different wires; concrete adapters may also branch on their connection
-        mode.  The ABC default carries nothing — a forgotten declaration
-        degrades the attachment, never crashes the wire.
+        mode. The wire profile's ``media.types`` decides.
         """
-        del model_id
-        return frozenset()
+        return self.wire_profile(model_id).media.types
 
     # ------------------------------------------------------------------
     # Request-context estimation
@@ -410,8 +403,7 @@ class ProviderAdapter(ABC):
         Callers can prepare compatible copies before serialization. Unknown
         limits stay absent; request-body and image-count limits remain separate.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).media.image_max_bytes
 
     def request_body_limit(self, model_id: str) -> int | None:
         """Verified maximum serialized request bytes for this Model's wire, if known.
@@ -421,8 +413,7 @@ class ProviderAdapter(ABC):
         retire already delivered images and submit a smaller request. Unknown
         limits stay absent; this is independent of tokens and harness image caps.
         """
-        del model_id
-        return None
+        return self.wire_profile(model_id).media.request_max_bytes
 
     def estimate_request_input_tokens(
         self,

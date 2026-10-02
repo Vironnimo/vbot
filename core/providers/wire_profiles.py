@@ -28,6 +28,7 @@ from core.providers._wire_profile_files import (
 )
 from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
 from core.providers.reasoning import normalize_thinking_effort
+from core.providers.wire_observations import ObservedFacts, WireObservations
 from core.providers.wire_profile import (
     PROTOCOLS,
     Admission,
@@ -47,7 +48,6 @@ from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.models.models import Model
-    from core.providers.wire_observations import ObservedFacts, WireObservations
 
 _LOGGER = get_logger("providers.wire_profiles")
 
@@ -66,6 +66,9 @@ LAYER_RULE = "rule"
 LAYER_OBSERVED = "observed"
 LAYER_MODEL = "model"
 LAYER_MODEL_CONNECTION = "model_connection"
+_GENERIC_LAYERS = frozenset(
+    {LAYER_PROTOCOL, LAYER_FILE_DEFAULTS, LAYER_FILE_PROTOCOL, LAYER_FILE_CONNECTION}
+)
 
 
 @dataclass(frozen=True)
@@ -232,7 +235,8 @@ def standalone_wire_binding(
 ) -> WireBinding:
     """Profile lookup for an Adapter built outside a Runtime (tools, tests).
 
-    Uses the bundled files and the Adapter's own Model lookup; no observations.
+    Uses the bundled files and the Adapter's own Model lookup. Learned facts
+    live in memory for the Adapter's lifetime only.
     """
 
     def resolve_model(_provider_id: str, model_id: str) -> Model | None:
@@ -243,6 +247,7 @@ def standalone_wire_binding(
         protocol_support=lambda _provider_id: protocols,
         model_resolver=resolve_model,
         report=log_wire_profile_issue,
+        observations=WireObservations(None, save_delay=None),
     )
     return profiles.bind(provider_id, connection_id)
 
@@ -448,8 +453,18 @@ class _Resolution:
             partial["response"] = {
                 "reasoning_fields": (field, *(item for item in current if item != field))
             }
-            if self.values.get("replay", {}).get("history_field") is not None:
+            # Echo the observed field back only where the wire opts in and the
+            # carrier is a generic default; catalog hints and rules know better.
+            replay = self.values.get("replay", {})
+            if (
+                replay.get("echo_response_field") is True
+                and replay.get("history_field") is not None
+                and self.provenance.get("replay.history_field") in _GENERIC_LAYERS
+            ):
                 partial["replay"] = {"history_field": field}
+        if facts.reasoning_returned and self.values.get("reasoning", {}).get("supported") is None:
+            # A Model the catalog does not know returned reasoning: it reasons.
+            partial["reasoning"] = {"supported": True}
         if facts.rejected_parameters:
             partial["request"] = {
                 "parameters": {name: {"mode": "drop"} for name in facts.rejected_parameters}
@@ -459,14 +474,16 @@ class _Resolution:
             ladder = tuple(
                 level for level in reasoning.ladder if level not in facts.rejected_efforts
             )
-            partial["reasoning"] = {
-                "levels": ladder,
-                "effort_map": {
-                    effort: level
-                    for effort, level in reasoning.effort_map.items()
-                    if level not in facts.rejected_efforts
-                },
-            }
+            partial.setdefault("reasoning", {}).update(
+                {
+                    "levels": ladder,
+                    "effort_map": {
+                        effort: level
+                        for effort, level in reasoning.effort_map.items()
+                        if level not in facts.rejected_efforts
+                    },
+                }
+            )
         _merge_into(self.values, partial, PROFILE_SCHEMA, "", LAYER_OBSERVED, self.provenance)
         if facts.rejected_efforts:
             # A rejected mapping must disappear, not merge with the earlier map.
@@ -625,6 +642,7 @@ def _build_replay(values: Mapping[str, Any]) -> ReplayRules:
                 "scope",
                 "fidelity",
                 "history_field",
+                "echo_response_field",
                 "echo_empty_on_tool_calls",
                 "strip_when_off",
             )

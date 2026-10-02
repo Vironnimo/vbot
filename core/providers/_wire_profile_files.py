@@ -212,6 +212,7 @@ PROFILE_SCHEMA: dict[str, Any] = {
         "scope": _enum(REASONING_REPLAY_POLICIES),
         "fidelity": _enum(REASONING_REPLAY_FIDELITIES),
         "history_field": _string(nullable=True),
+        "echo_response_field": _bool(),
         "echo_empty_on_tool_calls": _bool(),
         "strip_when_off": _bool(),
     },
@@ -223,16 +224,6 @@ PROFILE_SCHEMA: dict[str, Any] = {
 }
 
 _EFFORT_MAP_KEYS = frozenset(_EFFORT_LEVELS)
-
-LEARNABLE_PATHS: frozenset[str] = frozenset(
-    {
-        "response.reasoning_fields",
-        "replay.history_field",
-        "request.parameters",
-        "reasoning.effort_map",
-    }
-)
-"""Profile paths an observation may set (prefix match on dotted paths)."""
 
 
 def schema_node(path: str) -> Any:

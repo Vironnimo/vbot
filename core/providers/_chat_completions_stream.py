@@ -8,13 +8,16 @@ from typing import Any
 
 from core.providers._chat_completions_constants import (
     _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY,
+    _OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY,
+    _OPENAI_STREAM_REASONING_FIELDS_STATE_KEY,
     _OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY,
     _OPENAI_TOOL_CALL_NAMES_STATE_KEY,
+    OPENAI_REASONING_KEYS,
 )
 from core.providers._chat_completions_wire import (
-    _extract_openai_reasoning,
     _extract_openai_reasoning_meta,
     _extract_stream_usage,
+    _find_openai_reasoning,
     _normalize_openai_finish_reason,
     _openai_concealed_transport_failure,
 )
@@ -97,9 +100,13 @@ def _normalize_openai_message_delta(
     if isinstance(content, str) and content:
         normalized_deltas.append({"type": "content_delta", "text": content})
 
-    reasoning = _extract_openai_reasoning(delta)
-    if reasoning:
-        normalized_deltas.append({"type": "reasoning_delta", "text": reasoning})
+    state = normalization_state if normalization_state is not None else {}
+    found = _find_openai_reasoning(
+        delta, state.get(_OPENAI_STREAM_REASONING_FIELDS_STATE_KEY, OPENAI_REASONING_KEYS)
+    )
+    if found is not None:
+        state.setdefault(_OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY, found[0])
+        normalized_deltas.append({"type": "reasoning_delta", "text": found[1]})
 
     reasoning_meta = _extract_openai_reasoning_meta(delta)
     if reasoning_meta:

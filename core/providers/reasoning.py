@@ -432,6 +432,22 @@ class ReasoningIntent:
     effort_level: str | None = None
     budget_tokens: int | None = None
 
+    @property
+    def requests_reasoning(self) -> bool:
+        """Whether the intent asks the Model to reason.
+
+        ``effort`` with a positive level, ``budget``, and ``on`` ask for
+        reasoning. ``off`` does not, and ``default`` leaves the Provider default
+        untouched.
+        """
+
+        if self.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
+            return True
+        return self.kind == REASONING_INTENT_EFFORT and self.effort_level not in (
+            None,
+            _NONE_EFFORT,
+        )
+
 
 def effort_to_budget(
     effort: Any,
@@ -644,22 +660,6 @@ def reasoning_token_count(usage: Mapping[str, Any] | None) -> int | None:
     return None
 
 
-def _intent_requests_reasoning(intent: ReasoningIntent) -> bool:
-    """Return whether a rendered intent asks the Model to reason.
-
-    ``effort`` with a positive level, ``budget``, and ``on`` ask for reasoning.
-    ``off`` does not, and ``default`` leaves the Provider default untouched, so
-    zero reasoning tokens after either is no evidence of a swallowed request.
-    """
-
-    if intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
-        return True
-    return intent.kind == REASONING_INTENT_EFFORT and intent.effort_level not in (
-        None,
-        _NONE_EFFORT,
-    )
-
-
 def _rendered_reasoning_label(intent: ReasoningIntent) -> str:
     """Return a short log label for a rendered reasoning intent."""
 
@@ -694,7 +694,7 @@ def warn_effort_swallowed(
     silent. No token values beyond the count are logged.
     """
 
-    if not _intent_requests_reasoning(rendered) or returned_reasoning:
+    if not rendered.requests_reasoning or returned_reasoning:
         return
     if reasoning_token_count(usage) != 0:
         return

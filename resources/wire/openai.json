@@ -1,0 +1,10 @@
+{
+  "format_version": 1,
+  "_comment": "OpenAI first-party wire. Chat Completions accepts reasoning_effort 'none' and wants explicit non-strict Tool schemas.",
+  "protocols": {
+    "chat_completions": {
+      "request": {"tool_schema": "explicit_non_strict"},
+      "reasoning": {"floor": ["none", "low", "medium", "high"]}
+    }
+  }
+}

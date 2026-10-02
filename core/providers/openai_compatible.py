@@ -9,6 +9,7 @@ provider-specific behavior can subclass this adapter."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
@@ -28,7 +29,8 @@ from core.providers._chat_completions_catalog import (
     _supports_tools_by_default,
 )
 from core.providers._chat_completions_constants import (
-    _OPENAI_INPUT_AUDIO_FORMATS,
+    _OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY,
+    _OPENAI_STREAM_REASONING_FIELDS_STATE_KEY,
     CHAT_COMPLETIONS_ENDPOINT,
     CONTEXT_WINDOW_KEYS,
     DEFAULT_MAX_OUTPUT_TOKENS,
@@ -57,9 +59,11 @@ from core.providers._chat_completions_wire import (
     _extract_openai_terminal_outcome,
     _extract_openai_tool_calls,
     _extract_openai_usage,
+    _find_openai_reasoning,
     _first_choice_message,
     _merge_stream_usage_options,
     _openai_response_carries_reasoning,
+    _openai_response_message,
     _selected_thinking_effort,
     _to_openai_assistant_message,
     _to_openai_message,
@@ -70,15 +74,15 @@ from core.providers._http_shared import (
     classify_http_status,
     connect_streaming_with_retry,
     decode_response_json,
-    execute_with_sampling_fallback,
     format_http_error_detail,
     iter_sse_events,
     parse_sse_json_data,
     prepare_json_body,
     wrap_network_error,
 )
+from core.providers._wire_learning import execute_learning_from_rejections
+from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
-    IMAGE_WIRE_MEDIA_TYPES,
     ModelLookup,
     ProviderAdapter,
     project_tool_result_content_fallbacks,
@@ -98,7 +102,6 @@ from core.providers.providers import (
 from core.providers.reasoning import (
     REASONING_INTENT_BUDGET,
     REASONING_INTENT_EFFORT,
-    REASONING_INTENT_OFF,
     REASONING_INTENT_ON,
     REASONING_REPLAY_FIDELITY_META_ONLY,
     REASONING_REPLAY_FIDELITY_READABLE_ONLY,
@@ -112,8 +115,10 @@ from core.providers.reasoning import (
     warn_effort_swallowed,
     warn_rejected_effort,
 )
+from core.providers.reasoning_dialects import describe_reasoning, render_reasoning
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.tool_schema import render_tool_definitions
+from core.providers.wire_profile import ReasoningWire
 from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import (
@@ -203,23 +208,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         await self.aclose()
 
     # ------------------------------------------------------------------
-    # Wire media capability
-    # ------------------------------------------------------------------
-
-    @override
-    def wire_media_support(self, model_id: str) -> frozenset[str]:
-        """Images plus the OpenAI ``input_audio`` format set (WAV/MP3).
-
-        This is exactly what the shared ``/chat/completions`` content
-        translator encodes today, so generic OpenAI-compatible providers
-        (OpenRouter, MiniMax, OpenCode-Go, Mistral) inherit the correct set.
-        ``application/pdf`` is deliberately *not* declared here: the base wire
-        is unverified for documents, so only concrete, verified adapters opt in.
-        """
-        del model_id
-        return IMAGE_WIRE_MEDIA_TYPES | frozenset(_OPENAI_INPUT_AUDIO_FORMATS)
-
-    # ------------------------------------------------------------------
     # Header / payload helpers
     # ------------------------------------------------------------------
 
@@ -306,22 +294,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     ) -> dict[str, Any]:
         """Normalize an OpenAI-compatible response to canonical assistant fields.
 
-        When the model's catalog metadata names a reasoning response field
-        (``metadata.<provider>.reasoning_response_field``), that field is the
-        PREFERRED source for the reasoning; otherwise the hardcoded default-key
-        scan applies, so this works whether or not catalogs carry the projected
-        field (Phase 5, graceful).
+        Readable reasoning is read from the wire profile's
+        ``response.reasoning_fields`` in priority order.
         """
         message = _first_choice_message(response)
         content = message.get("content")
-        preferred_field = self._reasoning_response_field(model_id)
         normalized: dict[str, Any] = {
             "role": "assistant",
             "content": content if isinstance(content, str) or content is None else str(content),
-            "reasoning": _extract_openai_reasoning(message, preferred_field=preferred_field),
-            "reasoning_meta": _extract_openai_reasoning_meta(
-                message, preferred_field=preferred_field
+            "reasoning": _extract_openai_reasoning(
+                message, fields=self._reasoning_fields(model_id)
             ),
+            "reasoning_meta": _extract_openai_reasoning_meta(message),
             "tool_calls": _extract_openai_tool_calls(message),
         }
         normalized["terminal_outcome"] = _extract_openai_terminal_outcome(
@@ -332,6 +316,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if usage is not None:
             normalized["usage"] = usage
         return normalized
+
+    def _reasoning_fields(self, model_id: str | None) -> tuple[str, ...]:
+        """The readable reasoning fields of ``model_id``'s wire, in priority order."""
+
+        if not model_id:
+            return OPENAI_REASONING_KEYS
+        return self.wire_profile(model_id).response.reasoning_fields
 
     def _reasoning_response_field(self, model_id: str | None) -> str | None:
         """Resolve the data-driven reasoning response field for ``model_id``.
@@ -366,15 +357,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         Serialization carries exactly one reasoning class per the adapter's
         declared :meth:`reasoning_replay_fidelity`: opaque meta when the turn
         captured it and the declaration allows meta, otherwise the readable
-        text — never both. Subclasses may still override for provider-specific
-        field placement (e.g. Ollama Cloud's scanned carrier field).
+        text — never both. The readable text rides in the wire profile's
+        ``replay.history_field``; a wire without one never receives readable
+        reasoning. Subclasses may still override for provider-specific field
+        placement (e.g. Ollama Cloud's scanned carrier field).
         """
         wire = _to_openai_assistant_message(message)
         fidelity = self.reasoning_replay_fidelity(model_id or "")
-        has_meta = any(key in wire for key in OPENAI_REASONING_META_KEYS)
-        if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY:
+        carrier = self.wire_profile(model_id or "").replay.history_field
+        if fidelity == REASONING_REPLAY_FIDELITY_META_ONLY or carrier is None:
             # Strict/block-shaped wires never take a top-level readable field.
-            wire.pop("reasoning_content", None)
             return wire
 
         reasoning = message.get("reasoning")
@@ -384,15 +376,16 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             for key in OPENAI_REASONING_META_KEYS:
                 wire.pop(key, None)
             if readable:
-                wire["reasoning_content"] = reasoning
+                wire[carrier] = reasoning
             return wire
 
         # ``meta_preferred``: meta supersedes duplicated plaintext (OpenRouter's
         # documented contract); readable text stays the lossless fallback only
         # when no meta was captured.
+        has_meta = any(key in wire for key in OPENAI_REASONING_META_KEYS)
         if has_meta or not readable:
             return wire
-        wire["reasoning_content"] = reasoning
+        wire[carrier] = reasoning
         return wire
 
     def _format_message(
@@ -430,8 +423,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         if tools:
             tool_tokens, _ = estimate_structured_tokens(
                 render_tool_definitions(
-                    list(tools),
-                    profile="explicit_non_strict" if self._config.id == "openai" else "omit_strict",
+                    list(tools), profile=self.wire_profile(model_id).request.tool_schema
                 ),
                 model_id=model_id,
             )
@@ -449,6 +441,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         # do not clobber provider defaults below. Falsy-but-non-None values
         # (e.g. ``temperature=0.0``) must survive.
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        rules = self.wire_profile(model_id).request
+        selected_effort = _selected_thinking_effort(request_kwargs)
         self._apply_model_output_limit(request_kwargs, model_id, messages)
         projected_messages = project_tool_result_content_fallbacks(messages)
         payload: dict[str, Any] = {
@@ -457,11 +451,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 self._format_message(message, model_id=model_id) for message in projected_messages
             ],
         }
-        _apply_openai_tools(
-            payload,
-            request_kwargs,
-            profile=("explicit_non_strict" if self._config.id == "openai" else "omit_strict"),
-        )
+        _apply_openai_tools(payload, request_kwargs, profile=rules.tool_schema)
         self._apply_reasoning(payload, request_kwargs, model_id)
         # Apply provider defaults (lower priority — caller kwargs win)
         if self._config.defaults:
@@ -472,8 +462,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 ):
                     continue
                 payload.setdefault(key, value)
+        for key, value in rules.body_defaults.items():
+            payload.setdefault(key, thaw_json(value))
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
+        for key, value in rules.extra_body.items():
+            payload[key] = thaw_json(value)
+        if rules.parameters:
+            rules.shape_parameters(
+                payload,
+                reasoning_active=self._describe_reasoning(
+                    model_id, selected_effort or None
+                ).requests_reasoning,
+            )
         return payload
 
     def _apply_model_output_limit(
@@ -531,13 +532,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             )
             return max(0, int(value))
 
+        rules = self.wire_profile(model_id).request
         estimated_input = resolve_request_input_budget(model_id, estimate_input)
         resolved = resolve_request_output_limit(
             explicit_limit=explicit_limit,
             model_output_limit=self._model_max_output_tokens(model_id),
-            provider_default=(
-                self._config.defaults.get("max_tokens") if self._config.defaults else None
-            ),
+            provider_default=rules.output_limit_default
+            or (self._config.defaults.get("max_tokens") if self._config.defaults else None),
             effective_context_window=resolve_context_window(
                 self._model_context_window(model_id), self._config
             ),
@@ -545,12 +546,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         )
         if resolved is None:
             return
+        if rules.output_limit_cap is not None:
+            resolved = min(resolved, rules.output_limit_cap)
         if explicit_values:
             for key in OUTPUT_LIMIT_PARAMETER_NAMES:
                 if _positive_int(request_kwargs.get(key)) is not None:
                     request_kwargs[key] = min(int(request_kwargs[key]), resolved)
             return
-        request_kwargs["max_tokens"] = resolved
+        if rules.output_limit_field is not None:
+            request_kwargs[rules.output_limit_field] = resolved
 
     def _model_max_output_tokens(self, model_id: str) -> int | None:
         """The model's catalog output ceiling, or ``None`` when it is unknown.
@@ -593,13 +597,23 @@ class OpenAICompatibleAdapter(ProviderAdapter):
     def _supported_reasoning_efforts(self, model_id: str) -> set[str] | tuple[str, ...]:
         """Return the effort ladder to snap against for one model.
 
-        The effective per-model ladder from the DB
-        (``capabilities.reasoning.levels``) wins when present, so snapping
-        follows what this provider actually supports for this model. The
-        hardcoded adapter constant is only the floor for a model with no feed
-        ladder (e.g. opencode-go, whose ladder is clobbered upstream — Phase 5).
+        The wire profile's effective ladder (explicit wire levels, then the
+        catalog ladder, then the protocol floor) minus learned rejections.
         """
-        return self._reasoning_effort_ladder(self._model_lookup, self._config, model_id)
+        return self.wire_profile(model_id).reasoning.ladder
+
+    def _reasoning_wire(self, model_id: str) -> ReasoningWire:
+        """The profile's reasoning wire, snapping against this Adapter's ladder."""
+
+        wire = self.wire_profile(model_id).reasoning
+        ladder = tuple(self._supported_reasoning_efforts(model_id))
+        return wire if ladder == wire.ladder else replace(wire, levels=ladder)
+
+    def _describe_reasoning(self, model_id: str, effort: str | None) -> ReasoningIntent:
+        """The reasoning decision a request with ``effort`` carries on this wire."""
+
+        wire = self._reasoning_wire(model_id)
+        return describe_reasoning(wire, wire.plan(effort))
 
     @classmethod
     def _reasoning_effort_ladder(
@@ -631,62 +645,32 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         request_kwargs: dict[str, Any],
         model_id: str,
     ) -> None:
-        """Resolve the shared reasoning intent and render it onto the payload.
+        """Plan the Agent's reasoning effort and render it onto the payload.
 
-        Consumes ``thinking_effort``/``reasoning_effort`` from ``request_kwargs``,
-        resolves the provider-neutral intent via :func:`resolve_reasoning_intent`,
-        and renders it (see :meth:`_render_reasoning`). A catalog-known
-        non-reasoning model strips the raw reasoning controls and sends nothing,
-        exactly as before.
+        Consumes ``thinking_effort``/``reasoning_effort`` from ``request_kwargs``;
+        :meth:`ReasoningWire.plan` decides, :meth:`_render_reasoning` spells the
+        decision in the profile's dialect. A Model known not to reason has the
+        raw reasoning controls stripped and gets nothing.
         """
 
         thinking_effort = request_kwargs.pop("thinking_effort", "")
         reasoning_effort = request_kwargs.pop("reasoning_effort", "")
-        reasoning_supported = self._model_reasoning_supported(model_id)
-        if reasoning_supported is False:
+        wire = self._reasoning_wire(model_id)
+        if wire.supported is False:
             remove_reasoning_kwargs(request_kwargs, *REASONING_PARAMETER_NAMES)
             return
-        intent = resolve_reasoning_intent(
-            supported=reasoning_supported,
-            control=model_reasoning_control(self._model_lookup, model_id),
-            levels=tuple(self._supported_reasoning_efforts(model_id)),
-            effort=thinking_effort or reasoning_effort,
-            budget_max=model_reasoning_budget_max(self._model_lookup, model_id),
-            # The generic ``/chat/completions`` wire has no native token budget,
-            # so a budget intent degrades to an effort and the budget is never
-            # materialized — passing ``max_tokens`` would not change the output.
-            max_tokens=None,
-        )
-        self._render_reasoning(payload, intent, reasoning_supported=reasoning_supported)
+        self._render_reasoning(payload, wire.plan(thinking_effort or reasoning_effort), wire=wire)
 
     def _render_reasoning(
         self,
         payload: dict[str, Any],
         intent: ReasoningIntent,
         *,
-        reasoning_supported: bool | None,
+        wire: ReasoningWire,
     ) -> None:
-        """Render a reasoning intent onto the generic OpenAI-compatible wire.
+        """Spell a planned reasoning intent in the profile's reasoning dialect."""
 
-        The base wire only speaks ``reasoning_effort``: an ``effort`` intent maps
-        straight through; ``budget``/``on`` have no native field and degrade to
-        the snapped effort; ``off`` sends ``reasoning_effort: "none"`` only for an
-        OpenAI-style provider that proves it supports the ``none`` value
-        (``effort_level == "none"`` and reasoning confirmed), otherwise nothing;
-        ``default`` leaves the provider default untouched.
-        """
-
-        if intent.kind == REASONING_INTENT_EFFORT:
-            payload["reasoning_effort"] = intent.effort_level
-        elif intent.kind in (REASONING_INTENT_BUDGET, REASONING_INTENT_ON):
-            if intent.effort_level is not None:
-                payload["reasoning_effort"] = intent.effort_level
-        elif (
-            intent.kind == REASONING_INTENT_OFF
-            and reasoning_supported is True
-            and intent.effort_level == "none"
-        ):
-            payload["reasoning_effort"] = "none"
+        render_reasoning(wire, intent, payload)
 
     @classmethod
     @override
@@ -780,21 +764,18 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """
 
         request_headers = self._request_headers_from_kwargs(kwargs)
+        request_headers.update(self.wire_profile(model_id).request.extra_headers)
         # Capture the agent-selected effort before ``_build_payload`` consumes the
         # reasoning kwargs, so the observability signals below can name it.
         selected_effort = _selected_thinking_effort(kwargs)
-        # The swallowed-effort signal judges what this request actually renders
-        # (catalog support, ladder snapping, Adapter mapping), not the raw
-        # selection: a catalog non-reasoning Model has its effort stripped.
-        rendered_reasoning = type(self).describe_reasoning_render(
-            model_lookup=self._model_lookup,
-            model_id=model_id,
-            effort=selected_effort or None,
-            provider_config=self._config,
-        )
-        # Built before the retry loop so the sampling fallback below can strip a
-        # rejected parameter from the exact payload — provider ``defaults`` would
-        # otherwise refill the key on a rebuild.
+        reasoning_fields = self._reasoning_fields(model_id)
+
+        def describe() -> ReasoningIntent:
+            # The swallowed-effort signal judges what this request actually
+            # renders (catalog support, ladder snapping, dialect), not the raw
+            # selection: a catalog non-reasoning Model has its effort stripped.
+            return self._describe_reasoning(model_id, selected_effort or None)
+
         payload = self._build_payload(messages, model_id, **kwargs)
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
@@ -834,14 +815,19 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 response_headers=response.headers,
             )
             parsed = dict(decode_response_json(response, "OpenAI-compatible provider"))
+            returned_reasoning = _openai_response_carries_reasoning(parsed, fields=reasoning_fields)
+            message = _openai_response_message(parsed)
+            found = _find_openai_reasoning(message, reasoning_fields) if message else None
+            if found is not None:
+                self.wire.observe_reasoning_field(model_id, found[0])
+            elif returned_reasoning:
+                self.wire.observe_reasoning_returned(model_id)
             # Requested reasoning that comes back with 0 reasoning tokens and no
             # returned Reasoning was effectively swallowed — surface it.
             warn_effort_swallowed(
-                rendered=rendered_reasoning,
+                rendered=describe(),
                 usage=parsed.get("usage"),
-                returned_reasoning=_openai_response_carries_reasoning(
-                    parsed, preferred_field=self._reasoning_response_field(model_id)
-                ),
+                returned_reasoning=returned_reasoning,
                 model_id=model_id,
                 provider_logger=_LOGGER,
             )
@@ -853,9 +839,13 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             body = await self._prepare_request_body(payload, model_id)
             return await auth_recovery.run(lambda: retry_async(lambda: _do_request(body)))
 
-        return await execute_with_sampling_fallback(
+        return await execute_learning_from_rejections(
             _execute_payload,
             payload,
+            rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
+            sent_effort=lambda: describe().effort_level,
+            wire=self.wire,
+            model_id=model_id,
             logger=_LOGGER,
             provider_label=self._config.id,
         )
@@ -916,8 +906,15 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 error payloads.
         """
         request_headers = self._request_headers_from_kwargs(kwargs)
-        payload = self._build_payload(messages, model_id, **kwargs)
-        self._prepare_stream_payload(payload)
+        request_headers.update(self.wire_profile(model_id).request.extra_headers)
+        selected_effort = _selected_thinking_effort(kwargs)
+
+        def build_stream_payload() -> dict[str, Any]:
+            built = self._build_payload(messages, model_id, **kwargs)
+            self._prepare_stream_payload(built)
+            return built
+
+        payload = build_stream_payload()
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
 
         async def _build_headers() -> dict[str, str]:
@@ -948,15 +945,24 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 wrap_transport_error=self._wrap_transport_error,
             )
 
-        response = await execute_with_sampling_fallback(
+        response = await execute_learning_from_rejections(
             _connect_payload,
             payload,
+            rebuild=build_stream_payload,
+            sent_effort=lambda: (
+                self._describe_reasoning(model_id, selected_effort or None).effort_level
+            ),
+            wire=self.wire,
+            model_id=model_id,
             logger=_LOGGER,
             provider_label=self._config.id,
         )
 
         tool_call_slots: set[int] = set()
-        normalization_state: dict[str, Any] = {}
+        normalization_state: dict[str, Any] = {
+            _OPENAI_STREAM_REASONING_FIELDS_STATE_KEY: self._reasoning_fields(model_id)
+        }
+        observed_reasoning_field = False
         seen_done_marker = False
 
         try:
@@ -984,6 +990,11 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                     normalization_state,
                 ):
                     yield normalized_delta
+                if not observed_reasoning_field:
+                    field = normalization_state.get(_OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY)
+                    if isinstance(field, str):
+                        self.wire.observe_reasoning_field(model_id, field)
+                        observed_reasoning_field = True
             if not seen_done_marker:
                 raise NetworkError("Stream ended without [DONE] marker")
         except httpx.TimeoutException as exc:

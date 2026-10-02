@@ -31,6 +31,8 @@ from .openai_compatible_test_support import (
     SUCCESS_RESPONSE,
     catalog_model,
     make_adapter,
+    sse,
+    sse_response,
 )
 
 _ADAPTER_LOGGER = "vbot.providers.openai_compatible"
@@ -204,6 +206,34 @@ def test_catalog_named_reasoning_field_is_the_preferred_readable_source(
     )
 
     assert normalized["reasoning"] == expected
+
+
+@pytest.mark.parametrize("mode", ["send", "stream"])
+@pytest.mark.asyncio
+async def test_the_field_reasoning_arrives_in_is_learned_for_the_model(mode: str) -> None:
+    adapter = make_adapter(model=catalog_model())
+    with respx.mock:
+        if mode == "send":
+            respx.post(OPENAI_URL).mock(
+                return_value=httpx.Response(
+                    200, json=_response({"content": "Done", "thinking": "Trace"})
+                )
+            )
+            await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID)
+        else:
+            respx.post(OPENAI_URL).mock(
+                return_value=sse_response(
+                    sse(
+                        {"choices": [{"delta": {"thinking": "Trace"}}]},
+                        {"choices": [{"delta": {"content": "Done"}, "finish_reason": "stop"}]},
+                    )
+                )
+            )
+            [_ async for _ in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID)]
+
+    profile = adapter.wire_profile(MODEL_ID)
+    assert profile.response.reasoning_fields[0] == "thinking"
+    assert profile.source_of("response.reasoning_fields") == "observed"
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +522,46 @@ def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
 
 
+@pytest.mark.parametrize(
+    ("detail", "kwargs", "field", "expected"),
+    [
+        pytest.param(
+            "invalid value for 'reasoning_effort': 'high'",
+            {"thinking_effort": "high"},
+            "reasoning_effort",
+            ["high", "medium", "medium"],
+            id="effort",
+        ),
+        pytest.param(
+            "Unsupported parameter: 'temperature'",
+            {},
+            "temperature",
+            [0.7, None, None],
+            id="parameter",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_rejected_effort_warns_and_still_raises_the_fatal_error(
+async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
+    detail: str, kwargs: dict[str, Any], field: str, expected: list[Any]
+) -> None:
+    adapter = make_adapter(model=catalog_model(levels=("low", "medium", "high")))
+    with respx.mock:
+        route = respx.post(OPENAI_URL).mock(
+            side_effect=[
+                httpx.Response(400, text=detail),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+                httpx.Response(200, json=SUCCESS_RESPONSE),
+            ]
+        )
+        await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
+        await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
+
+    assert [json.loads(call.request.content).get(field) for call in route.calls] == expected
+
+
+@pytest.mark.asyncio
+async def test_an_unattributable_effort_rejection_warns_and_still_raises(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     with respx.mock, caplog.at_level(logging.WARNING, logger=_ADAPTER_LOGGER):

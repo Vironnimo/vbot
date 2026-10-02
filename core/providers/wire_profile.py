@@ -172,8 +172,8 @@ OFF_RENDERS: tuple[str, ...] = ("auto", "omit", "enabled", "lowest")
 """How the Agent effort ``none`` renders (``ReasoningWire.off``).
 
 - ``auto``: an ``off`` decision the dialect spells natively (``effort_level``
-  ``"none"`` when the effective ladder has a ``none`` rung); ``lowest`` instead
-  when the Model's reasoning is mandatory.
+  ``"none"`` when the effective ladder has a ``none`` rung and the Model is known
+  to reason); ``lowest`` instead when the Model's reasoning is mandatory.
 - ``omit``: no reasoning field; the Provider default applies.
 - ``enabled``: reasoning stays on (always-on Models).
 - ``lowest``: the lowest active rung of the ladder.
@@ -206,6 +206,18 @@ class ParameterRule:
     exclusive_minimum: bool = False
     out_of_range: OutOfRange = "clamp"
 
+    def bounded(self, value: float) -> float | None:
+        """Return ``value`` within the bounds, or ``None`` when it must be dropped."""
+
+        low, high = self.minimum, self.maximum
+        too_low = low is not None and (value <= low if self.exclusive_minimum else value < low)
+        too_high = high is not None and value > high
+        if not too_low and not too_high:
+            return value
+        if self.out_of_range == "drop" or (too_low and self.exclusive_minimum):
+            return None
+        return low if too_low else high
+
 
 @dataclass(frozen=True)
 class RequestRules:
@@ -231,6 +243,30 @@ class RequestRules:
     list_announced_tools: bool = False
     prompt_cache: PromptCacheStyle = "none"
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
+
+    def shape_parameters(self, payload: dict[str, Any], *, reasoning_active: bool) -> None:
+        """Apply ``parameters`` to the top-level request fields of ``payload``.
+
+        ``drop`` removes the field, ``drop_while_thinking`` removes it while the
+        request asks for reasoning, and numeric values outside the bounds are
+        clamped into range or dropped (an exclusive lower bound cannot be
+        clamped onto, so such a value is dropped).
+        """
+
+        for name, rule in self.parameters.items():
+            if name not in payload:
+                continue
+            if rule.mode == "drop" or (rule.mode == "drop_while_thinking" and reasoning_active):
+                del payload[name]
+                continue
+            value = payload[name]
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                continue
+            bounded = rule.bounded(value)
+            if bounded is None:
+                del payload[name]
+            else:
+                payload[name] = bounded
 
 
 @dataclass(frozen=True)
@@ -342,7 +378,9 @@ class ReasoningWire:
         if render == "auto":
             if self.control in ("on_off", "budget"):
                 return ReasoningIntent(REASONING_INTENT_OFF)
-            level = "none" if "none" in ladder else None
+            # An effort-spelled off is sent only to a Model known to reason; an
+            # unknown Model may reject the ``none`` value outright.
+            level = "none" if "none" in ladder and self.supported is True else None
             return ReasoningIntent(REASONING_INTENT_OFF, effort_level=level)
         if render == "omit":
             return ReasoningIntent(REASONING_INTENT_DEFAULT)
@@ -374,6 +412,8 @@ class ReplayRules:
     ``scope`` selects the Assistant turns (Chat applies it); ``fidelity`` selects
     the class of reasoning state per turn; ``history_field`` is the readable
     carrier on Assistant history where the protocol uses one;
+    ``echo_response_field`` lets the field a Model was observed answering in
+    become that carrier (for wires whose Models expect their own field back);
     ``echo_empty_on_tool_calls`` sends an empty readable carrier on Tool-call
     turns without reasoning; ``strip_when_off`` removes historical reasoning
     when the current request disables reasoning.
@@ -382,6 +422,7 @@ class ReplayRules:
     scope: ReasoningReplayPolicy = DEFAULT_REASONING_REPLAY_POLICY
     fidelity: ReasoningReplayFidelity = DEFAULT_REASONING_REPLAY_FIDELITY
     history_field: str | None = None
+    echo_response_field: bool = False
     echo_empty_on_tool_calls: bool = False
     strip_when_off: bool = False
 

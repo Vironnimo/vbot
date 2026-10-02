@@ -1,0 +1,7 @@
+{
+  "format_version": 1,
+  "_comment": "Nous Portal spells reasoning as reasoning: {enabled, effort}; disabled reasoning is an omission.",
+  "defaults": {
+    "reasoning": {"dialect": "nous_reasoning"}
+  }
+}

@@ -18,6 +18,12 @@ OPENAI_REASONING_META_KEYS = ("encrypted_content", "reasoning_details")
 
 _OPENAI_STREAM_REASONING_DETAILS_STATE_KEY = "openai_reasoning_details"
 
+_OPENAI_STREAM_REASONING_FIELDS_STATE_KEY = "openai_reasoning_fields"
+"""Stream state: the profile's readable reasoning fields, in priority order."""
+
+_OPENAI_STREAM_REASONING_FIELD_SEEN_STATE_KEY = "openai_reasoning_field_seen"
+"""Stream state: the field the stream's readable reasoning first arrived in."""
+
 _OPENAI_TOOL_CALL_INDEX_IDS_STATE_KEY = "openai_tool_call_index_ids"
 
 _OPENAI_TOOL_CALL_NAMES_STATE_KEY = "openai_tool_call_names"

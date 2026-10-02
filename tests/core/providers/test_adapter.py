@@ -74,8 +74,12 @@ def test_concrete_adapter_must_implement_aclose_send_and_stream(missing: str) ->
 def test_optional_capabilities_degrade_safely_by_default() -> None:
     adapter = _StubAdapter()
 
-    # A forgotten media declaration degrades attachments instead of crashing the wire.
-    assert adapter.wire_media_support("any-model") == frozenset()
+    # Media support, byte limits and replay fidelity come from the wire profile.
+    profile = adapter.wire_profile("any-model")
+    assert adapter.wire_media_support("any-model") == profile.media.types
+    assert adapter.image_size_limit("any-model") is None
+    assert adapter.request_body_limit("any-model") is None
+    assert adapter.reasoning_replay_fidelity("any-model") == profile.replay.fidelity
     # Debug context is a no-op without a recorder.
     adapter.set_debug_context(
         DebugContext(

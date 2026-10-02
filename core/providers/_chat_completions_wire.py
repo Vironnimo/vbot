@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.providers._chat_completions_constants import (
@@ -302,56 +302,56 @@ def _extract_openai_tool_calls(message: dict[str, Any]) -> list[dict[str, Any]] 
     return tool_calls or None
 
 
-def _extract_openai_reasoning(
-    message: dict[str, Any], *, preferred_field: str | None = None
-) -> str | None:
-    """Return the visible reasoning text from an assistant message.
+def _find_openai_reasoning(
+    message: Mapping[str, Any], fields: Sequence[str] = OPENAI_REASONING_KEYS
+) -> tuple[str, str] | None:
+    """Return ``(field, text)`` of the first readable reasoning on a message.
 
-    When ``preferred_field`` names a visible-text reasoning field present as a
-    string on the message, it wins; otherwise the default key scan
-    (``OPENAI_REASONING_KEYS``) applies. A ``preferred_field`` that is actually a
-    meta field (e.g. ``reasoning_details``) carries no visible text, so it is
-    ignored here and surfaces through :func:`_extract_openai_reasoning_meta`.
+    ``fields`` is the wire profile's ``response.reasoning_fields`` in priority
+    order; only non-empty string values count, and an opaque reasoning carrier
+    named there (``OPENAI_REASONING_META_KEYS``) never yields readable text.
     """
 
-    if preferred_field is not None and preferred_field not in OPENAI_REASONING_META_KEYS:
-        value = message.get(preferred_field)
+    for field in fields:
+        if field in OPENAI_REASONING_META_KEYS:
+            continue
+        value = message.get(field)
         if isinstance(value, str) and value:
-            return value
-    for key in OPENAI_REASONING_KEYS:
-        value = message.get(key)
-        if isinstance(value, str) and value:
-            return value
+            return field, value
     return None
 
 
-def _extract_openai_reasoning_meta(
-    message: dict[str, Any], *, preferred_field: str | None = None
-) -> dict[str, Any] | None:
-    """Return the opaque reasoning-meta fields from an assistant message.
+def _extract_openai_reasoning(
+    message: Mapping[str, Any], *, fields: Sequence[str] = OPENAI_REASONING_KEYS
+) -> str | None:
+    """Return the readable reasoning text from an assistant message or delta."""
 
-    The default meta keys (``OPENAI_REASONING_META_KEYS``) are always collected;
-    a ``preferred_field`` that names a meta field not already in that set is also
-    collected when present, so a catalog-named meta field is preserved for replay
-    even if it is not a hardcoded default.
-    """
+    found = _find_openai_reasoning(message, fields)
+    return found[1] if found is not None else None
+
+
+def _extract_openai_reasoning_meta(message: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the opaque reasoning-meta fields (``OPENAI_REASONING_META_KEYS``)."""
 
     meta: dict[str, Any] = {}
     for key in OPENAI_REASONING_META_KEYS:
         if key in message:
             meta[key] = message[key]
-    if (
-        preferred_field is not None
-        and preferred_field not in OPENAI_REASONING_KEYS
-        and preferred_field not in meta
-        and preferred_field in message
-    ):
-        meta[preferred_field] = message[preferred_field]
     return meta or None
 
 
+def _openai_response_message(response: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The first choice's message, or ``None`` for a malformed shape (diagnostics only)."""
+
+    choices = response.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return None
+    message = choices[0].get("message")
+    return message if isinstance(message, Mapping) else None
+
+
 def _openai_response_carries_reasoning(
-    response: Mapping[str, Any], *, preferred_field: str | None = None
+    response: Mapping[str, Any], *, fields: Sequence[str] = OPENAI_REASONING_KEYS
 ) -> bool:
     """Return whether a completed response returned any Reasoning state.
 
@@ -361,15 +361,12 @@ def _openai_response_carries_reasoning(
     normalization keeps owning shape errors.
     """
 
-    choices = response.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+    message = _openai_response_message(response)
+    if message is None:
         return False
-    message = choices[0].get("message")
-    if not isinstance(message, dict):
-        return False
-    if _extract_openai_reasoning(message, preferred_field=preferred_field):
+    if _find_openai_reasoning(message, fields) is not None:
         return True
-    meta = _extract_openai_reasoning_meta(message, preferred_field=preferred_field)
+    meta = _extract_openai_reasoning_meta(message)
     return meta is not None and any(meta.values())
 
 
