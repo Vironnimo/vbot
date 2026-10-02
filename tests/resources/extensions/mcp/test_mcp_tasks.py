@@ -8,11 +8,13 @@ from typing import Any
 import mcp.types as types
 import pytest
 from mcp.server import Server
+from mcp.shared.exceptions import MCPError
 
 from resources.extensions.mcp import _tasks
+from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._tasks import TASKS_EXTENSION, TaskEndedError
-from resources.extensions.mcp.client import UnsupportedOperationError
-from tests.resources.extensions.mcp.mcp_test_support import context, runner_for
+from resources.extensions.mcp.client import InvocationNotSentError, UnsupportedOperationError
+from tests.resources.extensions.mcp.mcp_test_support import StreamServer, context, runner_for
 
 _TASK = "task-sentinel"
 _STAMP = "2026-10-02T00:00:00Z"
@@ -41,7 +43,9 @@ class _TaskServer:
     """A 2026-07-28 server that answers its Tool with a task.
 
     Each ``tasks/get`` returns the next entry of *script* (the last one repeats);
-    a cancelled task reports ``cancelled`` from then on.
+    a cancelled task reports ``cancelled`` from then on. Its tasks outlive a
+    connection; a ``forgotten`` server no longer knows them, and while
+    ``stalling`` it never acknowledges an answer.
     """
 
     def __init__(self, script: list[dict[str, Any]], **handle: Any) -> None:
@@ -50,6 +54,8 @@ class _TaskServer:
         self.gets = 0
         self.updates: list[dict[str, Any]] = []
         self.cancels: list[str] = []
+        self.forgotten = False
+        self.stalling = False
         self.server = Server("tasks", on_call_tool=self._call, on_list_tools=self._list)
         self.server.extensions[TASKS_EXTENSION] = {}
         self.server.add_request_handler("tasks/get", _TaskParams, self._get)
@@ -76,6 +82,8 @@ class _TaskServer:
 
     async def _get(self, server_context: Any, params: _TaskParams) -> dict[str, Any]:
         assert params.task_id == _TASK
+        if self.forgotten:
+            raise MCPError(types.INVALID_PARAMS, "unknown-task-sentinel")
         if self.cancels:
             return self._task("cancelled")
         entry = self.script[min(self.gets, len(self.script) - 1)]
@@ -84,6 +92,8 @@ class _TaskServer:
 
     async def _update(self, server_context: Any, params: _TaskUpdate) -> dict[str, Any]:
         self.updates.append(params.input_responses)
+        if self.stalling:
+            await asyncio.Event().wait()
         return {}
 
     async def _cancel(self, server_context: Any, params: _TaskParams) -> dict[str, Any]:
@@ -213,15 +223,106 @@ async def test_a_task_that_ends_without_a_result_reports_why(
 
 
 @pytest.mark.asyncio
-async def test_a_cancelled_call_cancels_its_task_at_the_server(host, monkeypatch, clock):
+@pytest.mark.parametrize("forgotten", [False, True], ids=["resumed", "forgotten"])
+async def test_a_task_outlives_a_lost_connection_unless_the_server_forgot_it(
+    host, monkeypatch, clock, forgotten
+):
+    # The connection ends after the user's answer reached the server but before
+    # the server acknowledged it.
+    tasks = _TaskServer(
+        [
+            {"status": "input_required", "inputRequests": {"q": _QUESTION}},
+            # Still listed after the reconnect: the answer is sent again, not asked again.
+            {"status": "input_required", "inputRequests": {"q": _QUESTION}},
+            {"status": "completed", "result": {"content": [{"type": "text", "text": "done"}]}},
+        ]
+    )
+    tasks.stalling = True
+
+    async def sleep(delay):
+        pass
+
+    monkeypatch.setattr(mcp_client, "_sleep", sleep)
+    stream = StreamServer(tasks.server)
+    runner = runner_for(host, stream, monkeypatch)
+    call = asyncio.create_task(runner.invoke("tools/call", {"name": "long"}, context(host)))
+    try:
+        async with asyncio.timeout(10):
+            while not runner.inputs.list():
+                await asyncio.sleep(0)
+            pending = runner.inputs.list()[0]
+            runner.inputs.respond(
+                pending["id"], {"action": "accept", "content": {"name": "user-sentinel"}}
+            )
+            while not tasks.updates:
+                await asyncio.sleep(0)
+            tasks.stalling = False
+            tasks.forgotten = forgotten
+            await stream.kill()
+            while not call.done():
+                # The user is not asked again.
+                assert not runner.inputs.list()
+                await asyncio.sleep(0)
+        if forgotten:
+            with pytest.raises(ValueError) as lost:
+                await call
+            assert not isinstance(lost.value, InvocationNotSentError)
+            assert str(lost.value) == (
+                "The connection was lost while the call ran: the MCP server closed the "
+                "connection. After vBot reconnected, the MCP server no longer knew this call's "
+                "background work: unknown-task-sentinel"
+            )
+        else:
+            assert (await call)["content"][0]["text"] == "done"
+    finally:
+        call.cancel()
+        await asyncio.gather(call, return_exceptions=True)
+        await runner.close()
+
+    assert stream.connections == 2
+    answers = [update["q"]["content"] for update in tasks.updates]
+    assert answers == [{"name": "user-sentinel"}] * (1 if forgotten else 2)
+    assert tasks.cancels == []
+    events = runner.events()["events"]
+    assert [event["payload"] for event in events if event["kind"] == "task_resumed"] == [
+        {"task_id": _TASK, "attempt": 1}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reconnecting", [False, True], ids=["waiting", "reconnecting"])
+async def test_a_cancelled_call_cancels_its_task_at_the_server(
+    host, monkeypatch, clock, reconnecting
+):
+    # Also when its connection was lost and the Run is cancelled before it is back.
     tasks = _TaskServer([{"status": "working"}])
-    runner = runner_for(host, tasks.server, monkeypatch)
+    stream = StreamServer(tasks.server)
+    runner = runner_for(host, stream if reconnecting else tasks.server, monkeypatch)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def transport(stack):
+        if stream.connections:
+            entered.set()
+            await release.wait()
+        return stream
+
+    async def sleep(delay):
+        pass
+
+    if reconnecting:
+        monkeypatch.setattr(runner, "_transport", transport)
+        monkeypatch.setattr(mcp_client, "_sleep", sleep)
     call = asyncio.create_task(runner.invoke("tools/call", {"name": "long"}, context(host)))
     try:
         async with asyncio.timeout(10):
             while tasks.gets < 2:
                 await asyncio.sleep(0)
+            if reconnecting:
+                await stream.kill()
+                await entered.wait()
             call.cancel()
+            release.set()
             while not tasks.cancels:
                 await asyncio.sleep(0)
         with pytest.raises(asyncio.CancelledError):
