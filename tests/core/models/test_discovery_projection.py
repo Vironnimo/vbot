@@ -18,6 +18,7 @@ import respx
 from core.models.discovery import refresh_models
 from core.models.models import ModelRegistry
 from core.models.models_dev import ModelsDevCatalog
+from core.providers import OpenCodeZenAdapter
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 
 from .discovery_test_support import (
@@ -41,7 +42,8 @@ from .discovery_test_support import (
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_path: Path) -> None:
+async def test_opencode_zen_writes_admitted_models_and_merges_connections(tmp_path: Path) -> None:
+    """Zen admits a Model its protocol hint or a reviewed rule routes, unless free or retired."""
     resources_dir = tmp_path / "resources"
     config = ProviderConfig(
         id="opencode-zen",
@@ -64,6 +66,10 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
         catalog_exclusions=frozenset({"glm-5"}),
     )
     modalities = {"input": ["text", "image", "video", "audio", "pdf"], "output": ["text"]}
+
+    def section_model(model_id: str, npm: str | None = None) -> dict[str, Any]:
+        return {"id": model_id, "name": model_id, **({"provider": {"npm": npm}} if npm else {})}
+
     catalog = ModelsDevCatalog(
         {
             "models": {
@@ -78,9 +84,11 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
                 "opencode": {
                     "id": "opencode",
                     "name": "OpenCode",
+                    # The section's default package is no Model's protocol hint.
+                    "npm": "@ai-sdk/openai-compatible",
                     "models": {
                         "gemini-3.5-flash": {
-                            "id": "gemini-3.5-flash",
+                            **section_model("gemini-3.5-flash", "@ai-sdk/google"),
                             "name": "Gemini 3.5 Flash",
                             "family": "gemini",
                             "limit": {"context": 1_048_576, "output": 65_536},
@@ -90,7 +98,12 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
                             "reasoning_options": [
                                 {"type": "effort", "values": ["minimal", "low", "medium", "high"]}
                             ],
-                        }
+                        },
+                        "claude-future-6": section_model("claude-future-6", "@ai-sdk/anthropic"),
+                        "unreviewed-future-model": section_model("unreviewed-future-model"),
+                        "muse-spark-1.3-contributor-free": section_model(
+                            "muse-spark-1.3-contributor-free", "@ai-sdk/openai"
+                        ),
                     },
                 }
             },
@@ -98,9 +111,11 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
     )
     live_ids = [
         "gemini-3.5-flash",
-        "claude-fable-5-1",
+        "claude-future-6",
+        "glm-5.1",
         "glm-5",
         "unreviewed-future-model",
+        "muse-spark-1.3-contributor-free",
         "mimo-v2.6-flash-free",
     ]
     route = respx.get("https://opencode.ai/zen/v1/models").mock(
@@ -122,12 +137,30 @@ async def test_opencode_zen_enriches_its_allowlist_and_merges_connections(tmp_pa
 
     written = read_models_file(resources_dir, "opencode-zen.json")["models"]
     gemini = written["gemini-3.5-flash"]
-    assert counts == [2, 2]
+    assert counts == [3, 3]
     assert route.call_count == 2
-    assert set(written) == {"gemini-3.5-flash", "claude-fable-5-1"}
+    assert set(written) == {"gemini-3.5-flash", "claude-future-6", "glm-5.1"}
     assert gemini["connections"] == ["api-key", "account"]
     assert (gemini["context_window"], gemini["max_output_tokens"]) == (1_048_576, 65_536)
     assert gemini["capabilities"]["input_modalities"] == modalities["input"]
+    assert written["claude-future-6"]["metadata"] == {"opencode_zen": {"npm": "@ai-sdk/anthropic"}}
+    assert "metadata" not in written["glm-5.1"]
+
+    registry = ModelRegistry.load(resources_dir)
+    adapter = OpenCodeZenAdapter(
+        config, "key", model_lookup=lambda model_id: registry.get("opencode-zen", model_id)
+    )
+    profiles = {model_id: adapter.wire_profile(model_id) for model_id in written}
+    assert {
+        model_id: (profile.protocol, profile.admission.state)
+        for model_id, profile in profiles.items()
+    } == {
+        "gemini-3.5-flash": ("gemini", "available"),
+        "claude-future-6": ("messages", "available"),
+        "glm-5.1": ("chat_completions", "available"),
+    }
+    assert profiles["claude-future-6"].provenance["protocol"] == "catalog_hint"
+    await adapter.aclose()
 
 
 @respx.mock

@@ -64,6 +64,7 @@ LAYER_FILE_DEFAULTS = "defaults"
 LAYER_FILE_PROTOCOL = "protocols"
 LAYER_FILE_CONNECTION = "connections"
 LAYER_CATALOG = "catalog"
+LAYER_CATALOG_HINT = "catalog_hint"
 LAYER_RULE = "rule"
 LAYER_OBSERVED = "observed"
 LAYER_MODEL = "model"
@@ -71,6 +72,18 @@ LAYER_MODEL_CONNECTION = "model_connection"
 _GENERIC_LAYERS = frozenset(
     {LAYER_PROTOCOL, LAYER_FILE_DEFAULTS, LAYER_FILE_PROTOCOL, LAYER_FILE_CONNECTION}
 )
+
+_CATALOG_HINT_PROTOCOLS: Mapping[str, Protocol] = MappingProxyType(
+    {
+        "@ai-sdk/anthropic": "messages",
+        "@ai-sdk/google": "gemini",
+        "@ai-sdk/openai": "responses",
+        "@ai-sdk/openai-compatible": "chat_completions",
+    }
+)
+"""Catalog protocol hint (``metadata.<provider>.npm``, the Model's own AI SDK
+package) → the wire protocol that package speaks. Any other package names no
+protocol vBot can derive and is ignored."""
 
 
 @dataclass(frozen=True)
@@ -415,6 +428,9 @@ class _Resolution:
             candidates.append((entry.values.get("protocol"), LAYER_MODEL))
         for rule in reversed(rules):
             candidates.append((rule.values.get("protocol"), f"{LAYER_RULE}[{rule.index}]"))
+        hinted = self._hinted_protocol()
+        if hinted is not None:
+            candidates.append((hinted, LAYER_CATALOG_HINT))
         if self.file is not None:
             candidates.append(
                 (
@@ -434,6 +450,17 @@ class _Resolution:
                 f"({', '.join(self.protocols)}), ignoring it"
             )
         return self.protocols[0], LAYER_PROTOCOL
+
+    def _hinted_protocol(self) -> Protocol | None:
+        """The protocol the catalog's AI SDK package names, if the Adapter speaks it.
+
+        A hint is a catalog fact, not a curated choice: a package the Adapter
+        cannot speak is skipped silently instead of reported as a data issue.
+        """
+
+        npm = _catalog_hint(self.provider_id, self.model, "npm")
+        protocol = _CATALOG_HINT_PROTOCOLS.get(npm) if isinstance(npm, str) else None
+        return protocol if protocol in self.protocols else None
 
     # -- rules ----------------------------------------------------------------
 
@@ -738,6 +765,7 @@ __all__ = [
     "standalone_wire_binding",
     "wire_profile_files",
     "LAYER_CATALOG",
+    "LAYER_CATALOG_HINT",
     "LAYER_FILE_CONNECTION",
     "LAYER_FILE_DEFAULTS",
     "LAYER_FILE_PROTOCOL",

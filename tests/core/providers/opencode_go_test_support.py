@@ -53,9 +53,18 @@ _LEVELS: dict[str, tuple[str, ...]] = {
     "kimi-k3": ("low", "high", "max"),
 }
 
+# The catalog protocol hint (models.dev AI SDK package) of the hinted entries.
+_NPM: dict[str, str] = {
+    "minimax-m2.7": "@ai-sdk/anthropic",
+    "minimax-m3": "@ai-sdk/anthropic",
+    "gpt-5.6-luna": "@ai-sdk/openai",
+    "muse-spark-1.3-contributor": "@ai-sdk/openai",
+    "grok-4.6": "@ai-sdk/openai",
+}
+
 # Test-owned catalog entries, so wire behavior stays pinned when the live catalog
-# changes. Routing and wire shaping come from the bundled wire profile
-# (``resources/wire/opencode-go.json``), whose rules name these ids.
+# changes. Each entry's protocol hint routes it as in the live catalog; wire
+# shaping comes from the bundled wire profile (``resources/wire/opencode-go.json``).
 CATALOG_IDS = frozenset(
     {
         "minimax-m2.7",
@@ -95,6 +104,7 @@ def go_model(
         ),
         context_window=context_window,
         max_output_tokens=max_output_tokens,
+        metadata={"opencode_go": {"npm": _NPM[model_id]}} if model_id in _NPM else {},
     )
 
 

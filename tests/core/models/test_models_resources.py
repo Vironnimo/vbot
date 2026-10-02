@@ -246,7 +246,10 @@ def test_ollama_cloud_deepseek_v41_verified_profile(registry: ModelRegistry) -> 
 
 
 def test_opencode_go_current_endpoint_profiles_load(registry: ModelRegistry) -> None:
-    """Protect the current wire of every published id (``resources/wire/opencode-go.json``)."""
+    """Protect the current wire of every published id.
+
+    The bundled catalog's protocol hints and ``resources/wire/opencode-go.json`` route them.
+    """
 
     expected_by_protocol = {
         "responses": (
@@ -449,7 +452,6 @@ def test_zen_snapshot_serves_every_reviewed_model_on_both_connections(
     for model in usable:
         assert set(model.connections) == {"api-key", "account"}
         # Discovery keeps only Models the wire profile admits.
-        OpenCodeZenAdapter.normalize_catalog_entry({"id": model.model_id})
         assert _wire_profile(registry, "opencode-zen", model.model_id).admission.state == (
             "available"
         )

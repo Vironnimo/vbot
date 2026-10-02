@@ -230,14 +230,33 @@ def test_protocol_follows_precedence_and_skips_protocols_the_adapter_cannot_spea
         ],
         "models": {"gpt-y": {"connections": {"subscription": {"protocol": "chat_completions"}}}},
     }
-    profiles, issues = _profiles(document)
+    # The catalog protocol hint: the Model's own AI SDK package (models.dev).
+    hinted = {
+        model_id: _model(model_id, metadata={"acme": {"npm": npm}})
+        for model_id, npm in {
+            "claude-x": "@ai-sdk/openai",
+            "gpt-y": "@ai-sdk/anthropic",
+            "compat": "@ai-sdk/openai-compatible",
+            "undeclared": "@ai-sdk/google",
+            "unmapped": "@ai-sdk/mistral",
+        }.items()
+    }
+    profiles, issues = _profiles(document, hinted)
 
-    assert _resolve(profiles, "unknown").protocol == "responses"
-    assert _resolve(profiles, "unknown", "subscription").protocol == "messages"
-    assert _resolve(profiles, "gpt-y", "subscription").protocol == "chat_completions"
-    claude = _resolve(profiles, "claude-x")
-    assert (claude.protocol, claude.source_of("protocol")) == ("messages", "rule[0]")
-    assert any("'gemini'" in issue for issue in issues)
+    def protocol(model_id: str, connection: str = "api-key") -> tuple[str, str | None]:
+        profile = _resolve(profiles, model_id, connection)
+        return profile.protocol, profile.source_of("protocol")
+
+    assert protocol("unknown") == ("responses", "defaults")
+    assert protocol("unknown", "subscription") == ("messages", "connections")
+    assert protocol("gpt-y", "subscription") == ("chat_completions", "model_connection")
+    assert protocol("gpt-y") == ("messages", "catalog_hint")
+    assert protocol("compat", "subscription") == ("chat_completions", "catalog_hint")
+    assert protocol("claude-x") == ("messages", "rule[0]")
+    # A hint the Adapter cannot speak, or a package without a protocol, is no data issue.
+    assert protocol("undeclared") == ("responses", "defaults")
+    assert protocol("unmapped") == ("responses", "defaults")
+    assert issues and all("'gemini' from rule[1]" in issue for issue in issues)
 
     bare, _ = _profiles(None, protocols=("ollama_chat",))
     assert _resolve(bare, "anything").protocol == "ollama_chat"

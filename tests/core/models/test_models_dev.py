@@ -28,6 +28,7 @@ from core.models.models_dev import (
     provider_family,
     provider_limits,
     provider_modalities,
+    provider_npm,
     provider_reasoning_block,
     provider_reasoning_supported,
     reasoning_response_field,
@@ -191,6 +192,9 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
         ["text"],
     )
     assert provider_family(catalog, **lab_v4) == "deepseek-thinking"
+    # The section's default package is not a fact about one Model.
+    assert catalog.providers["openrouter"]["npm"] == "@openrouter/ai-sdk-provider"
+    assert provider_npm(catalog, **openrouter_v4) is None
     assert provider_reasoning_supported(catalog, **lab_v4) is True
     assert (
         provider_reasoning_supported(
@@ -208,6 +212,7 @@ def test_provider_sections_supply_the_facts_bare_endpoints_omit(
         (provider_limits, (None, None)),
         (provider_modalities, None),
         (provider_family, None),
+        (provider_npm, None),
         (provider_reasoning_supported, None),
     ],
 )

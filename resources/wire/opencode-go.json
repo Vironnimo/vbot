@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenCode Go gateway. One API key reaches three wires; the gateway publishes each Model's wire, so rules route the Messages and Responses Models and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history for every Model, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
+  "_comment": "OpenCode Go gateway. One API key reaches three wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes the Messages and Responses Models (Grok 4.7 on Responses live low-effort smoke verified), a rule routes the Messages Models the catalog names no package for, and every other Model speaks Chat Completions. Every wire carries the x-opencode-session prompt-cache affinity header (Adapter code). Chat replays readable reasoning_content only (OpenCode's own client never replays reasoning_details) and gives every historical Tool Call a reasoning_content carrier, empty when the call had no readable Reasoning: DeepSeek's thinking mode rejects a Tool Call without it. Responses is stateless (store false), takes only max_output_tokens (max_tokens maps onto it) and top_p, and structured output on every Model; its default ladder has no none rung because the gateway rejected an explicit none (live 2026-08-25), so only a Model whose ladder lists none sends it. Models that cannot stop reasoning get their cheapest rung for none. Replay scope is full_history for every Model, also where an upstream preserved-thinking contract is stronger than a particular gateway measurement. GLM 5.3 Flash drops calls to Tools outside the request's Tool list, so Tools announced mid-Session are listed there.",
   "defaults": {
     "replay": {"scope": "full_history"}
   },
@@ -25,33 +25,10 @@
   "rules": [
     {
       "when": {
-        "ids": [
-          "minimax-m2.5",
-          "minimax-m2.7",
-          "minimax-m3",
-          "qwen3.6-plus",
-          "qwen3.7-max",
-          "qwen3.7-plus",
-          "qwen3.8-flash",
-          "qwen3.8-max"
-        ]
+        "ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"]
       },
       "set": {"protocol": "messages"},
-      "note": "The gateway serves MiniMax and Qwen Models on Anthropic Messages (/messages)."
-    },
-    {
-      "when": {
-        "ids": [
-          "gpt-5.6-luna",
-          "gpt-6-luna",
-          "grok-4.6",
-          "grok-4.7",
-          "muse-spark-1.2-contributor",
-          "muse-spark-1.3-contributor"
-        ]
-      },
-      "set": {"protocol": "responses"},
-      "note": "The gateway serves GPT, Grok and Muse Spark Models on stateless Responses (/responses); Grok 4.7 live low-effort smoke verified."
+      "note": "The gateway serves these MiniMax and Qwen Models on Anthropic Messages (/messages), but the catalog names no package for them."
     },
     {
       "when": {"ids": ["hy3", "hy4-preview", "kimi-k2.6", "kimi-k3"]},

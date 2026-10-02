@@ -39,6 +39,11 @@
       "context_window": 1000000,
       "family": "claude-fable",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-fable-5",
       "pricing": {
         "rates": {
@@ -88,6 +93,11 @@
       "context_window": 1000000,
       "family": "claude-fable",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-fable-5-1",
       "pricing": {
         "rates": {
@@ -130,6 +140,11 @@
       "context_window": 200000,
       "family": "claude-haiku",
       "max_output_tokens": 64000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-haiku-4-5",
       "pricing": {
         "rates": {
@@ -177,6 +192,11 @@
       "context_window": 200000,
       "family": "claude-opus",
       "max_output_tokens": 64000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-4-5",
       "pricing": {
         "rates": {
@@ -225,6 +245,11 @@
       "context_window": 1000000,
       "family": "claude-opus",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-4-6",
       "pricing": {
         "rates": {
@@ -274,6 +299,11 @@
       "context_window": 1000000,
       "family": "claude-opus",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-4-7",
       "pricing": {
         "rates": {
@@ -323,6 +353,11 @@
       "context_window": 1000000,
       "family": "claude-opus",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-4-8",
       "pricing": {
         "rates": {
@@ -372,6 +407,11 @@
       "context_window": 1000000,
       "family": "claude-opus",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-5",
       "pricing": {
         "rates": {
@@ -421,6 +461,11 @@
       "context_window": 1000000,
       "family": "claude-opus",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-opus-5-5",
       "pricing": {
         "rates": {
@@ -463,6 +508,11 @@
       "context_window": 1000000,
       "family": "claude-sonnet",
       "max_output_tokens": 64000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-sonnet-4-5",
       "pricing": {
         "rates": {
@@ -523,6 +573,11 @@
       "context_window": 1000000,
       "family": "claude-sonnet",
       "max_output_tokens": 64000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-sonnet-4-6",
       "pricing": {
         "rates": {
@@ -572,6 +627,11 @@
       "context_window": 1000000,
       "family": "claude-sonnet",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-sonnet-5",
       "pricing": {
         "rates": {
@@ -621,6 +681,11 @@
       "context_window": 1000000,
       "family": "claude-sonnet",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "claude-sonnet-5-5",
       "pricing": {
         "rates": {
@@ -868,6 +933,11 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3-flash",
       "pricing": {
         "rates": {
@@ -916,6 +986,11 @@
       "context_window": 1048576,
       "family": "gemini-pro",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.1-pro",
       "pricing": {
         "rates": {
@@ -976,6 +1051,11 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.5-flash",
       "pricing": {
         "rates": {
@@ -1025,6 +1105,11 @@
       "context_window": 1048576,
       "family": "gemini-flash-lite",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.5-flash-lite",
       "pricing": {
         "rates": {
@@ -1074,6 +1159,11 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.6-flash",
       "pricing": {
         "rates": {
@@ -1122,6 +1212,11 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.7-flash",
       "pricing": {
         "rates": {
@@ -1170,6 +1265,11 @@
       "context_window": 1048576,
       "family": "gemini-flash",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/google"
+        }
+      },
       "name": "gemini-3.8-flash",
       "pricing": {
         "rates": {
@@ -1409,6 +1509,11 @@
       "context_window": 400000,
       "family": "gpt",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5",
       "pricing": {
         "rates": {
@@ -1455,6 +1560,11 @@
       "context_window": 400000,
       "family": "gpt-nano",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5-nano",
       "pricing": {
         "rates": {
@@ -1501,6 +1611,11 @@
       "context_window": 400000,
       "family": "gpt",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.1",
       "pricing": {
         "rates": {
@@ -1548,6 +1663,11 @@
       "context_window": 400000,
       "family": "gpt",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.2",
       "pricing": {
         "rates": {
@@ -1596,6 +1716,11 @@
       "context_window": 400000,
       "family": "gpt-codex",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.3-codex",
       "pricing": {
         "rates": {
@@ -1641,6 +1766,11 @@
       "context_window": 128000,
       "family": "gpt-codex-spark",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.3-codex-spark",
       "pricing": {
         "rates": {
@@ -1689,6 +1819,11 @@
       "context_window": 1050000,
       "family": "gpt",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.4",
       "pricing": {
         "rates": {
@@ -1748,6 +1883,11 @@
       "context_window": 400000,
       "family": "gpt-mini",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.4-mini",
       "pricing": {
         "rates": {
@@ -1796,6 +1936,11 @@
       "context_window": 400000,
       "family": "gpt-nano",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.4-nano",
       "pricing": {
         "rates": {
@@ -1842,6 +1987,11 @@
       "context_window": 1050000,
       "family": "gpt-pro",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.4-pro",
       "pricing": {
         "rates": {
@@ -1890,6 +2040,11 @@
       "context_window": 1050000,
       "family": "gpt",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.5",
       "pricing": {
         "rates": {
@@ -1947,6 +2102,11 @@
       "context_window": 1050000,
       "family": "gpt-pro",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.5-pro",
       "pricing": {
         "rates": {
@@ -1996,6 +2156,11 @@
       "context_window": 1050000,
       "family": "gpt-luna",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.6-luna",
       "pricing": {
         "rates": {
@@ -2058,6 +2223,11 @@
       "context_window": 1050000,
       "family": "gpt-sol",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.6-sol",
       "pricing": {
         "rates": {
@@ -2120,6 +2290,11 @@
       "context_window": 1050000,
       "family": "gpt-terra",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-5.6-terra",
       "pricing": {
         "rates": {
@@ -2181,6 +2356,11 @@
       "context_window": 1050000,
       "family": "gpt-astra",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-6-astra",
       "pricing": {
         "rates": {
@@ -2243,6 +2423,11 @@
       "context_window": 1050000,
       "family": "gpt-luna",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-6-luna",
       "pricing": {
         "rates": {
@@ -2305,6 +2490,11 @@
       "context_window": 1050000,
       "family": "gpt-sol",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-6-sol",
       "pricing": {
         "rates": {
@@ -2366,6 +2556,11 @@
       "context_window": 1050000,
       "family": "gpt-sol",
       "max_output_tokens": 128000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "gpt-6.1-sol",
       "pricing": {
         "rates": {
@@ -2424,6 +2619,11 @@
       "context_window": 500000,
       "family": "grok",
       "max_output_tokens": 500000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-4.5",
       "pricing": {
         "rates": {
@@ -2481,6 +2681,11 @@
       "context_window": 500000,
       "family": "grok",
       "max_output_tokens": 500000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-4.6",
       "pricing": {
         "rates": {
@@ -2539,6 +2744,11 @@
       "context_window": 500000,
       "family": "grok",
       "max_output_tokens": 500000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-4.7",
       "pricing": {
         "rates": {
@@ -2590,6 +2800,11 @@
       "context_window": 256000,
       "family": "grok-build",
       "max_output_tokens": 256000,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "grok-build-0.1",
       "pricing": {
         "rates": {
@@ -2868,6 +3083,11 @@
       "context_window": 1048576,
       "family": "muse",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "muse-spark-1.2",
       "pricing": {
         "rates": {
@@ -2918,6 +3138,11 @@
       "context_window": 1048576,
       "family": "muse",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/openai"
+        }
+      },
       "name": "muse-spark-1.3",
       "pricing": {
         "rates": {
@@ -2960,6 +3185,11 @@
       "context_window": 262144,
       "family": "qwen3.5",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.5-plus",
       "pricing": {
         "rates": {
@@ -3003,6 +3233,11 @@
       "context_window": 262144,
       "family": "qwen3.6",
       "max_output_tokens": 65536,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.6-plus",
       "pricing": {
         "rates": {
@@ -3050,6 +3285,11 @@
       "context_window": 1000000,
       "family": "qwen",
       "max_output_tokens": 131072,
+      "metadata": {
+        "opencode_zen": {
+          "npm": "@ai-sdk/anthropic"
+        }
+      },
       "name": "qwen3.8-flash",
       "pricing": {
         "rates": {
