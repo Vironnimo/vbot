@@ -122,11 +122,26 @@ class ReflectionUnavailableError(RuntimeError):
 class ReflectionService:
     """Fork-based session reviews that save durable memory/skill updates."""
 
-    def __init__(self, runtime: RuntimeServices) -> None:
+    def __init__(
+        self,
+        runtime: RuntimeServices,
+        *,
+        librarian_running: Callable[[str], bool] = lambda _agent_id: False,
+    ) -> None:
+        """Review Sessions of ``runtime``'s Agents.
+
+        ``librarian_running(agent_id)`` says whether a Librarian pass curates the
+        Agent's Skills; a background review then leaves the Skills to the pass.
+        """
         self._runtime = runtime
+        self._librarian_running = librarian_running
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._agents_in_review: set[str] = set()
         self._closed = False
+
+    def reviewing(self, agent_id: str) -> bool:
+        """Whether a background review of the Agent is starting or running."""
+        return agent_id in self._agents_in_review
 
     # -- background trigger ----------------------------------------------------
 
@@ -218,8 +233,11 @@ class ReflectionService:
         if counters is None:
             return
         # One review at a time per agent: a due Session while a review is already
-        # running keeps its counters and re-checks on its next Run end.
-        scope = _scope_of(memory=counters.memory_due, skill=counters.skill_due)
+        # running keeps its counters and re-checks on its next Run end. So do the
+        # Skill counts while a Librarian pass curates the Agent's Skills: both
+        # would change the same Skills, each from what it read earlier.
+        skill_due = counters.skill_due and not self._librarian_running(agent_id)
+        scope = _scope_of(memory=counters.memory_due, skill=skill_due)
         if (
             not counters.reviews_enabled
             or not count_run

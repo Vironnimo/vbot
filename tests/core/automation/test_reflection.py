@@ -157,10 +157,12 @@ def _make_service(
     skill_model_step_interval: int = 10,
     chat_sessions: ChatSessionManager | None = None,
     agent: Any = None,
+    librarian_running: set[str] | None = None,
 ) -> tuple[ReflectionService, _FakeSessions, _FakeLoop]:
     """Build the service over the fake Sessions, or over real ``chat_sessions``.
 
-    ``agent`` is the effective Agent a review resolves when it starts. Every
+    ``agent`` is the effective Agent a review resolves when it starts, and
+    ``librarian_running`` names the Agents a Librarian pass curates. Every
     prompt fragment reads as its bracketed name.
     """
     sessions = _FakeSessions()
@@ -184,7 +186,9 @@ def _make_service(
         streaming_chat_loop=loop,
         tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
     )
-    return ReflectionService(cast("Any", runtime)), sessions, loop
+    curated = librarian_running if librarian_running is not None else set()
+    service = ReflectionService(cast("Any", runtime), librarian_running=curated.__contains__)
+    return service, sessions, loop
 
 
 def _counters(sessions: _FakeSessions, session_id: str = "s1") -> dict[str, int]:
@@ -681,6 +685,40 @@ async def test_in_flight_guard_skips_review_but_keeps_counters() -> None:
         "iterations_since_skill_review": 0,
     }
     assert loop.started == []
+
+
+@pytest.mark.asyncio
+async def test_skill_review_waits_while_a_librarian_pass_curates_the_skills() -> None:
+    curated = {"main"}
+    service, sessions, loop = _make_service(
+        memory_turn_interval=1, skill_model_step_interval=1, librarian_running=curated
+    )
+
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=2)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    # Only Memory is reviewed; the Skill counts stay due for the next Run end.
+    assert [review["run_kind"] for review in loop.started] == [RunKind.MEMORY_REFLECTION]
+    assert _counters(sessions) == {
+        "turns_since_memory_review": 0,
+        "iterations_since_skill_review": 2,
+    }
+    curated.clear()
+    service.notify_run_end(
+        cast("Any", _FakeRun(iteration_count=1)),
+        _identity_agent(),
+        internal=False,
+        outcome="success",
+    )
+    await _drain(service)
+
+    assert loop.started[-1]["run_kind"] is RunKind.REFLECTION
+    assert _counters(sessions)["iterations_since_skill_review"] == 0
 
 
 @pytest.mark.asyncio

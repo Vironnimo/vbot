@@ -12,7 +12,8 @@ import pytest
 
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
 from core.runs import RunKind
-from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService
+from core.skills import _history as skill_history_module
+from core.skills.authoring import HUMAN_WRITER, SkillAuthoringService, SkillWriter
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
@@ -63,6 +64,8 @@ class _Harness:
         self.scheduled: set[str] = set()
         # Names ``main`` shares with other Agents.
         self.shared_out: set[str] = set()
+        # When each Run started, by Run id.
+        self.run_started: dict[str, str] = {}
         self.tools = ToolRegistry()
         self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
@@ -77,6 +80,7 @@ class _Harness:
             on_changed=lambda: self.changes.append(list(self.invalidated)),
             triggered_skill_names=lambda agent_id: self.scheduled if agent_id == "main" else (),
             shared_skill_names=lambda agent_id: self.shared_out if agent_id == "main" else (),
+            run_started_at=self.run_started.get,
         )
 
     def home(self, agent_id: str) -> Path:
@@ -446,6 +450,45 @@ def test_background_reviews_change_and_merge_skills_agents_created(
     )
     revision = harness.authoring.history(home, "new")[0]
     assert (revision.actor, revision.run_kind) == (actor, review.value)
+
+
+def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    clock = (f"2026-01-{day:02d}T00:00:00.000000Z" for day in range(1, 29))
+    monkeypatch.setattr(skill_history_module, "utc_now_timestamp", lambda: next(clock))
+    chat = SkillWriter(actor="agent", run_id="run-chat")
+    harness.authoring.create(home, "notes", _skill_md("notes"), writer=chat)
+    harness.authoring.create(home, "guide", _skill_md("guide"), writer=chat)
+    # The pass ("run-one") starts; then a review teaches "notes" a lesson.
+    harness.run_started["run-one"] = next(clock)
+    review = SkillWriter(actor="reflection", run_id="run-review", run_kind="reflection")
+    harness.authoring.edit(home, "notes", _skill_md("notes", body="# Lesson\n"), writer=review)
+    merge: dict[str, object] = {"action": "delete", "name": "notes", "absorbed_into": "guide"}
+
+    refused = harness.run(merge, run_kind=RunKind.LIBRARIAN)
+
+    assert refused == tool_failure(
+        "skill_changed",
+        "Skill 'notes' was changed outside this pass after the pass started; nothing "
+        "changed. Load 'notes' again with skill and build your change from that text, or "
+        "leave it as it is.",
+        retryable=False,
+    )
+    assert "notes" in harness.authoring.records(home)
+    # The pass's own changes and changes before it started are not refused.
+    for old, new in (("# Demo", "# All"), ("# All", "# Both")):
+        patch: dict[str, object] = {
+            "action": "patch",
+            "name": "guide",
+            "old_string": old,
+            "new_string": new,
+        }
+        assert harness.run(patch, run_kind=RunKind.LIBRARIAN)["ok"] is True
+    # Each outside change is reported once: the pass that read "notes" again goes on.
+    assert harness.run(merge, run_kind=RunKind.LIBRARIAN)["ok"] is True
 
 
 # --- Patch tolerance --------------------------------------------------------

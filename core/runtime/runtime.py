@@ -69,7 +69,7 @@ from core.providers.token_getter import TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
 from core.recall import RecallBackend
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunNotFoundError
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -609,6 +609,15 @@ class Runtime:
         """Name the Skills the Identity Agent ``owner_id`` shares with other Agents."""
         return self._skill_operations().shared_skill_names(owner_id)
 
+    def run_started_at(self, run_id: str) -> str | None:
+        """When the Run ``run_id`` was created, while the Run manager still holds it."""
+        if self._chat_run_manager is None:
+            return None
+        try:
+            return self._chat_run_manager.get(run_id).created_at
+        except RunNotFoundError:
+            return None
+
     def automation_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
         """Name the Skills the live automations of the Identity Agent ``agent_id`` trigger."""
         return self.automation_references.agent_triggered_skill_names(agent_id)
@@ -913,6 +922,7 @@ class Runtime:
                     on_changed=self._notify_skills_changed,
                     triggered_skill_names=self.automation_triggered_skill_names,
                     shared_skill_names=self.shared_skill_names,
+                    run_started_at=self.run_started_at,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

@@ -486,6 +486,7 @@ class LibrarianService:
         shared_skill_names: Callable[[str], frozenset[str]],
         skills_changed: Callable[[str], None],
         status_changed: Callable[[], None] = lambda: None,
+        reviewing: Callable[[str], bool] = lambda _agent_id: False,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         """Curate the homes ``skills_dir`` names with ``authoring``.
@@ -495,7 +496,9 @@ class LibrarianService:
         trigger, and ``shared_skill_names`` (blocking) the Skills it shares with
         other Agents. ``skills_changed`` runs after aging archived Skills of an Agent
         (consolidation writes report themselves through ``skill_manage``), and
-        ``status_changed`` whenever a pass starts or ends.
+        ``status_changed`` whenever a pass starts or ends. ``reviewing(agent_id)``
+        says whether a background review of the Agent is starting or running; a
+        pass waits for it like for any other Run of the Agent.
         """
         self._runtime = runtime
         self._authoring = authoring
@@ -505,6 +508,7 @@ class LibrarianService:
         self._shared_skill_names = shared_skill_names
         self._skills_changed = skills_changed
         self._status_changed = status_changed
+        self._reviewing = reviewing
         self._clock = clock or (lambda: datetime.now(UTC))
         self._active: dict[str, _ActivePass] = {}
         self._task: asyncio.Task[None] | None = None
@@ -595,7 +599,7 @@ class LibrarianService:
             )
         if agent_id in self._active:
             raise LibrarianBusyError(f"A Librarian pass of Agent {agent_id} is already running.")
-        if self._runtime.chat_run_manager.has_activity_for_agent(agent_id, project_id=None):
+        if self._agent_active(agent_id):
             raise LibrarianBusyError(
                 f"Agent {agent_id} has an active or queued Run; run the Librarian when it is idle."
             )
@@ -690,11 +694,23 @@ class LibrarianService:
         await self._guarded_pass(agent_id, active)
         return usage if active.run_id is None else None
 
+    def running(self, agent_id: str) -> bool:
+        """Whether a pass of the Agent runs."""
+        return agent_id in self._active
+
     def _busy(self, agent_id: str) -> bool:
         """Whether a pass of the Agent runs or the Agent has an active or queued Run."""
-        return agent_id in self._active or self._runtime.chat_run_manager.has_activity_for_agent(
+        return agent_id in self._active or self._agent_active(agent_id)
+
+    def _agent_active(self, agent_id: str) -> bool:
+        """Whether the Agent has an active or queued Run, or a review is starting.
+
+        Only Runs without a Project count: a Project Run executes a Config Agent,
+        which never loads an Identity Agent's own Skills nor changes them.
+        """
+        return self._runtime.chat_run_manager.has_activity_for_agent(
             agent_id, project_id=None
-        )
+        ) or self._reviewing(agent_id)
 
     async def _identity_agent(self, agent_id: str) -> Any:
         """Resolve ``agent_id`` as an Identity Agent, never a Config Agent or Sub-Agent."""

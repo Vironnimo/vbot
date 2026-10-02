@@ -193,7 +193,9 @@ def test_agent_triggered_skill_names_read_every_live_text_of_the_identity_agent(
         _cron(prompt="/deploy the release"),
         _bootstrap(id="boot-1", prompt="Warm up with $warmup, then $deploy."),
         _calendar(prompt="Use /triage only when asked."),
-        # Terminal history and another Agent's automations trigger nothing here.
+        # Terminal history triggers nothing here, and neither does a job of the
+        # Project Agent with the same id: that Config Agent never loads the
+        # Identity Agent's own Skills.
         _cron(id="cron-2", prompt="$retired", status="completed"),
         _cron(id="cron-3", prompt="$project-only", project_id="vbot"),
     ):

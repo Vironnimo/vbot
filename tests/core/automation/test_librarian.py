@@ -67,6 +67,8 @@ class _Harness:
         }
         self.agents: dict[str, Any] = {"main": self.agent()}
         self.busy: set[str] = set()
+        # Agents whose background review is starting or running.
+        self.reviewing: set[str] = set()
         self.usage: dict[tuple[str, str], SkillUse] = {}
         # Raised by the next Skill use read, when set.
         self.usage_error: Exception | None = None
@@ -127,6 +129,7 @@ class _Harness:
             shared_skill_names=lambda agent_id: self.shared.get(agent_id, frozenset()),
             skills_changed=self.changed.append,
             status_changed=self.announce,
+            reviewing=self.reviewing.__contains__,
             clock=lambda: self.now,
         )
 
@@ -477,7 +480,17 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
 ) -> None:
     harness.settings["consolidate"] = False
     harness.settings["enabled"] = enabled
-    agent_ids = ("broken", "due", "due-too", "new", "busy", "recent", "interrupted", "limited")
+    agent_ids = (
+        "broken",
+        "due",
+        "due-too",
+        "new",
+        "busy",
+        "reviewing",
+        "recent",
+        "interrupted",
+        "limited",
+    )
     for agent_id in agent_ids:
         harness.agents[agent_id] = harness.agent()
         harness.authoring.create(
@@ -486,9 +499,11 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     harness.agents["limited"] = harness.agent(denied=("skill",))
     del harness.agents["main"]
     harness.busy.add("busy")
+    # A starting background review changes Skills too, before its Run is active.
+    harness.reviewing.add("reviewing")
     # A first pass is due one interval after a check first saw the Agent.
     seen = format_canonical_timestamp(harness.now - timedelta(days=8))
-    for agent_id in ("due", "due-too", "busy", "limited"):
+    for agent_id in ("due", "due-too", "busy", "reviewing", "limited"):
         harness.write_state(agent_id, {"first_seen_at": seen})
     passed = format_canonical_timestamp(harness.now - timedelta(days=1))
     recent = {
@@ -540,7 +555,8 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     else:
         assert not (harness.storage.data_dir / "agents" / "new" / "librarian.json").exists()
     assert harness.changed == (["due", "due-too"] if enabled else [])
-    kept = ("broken", "new", "busy", "recent", "interrupted", "limited")
+    kept = ("broken", "new", "busy", "reviewing", "recent", "interrupted", "limited")
     for agent_id in (*kept, *(() if enabled else ("due", "due-too"))):
         assert "old-review" in harness.authoring.records(harness.home(agent_id))
     assert "last_pass" not in harness.state("busy")
+    assert "last_pass" not in harness.state("reviewing")

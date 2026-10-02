@@ -438,6 +438,7 @@ def bootstrap(runtime: Runtime) -> None:
             on_changed=runtime._notify_skills_changed,
             triggered_skill_names=runtime.automation_triggered_skill_names,
             shared_skill_names=runtime.shared_skill_names,
+            run_started_at=runtime.run_started_at,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(
@@ -510,7 +511,14 @@ def bootstrap(runtime: Runtime) -> None:
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.
-        runtime._reflection_service = ReflectionService(runtime)
+        runtime._reflection_service = ReflectionService(
+            runtime,
+            # Built later; a background review leaves the Skills to a running pass.
+            librarian_running=lambda agent_id: (
+                runtime._librarian_service is not None
+                and runtime._librarian_service.running(agent_id)
+            ),
+        )
         # What a Run changed in Memory and the Agent's own Skills, and its undo.
         assert runtime._memory_service is not None
         assert runtime._skill_authoring is not None
@@ -785,6 +793,10 @@ def _librarian_service(runtime: Runtime) -> LibrarianService:
         skills_changed=skills_changed,
         # The Skill manager shows the Librarian; its observers reload on Skill changes.
         status_changed=runtime._notify_skills_changed,
+        reviewing=lambda agent_id: (
+            runtime._reflection_service is not None
+            and runtime._reflection_service.reviewing(agent_id)
+        ),
     )
 
 
