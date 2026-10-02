@@ -20,6 +20,7 @@ from core.database.marker import (
 from core.database.recovery import active_incidents
 from core.database.snapshots import read_snapshot_health, snapshot_inventory
 from core.database.spec import DatabaseHealth, DatabaseSpec, canonical_database_path
+from core.utils.file_status import is_file_strict
 
 if TYPE_CHECKING:
     from core.database.database import Database
@@ -143,7 +144,11 @@ def _file_state(
 ) -> tuple[str, str | None, dict[str, Any]]:
     """Check a registered database that is not open here, without changing it."""
     path = canonical_database_path(data_dir, name)
-    if not path.is_file():
+    try:
+        present = is_file_strict(path)
+    except OSError as exc:
+        return "unavailable", f"the database file cannot be read: {exc}", {}
+    if not present:
         return "unavailable", missing_database_reason(name), {}
     try:
         with closing(sqlite3.connect(readonly_sqlite_uri(path), uri=True)) as connection:

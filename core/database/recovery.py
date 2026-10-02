@@ -89,6 +89,7 @@ from core.database.spec import (
     is_extension_database_name,
     validate_database_name,
 )
+from core.utils.file_status import exists_strict
 from core.utils.timestamps import is_canonical_timestamp, utc_now_timestamp
 
 _LOGGER = logging.getLogger("vbot.database")
@@ -182,14 +183,26 @@ def _new_quarantine_path(data_dir: Path, name: str) -> Path:
 
 
 def _bundle(path: Path) -> list[Path]:
-    return [member for member in database_files(path) if member.exists()]
+    """The files of a database bundle; raises ``OSError`` when one cannot be checked."""
+    return [member for member in database_files(path) if exists_strict(member)]
+
+
+def _holds_bundle(path: Path) -> bool:
+    """Whether any bundle file is at ``path``; one that cannot be checked may be."""
+    try:
+        return bool(_bundle(path))
+    except OSError:
+        return True
 
 
 def _quarantine_bundle(
     data_dir: Path, name: str, path: Path, *, destination: Path | None = None
 ) -> QuarantineResult:
     """Move a complete bundle, or roll back every member on the first failure."""
-    members = _bundle(path)
+    try:
+        members = _bundle(path)
+    except OSError as exc:
+        return QuarantineResult("failed", reason=str(exc))
     if not members:
         return QuarantineResult("no_bundle")
     batch = destination or _new_quarantine_path(data_dir, name)
@@ -497,7 +510,12 @@ def _probe(spec: DatabaseSpec, expected_database_id: str) -> _Probe:
     def untouchable(cause: str) -> _Probe:
         return _Probe(False, False, cause, detected_at)
 
-    if not spec.path.exists():
+    try:
+        present = exists_strict(spec.path)
+    except OSError:
+        # A file that cannot be checked may hold newer data than any snapshot.
+        return untouchable(f"operational {name} database failure")
+    if not present:
         return damaged(f"missing canonical {name} database")
     try:
         with closing(sqlite3.connect(readonly_sqlite_uri(spec.path), uri=True)) as connection:
@@ -624,7 +642,7 @@ def _restore_member_locked(
         pending = None
     incident_id = str(pending["incident_id"]) if pending else uuid.uuid4().hex
     retained_quarantine = pending["quarantine"] if pending else None
-    if retained_quarantine and not _bundle(Path(retained_quarantine) / target.name):
+    if retained_quarantine and not _holds_bundle(Path(retained_quarantine) / target.name):
         # A fully rolled-back attempt only reserved this path; it holds no evidence.
         retained_quarantine = None
     if pending is not None:

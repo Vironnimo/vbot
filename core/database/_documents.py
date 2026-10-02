@@ -33,6 +33,7 @@ from typing import Any
 import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
+from core.utils.file_status import exists_strict
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
 #: The quarantine child of replaced documents; never a valid database name.
@@ -335,7 +336,7 @@ def restore_documents(
         displaced = [
             path
             for path in (*plan.restored, *plan.removed)
-            if os.path.lexists(_data_path(data_dir, path))
+            if exists_strict(_data_path(data_dir, path), follow_symlinks=False)
         ]
         quarantine = (
             _quarantine_documents(data_dir, displaced, quarantine_batch) if displaced else None

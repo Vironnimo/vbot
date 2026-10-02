@@ -248,17 +248,30 @@ def test_restore_rejects_an_incompatible_member_before_touching_data(
     assert read_incident(data_dir, "notes") is None
 
 
-def test_a_newer_vbot_database_is_never_replaced(data_dir: Path) -> None:
+@pytest.mark.parametrize("condition", ["newer-vbot", "unreadable"])
+def test_a_newer_or_unreadable_database_is_never_replaced(
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    deny_access: Callable[[Path], None],
+    condition: str,
+) -> None:
     snapshot_with_notes(data_dir, "saved")
     path = notes_spec(data_dir).path
-    raw_execute(
-        path,
-        "INSERT INTO kernel_migrations (name, applied_at, applied_by_version, breaks_older) "
-        "VALUES ('notes.future', '2027-01-01T00:00:00Z', '9.0.0', 1)",
-    )
+    if condition == "newer-vbot":
+        raw_execute(
+            path,
+            "INSERT INTO kernel_migrations (name, applied_at, applied_by_version, breaks_older) "
+            "VALUES ('notes.future', '2027-01-01T00:00:00Z', '9.0.0', 1)",
+        )
     original = path.read_bytes()
+    if condition == "unreadable":
+        # A file that cannot even be checked may hold data newer than any snapshot.
+        deny_access(path)
+        with pytest.raises(DatabaseUnavailableError, match="unavailable"):
+            open_database(notes_spec(data_dir))
 
     assert _restore(data_dir) is False
+    monkeypatch.undo()
     assert path.read_bytes() == original
     assert not quarantine_root(data_dir).exists()
 

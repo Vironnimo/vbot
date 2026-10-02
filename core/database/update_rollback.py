@@ -92,8 +92,10 @@ def data_stamp(data_dir: Path) -> DataStamp:
     """Stamp the marker, the registered database files and the JSON documents."""
     data_dir = Path(data_dir)
     try:
-        marker_file = marker_path(data_dir)
-        marker_hash = sha256_file(marker_file) if marker_file.exists() else None
+        try:
+            marker_hash: str | None = sha256_file(marker_path(data_dir))
+        except FileNotFoundError:
+            marker_hash = None
         marker = read_marker(data_dir)
         files: dict[str, tuple[int, int] | None] = {}
         for name in sorted(marker.databases if marker is not None else ()):

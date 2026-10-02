@@ -22,6 +22,7 @@ from core.database.errors import (
     DatabaseError,
     DatabaseUnavailableError,
 )
+from core.utils.file_status import exists_strict
 
 _LOGGER = logging.getLogger("vbot.database")
 
@@ -234,7 +235,9 @@ def copy_database(
     its sidecars must not exist; partial output is removed on every failure.
     """
     destination = Path(destination)
-    existing = [path for path in database_files(destination) if path.exists()]
+    # A file that cannot be checked counts as present: the failure cleanup below
+    # would otherwise delete it.
+    existing = [path for path in database_files(destination) if exists_strict(path)]
     if existing:
         raise FileExistsError(f"database copy destination already exists: {existing[0]}")
     if cancelled is not None:

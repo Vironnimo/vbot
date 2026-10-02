@@ -72,6 +72,7 @@ from core.database.spec import (
     validate_database_name,
 )
 from core.utils.atomic import atomic_write_text
+from core.utils.file_status import exists_strict, is_file_strict
 from core.utils.timestamps import (
     is_canonical_timestamp,
     parse_canonical_timestamp,
@@ -827,7 +828,7 @@ def create_data_snapshot(
             needed = sum(
                 canonical_database_path(data_dir, name).stat().st_size
                 for name in marker.databases
-                if canonical_database_path(data_dir, name).exists()
+                if exists_strict(canonical_database_path(data_dir, name))
             ) + documents_size(data_dir)
             if shutil.disk_usage(root).free < needed + SNAPSHOT_RESERVE_BYTES:
                 _record_snapshot_health(
@@ -844,7 +845,7 @@ def create_data_snapshot(
 
         def copy_member(name: str) -> None:
             source_path = canonical_database_path(data_dir, name)
-            if not source_path.is_file():
+            if not is_file_strict(source_path):
                 raise DatabaseUnavailableError(missing_database_reason(name))
             destination = staging / member_file_name(name)
             handle = open_databases.get(name)
