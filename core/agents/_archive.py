@@ -24,7 +24,6 @@ from core.agents._config import (
     _agent_document,
     _agent_from_dict,
     _apply_defaults,
-    _utc_now,
     _validate_agent_id,
     load_validated_agent_json,
 )
@@ -46,6 +45,7 @@ from core.settings import is_valid_agent_id
 from core.utils.atomic import atomic_write_bytes
 from core.utils.ids import has_id_entry
 from core.utils.logging import get_logger
+from core.utils.timestamps import utc_now_timestamp
 from core.utils.tree_move import move_tree
 
 if TYPE_CHECKING:
@@ -218,7 +218,7 @@ def restore_files(
             id=target_id,
             workspace=str(restored_workspace),
             root_project_id=root_project_id,
-            updated_at=_utc_now(),
+            updated_at=utc_now_timestamp(),
         )
         try:
             archived_document = (source / "agent.json").read_bytes()
@@ -278,7 +278,7 @@ def restore_delegation_grants(
                 position = index if isinstance(index, int) and index >= 0 else len(allowed)
                 allowed.insert(min(position, len(allowed)), target_id)
                 subagent["allowed_agents"] = allowed
-                store._write_agent(replace(holder, tools=tools, updated_at=_utc_now()))
+                store._write_agent(replace(holder, tools=tools, updated_at=utc_now_timestamp()))
             except (AgentError, OSError) as error:
                 _LOGGER.warning(
                     "Could not restore a delegation grant (agent=%s policy_agent=%s): %s",

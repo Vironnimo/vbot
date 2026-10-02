@@ -19,7 +19,6 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any, cast
@@ -68,6 +67,7 @@ from core.settings.validation import (
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
 )
+from core.utils.timestamps import utc_now_timestamp
 
 DEFAULT_DEFAULT_AGENT = ""
 DEFAULT_DEFAULT_MODEL = ""
@@ -518,7 +518,7 @@ def build_project(
     )
     validated_overrides = _validate_overrides(overrides)
     _validate_tool_access_override_ceilings(validated_overrides, validated_allowed_tools)
-    now = _utc_now()
+    now = utc_now_timestamp()
     return Project(
         project_id=validated_id,
         display_name=validated_display_name,
@@ -547,7 +547,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
     auto_load list copy), it does not re-validate.
     """
     project_id = cast("str", data["project_id"])
-    timestamp_default = _utc_now()
+    timestamp_default = utc_now_timestamp()
     return Project(
         project_id=project_id,
         display_name=data.get("display_name") or project_id,
@@ -806,10 +806,6 @@ def _overrides_from_data(value: Any) -> dict[str, dict[str, Any]]:
         for agent_id, override in value.items()
         if isinstance(override, dict)
     }
-
-
-def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def _override_shape() -> JsonShape:

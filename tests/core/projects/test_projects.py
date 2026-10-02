@@ -19,6 +19,7 @@ from core.projects.projects import (
     project_from_dict,
     seed_default_auto_load,
 )
+from core.utils.timestamps import is_canonical_timestamp
 
 _TIMESTAMP = "2026-06-18T10:00:00Z"
 
@@ -45,7 +46,7 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
         "skills_project_disabled": [],
         "overrides": {},
     }
-    assert created_at.endswith("Z")
+    assert is_canonical_timestamp(created_at)
     assert updated_at == created_at
     # The base Tool Whitelist uses the successor of the retired edit Tool.
     assert "apply_patch" in PROJECT_DEFAULT_ALLOWED_TOOLS
