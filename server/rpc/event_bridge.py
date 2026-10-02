@@ -75,7 +75,8 @@ def _bridge_run_to_event_bus(state: Any, run: Run) -> None:
             state.event_bus,
             run,
             file_delivery=state.file_delivery,
-        )
+        ),
+        name=f"run-event-bridge:{run.id}",
     )
     task.add_done_callback(_on_run_event_bridge_done)
 

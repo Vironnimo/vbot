@@ -171,7 +171,8 @@ class Notifier:
             if run_id in self._acknowledged or run_id in self._shown:
                 return
         task = asyncio.get_running_loop().create_task(
-            self._deliver_run(run_id, kind, str(event_type), payload)
+            self._deliver_run(run_id, kind, str(event_type), payload),
+            name=f"run-notification:{run_id}",
         )
         self._pending[run_id] = task
         task.add_done_callback(lambda _task: self._pending.pop(run_id, None))

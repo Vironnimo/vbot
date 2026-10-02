@@ -136,7 +136,9 @@ def _register_run_event_bridge(state: Any) -> Any:
 
 def _start_statistics_warmup(state: Any) -> asyncio.Task[None]:
     """Reconcile the Statistics index in the background."""
-    return asyncio.create_task(_warm_statistics_index(statistics_service(state)))
+    return asyncio.create_task(
+        _warm_statistics_index(statistics_service(state)), name="statistics-warmup"
+    )
 
 
 def _start_speech_preload(runtime: Any) -> None:

@@ -175,9 +175,8 @@ class ConnectionRunner:
         self.client: Client | None = None
         self.catalog: dict[str, Any] = {}
         self.context: ToolContext | None = None
-        self._queue: asyncio.Queue[Invocation | None] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
-        self._queue_space = asyncio.Event()
-        self._queue_space.set()
+        # Each connection task gets its own queue, shut down when that connection ends.
+        self._queue: asyncio.Queue[Invocation] = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
         self._task: asyncio.Task[None] | None = None
         self._active: asyncio.Task[dict[str, Any]] | None = None
         self._ready = asyncio.Event()
@@ -198,6 +197,7 @@ class ConnectionRunner:
         self._closing = False
         self._ready.clear()
         self.state = "connecting"
+        self._queue = asyncio.Queue(CONNECTION_QUEUE_LIMIT)
         self._task = asyncio.create_task(self._run(), name=f"mcp:{self.id}")
         self._task.add_done_callback(self._finished)
 
@@ -230,11 +230,18 @@ class ConnectionRunner:
         self.state = "disconnected"
 
     def _reject_queued(self) -> None:
-        """Release unsent calls even when SDK teardown cannot finish."""
-        self._queue_space.set()
-        while not self._queue.empty():
-            invocation = self._queue.get_nowait()
-            if invocation is not None and not invocation.result.done():
+        """Release unsent calls even when SDK teardown cannot finish.
+
+        Shutting the queue down first refuses callers still waiting for room, so
+        nothing can join it after this drain.
+        """
+        self._queue.shutdown()
+        while True:
+            try:
+                invocation = self._queue.get_nowait()
+            except asyncio.QueueShutDown:
+                return
+            if not invocation.result.done():
                 invocation.result.set_exception(
                     InvocationNotSentError(self.error or "MCP connection closed")
                 )
@@ -269,20 +276,17 @@ class ConnectionRunner:
             self.start()
         owner = self._task
         await self._ready.wait()
+        if self._closing or self._task is not owner or owner is None or owner.done():
+            raise InvocationNotSentError(self.error or "MCP connection closed")
+        if self.state != "connected":
+            raise InvocationNotSentError(self.error or "MCP connection did not become ready")
         result: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
-        while True:
-            if self._closing or self._task is not owner or owner is None or owner.done():
-                raise InvocationNotSentError(self.error or "MCP connection closed")
-            if self.state != "connected":
-                raise InvocationNotSentError(self.error or "MCP connection did not become ready")
-            try:
-                # Admission and insertion must be atomic: a blocked Queue.put
-                # could resume only after its connection's final drain.
-                self._queue.put_nowait(Invocation(operation, arguments, context, result))
-                break
-            except asyncio.QueueFull:
-                self._queue_space.clear()
-                await self._queue_space.wait()
+        try:
+            # The queue belongs to the admitting connection: once that connection
+            # ends, a call still waiting for room is refused, never sent later.
+            await self._queue.put(Invocation(operation, arguments, context, result))
+        except asyncio.QueueShutDown:
+            raise InvocationNotSentError(self.error or "MCP connection closed") from None
         return await result
 
     async def _run(self) -> None:
@@ -309,7 +313,9 @@ class ConnectionRunner:
                 self.error = None
                 self._log_connected()
                 self._ready.set()
-                self._subscriptions["catalog"] = asyncio.create_task(self._watch_catalog())
+                self._subscriptions["catalog"] = asyncio.create_task(
+                    self._watch_catalog(), name=f"mcp-catalog-watch:{self.id}"
+                )
                 try:
                     await self._serve()
                 finally:
@@ -441,9 +447,9 @@ class ConnectionRunner:
 
     async def _serve(self) -> None:
         while not self._closing:
-            invocation = await self._queue.get()
-            self._queue_space.set()
-            if invocation is None:
+            try:
+                invocation = await self._queue.get()
+            except asyncio.QueueShutDown:
                 return
             if invocation.result.cancelled():
                 continue
@@ -455,7 +461,8 @@ class ConnectionRunner:
                     continue
             self.context = invocation.context
             self._active = asyncio.create_task(
-                self._perform_with_retries(invocation.operation, invocation.arguments)
+                self._perform_with_retries(invocation.operation, invocation.arguments),
+                name=f"mcp-call:{self.id}:{invocation.operation}",
             )
             active = self._active
 
@@ -629,7 +636,9 @@ class ConnectionRunner:
             existing = self._subscriptions.get(uri)
             if existing is None or existing.done():
                 ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-                subscription_task = asyncio.create_task(self._watch_resource(uri, ready))
+                subscription_task = asyncio.create_task(
+                    self._watch_resource(uri, ready), name=f"mcp-resource-watch:{self.id}"
+                )
                 self._subscriptions[uri] = subscription_task
                 await ready
             return {"subscribed": uri}

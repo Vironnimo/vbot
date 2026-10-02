@@ -216,7 +216,9 @@ class ContinuationTracker:
         if content:
             self._pending_content.append(content)
         if self._periodic_task is None:
-            self._periodic_task = asyncio.create_task(self._periodic_flush())
+            self._periodic_task = asyncio.create_task(
+                self._periodic_flush(), name=f"run-journal-flush:{self.run_id}"
+            )
 
     def assistant_boundary(self, message: ChatMessage) -> JournalBoundary:
         """Records for one persisted Assistant *message*, including its Tool Calls.
@@ -361,7 +363,9 @@ class ContinuationTracker:
             if self._periodic_task is current_task:
                 self._periodic_task = None
                 if not self._closed and (self._pending_reasoning or self._pending_content):
-                    self._periodic_task = asyncio.create_task(self._periodic_flush())
+                    self._periodic_task = asyncio.create_task(
+                        self._periodic_flush(), name=f"run-journal-flush:{self.run_id}"
+                    )
 
     async def _flush_boundary(self, *records: JsonObject) -> asyncio.Task[None] | None:
         if self._closed:

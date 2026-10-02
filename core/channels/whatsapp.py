@@ -57,7 +57,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
             while True:
                 await self.handle_event(await inbound.get())
 
-        worker = asyncio.create_task(consume())
+        worker = asyncio.create_task(consume(), name=f"channel:{self._config.id}:whatsapp-ingress")
 
         async def read_events() -> None:
             assert self._process is not None and self._process.stdout is not None
@@ -92,7 +92,9 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                         await asyncio.Future()
             raise ChannelError("WhatsApp bridge disconnected", retryable=True)
 
-        reader = asyncio.create_task(read_events())
+        reader = asyncio.create_task(
+            read_events(), name=f"channel:{self._config.id}:whatsapp-reader"
+        )
         try:
             done, _ = await asyncio.wait((reader, worker), return_when=asyncio.FIRST_COMPLETED)
             for task in done:

@@ -344,11 +344,8 @@ def test_native_transformers_adapter_contracts_without_weights(
         engine_type({"model_path": str(tmp_path / "missing")})
     options = {"device": "cpu", "language": "de", "prompt": "vBot", "model_path": str(tmp_path)}
     progress = SpeechProgress()
-    token = _PROGRESS.set(progress)
-    try:
+    with _PROGRESS.set(progress):
         engine = engine_type(options)
-    finally:
-        _PROGRESS.reset(token)
     try:
         result = engine.transcribe(np.ones(1600, dtype=np.float32), options)
         assert result.text == "Hallo"

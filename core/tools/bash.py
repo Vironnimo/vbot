@@ -686,7 +686,8 @@ def _maybe_spawn_completion_watcher(
             project_id=context.project_id,
             timeout_state=timeout_state,
             timeout_seconds=timeout_seconds,
-        )
+        ),
+        name=f"bash-background:{process_id}",
     )
     try:
         process_manager.register_completion_notification(

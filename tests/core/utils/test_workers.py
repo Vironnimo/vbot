@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import threading
 from collections.abc import Iterator
 from concurrent.futures import Future
@@ -11,6 +12,7 @@ import pytest
 
 from core.performance import PerformanceService
 from core.performance.performance import reset_for_tests
+from core.utils.errors import VBotError
 from core.utils.workers import BoundedWorkerPool, OrderedWorker
 
 
@@ -86,15 +88,19 @@ async def test_worker_pool_waits_for_started_mutation_before_cancellation() -> N
 
 
 @pytest.mark.asyncio
-async def test_worker_pool_keeps_cancellation_authoritative_after_worker_failure() -> None:
+@pytest.mark.parametrize("expected", [False, True])
+async def test_worker_pool_keeps_cancellation_authoritative_after_worker_failure(
+    caplog: pytest.LogCaptureFixture, expected: bool
+) -> None:
     pool = BoundedWorkerPool(name="test-cancelled-failure", max_workers=1)
     started = threading.Event()
     release = threading.Event()
+    failure = VBotError("late worker failure") if expected else RuntimeError("late worker failure")
 
     def fail_after_release() -> None:
         started.set()
         release.wait(timeout=5)
-        raise RuntimeError("late worker failure")
+        raise failure
 
     task = asyncio.create_task(pool.run(fail_after_release))
     await asyncio.to_thread(started.wait, 5)
@@ -105,8 +111,15 @@ async def test_worker_pool_keeps_cancellation_authoritative_after_worker_failure
     assert task.done() is False
 
     release.set()
-    with pytest.raises(asyncio.CancelledError):
+    with caplog.at_level(logging.WARNING), pytest.raises(asyncio.CancelledError):
         await task
+
+    # Nobody receives the late failure, so it is reported once, never swallowed.
+    [record] = [entry for entry in caplog.records if entry.name == "vbot.utils.workers"]
+    assert record.levelno == (logging.WARNING if expected else logging.ERROR)
+    assert "fail_after_release" in record.getMessage()
+    assert (record.exc_info is not None) is not expected
+    assert not [entry for entry in caplog.records if entry.name == "asyncio"]
 
 
 @pytest.mark.asyncio

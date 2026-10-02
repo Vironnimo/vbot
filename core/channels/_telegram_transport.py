@@ -496,7 +496,7 @@ class TelegramTransport:
         """Show Telegram's "typing" indicator for the chat until the block exits."""
         task = asyncio.create_task(
             self._keep_typing(platform_target, thread_id),
-            name=f"telegram:{self._channel_id}:typing:{platform_target}",
+            name=f"telegram:{self._channel_id}:typing",
         )
         try:
             yield

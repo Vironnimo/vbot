@@ -226,19 +226,15 @@ def _run_backend(
     benchmarks: list[Benchmark], settings: RunSettings, tmp_parent: Path | None
 ) -> tuple[list[ResultRecord], list[BenchFailure]]:
     work_dir = Path(tempfile.mkdtemp(prefix="vbot-perf-bench-", dir=tmp_parent))
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    context = BenchContext(work_dir, loop)
     try:
-        return run_benchmarks(benchmarks, context, settings, progress=_progress)
+        with asyncio.Runner() as runner:
+            context = BenchContext(work_dir, runner.get_loop())
+            try:
+                return run_benchmarks(benchmarks, context, settings, progress=_progress)
+            finally:
+                context.close()
     finally:
-        try:
-            context.close()
-        finally:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            asyncio.set_event_loop(None)
-            loop.close()
-            shutil.rmtree(work_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def _run_frontend(name_filter: str | None, time_ms: int) -> FrontendRun:

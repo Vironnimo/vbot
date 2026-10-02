@@ -148,7 +148,8 @@ class SessionTitleService:
                 agent=agent,
                 content=content,
                 run_id=run_id,
-            )
+            ),
+            name=f"session-title:{run_id}",
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._on_background_task_done)

@@ -91,8 +91,8 @@ class LiveRunFeed:
     def start(self) -> None:
         """Start following the bus; call once from the Event Loop."""
         self._tasks = [
-            asyncio.create_task(self._follow()),
-            asyncio.create_task(self._deliver()),
+            asyncio.create_task(self._follow(), name="live-run-feed:follow"),
+            asyncio.create_task(self._deliver(), name="live-run-feed:deliver"),
         ]
 
     async def aclose(self) -> None:

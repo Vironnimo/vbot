@@ -42,13 +42,16 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
     def wrapped(*args: _P.args, **kwargs: _P.kwargs) -> int:
         argv = args[0] if args else kwargs.get("argv")
         parsed = parse_args(argv)  # type: ignore[arg-type]
-        arguments_token = _arguments.set(parsed)
-        mode_token = output_mode.set(getattr(parsed, "output", "auto"))
-        result_token = _last_result.set(None)
-        path = parsed._command_path
-        try:
-            with ProgressPrinter(stream=sys.stderr) as progress:
-                progress_token = current_progress.set(progress if parsed.area != "update" else None)
+        with (
+            _arguments.set(parsed),
+            output_mode.set(getattr(parsed, "output", "auto")),
+            _last_result.set(None),
+        ):
+            path = parsed._command_path
+            with (
+                ProgressPrinter(stream=sys.stderr) as progress,
+                current_progress.set(progress if parsed.area != "update" else None),
+            ):
                 # chat reports its own progress between streamed answer text.
                 if output_mode.get() != "plain" and parsed.area not in {"update", "chat"}:
                     progress.track(f"Waiting for {path}")
@@ -79,8 +82,6 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
                         flush=True,
                     )
                     return 130
-                finally:
-                    current_progress.reset(progress_token)
             if output_mode.get() != "plain" and parsed.area not in {
                 "server",
                 "update",
@@ -116,10 +117,6 @@ def with_command_output(function: Callable[_P, int]) -> Callable[_P, int]:
                 for command in guidance.commands:
                     print(f"Next: {format_command(command)}", file=sys.stderr)
             return code
-        finally:
-            _last_result.reset(result_token)
-            output_mode.reset(mode_token)
-            _arguments.reset(arguments_token)
 
     return wrapped
 

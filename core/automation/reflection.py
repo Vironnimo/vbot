@@ -151,7 +151,8 @@ class ReflectionService:
                 memory_tool_called=memory_tool_called,
                 skill_manage_called=skill_manage_called,
                 count_run=count_run,
-            )
+            ),
+            name=f"reflection-accounting:{run.id}",
         )
         self._background_tasks.add(task)
         task.add_done_callback(self._on_background_task_done)

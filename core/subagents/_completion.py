@@ -93,7 +93,7 @@ def _track_subagent_completion(
         result = await _wait_for_subagent_result(run, activity_file)
         batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
 
-    task = asyncio.create_task(complete_when_terminal())
+    task = asyncio.create_task(complete_when_terminal(), name=f"subagent-completion:{run.id}")
     task.add_done_callback(
         lambda completed: _log_background_task_result(
             completed,
@@ -159,7 +159,9 @@ def _track_queued_subagent_completion(
         result = await _wait_for_subagent_result(run, activity_file)
         batch_tracker.on_sub_agent_complete(parent_key, run.id, result)
 
-    task = asyncio.create_task(complete_when_started_and_terminal())
+    task = asyncio.create_task(
+        complete_when_started_and_terminal(), name=f"subagent-completion:{item.item_id}"
+    )
     task.add_done_callback(
         lambda completed: _log_background_task_result(
             completed,

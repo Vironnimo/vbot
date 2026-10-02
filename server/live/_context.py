@@ -125,11 +125,10 @@ class LiveContext:
         """Run one Tool execution while no other execution of the call runs."""
         await self._lock.acquire()
         hold = _Hold(self._lock)
-        token = self._hold.set(hold)
         try:
-            yield
+            with self._hold.set(hold):
+                yield
         finally:
-            self._hold.reset(token)
             hold.release()
 
     def let_others_run(self) -> None:

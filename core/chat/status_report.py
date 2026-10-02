@@ -339,8 +339,7 @@ def build_status_reply(
     timezone: tzinfo | None = None,
 ) -> str:
     """Build status text while applying an optional model-display override."""
-    token = _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name)
-    try:
+    with _STATUS_MODEL_DISPLAY_OVERRIDE.set(model_display_name):
         return build_status_text(
             agent,
             messages,
@@ -352,8 +351,6 @@ def build_status_reply(
             temperature_status=temperature_status,
             timezone=timezone,
         )
-    finally:
-        _STATUS_MODEL_DISPLAY_OVERRIDE.reset(token)
 
 
 def build_status_text(

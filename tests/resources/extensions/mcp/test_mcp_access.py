@@ -189,7 +189,7 @@ async def test_queued_call_rechecks_access_before_remote_effect(context_service,
     second = asyncio.get_running_loop().create_future()
     await runner._queue.put(Invocation("tools/call", {"value": "first"}, context(host), first))
     await runner._queue.put(Invocation("tools/call", {"value": "second"}, context(host), second))
-    await runner._queue.put(None)
+    runner._queue.shutdown()
     worker = asyncio.create_task(runner._serve())
     try:
         await asyncio.wait_for(started.wait(), 2)

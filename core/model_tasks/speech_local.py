@@ -49,7 +49,7 @@ from core.model_tasks.speech_types import (
 )
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
-from core.utils.workers import BoundedWorkerPool
+from core.utils.workers import BoundedWorkerPool, settle_before_cancelling
 
 _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
@@ -417,13 +417,10 @@ class LocalSpeechExecutor:
     ) -> SpeechTranscriptionResult:
         # Scope built-in loader reporting to this worker invocation without adding
         # transport or progress requirements to third-party engine factories.
-        token = _PROGRESS.set(progress)
-        try:
+        with _PROGRESS.set(progress):
             if progress is not None:
                 progress.update("preparing")
             return self._transcribe(local_id, audio, options)
-        finally:
-            _PROGRESS.reset(token)
 
     def prepare(self, local_id: str, options: Mapping[str, Any]) -> str:
         """Start loading one STT engine in the background, before its first request.
@@ -450,7 +447,8 @@ class LocalSpeechExecutor:
             return "loading"
         state.preparing_key = key
         state.preparing = asyncio.get_running_loop().create_task(
-            self._prepare_in_worker(state, local_id, merged)
+            self._prepare_in_worker(state, local_id, merged),
+            name=f"local-speech-prepare:{local_id}",
         )
         return "loading"
 
@@ -644,21 +642,10 @@ class LocalSpeechExecutor:
             for state in self._states.values():
                 if state.preparing is not None:
                     state.preparing.cancel()
-            self._close_task = asyncio.create_task(self._finish_close())
-        try:
-            await asyncio.shield(self._close_task)
-        except asyncio.CancelledError:
-            # Cleanup may still be waiting for the inference worker. Cancellation
-            # must never shut down its executor before the model can be unloaded.
-            while not self._close_task.done():
-                try:
-                    await asyncio.shield(self._close_task)
-                except asyncio.CancelledError:
-                    continue
-                except Exception:
-                    break
-            self._close_task.exception()
-            raise
+            self._close_task = asyncio.create_task(self._finish_close(), name="local-speech-close")
+        # Cleanup may still be waiting for the inference worker. Cancellation
+        # must never shut down its executor before the model can be unloaded.
+        await settle_before_cancelling(self._close_task, on_late_failure=_log_close_failure)
 
     async def _finish_close(self) -> None:
         # Killing a process tree blocks, so it must not run on the Event Loop.
@@ -741,32 +728,30 @@ class LocalSpeechExecutor:
         )
         state = self._states[local_id]
         key = (local_id, json.dumps(load_options, sort_keys=True))
-        token = _PROGRESS.set(progress)
-        try:
-            if key != state.key:
-                state.unload()
-            if state.engine is None:
+        with _PROGRESS.set(progress):
+            try:
+                if key != state.key:
+                    state.unload()
+                if state.engine is None:
+                    if progress is not None:
+                        progress.update("loading")
+                    state.engine = definition.create(self._engine_options(local_id, options))
+                    state.key = key
                 if progress is not None:
-                    progress.update("loading")
-                state.engine = definition.create(self._engine_options(local_id, options))
-                state.key = key
-            if progress is not None:
-                progress.update("synthesizing")
-            result = cast(LocalSynthesisEngine, state.engine).synthesize(text, options)
-            if not result.audio:
-                raise ValueError("Empty synthesis")
-            return result
-        except Exception as error:
-            state.unload()
-            _LOGGER.warning(
-                "Local TTS failed (engine=%s, error_type=%s)", local_id, type(error).__name__
-            )
-            raise LocalSpeechExecutionError(
-                "Local speech synthesis failed. Check the selected device and available "
-                "memory, then retry."
-            ) from error
-        finally:
-            _PROGRESS.reset(token)
+                    progress.update("synthesizing")
+                result = cast(LocalSynthesisEngine, state.engine).synthesize(text, options)
+                if not result.audio:
+                    raise ValueError("Empty synthesis")
+                return result
+            except Exception as error:
+                state.unload()
+                _LOGGER.warning(
+                    "Local TTS failed (engine=%s, error_type=%s)", local_id, type(error).__name__
+                )
+                raise LocalSpeechExecutionError(
+                    "Local speech synthesis failed. Check the selected device and available "
+                    "memory, then retry."
+                ) from error
 
 
 def _tts_definitions(
@@ -1092,6 +1077,11 @@ def _close_speech_process(process: subprocess.Popen[str]) -> None:
         process.stdin.close()
     if process.stdout:
         process.stdout.close()
+
+
+def _log_close_failure(error: BaseException) -> None:
+    """Report a shutdown failure that its cancelled caller no longer receives."""
+    _LOGGER.error("Local speech shutdown failed after its caller was cancelled", exc_info=error)
 
 
 def _audio_chunks(audio: bytes) -> Iterator[tuple[int, Any]]:

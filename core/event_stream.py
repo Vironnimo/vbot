@@ -6,21 +6,14 @@ import asyncio
 from collections import deque
 from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
-from typing import Any, Generic, TypeVar, cast
+from typing import Generic, TypeVar
 
 EventT = TypeVar("EventT")
 
 
-class _LaggedSubscriberSentinel:
-    """Internal marker that closes a subscriber whose queue overflowed."""
-
-
-_LAGGED_SUBSCRIBER = _LaggedSubscriberSentinel()
-
-
 @dataclass
 class _Subscriber(Generic[EventT]):
-    queue: asyncio.Queue[EventT | _LaggedSubscriberSentinel]
+    queue: asyncio.Queue[EventT]
     closed: bool = False
     queued_bytes: int = 0
     # While True, publish drops on a full queue instead of evicting. Catch-up
@@ -35,8 +28,9 @@ class ReplayEventStream(Generic[EventT]):
     The event's shape and terminal semantics stay with the consuming domain.
     This owner only requires a contiguous sequence extractor (each publish is
     exactly one greater than the previous) and, optionally, a terminal-event
-    predicate. A lagging subscriber is removed and woken with an internal
-    sentinel so its async iterator closes without leaking.
+    predicate. A lagging subscriber is removed and its queue shut down, which
+    discards what it still held and wakes its async iterator to close without
+    leaking.
 
     The first event a subscription yields may start beyond the requested cursor
     when older events already left retention; accessors treat it as the replay
@@ -202,10 +196,10 @@ class ReplayEventStream(Generic[EventT]):
             subscriber.catching_up = False
 
             while True:
-                item = await subscriber.queue.get()
-                if item is _LAGGED_SUBSCRIBER:
+                try:
+                    event = await subscriber.queue.get()
+                except asyncio.QueueShutDown:
                     return
-                event = cast(EventT, item)
                 subscriber.queued_bytes -= self._size_of(event)
                 sequence = self._sequence_of(event)
                 if sequence <= after_sequence:
@@ -243,14 +237,13 @@ class ReplayEventStream(Generic[EventT]):
         drained: list[EventT] = []
         while True:
             try:
-                item = subscriber.queue.get_nowait()
+                event = subscriber.queue.get_nowait()
             except asyncio.QueueEmpty:
                 return drained
-            if item is _LAGGED_SUBSCRIBER:
+            except asyncio.QueueShutDown:
                 # A byte-budget eviction can also close a catch-up subscriber.
                 subscriber.closed = True
                 return drained
-            event = cast(EventT, item)
             subscriber.queued_bytes -= self._size_of(event)
             drained.append(event)
 
@@ -277,9 +270,8 @@ class ReplayEventStream(Generic[EventT]):
         if subscriber.closed:
             return
         self._remove_subscriber(subscriber)
-        _drain_queue(subscriber.queue)
+        subscriber.queue.shutdown(immediate=True)
         subscriber.queued_bytes = 0
-        subscriber.queue.put_nowait(_LAGGED_SUBSCRIBER)
         self._report_lagged()
 
     def _report_lagged(self) -> None:
@@ -290,11 +282,3 @@ class ReplayEventStream(Generic[EventT]):
         subscriber.closed = True
         if subscriber in self._subscribers:
             self._subscribers.remove(subscriber)
-
-
-def _drain_queue(queue: asyncio.Queue[Any]) -> None:
-    while True:
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            return

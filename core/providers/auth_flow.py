@@ -143,7 +143,8 @@ class DeviceFlowEngine:
         authorization = asyncio.create_task(
             self._request_device_session(
                 provider_id, local_connection_id, oauth_config, account_id=account_id
-            )
+            ),
+            name=f"device-flow-authorize:{provider_id}:{local_connection_id}",
         )
         self._active_authorizations[flow_key] = authorization
         self._authorization_tasks.add(authorization)
@@ -174,7 +175,8 @@ class DeviceFlowEngine:
                 on_complete,
                 user_code=session.user_code,
                 account_id=account_id,
-            )
+            ),
+            name=f"device-flow-poll:{provider_id}:{local_connection_id}",
         )
         self._active_flows[flow_key] = task
         self._poll_tasks.add(task)

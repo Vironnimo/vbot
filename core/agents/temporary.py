@@ -660,7 +660,10 @@ class TemporaryExecutionGroups:
         state = self._groups.setdefault(group_id, _Group())
         state.open = False
         if state.close_task is None:
-            state.close_task = asyncio.create_task(self._drain(group_id, state, reason))
+            state.close_task = asyncio.create_task(
+                self._drain(group_id, state, reason),
+                name=f"extension-group-close:{self._identity.name}",
+            )
         return await asyncio.shield(state.close_task)
 
     async def _drain(self, group_id: str, state: _Group, reason: str) -> dict[str, Any]:

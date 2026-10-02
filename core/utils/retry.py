@@ -71,21 +71,15 @@ def caller_owns_retries() -> Iterator[None]:
     Task-local and nestable: other Runs and standalone Provider consumers keep
     their normal retry policy. Protocol-specific repairs remain Adapter-owned.
     """
-    token = _retries_owned_by_caller.set(True)
-    try:
+    with _retries_owned_by_caller.set(True):
         yield
-    finally:
-        _retries_owned_by_caller.reset(token)
 
 
 @contextmanager
 def observe_retries(observer: Callable[[RetryNotice], None]) -> Iterator[None]:
     """Observe retries in this async request scope without changing retry policy."""
-    token = _retry_observer.set(observer)
-    try:
+    with _retry_observer.set(observer):
         yield
-    finally:
-        _retry_observer.reset(token)
 
 
 def _notify_retry(notice: RetryNotice) -> None:

@@ -238,7 +238,7 @@ class LiveCallEntry:
             after_sequence=self._after_sequence,
         )
         self._feed.start()
-        self._watcher = self._spawn(self._watch(call))
+        self._watcher = self._spawn(self._watch(call), "watch")
         self._arm_timer(self._limits.attach_timeout_seconds, "did not attach")
 
     def request_close(self) -> bool:
@@ -249,7 +249,7 @@ class LiveCallEntry:
         if not self._closing:
             self._closing = True
             self.active = False
-            self._spawn(self._close(call))
+            self._spawn(self._close(call), "close")
         return True
 
     def end_soon(self) -> None:
@@ -257,7 +257,7 @@ class LiveCallEntry:
         if self._ending or self._closing or self.ended:
             return
         self._ending = True
-        self._spawn(self._end_after_goodbye())
+        self._spawn(self._end_after_goodbye(), "end")
 
     async def _end_after_goodbye(self) -> None:
         await asyncio.sleep(self._limits.end_call_delay_seconds)
@@ -277,7 +277,7 @@ class LiveCallEntry:
     def _start_idle_watch(self) -> None:
         if self._idle_watch is None and not self._closing and not self.ended:
             self._mark_active()
-            self._idle_watch = self._spawn(self._watch_idle())
+            self._idle_watch = self._spawn(self._watch_idle(), "idle-watch")
 
     def _stop_idle_watch(self) -> None:
         watch, self._idle_watch = self._idle_watch, None
@@ -487,7 +487,7 @@ class LiveCallEntry:
         self._cancel_timer()
         if self.call is None or self.ended or self._closed_published:
             return
-        self._timer = self._spawn(self._expire(seconds, reason))
+        self._timer = self._spawn(self._expire(seconds, reason), "timer")
 
     def _cancel_timer(self) -> None:
         timer, self._timer = self._timer, None
@@ -538,8 +538,8 @@ class LiveCallEntry:
             future.set_result(result if result is not None else {})
         return True
 
-    def _spawn(self, coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = asyncio.create_task(coroutine)
+    def _spawn(self, coroutine: Coroutine[Any, Any, None], purpose: str) -> asyncio.Task[None]:
+        task = asyncio.create_task(coroutine, name=f"live-call:{self.log_id}:{purpose}")
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task

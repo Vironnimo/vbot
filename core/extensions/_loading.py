@@ -241,7 +241,7 @@ async def _await_pending_registers_async(pending: list[tuple[ExtensionRecord, An
     """
     loop = asyncio.get_running_loop()
     for index, (record, coro) in enumerate(pending):
-        task = loop.create_task(coro)
+        task = loop.create_task(coro, name=f"extension-register:{record.name}")
         try:
             done, _ = await asyncio.wait({task}, timeout=_ASYNC_REGISTER_TIMEOUT_SECONDS)
         except asyncio.CancelledError:

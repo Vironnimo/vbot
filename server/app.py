@@ -296,7 +296,9 @@ def create_app(
         app.state.local_catalog_refresh_task = (
             None
             if effective_safe_mode is not None
-            else asyncio.create_task(app_runtime.maybe_refresh_local_catalogs())
+            else asyncio.create_task(
+                app_runtime.maybe_refresh_local_catalogs(), name="local-catalog-refresh"
+            )
         )
         server_logger = logging.getLogger("vbot.server.app")
         server_logger.debug(

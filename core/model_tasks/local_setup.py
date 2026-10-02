@@ -31,7 +31,6 @@ import threading
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -193,7 +192,7 @@ class LocalSetup:
         if self.status()["state"] == "ready":
             return self.status()
         self._state, self._phase, self._error, self._progress = "installing", "checking", "", None
-        self._task = asyncio.create_task(self._install())
+        self._task = asyncio.create_task(self._install(), name=f"local-setup:{self._name}")
         return self.status()
 
     async def cancel(self) -> dict[str, Any]:
@@ -279,16 +278,15 @@ class LocalSetup:
             self._progress = (min(completed, total), total)
 
         cancelled = threading.Event()
-        work = asyncio.get_running_loop().run_in_executor(
-            None,
-            partial(
+        work = asyncio.create_task(
+            asyncio.to_thread(
                 fetch_model_files,
                 model,
                 directory,
                 progress=progress,
                 cancelled=cancelled,
                 reuse=earlier,
-            ),
+            )
         )
         try:
             await asyncio.shield(work)

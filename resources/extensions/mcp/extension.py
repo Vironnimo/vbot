@@ -1255,7 +1255,7 @@ class MCPService:
         for identifier in completed[:-MAX_FINISHED_JOBS]:
             self.jobs.pop(identifier)
         identifier = new_id("job", claim=lambda candidate: candidate not in self.jobs)
-        self.jobs[identifier] = asyncio.create_task(coroutine)
+        self.jobs[identifier] = asyncio.create_task(coroutine, name=f"mcp-job:{identifier}")
         self.jobs[identifier].add_done_callback(self._observe_job)
         return self._job_status(identifier)
 
