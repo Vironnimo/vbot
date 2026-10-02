@@ -185,6 +185,14 @@ function Install-NativeRelease {
     $release = if ($MainBuild) { "the newest main build" } elseif ([string]::IsNullOrWhiteSpace($Tag)) { "the latest release" } else { "release $Tag" }
     $identity = Get-ReleaseIdentity -Base $base -Release $release
     $releaseVersion = [string]$identity.version
+    if (-not $MainBuild -and [string]::IsNullOrWhiteSpace($Tag)) {
+        # Pin the tag the latest identity names: releases/latest can move to a
+        # newer release before the download, which would mix two releases.
+        if ($releaseVersion -cnotmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "$base/$ReleaseIdentityName names no valid release version."
+        }
+        $base = "$ReleaseDownloads/download/v$releaseVersion"
+    }
     # The installer carries the application version.
     $name = "vBot-$releaseVersion-windows-x86_64-$Shape.exe"
     $label = if ($MainBuild) { "the newest main build ($releaseVersion)" } else { "vBot $releaseVersion" }

@@ -85,6 +85,7 @@ _NATIVE_MODES = (
     "desktop-client",
     "missing",
     "no-digest",
+    "unsafe-version",
     "digest",
     "signature",
 )
@@ -130,7 +131,8 @@ function Invoke-WebRequest {
         if ($Mode -eq "missing") { throw "404 Not Found" }
         $assets = @{"vbot-windows-x86_64-$Shape.zip" = $sha}
         if ($Mode -ne "no-digest") { $assets["vBot-1.2.3-windows-x86_64-$Shape.exe"] = $sha }
-        $identity = @{schema_version=1; version="1.2.3"; assets=$assets}
+        $version = if ($Mode -eq "unsafe-version") { "1.2.3-x" } else { "1.2.3" }
+        $identity = @{schema_version=1; version=$version; assets=$assets}
         [IO.File]::WriteAllText($OutFile, (ConvertTo-Json -InputObject $identity -Depth 3))
         return
     }
@@ -185,18 +187,21 @@ $results | ConvertTo-Json -Compress -Depth 5
     )
 
     assert set(payloads) == set(_NATIVE_MODES)
-    # Only release downloads, never the GitHub API.
+    # Only release downloads, never the GitHub API. The latest release's installer
+    # comes from the tag its identity names, so a release published meanwhile
+    # cannot mix in.
     downloads = "https://github.com/Vironnimo/vbot/releases"
-    bases = {"main": f"{downloads}/download/main-build", "version": f"{downloads}/download/v1.2.3"}
+    tagged = f"{downloads}/download/v1.2.3"
+    bases = {"main": (f"{downloads}/download/main-build",) * 2, "version": (tagged, tagged)}
     for mode in ("release", "main", "version", "no-autostart", "desktop-client"):
         payload = payloads[mode]
         install_dir = tmp_path / "install with spaces" / mode
         assert payload["ok"] is True, mode
-        base = bases.get(mode, f"{downloads}/latest/download")
+        identity_base, installer_base = bases.get(mode, (f"{downloads}/latest/download", tagged))
         shape = "desktop-client" if mode == "desktop-client" else "server"
         assert payload["downloads"] == [
-            f"{base}/vbot-release.json",
-            f"{base}/vBot-1.2.3-windows-x86_64-{shape}.exe",
+            f"{identity_base}/vbot-release.json",
+            f"{installer_base}/vBot-1.2.3-windows-x86_64-{shape}.exe",
         ], mode
         starts = mode in {"release", "main", "version"}
         assert payload["calls"] == [
@@ -217,11 +222,14 @@ $results | ConvertTo-Json -Compress -Depth 5
         assert ("main builds" if mode == "main" else "releases") in status, mode
     assert "vbot-release.json" in payloads["missing"]["error"]
     assert "records no valid SHA-256 digest" in payloads["no-digest"]["error"]
+    # The version becomes the tag of the installer's download URL.
+    assert "names no valid release version" in payloads["unsafe-version"]["error"]
     assert "does not match the SHA-256 digest" in payloads["digest"]["error"]
     assert "invalid Authenticode signature" in payloads["signature"]["error"]
     # Without a verified digest the installer is never downloaded or run.
-    assert len(payloads["missing"]["downloads"]) == len(payloads["no-digest"]["downloads"]) == 1
-    for mode in ("missing", "no-digest", "digest", "signature"):
+    for mode in ("missing", "no-digest", "unsafe-version"):
+        assert len(payloads[mode]["downloads"]) == 1, mode
+    for mode in ("missing", "no-digest", "unsafe-version", "digest", "signature"):
         assert payloads[mode]["calls"] == [], mode
 
 

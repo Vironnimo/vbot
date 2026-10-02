@@ -111,7 +111,7 @@ nothing by itself. Two workflows call it in signed mode:
 
 A missing signing key blocks publication. The public PowerShell installer reads
 `vbot-release.json` from the release downloads (never the GitHub API), derives
-the exact installer name from its version, requires the SHA-256 digest it records
+the release tag and the exact installer name from its version, requires the SHA-256 digest it records
 and an HTTPS `github.com` download URL, and rejects an invalid Authenticode
 signature before executing it.
 

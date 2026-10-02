@@ -362,17 +362,20 @@ _DOWNLOADS = "https://github.com/Vironnimo/vbot/releases"
 
 
 @pytest.mark.parametrize(
-    ("channel", "published", "package_published"),
+    ("channel", "published", "version", "package_published"),
     [
-        pytest.param("release", "rel_active", True, id="already-active"),
-        pytest.param("main", "rel_newer", True, id="newer-main-build"),
-        pytest.param("release", "rel_newer", False, id="no-package"),
+        pytest.param("release", "rel_active", "1.0.0", True, id="already-active"),
+        pytest.param("release", "rel_newer", "1.0.0", True, id="newer-release"),
+        pytest.param("main", "rel_newer", "1.1.0.dev3", True, id="newer-main-build"),
+        pytest.param("release", "rel_newer", "1.0.0", False, id="no-package"),
+        # The version becomes the tag of the release download URL.
+        pytest.param("release", "rel_newer", "1.0.0/../../x", True, id="unsafe-version"),
         # A release without the identity names no version and is never downloaded.
-        pytest.param("release", None, True, id="no-identity"),
+        pytest.param("release", None, "1.0.0", True, id="no-identity"),
     ],
 )
 def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active(
-    tmp_path: Path, channel: str, published: str | None, package_published: bool
+    tmp_path: Path, channel: str, published: str | None, version: str, package_published: bool
 ) -> None:
     respx = pytest.importorskip("respx")
     install = replace(
@@ -381,22 +384,24 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
     (install.root / "versions" / "rel_active").mkdir(parents=True)
     (install.root / "active-version").write_text("rel_active\n", encoding="ascii")
     archive = package_name("server")
-    # Only the channel's release downloads are mocked, so a GitHub API request fails.
-    base_url = {
-        "release": f"{_DOWNLOADS}/latest/download",
-        "main": f"{_DOWNLOADS}/download/main-build",
+    # Only these release downloads are mocked, so a GitHub API request fails. The
+    # release channel downloads the packages from the tag the latest identity names,
+    # so a release published meanwhile cannot mix in.
+    identity_base, package_base = {
+        "release": (f"{_DOWNLOADS}/latest/download", f"{_DOWNLOADS}/download/v{version}"),
+        "main": (f"{_DOWNLOADS}/download/main-build", f"{_DOWNLOADS}/download/main-build"),
     }[channel]
     storage = "https://release-assets.example"
-    identity = {"schema_version": 1, "version_id": published, "version": "1.0.0"}
+    identity = {"schema_version": 1, "version_id": published, "version": version}
     with respx.mock(assert_all_called=False) as router:
-        identity_route = router.get(f"{base_url}/{RELEASE_IDENTITY_ASSET}")
+        identity_route = router.get(f"{identity_base}/{RELEASE_IDENTITY_ASSET}")
         if published:
             identity_route.respond(json=identity)
         else:
             identity_route.respond(404)
         # GitHub redirects every release download to its asset storage.
         for name in (archive, archive + ".sig"):
-            route = router.get(f"{base_url}/{name}")
+            route = router.get(f"{package_base}/{name}")
             if package_published:
                 route.respond(302, headers={"Location": f"{storage}/{name}"})
             else:
@@ -405,8 +410,10 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
         router.get(f"{storage}/{archive}.sig").respond(content=b"sig")
         labels: list[str | None] = []
 
-        if published is None or not package_published:
-            with pytest.raises(ApplicationError, match="publishes no|No matching signed"):
+        if published is None or not package_published or "/" in version:
+            with pytest.raises(
+                ApplicationError, match="publishes no|No matching signed|no valid release version"
+            ):
                 download_release(install, "upd_test")
             assert not package.called
             return
@@ -414,7 +421,7 @@ def test_download_fetches_the_platform_package_only_for_a_version_not_yet_active
             install, "upd_test", progress=lambda _message, label: labels.append(label)
         )
 
-    assert labels == ["1.0.0"]
+    assert labels == [version]
     if published == "rel_active":
         assert result is None
         assert not package.called

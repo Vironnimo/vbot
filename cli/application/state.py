@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform as _platform
+import re
 import sys
 import time
 from collections.abc import Iterator
@@ -56,14 +57,17 @@ CHANNEL_URLS = {
     "release": "https://api.github.com/repos/Vironnimo/vbot/releases/latest",
     "main": "https://api.github.com/repos/Vironnimo/vbot/releases/tags/main-build",
 }
-#: Where each update channel's release assets download from, as
-#: ``<base>/<asset name>``. CI publishes every green ``main`` commit to the rolling
-#: ``main-build`` prerelease. Release downloads, unlike the GitHub API (60
+#: Where each update channel publishes its release identity, as
+#: ``<base>/vbot-release.json``. CI publishes every green ``main`` commit to the
+#: rolling ``main-build`` prerelease. Release downloads, unlike the GitHub API (60
 #: anonymous requests per hour and IP), have no request limit.
 CHANNEL_DOWNLOADS = {
     "release": "https://github.com/Vironnimo/vbot/releases/latest/download",
     "main": "https://github.com/Vironnimo/vbot/releases/download/main-build",
 }
+#: The assets of the tagged release ``v<version>`` download from ``<base>/v<version>``.
+RELEASE_TAG_DOWNLOADS = "https://github.com/Vironnimo/vbot/releases/download"
+_RELEASE_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 
 
 class ApplicationError(ValueError):
@@ -163,8 +167,21 @@ class Installation:
 
     @property
     def download_base(self) -> str:
-        """Where the channel's release assets download from, as ``<base>/<asset name>``."""
+        """Where the channel's release identity downloads from."""
         return CHANNEL_DOWNLOADS[self.channel]
+
+    def asset_base(self, version: object) -> str:
+        """Where the assets of the release whose identity names ``version`` download from.
+
+        The release channel pins the tag ``v<version>``: ``releases/latest`` can move
+        to a newer release between reading the identity and downloading a package,
+        which would mix two releases. The main channel has only ``main-build``.
+        """
+        if self.channel != "release":
+            return self.download_base
+        if not isinstance(version, str) or not _RELEASE_VERSION.fullmatch(version):
+            raise ApplicationError("The latest release identity names no valid release version")
+        return f"{RELEASE_TAG_DOWNLOADS}/v{version}"
 
     def version(self, version_id: str | None = None) -> Path:
         if version_id is None:

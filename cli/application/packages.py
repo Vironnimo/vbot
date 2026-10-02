@@ -325,24 +325,24 @@ def download_release(
 ) -> Path | None:
     """Download the signed package of the installation's channel.
 
-    Reads the channel's release identity, then the package and its signature,
-    all from the channel's release downloads; it never queries the GitHub API,
-    whose anonymous request limit shared IP addresses exhaust. Returns ``None``
-    without downloading when the channel publishes the version that is already
-    active.
+    Reads the channel's release identity, then the package and its signature
+    from the release it names, all from release downloads; it never queries the
+    GitHub API, whose anonymous request limit shared IP addresses exhaust.
+    Returns ``None`` without downloading when the channel publishes the version
+    that is already active.
     """
     if not install.release_public_key:
         raise ApplicationError("Official updates require a configured release signing key")
     directory = contained(install.root, f"downloads/{safe_id(operation_id)}")
     expected = package_name(install.install_shape)
-    base = install.download_base
     with httpx.Client(timeout=60, follow_redirects=True, trust_env=False) as client:
-        identity = _release_identity(client, f"{base}/{RELEASE_IDENTITY_ASSET}")
+        identity = _release_identity(client, f"{install.download_base}/{RELEASE_IDENTITY_ASSET}")
         label = version_label(identity)
         if identity["version_id"] == install.version().name:
             if progress:
                 progress("The published version is already installed", label)
             return None
+        base = install.asset_base(identity.get("version"))
         if progress:
             progress("Downloading the application package", label)
         directory.mkdir(parents=True, exist_ok=True)

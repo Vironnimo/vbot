@@ -141,10 +141,18 @@ print(version, digest.lower() if digest else "-")
 PY
 )" || fail "$BASE/$IDENTITY is not a valid vBot release identity"
 read -r RELEASE_VERSION ASSET_SHA256 <<<"$FACTS"
+ASSET_BASE="$BASE"
+if [ "$CHANNEL" = "release" ] && [ -z "$VERSION" ]; then
+    # Pin the tag the latest identity names: releases/latest can move to a newer
+    # release before the download, which would mix two releases.
+    [[ "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+        || fail "$BASE/$IDENTITY names no valid release version"
+    ASSET_BASE="$DOWNLOADS/download/v$RELEASE_VERSION"
+fi
 
 status_line WORK "Downloading $ASSET of vBot $RELEASE_VERSION"
-curl -fL --progress-bar "$BASE/$ASSET" -o "$WORK/$ASSET" \
-    || fail "Could not download $BASE/$ASSET: the release publishes no package for $PLATFORM, or GitHub cannot be reached"
+curl -fL --progress-bar "$ASSET_BASE/$ASSET" -o "$WORK/$ASSET" \
+    || fail "Could not download $ASSET_BASE/$ASSET: the release publishes no package for $PLATFORM, or GitHub cannot be reached"
 if [ "$ASSET_SHA256" != "-" ]; then
     ACTUAL="$(python3 -c 'import hashlib, sys; print(hashlib.file_digest(open(sys.argv[1], "rb"), "sha256").hexdigest())' "$WORK/$ASSET" 2>/dev/null \
         || sha256sum "$WORK/$ASSET" | cut -d " " -f 1)"

@@ -62,16 +62,27 @@ def _web_name(url: str) -> str:
 
 
 def _publish(
-    web: Path, base: str, package: bytes, digest: str | None = None, *, identity: bool = True
+    web: Path,
+    base: str,
+    package: bytes,
+    digest: str | None = None,
+    *,
+    identity: bool = True,
+    version: str = "1.2.3",
 ) -> None:
-    """Publish the package and the identity recording its digest (``""``: none)."""
+    """Publish the identity under ``base`` and the package of the release it names.
+
+    The identity records the package's digest, or none for ``digest=""``. The
+    latest release's assets live under the tag its identity names.
+    """
     web.mkdir(exist_ok=True)
-    (web / _web_name(f"{DOWNLOADS}/{base}/{ASSET}")).write_bytes(package)
+    asset_base = f"download/v{version}" if base == "latest/download" else base
+    (web / _web_name(f"{DOWNLOADS}/{asset_base}/{ASSET}")).write_bytes(package)
     recorded = hashlib.sha256(package).hexdigest() if digest is None else digest
     assets = {ASSET: recorded} if recorded else {}
     if identity:
         (web / _web_name(f"{DOWNLOADS}/{base}/{IDENTITY}")).write_text(
-            json.dumps({"schema_version": 1, "version": "1.2.3", "assets": assets}), "utf-8"
+            json.dumps({"schema_version": 1, "version": version, "assets": assets}), "utf-8"
         )
 
 
@@ -116,15 +127,24 @@ def _calls(environment: dict[str, str]) -> list[str]:
 
 
 @pytest.mark.parametrize(
-    ("arguments", "base", "channel", "autostart", "digest"),
+    ("arguments", "base", "asset_base", "channel", "autostart", "digest"),
     [
-        pytest.param((), "latest/download", "release", True, None, id="release"),
+        # The package comes from the tag the latest identity names, so a release
+        # published meanwhile cannot mix in.
+        pytest.param((), "latest/download", "download/v1.2.3", "release", True, None, id="release"),
         pytest.param(
-            ("--main", "--no-autostart"), "download/main-build", "main", False, None, id="main"
+            ("--main", "--no-autostart"),
+            "download/main-build",
+            "download/main-build",
+            "main",
+            False,
+            None,
+            id="main",
         ),
         # A release whose identity records no digest installs over HTTPS only.
         pytest.param(
             ("--version", "v1.2.3", "--no-autostart"),
+            "download/v1.2.3",
             "download/v1.2.3",
             "release",
             False,
@@ -137,6 +157,7 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
     tmp_path: Path,
     arguments: tuple[str, ...],
     base: str,
+    asset_base: str,
     channel: str,
     autostart: bool,
     digest: str | None,
@@ -155,7 +176,7 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
     # Only release downloads, never the GitHub API.
     assert [call for call in calls if call.startswith("curl")] == [
         f"curl {DOWNLOADS}/{base}/{IDENTITY}",
-        f"curl {DOWNLOADS}/{base}/{ASSET}",
+        f"curl {DOWNLOADS}/{asset_base}/{ASSET}",
     ]
     (install,) = [call for call in calls if call.startswith("install ")]
     assert f"--root {root} " in install and "--shape server" in install
@@ -180,20 +201,34 @@ def test_installer_installs_the_verified_package_links_the_command_and_starts_th
 
 
 @pytest.mark.parametrize(
-    ("arguments", "digest", "identity", "message"),
+    ("arguments", "digest", "identity", "version", "message"),
     [
-        pytest.param((), "0" * 64, True, "does not match the SHA256 digest", id="digest-mismatch"),
-        pytest.param((), None, False, f"Could not read {IDENTITY}", id="no-identity"),
-        # The tag becomes part of the release download URL.
-        pytest.param(("--version", "v1/../../x"), None, True, "--version needs", id="unsafe-tag"),
+        pytest.param(
+            (), "0" * 64, True, "1.2.3", "does not match the SHA256 digest", id="digest-mismatch"
+        ),
+        pytest.param((), None, False, "1.2.3", f"Could not read {IDENTITY}", id="no-identity"),
+        # The tag, given or named by the latest identity, becomes part of the download URL.
+        pytest.param(
+            ("--version", "v1/../../x"), None, True, "1.2.3", "--version needs", id="unsafe-tag"
+        ),
+        pytest.param(
+            (), None, True, "1.2.3-x", "names no valid release version", id="unsafe-version"
+        ),
     ],
 )
 def test_installer_refuses_a_package_it_cannot_verify_against_the_release_identity(
-    tmp_path: Path, arguments: tuple[str, ...], digest: str | None, identity: bool, message: str
+    tmp_path: Path,
+    arguments: tuple[str, ...],
+    digest: str | None,
+    identity: bool,
+    version: str,
+    message: str,
 ) -> None:
     environment = _environment(tmp_path)
     package = _package(tmp_path / "package.zip")
-    _publish(tmp_path / "web", "latest/download", package, digest, identity=identity)
+    _publish(
+        tmp_path / "web", "latest/download", package, digest, identity=identity, version=version
+    )
 
     result = _install(environment, *arguments)
 
