@@ -446,7 +446,7 @@ describe('Review changes', () => {
     expect(undoLearningChanges).toHaveBeenCalledOnce();
   });
 
-  it('keeps a refused undo with the later change that blocks it', async () => {
+  it('keeps a refused undo with the later change that blocks it until the list reopens', async () => {
     const conflict = {
       store: 'memory',
       revision: 1,
@@ -498,6 +498,17 @@ describe('Review changes', () => {
       'alpha',
       'review-one',
     );
+    expect(source.reflectionDetails['review-one'].undoError).toEqual({
+      conflict: null,
+      message: failure.message,
+    });
+
+    // Reopening the list reads the review again; an old refusal no longer
+    // describes it.
+    expect(await controller.loadReflectionChanges(source, 'review-one')).toBe(
+      true,
+    );
+    expect(source.reflectionDetails['review-one'].undoError).toBeNull();
   });
 });
 

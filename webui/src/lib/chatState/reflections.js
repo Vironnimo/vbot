@@ -142,12 +142,21 @@ export function createChatReflections({
   }
 
   // Load what one review changed. Every call reads again, so reopening the
-  // list shows changes made elsewhere meanwhile.
-  async function loadChanges(sessionState, runId) {
+  // list shows changes made elsewhere meanwhile; an earlier undo refusal no
+  // longer describes it.
+  function loadChanges(sessionState, runId) {
+    return readChanges(sessionState, runId, { undoError: null });
+  }
+
+  async function readChanges(sessionState, runId, reset = {}) {
     const agentId = learningAgentId(sessionState);
     if (!agentId || !runId) return false;
     const isLatest = nextDetailVersion(sessionState, runId);
-    updateDetails(sessionState, runId, { loading: true, loadError: '' });
+    updateDetails(sessionState, runId, {
+      ...reset,
+      loading: true,
+      loadError: '',
+    });
     try {
       const result = await operations.loadLearningChanges(agentId, runId);
       if (!isLatest()) return false;
@@ -197,8 +206,9 @@ export function createChatReflections({
         undoing: false,
         undoError: { conflict, message: errorMessage(error) },
       });
-      // A failure while writing can leave part of the review undone.
-      if (!conflict) void loadChanges(sessionState, runId);
+      // A failure while writing can leave part of the review undone; the
+      // re-read keeps the failure shown.
+      if (!conflict) void readChanges(sessionState, runId);
       return false;
     }
   }
