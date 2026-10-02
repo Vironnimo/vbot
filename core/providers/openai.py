@@ -471,7 +471,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
             state = _responses_stream_state()
             response_events = cast(
-                AsyncGenerator[dict[str, Any], None],
+                AsyncGenerator[dict[str, Any]],
                 self._stream_responses(
                     payload,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
@@ -559,7 +559,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return
         async with aclosing(
             cast(
-                AsyncGenerator[dict[str, Any], None],
+                AsyncGenerator[dict[str, Any]],
                 super().stream(messages, model_id=model_id, **kwargs),
             )
         ) as deltas:
@@ -845,7 +845,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str | None = None,
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         stream_state = state or _responses_stream_state()
         if (
             endpoint_path == CODEX_RESPONSES_ENDPOINT
@@ -882,7 +882,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         cache_scope_id: str | None,
         state: ResponsesStreamState,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_stream(endpoint_path, payload, cache_scope_id=cache_scope_id)
         event_lines: list[str] = []
         seen_finish_delta = False
@@ -917,7 +917,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         cache_scope_id: str,
         conversation_id: str,
         state: ResponsesStreamState,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         websocket_headers = await self._build_codex_websocket_headers(cache_scope_id)
         account_id = websocket_headers["chatgpt-account-id"]
         model_id = payload.get("model")

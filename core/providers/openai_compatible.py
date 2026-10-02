@@ -9,7 +9,7 @@ provider-specific behavior can subclass this adapter."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 
 import httpx
 
@@ -195,7 +195,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """Close the HTTP client and release resources."""
         await self._client.aclose()
 
-    async def __aenter__(self) -> OpenAICompatibleAdapter:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

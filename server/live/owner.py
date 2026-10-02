@@ -147,7 +147,7 @@ class LiveOwnerStream:
             self._close_code = code
             self._wakeup.set()
 
-    async def frames(self) -> AsyncGenerator[OwnerFrame, None]:
+    async def frames(self) -> AsyncGenerator[OwnerFrame]:
         """Yield queued frames until the stream ends."""
         while True:
             while self._frames:

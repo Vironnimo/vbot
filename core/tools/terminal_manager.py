@@ -624,9 +624,7 @@ class TerminalManager:
         )
         return session
 
-    async def watch_for_operator(
-        self, terminal_id: str
-    ) -> AsyncGenerator[TerminalStreamEvent, None]:
+    async def watch_for_operator(self, terminal_id: str) -> AsyncGenerator[TerminalStreamEvent]:
         """Yield an authoritative VT snapshot followed by sequenced live events."""
         session = self._catalog._get_for_operator(terminal_id)
         async with contextlib.aclosing(self._events.watch_for_operator(session)) as events:

@@ -276,7 +276,7 @@ def _run_threads(targets: list[Any]) -> tuple[list[threading.Thread], list[BaseE
     return threads, errors
 
 
-async def _collect(events: AsyncGenerator[dict[str, Any], None], count: int) -> list[Any]:
+async def _collect(events: AsyncGenerator[dict[str, Any]], count: int) -> list[Any]:
     return [await anext(events) for _ in range(count)]
 
 

@@ -16,7 +16,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import httpx
 import psutil  # type: ignore[import-untyped]
@@ -281,7 +281,7 @@ class FakeProvider:
             stop_process_tree(self._process.pid)
             self._process = None
 
-    def __enter__(self) -> FakeProvider:
+    def __enter__(self) -> Self:
         self.start()
         return self
 
@@ -424,7 +424,7 @@ class VbotServer:
         self._process = None
         self._serving_pid = None
 
-    def __enter__(self) -> VbotServer:
+    def __enter__(self) -> Self:
         try:
             self.start()
         except BaseException:

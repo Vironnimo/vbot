@@ -127,7 +127,7 @@ class ReplayEventStream(Generic[EventT]):
         *,
         after_sequence: int = 0,
         live: bool = True,
-    ) -> AsyncGenerator[EventT, None]:
+    ) -> AsyncGenerator[EventT]:
         """Replay newer retained events, then optionally stream live events."""
 
         subscriber: _Subscriber[EventT] | None = None
@@ -227,7 +227,7 @@ class ReplayEventStream(Generic[EventT]):
         *,
         after_sequence: int,
         subscriber: _Subscriber[EventT] | None = None,
-    ) -> AsyncGenerator[EventT, None]:
+    ) -> AsyncGenerator[EventT]:
         for event, _size in list(self._events):
             if subscriber is not None and subscriber.closed:
                 return

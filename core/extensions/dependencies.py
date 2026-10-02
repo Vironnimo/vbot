@@ -188,6 +188,6 @@ def _contained(root: Path, relative: str) -> Path:
 def _safe_tree(path: Path) -> None:
     current = path
     while current != current.parent:
-        if current.is_symlink() or (hasattr(current, "is_junction") and current.is_junction()):
+        if current.is_symlink() or current.is_junction():
             raise DependencyError("Managed dependency paths must not contain links")
         current = current.parent

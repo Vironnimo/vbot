@@ -236,7 +236,7 @@ async def test_closing_a_partial_codex_stream_releases_the_socket_for_the_next_r
     connector = _FakeCodexWebSocketConnector([partial, replacement])
     adapter = codex_adapter(codex_websocket_connect=connector)
     stream = cast(
-        AsyncGenerator[dict[str, Any], None],
+        AsyncGenerator[dict[str, Any]],
         adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, conversation_id=CONVERSATION_ID),
     )
     try:

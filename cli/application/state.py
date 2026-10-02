@@ -110,14 +110,14 @@ def safe_id(value: Any) -> str:
 
 def contained(root: Path, relative: str) -> Path:
     """Reject traversal and Windows reparse points before using managed paths."""
-    if root.is_symlink() or (hasattr(root, "is_junction") and root.is_junction()):
+    if root.is_symlink() or root.is_junction():
         raise ApplicationError("Application root must not be a link or junction")
     path = root / relative
     if not path.resolve().is_relative_to(root.resolve()):
         raise ApplicationError("Application path escapes its installation")
     current = path
     while current != root and current != current.parent:
-        if current.is_symlink() or (hasattr(current, "is_junction") and current.is_junction()):
+        if current.is_symlink() or current.is_junction():
             raise ApplicationError("Application paths must not contain links or junctions")
         current = current.parent
     return path

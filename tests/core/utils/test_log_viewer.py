@@ -372,7 +372,7 @@ async def _until(condition: Callable[[], bool]) -> None:
             await asyncio.sleep(0)
 
 
-async def _next_event(stream: AsyncGenerator[dict[str, Any], None]) -> dict[str, Any]:
+async def _next_event(stream: AsyncGenerator[dict[str, Any]]) -> dict[str, Any]:
     return await stream.__anext__()
 
 
@@ -415,12 +415,12 @@ class _LiveFile:
         self.path.write_bytes(text.encode("utf-8"))
         self.changed()
 
-    async def subscribe(self) -> AsyncGenerator[dict[str, Any], None]:
+    async def subscribe(self) -> AsyncGenerator[dict[str, Any]]:
         read = await self.viewer.read_file(self.path.name)
         return self.viewer.subscribe(self.path.name, cursor=read["cursor"])
 
     async def next_after(
-        self, stream: AsyncGenerator[dict[str, Any], None], change: Callable[[], None]
+        self, stream: AsyncGenerator[dict[str, Any]], change: Callable[[], None]
     ) -> dict[str, Any]:
         pending = asyncio.ensure_future(stream.__anext__())
         await _until(lambda: self.viewer.subscriber_count(self.path.name) == 1)

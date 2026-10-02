@@ -8,6 +8,7 @@ import contextvars
 import hashlib
 import json
 from dataclasses import dataclass
+from typing import Self
 
 from core.sessions._types import _CHAT_HISTORY_CURSOR_PREFIX
 
@@ -25,7 +26,7 @@ class _SessionWriteLock:
             contextvars.ContextVar("session_write_lock_leases", default=())
         )
 
-    async def __aenter__(self) -> _SessionWriteLock:
+    async def __aenter__(self) -> Self:
         stack = tuple(lease for lease in self._leases.get() if lease.active)
         if stack:
             stack[-1].holders += 1

@@ -594,7 +594,7 @@ class LogViewer:
         file_name: str,
         *,
         cursor: str | None = None,
-    ) -> AsyncGenerator[JsonObject, None]:
+    ) -> AsyncGenerator[JsonObject]:
         """Stream the file's changes and the log directory's catalog changes.
 
         With a ``read_file`` cursor the stream first replays what changed since

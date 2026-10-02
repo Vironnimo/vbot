@@ -276,7 +276,7 @@ async def _sse_run_events(
     heartbeat_interval_seconds: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
     file_delivery: FileDelivery | None = None,
     include_file_urls: bool = False,
-) -> AsyncGenerator[str, None]:
+) -> AsyncGenerator[str]:
     async with aclosing(run.subscribe(after_sequence=after_sequence)) as events:
         event_iterator = events.__aiter__()
         event_task: asyncio.Task[Any] | None = None

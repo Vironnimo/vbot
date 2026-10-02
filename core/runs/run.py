@@ -656,7 +656,7 @@ class Run:
                 self.set_compaction_state("idle")
         return event
 
-    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent, None]:
+    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[RunEvent]:
         """Replay retained events, then stream live events until a terminal event.
 
         A subscription opened after the Run finished replays only the settled

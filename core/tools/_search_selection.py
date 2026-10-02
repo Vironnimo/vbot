@@ -136,7 +136,7 @@ class FileSelection:
         self.observed = 0
         self.skipped = 0
         self.complete = True
-        self._readers: list[Generator[tuple[Path, bool], None, None]] = []
+        self._readers: list[Generator[tuple[Path, bool]]] = []
 
     def close(self) -> None:
         # A suspended reader keeps the connection, and with it the spool file, open
@@ -340,7 +340,7 @@ class FileSelection:
         self._readers.append(reader)
         return reader
 
-    def _read_entries(self, action: str) -> Generator[tuple[Path, bool], None, None]:
+    def _read_entries(self, action: str) -> Generator[tuple[Path, bool]]:
         order, reverse = self.options.ordering or (
             ("path", False) if action == "content" else ("modified", True)
         )

@@ -317,7 +317,7 @@ def _site_path(install: Installation, fingerprint: str, relative: str) -> Path:
 
 def _safe_tree(root: Path, path: Path) -> None:
     for item in path.rglob("*"):
-        if item.is_symlink() or (hasattr(item, "is_junction") and item.is_junction()):
+        if item.is_symlink() or item.is_junction():
             raise DependencyError("Extension dependency site contains links")
         if not item.resolve().is_relative_to(root.resolve()):
             raise DependencyError("Extension dependency site escapes its root")

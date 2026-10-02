@@ -122,7 +122,7 @@ class ResultPage:
 
 
 def render_events(
-    events: Generator[dict[str, Any], None, None],
+    events: Generator[dict[str, Any]],
     page: ResultPage,
     options: SearchOptions,
     cwd: Path,

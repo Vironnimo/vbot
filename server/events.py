@@ -183,7 +183,7 @@ class ServerEventBus:
                 args={"subscribers": self._event_stream.subscriber_count},
             )
 
-    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject, None]:
+    async def subscribe(self, *, after_sequence: int = 0) -> AsyncGenerator[JsonObject]:
         """Replay existing events and stream new events until the client disconnects."""
         if self._loop is None:
             self._loop = asyncio.get_running_loop()

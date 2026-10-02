@@ -158,11 +158,11 @@ class LMStudioAdapter(OpenAICompatibleAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         await self._ensure_model_loaded(model_id)
         async with aclosing(
             cast(
-                AsyncGenerator[dict[str, Any], None],
+                AsyncGenerator[dict[str, Any]],
                 super().stream(messages, model_id=model_id, **kwargs),
             )
         ) as events:

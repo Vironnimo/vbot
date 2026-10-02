@@ -106,7 +106,7 @@ def _contained_detached_update(
 
 
 def _copy_evidence_entry(source: Path, destination: Path) -> None:
-    if source.is_symlink() or (hasattr(source, "is_junction") and source.is_junction()):
+    if source.is_symlink() or source.is_junction():
         return
     if source.is_file():
         destination.parent.mkdir(parents=True, exist_ok=True)

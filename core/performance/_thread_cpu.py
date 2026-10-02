@@ -30,7 +30,7 @@ def thread_cpu_reader() -> ThreadCpuReader | None:
     """
     if sys.platform == "win32":
         return _windows_reader()
-    if sys.platform.startswith("linux") and hasattr(time, "clock_gettime"):
+    if sys.platform.startswith("linux"):
         return _read_linux
     return None
 

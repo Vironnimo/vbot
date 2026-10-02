@@ -17,7 +17,9 @@ needs a fix.
 mypy checks the whole configured project, because a staged change can break a
 caller elsewhere, once for Windows and once for Linux (the platforms CI
 type-checks), so a Windows-only name without a platform check fails on any host.
-Its errors block the commit when they are in a staged file or
+The model workers that managed environments run on Python 3.12 are checked once
+more against 3.12's standard library when one of them or ``pyproject.toml`` is
+staged. mypy errors block the commit when they are in a staged file or
 in a file without uncommitted changes; errors in files with unstaged or untracked
 work in progress are reported without blocking.
 
@@ -66,6 +68,10 @@ SHOWN_DIFFERENCES = 5
 # The platforms CI type-checks (.github/workflows/ci.yml, static job). mypy keeps
 # the host platform in its default cache and every other one in its own.
 MYPY_PLATFORMS = ("win32", "linux")
+# Workers that managed model environments run on Python 3.12, not on vBot's Python
+# (PROJECT.md -> Development -> Python version). Ruff keeps their syntax valid there;
+# mypy checks their standard-library use.
+PYTHON_312_FILES = ("core/model_tasks/embedding_worker.py", "core/model_tasks/speech_worker.py")
 MYPY_LINE_PATTERN = re.compile(r"^(?P<path>[^:\n]+?):\d+(?::\d+)?: (?P<kind>error|note):")
 
 
@@ -291,6 +297,8 @@ def check_python(root: Path, staged: list[str], dirty: set[str]) -> list[StepRes
     targets = mypy_targets(root, python_files)
     if targets:
         results.extend(check_types(root, targets, set(staged), dirty))
+    if "pyproject.toml" in staged or set(PYTHON_312_FILES) & set(python_files):
+        results.extend(check_python_312(root, set(staged), dirty))
     return results
 
 
@@ -309,28 +317,38 @@ def check_types(
         runs = list(pool.map(run, MYPY_PLATFORMS))
     results: list[StepResult] = []
     for platform, mypy in zip(MYPY_PLATFORMS, runs, strict=True):
-        label = f"mypy {platform}"
-        if mypy.returncode == 0:
-            results.append(StepResult(label, "PASS", False))
-            continue
-        if mypy.returncode != 1:
-            results.append(StepResult(label, "FAIL", True, _output(mypy)))
-            continue
-        blocking, in_progress = split_mypy_output(mypy.stdout, staged, dirty)
+        results.extend(_mypy_results(f"mypy {platform}", mypy, staged, dirty))
+    return results
+
+
+def check_python_312(root: Path, staged: set[str], dirty: set[str]) -> list[StepResult]:
+    """Run mypy over ``PYTHON_312_FILES`` against Python 3.12's standard library."""
+    command = [sys.executable, "-m", "mypy", "--python-version", "3.12", *PYTHON_312_FILES]
+    return _mypy_results("mypy 3.12", _run(command, root), staged, dirty)
+
+
+def _mypy_results(
+    label: str, mypy: subprocess.CompletedProcess[str], staged: set[str], dirty: set[str]
+) -> list[StepResult]:
+    if mypy.returncode == 0:
+        return [StepResult(label, "PASS", False)]
+    if mypy.returncode != 1:
+        return [StepResult(label, "FAIL", True, _output(mypy))]
+    blocking, in_progress = split_mypy_output(mypy.stdout, staged, dirty)
+    results = [
+        StepResult(label, "FAIL", True, "\n".join(blocking))
+        if blocking
+        else StepResult(label, "PASS", False)
+    ]
+    if in_progress:
         results.append(
-            StepResult(label, "FAIL", True, "\n".join(blocking))
-            if blocking
-            else StepResult(label, "PASS", False)
-        )
-        if in_progress:
-            results.append(
-                StepResult(
-                    label,
-                    "NOT BLOCKING: errors in files with uncommitted work in progress",
-                    False,
-                    "\n".join(in_progress),
-                )
+            StepResult(
+                label,
+                "NOT BLOCKING: errors in files with uncommitted work in progress",
+                False,
+                "\n".join(in_progress),
             )
+        )
     return results
 
 

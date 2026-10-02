@@ -38,6 +38,12 @@ jobs:
         run: python -m ruff check .
       - name: Type-check
         run: python -m mypy
+      # Managed model environments run these workers on Python 3.12
+      # (scripts/commit_check.PYTHON_312_FILES).
+      - name: Type-check the model workers for Python 3.12
+        run: >-
+          python -m mypy --python-version 3.12
+          core/model_tasks/embedding_worker.py core/model_tasks/speech_worker.py
 
   backend:
     name: backend (${{ matrix.platform }}${{ matrix.shard && format(', shard {0}', matrix.shard) || '' }})

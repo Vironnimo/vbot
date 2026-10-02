@@ -38,7 +38,7 @@ import logging
 import random
 import threading
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, Self
 
 import httpx
 
@@ -160,7 +160,7 @@ class VoiceServerClient:
         """Release the connection pool."""
         self._http.close()
 
-    def __enter__(self) -> VoiceServerClient:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_exc_info: object) -> None:
