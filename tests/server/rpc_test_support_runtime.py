@@ -30,6 +30,9 @@ from core.providers.accounts import (
     split_connection_id,
 )
 from core.providers.reasoning import DEFAULT_REASONING_REPLAY_POLICY, ReasoningReplayPolicy
+from core.providers.wire_observations import ObservedFacts, WireObservations
+from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
+from core.providers.wire_profiles import WireProfiles
 from core.recall import IndexStatus
 from core.runs import ChatRunManager
 from core.runtime import AgentRenameOutcome, SettingsChangeEffects
@@ -456,6 +459,16 @@ class StubRuntime:
         self.models: Any = StubModels()
         self.providers = StubProviders()
         self.adapter = adapter
+        # Real wire profile resolution over no files; tests add files with
+        # ``wire_profiles.replace_files`` and learned facts on ``wire_observations``.
+        self.wire_observations = WireObservations(None, save_delay=None)
+        self.wire_profiles = WireProfiles(
+            files={},
+            protocol_support=lambda _provider_id: None,
+            model_resolver=self._wire_profile_model,
+            report=lambda _issue: None,
+            observations=self.wire_observations,
+        )
         self.chat_runs: ChatRunManager | None = None
         self.extensions: Any = None
         self.process_manager = StubProcessManager()
@@ -596,6 +609,25 @@ class StubRuntime:
 
     def get_adapter(self, connection: ConnectionRef) -> StubAdapter:
         return self.adapter
+
+    def _wire_profile_model(self, provider_id: str, model_id: str) -> Any:
+        try:
+            return self.models.get(provider_id, model_id)
+        except KeyError:
+            return None
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        return self.wire_profiles.resolve(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        return self.wire_profiles.status(provider_id, connection_id, model_id)
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        return self.wire_observations.facts_for(provider_id, connection_id, model_id)
 
     def model_database_refresh(self) -> asyncio.Lock:
         return self._model_database_refresh_lock

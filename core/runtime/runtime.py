@@ -65,6 +65,8 @@ from core.providers.runtime import ProviderRuntime
 from core.providers.token_getter import TokenGetter
 from core.providers.token_store import TokenStore
 from core.providers.usage import ProviderUsageService
+from core.providers.wire_observations import ObservedFacts
+from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.recall import RecallBackend
 from core.runs import ChatRunManager
 from core.runtime._agent_rename import (
@@ -1239,6 +1241,22 @@ class Runtime:
             model_id,
             effort,
         )
+
+    def wire_profile(self, provider_id: str, connection_id: str, model_id: str) -> WireProfile:
+        """Return the wire profile requests use for one Model on one local Connection id."""
+        return self._provider_operations().wire_profile(provider_id, connection_id, model_id)
+
+    def wire_status(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> tuple[ProfileStatus, Verification | None]:
+        """Return the wire profile ``(status, verification)`` without resolving the profile."""
+        return self._provider_operations().wire_status(provider_id, connection_id, model_id)
+
+    def learned_wire_facts(
+        self, provider_id: str, connection_id: str, model_id: str
+    ) -> ObservedFacts:
+        """Return what live traffic showed for one Model on one local Connection id."""
+        return self._provider_operations().learned_wire_facts(provider_id, connection_id, model_id)
 
     def model_database_refresh(self) -> AbstractAsyncContextManager[None]:
         """Coordinate manual and automatic Model DB refresh transactions."""

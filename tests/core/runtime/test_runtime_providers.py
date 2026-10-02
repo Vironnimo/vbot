@@ -443,6 +443,13 @@ def test_get_adapter_scopes_model_lookup_wire_profiles_and_replay_to_its_connect
     assert profile.protocol == "messages"
     assert profile.known_model
     assert anthropic.wire_profile("unknown-model").known_model is False
+    # The Runtime reports the profile requests use, learned facts included.
+    assert shared_runtime.wire_profile("anthropic", "api-key", "claude-sonnet-4-6") is profile
+    assert shared_runtime.wire_status("anthropic", "api-key", "claude-sonnet-4-6") == (
+        profile.status,
+        profile.verification,
+    )
+    assert shared_runtime.learned_wire_facts("anthropic", "api-key", "claude-sonnet-4-6").is_empty()
 
     cloud = shared_runtime.get_adapter(ConnectionRef("ollama-cloud", "ollama-cloud:api-key"))
     # The Provider-level policy applies to every model without a Model-level override.

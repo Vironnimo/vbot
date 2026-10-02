@@ -292,6 +292,19 @@ def test_status_reflects_verification_entries_and_explicit_rules() -> None:
     assert _resolve(profiles, "listed").status == "configured"
     assert _resolve(profiles, "p-1").status == "inferred"
     assert _resolve(profiles, "p-1").known_model is False
+    # The listing accessor answers the same without resolving the profile.
+    for model_id, connection in (
+        ("checked", "api-key"),
+        ("checked", "subscription"),
+        ("entry", "api-key"),
+        ("listed", "api-key"),
+        ("p-1", "api-key"),
+    ):
+        profile = _resolve(profiles, model_id, connection)
+        assert profiles.status("acme", connection, model_id) == (
+            profile.status,
+            profile.verification,
+        )
 
 
 def test_profiles_are_cached_until_the_model_or_the_files_change() -> None:
