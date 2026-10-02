@@ -34,6 +34,7 @@ import core.json_documents as json_documents
 from core.database._files import fsync_dir, fsync_file, sha256_file
 from core.database.errors import DatabaseCorruptError, DatabaseUnavailableError
 from core.utils.file_status import exists_strict
+from core.utils.tree_move import remove_tree
 
 DOCUMENTS_DIRECTORY_NAME = "documents"
 #: The quarantine child of replaced documents; never a valid database name.
@@ -351,8 +352,9 @@ def restore_documents(
         ) from exc
     finally:
         for temporary in staged.values():
+            # A staged copy keeps its document's bits, read-only ones included.
             with suppress(OSError):
-                temporary.unlink()
+                remove_tree(temporary, within=data_dir)
     return DocumentRestore(restored=plan.restored, removed=plan.removed, quarantine=quarantine)
 
 

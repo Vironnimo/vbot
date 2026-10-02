@@ -78,6 +78,7 @@ from core.utils.timestamps import (
     parse_canonical_timestamp,
     utc_now_timestamp,
 )
+from core.utils.tree_move import remove_tree
 from core.utils.version import detect_vbot_version
 
 if TYPE_CHECKING:
@@ -862,7 +863,8 @@ def create_data_snapshot(
                 raise _SnapshotCancelledError
 
         def discard_copies() -> None:
-            shutil.rmtree(staging)
+            # Copies keep their source's bits; read-only ones are removed too.
+            remove_tree(staging, within=root)
             staging.mkdir()
 
         capture = capture_members(
@@ -942,7 +944,8 @@ def create_data_snapshot(
         return None
     finally:
         if partial is not None:
-            shutil.rmtree(partial, ignore_errors=True)
+            with suppress(OSError):
+                remove_tree(partial, within=root)
         lock.release()
 
 
@@ -967,9 +970,11 @@ def _prune_snapshots(data_dir: Path, *, protected_snapshot: Path) -> None:
     )
     total = protected.total_size
     retained = 1
+    root = snapshot_root(data_dir)
     for child, manifest in others:
         if retained >= SNAPSHOT_KEEP_COUNT or total + manifest.total_size > SNAPSHOT_KEEP_BYTES:
-            shutil.rmtree(child, ignore_errors=True)
+            with suppress(OSError):
+                remove_tree(child, within=root)
         else:
             retained += 1
             total += manifest.total_size
