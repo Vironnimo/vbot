@@ -128,8 +128,8 @@ class _Resync:
     catalog: tuple[str, ...] | None
 
 
-# A subscriber queue carries events and resync markers; ``None`` ends the stream.
-_QueueItem = JsonObject | _Resync | None
+# A subscriber queue carries events and resync markers; shutting it down ends the stream.
+_QueueItem = JsonObject | _Resync
 _SubscriberQueue = asyncio.Queue[_QueueItem]
 
 
@@ -522,41 +522,34 @@ def _deliver(
     """Queue ``events``; a subscriber without room for them is resynchronized.
 
     Its backlog is dropped and replaced by one ``_Resync`` to ``tail``, the state
-    the dropped events led to, so later events still apply in order.
+    the dropped events led to, so later events still apply in order. A stream
+    that already ended receives nothing.
     """
 
-    if queue.maxsize <= 0 or queue.qsize() + len(events) <= queue.maxsize:
-        for event in events:
-            queue.put_nowait(event)
+    try:
+        if queue.maxsize <= 0 or queue.qsize() + len(events) <= queue.maxsize:
+            for event in events:
+                queue.put_nowait(event)
+            return
+        include_catalog = any(event["type"] == CATALOG_EVENT for event in events)
+        while True:
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if isinstance(item, _Resync):
+                include_catalog = include_catalog or item.catalog is not None
+            elif item.get("type") == CATALOG_EVENT:
+                include_catalog = True
+        queue.put_nowait(_Resync(tail=tail, catalog=catalog if include_catalog else None))
+    except asyncio.QueueShutDown:
         return
-    include_catalog = any(event["type"] == CATALOG_EVENT for event in events)
-    ended = False
-    while True:
-        try:
-            item = queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-        if item is None:
-            ended = True
-        elif isinstance(item, _Resync):
-            include_catalog = include_catalog or item.catalog is not None
-        elif item.get("type") == CATALOG_EVENT:
-            include_catalog = True
-    if ended:
-        queue.put_nowait(None)
-        return
-    queue.put_nowait(_Resync(tail=tail, catalog=catalog if include_catalog else None))
 
 
 def _end_stream(queue: _SubscriberQueue) -> None:
     """End a subscriber's stream now; its backlog no longer matters."""
 
-    while True:
-        try:
-            queue.get_nowait()
-        except asyncio.QueueEmpty:
-            break
-    queue.put_nowait(None)
+    queue.shutdown(immediate=True)
 
 
 class LogViewer:
@@ -647,7 +640,11 @@ class LogViewer:
             _deliver(queue, [replay_event], tail, catalog)
 
         try:
-            while (item := await queue.get()) is not None:
+            while True:
+                try:
+                    item = await queue.get()
+                except asyncio.QueueShutDown:
+                    return
                 if not isinstance(item, _Resync):
                     yield item
                     continue

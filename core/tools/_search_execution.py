@@ -46,7 +46,7 @@ def native_lines(
 
     if not keep_going():
         return
-    stopped = threading.Event()
+    # Shut down when this generator stops, which also releases an output thread blocked in put.
     messages: queue.Queue[tuple[str, bytes]] = queue.Queue(maxsize=8)
     diagnostics = bytearray()
 
@@ -57,18 +57,18 @@ def native_lines(
 
     monitored = None
 
-    def put(kind: str, data: bytes) -> None:
-        while not stopped.is_set():
-            try:
-                messages.put((kind, data), timeout=0.05)
-                return
-            except queue.Full:
-                continue
+    def put(kind: str, data: bytes) -> bool:
+        """Queue one message; ``False`` once the consumer has stopped."""
+        try:
+            messages.put((kind, data))
+        except queue.ShutDown:
+            return False
+        return True
 
     def output() -> None:
         assert stdout is not None
         try:
-            while not stopped.is_set():
+            while True:
                 line = stdout.readline(MAX_PROTOCOL_LINE + 1)
                 if not line:
                     break
@@ -81,7 +81,8 @@ def native_lines(
                         ),
                     )
                     break
-                put("line", line)
+                if not put("line", line):
+                    break
         finally:
             put("end", b"")
 
@@ -155,7 +156,7 @@ def native_lines(
             raise RuntimeError(diagnostics.decode("utf-8", errors="backslashreplace").strip())
     finally:
         try:
-            stopped.set()
+            messages.shutdown(immediate=True)
             kill(process)
             with contextlib.suppress(subprocess.TimeoutExpired):
                 process.wait(timeout=2)
