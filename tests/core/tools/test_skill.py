@@ -166,16 +166,27 @@ def test_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
     assert len(refreshes) == 1
 
 
-def _archived(name: str, reason: str, absorbed_into: str | None = None) -> ArchivedSkill:
+def _archived(
+    name: str,
+    reason: str,
+    absorbed_into: str | None = None,
+    *,
+    holder: str | None = None,
+    holder_since: str | None = None,
+) -> ArchivedSkill:
+    """An archived Skill; without ``holder``, an absorbing Skill still holds it."""
+    archived_at = "2026-09-30T08:00:00.000000Z"
     return ArchivedSkill(
         archive_id=f"{name}_0000",
         name=name,
-        archived_at="2026-09-30T08:00:00.000000Z",
+        archived_at=archived_at,
         reason=reason,
         absorbed_into=absorbed_into,
         archived_by="reflection",
         origin="agent",
         description="",
+        holder=holder or absorbed_into,
+        holder_since=holder_since or (archived_at if absorbed_into else None),
     )
 
 
@@ -188,6 +199,19 @@ def _archived(name: str, reason: str, absorbed_into: str | None = None) -> Archi
             "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-09-30; these are "
             "the instructions of 'debugging'.",
             id="merged-loads-its-target",
+        ),
+        pytest.param(
+            _archived(
+                "debug-notes",
+                "absorbed",
+                "debug-tips",
+                holder="debugging",
+                holder_since="2026-10-01T09:00:00.000000Z",
+            ),
+            {"name": "debug-notes"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-10-01; these are "
+            "the instructions of 'debugging'.",
+            id="merged-on-loads-the-skill-holding-it-now",
         ),
         pytest.param(
             _archived("debug-notes", "absorbed", "debugging"),

@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from core.skills import _history as history_module
 from core.skills._history import SkillHistory
 from core.skills.authoring import (
     HUMAN_WRITER,
@@ -319,6 +320,45 @@ def test_archived_skill_finds_an_absorbed_name_after_its_files_are_purged(
     assert entry is not None
     assert (entry.absorbed_into, entry.available) == ("new", False)
     assert service.archived_skill(root, "never") is None
+
+
+def test_archived_skill_follows_later_merges_to_the_skill_holding_it(
+    service: SkillAuthoringService, root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def at(day: int) -> None:
+        stamp = f"2026-09-{day:02d}T08:00:00.000000Z"
+        monkeypatch.setattr(history_module, "utc_now_timestamp", lambda: stamp)
+
+    for name in ("notes", "tips", "guide"):
+        service.create(root, name, skill_document(name), writer=AGENT)
+    at(10)
+    service.delete(root, "notes", writer=AGENT, absorbed_into="tips")
+    at(11)
+    service.delete(root, "tips", writer=AGENT, absorbed_into="guide")
+
+    entry = service.archived_skill(root, "notes")
+
+    assert entry is not None
+    assert (entry.absorbed_into, entry.holder, entry.holder_since) == (
+        "tips",
+        "guide",
+        "2026-09-11T08:00:00.000000Z",
+    )
+    # Merges that end at a deleted Skill, or lead back to one they passed, hold nothing.
+    service.delete(root, "guide", writer=AGENT)
+    dead_end = service.archived_skill(root, "notes")
+    assert dead_end is not None and dead_end.holder is None
+    service.create(root, "notes", skill_document("notes"), writer=AGENT)
+    service.create(root, "tips", skill_document("tips"), writer=AGENT)
+    at(12)
+    service.delete(root, "tips", writer=AGENT, absorbed_into="notes")
+    at(1)
+    service.delete(root, "notes", writer=AGENT)
+    looping = [service.archived_skill(root, name) for name in ("notes", "tips")]
+    assert [(entry.absorbed_into, entry.holder) for entry in looping if entry] == [
+        ("tips", None),
+        ("notes", None),
+    ]
 
 
 def test_revert_returns_files_to_their_earlier_text(

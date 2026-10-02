@@ -166,6 +166,14 @@ class ArchivedSkill:
 
     ``available`` is false for an absorbed Skill whose archived files were
     purged: the history still knows where its instructions went.
+
+    ``absorbed_into`` is the Skill that absorbed this one when it was archived.
+    ``holder`` is the Skill of the home that holds its instructions now:
+    ``absorbed_into`` while that Skill exists, otherwise the Skill that later
+    absorbed it, following each later merge; ``holder_since`` is when the
+    instructions reached ``holder``. Both are ``None`` when the merges end at a
+    Skill that was archived for another reason, or lead back to a Skill they
+    already passed.
     """
 
     archive_id: str
@@ -177,6 +185,8 @@ class ArchivedSkill:
     origin: str
     description: str
     available: bool = True
+    holder: str | None = None
+    holder_since: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -773,8 +783,12 @@ class SkillAuthoringService:
     def archived(self, target_root: Path) -> list[ArchivedSkill]:
         """Return the packages in a home's archive, newest first."""
         with self._write_lock:
-            history = SkillHistory(self._resolve(target_root))
-            return self._archived(history, self._archive_infos(history))
+            root = self._resolve(target_root)
+            history = SkillHistory(root)
+            infos = self._archive_infos(history)
+            packages = self._archived(history, infos)
+            newest = _newest_archives([*packages, *self._purged_absorbed(history, infos)])
+            return [self._with_holder(root, newest, entry) for entry in packages]
 
     def archived_skill(self, target_root: Path, skill_name: str) -> ArchivedSkill | None:
         """Return the newest archive entry of *skill_name* in a home, if any.
@@ -783,22 +797,14 @@ class SkillAuthoringService:
         (``available`` false).
         """
         with self._write_lock:
-            history = SkillHistory(self._resolve(target_root))
+            root = self._resolve(target_root)
+            history = SkillHistory(root)
             infos = self._archive_infos(history)
-            entries = [
-                entry for entry in self._archived(history, infos) if entry.name == skill_name
-            ]
-            listed = {entry.archive_id for entry in entries}
-            for info in infos.values():
-                if (
-                    info.skill == skill_name
-                    and info.absorbed_into
-                    and not info.restored
-                    and info.archive_id not in listed
-                    and not (history.archive_root / info.archive_id).exists()
-                ):
-                    entries.append(_archived_from_info(info, available=False))
-            return max(entries, key=lambda entry: entry.archived_at, default=None)
+            newest = _newest_archives(
+                [*self._archived(history, infos), *self._purged_absorbed(history, infos)]
+            )
+            entry = newest.get(skill_name)
+            return None if entry is None else self._with_holder(root, newest, entry)
 
     def restore(
         self, target_root: Path, archive_id: str, *, writer: SkillWriter
@@ -989,6 +995,41 @@ class SkillAuthoringService:
         entries = [_archived_entry(package, infos.get(package.name)) for package in packages]
         return sorted(entries, key=lambda entry: entry.archived_at, reverse=True)
 
+    def _purged_absorbed(
+        self, history: SkillHistory, infos: dict[str, SkillArchiveInfo]
+    ) -> list[ArchivedSkill]:
+        """Absorbed Skills whose archived files were purged; the history keeps their target."""
+        return [
+            _archived_from_info(info, available=False)
+            for info in infos.values()
+            if info.absorbed_into
+            and not info.restored
+            and not (history.archive_root / info.archive_id).exists()
+        ]
+
+    def _with_holder(
+        self, root: Path, newest: dict[str, ArchivedSkill], entry: ArchivedSkill
+    ) -> ArchivedSkill:
+        """Follow the merges from an absorbed *entry* to the Skill that holds it now."""
+        target, since = entry.absorbed_into, entry.archived_at
+        passed = {entry.name}
+        while target is not None and target not in passed:
+            if self._is_live(root, target):
+                return replace(entry, holder=target, holder_since=since)
+            passed.add(target)
+            later = newest.get(target)
+            if later is None:
+                break
+            target, since = later.absorbed_into, later.archived_at
+        return entry
+
+    def _is_live(self, root: Path, skill_name: str) -> bool:
+        try:
+            self._existing_skill_dir(root, skill_name)
+        except SkillAuthoringError:
+            return False
+        return True
+
     def _writable_root(self, target_root: Path) -> Path:
         root = self._resolve(target_root)
         self._reject_protected(root)
@@ -1160,6 +1201,16 @@ def _archived_entry(package: Path, info: SkillArchiveInfo | None) -> ArchivedSki
         origin=declared_origin(package),
         description=description,
     )
+
+
+def _newest_archives(entries: Iterable[ArchivedSkill]) -> dict[str, ArchivedSkill]:
+    """The newest archive entry of each Skill name."""
+    newest: dict[str, ArchivedSkill] = {}
+    for entry in entries:
+        known = newest.get(entry.name)
+        if known is None or entry.archived_at > known.archived_at:
+            newest[entry.name] = entry
+    return newest
 
 
 def _archived_from_info(info: SkillArchiveInfo, *, available: bool) -> ArchivedSkill:
