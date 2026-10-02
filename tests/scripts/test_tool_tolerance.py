@@ -28,7 +28,7 @@ def _cases():
         if not action.dest.endswith("_case") or not action.choices:
             continue
         tool = action.dest.removesuffix("_case")
-        if tool not in PROBE_SCENARIOS or tool in {"computer", "mcp_workflow"}:
+        if tool not in PROBE_SCENARIOS or tool == "mcp_workflow":
             continue
         for choice in action.choices:
             args = parser.parse_args(["--scenario", tool, action.option_strings[0], choice])

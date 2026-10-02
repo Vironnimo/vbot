@@ -74,7 +74,6 @@ PROBE_SCENARIOS = (
     "apply_patch",
     "reflection_workflow",
     "swarm_tool",
-    "computer",
     "mcp_workflow",
     "mcp",
     "direct_required",
