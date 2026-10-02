@@ -41,70 +41,40 @@ def _settings_state(model_tasks: Any) -> SimpleNamespace:
 
 
 @pytest.mark.asyncio
-async def test_local_speech_setup_rpc_status_install_and_guarded_restart() -> None:
+async def test_local_speech_setup_restart_is_guarded_per_target() -> None:
     setup = MagicMock()
     setup.status.return_value = {"state": "missing"}
-    setup.install.return_value = {"state": "installing", "phase": "checking", "error": ""}
+    lookup = MagicMock(return_value=setup)
     restart = MagicMock()
     state = SimpleNamespace(
-        runtime=SimpleNamespace(speech=SimpleNamespace(local_setup=setup)),
+        runtime=SimpleNamespace(speech=SimpleNamespace(local_setup_for=lookup)),
         request_restart=restart,
     )
 
-    async def invoke(action: str):
-        return await dispatch_rpc(state, {"method": f"speech.local_setup_{action}", "params": {}})
+    async def invoke(**params: Any) -> dict[str, Any]:
+        return await dispatch_rpc(state, {"method": "speech.local_setup_restart", "params": params})
 
-    assert (await invoke("status"))["result"] == {"state": "missing", "restart_available": True}
-    assert (await invoke("install"))["result"]["state"] == "installing"
-    setup.install.assert_called_once_with()
-    assert (await invoke("restart"))["result"]["error"] == "setup_not_finished"
+    assert (await invoke(target="local/parakeet"))["result"]["error"] == "setup_not_finished"
+    lookup.assert_called_once_with("local/parakeet")
     restart.assert_not_called()
     setup.status.return_value = {"state": "restart_required"}
-    assert (await invoke("restart"))["result"] == {"state": "restarting"}
+    assert (await invoke(target="local/parakeet"))["result"] == {"state": "restarting"}
     restart.assert_called_once_with()
     restart.side_effect = OSError("private details")
-    assert (await invoke("restart"))["result"] == {
+    assert (await invoke(target="local/parakeet"))["result"] == {
         "state": "failed",
         "error": "restart_unavailable",
     }
     state.request_restart = None
-    assert (await invoke("status"))["result"]["restart_available"] is False
-    assert (await invoke("restart"))["result"]["error"] == "restart_unavailable"
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("action", ["status", "install", "restart"])
-async def test_local_speech_setup_rpc_rejects_client_commands(action: str) -> None:
-    state = MagicMock()
-    result = await dispatch_rpc(
-        state,
-        {
-            "method": f"speech.local_setup_{action}",
-            "params": {"packages": ["untrusted"], "command": "shell"},
-        },
-    )
-    assert result["ok"] is False
-    assert result["error"]["code"] == "invalid_request"
-    state.runtime.speech.local_setup.install.assert_not_called()
-    state.request_restart.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_speech_setup_routes_exact_tts_target_and_rejects_unknown_targets() -> None:
-    setup = MagicMock()
-    setup.status.return_value = {"state": "ready"}
-    lookup = MagicMock(return_value=setup)
-    state = SimpleNamespace(
-        runtime=SimpleNamespace(speech=SimpleNamespace(local_setup_for=lookup)),
-        request_restart=None,
-    )
-    request = {"method": "speech.local_setup_status", "params": {"target": "local/chatterbox"}}
-    result = await dispatch_rpc(state, request)
-    lookup.assert_called_once_with("local/chatterbox")
-    assert result["result"] == {"state": "ready", "restart_available": False}
+    assert (await invoke(target="local/parakeet"))["result"]["error"] == "restart_unavailable"
     lookup.side_effect = ValueError("unknown target")
-    result = await dispatch_rpc(state, request)
-    assert result["error"]["code"] == "invalid_request"
+    for params in (
+        {"target": "local/unknown"},
+        {},
+        {"target": "local/parakeet", "packages": ["untrusted"], "command": "shell"},
+    ):
+        assert (await invoke(**params))["error"]["code"] == "invalid_request"
+    assert restart.call_count == 2
 
 
 def _local_owner(target: str, label: str) -> SimpleNamespace:
@@ -134,7 +104,7 @@ def _local_owner(target: str, label: str) -> SimpleNamespace:
 
 @pytest.mark.asyncio
 async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it() -> None:
-    speech = _local_owner("local/qwen3-tts", "Qwen3-TTS")
+    speech = _local_owner("local/qwen3-tts-1.7b", "Qwen3-TTS 1.7B")
     embeddings = _local_owner("local/granite-embedding-r2", "Granite")
     state = SimpleNamespace(
         runtime=SimpleNamespace(
@@ -167,7 +137,7 @@ async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it(
     assert [
         model["target"] for model in (await call("local_memory_status"))["result"]["models"]
     ] == [
-        "local/qwen3-tts",
+        "local/qwen3-tts-1.7b",
         "local/granite-embedding-r2",
     ]
     unloaded = (await call("local_unload", target="local/granite-embedding-r2"))["result"]
@@ -179,7 +149,7 @@ async def test_generic_local_rpcs_route_each_target_to_the_service_that_runs_it(
     for method, params in (
         ("local_setup_status", {"target": "local/unknown"}),
         ("local_setup_install", {"target": "openrouter/x/y::api-key"}),
-        ("local_setup_install", {"target": "local/qwen3-tts", "packages": ["untrusted"]}),
+        ("local_setup_install", {"target": "local/qwen3-tts-1.7b", "packages": ["untrusted"]}),
         ("local_unload", {"target": "local/unknown"}),
         ("local_memory_status", {"force": True}),
     ):
@@ -373,7 +343,7 @@ async def test_task_model_status_reports_live_binding_readiness(
     ("task_type", "target", "engine"),
     [
         ("speech_to_text", "local/nemotron3.5-asr", ""),
-        ("text_to_speech", "local/qwen3-tts", "qwen3-tts"),
+        ("text_to_speech", "local/qwen3-tts-1.7b", "qwen3-tts"),
     ],
 )
 async def test_local_speech_readiness_preserves_setup_and_logs_missing_environment(
@@ -527,7 +497,7 @@ async def test_prepare_transcription_rpc_reports_state_and_rejects_parameters() 
 async def test_local_memory_rpc_preserves_busy_result_and_rejects_parameters(busy):
     snapshot = {
         "models": [
-            {"target": "local/qwen3-tts", "label": "Qwen3-TTS", "loaded": True, "busy": busy}
+            {"target": "local/qwen3-tts-1.7b", "label": "Qwen3-TTS", "loaded": True, "busy": busy}
         ]
     }
     released = {**snapshot, "released": not busy}
@@ -537,7 +507,7 @@ async def test_local_memory_rpc_preserves_busy_result_and_rejects_parameters(bus
     )
     state = SimpleNamespace(runtime=SimpleNamespace(speech=speech))
     for method, expected in (("local_memory_status", snapshot), ("local_unload", released)):
-        params = {"target": "local/qwen3-tts"} if method == "local_unload" else {}
+        params = {"target": "local/qwen3-tts-1.7b"} if method == "local_unload" else {}
         response = await dispatch_rpc(state, {"method": f"speech.{method}", "params": params})
         assert response == {"ok": True, "result": expected}
         response = await dispatch_rpc(
@@ -545,7 +515,7 @@ async def test_local_memory_rpc_preserves_busy_result_and_rejects_parameters(bus
         )
         assert response["error"]["code"] == "invalid_request"
     speech.local_memory_status.assert_called_once_with()
-    speech.unload_local.assert_awaited_once_with("local/qwen3-tts")
+    speech.unload_local.assert_awaited_once_with("local/qwen3-tts-1.7b")
     for params in ({}, {"target": 2}, {"target": ""}):
         response = await dispatch_rpc(state, {"method": "speech.local_unload", "params": params})
         assert response["error"]["code"] == "invalid_request"

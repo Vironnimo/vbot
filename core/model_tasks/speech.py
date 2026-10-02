@@ -232,10 +232,6 @@ class SpeechService:
         if target_ref.kind == "local" and options.get(PRELOAD_OPTION) is True:
             self._local_executor.prepare(target_ref.local_id, options)
 
-    @property
-    def local_setup(self) -> LocalSpeechSetup:
-        return self._local_executor.setup
-
     def local_setup_for(self, target: str) -> LocalSpeechSetup:
         return self._local_executor.setup_for(target)
 

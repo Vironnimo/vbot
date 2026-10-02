@@ -77,12 +77,12 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       'disables unload for busy or empty speech memory: %j',
       async (status) => {
         api.getLocalSpeechMemory.mockResolvedValue({
-          models: [{ target: 'local/qwen3-asr', ...status }],
+          models: [{ target: 'local/qwen3-asr-1.7b', ...status }],
         });
         mountPanel({
           settings: {
             model_tasks: {
-              speech_to_text: { target: 'local/qwen3-asr', options: {} },
+              speech_to_text: { target: 'local/qwen3-asr-1.7b', options: {} },
             },
           },
         });
@@ -95,7 +95,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
 
     it('recovers from an unload failure and respects a busy response to a race', async () => {
       const loaded = {
-        target: 'local/qwen3-tts',
+        target: 'local/qwen3-tts-1.7b',
         label: 'Voice',
         loaded: true,
         busy: false,
@@ -123,13 +123,13 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
 
     it('unloads STT while TTS is busy and keeps the TTS row intact', async () => {
       const stt = {
-        target: 'local/qwen3-asr',
+        target: 'local/qwen3-asr-1.7b',
         label: 'STT',
         loaded: true,
         busy: false,
       };
       const tts = {
-        target: 'local/qwen3-tts',
+        target: 'local/qwen3-tts-1.7b',
         label: 'TTS',
         loaded: true,
         busy: true,
@@ -158,7 +158,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
     async function mountLocalPanel() {
       targetsFor('speech_to_text', [
         {
-          id: 'local/qwen3-asr',
+          id: 'local/qwen3-asr-1.7b',
           label: 'Qwen3 ASR',
           kind: 'local',
           usable: false,
@@ -167,7 +167,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       mountPanel({
         settings: {
           model_tasks: {
-            speech_to_text: { target: 'local/qwen3-asr', options: {} },
+            speech_to_text: { target: 'local/qwen3-asr-1.7b', options: {} },
           },
         },
       });
@@ -186,7 +186,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       setupState('missing');
       targetsFor('speech_to_text', [
         {
-          id: 'local/qwen3-asr',
+          id: 'local/qwen3-asr-1.7b',
           label: 'Qwen3 ASR',
           kind: 'local',
           usable: false,
@@ -201,7 +201,7 @@ describe('SettingsSpecializedModelsPanel local speech', () => {
       api.getTaskModelOptions.mockImplementation((_task, target) =>
         Promise.resolve({
           fields:
-            target === 'local/qwen3-asr'
+            target === 'local/qwen3-asr-1.7b'
               ? [
                   {
                     name: 'language',

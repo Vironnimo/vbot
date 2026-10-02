@@ -1,8 +1,11 @@
 """Optional local speech engines, their catalog, and serialized model lifecycle.
 
-An engine definition owns its options, availability and factory together. The
-executor knows only the synchronous transcription/close protocol; adding an
-engine does not change SpeechService, the server, or any accessor.
+An engine definition owns its options, availability, factory and pinned model
+together. The executor knows only the synchronous transcription/close protocol;
+adding an engine does not change SpeechService, the server, or any accessor.
+Every built-in target has its own installation (:class:`LocalSpeechSetup`):
+its engine environment plus its pinned model files, which the executor hands
+to the engine as ``model_path``. Engines never download.
 """
 
 from __future__ import annotations
@@ -30,19 +33,20 @@ from typing import Any, Protocol, cast
 
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
+from core.model_tasks.model_files import PinnedModel
 from core.model_tasks.options import (
     TaskModelOptionChoice,
     TaskModelOptionField,
     TaskModelOptionSchema,
     validate_task_model_options,
 )
-from core.model_tasks.speech_setup import LocalSpeechSetup, _dependencies_available
+from core.model_tasks.speech_models import SPEECH_MODELS
+from core.model_tasks.speech_setup import LocalSpeechSetup, ServerSpeechStack
 from core.model_tasks.speech_types import (
     SpeechProgress,
     SpeechSynthesisResult,
     SpeechTranscriptionResult,
 )
-from core.model_tasks.speech_worker import resolve_snapshot
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
@@ -50,7 +54,7 @@ from core.utils.workers import BoundedWorkerPool
 _LOGGER = get_logger("speech.local")
 _SAMPLE_RATE = 16_000
 _CHUNK_SAMPLES = 30 * _SAMPLE_RATE
-_LOAD_OPTIONS = ("model", "model_path", "device", "dtype")
+_LOAD_OPTIONS = ("model_path", "device", "dtype")
 # Local STT option asking the Runtime to load the engine after startup and binding changes.
 PRELOAD_OPTION = "preload"
 _PROGRESS: ContextVar[SpeechProgress | None] = ContextVar("local_speech_progress", default=None)
@@ -80,9 +84,19 @@ class LocalSynthesisEngine(Protocol):
 
 @dataclass(frozen=True)
 class SpeechEngineDefinition:
+    """One local speech target.
+
+    *model* is the pinned model its installation fetches; the executor passes
+    that model's directory to *create* as the ``model_path`` option unless the
+    binding names its own. *environment* is the TTS environment the target
+    runs in (``[tool.vbot.local-tts.<environment>]``); empty means the STT stack.
+    """
+
     descriptor: LocalTaskTargetDescriptor
     create: Callable[[Mapping[str, Any]], LocalTranscriptionEngine | LocalSynthesisEngine]
     load_options: tuple[str, ...] | None = None
+    model: PinnedModel | None = None
+    environment: str = ""
 
 
 def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
@@ -125,8 +139,9 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             "text",
             "Model directory",
             default="",
-            description="Optional directory on the vBot server containing a Transformers model. "
-            "Leave empty to download and cache the selected model from Hugging Face.",
+            description="Optional directory on the vBot server with a Transformers model of "
+            "this engine's architecture, loaded instead of the installed model. "
+            "Leave empty to use the installed model.",
         ),
         TaskModelOptionField(
             PRELOAD_OPTION,
@@ -147,55 +162,50 @@ def builtin_speech_engines() -> tuple[SpeechEngineDefinition, ...]:
             "Leave empty for automatic detection, or enter a language code such as de or en."
         ),
     )
-    qwen = LocalTaskTargetDescriptor(
-        id="qwen3-asr",
-        label="Qwen3 ASR",
-        task_types=(TASK_SPEECH_TO_TEXT,),
-        availability=_dependencies_available,
-        metadata={"installation_extra": "local-speech", "license": "Apache-2.0"},
-        option_fields=(
-            TaskModelOptionField(
-                "model",
-                "select",
-                "Model",
-                default="Qwen/Qwen3-ASR-1.7B-hf",
-                required=True,
-                options=(
-                    TaskModelOptionChoice("Qwen/Qwen3-ASR-1.7B-hf", "Qwen3 ASR 1.7B"),
-                    TaskModelOptionChoice("Qwen/Qwen3-ASR-0.6B-hf", "Qwen3 ASR 0.6B"),
-                ),
-            ),
-            language,
-            TaskModelOptionField(
-                "prompt",
-                "textarea",
-                "Vocabulary and context",
-                default="",
-                description="Optional names or terminology to help recognize your recording.",
-            ),
-            *common,
+    qwen_options = (
+        language,
+        TaskModelOptionField(
+            "prompt",
+            "textarea",
+            "Vocabulary and context",
+            default="",
+            description="Optional names or terminology to help recognize your recording.",
         ),
+        *common,
     )
-    parakeet = LocalTaskTargetDescriptor(
-        id="parakeet",
-        label="Parakeet TDT v3",
-        task_types=(TASK_SPEECH_TO_TEXT,),
-        availability=_dependencies_available,
-        metadata={"installation_extra": "local-speech", "license": "CC-BY-4.0"},
-        option_fields=common,
-    )
-    nemotron = LocalTaskTargetDescriptor(
-        id="nemotron3.5-asr",
-        label="Nemotron 3.5 ASR Streaming 0.6B",
-        task_types=(TASK_SPEECH_TO_TEXT,),
-        availability=_dependencies_available,
-        metadata={"installation_extra": "local-speech", "license": "OpenMDW-1.1"},
-        option_fields=(language, *common),
-    )
+
+    def definition(
+        local_id: str,
+        label: str,
+        license_name: str,
+        options: tuple[TaskModelOptionField, ...],
+        engine: Callable[[Mapping[str, Any]], LocalTranscriptionEngine],
+    ) -> SpeechEngineDefinition:
+        model = SPEECH_MODELS[local_id]
+        return SpeechEngineDefinition(
+            LocalTaskTargetDescriptor(
+                id=local_id,
+                label=label,
+                task_types=(TASK_SPEECH_TO_TEXT,),
+                metadata={"license": license_name, "download_bytes": model.download_bytes},
+                option_fields=options,
+            ),
+            engine,
+            _LOAD_OPTIONS,
+            model,
+        )
+
     return (
-        SpeechEngineDefinition(qwen, _QwenEngine, _LOAD_OPTIONS),
-        SpeechEngineDefinition(parakeet, _ParakeetEngine, _LOAD_OPTIONS),
-        SpeechEngineDefinition(nemotron, _NemotronEngine, _LOAD_OPTIONS),
+        definition("qwen3-asr-1.7b", "Qwen3 ASR 1.7B", "Apache-2.0", qwen_options, _QwenEngine),
+        definition("qwen3-asr-0.6b", "Qwen3 ASR 0.6B", "Apache-2.0", qwen_options, _QwenEngine),
+        definition("parakeet", "Parakeet TDT v3", "CC-BY-4.0", common, _ParakeetEngine),
+        definition(
+            "nemotron3.5-asr",
+            "Nemotron 3.5 ASR Streaming 0.6B",
+            "OpenMDW-1.1",
+            (language, *common),
+            _NemotronEngine,
+        ),
     )
 
 
@@ -259,40 +269,64 @@ class LocalSpeechExecutor:
         install_lock = asyncio.Lock()
         self._loading = _LoadingProcesses()
         packaged_app = None if managed_worker else _packaged_app_root()
-        self.setup = LocalSpeechSetup(
-            directory=engines_dir / "stt" if engines_dir and packaged_app else None,
-            install_lock=install_lock,
-        )
-        self.tts_setups = {
-            name: LocalSpeechSetup(
-                engine=name,
-                directory=engines_dir / name if engines_dir else None,
+        # A development checkout's STT targets share the server interpreter's packages.
+        server_stack = ServerSpeechStack()
+
+        def new_setup(
+            local_id: str, environment: str, model: PinnedModel | None
+        ) -> LocalSpeechSetup:
+            if environment:
+                directory = engines_dir / environment if engines_dir else None
+            else:
+                directory = engines_dir / "stt" if engines_dir and packaged_app else None
+            return LocalSpeechSetup(
+                name=local_id,
+                engine=environment,
+                directory=directory,
                 install_lock=install_lock,
+                model=model,
+                models_dir=engines_dir / "models" if engines_dir else None,
+                server_stack=server_stack,
             )
-            for name in ("qwen3-tts", "chatterbox")
-        }
-        definitions = (
-            tuple(engines)
-            if engines is not None
-            else (*builtin_speech_engines(), *_tts_definitions(self.tts_setups))
-        )
-        if engines is None and packaged_app is not None:
-            definitions = tuple(
+
+        self.setups: dict[str, LocalSpeechSetup] = {}
+
+        def add_setup(
+            local_id: str, environment: str, model: PinnedModel | None
+        ) -> LocalSpeechSetup:
+            setup = self.setups[local_id] = new_setup(local_id, environment, model)
+            return setup
+
+        if engines is None:
+            stt = tuple(
                 replace(
                     entry,
-                    descriptor=replace(entry.descriptor, availability=self.setup.available),
-                    create=partial(
-                        _ManagedSttEngine,
-                        self.setup,
-                        packaged_app,
-                        entry.descriptor.id,
-                        self._loading,
+                    descriptor=replace(
+                        entry.descriptor,
+                        availability=add_setup(entry.descriptor.id, "", entry.model).available,
                     ),
                 )
-                if TASK_SPEECH_TO_TEXT in entry.descriptor.task_types
-                else entry
-                for entry in definitions
+                for entry in builtin_speech_engines()
             )
+            if packaged_app is not None:
+                stt = tuple(
+                    replace(
+                        entry,
+                        create=partial(
+                            _ManagedSttEngine,
+                            self.setups[entry.descriptor.id],
+                            packaged_app,
+                            entry.descriptor.id,
+                            self._loading,
+                        ),
+                    )
+                    for entry in stt
+                )
+            definitions: tuple[SpeechEngineDefinition, ...] = (*stt, *_tts_definitions(add_setup))
+        else:
+            definitions = tuple(engines)
+            for entry in definitions:
+                add_setup(entry.descriptor.id, entry.environment, entry.model)
         definitions = tuple(
             replace(
                 entry,
@@ -315,17 +349,20 @@ class LocalSpeechExecutor:
         self._close_task: asyncio.Task[None] | None = None
 
     def _can_execute(self, descriptor: LocalTaskTargetDescriptor) -> bool:
-        setup = self.tts_setups.get(descriptor.id)
-        if setup is None and TASK_SPEECH_TO_TEXT in descriptor.task_types:
-            setup = self.setup
-        return not (setup and setup.blocks_execution) and descriptor.can_execute()
+        return not self.setups[descriptor.id].blocks_execution and descriptor.can_execute()
 
     def setup_for(self, target: str) -> LocalSpeechSetup:
-        if target in ("", "local/qwen3-asr", "local/parakeet", "local/nemotron3.5-asr"):
-            return self.setup
-        if target.startswith("local/") and target[6:] in self.tts_setups:
-            return self.tts_setups[target[6:]]
-        raise ValueError("Unknown local speech target")
+        local_id = target.removeprefix("local/")
+        if not target.startswith("local/") or local_id not in self.setups:
+            raise ValueError("Unknown local speech target")
+        return self.setups[local_id]
+
+    def _engine_options(self, local_id: str, options: dict[str, Any]) -> dict[str, Any]:
+        """The options an engine loads with: the installed model unless the binding names one."""
+        directory = self.setups[local_id].model_directory
+        if directory is None or options.get("model_path"):
+            return options
+        return {**options, "model_path": str(directory)}
 
     async def transcribe(
         self,
@@ -439,10 +476,9 @@ class LocalSpeechExecutor:
             raise LocalSpeechError(f"Local speech-to-text target is not available: {local_id}")
         if not definition.descriptor.can_execute():
             raise LocalSpeechError(
-                "Local speech recognition is not installed. "
-                "Open Settings → Voice → Speech models, select a local speech-to-text "
-                "engine under Speech to text, and choose Install. "
-                "Restart the server when setup has finished."
+                f"The local speech-to-text model {definition.descriptor.label} is not "
+                "installed. Open Settings → Voice → Speech models, select it under Speech "
+                "to text, and choose Install. Restart the server if Settings asks for it."
             )
         schema = TaskModelOptionSchema(
             TASK_SPEECH_TO_TEXT,
@@ -474,7 +510,7 @@ class LocalSpeechExecutor:
                 progress.update("loading")
             _LOGGER.debug("Loading local STT model (engine=%s)", local_id)
             started = monotonic()
-            state.engine = definition.create(options)
+            state.engine = definition.create(self._engine_options(local_id, options))
             state.key = key
             _LOGGER.info(
                 "Loaded local STT model (engine=%s seconds=%.1f)", local_id, monotonic() - started
@@ -491,8 +527,7 @@ class LocalSpeechExecutor:
             return error
         return LocalSpeechExecutionError(
             f"Local speech recognition failed ({type(error).__name__}). "
-            "Check the selected device, model directory, available memory, "
-            "and model download access."
+            "Check the selected device, model directory and available memory."
         )
 
     def _transcribe(
@@ -571,8 +606,7 @@ class LocalSpeechExecutor:
         return {**self.memory_status(), "released": True}
 
     def close(self) -> None:
-        self.setup.close()
-        for setup in self.tts_setups.values():
+        for setup in self.setups.values():
             setup.close()
         self._closed = True
         self._loading.close()
@@ -583,8 +617,7 @@ class LocalSpeechExecutor:
             state.unload()
 
     async def aclose(self) -> None:
-        await self.setup.aclose()
-        for setup in self.tts_setups.values():
+        for setup in self.setups.values():
             await setup.aclose()
         if self._close_task is None:
             if self._closed:
@@ -698,7 +731,7 @@ class LocalSpeechExecutor:
             if state.engine is None:
                 if progress is not None:
                     progress.update("loading")
-                state.engine = definition.create(options)
+                state.engine = definition.create(self._engine_options(local_id, options))
                 state.key = key
             if progress is not None:
                 progress.update("synthesizing")
@@ -712,14 +745,18 @@ class LocalSpeechExecutor:
                 "Local TTS failed (engine=%s, error_type=%s)", local_id, type(error).__name__
             )
             raise LocalSpeechExecutionError(
-                "Local speech synthesis failed. Check the selected device, available memory "
-                "and model download access, then retry."
+                "Local speech synthesis failed. Check the selected device and available "
+                "memory, then retry."
             ) from error
         finally:
             _PROGRESS.reset(token)
 
 
-def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngineDefinition, ...]:
+def _tts_definitions(
+    setup_for: Callable[[str, str, PinnedModel], LocalSpeechSetup],
+) -> tuple[SpeechEngineDefinition, ...]:
+    """The local TTS targets; *setup_for(id, environment, model)* supplies each installation."""
+
     def select(name: str, label: str, default: str, choices: Sequence[str]) -> TaskModelOptionField:
         return TaskModelOptionField(
             name,
@@ -732,12 +769,6 @@ def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngi
 
     common = (select("device", "Device", "auto", ("auto", "cuda", "cpu", "mps")),)
     qwen_options = (
-        select(
-            "model",
-            "Model",
-            "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
-            ("Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"),
-        ),
         select(
             "voice",
             "Voice",
@@ -762,14 +793,14 @@ def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngi
                 "Italian",
             ),
         ),
-        TaskModelOptionField(
-            "instructions",
-            "textarea",
-            "Speaking instructions",
-            default="",
-            description="Optional style instructions for the 1.7B model.",
-        ),
         *common,
+    )
+    instructions = TaskModelOptionField(
+        "instructions",
+        "textarea",
+        "Speaking instructions",
+        default="",
+        description="Optional style instructions, such as a calm or cheerful voice.",
     )
     chatter_options = (
         select(
@@ -816,24 +847,37 @@ def _tts_definitions(setups: Mapping[str, LocalSpeechSetup]) -> tuple[SpeechEngi
         ),
         *common,
     )
-    return tuple(
-        SpeechEngineDefinition(
-            LocalTaskTargetDescriptor(
-                id=name,
-                label=label,
-                task_types=(TASK_TEXT_TO_SPEECH,),
-                availability=setups[name].available,
-                metadata={"installation_extra": "local-tts", "license": license_name},
-                option_fields=fields,
-            ),
-            partial(_TtsEngine, setups[name]),
-            ("model", "device"),
+    definitions = []
+    for local_id, environment, label, license_name, fields in (
+        (
+            "qwen3-tts-1.7b",
+            "qwen3-tts",
+            "Qwen3-TTS 1.7B",
+            "Apache-2.0",
+            (*qwen_options, instructions),
+        ),
+        ("qwen3-tts-0.6b", "qwen3-tts", "Qwen3-TTS 0.6B", "Apache-2.0", qwen_options),
+        ("chatterbox", "chatterbox", "Chatterbox Multilingual V3", "MIT", chatter_options),
+    ):
+        model = SPEECH_MODELS[local_id]
+        setup = setup_for(local_id, environment, model)
+        definitions.append(
+            SpeechEngineDefinition(
+                LocalTaskTargetDescriptor(
+                    id=local_id,
+                    label=label,
+                    task_types=(TASK_TEXT_TO_SPEECH,),
+                    availability=setup.available,
+                    metadata={"license": license_name, "download_bytes": model.download_bytes},
+                    option_fields=fields,
+                ),
+                partial(_TtsEngine, setup),
+                ("device",),
+                model,
+                environment,
+            )
         )
-        for name, label, license_name, fields in (
-            ("qwen3-tts", "Qwen3-TTS", "Apache-2.0", qwen_options),
-            ("chatterbox", "Chatterbox Multilingual V3", "MIT", chatter_options),
-        )
-    )
+    return tuple(definitions)
 
 
 class _TtsEngine:
@@ -842,6 +886,8 @@ class _TtsEngine:
     def __init__(self, setup: LocalSpeechSetup, options: Mapping[str, Any]) -> None:
         from core.utils.processes import subprocess_creation_flags
 
+        # The worker loads this model directory with the first request.
+        self._model_path = options["model_path"]
         self._process = subprocess.Popen(
             [
                 str(setup.python),
@@ -870,7 +916,13 @@ class _TtsEngine:
             with tempfile.TemporaryDirectory(prefix="vbot-tts-") as directory:
                 output = Path(directory) / "speech.wav"
                 process.stdin.write(
-                    json.dumps({"text": text, "options": dict(options), "output": str(output)})
+                    json.dumps(
+                        {
+                            "text": text,
+                            "options": {**options, "model_path": self._model_path},
+                            "output": str(output),
+                        }
+                    )
                     + "\n"
                 )
                 process.stdin.flush()
@@ -879,8 +931,7 @@ class _TtsEngine:
                     if event.get("error"):
                         raise RuntimeError(event["error"])
                     if (
-                        event.get("phase")
-                        in {"checking_model", "downloading", "loading", "synthesizing"}
+                        event.get("phase") in {"loading", "synthesizing"}
                         and (progress := _PROGRESS.get()) is not None
                     ):
                         progress.update(event["phase"])
@@ -1061,7 +1112,6 @@ class _TransformersEngine:
     """Shared model loading; model-specific preparation and decoding stay below."""
 
     model_class = ""
-    default_model = ""
 
     def __init__(self, options: Mapping[str, Any]) -> None:
         torch = importlib.import_module("torch")
@@ -1092,52 +1142,21 @@ class _TransformersEngine:
             precision = "float32"
             if device == "cuda":
                 precision = "bfloat16" if torch.cuda.is_bf16_supported() else "float16"
-        source = (options.get("model_path") or "").strip()
-        if source:
-            path = Path(source).expanduser()
-            if not path.is_dir():
-                raise LocalSpeechExecutionError(
-                    "The model directory does not exist on the vBot server. "
-                    "Correct Model directory in the speech-to-text options or leave it empty "
-                    "to use the selected downloadable model."
-                )
-            source = str(path)
-        else:
-            source = options.get("model") or self.default_model
+        # The executor supplies the installed model's directory unless the binding names one.
+        path = Path((options.get("model_path") or "").strip()).expanduser()
+        if not str(path) or str(path) == "." or not path.is_dir():
+            raise LocalSpeechExecutionError(
+                "The model directory does not exist on the vBot server. "
+                "Correct Model directory in the speech-to-text options or leave it empty "
+                "to use the installed model."
+            )
+        source = str(path)
         load_options = {
             "local_files_only": True,
             "trust_remote_code": False,
         }
         try:
-            progress = _PROGRESS.get()
-            if not options.get("model_path"):
-                from tqdm.auto import tqdm  # type: ignore[import-untyped]
-
-                class DownloadProgress(tqdm):
-                    def __init__(self, *args: Any, **kwargs: Any) -> None:
-                        self._bytes = kwargs.get("unit") == "B"
-                        kwargs["file"] = io.StringIO()
-                        super().__init__(*args, **kwargs)
-
-                    def update(self, n: float | None = 1) -> bool | None:
-                        if progress is not None and self._bytes and (n or 0) > 0:
-                            progress.update("downloading")
-                        return cast(bool | None, super().update(n))
-
-                if progress is not None:
-                    progress.update("checking_model")
-                files = [
-                    "config.json",
-                    "generation_config.json",
-                    "model.safetensors",
-                    "processor_config.json",
-                    "tokenizer.json",
-                    "tokenizer_config.json",
-                ]
-                if self.model_class == "AutoModelForMultimodalLM":
-                    files.append("chat_template.jinja")
-                source = resolve_snapshot(source, files, DownloadProgress)
-            if progress is not None:
+            if (progress := _PROGRESS.get()) is not None:
                 progress.update("loading")
             self._processor = transformers.AutoProcessor.from_pretrained(source, **load_options)
             self._model = (
@@ -1162,7 +1181,6 @@ class _TransformersEngine:
 
 class _QwenEngine(_TransformersEngine):
     model_class = "AutoModelForMultimodalLM"
-    default_model = "Qwen/Qwen3-ASR-1.7B-hf"
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         language = (options.get("language") or "").strip() or None
@@ -1189,7 +1207,6 @@ class _QwenEngine(_TransformersEngine):
 
 class _ParakeetEngine(_TransformersEngine):
     model_class = "AutoModelForTDT"
-    default_model = "nvidia/parakeet-tdt-0.6b-v3"
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         inputs = self._processor(samples, sampling_rate=_SAMPLE_RATE, return_tensors="pt").to(
@@ -1203,7 +1220,6 @@ class _ParakeetEngine(_TransformersEngine):
 
 class _NemotronEngine(_TransformersEngine):
     model_class = "AutoModelForRNNT"
-    default_model = "nvidia/nemotron-3.5-asr-streaming-0.6b"
 
     def transcribe(self, samples: Any, options: Mapping[str, Any]) -> SpeechTranscriptionResult:
         language = (options.get("language") or "").strip() or "auto"

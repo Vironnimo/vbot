@@ -166,13 +166,15 @@ async def test_runtime_registers_local_speech_and_closes_its_executor(config: Co
     try:
         targets = runtime.model_tasks.list_targets("speech_to_text")
         assert {target.id for target in targets if target.kind == "local"} == {
-            "local/qwen3-asr",
+            "local/qwen3-asr-1.7b",
+            "local/qwen3-asr-0.6b",
             "local/parakeet",
             "local/nemotron3.5-asr",
         }
         tts = runtime.model_tasks.list_targets("text_to_speech")
         assert {target.id for target in tts if target.kind == "local"} == {
-            "local/qwen3-tts",
+            "local/qwen3-tts-1.7b",
+            "local/qwen3-tts-0.6b",
             "local/chatterbox",
         }
         assert (

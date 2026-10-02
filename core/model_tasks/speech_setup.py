@@ -1,4 +1,4 @@
-"""Fixed speech dependency recipes and per-engine installation lifecycle."""
+"""Fixed speech dependency recipes and per-target installation lifecycle."""
 
 from __future__ import annotations
 
@@ -6,44 +6,89 @@ import asyncio
 import shutil
 import sys
 import tomllib
+from dataclasses import dataclass
 from importlib import metadata, util
 from pathlib import Path
+from typing import Any
 
 from core.model_tasks.local_setup import LocalSetup
+from core.model_tasks.model_files import PinnedModel
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("speech.setup")
 
 
-class LocalSpeechSetup(LocalSetup):
-    """One speech engine's installation: the server's STT stack or a managed environment.
+@dataclass
+class ServerSpeechStack:
+    """The development checkout's STT packages, installed into the server's interpreter.
 
-    Without a directory it installs the shipped ``local-speech`` extra into a
-    development checkout's server interpreter (restart required). With a
-    directory it creates a managed environment: the packaged STT stack, or a
-    TTS engine's ``[tool.vbot.local-tts.<engine>]`` recipe.
+    Every local STT target of that checkout shares them. Once they changed,
+    the server must restart before any of those targets runs.
+    """
+
+    restart_required: bool = False
+
+
+class LocalSpeechSetup(LocalSetup):
+    """One local speech target's installation: its engine environment and pinned model.
+
+    *engine* names a TTS environment (``[tool.vbot.local-tts.<engine>]``);
+    empty means the STT stack. With a directory the stack is a managed
+    environment, shared by every target of the same engine; without one, a
+    development checkout installs the ``local-speech`` extra into the server's
+    interpreter (*server_stack*, restart required). The target's *model* lives
+    under *models_dir* and is fetched after the environment is ready.
     """
 
     def __init__(
         self,
         *,
+        name: str = "",
         engine: str = "",
         directory: Path | None = None,
         install_lock: asyncio.Lock | None = None,
+        model: PinnedModel | None = None,
+        models_dir: Path | None = None,
+        server_stack: ServerSpeechStack | None = None,
     ) -> None:
         super().__init__(
-            name=engine or "stt",
+            name=name or engine or "stt",
             directory=directory,
             install_lock=install_lock,
             subject="Local speech",
             logger=_LOGGER,
+            model=model,
+            models_dir=models_dir,
         )
         self.engine = engine
+        self._server_stack = (
+            (server_stack or ServerSpeechStack()) if not engine and directory is None else None
+        )
 
-    def _availability_error(self) -> str:
-        if not self.engine and self.directory is None:
+    @property
+    def _restart_pending(self) -> bool:
+        return self._server_stack is not None and self._server_stack.restart_required
+
+    @property
+    def blocks_execution(self) -> bool:
+        return super().blocks_execution or self._restart_pending
+
+    def status(self, *, log_unavailable: bool = False) -> dict[str, Any]:
+        status = super().status(log_unavailable=log_unavailable)
+        if self._restart_pending and status["state"] in {"ready", "missing"}:
+            status = {**status, "state": "restart_required", "error": ""}
+            status.pop("progress", None)
+        return status
+
+    def install(self) -> dict[str, Any]:
+        if self._restart_pending:
+            return self.status()
+        return super().install()
+
+    def _environment_error(self) -> str:
+        if self._server_stack is not None:
             return "" if _dependencies_available() else "dependencies_missing"
-        return super()._availability_error()
+        return super()._environment_error()
 
     def _python_version(self) -> str | None:
         # The managed STT worker imports vBot's source, which needs the server's Python.
@@ -52,12 +97,29 @@ class LocalSpeechSetup(LocalSetup):
         return f"{sys.version_info.major}.{sys.version_info.minor}"
 
     async def _perform(self) -> None:
-        if self.engine:
-            await self._install_tts()
-            return
-        if self.directory is not None:
-            await self._install_stt()
-            return
+        if self._environment_error():
+            if self.engine:
+                installed = await self._install_tts()
+            elif self._server_stack is None:
+                installed = await self._install_stt()
+            else:
+                installed = await self._install_server_stack()
+            if not installed:
+                return
+        if self.model is not None and self._model_error():
+            if not await self._fetch_model():
+                return
+            self._publish_model()
+            _LOGGER.info(
+                "Local speech model installed (target=%s revision=%s)",
+                self._name,
+                self.model.revision[:12],
+            )
+        self._state = "ready"
+
+    async def _install_server_stack(self) -> bool:
+        """Install the shipped extra into a development checkout's server interpreter."""
+        assert self._server_stack is not None
         # Only the shipped extra is installable, never packages or paths
         # supplied by an RPC caller. Install dependencies, not vBot's
         # launchers, which may be locked by an open Windows Desktop.
@@ -67,7 +129,7 @@ class LocalSpeechSetup(LocalSetup):
         ]["local-speech"]
         if await self._command([sys.executable, "-m", "pip", "--version"]) != 0:
             self._fail("pip_unavailable")
-            return
+            return False
         gpu_tool = shutil.which("nvidia-smi")
         use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
         self._phase = "gpu" if use_cuda else "downloading"
@@ -100,10 +162,10 @@ class LocalSpeechSetup(LocalSetup):
                 != 0
             ):
                 self._fail("install_failed")
-                return
+                return False
         if await self._pip(requirements) != 0:
             self._fail("install_failed")
-            return
+            return False
         self._phase = "verifying"
         # A fresh process proves imports without contaminating the live
         # server with a mixture of old and newly installed libraries.
@@ -118,15 +180,16 @@ class LocalSpeechSetup(LocalSetup):
             probe += "x=torch.ones((16,16),device='cuda'); assert (x@x).sum().item()==4096; "
         if await self._command([sys.executable, "-c", probe]) != 0:
             self._fail("gpu_unavailable" if use_cuda else "verification_failed")
-            return
-        self._state = "restart_required"
+            return False
+        self._server_stack.restart_required = True
         _LOGGER.info("Local speech support installed; server restart required")
+        return True
 
-    async def _install_tts(self) -> None:
+    async def _install_tts(self) -> bool:
         assert self.directory is not None
         device = await self._install_recipe("local-tts", self.engine)
         if device is None:
-            return
+            return False
         worker = Path(__file__).with_name("speech_worker.py")
         if (
             await self._command(
@@ -135,13 +198,13 @@ class LocalSpeechSetup(LocalSetup):
             != 0
         ):
             self._fail("verification_failed")
-            return
+            return False
         self._write_marker(self.directory / "verified.json")
         # Only a child environment changed; the server can use it immediately.
-        self._state = "ready"
         _LOGGER.info("Local TTS support installed (engine=%s)", self.engine)
+        return True
 
-    async def _install_stt(self) -> None:
+    async def _install_stt(self) -> bool:
         """Install the shipped STT recipe only inside its managed environment."""
         assert self.directory is not None
         marker = self.directory / "verified.json"
@@ -160,13 +223,13 @@ class LocalSpeechSetup(LocalSetup):
             install = self._packaged_installation()
             if install is None:
                 self._fail("setup_unavailable")
-                return
+                return False
             from cli.application.dependencies import environment_creation_command
 
             command, environment = environment_creation_command(install, self.directory)
             if await self._command(command, environment=environment) != 0:
                 self._fail("install_failed")
-                return
+                return False
         gpu_tool = shutil.which("nvidia-smi")
         use_cuda = bool(gpu_tool) and await self._command([str(gpu_tool), "-L"]) == 0
         self._phase = "gpu" if use_cuda else "downloading"
@@ -181,10 +244,10 @@ class LocalSpeechSetup(LocalSetup):
         pip = [*uv, "pip", "install", "--python", str(self.python), "--only-binary=:all:"]
         if await self._command([*pip, torch_requirement, "--index-url", index], progress=True) != 0:
             self._fail("install_failed")
-            return
+            return False
         if await self._command([*pip, *requirements], progress=True) != 0:
             self._fail("install_failed")
-            return
+            return False
         self._phase = "verifying"
         worker = Path(__file__).with_name("speech_worker.py")
         source = Path(__file__).resolve()
@@ -203,10 +266,10 @@ class LocalSpeechSetup(LocalSetup):
             != 0
         ):
             self._fail("verification_failed")
-            return
+            return False
         self._write_marker(marker)
-        self._state = "ready"
         _LOGGER.info("Local STT support installed in its managed environment")
+        return True
 
     def _packaged_installation(self):
         from cli.application.state import load_installation

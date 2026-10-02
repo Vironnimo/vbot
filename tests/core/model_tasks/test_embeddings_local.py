@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import array
 import asyncio
-import hashlib
 import io
 import json
 import os
@@ -13,12 +12,12 @@ import threading
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from core.model_tasks import embedding_worker
+from core.model_tasks import embedding_worker, local_setup
 from core.model_tasks.embeddings_local import (
     LocalEmbeddingError,
     LocalEmbeddingExecutor,
@@ -28,6 +27,7 @@ from core.model_tasks.embeddings_local import (
     _WorkerProcess,
     builtin_local_embedding_models,
 )
+from core.model_tasks.model_files import ModelFilesError
 
 GRANITE, HARRIER = builtin_local_embedding_models()
 
@@ -186,32 +186,47 @@ async def test_memory_release_stops_only_an_idle_loaded_model(tmp_path: Path) ->
 
 
 class _Commands:
-    """Fake setup commands: creates the environment and emits worker frames."""
+    """Fake setup commands: creates the environment and the prepared graph."""
 
-    def __init__(self, setup: Any, frames: list[dict[str, Any]], exit_code: int = 0) -> None:
+    def __init__(self, setup: Any, exit_code: int = 0) -> None:
         self.setup = setup
-        self.frames = frames
         self.exit_code = exit_code
         self.calls: list[list[str]] = []
         self.seen: list[dict[str, Any]] = []
 
-    async def __call__(self, arguments: Any, *, on_line: Any = None, **_kwargs: Any) -> int:
+    async def __call__(self, arguments: Any, **_kwargs: Any) -> int:
         self.calls.append(list(arguments))
         if "venv" in arguments:
             self.setup.python.parent.mkdir(parents=True, exist_ok=True)
             self.setup.python.touch()
-        if "--install" not in arguments:
+        if "--prepare" not in arguments:
             return 0
-        spec = json.loads(arguments[-1])
-        for frame in self.frames:
-            on_line(b"noise from a library\n")
-            on_line(json.dumps(frame).encode() + b"\n")
-            self.seen.append(self.setup.status())
+        self.seen.append(self.setup.status())
         if self.exit_code == 0:
-            graph = Path(spec["model"]["graph"])
+            graph = Path(json.loads(arguments[-1])["model"]["graph"])
             graph.parent.mkdir(parents=True, exist_ok=True)
             graph.touch()
         return self.exit_code
+
+
+class _Fetch:
+    """Fake model download: reports half the bytes, then all, or fails with *error*."""
+
+    def __init__(self, setup: Any, error: str = "") -> None:
+        self.setup = setup
+        self.error = error
+        self.models: list[Any] = []
+        self.seen: list[dict[str, Any]] = []
+
+    def __call__(
+        self, model: Any, directory: Path, *, progress: Any, cancelled: Any, reuse: Any = ()
+    ) -> None:
+        self.models.append(model)
+        progress(model.download_bytes // 2)
+        self.seen.append(self.setup.status())
+        if self.error:
+            raise ModelFilesError(self.error)
+        progress(model.download_bytes)
 
 
 @pytest.mark.asyncio
@@ -225,16 +240,11 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         stale = tmp_path / "models" / HARRIER.id / "old-revision"
         stale.mkdir(parents=True)
         total = HARRIER.download_bytes
-        commands = _Commands(
-            harrier,
-            [
-                {"progress": {"completed": 0, "total": total}},
-                {"progress": {"completed": total // 2, "total": total}},
-                {"progress": {"completed": total, "total": total}},
-            ],
-        )
+        commands = _Commands(harrier)
+        fetch = _Fetch(harrier)
         monkeypatch.setattr(harrier, "_command", commands)
         monkeypatch.setattr(harrier, "_packaged", lambda: True)
+        monkeypatch.setattr(local_setup, "fetch_model_files", fetch)
         assert harrier.status() == {
             "state": "missing",
             "phase": "checking",
@@ -248,13 +258,16 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         assert harrier.status()["state"] == "ready" and harrier.available()
         assert executor.targets.get(HARRIER.id).can_execute()
         assert ready == ["local/harrier-0.6b"]
-        assert commands.seen[1] == {
-            "state": "installing",
-            "phase": "downloading",
-            "error": "",
-            "progress": {"completed": total // 2, "total": total},
-        }
-        assert commands.seen[2]["phase"] == "verifying"
+        assert fetch.models == [HARRIER.pinned]
+        assert fetch.seen == [
+            {
+                "state": "installing",
+                "phase": "downloading",
+                "error": "",
+                "progress": {"completed": total // 2, "total": total},
+            }
+        ]
+        assert commands.seen == [{"state": "installing", "phase": "verifying", "error": ""}]
         # The pinned recipe goes into the managed environment only, never the server.
         installs = [call for call in commands.calls if "install" in call and "pip" in call]
         assert installs and all(
@@ -265,50 +278,49 @@ async def test_setup_installs_the_environment_once_then_each_pinned_model(
         recipe = harrier._config()["tool"]["vbot"]["local-embeddings"]["onnx"]
         assert installs[-1][-len(recipe["packages"]) :] == recipe["packages"]
         assert "--verify" in commands.calls[-2]
-        spec = json.loads(commands.calls[-1][-1])
-        assert (spec["repo"], spec["revision"]) == (HARRIER.repo, HARRIER.revision)
-        assert [item["sha256"] for item in spec["files"]] == [item.sha256 for item in HARRIER.files]
-        assert spec["derive"]["accuracy_level"] == 4
+        assert json.loads(commands.calls[-1][-1])["derive"]["accuracy_level"] == 4
         assert not stale.exists()
 
         granite = executor.setup_for("local/granite-embedding-r2")
-        granite_commands = _Commands(granite, [])
+        granite_commands = _Commands(granite)
         monkeypatch.setattr(granite, "_command", granite_commands)
         granite.install()
         assert granite._task is not None
         await granite._task
 
         assert granite.available()
-        assert [call[-2] for call in granite_commands.calls] == ["--install"]
+        assert [call[-2] for call in granite_commands.calls] == ["--prepare"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("frames", "error"),
+    ("fetch_error", "prepare_exit", "phase", "error"),
     [
-        pytest.param([{"error": "checksum_mismatch"}], "checksum_mismatch", id="checksum"),
-        pytest.param([{"error": "something private"}], "download_failed", id="unknown-code"),
+        pytest.param("checksum_mismatch", 0, "downloading", "checksum_mismatch", id="download"),
+        pytest.param("", 1, "verifying", "verification_failed", id="unloadable"),
     ],
 )
 async def test_failed_model_install_publishes_no_receipt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    frames: list[dict[str, Any]],
+    fetch_error: str,
+    prepare_exit: int,
+    phase: str,
     error: str,
 ) -> None:
     async with running(tmp_path) as executor:
         install_fake(tmp_path, GRANITE)
         setup = executor.setup_for("local/granite-embedding-r2")
         assert setup.model_directory is not None
-        commands = _Commands(setup, frames, exit_code=1)
-        monkeypatch.setattr(setup, "_command", commands)
+        monkeypatch.setattr(setup, "_command", _Commands(setup, exit_code=prepare_exit))
+        monkeypatch.setattr(local_setup, "fetch_model_files", _Fetch(setup, fetch_error))
         # Reinstalling a model withdraws its earlier receipt first.
         (setup.model_directory / "verified.json").unlink()
         setup.install()
         assert setup._task is not None
         await setup._task
 
-        assert setup.status() == {"state": "failed", "phase": "downloading", "error": error}
+        assert setup.status() == {"state": "failed", "phase": phase, "error": error}
         assert not (setup.model_directory / "verified.json").exists()
         assert not setup.available()
 
@@ -376,94 +388,3 @@ def test_worker_wire_round_trip(monkeypatch: pytest.MonkeyPatch) -> None:
         "op": "embed",
         "texts": ["ab", "Grüße"],
     }
-
-
-def _hub(contents: dict[str, bytes], downloads: list[str]) -> dict[str, ModuleType]:
-    """Fake ``huggingface_hub`` that serves *contents* with byte progress like a Xet download."""
-
-    class Tqdm:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self.unit = kwargs.get("unit")
-            self.n = 0
-            # tqdm's rule: `disable=None` turns off a bar whose output is no terminal.
-            disable = kwargs.get("disable")
-            self.disable = not kwargs["file"].isatty() if disable is None else disable
-
-        def update(self, n: float | None = 1) -> bool | None:
-            if not self.disable:
-                self.n += int(n or 0)
-            return None
-
-    def hf_hub_download(
-        repo: str, path: str, *, revision: str, local_dir: str, tqdm_class: Any, **_: Any
-    ) -> str:
-        downloads.append(path)
-        target = Path(local_dir) / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(contents[path])
-        # Xet counts compressed network bytes and written bytes on two bars.
-        size = len(contents[path])
-        network = tqdm_class(unit="B", disable=None)
-        written = tqdm_class(unit="B", total=size, disable=None)
-        network.update(3)
-        written.update(2)
-        written.update(size - 2)
-        return str(target)
-
-    hub = ModuleType("huggingface_hub")
-    hub.hf_hub_download = hf_hub_download  # type: ignore[attr-defined]
-    progress = ModuleType("huggingface_hub.utils.tqdm")
-    progress.tqdm = Tqdm  # type: ignore[attr-defined]
-    return {"huggingface_hub": hub, "huggingface_hub.utils.tqdm": progress}
-
-
-@pytest.mark.parametrize(
-    ("served", "graph", "error"),
-    [
-        pytest.param(b"graph", "g", None, id="installed"),
-        pytest.param(b"tampered", "g", "checksum_mismatch", id="checksum"),
-        pytest.param(b"graph", "unloadable", "verification_failed", id="unloadable"),
-    ],
-)
-def test_worker_install_downloads_verified_files_only(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    served: bytes,
-    graph: str,
-    error: str | None,
-) -> None:
-    def item(path: str, content: bytes) -> dict[str, Any]:
-        return {"path": path, "sha256": hashlib.sha256(content).hexdigest(), "size": len(content)}
-
-    downloads: list[str] = []
-    for name, module in _hub({"onnx/model.onnx": served}, downloads).items():
-        monkeypatch.setitem(sys.modules, name, module)
-    monkeypatch.setattr(embedding_worker, "Model", _WorkerModel)
-    monkeypatch.setattr(embedding_worker, "lower_priority", lambda: None)
-    monkeypatch.setattr(embedding_worker, "_PROGRESS_INTERVAL_S", 0.0)
-    # A file already present with the pinned checksum is kept, not downloaded again.
-    (tmp_path / "tokenizer.json").write_bytes(b"tokens")
-    spec = {
-        "repo": "example/model",
-        "revision": "0" * 40,
-        "directory": str(tmp_path),
-        "files": [item("onnx/model.onnx", b"graph"), item("tokenizer.json", b"tokens")],
-        "derive": None,
-        "model": {"graph": graph},
-    }
-
-    status = embedding_worker.install(spec)
-
-    frames = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
-    assert downloads == ["onnx/model.onnx"]
-    completed = [frame["progress"]["completed"] for frame in frames if "progress" in frame]
-    # Bytes arrive during the download and never go back across Xet's two bars.
-    assert completed[:4] == [0, 3, 3, 5]
-    assert frames[0] == {"progress": {"completed": 0, "total": 11}}
-    if error is None:
-        assert status == 0
-        assert frames[-1] == {"progress": {"completed": 11, "total": 11}}
-    else:
-        assert (status, frames[-1]) == (1, {"error": error})
-    assert (tmp_path / "onnx" / "model.onnx").exists() is (error != "checksum_mismatch")

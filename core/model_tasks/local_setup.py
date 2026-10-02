@@ -6,9 +6,14 @@ It owns the state machine (``missing``/``installing``/``ready``/``failed``/
 ``restart_required``), the coarse phase and optional byte progress the WebUI
 shows, a shared lock that serializes installations, the completion receipt
 (``verified.json``) and the subprocess runner that hides package-manager
-output. Subclasses supply the installation body and their availability check;
+output. Subclasses supply the installation body and their environment check;
 :meth:`LocalSetup._install_recipe` creates a uv-managed child environment from
 a ``[tool.vbot.*]`` recipe in ``pyproject.toml``.
+
+A setup may also own one pinned model (:mod:`core.model_tasks.model_files`):
+its files live in ``<models_dir>/<name>/<revision>`` with their own receipt,
+the setup is available only once both the environment and the model are,
+and :meth:`LocalSetup._fetch_model` reports the model download in bytes.
 
 Packaged releases never install into their own runtime: managed environments
 live in the data directory, and the uv bootstrap only reaches the server
@@ -18,20 +23,31 @@ interpreter of a development checkout.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import sys
+import threading
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from core.model_tasks.model_files import (
+    ModelFilesCancelledError,
+    ModelFilesError,
+    PinnedModel,
+    fetch_model_files,
+)
 from core.utils.logging import get_logger
 
 _LOGGER = get_logger("local_engines.setup")
 # The optional extra that brings uv to a development checkout's server interpreter.
 UV_BOOTSTRAP_EXTRA = "local-tts"
+# Longest one package-manager or verification command may run. Model
+# downloads have no overall limit: their network reads time out instead.
 SETUP_TIMEOUT_S = 3600
 
 
@@ -46,8 +62,15 @@ class LocalSetup:
         install_lock: asyncio.Lock | None = None,
         subject: str = "Local engine",
         logger: Any = None,
+        model: PinnedModel | None = None,
+        models_dir: Path | None = None,
     ) -> None:
         self.directory = directory
+        self.model = model
+        # Without a models directory a pinned model cannot be installed.
+        self.model_directory = (
+            models_dir / name / model.revision if model is not None and models_dir else None
+        )
         self._name = name
         self._subject = subject
         self._logger = logger or _LOGGER
@@ -100,9 +123,26 @@ class LocalSetup:
 
     def _availability_error(self) -> str:
         """Return a stable reason code while the installation cannot execute."""
+        return self._environment_error() or self._model_error()
+
+    def _environment_error(self) -> str:
+        """Why the engine's environment cannot run, or ``""``."""
         if self.directory is None:
             return "environment_missing"
         return environment_error(self.directory, self.python, self._python_version())
+
+    def _model_error(self) -> str:
+        """Why the pinned model is not installed, or ``""`` (also without one)."""
+        if self.model is None:
+            return ""
+        if self.model_directory is None:
+            return "model_missing"
+        try:
+            if not (self.model_directory / "verified.json").is_file():
+                return "model_missing"
+        except OSError:
+            return "environment_unreadable"
+        return ""
 
     def _python_version(self) -> str | None:
         """The ``major.minor`` the environment's Python must have, or None for any."""
@@ -146,8 +186,7 @@ class LocalSetup:
 
     async def _run_install(self) -> None:
         try:
-            async with asyncio.timeout(SETUP_TIMEOUT_S):
-                await self._perform()
+            await self._perform()
         except asyncio.CancelledError:
             raise
         except TimeoutError:
@@ -160,6 +199,70 @@ class LocalSetup:
     async def _perform(self) -> None:
         """Install, verify and leave the state ``ready``, ``restart_required`` or failed."""
         raise NotImplementedError
+
+    async def _fetch_model(self) -> bool:
+        """Fetch the pinned model's files with byte progress; False after a reported failure.
+
+        Removes the model's receipt first; the caller verifies what it needs
+        and then publishes the model with :meth:`_publish_model`.
+        """
+        assert self.model is not None
+        if self.model_directory is None:
+            self._fail("setup_unavailable")
+            return False
+        model, directory = self.model, self.model_directory
+        (directory / "verified.json").unlink(missing_ok=True)
+        try:
+            # Earlier revisions supply the files a newer one did not change.
+            earlier = [
+                entry
+                for entry in directory.parent.iterdir()
+                if entry.is_dir() and entry != directory
+            ]
+        except OSError:
+            earlier = []
+        total = model.download_bytes
+        self._phase = "downloading"
+        self._progress = (0, total)
+
+        def progress(completed: int) -> None:
+            self._progress = (min(completed, total), total)
+
+        cancelled = threading.Event()
+        work = asyncio.get_running_loop().run_in_executor(
+            None,
+            partial(
+                fetch_model_files,
+                model,
+                directory,
+                progress=progress,
+                cancelled=cancelled,
+                reuse=earlier,
+            ),
+        )
+        try:
+            await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # The thread stops within one chunk; its files stay for a retry.
+            cancelled.set()
+            await asyncio.wait([work])
+            raise
+        except ModelFilesCancelledError:
+            self._fail("interrupted")
+            return False
+        except ModelFilesError as error:
+            self._fail(error.code)
+            return False
+        return True
+
+    def _publish_model(self) -> None:
+        """Write the model's receipt and remove revisions this release no longer pins."""
+        assert self.model is not None and self.model_directory is not None
+        receipt = {"repo": self.model.repo, "revision": self.model.revision}
+        self._write_marker(self.model_directory / "verified.json", json.dumps(receipt) + "\n")
+        for entry in self.model_directory.parent.iterdir():
+            if entry.is_dir() and entry != self.model_directory:
+                shutil.rmtree(entry, ignore_errors=True)
 
     def _config(self) -> dict[str, Any]:
         """Read this release's ``pyproject.toml``, the only source of recipes."""
@@ -319,16 +422,17 @@ class LocalSetup:
         self._process = process
         try:
             assert process.stdout is not None
-            while line := await process.stdout.readline():
-                # Never expose package-manager output: custom indexes can carry
-                # credentials. Surface only fixed, translated phase identifiers.
-                if progress and line.startswith(b"Installing collected packages"):
-                    self._phase = "installing"
-                elif progress and line.startswith(b"Downloading"):
-                    self._phase = "downloading"
-                if on_line is not None:
-                    on_line(line)
-            return await process.wait()
+            async with asyncio.timeout(SETUP_TIMEOUT_S):
+                while line := await process.stdout.readline():
+                    # Never expose package-manager output: custom indexes can carry
+                    # credentials. Surface only fixed, translated phase identifiers.
+                    if progress and line.startswith(b"Installing collected packages"):
+                        self._phase = "installing"
+                    elif progress and line.startswith(b"Downloading"):
+                        self._phase = "downloading"
+                    if on_line is not None:
+                        on_line(line)
+                return await process.wait()
         finally:
             if process.returncode is None:
                 with suppress(ProcessLookupError):

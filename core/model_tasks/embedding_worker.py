@@ -1,18 +1,16 @@
 """Standalone local embedding child; it never imports vBot.
 
 It runs in the managed embedding environment (ONNX Runtime, tokenizers,
-numpy, huggingface-hub, onnx). The parent owns model choice, paths, timeouts
-and process lifetime, and applies every query or document prefix before a
-text arrives here, so a text is embedded exactly as received. Modes:
+numpy, onnx). The parent owns model choice, paths, timeouts, process lifetime
+and the model files, which it fetched and verified before; it applies every
+query or document prefix before a text arrives here, so a text is embedded
+exactly as received. Modes:
 
 ``--verify``
     Import the runtime stack; exit status 0 proves the environment.
-``--install <spec>``
-    Download the pinned files of one model revision into its directory,
-    check their SHA-256, derive the graph vBot loads when the spec asks for
-    it, and load the model once. Progress frames
-    ``{"progress": {"completed": bytes, "total": bytes}}`` and a final
-    ``{"error": code}`` on failure are written to stdout, each on its own line.
+``--prepare <spec>``
+    Derive the graph vBot loads from the model's files when the spec asks
+    for it, and load the model once; exit status 0 proves the model runs.
 ``--serve``
     Answer one JSON request per stdin line on stdout:
     ``{"op": "load", "model": {...}, "threads": n}`` replies
@@ -31,13 +29,10 @@ its batch neighbours, and a single text needs no padding.
 from __future__ import annotations
 
 import base64
-import hashlib
 import importlib
-import io
 import json
 import os
 import sys
-import time
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
@@ -50,11 +45,6 @@ class InputTooLongError(Exception):
     def __init__(self, index: int, tokens: int, limit: int) -> None:
         super().__init__("input_too_long")
         self.index, self.tokens, self.limit = index, tokens, limit
-
-
-class InstallError(Exception):
-    """An installation failure carrying its stable code (``download_failed``,
-    ``checksum_mismatch`` or ``verification_failed``)."""
 
 
 def lower_priority() -> None:
@@ -173,100 +163,12 @@ def serve() -> int:
     return 0
 
 
-def sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        while chunk := handle.read(8 * 1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def install(spec: dict[str, Any]) -> int:
-    def send(frame: dict[str, Any]) -> None:
-        # A leading newline keeps the frame on its own line even after a
-        # library wrote a partial line to the shared output.
-        sys.stdout.write("\n" + json.dumps(frame, separators=(",", ":")) + "\n")
-        sys.stdout.flush()
-
+def prepare(spec: dict[str, Any]) -> int:
     lower_priority()
-    try:
-        directory = Path(spec["directory"])
-        directory.mkdir(parents=True, exist_ok=True)
-        files = spec["files"]
-        total = sum(int(item["size"]) for item in files)
-        done = 0
-        reported = 0.0
-
-        def report(current: int, force: bool = False) -> None:
-            nonlocal reported
-            now = time.monotonic()
-            if force or now - reported >= _PROGRESS_INTERVAL_S:
-                reported = now
-                send({"progress": {"completed": min(done + current, total), "total": total}})
-
-        report(0, force=True)
-        for item in files:
-            target = directory / item["path"]
-            if not (target.is_file() and target.stat().st_size == int(item["size"])) or (
-                sha256(target) != item["sha256"]
-            ):
-                download(spec, item, target, report)
-            done += int(item["size"])
-            report(0, force=True)
-        if derive := spec.get("derive"):
-            derive_graph(directory, derive)
-        try:
-            Model(spec["model"], spec.get("threads", 1))
-        except Exception as error:
-            raise InstallError("verification_failed") from error
-    except InstallError as error:
-        send({"error": str(error)})
-        return 1
-    except Exception:
-        send({"error": "download_failed"})
-        return 1
+    if derive := spec.get("derive"):
+        derive_graph(Path(spec["directory"]), derive)
+    Model(spec["model"], spec.get("threads", 1))
     return 0
-
-
-def download(spec: dict[str, Any], item: dict[str, Any], target: Path, report: Any) -> None:
-    hub = importlib.import_module("huggingface_hub")
-    tqdm = importlib.import_module("huggingface_hub.utils.tqdm").tqdm
-    size = int(item["size"])
-    # Xet downloads count network bytes and written bytes on separate bars;
-    # the furthest of them is this file's progress.
-    furthest = 0
-
-    class Progress(tqdm):  # type: ignore[valid-type,misc]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self._bytes = kwargs.get("unit") == "B"
-            kwargs["file"] = io.StringIO()
-            # The hub leaves `disable` to TTY detection, which turns off a bar
-            # writing to a string, and a bar that is off never counts.
-            kwargs["disable"] = False
-            super().__init__(*args, **kwargs)
-
-        def update(self, n: float | None = 1) -> bool | None:
-            nonlocal furthest
-            result: bool | None = super().update(n)
-            if self._bytes:
-                furthest = min(size, max(furthest, int(self.n)))
-                report(furthest)
-            return result
-
-    try:
-        hub.hf_hub_download(
-            spec["repo"],
-            item["path"],
-            revision=spec["revision"],
-            local_dir=spec["directory"],
-            force_download=target.exists(),
-            tqdm_class=Progress,
-        )
-    except Exception as error:
-        raise InstallError("download_failed") from error
-    if sha256(target) != item["sha256"]:
-        target.unlink(missing_ok=True)
-        raise InstallError("checksum_mismatch")
 
 
 def derive_graph(directory: Path, derive: dict[str, Any]) -> None:
@@ -293,7 +195,7 @@ def derive_graph(directory: Path, derive: dict[str, Any]) -> None:
 
 
 def verify() -> int:
-    for name in ("numpy", "onnxruntime", "tokenizers", "huggingface_hub", "onnx"):
+    for name in ("numpy", "onnxruntime", "tokenizers", "onnx"):
         importlib.import_module(name)
     runtime = importlib.import_module("onnxruntime")
     return 0 if "CPUExecutionProvider" in runtime.get_available_providers() else 1
@@ -302,11 +204,11 @@ def verify() -> int:
 def main(arguments: list[str]) -> int:
     if arguments[:1] == ["--verify"]:
         return verify()
-    if arguments[:1] == ["--install"] and len(arguments) == 2:
-        return install(json.loads(arguments[1]))
+    if arguments[:1] == ["--prepare"] and len(arguments) == 2:
+        return prepare(json.loads(arguments[1]))
     if arguments[:1] == ["--serve"]:
         return serve()
-    sys.stderr.write("usage: embedding_worker.py --verify | --install <spec> | --serve\n")
+    sys.stderr.write("usage: embedding_worker.py --verify | --prepare <spec> | --serve\n")
     return 2
 
 

@@ -24,6 +24,7 @@ import pytest
 
 from core.model_tasks.constants import TASK_SPEECH_TO_TEXT, TASK_TEXT_TO_SPEECH
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor
+from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.model_tasks.speech_local import (
     LocalSpeechError,
@@ -91,35 +92,54 @@ async def transcribe(
     )
 
 
-def test_builtin_catalog_is_lazy_and_reports_missing_dependencies(
-    monkeypatch: pytest.MonkeyPatch,
+def test_builtin_catalog_is_lazy_and_needs_dependencies_and_installed_model(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from core.model_tasks import speech_setup as speech_local
 
     versions = {"torch": "2.11.0+cu128", "transformers": "5.16.1", "huggingface-hub": "1.30.0"}
     monkeypatch.setattr(speech_local.metadata, "version", versions.__getitem__)
     monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: None)
-    engines = builtin_speech_engines()
-    assert [engine.descriptor.public_id for engine in engines] == [
-        "local/qwen3-asr",
+    assert [engine.descriptor.public_id for engine in builtin_speech_engines()] == [
+        "local/qwen3-asr-1.7b",
+        "local/qwen3-asr-0.6b",
         "local/parakeet",
         "local/nemotron3.5-asr",
     ]
-    assert not any(engine.descriptor.can_execute() for engine in engines)
-    monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: object())
-    assert all(engine.descriptor.can_execute() for engine in engines)
-    versions["torch"] = "2.9.0"
-    assert not any(engine.descriptor.can_execute() for engine in engines)
-    monkeypatch.setattr(speech_local.metadata, "version", lambda _name: "5.12.0")
-    assert not any(engine.descriptor.can_execute() for engine in engines)
-    assert "prompt" not in {field.name for field in engines[1].descriptor.option_fields}
+    executor = LocalSpeechExecutor(engines_dir=tmp_path)
+    try:
+        engines = [
+            entry.descriptor
+            for entry in executor._definitions.values()
+            if TASK_SPEECH_TO_TEXT in entry.descriptor.task_types
+        ]
+        assert all((engine.metadata or {}).get("download_bytes", 0) > 0 for engine in engines)
+        assert not any(engine.can_execute() for engine in engines)
+        monkeypatch.setattr(speech_local.util, "find_spec", lambda _name: object())
+        # The packages alone are not enough: each target needs its own installed model.
+        assert not any(engine.can_execute() for engine in engines)
+        setup = executor.setup_for("local/parakeet")
+        assert setup.status()["error"] == "model_missing"
+        assert setup.model_directory is not None
+        setup.model_directory.mkdir(parents=True)
+        (setup.model_directory / "verified.json").write_text("{}", encoding="utf-8")
+        assert [engine.can_execute() for engine in engines] == [False, False, True, False]
+        versions["torch"] = "2.9.0"
+        assert not any(engine.can_execute() for engine in engines)
+        monkeypatch.setattr(speech_local.metadata, "version", lambda _name: "5.12.0")
+        assert not any(engine.can_execute() for engine in engines)
+        assert "prompt" not in {field.name for field in engines[2].option_fields}
+    finally:
+        executor.close()
 
 
 @pytest.mark.asyncio
-async def test_third_engine_reuses_and_switches_with_its_own_options() -> None:
+async def test_third_engine_reuses_and_switches_with_its_own_options(tmp_path: Path) -> None:
     events: list[Any] = []
+    model = PinnedModel("owner/third", "a" * 40, (ModelFile("model.bin", "0" * 64, 1),))
     executor = LocalSpeechExecutor(
-        engines=[definition("first", events), definition("third", events)]
+        engines=[definition("first", events), replace(definition("third", events), model=model)],
+        engines_dir=tmp_path,
     )
     try:
         assert (await transcribe(executor)).text == "first"
@@ -131,7 +151,9 @@ async def test_third_engine_reuses_and_switches_with_its_own_options() -> None:
         assert result.text == "third"
         assert result.language == "de"
         assert result.segments == ({"start": 0.0, "end": 0.1, "text": "third"},)
-        assert events[-2] == ("third", "load", {"custom": "one"})
+        # A target with a pinned model loads the installed copy.
+        installed = str(tmp_path / "models" / "third" / model.revision)
+        assert events[-2] == ("third", "load", {"custom": "one", "model_path": installed})
         assert [model["loaded"] for model in executor.memory_status()["models"]] == [True, True]
         await executor.release_memory("local/third")
         assert events[-1] == ("third", "close")
@@ -262,27 +284,11 @@ async def test_cancellation_waits_for_inference_then_shutdown_releases_model() -
         await executor.aclose()
 
 
-class _ProgressBar:
-    """Stand-in for ``tqdm.auto.tqdm``, the progress bar class Hugging Face downloads use."""
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        pass
-
-    def __enter__(self) -> _ProgressBar:
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        pass
-
-    def update(self, n: float | None = 1) -> bool | None:
-        return None
-
-
 @pytest.mark.parametrize("engine_name", ["qwen", "parakeet", "nemotron"])
 def test_native_transformers_adapter_contracts_without_weights(
-    engine_name: str, monkeypatch: pytest.MonkeyPatch
+    engine_name: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    # Stand-in torch, transformers and tqdm modules: the adapters import them lazily, and
+    # Stand-in torch and transformers modules: the adapters import them lazily, and
     # the real native imports cost several seconds without adding adapter coverage.
     from core.model_tasks.speech_local import (
         _PROGRESS,
@@ -297,8 +303,6 @@ def test_native_transformers_adapter_contracts_without_weights(
         "nemotron": _NemotronEngine,
     }
     engine_type = engine_types[engine_name]
-    snapshot = MagicMock(return_value=engine_type.default_model)
-    monkeypatch.setattr("core.model_tasks.speech_local.resolve_snapshot", snapshot)
     torch = ModuleType("torch")
     torch.float32 = "float32"  # type: ignore[attr-defined]
     torch.cuda = SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
@@ -336,11 +340,9 @@ def test_native_transformers_adapter_contracts_without_weights(
     setattr(transformers, engine_type.model_class, SimpleNamespace(from_pretrained=load_model))
     monkeypatch.setitem(sys.modules, "torch", torch)
     monkeypatch.setitem(sys.modules, "transformers", transformers)
-    tqdm = ModuleType("tqdm.auto")
-    tqdm.tqdm = _ProgressBar  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "tqdm", ModuleType("tqdm"))
-    monkeypatch.setitem(sys.modules, "tqdm.auto", tqdm)
-    options = {"device": "cpu", "language": "de", "prompt": "vBot"}
+    with pytest.raises(LocalSpeechExecutionError, match="model directory does not exist"):
+        engine_type({"model_path": str(tmp_path / "missing")})
+    options = {"device": "cpu", "language": "de", "prompt": "vBot", "model_path": str(tmp_path)}
     progress = SpeechProgress()
     token = _PROGRESS.set(progress)
     try:
@@ -357,12 +359,9 @@ def test_native_transformers_adapter_contracts_without_weights(
         }
         model.to.assert_called_once_with("cpu")
         model.eval.assert_called_once_with()
-        assert "model.safetensors" in snapshot.call_args.args[1]
-        progress_class = snapshot.call_args.args[2]
-        with progress_class(total=10, unit="B", disable=True) as bar:
-            bar.update(5)
-        assert progress.snapshot()["phase"] == "downloading"
-        assert load_processor.call_args.args == (engine_type.default_model,)
+        assert progress.snapshot()["phase"] == "loading"
+        assert load_processor.call_args.args == (str(tmp_path),)
+        assert load_model.call_args.args == (str(tmp_path),)
         if engine_name == "qwen":
             assert result.language == "de"
             assert processor.apply_transcription_request.call_args.kwargs["audio_kwargs"] == {
@@ -438,20 +437,29 @@ def test_nemotron_keeps_every_streaming_frame_and_language_prompt(frames, langua
     assert not joined[:, frames:].any()
 
 
-def test_nemotron_shares_stt_setup_and_has_independent_memory():
-    executor = LocalSpeechExecutor()
+def test_each_builtin_target_has_its_own_setup_and_memory(tmp_path: Path) -> None:
+    executor = LocalSpeechExecutor(engines_dir=tmp_path)
     try:
-        assert executor.setup_for("local/nemotron3.5-asr") is executor.setup
         status = {entry["target"]: entry for entry in executor.memory_status()["models"]}
         assert set(status) == {
-            "local/nemotron3.5-asr",
-            "local/qwen3-asr",
+            "local/qwen3-asr-1.7b",
+            "local/qwen3-asr-0.6b",
             "local/parakeet",
-            "local/qwen3-tts",
+            "local/nemotron3.5-asr",
+            "local/qwen3-tts-1.7b",
+            "local/qwen3-tts-0.6b",
             "local/chatterbox",
         }
         assert not status["local/nemotron3.5-asr"]["loaded"]
-        assert len({id(state.workers) for state in executor._states.values()}) == 5
+        assert len({id(state.workers) for state in executor._states.values()}) == 7
+        setups = [executor.setup_for(target) for target in status]
+        assert len({id(setup) for setup in setups}) == 7
+        # Sizes of one engine share its environment but keep separate models.
+        large, small = (executor.setup_for(f"local/qwen3-tts-{size}") for size in ("1.7b", "0.6b"))
+        assert large.directory == small.directory == tmp_path / "qwen3-tts"
+        assert large.model_directory != small.model_directory
+        with pytest.raises(ValueError):
+            executor.setup_for("local/../../escape")
     finally:
         executor.close()
 
@@ -956,18 +964,24 @@ async def test_setup_blocks_catalog_and_inference_until_a_new_runtime(
     monkeypatch.setattr(speech_local, "_dependencies_available", lambda: False)
     monkeypatch.setattr(speech_local.shutil, "which", lambda _name: None)
     events: list[Any] = []
-    executor = LocalSpeechExecutor(engines=[definition("first", events)])
-    monkeypatch.setattr(executor.setup, "_command", AsyncMock(return_value=0))
+    executor = LocalSpeechExecutor(
+        engines=[definition("first", events), definition("second", events)]
+    )
+    setup = executor.setup_for("local/first")
+    monkeypatch.setattr(setup, "_command", AsyncMock(return_value=0))
     try:
         assert executor._definitions["first"].descriptor.can_execute()
-        executor.setup.install()
+        setup.install()
         assert not executor._definitions["first"].descriptor.can_execute()
-        assert executor.setup._task is not None
-        await executor.setup._task
-        assert executor.setup.status()["state"] == "restart_required"
-        assert not executor._definitions["first"].descriptor.can_execute()
-        with pytest.raises(LocalSpeechError):
-            await transcribe(executor)
+        assert setup._task is not None
+        await setup._task
+        assert setup.status()["state"] == "restart_required"
+        # The development checkout's targets share the server's packages.
+        assert executor.setup_for("local/second").status()["state"] == "restart_required"
+        for name in ("first", "second"):
+            assert not executor._definitions[name].descriptor.can_execute()
+            with pytest.raises(LocalSpeechError):
+                await transcribe(executor, name)
         assert events == []
     finally:
         await executor.aclose()
@@ -1219,7 +1233,7 @@ def test_local_speech_options_do_not_expose_an_offline_switch(task_type):
             for entry in executor._definitions.values()
             if task_type in entry.descriptor.task_types
         ]
-        assert len(definitions) == (3 if task_type == TASK_SPEECH_TO_TEXT else 2)
+        assert len(definitions) == (4 if task_type == TASK_SPEECH_TO_TEXT else 3)
         for entry in definitions:
             assert "offline" not in {field.name for field in entry.descriptor.option_fields}
             assert "offline" not in entry.load_options

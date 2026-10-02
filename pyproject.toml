@@ -105,7 +105,7 @@ ignore_missing_imports = true
 # SDK stacks live in separate managed Python environments, never in the server.
 [tool.vbot.local-tts.qwen3-tts]
 python = "3.12"
-packages = ["qwen-tts==0.1.1", "hf-xet==1.6.0"]
+packages = ["qwen-tts==0.1.1"]
 torch = "2.11.0"
 
 [tool.vbot.local-tts.chatterbox]
@@ -119,4 +119,4 @@ torch = "2.6.0"
 # The local embedding engine's environment, shared by every local embedding Model.
 [tool.vbot.local-embeddings.onnx]
 python = "3.12"
-packages = ["onnxruntime==1.26.0", "tokenizers==0.23.2", "numpy==2.5.2", "huggingface-hub==1.30.0", "hf-xet==1.6.0", "onnx==1.21.0"]
+packages = ["onnxruntime==1.26.0", "tokenizers==0.23.2", "numpy==2.5.2", "onnx==1.21.0"]

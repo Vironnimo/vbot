@@ -39,16 +39,22 @@ Speech execution writes durable Model Usage through the Runtime-injected recorde
 ## Local engines
 
 `speech_local.py` owns engine definitions, option schemas, dependency preflight,
-audio chunking, adapters and lifecycle. Runtime passes one `LocalSpeechExecutor`
-and its target registry to SpeechService and TaskModelService. Built-ins are
-`local/qwen3-asr` (Qwen 1.7B or 0.6B, language/context options),
+audio chunking, adapters and lifecycle; `speech_models.py` (`SPEECH_MODELS`) pins
+every built-in target's Model: repository, commit revision, and each file's SHA-256
+and size. Moving a target to a newer upstream revision means editing its entry there.
+Runtime passes one `LocalSpeechExecutor`
+and its target registry to SpeechService and TaskModelService. Built-in STT targets are
+`local/qwen3-asr-1.7b` and `local/qwen3-asr-0.6b` (language/context options),
 `local/parakeet` (NVIDIA TDT v3), and `local/nemotron3.5-asr` (NVIDIA Nemotron 3.5
-ASR Streaming 0.6B, automatic or explicit language). All use native Transformers under the optional
+ASR Streaming 0.6B, automatic or explicit language). One target is one Model; there is
+no `model` option. Descriptor `metadata` is `{license, download_bytes}` for install UIs.
+All use native Transformers under the optional
 `local-speech` extra. Configuration does not load weights; first non-silent use does,
 unless a preload or preparation request (below) started the load earlier.
 
-To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory and
-optional load-affecting option names. Its synchronous `LocalTranscriptionEngine` or `LocalSynthesisEngine`
+To add an engine, supply a `SpeechEngineDefinition` with descriptor, factory,
+optional load-affecting option names, and its pinned `model` (plus `environment`, the
+TTS environment it runs in; empty means the STT stack). Its synchronous `LocalTranscriptionEngine` or `LocalSynthesisEngine`
 implements `transcribe` or `synthesize`, plus `close`; callers and accessors remain unchanged.
 Unspecified load-option names mean every option participates in cache identity.
 Each engine has its own cached model and bounded worker, serializing its loading,
@@ -57,7 +63,7 @@ STT can be unloaded while TTS is busy. Changing load options replaces only that
 engine's model; switching bindings or using a Provider does not evict other models.
 Runtime shutdown closes all engines. Cancellation waits for already-started work
 before reporting cancellation. Memory status is metadata-only; targeted manual
-release refuses a busy engine immediately and retains downloaded files. Coverage:
+release refuses a busy engine immediately and keeps the installed Model files. Coverage:
 `test_speech_local.py` checks independent residency, busy TTS during STT release,
 cancellation, no-op release and loading again.
 
@@ -86,16 +92,14 @@ transcription, failed preload, shutdown during a managed preload), `test_speech.
 PyAV decodes canonical audio into mono float32 at 16 kHz. Chunks are at most 30
 seconds, cut near a quiet point in the last second, with no discarded samples.
 Exact digital silence skips inference. Result segment times are chunk bounds,
-not word alignment. Models load from the Hugging Face cache/download or an
-explicit server directory, with remote code disabled. The shared standalone
-loader first resolves the cached Hugging Face snapshot without HTTP and checks
-all required engine files. Complete snapshots are reused without update checks;
-missing/empty files trigger download, completing a partial snapshot at its existing
-revision. Native Transformers loads exclusively from the resolved local path.
-There is no offline option in the schema. Download callbacks report actual
-transfer activity; cached/local loads do not fabricate download progress.
-Coverage: `test_speech_tts.py` checks complete, absent, partial and empty-file
-caches, and `test_speech_local.py` checks all three STT adapter contracts.
+not word alignment. Engines never download: they load only from a local directory,
+with remote code disabled and `local_files_only`. The executor passes the target's
+installed Model directory as the `model_path` option unless the binding sets its own
+("Model directory": a server directory with a Transformers model of that engine's
+architecture, loaded instead of the installed Model; a missing directory fails with a
+configuration message). There is no offline option in the schema; a ready target
+always runs offline. Coverage: `test_speech_local.py` checks the injected `model_path`
+and all three STT adapter contracts, `test_speech_tts.py` the TTS worker's offline load.
 
 Nemotron uses native `AutoModelForRNNT` with language prompt ids. Within each
 recording segment, one feature extraction feeds fixed-size mel chunks into
@@ -107,12 +111,19 @@ prompt integer dtype, language projection and separate memory/setup identity.
 This internal streaming does not introduce partial-text transport or realtime
 microphone Sessions.
 
-`LocalSpeechSetup` in `speech_setup.py`, exposed through `SpeechService.local_setup`
-and `local_setup_for(target)`, owns fixed-recipe installation jobs per Runtime.
+`LocalSpeechSetup` in `speech_setup.py` is one installation job per target and Runtime
+(`LocalSpeechExecutor.setups`, reached through `SpeechService.local_setup_for(target)`):
+the target's engine environment, then its pinned Model.
 It extends `LocalSetup` (`local_setup.py`), which local embeddings share: status,
-job lifecycle, receipts and the uv recipe installer (`_install_recipe`) live there;
+job lifecycle, receipts, the Model fetch (`model_tasks.md` -> Overview) and the uv
+recipe installer (`_install_recipe`) live there;
 the server-interpreter STT path and the TTS verification stay in `speech_setup.py`.
-The shared STT job and individual TTS jobs serialize package operations. In a packaged release,
+Targets of one engine share its environment under `DataDirectoryLayout.speech_engines`
+(`stt/` for managed STT, `qwen3-tts/` for both Qwen3-TTS sizes, `chatterbox/`), while each
+target's Model lives in `models/<local id>/<revision>/` there. Install sets up the
+environment only when it is missing or unusable, then fetches the Model unless its
+receipt exists; `ready` means the target runs offline. All target jobs share one
+install lock (`queued` while another runs). In a packaged release,
 STT and TTS use managed data-directory environments and child processes; the immutable release
 runtime is not changed. Managed verification and execution workers use `-I -B`:
 isolated mode alone ignores `PYTHONDONTWRITEBYTECODE` and would allow STT imports
@@ -120,7 +131,10 @@ to create bytecode inside the release. Managed STT installs both the declared co
 local-speech extra because its worker imports vBot source. Its startup imports only
 the local speech implementation through the lazy Task Model package facade, so
 unrelated task dependencies do not become STT requirements. The development-checkout STT path
-retains its legacy server-interpreter pip recipe. Fixed recipes preserve compatible Torch
+retains its legacy server-interpreter pip recipe; its STT targets share one
+`ServerSpeechStack`, so once that install changed the server's packages every STT
+target reports `restart_required` (and install returns that status) until the server
+restarts. Fixed recipes preserve compatible Torch
 or install the selected CUDA/CPU build and verify
 imports plus NVIDIA execution in a fresh process. Status is process-local and survives browser
 navigation; duplicate requests share the job, failures permit explicit retry, shutdown cancels and
@@ -131,9 +145,11 @@ Python its `pyvenv.cfg` names (`python_missing` once that is gone, e.g. after th
 was installed again), for STT the server's `major.minor` Python version (`python_changed`,
 because its worker imports vBot source), and a
 `verified.json` completion receipt, written atomically only after successful verification
-and removed before package changes. Setup removes and recreates an environment that fails one of
-these Python checks. Receipt contents are not runtime compatibility data:
+and removed before package changes. Every target also needs its Model receipt
+(`model_missing` otherwise). Setup removes and recreates an environment that fails one of
+these Python checks. Environment receipt contents are not runtime compatibility data:
 changed dependency declarations or worker source never invalidate a completed setup.
+A changed pinned revision does: the target is `model_missing` until installed again.
 Actual SDK, device and Model failures are handled at execution. Status reads neither
 import ML runtimes nor start subprocesses, rewrite receipts or run setup. Explicit
 `task_model.status` checks report the selected local speech environment's concrete
@@ -152,8 +168,8 @@ load boundary (logs, progress, preloading) covers the child's real load.
 time. `SpeechService.transcribe/synthesize(progress=...)` carries it to local workers
 or Provider speech. Local factory signatures stay unchanged: the executor scopes
 built-in loader reporting to its worker invocation and resets that context
-afterwards. Queued, preparation, model checks/download/loading and inference
-remain distinguishable; cached engines skip loading. No audio or transcript
+afterwards. Phases are `queued`, `preparing`, `loading` and `transcribing` /
+`synthesizing`; cached engines skip loading. Downloads happen only during installation. No audio or transcript
 is included in progress snapshots.
 
 Coverage: `tests/core/model_tasks/test_speech_local.py` tests custom engine
@@ -164,14 +180,16 @@ covers service error translation and Provider routing; Runtime registration and
 cleanup are covered by `tests/core/runtime/test_runtime_lifecycle.py`.
 
 
-Local TTS registrations are `local/qwen3-tts` (CustomVoice 1.7B/0.6B, preset
-voices/languages, 1.7B style instructions) and `local/chatterbox` (Multilingual V3,
-language, expressiveness/guidance). Their incompatible SDK dependencies are
+Local TTS registrations are `local/qwen3-tts-1.7b` and `local/qwen3-tts-0.6b`
+(CustomVoice, preset voices/languages; style instructions only on 1.7B) and
+`local/chatterbox` (Multilingual V3, language, expressiveness/guidance). Their
+incompatible SDK dependencies are
 installed into managed Python 3.12 environments under the Runtime-injected
-`DataDirectoryLayout.speech_engines` root. `local-tts` installs only uv in the
+`DataDirectoryLayout.speech_engines` root; both Qwen3-TTS sizes share one. `local-tts` installs only uv in the
 development-checkout server interpreter; packaged roles ship uv. Shipped recipes install each SDK and
 matched Torch/audio packages inside the managed environment. Verification writes a completion
-receipt, never loads weights, and makes TTS immediately available without restarting the server. A missing
+receipt and never loads weights; once the target's Model is fetched, TTS is available
+without restarting the server. A missing
 interpreter or incomplete setup requires setup again. Fixed upstream revisions
 avoid accidentally selecting Chatterbox's older PyPI V2 implementation.
 Repeated Chatterbox setup explicitly reinstalls the PyPI distribution for dependency resolution
@@ -179,16 +197,17 @@ before restoring the pinned source without dependencies. This avoids resolving t
 requirements from an already installed, same-version source distribution.
 
 `speech_worker.py` starts without importing vBot, loads SDKs only inside its
-child environment, reports actual download/load/generation phases and writes
-mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS engine
-while that engine's load options match, bounds requests to 5,000 characters / 64 MiB output,
+child environment, reports `loading`/`synthesizing` phases and writes
+mono PCM16 WAV to a parent-owned temporary path. The parent retains one process per TTS target
+while that target's load options (`device`) match, bounds requests to 5,000 characters / 64 MiB output,
 and owns timeouts and whole-process-tree cleanup (Windows launchers have child
 interpreters). Sentence/word chunking bounds each generation context. No voice
-cloning input is exposed. After resolving all required files, the child disables
-Hub networking for SDK loading/inference. The pinned Chatterbox tokenizer's
-mapping lookup resolves directly from that snapshot instead of probing a nested
-Hub cache. Native Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
-SDK calls, playable WAV chunks, process boundaries, setup isolation and availability.
+cloning input is exposed. The child loads only from the `model_path` it receives
+(the installed Model directory) and disables Hub networking for SDK loading and
+inference. The pinned Chatterbox tokenizer's mapping lookup resolves directly from
+that directory instead of probing a nested Hub cache. Native Chatterbox watermarking remains enabled. Coverage: `test_speech_tts.py` covers
+SDK calls, playable WAV chunks, process boundaries, setup isolation, sizes sharing an
+environment with their own Models, and availability.
 
 ## Provider Wire Behavior
 
@@ -222,12 +241,14 @@ Executable TTS targets send JSON to `/audio/speech` and return raw audio bytes. 
   transport and cancels/reaps work on disconnect; local worker cancellation
   still waits for active inference. Ordinary JSON clients remain supported.
   Coverage: `tests/server/test_speech_endpoints.py`.
-- `speech.local_setup_status/install/restart` in `server/rpc/task_model_methods.py`
-  (the generic `task_model.local_setup_status/install`, `local_memory_status` and
-  `local_unload` serve speech targets too; `model_tasks.md` -> Contracts; the WebUI
-  reads status and installs through the generic pair and uses only the restart here)
-  accept an optional exact local `target`, never client commands, package names or paths. Restart requires verified
-  setup and the server startup callback; its detached CLI lifecycle helper
+- Status and install of every local speech target go through the generic
+  `task_model.local_setup_status/install {target}` (`model_tasks.md` -> Contracts),
+  as do `task_model.local_memory_status` and `local_unload`.
+  `speech.local_setup_restart {target}` in `server/rpc/task_model_methods.py` requires
+  one exact local speech target (missing, non-`local/` or unknown -> `invalid_request`),
+  never client commands, package names or paths. Restart requires that target's
+  `restart_required` state (else `setup_not_finished`) and the server startup callback
+  (else `restart_unavailable`); its detached CLI lifecycle helper
   targets the exact running bind/data directory; a scheduled restart logs one INFO
   line. Coverage: task-model RPC and
   server-main tests.

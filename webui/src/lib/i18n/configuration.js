@@ -371,6 +371,8 @@ export default Object.freeze({
     'The model download failed. Check the server’s internet connection, then try again.',
   'settings.localModel.error.checksum_mismatch':
     'The downloaded model files were damaged. Try again.',
+  'settings.localModel.error.insufficient_space':
+    'This computer does not have enough free disk space for the model. Free some space, then try again.',
   'settings.localModel.error.verification_failed':
     'The installed model could not start. Try the installation again.',
   'settings.localModel.error.setup_unavailable':
@@ -456,12 +458,13 @@ export default Object.freeze({
   'settings.localSpeech.unloadError':
     'Could not unload the speech model. Try again.',
   'settings.localSpeech.ttsReady':
-    'Runs on the vBot server. The first preview or Tool request downloads and loads the model, which can take several minutes.',
+    'Installed on the vBot server and works offline. The first preview or Tool request loads the model into memory, which can take a moment.',
   'settings.localSpeech.ttsMissing':
-    'Install support for this local voice engine. Setup may download several gigabytes and can take a few minutes.',
+    'Not installed on the vBot server yet. Installing downloads this voice model and the engine that runs it; afterwards it works offline.',
   'settings.localSpeech.phase.queued':
     'Waiting for another speech installation to finish…',
-  'settings.localSpeech.phase.python': 'Preparing the local voice environment…',
+  'settings.localSpeech.phase.python':
+    'Preparing the local speech environment…',
   'settings.localSpeech.previewText':
     'Hello! This is a preview of my local voice.',
   'settings.localSpeech.previewLabel': 'Text for voice preview',
@@ -473,14 +476,14 @@ export default Object.freeze({
   'settings.localSpeech.options.voice.label': 'Voice',
   'settings.localSpeech.options.instructions.label': 'Speaking instructions',
   'settings.localSpeech.options.instructions.help':
-    'Optional style instructions for the 1.7B model.',
+    'Optional style instructions, such as a calm or cheerful voice.',
   'settings.localSpeech.options.exaggeration.label': 'Expressiveness',
   'settings.localSpeech.options.cfg_weight.label': 'Guidance',
   'settings.localSpeech.ready':
-    'Runs on the vBot server. The first transcription downloads and loads the model, which can take several minutes; after that it works offline.',
+    'Installed on the vBot server and works offline. The first transcription loads the model into memory, which can take a moment.',
   'settings.localSpeech.state.checking': 'Checking local speech support…',
   'settings.localSpeech.state.missing':
-    'Local speech support is not installed on this server. Installation supports all local speech-to-text engines and may download several gigabytes.',
+    'Not installed on the vBot server yet. Installing downloads this speech-to-text model and the engine that runs it; afterwards it works offline.',
   'settings.localSpeech.state.restart_required':
     'Installation complete. Restart the server to enable local speech recognition. Active Runs will be interrupted.',
   'settings.localSpeech.state.restarting':
@@ -494,10 +497,12 @@ export default Object.freeze({
   'settings.localSpeech.phase.checking': 'Checking the server environment…',
   'settings.localSpeech.phase.gpu': 'Preparing GPU support…',
   'settings.localSpeech.phase.downloading':
-    'Downloading speech support. This can take several minutes; you can leave this page.',
-  'settings.localSpeech.phase.installing': 'Installing speech support…',
+    'Downloading the speech engine. This can take several minutes; you can leave this page.',
+  'settings.localSpeech.phase.installing': 'Installing the speech engine…',
   'settings.localSpeech.phase.verifying':
-    'Checking the installed speech engines…',
+    'Checking the installed speech engine…',
+  'settings.localSpeech.downloadingModel':
+    'Downloading the model. You can leave this page; the download continues.',
   'settings.localSpeech.error.connection':
     'The server could not be reached. Check the connection to see the current installation status.',
   'settings.localSpeech.error.install_failed':
@@ -507,7 +512,13 @@ export default Object.freeze({
   'settings.localSpeech.error.setup_unavailable':
     'Setup could not access the vBot installation. Check its files and write permissions, then try again.',
   'settings.localSpeech.error.verification_failed':
-    'The installed speech engines could not start. Try the installation again.',
+    'The installed speech engine could not start. Try the installation again.',
+  'settings.localSpeech.error.download_failed':
+    'The model download failed. Check the server’s internet connection, then try again; the finished part is kept.',
+  'settings.localSpeech.error.checksum_mismatch':
+    'The downloaded model files were damaged. Try again.',
+  'settings.localSpeech.error.insufficient_space':
+    'The vBot server does not have enough free disk space for this model. Free some space, then try again.',
   'settings.localSpeech.error.gpu_unavailable':
     'The GPU could not be used after installation. Update the server’s graphics driver, then try again.',
   'settings.localSpeech.error.timeout':
@@ -515,17 +526,16 @@ export default Object.freeze({
   'settings.localSpeech.error.interrupted':
     'Installation was interrupted. Try again to finish setup.',
   'settings.localSpeech.error.setup_not_finished':
-    'Finish installing speech support before restarting the server.',
+    'Finish the installation before restarting the server.',
   'settings.localSpeech.error.restart_unavailable':
     'The server could not restart automatically. Restart it using the application that started it.',
   'settings.localSpeech.error.restart_timeout':
     'The server has not reconnected yet. Check whether it is running, then check again.',
   'settings.localSpeech.options.device.label': 'Device',
   'settings.localSpeech.options.dtype.label': 'Precision',
-  'settings.localSpeech.options.model.label': 'Model',
   'settings.localSpeech.options.model_path.label': 'Model directory',
   'settings.localSpeech.options.model_path.help':
-    'Optional directory on the vBot server containing a Transformers model. Leave empty to download and cache the selected model from Hugging Face.',
+    'Optional directory on the vBot server with a Transformers model of this engine’s architecture, loaded instead of the installed model. Leave empty to use the installed model.',
   'settings.localSpeech.options.language.label': 'Language',
   'settings.localSpeech.options.language.help':
     'Leave empty for automatic detection, or enter a language code such as de or en.',

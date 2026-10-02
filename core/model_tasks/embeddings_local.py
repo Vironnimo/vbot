@@ -20,7 +20,6 @@ import asyncio
 import base64
 import json
 import os
-import shutil
 import subprocess
 import sys
 from collections import deque
@@ -35,6 +34,7 @@ from typing import Any, Protocol
 from core.model_tasks.constants import TASK_TEXT_EMBEDDING
 from core.model_tasks.local_setup import LocalSetup, environment_error
 from core.model_tasks.local_targets import LocalTaskTargetDescriptor, LocalTaskTargetRegistry
+from core.model_tasks.model_files import ModelFile, PinnedModel
 from core.model_tasks.options import TaskModelOptionField
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -46,7 +46,6 @@ _WORKER = Path(__file__).with_name("embedding_worker.py")
 LOCAL_EMBEDDING_ENGINE_VERSION = 1
 THREADS_OPTION = "threads"
 _EXCHANGE_TIMEOUT_S = 300.0
-_INSTALL_ERRORS = frozenset({"download_failed", "checksum_mismatch", "verification_failed"})
 
 
 class LocalEmbeddingError(VBotError):
@@ -66,13 +65,6 @@ class LocalEmbeddingInputTooLongError(LocalEmbeddingError):
             f"{limit} tokens per text."
         )
         self.index, self.tokens, self.limit = index, tokens, limit
-
-
-@dataclass(frozen=True)
-class ModelFile:
-    path: str
-    sha256: str
-    size: int
 
 
 @dataclass(frozen=True)
@@ -103,8 +95,12 @@ class LocalEmbeddingModel:
     derive: Mapping[str, Any] | None = None
 
     @property
+    def pinned(self) -> PinnedModel:
+        return PinnedModel(self.repo, self.revision, self.files)
+
+    @property
     def download_bytes(self) -> int:
-        return sum(item.size for item in self.files)
+        return self.pinned.download_bytes
 
     def identity(self) -> dict[str, Any]:
         """The facts that determine which vector a text gets."""
@@ -231,21 +227,23 @@ class LocalEmbeddingSetup(LocalSetup):
             install_lock=install_lock,
             subject="Local embedding",
             logger=_LOGGER,
+            model=model.pinned,
+            models_dir=models_dir,
         )
-        self.model = model
+        self.embedding_model = model
         self._on_ready = on_ready
-        self.model_directory = models_dir / model.id / model.revision if models_dir else None
 
-    def _availability_error(self) -> str:
-        if self.directory is None or self.model_directory is None:
+    def _environment_error(self) -> str:
+        if self.model_directory is None:
             return "environment_missing"
-        error = environment_error(self.directory, self.python)
-        if error:
+        return super()._environment_error()
+
+    def _model_error(self) -> str:
+        if error := super()._model_error():
             return error
+        assert self.model_directory is not None
         try:
-            if not (self.model_directory / "verified.json").is_file():
-                return "model_missing"
-            if not (self.model_directory / self.model.graph).is_file():
+            if not (self.model_directory / self.embedding_model.graph).is_file():
                 return "model_incomplete"
         except OSError:
             return "environment_unreadable"
@@ -253,6 +251,7 @@ class LocalEmbeddingSetup(LocalSetup):
 
     async def _perform(self) -> None:
         assert self.directory is not None and self.model_directory is not None
+        model = self.embedding_model
         if environment_error(self.directory, self.python):
             if await self._install_recipe("local-embeddings", "onnx") is None:
                 return
@@ -261,74 +260,33 @@ class LocalEmbeddingSetup(LocalSetup):
                 return
             self._write_marker(self.directory / "verified.json")
             _LOGGER.info("Local embedding environment installed")
-        receipt = self.model_directory / "verified.json"
-        receipt.unlink(missing_ok=True)
-        self._phase = "downloading"
-        self._progress = (0, self.model.download_bytes)
-        failure = ""
-
-        def observe(line: bytes) -> None:
-            nonlocal failure
-            text = line.strip()
-            if not text.startswith(b"{"):
-                return
-            try:
-                frame = json.loads(text)
-                if isinstance(progress := frame.get("progress"), dict):
-                    self._progress = (int(progress["completed"]), int(progress["total"]))
-                    if self._progress[0] >= self._progress[1]:
-                        self._phase = "verifying"
-                elif frame.get("error") in _INSTALL_ERRORS:
-                    failure = frame["error"]
-            except (ValueError, TypeError, KeyError, AttributeError):
-                return
-
+        if not await self._fetch_model():
+            return
+        self._phase = "verifying"
+        self._progress = None
         spec = {
-            "repo": self.model.repo,
-            "revision": self.model.revision,
             "directory": str(self.model_directory),
-            "files": [
-                {"path": item.path, "sha256": item.sha256, "size": item.size}
-                for item in self.model.files
-            ],
-            "derive": dict(self.model.derive) if self.model.derive else None,
-            "model": _model_spec(self.model, self.model_directory),
+            "derive": dict(model.derive) if model.derive else None,
+            "model": _model_spec(model, self.model_directory),
             "threads": default_threads(),
         }
-        environment = {
-            **os.environ,
-            "PYTHONUTF8": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "HF_HUB_DISABLE_TELEMETRY": "1",
-        }
+        environment = {**os.environ, "PYTHONUTF8": "1", "PYTHONDONTWRITEBYTECODE": "1"}
         code = await self._command(
-            [str(self.python), "-I", "-B", str(_WORKER), "--install", json.dumps(spec)],
+            [str(self.python), "-I", "-B", str(_WORKER), "--prepare", json.dumps(spec)],
             environment=environment,
-            on_line=observe,
         )
         if code != 0:
-            self._fail(failure or "download_failed")
+            self._fail("verification_failed")
             return
-        self._write_marker(
-            receipt,
-            json.dumps({"repo": self.model.repo, "revision": self.model.revision}) + "\n",
-        )
-        self._remove_other_revisions()
+        self._publish_model()
         self._state = "ready"
         _LOGGER.info(
             "Local embedding model installed (model=%s revision=%s)",
-            self.model.id,
-            self.model.revision[:12],
+            model.id,
+            model.revision[:12],
         )
         if self._on_ready is not None:
             self._on_ready()
-
-    def _remove_other_revisions(self) -> None:
-        """Files of a revision this release no longer pins are never used again."""
-        assert self.model_directory is not None
-        for entry in self.model_directory.parent.iterdir():
-            if entry.is_dir() and entry != self.model_directory:
-                shutil.rmtree(entry, ignore_errors=True)
 
 
 class _Child(Protocol):
