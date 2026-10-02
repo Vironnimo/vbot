@@ -32,17 +32,16 @@ from core.model_tasks.speech_types import SpeechProgress, SpeechSynthesisResult
 
 
 @pytest.mark.asyncio
-async def test_installations_share_a_queue_and_cancel_waiting_jobs(tmp_path, monkeypatch):
+async def test_installations_share_a_queue_and_stop_on_cancel_or_close(tmp_path, monkeypatch):
     executor = LocalSpeechExecutor(engines_dir=tmp_path)
     first, second = (
         executor.setup_for(target) for target in ("local/qwen3-tts-1.7b", "local/chatterbox")
     )
     entered = asyncio.Event()
-    release = asyncio.Event()
 
     async def block():
         entered.set()
-        await release.wait()
+        await asyncio.Event().wait()
 
     next_install = AsyncMock()
     monkeypatch.setattr(first, "_run_install", block)
@@ -52,10 +51,28 @@ async def test_installations_share_a_queue_and_cancel_waiting_jobs(tmp_path, mon
     second.install()
     await asyncio.sleep(0)
     assert second.status()["phase"] == "queued"
+    activities = {activity["target"]: activity for activity in executor.activities()}
+    assert activities["local/chatterbox"]["state"] == "running"
+    assert activities["local/chatterbox"]["phase"] == "queued"
+    assert activities["local/chatterbox"]["task_type"] == TASK_TEXT_TO_SPEECH
+    assert activities["local/qwen3-tts-1.7b"]["state"] == "running"
     next_install.assert_not_called()
-    await second.aclose()
-    assert second.status()["error"] == "interrupted"
-    release.set()
+
+    # Cancelling is no failure: the target is simply not installed, and the queue moves on.
+    cancelled = await first.cancel()
+    assert cancelled["state"] == "missing"
+    assert first.activity() is None
+    for _ in range(20):
+        await asyncio.sleep(0)
+    next_install.assert_awaited_once()
+
+    # Closing the server interrupts a running installation instead.
+    entered.clear()
+    first.install()
+    await entered.wait()
+    await first.aclose()
+    assert first.status()["error"] == "interrupted"
+    assert first.activity() == {"state": "failed", "error": "interrupted"}
     await executor.aclose()
 
 

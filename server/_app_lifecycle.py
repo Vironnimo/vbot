@@ -13,8 +13,10 @@ from core.storage.layout import DataDirectoryLayout
 from core.utils.log_viewer import LogViewer
 from server._bind import ServerBindState
 from server._http_dependencies import FastAPIType
+from server.activity import ActivityMonitor
 from server.clients import ClientRegistry
 from server.events import (
+    ACTIVITY_STATUS_EVENT,
     RESOURCE_KIND_ARCHIVE,
     RESOURCE_KIND_CALENDAR,
     RESOURCE_KIND_CRON,
@@ -80,6 +82,12 @@ def _initialize_app_state(
     app.state.terminal_change_bridge_unsubscribe = _register_terminal_change_bridge(app.state)
     app.state.bash_process_change_bridge_unsubscribe = _register_bash_process_change_bridge(
         app.state
+    )
+    app.state.activity = ActivityMonitor(
+        runtime,
+        lambda activities: app.state.event_bus.publish(
+            ACTIVITY_STATUS_EVENT, {"activities": activities}
+        ),
     )
     app.state.recall_index_status_bridge_unsubscribe = _register_recall_index_status_bridge(
         app.state
@@ -274,9 +282,11 @@ def _unregister_bash_process_change_bridge(state: Any) -> None:
 
 
 def _register_recall_index_status_bridge(state: Any) -> Any:
-    return state.runtime.recall.add_index_status_listener(
-        lambda status: publish_recall_index_status(state, status)
-    )
+    def forward(status: Any) -> None:
+        state.activity.set_recall_status(status.to_dict())
+        publish_recall_index_status(state, status)
+
+    return state.runtime.recall.add_index_status_listener(forward)
 
 
 def _unregister_recall_index_status_bridge(state: Any) -> None:

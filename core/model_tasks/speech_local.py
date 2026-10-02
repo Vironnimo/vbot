@@ -357,6 +357,23 @@ class LocalSpeechExecutor:
             raise ValueError("Unknown local speech target")
         return self.setups[local_id]
 
+    def activities(self) -> list[dict[str, Any]]:
+        """Each local speech installation that has something to show (``LocalSetup.activity``)."""
+        result = []
+        for local_id, setup in self.setups.items():
+            activity = setup.activity()
+            if activity is not None:
+                descriptor = self._definitions[local_id].descriptor
+                result.append(
+                    {
+                        "target": descriptor.public_id,
+                        "label": descriptor.label,
+                        "task_type": descriptor.task_types[0],
+                        **activity,
+                    }
+                )
+        return result
+
     def _engine_options(self, local_id: str, options: dict[str, Any]) -> dict[str, Any]:
         """The options an engine loads with: the installed model unless the binding names one."""
         directory = self.setups[local_id].model_directory

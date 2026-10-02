@@ -272,6 +272,12 @@ def _local_setup_install(state: Any, params: JsonObject) -> JsonObject:
     return {**setup.install(), "restart_available": state.request_restart is not None}
 
 
+async def _local_setup_cancel(state: Any, params: JsonObject) -> JsonObject:
+    """Stop a running installation of one local target; finished downloads are kept."""
+    setup = _local_setup(state, params, "task_model.local_setup_cancel")
+    return {**await setup.cancel(), "restart_available": state.request_restart is not None}
+
+
 def _local_memory_status(state: Any, params: JsonObject) -> JsonObject:
     _reject_unsupported(params, set(), "task_model.local_memory_status")
     return {
@@ -314,6 +320,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         ),
         "task_model.local_setup_status": _local_setup_status,
         "task_model.local_setup_install": _local_setup_install,
+        "task_model.local_setup_cancel": _local_setup_cancel,
         "task_model.local_memory_status": _local_memory_status,
         "task_model.local_unload": _local_unload,
     }

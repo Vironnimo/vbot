@@ -283,6 +283,7 @@ def create_app(
         _initialize_app_state(app, app_runtime, server_bind=resolved_server_bind)
         app.state.control_token = shutdown_token
         app.state.request_restart = request_restart
+        app.state.activity.start()
         app.state.statistics_warmup_task = (
             None if effective_safe_mode is not None else _start_statistics_warmup(app.state)
         )
@@ -318,6 +319,7 @@ def create_app(
                     server_logger,
                 )
                 await _shutdown_statistics_warmup(app.state.statistics_warmup_task)
+                await app.state.activity.aclose()
                 _unregister_run_event_bridge(app.state)
                 _unregister_session_title_bridge(app.state)
                 _unregister_session_completion_read_bridge(app.state)

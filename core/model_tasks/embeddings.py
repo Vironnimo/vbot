@@ -350,6 +350,9 @@ class EmbeddingService:
     def local_memory_status(self) -> dict[str, Any]:
         return self._local.memory_status() if self._local is not None else {"models": []}
 
+    def local_activities(self) -> list[dict[str, Any]]:
+        return self._local.activities() if self._local is not None else []
+
     async def unload_local(self, target: str) -> dict[str, Any]:
         if self._local is None:
             raise ValueError("Unknown local embedding target")
