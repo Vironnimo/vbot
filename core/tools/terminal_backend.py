@@ -654,7 +654,7 @@ def _spawn_posix_terminal(
     if sys.platform == "win32":
         raise OSError("POSIX terminals are not available on Windows")
     _require_program(argv[0], cwd, env)
-    launch = guarded_process_launch(argv, controlling_terminal=True)
+    launch = guarded_process_launch(argv, env=env, controlling_terminal=True)
     master_fd, slave_fd = os.openpty()
     try:
         _set_window_size(master_fd, rows, columns)

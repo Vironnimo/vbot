@@ -310,7 +310,7 @@ class ProcessManager:
             process_env.update(env)
         process_env["PYTHONIOENCODING"] = "utf-8"
 
-        launch = guarded_process_launch(argv)
+        launch = guarded_process_launch(argv, env=process_env)
         creationflags = subprocess_creation_flags(new_process_group=True)
         start_new_session = os.name != "nt"
         pass_fds = launch.pass_fds if os.name != "nt" else ()

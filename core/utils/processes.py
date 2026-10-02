@@ -11,7 +11,7 @@ import re
 import signal
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -37,6 +37,12 @@ _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 _WINDOWS_SERVER_JOB_HANDLE: int | None = None
 _POSIX_LIFETIME_READ_FD: int | None = None
 _POSIX_LIFETIME_WRITE_FD: int | None = None
+# The guardian imports only the standard library. It runs by file path in
+# isolated mode without site-packages, so neither the child's working directory
+# nor its PYTHON* variables can replace a module it imports (a project's own
+# ``core`` package, say), and it writes no bytecode into an installed version.
+_GUARDIAN_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "process_guardian.py")
+_GUARDIAN_INTERPRETER_OPTIONS = ("-I", "-S", "-B", "-X", "utf8")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +63,11 @@ def activate_process_containment(*, platform_name: str = os.name) -> None:
 
 
 def guarded_process_launch(
-    argv: Sequence[str], *, controlling_terminal: bool = False, platform_name: str = os.name
+    argv: Sequence[str],
+    *,
+    env: Mapping[str, str],
+    controlling_terminal: bool = False,
+    platform_name: str = os.name,
 ) -> GuardedProcessLaunch:
     """Wrap a POSIX child with the private guardian when it needs one.
 
@@ -65,6 +75,8 @@ def guarded_process_launch(
     active. With *controlling_terminal* it also makes the PTY on the child's
     stdin its controlling terminal, so the caller must start the launch as a
     session leader (``start_new_session=True``) with the PTY slave as stdin.
+    *env* is the environment the caller starts the launch with; the child
+    receives it, like the caller's working directory, unchanged.
     """
 
     if not argv:
@@ -75,8 +87,12 @@ def guarded_process_launch(
     options = ["--controlling-terminal"] if controlling_terminal else []
     if lifetime_fd is not None:
         options += ["--lifetime-fd", str(lifetime_fd)]
+    # Python's startup may set the guardian's LC_CTYPE (PEP 538 locale coercion);
+    # the guardian restores the requested value, or its absence, for the child.
+    if "LC_CTYPE" in env:
+        options.append(f"--lc-ctype={env['LC_CTYPE']}")
     return GuardedProcessLaunch(
-        (sys.executable, "-m", "core.utils.process_guardian", *options, "--", *argv),
+        (sys.executable, *_GUARDIAN_INTERPRETER_OPTIONS, _GUARDIAN_SCRIPT, *options, "--", *argv),
         () if lifetime_fd is None else (lifetime_fd,),
     )
 

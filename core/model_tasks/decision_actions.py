@@ -70,7 +70,8 @@ def validate_command(value: Any) -> None:
 
 async def run_command(command: dict[str, Any], timeout: float) -> str:
     """Capture bounded UTF-8 stdout; never interpolate Model data into commands."""
-    launch = guarded_process_launch(command["argv"])
+    environment = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    launch = guarded_process_launch(command["argv"], env=environment)
     pending = asyncio.create_task(
         asyncio.create_subprocess_exec(
             *launch.argv,
@@ -78,7 +79,7 @@ async def run_command(command: dict[str, Any], timeout: float) -> str:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            env=environment,
             creationflags=subprocess_creation_flags(new_process_group=True),
             start_new_session=os.name != "nt",
             pass_fds=launch.pass_fds if os.name != "nt" else (),

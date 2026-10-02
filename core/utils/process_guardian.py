@@ -1,5 +1,10 @@
 """POSIX child wrapper: takes a PTY child's controlling terminal and ties its process
-group to the vBot server lifetime."""
+group to the vBot server lifetime.
+
+Standard library only: ``core.utils.processes.guarded_process_launch`` runs this
+file by path in isolated mode, in the child's working directory and environment,
+where no vBot package is importable.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +26,11 @@ _PYTHON_IGNORED_SIGNALS = ("SIGPIPE", "SIGXFZ", "SIGXFSZ")
 
 
 def run_guardian(
-    lifetime_fd: int | None, argv: Sequence[str], *, controlling_terminal: bool = False
+    lifetime_fd: int | None,
+    argv: Sequence[str],
+    *,
+    lc_ctype: str | None,
+    controlling_terminal: bool = False,
 ) -> int:
     """Run the exact child, killing its process group when the server pipe closes.
 
@@ -31,12 +40,21 @@ def run_guardian(
     after exec, keeps Python code out of the launcher's forked child. Without a
     lifetime descriptor there is nothing to watch, and the guardian replaces
     itself with the child.
+
+    The child inherits this process's environment. *lc_ctype* is the child's
+    requested ``LC_CTYPE``, ``None`` when it has none: the interpreter's locale
+    coercion (PEP 538) sets ``LC_CTYPE`` at startup when the environment names
+    no UTF-8 locale, and isolated mode cannot turn that off.
     """
 
     if sys.platform == "win32":
         raise RuntimeError("The process guardian is only available on POSIX")
     if not argv or (lifetime_fd is not None and lifetime_fd < 0):
         raise ValueError("A valid lifetime descriptor and child argv are required")
+    if lc_ctype is None:
+        os.environ.pop("LC_CTYPE", None)
+    else:
+        os.environ["LC_CTYPE"] = lc_ctype
     if controlling_terminal:
         import fcntl
         import termios
@@ -82,13 +100,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--lifetime-fd", type=int)
     parser.add_argument("--controlling-terminal", action="store_true")
+    parser.add_argument("--lc-ctype")
     parser.add_argument("child", nargs=argparse.REMAINDER)
     arguments = parser.parse_args(argv)
     child = list(arguments.child)
     if child and child[0] == "--":
         child.pop(0)
     return run_guardian(
-        arguments.lifetime_fd, child, controlling_terminal=arguments.controlling_terminal
+        arguments.lifetime_fd,
+        child,
+        lc_ctype=arguments.lc_ctype,
+        controlling_terminal=arguments.controlling_terminal,
     )
 
 
