@@ -1,53 +1,76 @@
 name: Main build
 
-# Publishes the signed packages of every main commit that passed CI to the
-# rolling prerelease `main-build`. Installations on the main channel install and
-# update from it; `releases/latest` never lists a prerelease. Packages upload
-# before vbot-release.json, so the published identity never names a version
-# whose packages are still missing. While a build replaces the assets, the
-# digests of the previous identity disagree with them; the installers then ask
-# to try again.
+# Runs on every push to main: the complete CI and the signed main-channel
+# packages build side by side, and only a commit whose CI and packages all
+# passed is published to the rolling prerelease `main-build`. Installations on
+# the main channel install and update from it; `releases/latest` never lists a
+# prerelease. Main packages skip the release-only smokes (managed speech
+# provisioning, compiled installer); release.yml runs every smoke. Packages
+# upload before vbot-release.json, so the published identity never names a
+# version whose packages are still missing. While a build replaces the assets,
+# the digests of the previous identity disagree with them; the installers then
+# ask to try again. Pushes that change only development documentation, which no
+# package ships and no test reads, run nothing.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [main]
+    paths-ignore:
+      - ".vorch/**"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "CONTRIBUTING.md"
+      - "README.md"
+      - "USAGE.md"
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# One build publishes at a time; a newer green commit replaces a waiting one.
-concurrency:
-  group: main-build
-  cancel-in-progress: false
-
+# A newer run supersedes the CI and package jobs of an older one still in
+# progress; the older run then publishes nothing. Its publish job, once
+# started, always finishes.
 jobs:
+  ci:
+    if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: main-build-ci
+      cancel-in-progress: true
+    uses: ./.github/workflows/ci.yml
+
   windows:
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: main-build-windows
+      cancel-in-progress: true
     uses: ./.github/workflows/windows-package.yml
     with:
       release_mode: true
       channel: main
-      ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      release_smoke: false
     secrets: inherit
 
   linux:
-    if: (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    if: github.ref == 'refs/heads/main'
+    concurrency:
+      group: main-build-linux
+      cancel-in-progress: true
     uses: ./.github/workflows/linux-package.yml
     with:
       release_mode: true
       channel: main
-      ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     secrets: inherit
 
   publish:
-    needs: [windows, linux]
+    needs: [ci, windows, linux]
+    # Publishing is never cancelled halfway; a newer run waits for it.
+    concurrency:
+      group: main-build-publish
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      BUILD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      BUILD_SHA: ${{ github.sha }}
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:

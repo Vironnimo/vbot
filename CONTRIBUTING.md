@@ -62,4 +62,4 @@ npx vitest run src/lib
 npm run lint
 ```
 
-CI runs the complete suites on Linux and Windows on every push to `main` and for every release. More details, including the Vite development server and Windows packaging, are in [Development and verification](USAGE.md#development-and-verification).
+CI runs the complete suites on Linux and Windows on every push to `main` (except pushes that change only development documentation) and for every release. More details, including the Vite development server and Windows packaging, are in [Development and verification](USAGE.md#development-and-verification).
