@@ -28,6 +28,7 @@ from .openai_test_support import (
     OPENAI_SUBSCRIPTION_URL,
     SAMPLE_MESSAGES,
     RotatingTokenGetter,
+    bundled_model_lookup,
     codex_adapter,
     codex_sse_response,
     jwt_with_account,
@@ -433,6 +434,51 @@ async def test_codex_error_events_follow_codex_retry_classification(
     assert sentinel in message
     assert "test-instructions-sentinel" not in message
     assert "test-header-sentinel" not in message
+    await adapter.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_event_before_the_first_delta_is_learned_on_a_fresh_socket() -> None:
+    """An in-band rejection teaches the wire like an HTTP one (test_wire_learning.py).
+
+    The failed exchange drops its socket and continuation, so the retry in the
+    learned shape opens a fresh socket with the full context.
+    """
+
+    rejected = _FakeCodexWebSocket(
+        [
+            [
+                _error_frame(
+                    400,
+                    type="invalid_request_error",
+                    param="reasoning.effort",
+                    message="Invalid value for 'reasoning.effort': 'max'",
+                )
+            ]
+        ]
+    )
+    replacement = _FakeCodexWebSocket([_final_turn("resp_1"), _final_turn("resp_2")])
+    connector = _FakeCodexWebSocketConnector([rejected, replacement])
+    adapter = codex_adapter(codex_websocket_connect=connector, model_lookup=bundled_model_lookup())
+
+    for _ in range(2):
+        deltas = [
+            delta
+            async for delta in adapter.stream(
+                SAMPLE_MESSAGES,
+                model_id="gpt-6-sol",
+                conversation_id=CONVERSATION_ID,
+                thinking_effort="max",
+            )
+        ]
+        assert deltas[-1]["type"] == "finish"
+
+    assert rejected.closed is True
+    assert len(connector.calls) == 2
+    payloads = [*rejected.sent_payloads, *replacement.sent_payloads]
+    assert [payload["reasoning"]["effort"] for payload in payloads] == ["max", "xhigh", "xhigh"]
+    assert "previous_response_id" not in replacement.sent_payloads[0]
+    assert replacement.sent_payloads[0]["input"] == rejected.sent_payloads[0]["input"]
     await adapter.aclose()
 
 

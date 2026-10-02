@@ -31,6 +31,7 @@ from core.providers._http_shared import (
     post_json_with_retry,
     wrap_network_error,
 )
+from core.providers._messages_wire import messages_returned_reasoning
 from core.providers._openai_constants import OPTIONAL_REQUEST_PARAMETER_NAMES
 from core.providers._responses_profile import (
     RESPONSES_DOCUMENT_TYPES,
@@ -39,6 +40,10 @@ from core.providers._responses_profile import (
     drop_unsupported_request_kwargs,
     profile_responses_policy,
     take_reasoning_renderer,
+)
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
 )
 from core.providers.adapter import resolve_request_input_budget
 from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderError
@@ -54,6 +59,7 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
@@ -142,13 +148,32 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         """Send one Copilot request through the wire profile's protocol."""
 
         protocol = self.wire_profile(model_id).protocol
-        if protocol == "responses":
-            payload = self._build_copilot_responses_payload(messages, model_id, kwargs)
-            return await self._post_json(RESPONSES_ENDPOINT, payload, messages)
-        if protocol == "messages":
-            payload = self._build_copilot_messages_payload(messages, model_id, kwargs)
-            return await self._post_json(MESSAGES_ENDPOINT, payload, messages)
-        return await super().send(messages, model_id=model_id, **kwargs)
+        if protocol not in ("responses", "messages"):
+            return await super().send(messages, model_id=model_id, **kwargs)
+
+        def build() -> dict[str, Any]:
+            if protocol == "responses":
+                return self._build_copilot_responses_payload(messages, model_id, kwargs)
+            return self._build_copilot_messages_payload(messages, model_id, kwargs)
+
+        endpoint = RESPONSES_ENDPOINT if protocol == "responses" else MESSAGES_ENDPOINT
+        payload = build()
+        response = await execute_learning_from_rejections(
+            lambda: self._post_json(endpoint, payload, messages),
+            payload,
+            rebuild=build,
+            wire=self.wire,
+            model_id=model_id,
+            provider_label=self._config.id,
+        )
+        returned_reasoning = (
+            responses_returned_reasoning(response)
+            if protocol == "responses"
+            else messages_returned_reasoning(response)
+        )
+        if returned_reasoning:
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -161,16 +186,31 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
         """Stream one Copilot request as normalized vBot deltas."""
 
         protocol = self.wire_profile(model_id).protocol
-        if protocol == "responses":
-            payload = self._build_copilot_responses_payload(messages, model_id, kwargs, stream=True)
-            async with aclosing(self._stream_responses(payload, messages)) as deltas:
-                async for delta in deltas:
-                    yield delta
-            return
-        if protocol == "messages":
-            payload = self._build_copilot_messages_payload(messages, model_id, kwargs)
-            payload["stream"] = True
-            async with aclosing(self._stream_messages(payload, messages)) as deltas:
+        if protocol in ("responses", "messages"):
+
+            def build() -> dict[str, Any]:
+                if protocol == "responses":
+                    return self._build_copilot_responses_payload(
+                        messages, model_id, kwargs, stream=True
+                    )
+                built = self._build_copilot_messages_payload(messages, model_id, kwargs)
+                built["stream"] = True
+                return built
+
+            payload = build()
+            open_stream = (
+                self._stream_responses if protocol == "responses" else self._stream_messages
+            )
+            async with aclosing(
+                stream_learning_from_rejections(
+                    lambda: open_stream(payload, messages),
+                    payload,
+                    rebuild=build,
+                    wire=self.wire,
+                    model_id=model_id,
+                    provider_label=self._config.id,
+                )
+            ) as deltas:
                 async for delta in deltas:
                     yield delta
             return

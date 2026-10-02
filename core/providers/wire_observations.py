@@ -1,8 +1,9 @@
 """Wire facts learned from live Provider traffic (wire profile layer 7).
 
 Codecs report what a Provider actually did for one (Provider, Connection,
-Model): which readable field carried reasoning, which optional parameter the
-wire rejected, which effort value it refused. The resolver turns these facts
+Model): which readable field carried reasoning, whether reasoning came back at
+all, which optional parameter the wire rejected, which effort value it refused
+(``none`` also for a refused explicit off). The resolver turns these facts
 into profile values below every explicit Model entry, so a configured or
 verified profile always wins and an unconfigured Model improves after its first
 responses instead of failing the same way on every request.
@@ -145,7 +146,11 @@ class WireObservations:
     def record_rejected_effort(
         self, provider_id: str, connection_id: str, model_id: str, effort: str
     ) -> None:
-        """The wire rejected the reasoning effort value ``effort``."""
+        """The wire rejected the reasoning effort value ``effort``.
+
+        ``none`` also records a rejected explicit off (``thinking: {type:
+        disabled}``), which the resolver turns into an omitted off render.
+        """
 
         self._update(
             provider_id,

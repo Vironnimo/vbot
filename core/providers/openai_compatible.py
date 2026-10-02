@@ -8,7 +8,8 @@ provider-specific behavior can subclass this adapter."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, Self, override
 
 import httpx
@@ -77,7 +78,10 @@ from core.providers._http_shared import (
     wrap_network_error,
 )
 from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES, normalize_tool_call_ids
-from core.providers._wire_learning import execute_learning_from_rejections
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
     ModelLookup,
@@ -755,10 +759,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             _execute_payload,
             payload,
             rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
-            sent_effort=lambda: describe().effort_level,
             wire=self.wire,
             model_id=model_id,
-            logger=_LOGGER,
             provider_label=self._config.id,
         )
 
@@ -819,7 +821,6 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         """
         request_headers = self._request_headers_from_kwargs(kwargs)
         request_headers.update(self.wire_profile(model_id).request.extra_headers)
-        selected_effort = _selected_thinking_effort(kwargs)
 
         def build_stream_payload() -> dict[str, Any]:
             built = self._build_payload(messages, model_id, **kwargs)
@@ -845,9 +846,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        async def _connect_payload() -> httpx.Response:
+        async def _stream_payload() -> AsyncGenerator[dict[str, Any]]:
             body = await self._prepare_request_body(payload, model_id)
-            return await connect_streaming_with_retry(
+            response = await connect_streaming_with_retry(
                 self._client,
                 CHAT_COMPLETIONS_ENDPOINT,
                 body,
@@ -856,19 +857,27 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 auth_recovery=auth_recovery,
                 wrap_transport_error=self._wrap_transport_error,
             )
+            async with aclosing(self._stream_response_deltas(response, model_id)) as deltas:
+                async for delta in deltas:
+                    yield delta
 
-        response = await execute_learning_from_rejections(
-            _connect_payload,
-            payload,
-            rebuild=build_stream_payload,
-            sent_effort=lambda: (
-                self.describe_reasoning_render(model_id, selected_effort or None).effort_level
-            ),
-            wire=self.wire,
-            model_id=model_id,
-            logger=_LOGGER,
-            provider_label=self._config.id,
-        )
+        async with aclosing(
+            stream_learning_from_rejections(
+                _stream_payload,
+                payload,
+                rebuild=build_stream_payload,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
+
+    async def _stream_response_deltas(
+        self, response: httpx.Response, model_id: str
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield the normalized deltas of an established SSE stream, then close it."""
 
         tool_call_slots: set[int] = set()
         normalization_state: dict[str, Any] = {

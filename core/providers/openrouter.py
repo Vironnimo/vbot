@@ -72,6 +72,10 @@ from core.providers._responses_profile import (
     profile_responses_policy,
     take_reasoning_renderer,
 )
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.errors import (
     NetworkError,
     classify_in_band_provider_error,
@@ -82,6 +86,7 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import (
     OpenAICompatibleAdapter,
@@ -148,12 +153,26 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
         if not self._uses_responses(model_id):
             return await super().send(messages, model_id=model_id, **kwargs)
-        payload = self._build_openrouter_responses_payload(
-            messages,
+
+        def build() -> dict[str, Any]:
+            return self._build_openrouter_responses_payload(
+                messages,
+                model_id=model_id,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+
+        payload = build()
+        response = await execute_learning_from_rejections(
+            lambda: self._post_responses_json(payload),
+            payload,
+            rebuild=build,
+            wire=self.wire,
             model_id=model_id,
-            **self._request_kwargs_with_defaults(kwargs),
+            provider_label=self._config.id,
         )
-        return await self._post_responses_json(payload)
+        if responses_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -175,13 +194,26 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 async for delta in deltas:
                     yield delta
             return
-        payload = self._build_openrouter_responses_payload(
-            messages,
-            model_id=model_id,
-            stream=True,
-            **self._request_kwargs_with_defaults(kwargs),
-        )
-        async with aclosing(self._stream_responses(payload)) as deltas:
+
+        def build() -> dict[str, Any]:
+            return self._build_openrouter_responses_payload(
+                messages,
+                model_id=model_id,
+                stream=True,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+
+        payload = build()
+        async with aclosing(
+            stream_learning_from_rejections(
+                lambda: self._stream_responses(payload),
+                payload,
+                rebuild=build,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
             async for delta in deltas:
                 yield delta
 

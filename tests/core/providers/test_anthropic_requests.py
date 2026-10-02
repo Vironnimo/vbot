@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 import httpx
 import pytest
@@ -26,17 +25,13 @@ from .anthropic_test_support import (
     MINIMAL_URL,
     MODEL_ID,
     NO_DEFAULTS_CONFIG,
-    SAMPLE_MESSAGES,
     SAMPLE_TOOLS,
-    SUCCESS_RESPONSE,
     THINKING_BLOCK,
     claude_model,
     make_adapter,
     sampling_model,
     send_request,
     sent_payload,
-    sse,
-    sse_response,
 )
 
 EPHEMERAL = {"type": "ephemeral"}
@@ -690,36 +685,6 @@ async def test_sampling_is_dropped_while_thinking_or_when_the_model_rejects_it(
     payload = await sent_payload(make_adapter(config, model=model), url=url, **kwargs)
 
     _assert_payload_fields(payload, expected)
-
-
-@pytest.mark.parametrize("transport", ["send", "stream"])
-@pytest.mark.asyncio
-async def test_rejected_sampling_parameter_is_retried_once_without_it(transport) -> None:
-    rejection = httpx.Response(
-        400,
-        json={
-            "error": {
-                "type": "invalid_request_error",
-                "message": "temperature is not supported for this model",
-            }
-        },
-    )
-    success = (
-        httpx.Response(200, json=SUCCESS_RESPONSE) if transport == "send" else sse_response(sse())
-    )
-    adapter = make_adapter()
-    kwargs: dict[str, Any] = {"temperature": 0.5, "thinking_effort": "none"}
-
-    with respx.mock:
-        route = respx.post(ANTHROPIC_URL).mock(side_effect=[rejection, success])
-        if transport == "send":
-            await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
-        else:
-            [chunk async for chunk in adapter.stream(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)]
-
-    assert route.call_count == 2
-    assert json.loads(route.calls[0].request.content)["temperature"] == 0.5
-    assert "temperature" not in json.loads(route.calls[1].request.content)
 
 
 PRIOR_RUN_REDACTED_BLOCK = {"type": "redacted_thinking", "data": "opaque-prior-run-redacted"}

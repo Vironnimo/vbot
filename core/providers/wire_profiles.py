@@ -29,6 +29,7 @@ from core.providers._wire_profile_files import (
 )
 from core.providers._wire_protocol_defaults import PROTOCOL_DEFAULTS
 from core.providers.reasoning import normalize_thinking_effort
+from core.providers.reasoning_dialects import dialect_carriers
 from core.providers.wire_observations import ObservedFacts, WireObservations
 from core.providers.wire_profile import (
     PROTOCOLS,
@@ -579,25 +580,34 @@ class _Resolution:
             partial["request"] = {
                 "parameters": {name: {"mode": "drop"} for name in facts.rejected_parameters}
             }
-        if facts.rejected_efforts:
+        rejected = facts.rejected_efforts
+        narrowed_map: dict[str, str] | None = None
+        if rejected:
             reasoning = _build_reasoning(self.values.get("reasoning", {}))
-            ladder = tuple(
-                level for level in reasoning.ladder if level not in facts.rejected_efforts
-            )
-            partial.setdefault("reasoning", {}).update(
-                {
-                    "levels": ladder,
-                    "effort_map": {
-                        effort: level
-                        for effort, level in reasoning.effort_map.items()
-                        if level not in facts.rejected_efforts
-                    },
+            learned = partial.setdefault("reasoning", {})
+            if "none" in rejected and (
+                "none" not in reasoning.ladder or dialect_carriers(reasoning.dialect).off_switch
+            ):
+                # A rejected explicit off that no ladder rung spells (the
+                # dialect's off switch, or a ``none`` outside the ladder):
+                # Agent effort ``none`` leaves reasoning to the Provider.
+                learned["off"] = "omit"
+            if any(level in rejected for level in reasoning.ladder) or any(
+                level in rejected for level in reasoning.effort_map.values()
+            ):
+                narrowed_map = {
+                    effort: level
+                    for effort, level in reasoning.effort_map.items()
+                    if level not in rejected
                 }
-            )
+                learned["levels"] = tuple(
+                    level for level in reasoning.ladder if level not in rejected
+                )
+                learned["effort_map"] = narrowed_map
         _merge_into(self.values, partial, PROFILE_SCHEMA, "", LAYER_OBSERVED, self.provenance)
-        if facts.rejected_efforts:
+        if narrowed_map is not None:
             # A rejected mapping must disappear, not merge with the earlier map.
-            self.values["reasoning"]["effort_map"] = partial["reasoning"]["effort_map"]
+            self.values["reasoning"]["effort_map"] = narrowed_map
 
     # -- status ---------------------------------------------------------------
 
