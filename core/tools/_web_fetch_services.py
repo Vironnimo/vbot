@@ -15,6 +15,10 @@ _MAX_BYTES = 12 * 1024 * 1024
 _DATA_URI = re.compile(
     r"data:(?:[a-z0-9.+-]+/[a-z0-9.+-]+)?(?:;[a-z0-9=.+-]+)*,[^\s\)\]\"'<>]+", re.I
 )
+# Neither the link text nor the URL may contain "[": a failed match then ends at
+# the next "[", where the next attempt starts, so collapsing links stays linear
+# even for page text full of unclosed brackets.
+_MARKDOWN_LINK = re.compile(r"!?\[([^\[\]]*)\]\(https?://[^\s)\[]*\)")
 
 
 class FetchServiceError(Exception):
@@ -25,7 +29,7 @@ def clean_service_text(text: str, *, include_links: bool = True) -> str:
     """Embedded bytes are not readable page content and can consume huge Context."""
     text = _DATA_URI.sub("[embedded data omitted]", text)
     if not include_links:
-        text = re.sub(r"!?\[([^\]]*)\]\(https?://[^\s)]*\)", r"\1", text)
+        text = _MARKDOWN_LINK.sub(r"\1", text)
     return text
 
 
