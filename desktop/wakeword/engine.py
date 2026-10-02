@@ -238,21 +238,21 @@ class WakewordModelCatalog:
         model_id = f"{_CUSTOM_MODEL_PREFIX}{model_token}"
         model_path = self._model_directory / f"{model_token}{_CUSTOM_MODEL_FILE_SUFFIX}"
         metadata_path = self._metadata_path(model_token)
-        temporary_path: Path | None = None
 
         try:
+            # Leaving the block removes the temporary file unless it became the model.
             with tempfile.NamedTemporaryFile(
                 "wb",
                 dir=self._model_directory,
-                delete=False,
+                delete_on_close=False,
                 prefix=f".{model_token}.",
                 suffix=_CUSTOM_MODEL_FILE_SUFFIX,
             ) as temporary_file:
                 temporary_file.write(content)
+                temporary_file.close()
                 temporary_path = Path(temporary_file.name)
-            _validate_custom_model(temporary_path)
-            temporary_path.replace(model_path)
-            temporary_path = None
+                _validate_custom_model(temporary_path)
+                temporary_path.replace(model_path)
             metadata = {
                 "id": model_id,
                 "label": _display_label(original_name),
@@ -262,12 +262,10 @@ class WakewordModelCatalog:
             }
             _write_json_atomic(metadata_path, metadata)
         except WakewordModelError:
-            _remove_file(temporary_path)
             _remove_file(model_path)
             _remove_file(metadata_path)
             raise
         except Exception as exc:
-            _remove_file(temporary_path)
             _remove_file(model_path)
             _remove_file(metadata_path)
             raise WakewordModelError("Wakeword model could not be imported") from exc
@@ -670,27 +668,22 @@ def _display_label(filename: str) -> str:
 
 
 def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=path.parent,
-            delete=False,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-        ) as temporary_file:
-            json.dump(value, temporary_file, indent=2, sort_keys=True)
-            temporary_file.write("\n")
-            temporary_path = Path(temporary_file.name)
-        temporary_path.replace(path)
-    finally:
-        _remove_file(temporary_path)
+    # Leaving the block removes the temporary file unless it replaced *path*.
+    with tempfile.NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=path.parent,
+        delete_on_close=False,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    ) as temporary_file:
+        json.dump(value, temporary_file, indent=2, sort_keys=True)
+        temporary_file.write("\n")
+        temporary_file.close()
+        Path(temporary_file.name).replace(path)
 
 
-def _remove_file(path: Path | None) -> None:
-    if path is None:
-        return
+def _remove_file(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
     except OSError:

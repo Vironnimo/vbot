@@ -39,7 +39,7 @@ from core.recall.passages import Passage
 from core.sessions import ChatSession, ChatSessionManager
 from tests.core.recall.recall_test_support import connect_store, request, timestamp
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.filterwarnings("ignore::DeprecationWarning")]
+pytestmark = pytest.mark.asyncio
 
 HEADER = VectorHeader(provider_id="p", model_id="m", dimension=3)
 VECTORS: dict[str, list[float]] = {

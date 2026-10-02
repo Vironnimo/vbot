@@ -186,7 +186,11 @@ def builtin_local_embedding_models() -> tuple[LocalEmbeddingModel, ...]:
 
 
 def default_threads() -> int:
-    """All physical cores but one, at least one."""
+    """All physical cores but one, at least one, within the CPUs the server may use.
+
+    The serving child inherits the server's CPU affinity, so a server pinned to
+    fewer CPUs than the machine has keeps one of those free instead.
+    """
     try:
         import psutil  # type: ignore[import-untyped]
 
@@ -195,7 +199,8 @@ def default_threads() -> int:
         physical = None
     if not physical:
         physical = max(1, (os.cpu_count() or 2) // 2)
-    return max(1, physical - 1)
+    usable = os.process_cpu_count() or physical
+    return max(1, min(physical, usable) - 1)
 
 
 def _model_spec(model: LocalEmbeddingModel, directory: Path) -> dict[str, Any]:

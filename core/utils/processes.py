@@ -6,7 +6,6 @@ import asyncio
 import contextlib
 import ctypes
 import functools
-import locale
 import os
 import re
 import signal
@@ -494,12 +493,14 @@ def _run_taskkill_tree(pid: int) -> str | None:
         return f"could not run: {error}"
     if completed.returncode == 0:
         return None
-    # The first stderr line names the cause, in UTF-8 or the process code page.
+    # The first stderr line names the cause. Windowless, taskkill runs in a new
+    # console and writes in its code page: the OEM code page, or UTF-8 where the
+    # system or the user's console settings select it.
     stderr = completed.stderr or b""
     try:
         text = stderr.decode("utf-8")
     except UnicodeDecodeError:
-        text = stderr.decode(locale.getpreferredencoding(False), errors="replace")
+        text = stderr.decode("oem", errors="replace")
     detail = next((line.strip() for line in text.splitlines() if line.strip()), "")
     if len(detail) > _TASKKILL_DETAIL_MAX_CHARS:
         detail = detail[: _TASKKILL_DETAIL_MAX_CHARS - 3] + "..."

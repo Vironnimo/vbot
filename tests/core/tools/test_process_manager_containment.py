@@ -357,7 +357,24 @@ def test_windows_process_tree_kill_runs_taskkill_windowless(
     assert fallback_kills == 0
 
 
-def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog):
+@pytest.mark.parametrize(
+    ("cause", "encoding"),
+    [
+        pytest.param("ERROR: The process with PID 2 could not be terminated.", "utf-8", id="utf-8"),
+        # Windowless, taskkill writes localized messages in the OEM code page.
+        pytest.param(
+            "FEHLER: Der Prozess mit PID 2 konnte nicht beendet werden: ungültig.",
+            "oem",
+            id="oem-code-page",
+            marks=pytest.mark.skipif(sys.platform != "win32", reason="Windows code pages"),
+        ),
+    ],
+)
+def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog, cause, encoding):
+    try:
+        stderr = f"\r\n{cause}\r\nReason: denied\r\n".encode(encoding)
+    except UnicodeEncodeError:
+        pytest.skip("this OEM code page cannot encode the localized message")
     root_alive = True
     child_alive = True
     deny_child = True
@@ -384,7 +401,6 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog):
 
     def failing_taskkill(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
         taskkill_runs.append(args)
-        stderr = b"\r\nERROR: The process with PID 2 could not be terminated.\r\nReason: denied\r\n"
         return subprocess.CompletedProcess(args, 128, stderr=stderr)
 
     monkeypatch.setattr(subprocess, "run", failing_taskkill)
@@ -396,7 +412,7 @@ def test_windows_failed_tree_kill_retains_orphan_for_retry(monkeypatch, caplog):
         assert level == logging.WARNING
         assert "1 of 2 captured processes survive" in message
         # The exit code and the first stderr line name the taskkill failure.
-        assert "taskkill exit code 128: ERROR: The process with PID 2 could not be" in message
+        assert f"taskkill exit code 128: {cause}" in message
         assert "Reason" not in message
         assert "killing pid=2 failed" in message
         caplog.clear()

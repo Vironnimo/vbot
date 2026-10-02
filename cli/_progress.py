@@ -50,19 +50,28 @@ def _windows_color(stream: TextIO) -> bool:
         return False
 
 
+def _decorated_terminal(stream: TextIO) -> bool:
+    return stream.isatty() and os.environ.get("TERM") != "dumb" and output_mode.get() != "plain"
+
+
+def color_enabled(stream: TextIO) -> bool:
+    """Color only a decorated terminal, never with ``NO_COLOR``; status lines and help agree."""
+    return _decorated_terminal(stream) and not os.environ.get("NO_COLOR") and _windows_color(stream)
+
+
 def status_line(status: Status, message: str, *, stream: TextIO | None = None) -> str:
     """Keep textual status in pipes; decorate only a capable terminal."""
 
     stream = stream or sys.stdout
     symbol, label, color = _MARKERS[status]
-    terminal = stream.isatty() and os.environ.get("TERM") != "dumb" and output_mode.get() != "plain"
+    terminal = _decorated_terminal(stream)
     if terminal:
         try:
             symbol.encode(stream.encoding or "ascii")
         except (UnicodeEncodeError, LookupError):
             terminal = False
     marker = f"{symbol} {label}" if terminal else f"[{label}]"
-    if terminal and not os.environ.get("NO_COLOR") and _windows_color(stream):
+    if terminal and color_enabled(stream):
         marker = f"\033[{color}m{marker}\033[0m"
     return f"{marker} {message}"
 
@@ -80,13 +89,7 @@ class ProgressPrinter:
         self.messages: set[str] = set()
         self._plain = output_mode.get() == "plain"
         self._stream = stream or sys.stdout
-        self._live = (
-            live
-            and not self._plain
-            and self._stream.isatty()
-            and os.environ.get("TERM") != "dumb"
-            and _windows_color(self._stream)
-        )
+        self._live = live and _decorated_terminal(self._stream) and _windows_color(self._stream)
         self._line_open = False
         self._last_heartbeat = 0.0
         self._interval = interval

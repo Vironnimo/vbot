@@ -6,6 +6,7 @@ import json
 import logging
 import os
 from datetime import UTC, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,7 @@ def test_spans_on_one_lane_never_overlap_including_retroactive_spans() -> None:
         by_lane.setdefault(event[2], []).append((event[3], event[3] + event[4]))
     for spans in by_lane.values():
         spans.sort()
-        for (_start, end), (next_start, _next_end) in zip(spans, spans[1:], strict=False):
+        for (_start, end), (next_start, _next_end) in pairwise(spans):
             assert end <= next_start
     names = {event[5]: event[2] for event in _spans(recording)}
     assert names["late"] != names["live"]

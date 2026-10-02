@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Sequence
+from itertools import batched
 from typing import TYPE_CHECKING, Any, cast
 
 from core.chat.errors import ChatSessionError
@@ -47,8 +48,7 @@ def existing_addresses(
     """Return the live subset of *addresses*, one indexed statement per batch."""
     wanted = list(dict.fromkeys(addresses))
     found: set[SessionAddress] = set()
-    for start in range(0, len(wanted), _EXISTING_ADDRESS_BATCH_SIZE):
-        batch = wanted[start : start + _EXISTING_ADDRESS_BATCH_SIZE]
+    for batch in batched(wanted, _EXISTING_ADDRESS_BATCH_SIZE, strict=False):
         rows = connection.execute(
             "SELECT project_id, agent_id, session_id FROM sessions WHERE state = 'live' "
             "AND (project_id, agent_id, session_id) IN (VALUES "
@@ -75,8 +75,9 @@ def descriptor_sources(
     """Load each live Session's metadata and Recall visibility in set-oriented reads."""
     selected: list[sqlite3.Row] = []
     for (project_id, agent_id), session_ids in _by_scope(addresses).items():
-        for start in range(0, len(session_ids), _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE):
-            chunk = session_ids[start : start + _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE]
+        for chunk in batched(
+            session_ids, _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE, strict=False
+        ):
             selected.extend(
                 connection.execute(
                     f"SELECT {_store_values._SESSION_STATE_COLUMNS}, "
@@ -375,8 +376,7 @@ def list_completion_activity(
         (project_id or None, agent_id): [] for project_id, agent_id in scopes
     }
     normalized = tuple((project_id or "", agent_id) for project_id, agent_id in result)
-    for start in range(0, len(normalized), _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE):
-        chunk = normalized[start : start + _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE]
+    for chunk in batched(normalized, _COMPLETION_ACTIVITY_SCOPE_BATCH_SIZE, strict=False):
         values = ", ".join("(?, ?)" for _scope in chunk)
         for state in connection.execute(
             f"WITH scopes(project_id, agent_id) AS (VALUES {values}) "
@@ -428,8 +428,9 @@ def list_history_versions(
     """
     versions: dict[SessionAddress, tuple[str, int]] = {}
     for (project_id, agent_id), session_ids in _by_scope(addresses).items():
-        for start in range(0, len(session_ids), _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE):
-            chunk = session_ids[start : start + _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE]
+        for chunk in batched(
+            session_ids, _store_values._DESCRIPTOR_SOURCE_BATCH_SIZE, strict=False
+        ):
             for row in connection.execute(
                 "SELECT project_id, agent_id, session_id, generation_id, history_revision "
                 "FROM sessions WHERE project_id = ? AND agent_id = ? AND state = 'live' "

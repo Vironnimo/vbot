@@ -95,9 +95,16 @@ def test_fetch_downloads_missing_files_and_keeps_complete_ones(tmp_path: Path, h
     assert reported == sorted(reported) and reported[-1] == model.download_bytes
 
 
+@pytest.mark.parametrize("linkable", [True, False], ids=["hard-link", "copy"])
 def test_fetch_adopts_verified_copies_from_earlier_revisions_and_the_cache(
-    tmp_path: Path, hub
+    tmp_path: Path, hub, monkeypatch: pytest.MonkeyPatch, linkable: bool
 ) -> None:
+    if not linkable:
+        # Another volume or a file system without hard links: the files are copied.
+        def refuse_link(source: object, target: object) -> None:
+            raise OSError("hard links are not supported here")
+
+        monkeypatch.setattr(model_files.os, "link", refuse_link)
     tokenizer = b"tokens" * 10
     vocabulary = b"vocabulary"
     model = pinned(
@@ -134,6 +141,9 @@ def test_fetch_adopts_verified_copies_from_earlier_revisions_and_the_cache(
     contents = (WEIGHTS, CONFIG, tokenizer, vocabulary)
     for item, content in zip(model.files, contents, strict=True):
         assert (tmp_path / "model" / item.path).read_bytes() == content
+    blob = repository / "blobs" / model.files[0].sha256
+    assert (tmp_path / "model" / "model.bin").samefile(blob) is linkable
+    assert not list((tmp_path / "model").rglob("*.part"))
 
 
 @pytest.mark.parametrize("ranges", [True, False], ids=["resumed", "range-ignored"])

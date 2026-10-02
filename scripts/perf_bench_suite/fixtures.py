@@ -19,6 +19,7 @@ import random
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
@@ -614,7 +615,7 @@ def tool_call_stream_events(chunks: int = STREAM_CHUNKS, *, seed: int = 19) -> t
     text = TextFactory(seed)
     arguments = json.dumps({"path": "notes/plan.md", "content": text.markdown(chunks * 12)})
     bounds = [round(index * len(arguments) / chunks) for index in range(chunks + 1)]
-    fragments = [arguments[start:end] for start, end in zip(bounds, bounds[1:], strict=False)]
+    fragments = [arguments[start:end] for start, end in pairwise(bounds)]
     first = {
         "role": "assistant",
         "content": None,

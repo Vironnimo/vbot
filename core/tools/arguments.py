@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+from itertools import pairwise
 from typing import overload
 
 from core.tools.contracts import ToolContractError
@@ -212,7 +213,7 @@ def line_number_gutter_candidates(
         compact_lines.append(rest + ending)
 
     if require_consecutive and any(
-        current != previous + 1 for previous, current in zip(numbers, numbers[1:], strict=False)
+        current != previous + 1 for previous, current in pairwise(numbers)
     ):
         return ()
 

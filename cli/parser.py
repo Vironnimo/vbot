@@ -51,7 +51,7 @@ from cli._parser_operations import (
     _add_performance_parsers,
     _add_statistics_parsers,
 )
-from cli._progress import status_line
+from cli._progress import color_enabled, status_line
 from cli._recovery import format_command
 
 AREA_ALIASES = {
@@ -77,6 +77,11 @@ class _CliParser(argparse.ArgumentParser):
 
     def __init__(self, *args, **kwargs) -> None:
         kwargs.setdefault("allow_abbrev", False)
+        if "color" not in kwargs:
+            # Help follows the CLI's color rule rather than Python's own, which would
+            # also color a pipe under FORCE_COLOR. Subparsers inherit the decision;
+            # a GUI process may have no stdout at all.
+            kwargs["color"] = sys.stdout is not None and color_enabled(sys.stdout)
         super().__init__(*args, **kwargs)
         self._error_help_path = self.prog
         self._unknown_options: list[str] = []
