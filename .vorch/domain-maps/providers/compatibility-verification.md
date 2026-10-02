@@ -172,6 +172,7 @@ Run the affected Provider, Model and request-policy tests while iterating and be
 
 ## Existing local probes
 
+- `scripts/verify_wire_profile.py --provider ID --model MODEL [--connection ID] [--data-dir DIR] [--check NAME ...] [--write]` builds the data directory's production Provider Runtime, resolves the Model's wire profile without learned facts, drives real requests through the Adapter (checks in `scripts/_wire_verify/`), and prints only measurements plus the Model entry the evidence supports. `--write` merges that entry into `resources/wire/<provider>.json`, or for a Custom Provider into `providers.custom.<id>.wire.models` of that data directory's Settings through `StorageManager.update_custom_provider_settings`. A running server applies a Settings write only after a restart.
 - `scripts/probe_reasoning_replay_exact.py` exercises the effective vBot Adapter/history path for supported Providers and policies; inspect its payload construction before extending it to another wire.
 - `scripts/probe_reasoning_replay_tokens.py`, `scripts/probe_reasoning_replay_alt_wires.py`, and `scripts/probe_reasoning_replay_native.py` contain Provider-specific raw-wire experiments. Reuse their controlled-comparison pattern, not their Provider assumptions.
 - `scripts/probe_reasoning_replay_behavior.py` is a behavioral diagnostic and cannot establish transport by itself.
