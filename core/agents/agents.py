@@ -85,6 +85,7 @@ from core.agents._types import (
     LibrarianProblem,
     _AgentOrderDocument,
     is_librarian,
+    librarian_problem_message,
     skill_subject_id,
 )
 from core.agents._workspace import (
@@ -137,6 +138,7 @@ __all__ = [
     "BuiltinAgentError",
     "LibrarianProblem",
     "is_librarian",
+    "librarian_problem_message",
     "skill_subject_id",
     "ArchivedAgent",
     "ArchivedAgentPayload",

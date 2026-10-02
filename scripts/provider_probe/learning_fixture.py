@@ -307,10 +307,7 @@ class EvalWorker:
         self, case: Mapping[str, Any], scope: str, *, attempt_id: str
     ) -> PreparedAttempt:
         """Seed one attempt's state and build its first request like production."""
-        from core.automation.librarian import (
-            LIBRARIAN_TOOL_RESTRICTION,
-            librarian_tool_denial_resolver,
-        )
+        from core.agents import LIBRARIAN_TOOLS
         from core.automation.reflection import (
             REFLECTION_RUN_KINDS,
             REFLECTION_TOOL_RESTRICTIONS,
@@ -359,8 +356,7 @@ class EvalWorker:
             restriction, denial_resolver = LEARN_DISPATCH_TOOLS, None
             run_kind = "user"
         elif scope == "librarian":
-            restriction = tuple(LIBRARIAN_TOOL_RESTRICTION)
-            denial_resolver = librarian_tool_denial_resolver()
+            restriction, denial_resolver = LIBRARIAN_TOOLS, None
             run_kind = RunKind.LIBRARIAN.value
             candidates = self.librarian_candidates()
         else:

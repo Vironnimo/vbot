@@ -142,14 +142,16 @@ class ChatSessionManager:
         *,
         actor: str | None = None,
         run_kind: RunKind | None = None,
+        metadata: JsonObject | None = None,
     ) -> ChatSession:
         """Create a Session.
 
         ``actor`` names who asked for it (``rpc``, ``command``): that creation is a
         control-plane change and logs at INFO. A Session created as a side effect of
         other work (a triggered Run, a Sub-Agent) passes none and logs at DEBUG.
-        ``run_kind`` labels the new Session in the same write, so a background
-        Session (a Librarian pass) is never listed as a conversation.
+        ``run_kind`` labels the new Session and ``metadata`` sets metadata facade
+        values (a title, open keys) in the same write, so no reader ever sees the
+        Session without them (a Librarian pass Session and its binding).
         """
         _validate_agent_id(agent_id)
         if project_id is not None and not is_valid_project_id(project_id):
@@ -162,6 +164,7 @@ class ChatSessionManager:
             SessionAddress(project_id, agent_id, session_id or ""),
             generate_id=session_id is None,
             run_kind=None if run_kind is None else run_kind.value,
+            metadata=metadata,
         )
         _LOGGER.log(
             logging.INFO if actor is not None else logging.DEBUG,
@@ -181,9 +184,17 @@ class ChatSessionManager:
         *,
         actor: str | None = None,
         run_kind: RunKind | None = None,
+        metadata: JsonObject | None = None,
     ) -> ChatSession:
         return await self._store.run_async(
-            lambda: self.create(agent_id, session_id, project_id, actor=actor, run_kind=run_kind)
+            lambda: self.create(
+                agent_id,
+                session_id,
+                project_id,
+                actor=actor,
+                run_kind=run_kind,
+                metadata=metadata,
+            )
         )
 
     def exists(self, address: SessionAddress) -> bool:

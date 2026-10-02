@@ -161,10 +161,16 @@ class SessionStore:
         *,
         generate_id: bool = False,
         run_kind: str | None = None,
+        metadata: JsonObject | None = None,
     ) -> SessionAddress:
         return self._execute_write(
             lambda connection: _store_mutations.create(
-                connection, address, created_at, generate_id=generate_id, run_kind=run_kind
+                connection,
+                address,
+                created_at,
+                generate_id=generate_id,
+                run_kind=run_kind,
+                metadata=metadata,
             )
         )
 

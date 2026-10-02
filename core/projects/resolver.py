@@ -32,7 +32,6 @@ from core.projects._resolution_values import (
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
-    MODEL_DEFAULTS_FIELD,
     AgentOverrides,
     AgentResolutionError,
     ConfigAgent,
@@ -67,7 +66,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
-    "MODEL_DEFAULTS_FIELD",
     "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
@@ -390,7 +388,7 @@ class AgentResolver:
         vBot added survive. Every value is validated first, a Model also for
         usability, so an invalid change writes nothing.
         """
-        unknown = sorted(set(changes) - {*AGENT_OVERRIDE_FIELDS, MODEL_DEFAULTS_FIELD})
+        unknown = sorted(set(changes) - set(AGENT_OVERRIDE_FIELDS))
         if unknown:
             raise ValueError("unknown Agent override: " + ", ".join(unknown))
         requested = AgentOverrides(

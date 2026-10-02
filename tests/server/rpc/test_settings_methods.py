@@ -380,7 +380,6 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "interval_days": 7,
             "archive_after_days": 90,
             "consolidate": True,
-            "model": "",
         },
         "speech": {
             "transcription_audio": {

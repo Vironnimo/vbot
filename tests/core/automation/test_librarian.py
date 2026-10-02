@@ -18,30 +18,21 @@ from core.agents import AgentNotFoundError
 from core.automation.librarian import (
     CHECK_INTERVAL_SECONDS,
     FIRST_CHECK_DELAY_SECONDS,
-    LIBRARIAN_TOOL_ITERATION_LIMIT,
-    LIBRARIAN_TOOL_RESTRICTION,
+    LIBRARIAN_PASS_HISTORY,
     LibrarianBusyError,
     LibrarianService,
     LibrarianStateError,
     LibrarianUnavailableError,
     librarian_candidates,
-    librarian_tool_denial_resolver,
     validate_librarian_state_file,
 )
 from core.prompts.briefs import librarian_brief
 from core.runs import RunKind
-from core.sessions import SessionAddress
 from core.skills import SkillAuthoringService, SkillWriter
 from core.statistics.skills import SkillUse
 from core.storage import StorageManager
-from core.tools.availability import ToolAccess
 from core.utils.timestamps import format_canonical_timestamp
 
-_TOOLS = (
-    SimpleNamespace(name="read"),
-    SimpleNamespace(name="skill"),
-    SimpleNamespace(name="skill_manage", constraints=("identity_agent",)),
-)
 _AGENT = SkillWriter(actor="agent", session_id="s-1", run_id="r-1", run_kind="user")
 _REFLECTION = SkillWriter(actor="reflection", session_id="s-2", run_id="r-2", run_kind="reflection")
 _HUMAN = SkillWriter(actor="human")
@@ -64,9 +55,11 @@ class _Harness:
             "interval_days": 7,
             "archive_after_days": 90,
             "consolidate": True,
-            "model": "",
         }
         self.agents: dict[str, Any] = {"main": self.agent()}
+        # Why the built-in Librarian is unavailable, ``None`` while it is available.
+        self.librarian_problem: str | None = None
+        # Agents with active or queued Runs, the Librarian among them.
         self.busy: set[str] = set()
         # Agents whose background review is starting or running.
         self.reviewing: set[str] = set()
@@ -81,8 +74,6 @@ class _Harness:
         self.announced = 0
         self.started: list[dict[str, Any]] = []
         self.created_sessions: list[dict[str, Any]] = []
-        # The overrides written per Session address, in order.
-        self.session_overrides: list[tuple[Any, dict[str, Any]]] = []
         self.deleted_sessions: list[Any] = []
         # Called with the start kwargs while the consolidation Run "runs".
         self.on_run: Any = None
@@ -94,9 +85,6 @@ class _Harness:
         async def resolve_agent_async(_project_id: str | None, agent_id: str) -> Any:
             return self.agents[agent_id]
 
-        async def update_session_overrides_async(address: Any, changes: dict[str, Any]) -> Any:
-            self.session_overrides.append((address, dict(changes)))
-
         runtime = SimpleNamespace(
             storage=SimpleNamespace(
                 data_dir=data_dir,
@@ -104,22 +92,21 @@ class _Harness:
                 read_prompt_fragment=self.storage.read_prompt_fragment,
             ),
             agents=SimpleNamespace(
-                list=lambda: [SimpleNamespace(id=agent_id) for agent_id in self.agents],
+                # The roster: the Librarian is never part of it.
+                list=lambda: [
+                    SimpleNamespace(id=agent_id, name=agent.name)
+                    for agent_id, agent in self.agents.items()
+                    if getattr(agent, "builtin", None) is None
+                ],
                 exists=lambda agent_id: agent_id in self.agents,
                 lifecycle_guard=nullcontext,
+                librarian_problem=lambda: self.librarian_problem,
             ),
-            agent_resolver=SimpleNamespace(
-                resolve_agent_async=resolve_agent_async,
-                update_session_overrides_async=update_session_overrides_async,
-            ),
-            tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
+            agent_resolver=SimpleNamespace(resolve_agent_async=resolve_agent_async),
             chat_sessions=SimpleNamespace(create_async=self._create_session, delete=self._delete),
             streaming_chat_loop=SimpleNamespace(start_run=self._start_run),
             chat_run_manager=SimpleNamespace(
                 has_activity_for_agent=lambda agent_id, *, project_id: agent_id in self.busy,
-                has_activity_for_session=lambda agent_id, _session_id, *, project_id: (
-                    agent_id in self.busy
-                ),
             ),
         )
 
@@ -143,13 +130,8 @@ class _Harness:
         )
 
     @staticmethod
-    def agent(*, librarian_enabled: bool = True, **tool_access: Any) -> Any:
-        return SimpleNamespace(
-            workspace="/data/workspace-main",
-            memory_prompt_mode="agent_user",
-            tool_access=ToolAccess(**tool_access),
-            librarian_enabled=librarian_enabled,
-        )
+    def agent(*, name: str = "Main", librarian_enabled: bool = True) -> Any:
+        return SimpleNamespace(name=name, librarian_enabled=librarian_enabled)
 
     def announce(self) -> None:
         self.announced += 1
@@ -160,6 +142,10 @@ class _Harness:
     def state(self, agent_id: str = "main") -> dict[str, Any]:
         path = self.storage.data_dir / "agents" / agent_id / "librarian.json"
         return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
+
+    def title(self, agent_name: str) -> str:
+        """The title of a pass Session the Librarian opens now."""
+        return f"Skills of {agent_name} · {self.now.astimezone().date().isoformat()}"
 
     def write_state(self, agent_id: str, fields: dict[str, Any]) -> None:
         path = self.storage.data_dir / "agents" / agent_id / "librarian.json"
@@ -176,9 +162,8 @@ class _Harness:
 
     async def _create_session(self, agent_id: str, **kwargs: Any) -> Any:
         self.created_sessions.append({"agent_id": agent_id, **kwargs})
-        return SimpleNamespace(
-            id=f"lib-{len(self.created_sessions)}", address=("address", agent_id)
-        )
+        session_id = f"lib-{len(self.created_sessions)}"
+        return SimpleNamespace(id=session_id, address=("address", agent_id, session_id))
 
     def _delete(self, address: Any) -> None:
         self.deleted_sessions.append(address)
@@ -316,36 +301,32 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
 
     [started] = harness.started
     assert started["message"] == librarian_brief(
-        harness.storage, candidates, limit=LIBRARIAN_TOOL_ITERATION_LIMIT
+        harness.storage, candidates, agent_id="main", agent_name="Main"
     )
     # Every unpinned Skill is listed, whoever created it and whether it is shared.
     for listed in ("deploy-web", "deploy-api", "deploy-docs", "deploy-team"):
         assert f"- {listed}\n" in started["message"]
     assert "- deploy-db" not in started["message"]
-    assert {
-        key: started[key]
-        for key in (
-            "agent_id",
-            "session_id",
-            "internal",
-            "tool_restriction",
-            "max_tool_iterations",
-            "run_kind",
-            "contributes_to_agent_activity",
-        )
-    } == {
-        "agent_id": "main",
+    # The Librarian runs it in a new Session of its own, bound to the Agent: its own
+    # Model settings, Tools and Tool-call limit, and its own activity.
+    assert started == {
+        "agent_id": "librarian",
+        "message": started["message"],
         "session_id": "lib-1",
         "internal": True,
-        "tool_restriction": LIBRARIAN_TOOL_RESTRICTION,
-        "max_tool_iterations": 60,
         "run_kind": RunKind.LIBRARIAN,
-        "contributes_to_agent_activity": False,
     }
-    assert harness.created_sessions == [{"agent_id": "main", "run_kind": RunKind.LIBRARIAN}]
-    # Without librarian.model the Run keeps the Agent's own Model settings.
-    assert harness.session_overrides == []
-    assert started["tool_denial_resolver"]("read") == librarian_tool_denial_resolver()("read")
+    assert harness.created_sessions == [
+        {
+            "agent_id": "librarian",
+            "run_kind": RunKind.LIBRARIAN,
+            "metadata": {
+                "skill_agent_id": "main",
+                "auto_title": harness.title("Main"),
+                "auto_title_initialized": True,
+            },
+        }
+    ]
     last_pass = status["last_pass"]
     assert {
         key: last_pass[key]
@@ -367,14 +348,8 @@ async def test_consolidation_runs_the_brief_only_over_changed_candidates(
     # Unchanged candidates are not consolidated again.
     harness.authoring.create(root, "deploy-cli", _document("deploy-cli"), writer=_AGENT)
     harness.on_run = None
-    # librarian.model replaces the Agent's Model and its Model settings in the
-    # pass's own Session only.
-    harness.settings["model"] = "openai/gpt-mini"
     await harness.run_pass()
     assert len(harness.started) == 2
-    assert harness.session_overrides == [
-        (("address", "main"), {"model": "openai/gpt-mini", "model_defaults": True})
-    ]
     status = await harness.run_pass()
     assert len(harness.started) == 2
     assert status["last_pass"]["consolidation"] == "unchanged"
@@ -394,34 +369,62 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
     harness.authoring.create(root, "other-review", _document("other-review"), writer=_REFLECTION)
     harness.now = datetime.now(UTC)
     harness.run_gate = asyncio.Event()
-    harness.agents["limited"] = harness.agent(denied=("skill_manage",))
-    # The Agent's own switch wins over its Tools in the reason status reports.
-    harness.agents["off"] = harness.agent(librarian_enabled=False, denied=("skill",))
+    harness.agents["empty"] = harness.agent(name="Empty")
+    # The Agent's own switch wins over its Skills in the reason status reports.
+    harness.agents["off"] = harness.agent(librarian_enabled=False)
+    harness.agents["second"] = harness.agent(name="Second")
+    harness.authoring.create(
+        harness.home("second"), "old-review", _document("old-review"), writer=_REFLECTION
+    )
+    harness.agents["librarian"] = SimpleNamespace(builtin="librarian", name="Librarian")
 
     await harness.service.run("main")
     status = await harness.service.status("main")
     assert status["running"] is True and status["running_since"] is not None
     with pytest.raises(LibrarianBusyError, match="already running"):
         await harness.service.run("main")
+    # Passes run one at a time.
+    with pytest.raises(LibrarianBusyError, match="pass of Agent main is running"):
+        await harness.service.run("second")
     harness.run_gate.set()
     await asyncio.gather(*(a.task for a in harness.service._active.values() if a.task))
 
     harness.busy.add("main")
-    with pytest.raises(LibrarianBusyError, match="active or queued Run"):
+    with pytest.raises(LibrarianBusyError, match="Agent main has an active or queued Run"):
         await harness.service.run("main")
-    with pytest.raises(LibrarianUnavailableError, match="cannot call skill and skill_manage"):
-        await harness.service.run("limited")
+    # The user talking with the Librarian holds back every pass.
+    harness.busy = {"librarian"}
+    with pytest.raises(LibrarianBusyError, match="The Librarian has an active or queued Run"):
+        await harness.service.run("second")
+    with pytest.raises(LibrarianUnavailableError, match="has no Skills of its own"):
+        await harness.service.run("empty")
     with pytest.raises(LibrarianUnavailableError, match="librarian_enabled is false"):
         await harness.service.run("off")
-    for agent_id, reason in (("limited", "skill_tools_unavailable"), ("off", "agent_disabled")):
+    for agent_id, reason in (("empty", "no_skills"), ("off", "agent_disabled")):
         status = await harness.service.status(agent_id)
         assert (status["available"], status["unscheduled_reason"], status["next_due_at"]) == (
             False,
             reason,
             None,
         )
+    # The Librarian gets no pass of its own.
+    with pytest.raises(LibrarianUnavailableError, match="gets no pass itself"):
+        await harness.service.status("librarian")
     with pytest.raises(AgentNotFoundError):
         await harness.service.run("ghost")
+    # Without the Librarian no pass runs, and status says why.
+    harness.librarian_problem = "agent_id_taken"
+    with pytest.raises(LibrarianUnavailableError, match="one of your Agents uses its id"):
+        await harness.service.run("second")
+    status = await harness.service.status("second")
+    assert (status["available"], status["unscheduled_reason"], status["librarian_problem"]) == (
+        False,
+        "librarian_unavailable",
+        "agent_id_taken",
+    )
+    overview = await harness.service.overview()
+    assert (overview["available"], overview["problem"]) == (False, "agent_id_taken")
+    harness.librarian_problem = None
     harness.busy.clear()
     revisions = len(harness.authoring.history(root))
     harness.now += _LATER
@@ -434,13 +437,24 @@ async def test_run_refuses_clearly_and_changes_nothing(harness: _Harness) -> Non
 
 
 @pytest.mark.asyncio
-async def test_a_pass_that_stops_early_is_recorded_and_only_the_newest_session_stays(
+async def test_a_pass_that_stops_early_is_recorded_and_every_pass_session_stays(
     harness: _Harness,
 ) -> None:
     root = harness.home("main")
     for name in ("deploy-web", "deploy-api"):
         harness.authoring.create(root, name, _document(name), writer=_AGENT)
     harness.now = datetime.now(UTC)
+    # A full history from an earlier vBot: the oldest pass gives way to a new one.
+    old_passes = [
+        {
+            "started_at": format_canonical_timestamp(harness.now - timedelta(days=day)),
+            "finished_at": format_canonical_timestamp(harness.now - timedelta(days=day)),
+            "trigger": "schedule",
+            "consolidation": "disabled",
+        }
+        for day in range(30, 30 + LIBRARIAN_PASS_HISTORY)
+    ]
+    harness.write_state("main", {"last_pass": old_passes[0], "earlier_passes": old_passes[1:]})
 
     def change_web(started: dict[str, Any], run_id: str) -> None:
         writer = SkillWriter(
@@ -450,7 +464,11 @@ async def test_a_pass_that_stops_early_is_recorded_and_only_the_newest_session_s
         harness.authoring.edit(root, "deploy-web", changed, writer=writer)
 
     harness.on_run = change_web
-    await harness.run_pass()
+    status = await harness.run_pass()
+    assert [record["started_at"] for record in status["passes"]] == [
+        status["last_pass"]["started_at"],
+        *(record["started_at"] for record in old_passes[:-1]),
+    ]
 
     # An error stops a pass: it records itself as failed, and the next scheduled
     # pass waits a full interval. The Session of the pass before it goes.
@@ -465,9 +483,6 @@ async def test_a_pass_that_stops_early_is_recorded_and_only_the_newest_session_s
     finished = datetime.fromisoformat(failed["finished_at"])
     assert datetime.fromisoformat(status["next_due_at"]) == finished + timedelta(days=7)
     assert "running_pass" not in harness.state()
-    assert harness.deleted_sessions == [
-        SessionAddress(project_id=None, agent_id="main", session_id="lib-1")
-    ]
 
     # vBot stops while a consolidation Run runs: the running record written
     # before the pass awaited the Run reports the pass as interrupted.
@@ -498,15 +513,41 @@ async def test_a_pass_that_stops_early_is_recorded_and_only_the_newest_session_s
     assert datetime.fromisoformat(status["next_due_at"]) == finished + timedelta(days=7)
     path = harness.storage.data_dir / "agents" / "main" / "librarian.json"
     assert validate_librarian_state_file(path).diagnostics == ()
+    # Every pass keeps its Session, newest first, and the overview lists the passes
+    # of every Agent with the Agent they curated.
+    assert harness.deleted_sessions == []
+    assert [record.get("session_id") for record in status["passes"][:3]] == [
+        "lib-2",
+        None,
+        "lib-1",
+    ]
+    assert len(status["passes"]) == LIBRARIAN_PASS_HISTORY
+    overview = await harness.service.overview()
+    assert (overview["available"], overview["running"]) == (True, None)
+    assert [
+        (record["agent_id"], record["agent_name"], record.get("session_id"))
+        for record in overview["passes"][:3]
+    ] == [("main", "Main", "lib-2"), ("main", "Main", None), ("main", "Main", "lib-1")]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    ("enabled", "librarian_problem"),
+    [
+        pytest.param(True, None, id="scheduled"),
+        pytest.param(False, None, id="schedule-off"),
+        pytest.param(True, "invalid_config", id="librarian-unavailable"),
+    ],
+)
 async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
-    harness: _Harness, monkeypatch: pytest.MonkeyPatch, enabled: bool
+    harness: _Harness,
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: bool,
+    librarian_problem: str | None,
 ) -> None:
     harness.settings["consolidate"] = False
     harness.settings["enabled"] = enabled
+    harness.librarian_problem = librarian_problem
     agent_ids = (
         "broken",
         "due",
@@ -516,15 +557,15 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
         "reviewing",
         "recent",
         "interrupted",
-        "limited",
+        "empty",
         "off",
     )
     for agent_id in agent_ids:
         harness.agents[agent_id] = harness.agent()
-        harness.authoring.create(
-            harness.home(agent_id), "old-review", _document("old-review"), writer=_REFLECTION
-        )
-    harness.agents["limited"] = harness.agent(denied=("skill",))
+        if agent_id != "empty":
+            harness.authoring.create(
+                harness.home(agent_id), "old-review", _document("old-review"), writer=_REFLECTION
+            )
     harness.agents["off"] = harness.agent(librarian_enabled=False)
     del harness.agents["main"]
     harness.busy.add("busy")
@@ -532,7 +573,7 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
     harness.reviewing.add("reviewing")
     # A first pass is due one interval after a check first saw the Agent.
     seen = format_canonical_timestamp(harness.now - timedelta(days=8))
-    for agent_id in ("due", "due-too", "busy", "reviewing", "limited", "off"):
+    for agent_id in ("due", "due-too", "busy", "reviewing", "empty", "off"):
         harness.write_state(agent_id, {"first_seen_at": seen})
     passed = format_canonical_timestamp(harness.now - timedelta(days=1))
     recent = {
@@ -568,7 +609,8 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
         await harness.service.aclose()
 
     assert delays == [FIRST_CHECK_DELAY_SECONDS, CHECK_INTERVAL_SECONDS]
-    if enabled:
+    scheduled = enabled and librarian_problem is None
+    if scheduled:
         for agent_id in ("due", "due-too"):
             assert harness.state(agent_id)["last_pass"]["trigger"] == "schedule"
             assert harness.state(agent_id)["first_seen_at"] == seen
@@ -584,16 +626,18 @@ async def test_schedule_passes_due_idle_and_eligible_agents_once_an_hour(
         assert (status["available"], status["unscheduled_reason"]) == (True, None)
     else:
         assert not (harness.storage.data_dir / "agents" / "new" / "librarian.json").exists()
-        # A pass started by hand still runs while scheduled passes are off.
+        # A pass started by hand still runs while scheduled passes are off, but none
+        # runs without the Librarian.
         status = await harness.service.status("new")
         assert (status["available"], status["unscheduled_reason"], status["next_due_at"]) == (
-            True,
-            "schedule_disabled",
-            None,
+            (True, "schedule_disabled", None)
+            if librarian_problem is None
+            else (False, "librarian_unavailable", None)
         )
-    assert harness.changed == (["due", "due-too"] if enabled else [])
-    kept = ("broken", "new", "busy", "reviewing", "recent", "interrupted", "limited", "off")
-    for agent_id in (*kept, *(() if enabled else ("due", "due-too"))):
+    assert harness.changed == (["due", "due-too"] if scheduled else [])
+    kept = ("broken", "new", "busy", "reviewing", "recent", "interrupted", "off")
+    for agent_id in (*kept, *(() if scheduled else ("due", "due-too"))):
         assert "old-review" in harness.authoring.records(harness.home(agent_id))
+    assert "last_pass" not in harness.state("empty")
     assert "last_pass" not in harness.state("busy")
     assert "last_pass" not in harness.state("reviewing")

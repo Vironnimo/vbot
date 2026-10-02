@@ -125,6 +125,22 @@ def is_librarian(agent: object) -> bool:
     return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN
 
 
+def librarian_problem_message(problem: LibrarianProblem) -> str:
+    """Say why the Librarian is unavailable and what the user can do about it."""
+    if problem == "agent_id_taken":
+        return (
+            f"The Librarian is unavailable: one of your Agents uses its id {LIBRARIAN_AGENT_ID}. "
+            f"Rename that Agent (vbot agent rename {LIBRARIAN_AGENT_ID} <new-id>) and restart "
+            "vBot to create the Librarian."
+        )
+    if problem == "invalid_config":
+        return (
+            f"The Librarian is unavailable: agents/{LIBRARIAN_AGENT_ID}/agent.json cannot be "
+            "loaded. Fix that file (vbot doctor names the problem) and restart vBot."
+        )
+    return "The Librarian is unavailable: it does not exist yet. Restart vBot to create it."
+
+
 def skill_subject_id(agent: Any) -> str:
     """Return the id of the Agent whose Skills ``agent`` (any resolved Agent) works on.
 

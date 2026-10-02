@@ -95,33 +95,23 @@ class RuntimeAgent(Protocol):
 
 
 AGENT_OVERRIDE_FIELDS = ("model", "thinking_effort", "temperature")
-# The Session-only switch vBot sets for its own Sessions, never a user or Agent.
-MODEL_DEFAULTS_FIELD = "model_defaults"
-_STORED_OVERRIDE_FIELDS = (*AGENT_OVERRIDE_FIELDS, MODEL_DEFAULTS_FIELD)
 
 
 @dataclass(frozen=True)
 class AgentOverrides:
     """The Agent Run settings one Session replaces for every Run it executes.
 
-    ``None`` keeps the Agent's resolved value. ``model_defaults`` runs the
-    Session's Model on its own defaults: the Agent's temperature, thinking
-    effort and fallback Models do not apply, while an override of temperature
-    or thinking effort still does. Only vBot sets it, for a Session whose Model
-    is a dedicated binding (a Librarian pass with ``librarian.model``); the
-    public ``AGENT_OVERRIDE_FIELDS`` leave it out. A Session stores these values
-    as one object in its metadata (``agent_overrides``); :meth:`from_stored`
-    reads it, ignoring fields a newer vBot may have added.
+    ``None`` keeps the Agent's resolved value. A Session stores these values as
+    one object in its metadata (``agent_overrides``); :meth:`from_stored` reads
+    it, ignoring fields it does not know: those a newer vBot may have added and
+    ``model_defaults``, which an earlier vBot set on Librarian pass Sessions.
     """
 
     model: str | None = None
     thinking_effort: str | None = None
     temperature: float | None = None
-    model_defaults: bool = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.model_defaults, bool):
-            raise ValueError("model_defaults must be a boolean")
         if self.model is not None and (not isinstance(self.model, str) or not self.model):
             raise ValueError("model must be a non-empty string")
         if self.thinking_effort is not None:
@@ -146,42 +136,24 @@ class AgentOverrides:
             return cls()
         if not isinstance(value, dict):
             raise ValueError("Session agent_overrides must be an object")
-        return cls(
-            **{name: value.get(name) for name in AGENT_OVERRIDE_FIELDS},
-            model_defaults=value.get(MODEL_DEFAULTS_FIELD, False),
-        )
+        return cls(**{name: value.get(name) for name in AGENT_OVERRIDE_FIELDS})
 
     @property
     def is_empty(self) -> bool:
         """Return whether this value replaces no Agent setting."""
-        return not self.model_defaults and all(
-            getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS
-        )
+        return all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
 
     def as_dict(self) -> dict[str, Any]:
         """Return only the replaced settings as stored, keyed by field name."""
-        stored: dict[str, Any] = {
+        return {
             name: getattr(self, name)
             for name in AGENT_OVERRIDE_FIELDS
             if getattr(self, name) is not None
         }
-        if self.model_defaults:
-            stored[MODEL_DEFAULTS_FIELD] = True
-        return stored
 
     def agent_changes(self) -> dict[str, Any]:
         """Return the runtime Agent fields these overrides replace, keyed by field name."""
-        changes: dict[str, Any] = (
-            {"temperature": None, "thinking_effort": None, "fallback_models": []}
-            if self.model_defaults
-            else {}
-        )
-        changes.update(
-            (name, getattr(self, name))
-            for name in AGENT_OVERRIDE_FIELDS
-            if getattr(self, name) is not None
-        )
-        return changes
+        return self.as_dict()
 
 
 @dataclass(frozen=True)

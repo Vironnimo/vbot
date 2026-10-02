@@ -53,11 +53,12 @@ def create(
     *,
     generate_id: bool = False,
     run_kind: str | None = None,
+    metadata: JsonObject | None = None,
 ) -> SessionAddress:
     """Create a live Session; with *generate_id*, allocate a fresh id in its scope.
 
-    A *run_kind* labels the Session from its first write, so a background
-    Session is classified before any reader can list it.
+    A *run_kind* labels the Session and *metadata* sets facade values from its
+    first write, so no reader sees the Session without them.
     """
     timestamp = (
         utc_now_timestamp()
@@ -72,6 +73,9 @@ def create(
         raise ChatSessionError(f"session already exists: {address.session_id}") from exc
     if run_kind is not None:
         record_run_kind_by_key(connection, session_key, run_kind)
+    if metadata:
+        initial = dict(metadata)
+        mutate_metadata(connection, address, lambda current: current.update(initial))
     return address
 
 

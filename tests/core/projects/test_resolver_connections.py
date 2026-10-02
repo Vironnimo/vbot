@@ -172,45 +172,6 @@ def test_session_overrides_persist_in_the_session_and_never_in_the_agent(
         assert resolved_elsewhere.thinking_effort == "low"
 
 
-def test_model_defaults_run_the_session_model_without_the_agents_run_settings(
-    agents: AgentStore, projects: ProjectStore
-) -> None:
-    agents.create(
-        "identity",
-        model="openai/gpt-5.2",
-        fallback_models=["openai/gpt-mini"],
-        thinking_effort="low",
-        temperature=0.2,
-    )
-    resolver = _resolver(agents, projects, _openai_configured())
-    sessions = agents._session_manager()
-    session = sessions.create("identity")
-    address = SessionAddress(None, "identity", session.id)
-
-    resolver.update_session_overrides(address, {"model": "openai/gpt-mini", "model_defaults": True})
-
-    # The Model runs on its own defaults: no temperature, thinking effort or
-    # fallback Models of the Agent.
-    resolved = resolver.resolve_agent(None, "identity", session_id=session.id)
-    run_settings = ("model", "fallback_models", "temperature", "thinking_effort")
-    assert [getattr(resolved, name) for name in run_settings] == ["openai/gpt-mini", [], None, None]
-    assert sessions.metadata_value(address, "agent_overrides") == {
-        "model": "openai/gpt-mini",
-        "model_defaults": True,
-    }
-    effective = resolver.effective_config(None, "identity", session_id=session.id)
-    assert {name: effective[name]["value"] for name in run_settings} == {
-        "model": "openai/gpt-mini",
-        "fallback_models": [],
-        "temperature": None,
-        "thinking_effort": None,
-    }
-    # An explicit override still applies.
-    resolver.update_session_overrides(address, {"thinking_effort": "high"})
-    assert resolver.resolve_agent(None, "identity", session_id=session.id).thinking_effort == "high"
-    assert agents.get("identity").fallback_models == ["openai/gpt-mini"]
-
-
 def test_a_librarian_session_runs_on_the_skills_of_its_bound_agent(
     agents: AgentStore, projects: ProjectStore
 ) -> None:
