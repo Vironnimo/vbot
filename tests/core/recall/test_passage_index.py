@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -685,20 +685,23 @@ async def test_same_session_uuid_in_two_scopes_stays_distinct(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def literal_backend(tmp_path: Path, sessions: ChatSessionManager) -> HybridRecallBackend:
+@pytest.fixture
+def recall(tmp_path: Path, sessions: ChatSessionManager) -> Iterator[HybridRecallBackend]:
     """Hybrid without an embedding model: only its literal Passage arm ranks."""
-    return HybridRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+    backend = HybridRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
+    yield backend
+    backend.close()
 
 
 async def test_literal_search_returns_multiple_source_faithful_passages(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:
     original = "needle  spacing\n" * 250
     sessions.create("coder", session_id="passages").append(
         ChatMessage.user(original, timestamp=timestamp(1))
     )
 
-    page = await literal_backend(tmp_path, sessions).search_page(request("needle", limit=20))
+    page = await recall.search_page(request("needle", limit=20))
 
     assert page.result_type == "passage"
     assert len(page.hits) > 1
@@ -717,8 +720,8 @@ async def test_literal_search_returns_multiple_source_faithful_passages(
     ids=["phrase", "phrase-order", "any-term"],
 )
 async def test_literal_search_honours_the_match_mode(
-    tmp_path: Path,
     sessions: ChatSessionManager,
+    recall: HybridRecallBackend,
     query: str,
     match_mode: str,
     expected: set[str],
@@ -728,20 +731,17 @@ async def test_literal_search_honours_the_match_mode(
             ChatMessage.user(text, timestamp=timestamp(1))
         )
 
-    page = await literal_backend(tmp_path, sessions).search_page(
-        request(query, match_mode=match_mode)
-    )
+    page = await recall.search_page(request(query, match_mode=match_mode))
 
     assert {hit.session_id for hit in page.hits} == expected
 
 
 async def test_literal_time_filters_include_the_bounds_as_instants(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:
     sessions.create("coder", session_id="bounds").append(
         ChatMessage.user("bounded needle", timestamp=timestamp(1))
     )
-    recall = literal_backend(tmp_path, sessions)
     instant = timestamp(1)
     # Another offset names the same instant; the bound compares as canonical text.
     local = instant.astimezone(timezone(timedelta(hours=2)))
@@ -757,7 +757,7 @@ async def test_literal_time_filters_include_the_bounds_as_instants(
 
 
 async def test_short_literal_terms_use_the_token_index_without_loading_histories(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager, recall: HybridRecallBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     for number in range(6):
         sessions.create("coder", session_id=f"noise-{number}").append(
@@ -769,7 +769,6 @@ async def test_short_literal_terms_use_the_token_index_without_loading_histories
                 f"We compared C# generics with Java, part {number}", timestamp=timestamp(2)
             )
         )
-    recall = literal_backend(tmp_path, sessions)
     await recall.search_page(request("generics"))
 
     def reject_load(*_args: object) -> None:
@@ -802,7 +801,7 @@ def _stored_passages(path: Path) -> dict[str, int]:
 
 
 async def test_search_refresh_rewrites_only_changed_passages(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:
     session = sessions.create("coder", session_id="growing")
     session.append_many(
@@ -811,7 +810,6 @@ async def test_search_refresh_rewrites_only_changed_passages(
             for number in range(4)
         ]
     )
-    recall = literal_backend(tmp_path, sessions)
     await recall.search_page(request("needle"))
     before = _stored_passages(recall.index.path)
 
@@ -833,14 +831,13 @@ async def test_search_refresh_rewrites_only_changed_passages(
 
 
 async def test_literal_search_reports_shared_fork_history_once(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:
     source = sessions.create("coder", session_id="source")
     for day in range(1, 4):
         source.append(ChatMessage.user(f"needle story {day} " * 120, timestamp=timestamp(day)))
     older = await sessions.fork(source.address)
     newer = await sessions.fork(source.address)
-    recall = literal_backend(tmp_path, sessions)
 
     complete = await recall.search_page(request("needle", limit=20))
     without_origin = await recall.search_page(
@@ -879,7 +876,7 @@ async def test_literal_search_reports_shared_fork_history_once(
 
 
 async def test_literal_search_attributes_own_fork_content_to_the_fork(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, recall: HybridRecallBackend
 ) -> None:
     source = sessions.create("coder", session_id="source")
     source.append(ChatMessage.user("shared needle " * 150, timestamp=timestamp(1)))
@@ -887,7 +884,6 @@ async def test_literal_search_attributes_own_fork_content_to_the_fork(
     await asyncio.to_thread(
         fork.append, ChatMessage.user("fork needle only " * 150, timestamp=timestamp(2))
     )
-    recall = literal_backend(tmp_path, sessions)
 
     page = await recall.search_page(request("needle", limit=20))
 
@@ -902,15 +898,14 @@ async def test_literal_search_attributes_own_fork_content_to_the_fork(
 
 @pytest.mark.parametrize("persistent", [False, True], ids=["once", "persistent"])
 async def test_index_damaged_during_a_search_is_rebuilt_once(
-    tmp_path: Path,
     sessions: ChatSessionManager,
+    recall: HybridRecallBackend,
     monkeypatch: pytest.MonkeyPatch,
     persistent: bool,
 ) -> None:
     sessions.create("coder", session_id="damaged").append(
         ChatMessage.user("needle", timestamp=timestamp(1))
     )
-    recall = literal_backend(tmp_path, sessions)
     await recall.search_page(request("needle"))
     old_identity = _identity(recall.index.path)
     refresh = PassageCatalog.refresh
@@ -937,14 +932,13 @@ async def test_index_damaged_during_a_search_is_rebuilt_once(
 
 
 async def test_busy_index_fails_the_search_without_discarding_it(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager, recall: HybridRecallBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Neither the SQLite busy timeout nor the write patience is waited out in full.
     monkeypatch.setattr("core.database._runtime.BUSY_TIMEOUT_MS", 0)
     monkeypatch.setattr("core.recall._passage_catalog.WRITE_PATIENCE_S", 0.05)
     session = sessions.create("coder", session_id="busy")
     session.append(ChatMessage.user("needle one", timestamp=timestamp(1)))
-    recall = literal_backend(tmp_path, sessions)
     await recall.search_page(request("needle"))
     identity = _identity(recall.index.path)
     await asyncio.to_thread(session.append, ChatMessage.user("needle two", timestamp=timestamp(2)))
