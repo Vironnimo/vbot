@@ -390,9 +390,11 @@ class LiveHotkeyController:
     """Persisted Live voice hotkey preference plus its live registration.
 
     Registration is only active between :meth:`start` (after the window is
-    shown) and :meth:`stop` (on exit). Every public method is thread-safe and
-    idempotent; a failed registration keeps the saved preference and reports
-    ``error_code`` so the user can choose another combination.
+    shown) and :meth:`stop` (on exit). :meth:`stop` is final: the window's start
+    callback can still reach :meth:`start` after the Desktop began shutting down,
+    and must not register the global hotkey again. Every public method is
+    thread-safe and idempotent; a failed registration keeps the saved preference
+    and reports ``error_code`` so the user can choose another combination.
     """
 
     def __init__(
@@ -409,6 +411,7 @@ class LiveHotkeyController:
         self._api_factory: Callable[[], HotkeyApi] = api_factory or _Win32HotkeyApi
         self._lock = threading.RLock()
         self._active = False
+        self._stopped = False
         self._thread: _HotkeyThread | None = None
         self._error_code: str | None = None
 
@@ -449,16 +452,17 @@ class LiveHotkeyController:
         """Begin honoring the saved preference (register it when enabled)."""
 
         with self._lock:
-            if self._active:
+            if self._active or self._stopped:
                 return
             self._active = True
             self._apply(read_live_hotkey_settings(self._settings_path))
 
     def stop(self) -> None:
-        """Unregister and stop the registration thread."""
+        """Unregister and stop the registration thread for good."""
 
         with self._lock:
             self._active = False
+            self._stopped = True
             self._release()
 
     def _apply(self, setting: Mapping[str, Any]) -> None:

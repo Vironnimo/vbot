@@ -151,7 +151,9 @@ def test_default_status_is_disabled_ctrl_alt_space(tmp_path: Path) -> None:
     controller.stop()
 
 
-def test_enabling_before_start_persists_and_registers_on_its_own_thread(tmp_path: Path) -> None:
+def test_enabling_before_start_persists_and_registers_on_its_own_thread_until_stopped(
+    tmp_path: Path,
+) -> None:
     controller, created = _controller(tmp_path)
 
     status = controller.update({"enabled": True})
@@ -169,6 +171,10 @@ def test_enabling_before_start_persists_and_registers_on_its_own_thread(tmp_path
     assert api.thread_ids["register"] != threading.get_native_id()
     stored = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert stored["live_voice"]["hotkey"]["enabled"] is True
+    # A start that arrives during shutdown (the shown callback outlasting the
+    # window) never registers the hotkey again.
+    controller.start()
+    assert len(created) == 1
 
 
 def test_letters_follow_the_active_keyboard_layout(tmp_path: Path) -> None:
