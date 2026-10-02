@@ -10,6 +10,7 @@ import socket
 import sys
 import warnings
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import override
 from urllib.parse import urlparse
@@ -26,13 +27,14 @@ from mcp.server.subscriptions import InMemorySubscriptionBus, ListenHandler, Res
 from mcp.shared.exceptions import MCPDeprecationWarning
 
 from core.extensions.operations import PENDING_INPUTS_RESOURCE
+from core.utils.timestamps import parse_canonical_timestamp
 from resources.extensions.mcp import _tasks
 from resources.extensions.mcp import client as mcp_client
 from resources.extensions.mcp._callbacks import sampling_messages
 from resources.extensions.mcp._network import DestinationGuard
 from resources.extensions.mcp.client import ConnectionRunner, InvocationNotSentError
 from resources.extensions.mcp.config import validate_connection
-from resources.extensions.mcp.interactions import InputRequests
+from resources.extensions.mcp.interactions import INPUT_REQUEST_TTL_SECONDS, InputRequests
 from tests.resources.extensions.mcp.mcp_test_support import (
     StreamServer,
     context,
@@ -796,6 +798,8 @@ async def test_input_response_is_validated_and_not_retained(host, retired):
     )
     await asyncio.sleep(0)
     pending = inputs.list()[0]
+    remaining = parse_canonical_timestamp(pending["expires_at"]) - datetime.now(UTC)
+    assert INPUT_REQUEST_TTL_SECONDS - 10 <= remaining.total_seconds() <= INPUT_REQUEST_TTL_SECONDS
     with pytest.raises(ValueError):
         inputs.respond(pending["id"], {"action": "accept", "content": {}})
     inputs.respond(pending["id"], {"action": "accept", "content": {"name": "answer"}})
@@ -865,13 +869,18 @@ async def test_a_call_waits_for_its_connection_only_until_the_timeout(
 @pytest.mark.asyncio
 async def test_unanswered_server_requests_expire_but_a_sign_in_keeps_its_own_deadline(host):
     inputs = InputRequests(ttl=0)
-    sign_in = asyncio.create_task(inputs.request("example", "oauth", {"url": "test-owned"}))
+    sign_in = asyncio.create_task(
+        inputs.request("example", "oauth", {"url": "test-owned"}, expires_in=600)
+    )
     try:
         elicited = await inputs.request("example", "elicitation", {"message": "test-owned"})
         sampled = await inputs.request("example", "sampling", {"message": "test-owned"})
 
         assert elicited == sampled == {"action": "cancel"}
         assert [item["kind"] for item in inputs.list()] == ["oauth"]
+        # Listed with the deadline its caller keeps.
+        remaining = parse_canonical_timestamp(inputs.list()[0]["expires_at"]) - datetime.now(UTC)
+        assert 590 <= remaining.total_seconds() <= 600
     finally:
         sign_in.cancel()
         await asyncio.gather(sign_in, return_exceptions=True)

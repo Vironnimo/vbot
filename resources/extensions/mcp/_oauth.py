@@ -411,7 +411,12 @@ class ConnectionOAuth:
         browser = redirects.expect(self._state) if redirects is not None and self._state else None
         # Started eagerly: the pending input exists once the sign-in waits.
         pasted = asyncio.create_task(
-            self._inputs.request(self._config["id"], "oauth", {"url": self._authorization_url}),
+            self._inputs.request(
+                self._config["id"],
+                "oauth",
+                {"url": self._authorization_url},
+                expires_in=SIGN_IN_TIMEOUT_SECONDS,
+            ),
             eager_start=True,
         )
         waiting: set[asyncio.Future[Any]] = {pasted} if browser is None else {pasted, browser}
