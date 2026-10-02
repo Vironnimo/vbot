@@ -368,8 +368,8 @@ SKILL_HELP = {
     "archived": "List the deleted skills kept in an editable scope's archive",
     "restore": "Restore an archived skill under its name",
     "purge": "Permanently delete one archived skill",
-    "pin": "Pin a skill so background reviews leave it unchanged",
-    "unpin": "Unpin a skill so background reviews may change it again",
+    "pin": "Pin a skill so reflection and Librarian passes leave it unchanged",
+    "unpin": "Unpin a skill so reflection and Librarian passes may change it again",
 }
 
 

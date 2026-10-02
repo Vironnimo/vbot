@@ -23,6 +23,7 @@ def _valid_agent_data() -> dict[str, Any]:
         "allowed_skills": ["*"],
         "excluded_skills": ["pdf"],
         "custom_system_prompt_enabled": False,
+        "librarian_enabled": False,
         "created_at": "2026-05-03T12:00:00Z",
         "updated_at": "2026-05-03T12:00:00Z",
     }
@@ -85,6 +86,7 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
             {"custom_system_prompt_enabled": "yes"},
             ("$.custom_system_prompt_enabled", "must be a boolean"),
         ),
+        ({"librarian_enabled": "no"}, ("$.librarian_enabled", "must be a boolean")),
         (
             {"memory_prompt_mode": "sometimes"},
             ("$.memory_prompt_mode", "must be one of: agent, agent_user, off"),
@@ -127,6 +129,7 @@ def test_validate_agent_data_accepts_a_document_that_names_only_its_id(
         "subagent-target",
         "bash-env-key",
         "custom-prompt-toggle",
+        "librarian-switch",
         "memory-mode",
         "non-finite-temperature",
         "temperature-range",

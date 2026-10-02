@@ -95,12 +95,14 @@ REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
     "skill_model_step_interval": 10,
 }
 
-# The Librarian's scheduled passes over each Agent's own Skills.
+# The Librarian's scheduled passes over each Agent's own Skills. An empty
+# ``model`` runs consolidation on each Agent's own Model.
 LIBRARIAN_SETTING_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "interval_days": 7,
     "archive_after_days": 90,
     "consolidate": True,
+    "model": "",
 }
 
 
@@ -517,6 +519,12 @@ def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
         ):
             raise StorageError(f"Librarian setting {key} {LIBRARIAN_DAYS_RULE}")
         normalized[key] = value
+    model = section.get("model")
+    if model is None:
+        model = LIBRARIAN_SETTING_DEFAULTS["model"]
+    elif not isinstance(model, str):
+        raise StorageError("Librarian setting model must be a string")
+    normalized["model"] = model.strip()
     return normalized
 
 

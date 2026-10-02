@@ -156,7 +156,7 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     # Skill nor the pinned one.
     brief = adapter.requests[3]["messages"][-1]["content"]
     assert "- sales-report-quarterly\n  Description:" in brief
-    assert "Created by: a background review of a conversation" in brief
+    assert "Created by: a background reflection on a conversation" in brief
     assert "- sales-report-weekly\n" not in brief
     assert "- sales-report-monthly\n" not in brief
     assert [(row["passed"], row["effect_passed"]) for row in report["pass_rates"]] == [

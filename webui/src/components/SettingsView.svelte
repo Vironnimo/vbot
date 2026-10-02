@@ -978,6 +978,7 @@
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
+      {modelsRefreshToken}
     />
   {:else if panelId === 'notifications'}
     <SettingsNotificationsPanel

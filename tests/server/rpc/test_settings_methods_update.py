@@ -110,6 +110,7 @@ def _add_tts_model(state: SimpleNamespace) -> None:
             ),
             context_window=None,
             max_output_tokens=None,
+            connections=("api-key",),
         )
     )
     state.runtime.model_tasks = TaskModelService(
@@ -176,7 +177,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         compaction=_COMPACTION,
         defaults={"agent": {"model": "openai/gpt-4.1-mini"}},
         reflection={"enabled": True, "memory_turn_interval": 5},
-        librarian={"archive_after_days": 30},
+        librarian={"archive_after_days": 30, "model": "openai/gpt-4.1-mini::api-key"},
         web_search={"provider": "searxng", "searxng": {"base_url": "http://localhost:9999"}},
         session_titles={"enabled": True, "model": "openai/gpt-4.1-mini::api-key"},
         notifications={"run_completed": False},
@@ -215,6 +216,7 @@ async def test_settings_update_persists_sections_and_returns_the_full_settings_p
         "interval_days": 7,
         "archive_after_days": 30,
         "consolidate": True,
+        "model": "openai/gpt-4.1-mini::api-key",
     }
     assert {key: result["web_search"][key] for key in ("provider", "default_count", "searxng")} == {
         "provider": "searxng",
@@ -622,6 +624,12 @@ _TTS_BINDING = {"target": "openai/gpt-4o-mini-tts::api-key", "options": {"voice"
             "settings.patch",
             _patch(_set('model_tasks["text_to_speech"]', _TTS_BINDING)),
             "must be one of: alloy, echo",
+        ),
+        # A Model binding pinned to a Connection its Model does not allow.
+        (
+            "settings.patch",
+            _patch(_set("librarian.model", "openai/gpt-4o-mini-tts::subscription")),
+            "params.librarian.model: model openai/gpt-4o-mini-tts is not available",
         ),
         # Secrets never go through settings; the error names the safe command.
         (

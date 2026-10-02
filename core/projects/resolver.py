@@ -32,6 +32,7 @@ from core.projects._resolution_values import (
 )
 from core.projects._runtime_agent import (
     AGENT_OVERRIDE_FIELDS,
+    MODEL_DEFAULTS_FIELD,
     AgentOverrides,
     AgentResolutionError,
     ConfigAgent,
@@ -66,6 +67,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AGENT_OVERRIDE_FIELDS",
+    "MODEL_DEFAULTS_FIELD",
     "AgentOverrides",
     "AgentResolutionError",
     "AgentResolver",
@@ -348,7 +350,7 @@ class AgentResolver:
         vBot added survive. Every value is validated first, a Model also for
         usability, so an invalid change writes nothing.
         """
-        unknown = sorted(set(changes) - set(AGENT_OVERRIDE_FIELDS))
+        unknown = sorted(set(changes) - {*AGENT_OVERRIDE_FIELDS, MODEL_DEFAULTS_FIELD})
         if unknown:
             raise ValueError("unknown Agent override: " + ", ".join(unknown))
         requested = AgentOverrides(
@@ -438,7 +440,7 @@ class AgentResolver:
         if overrides.is_empty:
             return agent
 
-        changes = overrides.as_dict()
+        changes = overrides.agent_changes()
         if overrides.model is not None:
             self._model_checker.require_configured(overrides.model)
         if isinstance(agent, ConfigAgent):
@@ -533,8 +535,9 @@ class AgentResolver:
             effective = self._config_effective_config(project_id, agent_id)
         if session_id is not None:
             overrides = self.session_overrides(_session_address(project_id, agent_id, session_id))
-            for name, value in overrides.as_dict().items():
-                effective[name] = {"value": value, "source": "session"}
+            for name, value in overrides.agent_changes().items():
+                if name in effective:
+                    effective[name] = {"value": value, "source": "session"}
         return effective
 
     def effective_tools_for_member(self, project: Project, member: ScannedAgent) -> dict[str, Any]:

@@ -16,6 +16,7 @@ from tests.core.chat.chat_loop_support import (
     StubProviderCredentials,
     StubRuntime,
     build_chat_loop,
+    last_run,
     session_address,
 )
 
@@ -129,12 +130,19 @@ async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
             {"content": "Overridden", "tool_calls": None},
             {"content": "Overridden again", "tool_calls": None},
             {"content": "Configured", "tool_calls": None},
+            {"content": "Model defaults", "tool_calls": None},
         ]
     )
     runtime: Any = StubRuntime(data_dir=tmp_path, agent=agent, adapter=adapter)
     runtime.agent_resolver.update_session_overrides(
         session_address("coder", "session-one"),
         {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 0.7},
+    )
+    # A dedicated binding (a Librarian pass with librarian.model) runs its Model
+    # on that Model's own defaults.
+    runtime.agent_resolver.update_session_overrides(
+        session_address("coder", "session-three"),
+        {"model": "openai/gpt-mini", "model_defaults": True},
     )
     loop = build_chat_loop(runtime)
 
@@ -144,6 +152,7 @@ async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
     )
     await run.wait()
     await loop.send("coder", "Elsewhere", session_id="session-two")
+    answer = await loop.send("coder", "Maintain", session_id="session-three")
 
     overridden = [
         (
@@ -157,7 +166,10 @@ async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
         ("gpt-mini", "high", 0.7),
         ("gpt-mini", "high", 0.7),
         ("gpt-5.2", "low", 0.1),
+        ("gpt-mini", None, None),
     ]
+    # Usage belongs to the Model that answered.
+    assert answer.model == last_run(runtime, "session-three").model == "openai/gpt-mini"
 
 
 @pytest.mark.asyncio

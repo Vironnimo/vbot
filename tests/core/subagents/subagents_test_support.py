@@ -238,7 +238,7 @@ class FakeAgentResolver:
         overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
         if overrides.model is not None:
             self.models.require_configured(overrides.model)
-        return SimpleNamespace(**{**vars(agent), **overrides.as_dict()})
+        return SimpleNamespace(**{**vars(agent), **overrides.agent_changes()})
 
     async def require_model_configured_async(self, model: str) -> None:
         self.models.require_configured(model)

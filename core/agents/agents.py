@@ -59,6 +59,7 @@ from core.agents._config import (
 )
 from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+    DEFAULT_LIBRARIAN_ENABLED,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
@@ -245,6 +246,7 @@ class AgentStore:
         tools: Mapping[str, Any] | None = None,
         custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
         compaction_policy: dict[str, Any] | None = None,
+        librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
     ) -> Agent:
         """Create and persist a new Agent, initial Session, and Workspace."""
         with self._snapshot_barrier.compound_mutation(), self._change():
@@ -272,6 +274,9 @@ class AgentStore:
             validated_tools = _normalize_agent_tools(tools)
             validated_custom_system_prompt_enabled = _validate_bool_field(
                 "custom_system_prompt_enabled", custom_system_prompt_enabled
+            )
+            validated_librarian_enabled = _validate_bool_field(
+                "librarian_enabled", librarian_enabled
             )
             validated_compaction_policy = (
                 normalize_compaction_policy(compaction_policy)
@@ -310,6 +315,7 @@ class AgentStore:
                 tools=validated_tools,
                 custom_system_prompt_enabled=validated_custom_system_prompt_enabled,
                 compaction_policy=validated_compaction_policy,
+                librarian_enabled=validated_librarian_enabled,
                 current_session_id=session.id,
                 created_at=now,
                 updated_at=now,
@@ -639,10 +645,9 @@ class AgentStore:
                 changes["excluded_skills"] = _validate_excluded_skills(changes["excluded_skills"])
             if "tools" in changes:
                 changes["tools"] = _normalize_agent_tools(changes["tools"])
-            if "custom_system_prompt_enabled" in changes:
-                changes["custom_system_prompt_enabled"] = _validate_bool_field(
-                    "custom_system_prompt_enabled", changes["custom_system_prompt_enabled"]
-                )
+            for bool_field in ("custom_system_prompt_enabled", "librarian_enabled"):
+                if bool_field in changes:
+                    changes[bool_field] = _validate_bool_field(bool_field, changes[bool_field])
             if "compaction_policy" in changes:
                 policy = changes["compaction_policy"]
                 changes["compaction_policy"] = (

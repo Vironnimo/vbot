@@ -110,6 +110,8 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["memory_prompt_mode"] = args.memory_prompt_mode
     if args.custom_system_prompt is not None:
         changes["custom_system_prompt_enabled"] = args.custom_system_prompt == "true"
+    if args.librarian is not None:
+        changes["librarian_enabled"] = args.librarian == "true"
     if (
         args.tool_access_mode is not None
         or args.tool_allow is not None

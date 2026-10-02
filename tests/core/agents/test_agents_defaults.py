@@ -4,6 +4,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.agents import AgentStore
 from core.sessions import SessionAddress
 from tests.core.agents.agents_test_support import persisted, rewrite
@@ -89,17 +91,23 @@ def test_missing_session_pointer_and_workspace_are_repaired_and_persisted_on_loa
     assert data["workspace"] == "agents/legacy/workspace"
 
 
-def test_missing_workspace_directory_and_prompt_toggle_load_without_a_rewrite(
-    store: AgentStore,
+@pytest.mark.parametrize("librarian_switch", ["missing", "null"])
+def test_missing_workspace_directory_and_switches_load_without_a_rewrite(
+    store: AgentStore, librarian_switch: str
 ) -> None:
     agent = store.create("legacy", "Legacy Agent")
     workspace_path = Path(agent.workspace)
     shutil.rmtree(workspace_path)
-    rewrite(store, "legacy", "custom_system_prompt_enabled")
+    if librarian_switch == "missing":
+        rewrite(store, "legacy", "custom_system_prompt_enabled", "librarian_enabled")
+    else:
+        rewrite(store, "legacy", "custom_system_prompt_enabled", librarian_enabled=None)
 
     loaded = store.get("legacy")
 
     assert loaded.workspace == agent.workspace
     assert (workspace_path / "SOUL.md").exists()
     assert loaded.custom_system_prompt_enabled is False
+    # An agent.json from before the Librarian switch keeps the Librarian on.
+    assert loaded.librarian_enabled is True
     assert "custom_system_prompt_enabled" not in persisted(store, "legacy")

@@ -15,6 +15,8 @@ from core.tools.availability import (
 )
 
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
+# Librarian passes curate an Agent's own Skills unless its switch is off.
+DEFAULT_LIBRARIAN_ENABLED = True
 
 
 class AgentError(ValueError):
@@ -85,6 +87,9 @@ class Agent:
     custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED
     memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE
     compaction_policy: dict[str, Any] | None = None
+    # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
+    # still switches scheduled passes off for every Agent.
+    librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,7 @@
 <script>
   import { t } from '$lib/i18n.js';
   import Button from '../ui/Button.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import Toggle from '../ui/Toggle.svelte';
   import CompactionPolicyEditor from '../compaction/CompactionPolicyEditor.svelte';
   import {
@@ -600,6 +601,28 @@
             </div>
           {/if}
         {/if}
+      </div>
+
+      <div class="s-group">
+        <div class="s-row s-row--compact">
+          <div class="s-row-info">
+            <div class="s-row-label">
+              {t('agents.form.librarian')}
+              <InfoHint text={t('agents.form.librarianHelp')} />
+            </div>
+            <div class="s-row-desc">
+              {t('agents.form.librarianDescription')}
+            </div>
+          </div>
+          <div class="s-row-control">
+            <Toggle
+              class="agents-view__librarian-toggle"
+              checked={formValues.librarian_enabled !== false}
+              ariaLabel={t('agents.form.librarian')}
+              onChange={(next) => (formValues.librarian_enabled = next)}
+            />
+          </div>
+        </div>
       </div>
 
       <div class="s-group agents-view__compaction-group">

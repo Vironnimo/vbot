@@ -5,7 +5,10 @@
   // into each Skill's history, one action that reverts them together, and
   // Run now. It reads `librarian.status` whenever the inventory reloads; the
   // server announces the start and end of a pass as a Skills change, which
-  // reloads the inventory.
+  // reloads the inventory. An Agent without scheduled passes shows the one
+  // reason the status names: maintenance is off in Settings, off for this
+  // Agent, or the Agent cannot use the skill and skill_manage Tools; the last
+  // two also block Run now.
   import { onDestroy, untrack } from 'svelte';
   import { librarianStatus, runLibrarian } from '$lib/api.js';
   import { t } from '$lib/i18n.js';
@@ -43,9 +46,14 @@
       ? status.changes.filter((revision) => Number.isInteger(revision?.id))
       : [],
   );
+  let unavailableText = $derived(
+    status?.unscheduled_reason === 'agent_disabled'
+      ? t('skills.librarian.agentOff')
+      : t('skills.librarian.unavailable'),
+  );
   let runBlocked = $derived(
     status?.available === false
-      ? t('skills.librarian.unavailable')
+      ? unavailableText
       : status?.running
         ? t('skills.librarian.alreadyRunning')
         : '',
@@ -83,8 +91,7 @@
 
   function runErrorText(failure) {
     if (failure?.code === 'agent_busy') return t('skills.librarian.busy');
-    if (failure?.code === 'invalid_request')
-      return t('skills.librarian.unavailable');
+    if (failure?.code === 'invalid_request') return unavailableText;
     return `${t('skills.librarian.runError')} ${failure?.message ?? ''}`.trim();
   }
 
@@ -200,16 +207,16 @@
     >
   {:else if status}
     {#if status.available === false}
-      <p class="skills-page-note">{t('skills.librarian.unavailable')}</p>
+      <p class="skills-page-note">{unavailableText}</p>
     {/if}
     <dl class="skills-page-facts">
-      {#if scheduleText()}
+      {#if status.available !== false && scheduleText()}
         <div class="skills-page-fact">
           <dt>{t('skills.librarian.schedule')}</dt>
           <dd>{scheduleText()}</dd>
         </div>
       {/if}
-      {#if settings.enabled === true && status.available !== false}
+      {#if status.available !== false && !status.unscheduled_reason && settings.enabled === true}
         <div class="skills-page-fact">
           <dt>{t('skills.librarian.next')}</dt>
           <dd>{nextPassText()}</dd>

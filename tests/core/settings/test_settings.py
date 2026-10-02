@@ -85,6 +85,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
                 "interval_days": 14,
                 "archive_after_days": 30,
                 "consolidate": False,
+                "model": " openai/gpt-5.2-mini ",
             },
             # ``null`` marks a context window for removal.
             "local_models": {
@@ -156,6 +157,7 @@ def test_parse_settings_update_normalizes_all_supported_sections() -> None:
             "interval_days": 14,
             "archive_after_days": 30,
             "consolidate": False,
+            "model": "openai/gpt-5.2-mini",
         },
         "local_models": {
             "context_windows": {"ollama/ministral-3:8b": 16384, "ollama/old:1b": None}
@@ -481,6 +483,7 @@ def _compaction_threshold(threshold: object) -> dict[str, Any]:
         ({"librarian": []}, "params.librarian must be an object"),
         ({"librarian": {"extra": 1}}, "unsupported librarian settings: extra"),
         ({"librarian": {"consolidate": 1}}, "params.librarian.consolidate must be a boolean"),
+        ({"librarian": {"model": None}}, "params.librarian.model must be a string"),
         (
             {"librarian": {"archive_after_days": 0}},
             "params.librarian.archive_after_days must be an integer from 1 to 3650",
@@ -559,14 +562,18 @@ def test_stored_reflection_section_fills_defaults(
 
 
 def test_stored_librarian_section_fills_defaults() -> None:
-    defaults = {"enabled": True, "interval_days": 7, "archive_after_days": 90, "consolidate": True}
+    defaults = {
+        "enabled": True,
+        "interval_days": 7,
+        "archive_after_days": 90,
+        "consolidate": True,
+        "model": "",
+    }
 
     assert normalize_librarian_settings(None) == defaults
-    assert normalize_librarian_settings({"consolidate": False, "interval_days": 3}) == {
-        **defaults,
-        "consolidate": False,
-        "interval_days": 3,
-    }
+    assert normalize_librarian_settings(
+        {"consolidate": False, "interval_days": 3, "model": " openai/gpt-5.2 "}
+    ) == {**defaults, "consolidate": False, "interval_days": 3, "model": "openai/gpt-5.2"}
 
 
 @pytest.mark.parametrize(
@@ -592,6 +599,7 @@ def test_stored_librarian_section_fills_defaults() -> None:
         (normalize_librarian_settings, "on", "Expected settings.librarian to be an object"),
         (normalize_librarian_settings, {"consolidate": "yes"}, "consolidate must be a boolean"),
         (normalize_librarian_settings, {"interval_days": 1.5}, "interval_days must be an integer"),
+        (normalize_librarian_settings, {"model": 5}, "model must be a string"),
         (
             normalize_librarian_settings,
             {"archive_after_days": 3651},

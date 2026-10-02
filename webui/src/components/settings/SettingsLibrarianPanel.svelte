@@ -1,21 +1,32 @@
 <script>
-  import { onDestroy, untrack } from 'svelte';
+  import { onDestroy, onMount, untrack } from 'svelte';
 
+  import SearchableDropdown from '../SearchableDropdown.svelte';
   import InfoHint from '../ui/InfoHint.svelte';
   import SaveStatus from '../ui/SaveStatus.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import { listConnections, listModels } from '$lib/api.js';
   import {
     createDebouncedAutosave,
     useAutosaveContext,
   } from '$lib/autosave.js';
   import { t } from '$lib/i18n.js';
+  import {
+    buildModelSelectOptions,
+    filterModelSelectOptions,
+    modelFilterFooterLabel,
+    modelSelectionValue,
+    parseModelSelectionValue,
+    selectModelValue,
+  } from '$lib/modelSelection.js';
   import { createSettingsDraft } from '$lib/settingsSave.js';
 
   // The `librarian` settings section: scheduled Skill maintenance, its
-  // interval, when unused background-made Skills are retired, and whether a
-  // pass merges overlapping Skills. A pass started by hand from the Skills
-  // manager uses the last two even while the schedule is off.
+  // interval, when unused background-made Skills are retired, whether a pass
+  // merges overlapping Skills, and the Model of that merge step (empty: each
+  // Agent's own Model). A pass started by hand from the Skills manager uses
+  // the last three even while the schedule is off.
 
   const noop = () => {};
 
@@ -24,6 +35,7 @@
     interval_days: 7,
     archive_after_days: 90,
     consolidate: true,
+    model: '',
   });
   const SWITCH_FIELDS = ['enabled', 'consolidate'];
   const DAY_FIELDS = ['interval_days', 'archive_after_days'];
@@ -52,10 +64,19 @@
         librarian[field],
         LIBRARIAN_SETTING_DEFAULTS[field],
       );
+    result.model =
+      typeof librarian.model === 'string'
+        ? librarian.model.trim()
+        : LIBRARIAN_SETTING_DEFAULTS.model;
     return result;
   }
 
-  let { settings = null, onCommit = noop, onError = noop } = $props();
+  let {
+    settings = null,
+    onCommit = noop,
+    onError = noop,
+    modelsRefreshToken = 0,
+  } = $props();
 
   // Form is seeded once from the settings prop at mount (untrack avoids a
   // reactive dependency); later commits flow back through saveDisabled.
@@ -71,6 +92,34 @@
     }),
   });
 
+  let availableModels = $state([]);
+  let availableConnections = $state([]);
+  let showAllModels = $state(false);
+  let lastModelsRefreshToken = null;
+
+  let allModelOptions = $derived(
+    buildModelSelectOptions({
+      models: availableModels,
+      connections: availableConnections,
+      selectedModelValue: librarianSettings.model,
+      emptyLabel: t('settings.librarian.agentModel'),
+    }),
+  );
+  let modelOptions = $derived(
+    filterModelSelectOptions(allModelOptions, {
+      showAll: showAllModels,
+      selectedModelValue: librarianSettings.model,
+    }),
+  );
+  let modelSelectValue = $derived(
+    selectModelValue(librarianSettings.model, modelOptions),
+  );
+  let modelFilterFooter = $derived(
+    modelFilterFooterLabel({
+      showAll: showAllModels,
+      hiddenCount: allModelOptions.length - modelOptions.length,
+    }),
+  );
   let saveDisabled = $derived(
     saving ||
       librarianSettingsMatch(librarianSettings, getLibrarianSettings(settings)),
@@ -101,18 +150,52 @@
     };
   });
 
+  onMount(() => void loadModelCatalogs());
   onDestroy(() => {
     unregisterLibrarianAutosave();
     librarianAutosave.cancelPendingTimer();
   });
 
+  $effect(() => {
+    if (lastModelsRefreshToken === null) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      return;
+    }
+    if (modelsRefreshToken !== lastModelsRefreshToken) {
+      lastModelsRefreshToken = modelsRefreshToken;
+      void loadModelCatalogs();
+    }
+  });
+
+  async function loadModelCatalogs() {
+    try {
+      const [modelsResult, connectionsResult] = await Promise.all([
+        listModels(),
+        listConnections(),
+      ]);
+      availableModels = modelsResult.models;
+      availableConnections = connectionsResult.connections;
+    } catch (error) {
+      onError(`${t('settings.models.loadError')} ${error.message}`);
+    }
+  }
+
   function librarianSettingsMatch(left, right) {
     const normalizedLeft = getLibrarianSettings({ librarian: left });
     const normalizedRight = getLibrarianSettings({ librarian: right });
 
-    return [...SWITCH_FIELDS, ...DAY_FIELDS].every(
+    return [...SWITCH_FIELDS, ...DAY_FIELDS, 'model'].every(
       (field) => normalizedLeft[field] === normalizedRight[field],
     );
+  }
+
+  function selectModel(selectedValue) {
+    const selection = parseModelSelectionValue(selectedValue);
+    librarianSettings = {
+      ...librarianSettings,
+      model: modelSelectionValue(selection.model, selection.connectionLocalId),
+    };
+    onError('');
   }
 
   function setSwitch(field, next) {
@@ -234,6 +317,33 @@
         checked={librarianSettings.consolidate === true}
         ariaLabel={t('settings.librarian.consolidate')}
         onChange={(next) => setSwitch('consolidate', next)}
+      />
+    </div>
+  </div>
+
+  <!-- The Model only matters while passes merge Skills; its draft stays in
+       the form while the row is hidden. -->
+  <div class="s-row" hidden={librarianSettings.consolidate !== true}>
+    <div class="s-row-info">
+      <div class="s-row-label">
+        {t('settings.librarian.model')}
+        <InfoHint text={t('settings.librarian.modelHelp')} />
+      </div>
+    </div>
+    <div class="s-row-control s-row-control--model">
+      <SearchableDropdown
+        id="settings-librarian-model"
+        value={modelSelectValue}
+        options={modelOptions}
+        placeholder={t('settings.librarian.agentModel')}
+        searchPlaceholder={t('agents.form.modelSearchPlaceholder')}
+        emptyLabel={t('agents.form.modelSearchEmpty')}
+        ariaLabel={t('settings.librarian.model')}
+        triggerClass="settings-view__dropdown"
+        panelClass="settings-view__model-panel"
+        footerActionLabel={modelFilterFooter}
+        onFooterAction={() => (showAllModels = !showAllModels)}
+        onValueChange={selectModel}
       />
     </div>
   </div>

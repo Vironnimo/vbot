@@ -5,6 +5,10 @@ import { flushSync, mount, unmount } from 'svelte';
 
 import { init } from '../../lib/i18n.js';
 import { rpcBackedApiMock } from './apiMock.support.js';
+import {
+  openSearchableDropdown,
+  selectSearchableOption,
+} from './AgentsView.support.js';
 
 const rpcMock = vi.fn();
 
@@ -23,8 +27,29 @@ const SETTINGS = Object.freeze({
     interval_days: 7,
     archive_after_days: 90,
     consolidate: true,
+    model: '',
   },
 });
+const MODELS = [
+  {
+    id: 'openai/gpt-5.2-mini',
+    provider_id: 'openai',
+    model_id: 'gpt-5.2-mini',
+    name: 'GPT-5.2 Mini',
+    capabilities: { tools: true },
+    context_window: 128000,
+    effective_context_window: 128000,
+  },
+];
+const CONNECTIONS = [
+  {
+    id: 'openai:api-key',
+    provider_id: 'openai',
+    type: 'api_key',
+    label: 'API Key',
+    usable: true,
+  },
+];
 
 describe('SettingsLibrarianPanel', () => {
   let mountedComponent;
@@ -33,9 +58,11 @@ describe('SettingsLibrarianPanel', () => {
     document.body.innerHTML = '';
     init('en');
     rpcMock.mockReset();
-    rpcMock.mockImplementation(async (_method, params) => ({
-      librarian: params.librarian,
-    }));
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'model.list') return { models: MODELS };
+      if (method === 'connection.list') return { connections: CONNECTIONS };
+      return { librarian: params.librarian };
+    });
     mountedComponent = null;
   });
 
@@ -47,7 +74,7 @@ describe('SettingsLibrarianPanel', () => {
     document.body.innerHTML = '';
   });
 
-  it('shows the interval only while the schedule is on, keeps the hand-run options, and saves the edited section', async () => {
+  it('shows the interval only while the schedule is on, keeps the hand-run options, and saves the edited section with its Model', async () => {
     const commits = [];
     mountedComponent = mount(SettingsLibrarianPanel, {
       target: document.body,
@@ -64,12 +91,21 @@ describe('SettingsLibrarianPanel', () => {
       document.getElementById('settings-librarian-interval');
     const archiveInput = () =>
       document.getElementById('settings-librarian-archive-after');
+    const modelRow = () =>
+      document.getElementById('settings-librarian-model').closest('.s-row');
     expect(scheduleToggle.getAttribute('aria-checked')).toBe('false');
     expect(consolidateToggle.getAttribute('aria-checked')).toBe('true');
     expect(intervalInput().closest('.s-row').hidden).toBe(true);
     // A pass started by hand uses these even while the schedule is off.
     expect(archiveInput().closest('.s-row').hidden).toBe(false);
     expect(archiveInput().value).toBe('90');
+    // The merge step's Model shows only while passes merge Skills.
+    expect(modelRow().hidden).toBe(false);
+    await waitForCondition(() =>
+      rpcMock.mock.calls.some(([method]) => method === 'connection.list'),
+    );
+    await openSearchableDropdown('settings-librarian-model');
+    selectSearchableOption('settings-librarian-model', 'openai/gpt-5.2-mini');
 
     scheduleToggle.click();
     flushSync();
@@ -82,12 +118,15 @@ describe('SettingsLibrarianPanel', () => {
     archiveInput().dispatchEvent(new Event('input', { bubbles: true }));
     consolidateToggle.click();
     flushSync();
+    expect(modelRow().hidden).toBe(true);
     findSaveButton().click();
     flushSync();
     await waitForCondition(() => commits.length === 1);
 
     // The rejected 0 and 3651 keep the last valid archive age.
-    expect(rpcMock.mock.calls).toEqual([
+    expect(
+      rpcMock.mock.calls.filter(([method]) => method === 'settings.update'),
+    ).toEqual([
       [
         'settings.update',
         {
@@ -96,6 +135,7 @@ describe('SettingsLibrarianPanel', () => {
             consolidate: false,
             interval_days: 14,
             archive_after_days: 90,
+            model: 'openai/gpt-5.2-mini::api-key',
           },
           base: { librarian: SETTINGS.librarian },
         },

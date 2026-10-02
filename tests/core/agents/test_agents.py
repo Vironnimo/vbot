@@ -51,6 +51,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert "excluded_skills" not in data
     assert agent.excluded_skills == []
     assert data["custom_system_prompt_enabled"] is False
+    assert data["librarian_enabled"] is True
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
     assert is_canonical_timestamp(data["created_at"])
