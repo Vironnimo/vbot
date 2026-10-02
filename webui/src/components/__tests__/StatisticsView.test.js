@@ -347,6 +347,10 @@ describe('StatisticsView', () => {
       panel().textContent.includes('Walross research'),
     );
     expect(tileText('statistics.extensions.groups').value).toBe('1');
+    expect(tileText('statistics.extensions.runs').detail).toBe(
+      t('statistics.extensions.unfinishedRuns', { count: '1' }),
+    );
+    expect(tileText('statistics.extensions.runs').value).toBe('3');
   });
 
   it('opens the tab a place names and corrects retired and empty places', async () => {

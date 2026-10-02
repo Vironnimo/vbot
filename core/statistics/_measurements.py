@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import json
 import math
-from collections import Counter
 from typing import Any
 
 from core.chat.model_resolution import parse_bare_model
-from core.statistics.report import (
-    CountEntry,
-    JsonObject,
-)
+from core.statistics.report import JsonObject
 from core.tools import is_tool_result_envelope
-from core.utils.timestamps import parse_canonical_timestamp
 
 UNKNOWN_MODEL_KEY = "unknown"
 
@@ -63,14 +58,6 @@ def _timing_field(timing: JsonObject | None, key: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _max_timestamp(current: str | None, candidate: str) -> str:
-    """The later of two stored canonical timestamps; another form raises ``ValueError``."""
-    if current is None:
-        return candidate
-    later = parse_canonical_timestamp(candidate) > parse_canonical_timestamp(current)
-    return candidate if later else current
-
-
 def _mean(values: list[int]) -> float | None:
     return sum(values) / len(values) if values else None
 
@@ -99,14 +86,3 @@ def _nearest_rank_index(count: int, percentile: float) -> int:
     """Zero-based position of the nearest-rank percentile among ``count`` values."""
     rank = math.ceil((percentile / 100) * count)
     return min(max(rank - 1, 0), count - 1)
-
-
-def _ratio(part: int, total: int) -> float:
-    return part / total if total else 0.0
-
-
-def _count_entries(counter: Counter[str]) -> list[CountEntry]:
-    return [
-        CountEntry(key=key, count=count)
-        for key, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    ]

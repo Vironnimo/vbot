@@ -1,38 +1,154 @@
 """Extensions: in-window activity of every listed Extension participant Session, by group.
 
 Runs, Tool calls and errors are the Session's own; requests are the ledger's
-at the Session's address. ``last_activity`` is the latest in-window record or
-request.
+at the Session's address, in the report ``Totals`` shape. ``last_activity`` is
+the latest in-window record or request. Owners are sorted by name; groups
+most recently active first, capped at ``TOP_EXTENSION_GROUPS``.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import dataclass, field
 
 from core.statistics._extensions import (
     EXTENSION_ACTOR_PREFIX,
-    ExtensionSlice,
-    ExtensionUsageAccumulator,
+    ExtensionSliceKey,
+    extension_actor_key,
 )
-from core.statistics._sections.common import JsonObject, ReportContext
+from core.statistics._sections.common import (
+    RUN_STATUSES,
+    JsonObject,
+    ReportContext,
+    Totals,
+    totals_sql,
+)
 from core.statistics._sections.window import instant_timestamp
+
+# Groups per owner, most recently active first; bounds the serialized report.
+TOP_EXTENSION_GROUPS = 25
+
+
+@dataclass
+class _Activity:
+    """In-window activity of one participant Session, or a rollup of several."""
+
+    sessions: int = 0
+    statuses: dict[str, int] = field(default_factory=lambda: dict.fromkeys(RUN_STATUSES, 0))
+    errors: int = 0
+    tool_calls: int = 0
+    totals: Totals = field(default_factory=Totals)
+    # Latest in-window instant, microseconds.
+    last_instant: int | None = None
+
+    @property
+    def active(self) -> bool:
+        return bool(sum(self.statuses.values()) or self.tool_calls or self.totals["calls"])
+
+    def merge(self, other: _Activity) -> None:
+        self.sessions += other.sessions
+        for status, count in other.statuses.items():
+            self.statuses[status] = self.statuses.get(status, 0) + count
+        self.errors += other.errors
+        self.tool_calls += other.tool_calls
+        self.totals.merge(other.totals)
+        self.seen(other.last_instant)
+
+    def seen(self, instant: int | None) -> None:
+        if instant is not None and (self.last_instant is None or instant > self.last_instant):
+            self.last_instant = instant
+
+    def json(self) -> JsonObject:
+        return {
+            "sessions": self.sessions,
+            "runs": {"total": sum(self.statuses.values()), **self.statuses},
+            "errors": self.errors,
+            "tool_calls": self.tool_calls,
+            "totals": self.totals.json(),
+            "last_activity": (
+                None if self.last_instant is None else instant_timestamp(self.last_instant)
+            ),
+        }
 
 
 def build(context: ReportContext) -> JsonObject:
-    accumulator = ExtensionUsageAccumulator(windowed=context.window.windowed)
-    slices: dict[int, ExtensionSlice] = {
-        session.session_key: accumulator.slice(session.extension)
+    participants: dict[int, tuple[ExtensionSliceKey, _Activity]] = {
+        session.session_key: (session.extension, _Activity(sessions=1))
         for session in context.by_key.values()
         if session.extension is not None
     }
-    if slices:
-        _fill(context, slices)
-    return asdict(accumulator.build())
+    if participants:
+        _fill(context, {key: activity for key, (_label, activity) in participants.items()})
+    return {"extensions": _owners(context, list(participants.values()))}
 
 
-def _fill(context: ReportContext, slices: dict[int, ExtensionSlice]) -> None:
+def _owners(
+    context: ReportContext, participants: list[tuple[ExtensionSliceKey, _Activity]]
+) -> list[JsonObject]:
+    owners: dict[str, dict[str, list[tuple[ExtensionSliceKey, _Activity]]]] = {}
+    for label, activity in participants:
+        owners.setdefault(label.owner_name, {}).setdefault(label.group_id, []).append(
+            (label, activity)
+        )
+    result: list[JsonObject] = []
+    for owner_name in sorted(owners):
+        owner = _Activity()
+        groups: list[tuple[tuple[str, str], JsonObject]] = []
+        for group_id, members in owners[owner_name].items():
+            group = _Activity()
+            for _label, activity in members:
+                group.merge(activity)
+            # A window hides groups without in-window Runs, Tool calls,
+            # Model calls or errors; all-time reporting keeps every retained
+            # group, including idle ones.
+            if context.window.windowed and not (group.active or group.errors):
+                continue
+            owner.merge(group)
+            title = next((label.group_title for label, _ in members if label.group_title), None)
+            started_at = min(
+                (label.created_at for label, _ in members if label.created_at), default=None
+            )
+            last = group.last_instant
+            recency = instant_timestamp(last) if last is not None else started_at or ""
+            groups.append(
+                (
+                    (recency, group_id),
+                    {
+                        "group_id": group_id,
+                        "title": title,
+                        "started_at": started_at,
+                        "activity": group.json(),
+                        "participants": [
+                            {
+                                "participant_id": label.participant_id,
+                                "name": label.participant_name,
+                                "model": label.model,
+                                "session_id": label.session_id,
+                                "activity": activity.json(),
+                            }
+                            for label, activity in members
+                        ],
+                    },
+                )
+            )
+        if not groups:
+            continue
+        groups.sort(key=lambda item: item[0], reverse=True)
+        result.append(
+            {
+                "name": owner_name,
+                "actor_key": extension_actor_key(owner_name),
+                "total_groups": len(groups),
+                "groups_truncated": len(groups) > TOP_EXTENSION_GROUPS,
+                "activity": owner.json(),
+                "groups": [group for _order, group in groups[:TOP_EXTENSION_GROUPS]],
+            }
+        )
+    return result
+
+
+def _fill(context: ReportContext, participants: dict[int, _Activity]) -> None:
     context.sessions_table  # noqa: B018 - loads the Session address ids.
-    by_address = {context.session_addresses[key]: key for key in slices}
+    by_address = {context.session_addresses[key]: key for key in participants}
     in_window = context.instant_condition
     for session_key, status, count in context.query(
         f"""
@@ -41,10 +157,9 @@ def _fill(context: ReportContext, slices: dict[int, ExtensionSlice]) -> None:
         GROUP BY r.session_key, r.status
         """
     ):
-        target = slices.get(session_key)
+        target = participants.get(session_key)
         if target is not None:
-            target.runs += count
-            target.status[status] += count
+            target.statuses[status] = target.statuses.get(status, 0) + count
     for session_key, calls in context.query(
         f"""
         SELECT t.session_key, SUM(t.calls) FROM agg_tools t
@@ -52,67 +167,36 @@ def _fill(context: ReportContext, slices: dict[int, ExtensionSlice]) -> None:
         GROUP BY t.session_key
         """
     ):
-        if session_key in slices:
-            slices[session_key].tool_calls += calls
+        if session_key in participants:
+            participants[session_key].tool_calls += calls
     for session_key, count in context.query(
         f"SELECT e.session_key, COUNT(*) FROM stat_errors e WHERE {in_window('e.instant')} "
         "GROUP BY e.session_key"
     ):
-        if session_key in slices:
-            slices[session_key].errors += count
-    for (
-        address,
-        calls,
-        input_tokens,
-        estimated_input,
-        output_tokens,
-        estimated_output,
-        reported_calls,
-        estimated_calls,
-        unpriced_calls,
-        retrospective_calls,
-        reported_nusd,
-        estimated_nusd,
-    ) in context.query(
+        if session_key in participants:
+            participants[session_key].errors += count
+    for address, *measures in context.query(
         f"""
-        SELECT u.address, SUM(a.calls), SUM(a.input_tokens), SUM(a.estimated_input_tokens),
-            SUM(a.output_tokens), SUM(a.estimated_output_tokens), SUM(a.reported_calls),
-            SUM(a.estimated_calls), SUM(a.unpriced_calls), SUM(a.retrospective_calls),
-            SUM(a.reported_nusd), SUM(a.estimated_nusd)
+        SELECT u.address, {totals_sql()}
         FROM agg_usage a JOIN {context.units_table} u ON u.unit_key = a.unit_key
         WHERE {context.hour_condition("a")} AND u.actor LIKE ?
         GROUP BY u.address
         """,
         (EXTENSION_ACTOR_PREFIX + "%",),
     ):
-        if address not in by_address:
-            continue
-        target = slices[by_address[address]]
-        target.model_calls += calls
-        target.measured_input_tokens += input_tokens - estimated_input
-        target.estimated_input_tokens += estimated_input
-        target.measured_output_tokens += output_tokens - estimated_output
-        target.estimated_output_tokens += estimated_output
-        coverage = target.calls
-        coverage.calls += calls
-        coverage.reported_calls += reported_calls
-        coverage.estimated_calls += estimated_calls
-        coverage.unpriced_calls += unpriced_calls
-        coverage.retrospective_calls += retrospective_calls
-        target.reported_nusd += reported_nusd
-        target.estimated_nusd += estimated_nusd
-    _last_activity(context, slices, by_address)
+        if address in by_address:
+            participants[by_address[address]].totals.add(measures)
+    _last_activity(context, participants, by_address)
 
 
 def _last_activity(
-    context: ReportContext, slices: dict[int, ExtensionSlice], by_address: dict[int, int]
+    context: ReportContext, participants: dict[int, _Activity], by_address: dict[int, int]
 ) -> None:
     low, high = context.window.instants
-    latest: dict[int, int] = {}
     for session_key, max_instant in context.query(
         "SELECT session_key, max_instant FROM stat_sessions WHERE max_instant IS NOT NULL"
     ):
-        if session_key not in slices or max_instant < low:
+        if session_key not in participants or max_instant < low:
             continue
         if max_instant >= high:
             # Later records exist; find the latest one inside the window.
@@ -121,8 +205,7 @@ def _last_activity(
                 "WHERE session_key = ? AND instant >= ? AND instant < ?",
                 (session_key, low, high),
             )
-        if max_instant is not None:
-            latest[session_key] = max_instant
+        participants[session_key].seen(max_instant)
     for address, max_instant in context.query(
         f"""
         SELECT u.address, MAX((
@@ -134,7 +217,5 @@ def _last_activity(
         (EXTENSION_ACTOR_PREFIX + "%",),
     ):
         session_key = by_address.get(address)
-        if session_key is not None and max_instant is not None:
-            latest[session_key] = max(latest.get(session_key, max_instant), max_instant)
-    for session_key, instant in latest.items():
-        slices[session_key].last_activity = instant_timestamp(instant)
+        if session_key is not None:
+            participants[session_key].seen(max_instant)

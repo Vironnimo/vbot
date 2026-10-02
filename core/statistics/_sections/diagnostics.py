@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import timedelta
 
-from core.statistics._cache import (
-    MIN_CACHE_SESSION_TURNS,
-    TOP_CACHE_BREAK_INCIDENTS,
-    TOP_CACHE_SESSIONS,
+from core.statistics._compactions import (
+    CHECKPOINT_SQL,
+    CompactionAccumulator,
+    CompactionObservation,
+    CompactionsSection,
 )
-from core.statistics._compactions import CompactionAccumulator
 from core.statistics._sections.common import (
     RUN_COST_ORDER,
     JsonObject,
@@ -21,10 +20,12 @@ from core.statistics._sections.common import (
 )
 from core.statistics._sections.overview import RUNAWAY_ITERATIONS
 from core.statistics._sections.window import hour_timestamp, instant_timestamp
-from core.statistics._units import ReportUnit, UnitScan
-from core.statistics.report import CacheBreakIncident, SessionCacheUsage
 
 TOP_FAILED_HOURS = 10
+# A Session needs two cache-reporting turns before its hit rate means anything.
+MIN_CACHE_SESSION_TURNS = 2
+TOP_CACHE_SESSIONS = 20
+TOP_CACHE_BREAK_INCIDENTS = 20
 # A Run is a cost outlier at this multiple of the median positive Run cost.
 RUNAWAY_COST_FACTOR = 20
 MAX_RUNAWAY_RUNS = 50
@@ -47,28 +48,8 @@ SESSION_RECORD_ROLES = (
 
 
 def build(context: ReportContext) -> JsonObject:
-    window = context.window
-    units = [
-        ReportUnit(
-            display_key=session.display_key,
-            session_key=session.session_key,
-            session_id=session.address.session_id,
-            title=session.title,
-            address=session.address,
-        )
-        for session in context.by_key.values()
-    ]
-    # Unit scans select instants inclusively; stop one microsecond before ``until``.
-    scan = UnitScan(
-        context.connection,
-        units,
-        since=window.since,
-        until=None if window.until is None else window.until - timedelta(microseconds=1),
-    )
-    compactions = CompactionAccumulator()
-    compactions.load(scan, [unit.title for unit in units])
     return {
-        "compactions": asdict(compactions.build()),
+        "compactions": asdict(_compactions(context)),
         "cache": _cache(context),
         "data_quality": _data_quality(context),
         "failed_attempts": _failed_attempts(context),
@@ -83,13 +64,30 @@ def build(context: ReportContext) -> JsonObject:
     }
 
 
+def _compactions(context: ReportContext) -> CompactionsSection:
+    """Every in-window Compaction checkpoint of the listed Sessions."""
+    observations = []
+    for session_key, *values in context.query(
+        CHECKPOINT_SQL.format(
+            sessions=context.sessions_table, window=context.instant_condition("r.instant")
+        )
+    ):
+        session = context.by_key[session_key]
+        observations.append(
+            CompactionObservation(
+                session.display_key, session.address.session_id, session.title, *values
+            )
+        )
+    return CompactionAccumulator(observations).build()
+
+
 def _cache(context: ReportContext) -> JsonObject:
     """Prompt-cache health of listed Sessions from the cache cubes.
 
     The lowest hit rates need at least two cache-reporting turns with a
     prompt; suspected breaks are the largest read shortfalls first.
     """
-    sessions: list[SessionCacheUsage] = []
+    sessions: list[JsonObject] = []
     evaluated = suspected = 0
     for key, turns, input_tokens, read, write, judged, flagged, last_instant in context.query(
         f"""
@@ -108,22 +106,22 @@ def _cache(context: ReportContext) -> JsonObject:
         if turns < MIN_CACHE_SESSION_TURNS or input_tokens <= 0:
             continue
         sessions.append(
-            SessionCacheUsage(
-                agent_id=session.display_key,
-                session_id=session.address.session_id,
-                cache_turns=turns,
-                input_tokens=input_tokens,
-                cache_read_tokens=read,
-                cache_write_tokens=write,
-                hit_rate=read / input_tokens,
-                last_activity=instant_timestamp(last_instant),
-                session_title=session.title,
-            )
+            {
+                "agent_id": session.display_key,
+                "session_id": session.address.session_id,
+                "cache_turns": turns,
+                "input_tokens": input_tokens,
+                "cache_read_tokens": read,
+                "cache_write_tokens": write,
+                "hit_rate": read / input_tokens,
+                "last_activity": instant_timestamp(last_instant),
+                "session_title": session.title,
+            }
         )
     # Worst hit rate first; equal rates surface the bigger Session first.
-    sessions.sort(key=lambda row: (row.hit_rate, -row.input_tokens, row.session_id))
+    sessions.sort(key=lambda row: (row["hit_rate"], -row["input_tokens"], row["session_id"]))
     # Largest read shortfall first, then Session id, time and position.
-    breaks: list[tuple[tuple[int, str, int, int, int], CacheBreakIncident]] = []
+    breaks: list[tuple[tuple[int, str, int, int, int], JsonObject]] = []
     for key, seq, instant, model, previous_input, read in context.query(
         f"""
         SELECT b.session_key, b.seq, b.instant, b.model_key, b.previous_input_tokens,
@@ -134,25 +132,24 @@ def _cache(context: ReportContext) -> JsonObject:
         session = context.by_key.get(key)
         if session is None:
             continue
-        incident = CacheBreakIncident(
-            agent_id=session.display_key,
-            session_id=session.address.session_id,
-            timestamp=instant_timestamp(instant),
-            model=model,
-            previous_input_tokens=previous_input,
-            cache_read_tokens=read,
-            session_title=session.title,
-        )
-        breaks.append(((read - previous_input, incident.session_id, instant, key, seq), incident))
+        incident = {
+            "agent_id": session.display_key,
+            "session_id": session.address.session_id,
+            "timestamp": instant_timestamp(instant),
+            "model": model,
+            "previous_input_tokens": previous_input,
+            "cache_read_tokens": read,
+            "session_title": session.title,
+        }
+        order = (read - previous_input, session.address.session_id, instant, key, seq)
+        breaks.append((order, incident))
     breaks.sort(key=lambda item: item[0])
     return {
-        "lowest_hit_rate_sessions": [asdict(row) for row in sessions[:TOP_CACHE_SESSIONS]],
+        "lowest_hit_rate_sessions": sessions[:TOP_CACHE_SESSIONS],
         "suspected_breaks": {
             "evaluated_turns": evaluated,
             "suspected_turns": suspected,
-            "incidents": [
-                asdict(incident) for _order, incident in breaks[:TOP_CACHE_BREAK_INCIDENTS]
-            ],
+            "incidents": [incident for _order, incident in breaks[:TOP_CACHE_BREAK_INCIDENTS]],
         },
     }
 

@@ -86,10 +86,10 @@ async def test_group_usage_slices_exact_owned_run_in_reused_session(
     usage = await statistics([]).group_usage(owner_name="swarm", group_id="group")
 
     assert usage["owned_run_count"] == 1
-    assert usage["usage"]["totals"]["measured_input_tokens"] == 2
-    assert usage["usage"]["totals"]["measured_output_tokens"] == 3
-    assert usage["usage"]["models"][0]["model"] == "fallback"
-    assert usage["compactions"]["total_compactions"] == 1
+    assert usage["activity"]["totals"]["input_tokens"] == 2
+    assert usage["activity"]["totals"]["output_tokens"] == 3
+    assert usage["activity"]["models"][0]["model"] == "fallback"
+    assert usage["activity"]["compactions"] == 1
 
 
 async def test_group_usage_stops_open_owned_run_at_ordinary_successor(
@@ -106,8 +106,8 @@ async def test_group_usage_stops_open_owned_run_at_ordinary_successor(
 
     usage = await statistics([]).group_usage(owner_name="swarm", group_id="group")
 
-    assert usage["usage"]["totals"]["measured_input_tokens"] == 2
-    assert usage["usage"]["models"][0]["model"] == "owned"
+    assert usage["activity"]["totals"]["input_tokens"] == 2
+    assert usage["activity"]["models"][0]["model"] == "owned"
 
 
 async def test_group_usage_empty_owned_run_does_not_claim_same_sequence_successor(
@@ -120,7 +120,7 @@ async def test_group_usage_empty_owned_run_does_not_claim_same_sequence_successo
 
     usage = await statistics([]).group_usage(owner_name="swarm", group_id="group")
 
-    assert usage["usage"]["models"] == []
+    assert usage["activity"]["models"] == []
 
 
 @pytest.mark.parametrize(
@@ -155,7 +155,7 @@ async def test_group_usage_reads_every_page_of_owned_runs(
     usage = await statistics([]).group_usage(owner_name="swarm", group_id="group")
 
     assert usage["owned_run_count"] == runs
-    assert usage["usage"]["totals"]["measured_input_tokens"] == 2 * runs
+    assert usage["activity"]["totals"]["input_tokens"] == 2 * runs
 
 
 async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(
@@ -209,28 +209,28 @@ async def test_group_usage_combines_peers_resumed_runs_and_rebuilds_exactly(
 
     assert first["owned_run_count"] == rebuilt["owned_run_count"] == 4
     assert first["participant_count"] == rebuilt["participant_count"] == 2
-    assert first["usage"]["totals"]["measured_input_tokens"] == 11
-    assert rebuilt["usage"]["totals"]["measured_input_tokens"] == 11
-    assert first["usage"]["totals"]["estimated_input_tokens"] == 5
-    assert first["usage"]["totals"]["cache_read_tokens"] == 4
-    assert (
-        first["compactions"]["total_compactions"]
-        == rebuilt["compactions"]["total_compactions"]
-        == 2
-    )
-    assert first["tools"]["total_calls"] == rebuilt["tools"]["total_calls"] == 4
-    assert {row["model"] for row in first["usage"]["models"]} == {"primary", "fallback"}
+    assert first == rebuilt
+    activity = first["activity"]
+    assert activity["runs"]["total"] == activity["runs"]["completed"] == 4
+    assert activity["totals"]["input_tokens"] == 16
+    assert activity["totals"]["estimated_input_tokens"] == 5
+    assert activity["totals"]["cache_read_tokens"] == 4
+    assert activity["compactions"] == 2
+    assert activity["tool_calls"] == activity["tool_rejected"] == 4
+    assert {row["model"]: row["runs"] for row in activity["models"]} == {
+        "primary": 2,
+        "fallback": 2,
+    }
     filtered = await service.group_usage(
         owner_name="swarm", group_id="group", query={"participant_id": "two"}
     )
     assert filtered["owned_run_count"] == 2
-    assert filtered["usage"]["totals"]["measured_input_tokens"] == 5
-    assert filtered["usage"]["totals"]["estimated_input_tokens"] == 5
-    assert filtered["tools"]["total_calls"] == 2
-    peers = {peer["participant_id"]: peer for peer in first["participants"]}
-    assert peers["one"]["usage"]["totals"]["measured_input_tokens"] == 6
-    assert peers["two"]["usage"] == filtered["usage"]
-    assert peers["two"]["tools"] == filtered["tools"]
+    assert filtered["activity"]["totals"]["input_tokens"] == 10
+    assert filtered["activity"]["totals"]["estimated_input_tokens"] == 5
+    assert filtered["activity"]["tool_calls"] == 2
+    peers = {peer["participant_id"]: peer["activity"] for peer in first["participants"]}
+    assert peers["one"]["totals"]["input_tokens"] == 6
+    assert peers["two"] == filtered["activity"]
 
 
 async def test_group_usage_never_loads_or_prunes_unrelated_indexed_sessions(
@@ -250,7 +250,7 @@ async def test_group_usage_never_loads_or_prunes_unrelated_indexed_sessions(
 
     for expected in (2, 5):
         result = await service.group_usage(owner_name="swarm", group_id="group")
-        assert result["usage"]["totals"]["measured_input_tokens"] == expected
+        assert result["activity"]["totals"]["input_tokens"] == expected
         session.append(_assistant(model="owned", at=BASE, usage={"input_tokens": 3}))
 
     assert {session_id for session_id, _cursor in reads} == {address.session_id}

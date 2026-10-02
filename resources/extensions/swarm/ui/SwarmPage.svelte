@@ -596,12 +596,12 @@
                     <dt>
                       {t('swarm.usage.tokensUsed')}
                     </dt>
-                    <dd>{tokensUsed(model.usage.usage.usage?.totals)}</dd>
+                    <dd>{tokensUsed(model.usage.usage.activity?.totals)}</dd>
                   </div>
                   <div>
                     <dt>{t('swarm.usage.toolCalls')}</dt>
                     <dd>
-                      {usageCount(model.usage.usage.tools?.total_calls)}
+                      {usageCount(model.usage.usage.activity?.tool_calls)}
                     </dd>
                   </div>
                 </dl>

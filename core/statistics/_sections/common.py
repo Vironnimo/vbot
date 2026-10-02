@@ -20,6 +20,7 @@ from core.sessions import SessionAddress
 from core.statistics._extensions import ExtensionSliceKey, extension_actor_key
 from core.statistics._measurements import _nearest_rank_index
 from core.statistics._projection import MICROSECONDS_PER_HOUR
+from core.statistics._rollups import USAGE_MEASURES
 from core.statistics._sections.window import LocalCalendar, ReportWindow, instant_timestamp
 from core.statistics.skills import _ResolvedInventory
 
@@ -102,29 +103,7 @@ def provider_sql(column: str) -> str:
 # ---------------------------------------------------------------------------
 
 # Integer measures of usage cube rows, in ``totals_sql`` order.
-TOTALS_FIELDS = (
-    "calls",
-    "failed_calls",
-    "input_tokens",
-    "estimated_input_tokens",
-    "output_tokens",
-    "estimated_output_tokens",
-    "reasoning_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-    "cache_input_tokens",
-    "cache_calls",
-    "unreported_calls",
-    "reported_nusd",
-    "reported_calls",
-    "estimated_nusd",
-    "estimated_calls",
-    "unpriced_calls",
-    "retrospective_calls",
-    "uncached_nusd",
-    "uncached_calls",
-    "estimated_token_calls",
-)
+TOTALS_FIELDS = USAGE_MEASURES
 _FIELD = {name: position for position, name in enumerate(TOTALS_FIELDS)}
 
 

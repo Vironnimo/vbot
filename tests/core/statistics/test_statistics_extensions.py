@@ -103,18 +103,18 @@ def test_report_counts_owner_managed_sessions_under_their_extension(
     [extension] = report["extensions"]["extensions"]
     assert extension["name"] == "swarm"
     assert extension["actor_key"] == "extension:swarm"
-    assert extension["activity"]["runs"] == 2
-    assert extension["activity"]["costs"]["reported_usd"] == 0.5
+    assert extension["activity"]["runs"]["total"] == 2
+    assert extension["activity"]["totals"]["reported_cost_usd"] == 0.5
     [group] = extension["groups"]
     assert group["title"] == "Parser rework"
     assert group["activity"]["sessions"] == 2
-    assert group["activity"]["measured_input_tokens"] == 20
+    assert group["activity"]["totals"]["input_tokens"] == 20
     assert group["activity"]["tool_calls"] == 2
     assert [(row["name"], row["model"]) for row in group["participants"]] == [
         ("Walross", "prov/a"),
         ("Xenia", "prov/b"),
     ]
-    assert group["participants"][0]["activity"]["run_status"]["completed"] == 1
+    assert group["participants"][0]["activity"]["runs"]["completed"] == 1
 
 
 def test_windowed_report_keeps_only_groups_with_in_window_activity(
@@ -130,7 +130,7 @@ def test_windowed_report_keeps_only_groups_with_in_window_activity(
 
     [extension] = windowed["extensions"]["extensions"]
     assert [group["group_id"] for group in extension["groups"]] == ["swr_new"]
-    assert extension["activity"]["runs"] == 1
+    assert extension["activity"]["runs"]["total"] == 1
     assert extension["activity"]["sessions"] == 1
     # Without a group title the report leaves naming to the accessor.
     assert extension["groups"][0]["title"] is None
