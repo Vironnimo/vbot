@@ -13,6 +13,7 @@
   import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
+  import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
@@ -153,6 +154,10 @@
       label: () => t('settings.reflection.title'),
     },
     {
+      id: 'librarian',
+      label: () => t('settings.librarian.title'),
+    },
+    {
       id: 'web_search',
       label: () => t('settings.webSearch.title'),
     },
@@ -238,7 +243,7 @@
       id: 'memory',
       label: () => t('settings.pages.memory'),
       description: () => t('settings.pages.memoryDescription'),
-      sections: ['reflection', 'recall'],
+      sections: ['reflection', 'librarian', 'recall'],
     },
     {
       id: 'tools',
@@ -975,6 +980,12 @@
     />
   {:else if panelId === 'reflection'}
     <SettingsReflectionPanel
+      {settings}
+      onCommit={commitSettings}
+      onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'librarian'}
+    <SettingsLibrarianPanel
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
