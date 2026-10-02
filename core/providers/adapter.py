@@ -331,9 +331,9 @@ class ProviderAdapter(ABC):
         admission = profile.admission
         if admission.state == "available":
             return
+        refusal = f"Model '{profile.model_id}' is {admission.state} on this Connection"
         raise ProviderError(
-            admission.message
-            or f"Model '{profile.model_id}' is {admission.state} on this Connection",
+            f"{refusal}: {admission.message}" if admission.message else refusal,
             retryable=False,
         )
 

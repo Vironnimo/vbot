@@ -117,6 +117,7 @@ async def test_unusable_selection_fails_before_network(
 
     assert type(caught.value) is ProviderError
     assert caught.value.retryable is False
+    assert str(caught.value).startswith(f"Model '{model_id}' is ")
     assert not route.called
 
 
