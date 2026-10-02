@@ -24,7 +24,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -385,14 +385,51 @@ def apply_changes(entries: list[str], changes: Iterable[MemoryChange]) -> None:
 class MemoryRevertConflict:
     """A change that cannot be taken back because a later change built on it.
 
-    ``text`` is the entry text the revert needs but no longer finds; ``later``
-    lists the revisions that changed or removed that text since.
+    ``text`` is the entry text of the change; ``later`` lists the revisions
+    that changed it since. ``missing`` says the revert needs that text but no
+    entry reads it anymore; a strict revert also refuses a change whose text a
+    later revision touched while the entry still reads it.
     """
 
     revision: int
     change: MemoryChange
     text: str
     later: tuple[int, ...]
+    missing: bool = True
+
+
+def later_touches(
+    targets: Sequence[MemoryRevision],
+    revisions: Sequence[MemoryRevision],
+    *,
+    exempt: Collection[int],
+) -> list[MemoryRevertConflict]:
+    """Return a conflict for each change of *targets* a later revision touched.
+
+    A later revision of the same scope touches a change when it adds, removes or
+    replaces an entry whose text is the change's text (for a removal, the
+    removed text), whether or not the change could still be taken back.
+    Revisions in *exempt* never touch. Conflicts follow *targets* order.
+    """
+    conflicts: list[MemoryRevertConflict] = []
+    for target in targets:
+        for change in target.changes:
+            later = tuple(
+                revision.id
+                for revision in revisions
+                if revision.id > target.id
+                and revision.scope == target.scope
+                and revision.id not in exempt
+                and any(
+                    item.text == change.text or item.previous == change.text
+                    for item in revision.changes
+                )
+            )
+            if later:
+                conflicts.append(
+                    MemoryRevertConflict(target.id, change, change.text, later, missing=False)
+                )
+    return conflicts
 
 
 def revert_revisions(

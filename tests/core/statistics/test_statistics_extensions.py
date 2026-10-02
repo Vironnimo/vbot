@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 
 from core.sessions import ChatSessionManager, SessionAddress
 from core.tools import tool_success
+from core.usage import UsageRecorder
 from tests.core.sessions.history_fixtures import seed_history
 from tests.core.statistics.statistics_test_support import (
     BASE,
@@ -54,7 +55,7 @@ def _participant(
 
 
 def test_report_counts_owner_managed_sessions_under_their_extension(
-    manager: ChatSessionManager, statistics: StatisticsFactory
+    manager: ChatSessionManager, statistics: StatisticsFactory, ledger: UsageRecorder
 ) -> None:
     _write_session(
         manager,
@@ -68,28 +69,30 @@ def test_report_counts_owner_managed_sessions_under_their_extension(
     _participant(manager, group_id="swr_a", participant_id="p2", name="Xenia", model="prov/b")
     manager.set_temporary_group_title(owner_name="swarm", group_id="swr_a", title="Parser rework")
 
-    report = statistics(["main"]).report().to_dict()
+    report = statistics(["main"], usage_recorder=ledger).report()
 
-    agents = {row["agent_id"]: row for row in report["overview"]["agents"]}
+    agents = {row["agent_id"]: row for row in report["runs"]["agents"]}
     assert set(agents) == {"main", "extension:swarm"}
-    assert agents["extension:swarm"]["sessions"] == 2
     assert agents["extension:swarm"]["runs"] == 2
-    assert report["overview"]["total_agents"] == 1
-    assert report["overview"]["total_sessions"] == 3
-    assert report["overview"]["total_runs"] == 3
-    assert report["usage"]["totals"]["measured_input_tokens"] == 21
-    assert report["tools"]["by_agent"] == [{"key": "extension:swarm", "count": 2}]
+    # Extension work is not an Agent of its own, but its Sessions are active.
+    assert report["overview"]["active_agents"] == 1
+    assert report["overview"]["active_sessions"] == 3
+    assert report["overview"]["runs"]["total"] == 3
+    assert report["usage"]["totals"]["input_tokens"] == 21
+    assert report["tools"]["by_agent"] == [
+        {"agent_id": "extension:swarm", "calls": 2, "rejected": 0, "tool_ms": 10}
+    ]
     # Report rows name the group and participant instead of synthetic Agent ids.
-    session_titles = [row["session_title"] for row in report["costs"]["top_sessions"]]
+    session_titles = [row["session_title"] for row in report["usage"]["top_sessions"]]
     for name in ("Walross", "Xenia"):
         assert any("Parser rework" in title and name in title for title in session_titles)
-    # Every Session row carries the same title next to its id.
+    # Every Session and Run row carries the same title next to its id.
     participant_titles = {
         row["session_id"]: row["session_title"]
-        for row in report["costs"]["top_sessions"]
+        for row in report["usage"]["top_sessions"]
         if row["agent_id"] == "extension:swarm"
     }
-    for rows in (report["tools"]["top_sessions"], report["runs"]["top_sessions_by_runs"]):
+    for rows in (report["usage"]["top_runs"], report["runs"]["longest"]):
         titled = {
             row["session_id"]: row["session_title"]
             for row in rows
@@ -122,8 +125,8 @@ def test_windowed_report_keeps_only_groups_with_in_window_activity(
     _participant(manager, group_id="swr_new", participant_id="p2", name="Bo", model="p/m")
     service = statistics([])
 
-    windowed = service.report(since=BASE - timedelta(days=1)).to_dict()
-    all_time = service.report().to_dict()
+    windowed = service.report(since=BASE - timedelta(days=1), sections=["extensions"])
+    all_time = service.report(sections=["extensions"])
 
     [extension] = windowed["extensions"]["extensions"]
     assert [group["group_id"] for group in extension["groups"]] == ["swr_new"]
@@ -141,10 +144,10 @@ def test_deleted_group_leaves_the_report(
     _participant(manager, group_id="swr_a", participant_id="p1", name="Ada", model="p/m")
     manager.set_temporary_group_title(owner_name="swarm", group_id="swr_a", title="Gone soon")
     service = statistics([])
-    assert service.report().to_dict()["extensions"]["extensions"]
+    assert service.report(sections=["extensions"])["extensions"]["extensions"]
 
     asyncio.run(manager.delete_temporary_group(owner_name="swarm", group_id="swr_a"))
 
-    report = service.report().to_dict()
+    report = service.report(sections=["extensions", "runs"])
     assert report["extensions"]["extensions"] == []
-    assert report["overview"]["agents"] == []
+    assert report["runs"]["agents"] == []

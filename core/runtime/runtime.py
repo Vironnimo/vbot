@@ -22,6 +22,7 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    LearningChanges,
     LibrarianService,
     ReflectionService,
     TriggerService,
@@ -220,6 +221,7 @@ class Runtime:
         self._archive: ArchiveService | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
+        self._learning_changes: LearningChanges | None = None
         self._librarian_service: LibrarianService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
@@ -1175,6 +1177,10 @@ class Runtime:
 
     reflection: _StartedService[ReflectionService] = _StartedService(
         lambda runtime: runtime._reflection_service, "Reflection service not available"
+    )
+
+    learning_changes: _StartedService[LearningChanges] = _StartedService(
+        lambda runtime: runtime._learning_changes, "Learning changes service not available"
     )
 
     librarian: _StartedService[LibrarianService] = _StartedService(

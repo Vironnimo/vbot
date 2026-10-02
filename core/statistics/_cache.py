@@ -4,33 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from core.statistics._rollups import judged_cache_turns_sql
 from core.statistics._units import UnitScan, max_timestamp_sql
 from core.statistics.report import (
     CacheBreakIncident,
+    CacheSection,
     SessionCacheUsage,
+    SuspectedCacheBreaks,
 )
-
-# Prompt-cache-break heuristic (best-effort, derived — the cache-side sibling of
-# ``derived_fallback_runs``). A measured turn is evaluated against its
-# predecessor only when no legitimate prefix change explains a cache miss; the
-# thresholds below keep false positives low rather than catching every break.
-CACHE_BREAK_READ_RATIO = 0.5
-
-
-"""A cache read below this share of the previous turn's prompt is a suspected break."""
-
-
-CACHE_BREAK_MAX_GAP_SECONDS = 300
-
-
-"""Provider prompt caches expire after ~5 idle minutes; longer gaps are expected misses."""
-
-
-CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS = 2048
-
-
-"""Below provider minimum cacheable prompt sizes an empty cache read is legitimate."""
-
 
 MIN_CACHE_SESSION_TURNS = 2
 
@@ -38,7 +19,8 @@ MIN_CACHE_SESSION_TURNS = 2
 """A session needs two cache-reporting turns before its hit rate means anything."""
 
 
-_MICROSECONDS_PER_SECOND = 1_000_000
+TOP_CACHE_SESSIONS = 20
+TOP_CACHE_BREAK_INCIDENTS = 20
 
 
 @dataclass
@@ -52,66 +34,12 @@ class CacheFacts:
 
 
 def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
-    """Walk each unit's in-window turns in order and apply the cache heuristics.
-
-    Only measured Assistant turns set an expectation baseline; a Compaction
-    checkpoint, an Agent takeover, a turn without Usage or an estimated turn
-    clears it. A cache-reporting turn is evaluated against the immediately
-    preceding measured turn when that turn also reported cache fields, used the
-    same Model, sent a prompt of at least the minimum cacheable size and ran
-    within the cache lifetime; a read below the break ratio of the previous
-    prompt is a suspected break.
-    """
+    """Judge each unit's in-window turns in order (``judged_cache_turns_sql``)."""
     connection = scan.connection
     connection.execute("DROP TABLE IF EXISTS temp.cache_turns")
     scan.execute(
-        f"""
-        CREATE TEMP TABLE cache_turns AS
-        WITH stream AS (
-            SELECT u.unit, r.seq, r.timestamp, r.instant, c.model_key, c.has_cache,
-                COALESCE(c.input_tokens, 0) AS input_tokens,
-                COALESCE(c.cache_read_tokens, 0) AS cache_read_tokens,
-                COALESCE(c.cache_write_tokens, 0) AS cache_write_tokens,
-                (r.role = 'assistant' AND c.has_usage = 1
-                    AND c.input_estimated = 0 AND c.output_estimated = 0) AS measured
-            FROM {scan.source("stat_records", "r")}
-            LEFT JOIN stat_calls c
-                ON c.session_key = r.session_key AND c.seq = r.seq AND c.kind = 0
-            WHERE {scan.where("r")}
-                AND r.role IN ('assistant', 'compaction_checkpoint', 'agent_takeover')
-        ),
-        turns AS (
-            SELECT unit, seq, timestamp, instant, model_key, has_cache, input_tokens,
-                cache_read_tokens, cache_write_tokens, measured,
-                LAG(measured) OVER turn_order AS previous_measured,
-                LAG(has_cache) OVER turn_order AS previous_has_cache,
-                LAG(model_key) OVER turn_order AS previous_model_key,
-                LAG(input_tokens) OVER turn_order AS previous_input_tokens,
-                LAG(instant) OVER turn_order AS previous_instant
-            FROM stream
-            WINDOW turn_order AS (PARTITION BY unit ORDER BY seq)
-        ),
-        judged AS (
-            SELECT unit, seq, timestamp, instant, model_key, input_tokens,
-                cache_read_tokens, cache_write_tokens, previous_input_tokens, COALESCE(
-                previous_measured = 1
-                AND previous_has_cache = 1
-                AND previous_model_key = model_key
-                AND previous_input_tokens >= {CACHE_BREAK_MIN_PREVIOUS_INPUT_TOKENS}
-                AND instant - previous_instant
-                    BETWEEN 0 AND {CACHE_BREAK_MAX_GAP_SECONDS * _MICROSECONDS_PER_SECOND},
-                0
-            ) AS evaluated
-            FROM turns
-            WHERE measured = 1 AND has_cache = 1
-        )
-        SELECT unit, seq, timestamp, instant, model_key, input_tokens, cache_read_tokens,
-            cache_write_tokens, previous_input_tokens, evaluated,
-            (evaluated = 1
-                AND cache_read_tokens < previous_input_tokens * {CACHE_BREAK_READ_RATIO}
-            ) AS incident
-        FROM judged
-        """
+        "CREATE TEMP TABLE cache_turns AS "
+        + judged_cache_turns_sql(scan.source("stat_records", "r"), scan.where("r"), "u.unit")
     )
     facts = CacheFacts()
     units = scan.units
@@ -189,3 +117,21 @@ def load_cache_facts(scan: UnitScan, *, top_incidents: int) -> CacheFacts:
             )
         )
     return facts
+
+
+def cache_section(facts: CacheFacts) -> CacheSection:
+    """The cache view: the lowest hit rates and the suspected breaks of ``facts``."""
+    # Worst hit rate first; equal rates surface the bigger session (more
+    # tokens paid) before the smaller one.
+    sessions = sorted(
+        facts.sessions,
+        key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
+    )[:TOP_CACHE_SESSIONS]
+    return CacheSection(
+        lowest_hit_rate_sessions=sessions,
+        suspected_breaks=SuspectedCacheBreaks(
+            evaluated_turns=facts.evaluated_turns,
+            suspected_turns=facts.suspected_turns,
+            incidents=facts.incidents,
+        ),
+    )

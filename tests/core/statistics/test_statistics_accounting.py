@@ -8,6 +8,7 @@ from contextlib import closing
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -48,6 +49,15 @@ def accounting(
     recorder.close()
 
 
+def _usage(service: StatisticsService, **request: Any) -> dict[str, Any]:
+    usage: dict[str, Any] = service.report(sections=["usage"], **request)["usage"]
+    return usage
+
+
+def _session_records(report: dict[str, Any]) -> int:
+    return sum(report["diagnostics"]["roles"]["session_records_by_role"].values())
+
+
 @pytest.mark.asyncio
 async def test_standalone_task_and_auxiliary_calls_count_without_fake_sessions(accounting):
     service, _manager, recorder = accounting
@@ -75,26 +85,23 @@ async def test_standalone_task_and_auxiliary_calls_count_without_fake_sessions(a
             else None,
         )
 
-    report = service.report()
+    report = service.report(sections=["overview", "usage", "diagnostics"])
 
-    assert report.overview.total_sessions == 0
-    assert report.overview.total_chat_messages == 0
-    assert report.overview.total_session_records == 0
-    assert report.usage.totals.assistant_messages == 0
-    assert report.usage.totals.chat_calls == 0
-    assert report.usage.totals.auxiliary_calls == len(kinds)
-    assert report.usage.totals.model_calls == len(kinds)
-    assert report.usage.totals.unreported_calls == len(kinds) - 1
-    assert report.usage.totals.measured_input_tokens == 10
-    assert report.costs.totals.calls == len(kinds)
-    assert report.costs.totals.reported_usd == 0.25
-    assert report.costs.totals.unpriced_calls == len(kinds) - 1
-    assert {call.status for call in report.costs.recent_calls} == {"completed"}
-    assert report.costs.top_sessions == []
-    assert {row.kind for row in report.costs.recent_calls} == set(kinds)
-    assert {row.kind for row in report.usage.kinds} == set(kinds)
-    assert report.usage.models[0].model == "tasks/model"
-    assert all(row.session_id == "" and row.agent_id == "" for row in report.costs.recent_calls)
+    assert report["overview"]["active_sessions"] == report["overview"]["active_agents"] == 0
+    assert _session_records(report) == 0
+    usage = report["usage"]
+    totals = usage["totals"]
+    assert totals["calls"] == len(kinds)
+    assert totals["unreported_calls"] == totals["unpriced_calls"] == len(kinds) - 1
+    assert totals["input_tokens"] == 10
+    assert totals["reported_cost_usd"] == 0.25
+    assert {row["key"] for row in usage["breakdowns"]["kind"]} == set(kinds)
+    assert [row["key"] for row in usage["breakdowns"]["model"]] == ["tasks/model"]
+    assert [row["key"] for row in usage["breakdowns"]["origin"]] == ["background"]
+    assert usage["top_sessions"] == []
+    assert {row["kind"] for row in usage["recent_calls"]} == set(kinds)
+    assert {row["status"] for row in usage["recent_calls"]} == {"completed"}
+    assert all(row["session_id"] is None and row["agent_id"] == "" for row in usage["recent_calls"])
 
 
 @pytest.mark.asyncio
@@ -136,25 +143,27 @@ async def test_history_deduplicates_and_usage_survives_archive_delete_and_rebuil
         [_assistant(model="old/m", at=BASE, usage={"input_tokens": 7, "output_tokens": 2})],
     )
 
-    report = service.report()
-    assert report.usage.totals.model_calls == 3
-    assert report.usage.totals.assistant_messages == 2
-    assert report.usage.totals.compaction_calls == 1
-    assert report.usage.totals.measured_input_tokens == 57
-    assert service.report().costs.totals == report.costs.totals
+    report = service.report(sections=["usage", "diagnostics"])
+    totals = report["usage"]["totals"]
+    # The saved Chat and Compaction steps carry their ledger ids and count once.
+    assert (totals["calls"], totals["input_tokens"]) == (3, 57)
+    assert {row["key"]: row["calls"] for row in report["usage"]["breakdowns"]["kind"]} == {
+        "chat": 2,
+        "compaction": 1,
+    }
+    assert _session_records(report) > 0
+    assert _usage(service)["totals"] == totals
 
     archived_entry = await manager.archive(session.address)
     manager.delete(SessionAddress(None, "main", other))
-    archived = service.report()
-    assert archived.overview.total_sessions == 0
-    assert archived.usage.totals.assistant_messages == 0
-    assert archived.usage.totals.model_calls == 3
-    assert archived.costs.totals == report.costs.totals
+    archived = service.report(sections=["usage", "diagnostics"])
+    assert _session_records(archived) == 0
+    assert archived["usage"]["totals"] == totals
     index.discard()
-    assert service.report().costs.totals == report.costs.totals
+    assert _usage(service)["totals"] == totals
     manager.archive_ledger.begin_restore(archived_entry.entry_id, {"target_id": None})
     manager.archive_ledger.commit_restore(archived_entry.entry_key)
-    assert service.report().usage.totals.model_calls == 3
+    assert _usage(service)["totals"]["calls"] == 3
 
 
 @pytest.mark.asyncio
@@ -163,18 +172,16 @@ async def test_cumulative_updates_replace_counters_and_unchanged_reads_do_not_wr
 ):
     service, _manager, recorder = accounting
     call = await recorder.start(model="voice/m", kind="live_voice")
-    assert service.report().usage.totals.unreported_calls == 1
+    assert _usage(service)["totals"]["unreported_calls"] == 1
     await recorder.update(call, {"input_tokens": 10, "output_tokens": 2})
-    assert service.report().usage.totals.measured_input_tokens == 10
+    assert _usage(service)["totals"]["input_tokens"] == 10
     await recorder.finish(call, {"input_tokens": 16, "output_tokens": 5, "reported_cost_usd": 0})
-    report = service.report()
-    assert report.usage.totals.model_calls == 1
-    assert report.usage.totals.measured_input_tokens == 16
-    assert report.usage.totals.measured_output_tokens == 5
-    assert report.costs.totals.reported_usd == 0
+    totals = _usage(service)["totals"]
+    assert (totals["calls"], totals["input_tokens"], totals["output_tokens"]) == (1, 16, 5)
+    assert totals["reported_cost_usd"] == 0.0
     with closing(sqlite3.connect(index.index_path)) as observer:
         before = observer.execute("PRAGMA data_version").fetchone()[0]
-        assert service.report().costs == report.costs
+        assert _usage(service)["totals"] == totals
         service.warm_index()
         assert observer.execute("PRAGMA data_version").fetchone()[0] == before
 
@@ -199,40 +206,33 @@ async def test_ledger_failure_propagates_without_discarding_index(
 
 
 @pytest.mark.asyncio
-async def test_auxiliary_requests_keep_request_windows_and_chat_cache_sequence(
-    accounting, monkeypatch
-):
+async def test_auxiliary_requests_keep_request_windows_and_chat_cache_sequence(accounting):
     service, manager, recorder = accounting
     first = {"input_tokens": 4000, "output_tokens": 20, "cache_read_tokens": 0}
     second = {"input_tokens": 4200, "output_tokens": 20, "cache_read_tokens": 4000}
+    # Two Chat steps around an hour boundary with a title request between them.
     identifier = _write_session(
         manager,
         "main",
         [
-            _assistant(model="chat/m", at=BASE, usage=first),
-            _assistant(model="chat/m", at=BASE + timedelta(seconds=2), usage=second),
+            _assistant(model="chat/m", at=BASE - timedelta(seconds=1), usage=first),
+            _assistant(model="chat/m", at=BASE + timedelta(seconds=1), usage=second),
         ],
-    )
-    monkeypatch.setattr(
-        "core.usage.usage.utc_now_timestamp",
-        lambda: format_canonical_timestamp(BASE + timedelta(seconds=1)),
     )
     call = await recorder.start(
         model="title/m", kind="title", agent_id="main", session_id=identifier
     )
     await recorder.finish(call, {"input_tokens": 1, "output_tokens": 1})
 
-    report = service.report()
-    assert report.usage.totals.model_calls == 3
-    assert report.usage.cache.suspected_breaks.evaluated_turns == 1
-    assert report.usage.cache.suspected_breaks.suspected_turns == 0
-    assert report.usage.cache.lowest_hit_rate_sessions[0].cache_turns == 2
-    narrow = service.report(
-        since=BASE + timedelta(microseconds=1), until=BASE + timedelta(seconds=1)
-    )
-    assert narrow.usage.totals.model_calls == 1
-    assert narrow.usage.totals.assistant_messages == 0
-    assert narrow.costs.recent_calls[0].kind == "title"
+    report = service.report(sections=["usage", "diagnostics"])
+    assert report["usage"]["totals"]["calls"] == 3
+    cache = report["diagnostics"]["cache"]
+    assert cache["suspected_breaks"]["evaluated_turns"] == 1
+    assert cache["suspected_breaks"]["suspected_turns"] == 0
+    assert cache["lowest_hit_rate_sessions"][0]["cache_turns"] == 2
+    narrow = _usage(service, since=BASE, until=BASE + timedelta(seconds=1))
+    assert narrow["totals"]["calls"] == 2
+    assert [row["kind"] for row in narrow["recent_calls"]] == ["chat", "title"]
 
 
 @pytest.mark.asyncio
@@ -262,15 +262,20 @@ async def test_run_activity_counts_unsaved_and_auxiliary_attempts(accounting):
     assert activity.runs[0].measured_input_tokens == 25
     assert activity.runs[0].measured_output_tokens == 5
     assert activity.runs[0].models == ["chat/m", "image/m", "retry/m"]
-    report = service.report()
-    assert report.usage.totals.assistant_messages == 1
-    assert report.usage.totals.chat_calls == 2
-    assert {row.model: row.runs for row in report.usage.models} == {
+    usage = _usage(service)
+    assert {row["key"]: row["calls"] for row in usage["breakdowns"]["kind"]} == {
+        "chat": 2,
+        "image_generation": 1,
+    }
+    assert usage["totals"]["failed_calls"] == 1
+    assert {row["key"]: row["runs"] for row in usage["breakdowns"]["model"]} == {
         "chat/m": 1,
         "retry/m": 1,
         "image/m": 1,
     }
-    assert all(row.average_run_duration_ms == 2000 for row in report.usage.models)
+    [run] = usage["top_runs"]
+    assert (run["calls"], run["input_tokens"], run["duration_ms"]) == (3, 25, 2000)
+    assert sorted(run["models"]) == ["chat/m", "image/m", "retry/m"]
 
 
 @pytest.mark.asyncio
@@ -410,11 +415,10 @@ async def test_takeover_keeps_saved_run_usage_without_reassigning_durable_calls(
     group = await service.group_usage(owner_name="swarm", group_id="group")
     assert group["usage"]["totals"]["model_calls"] == 1
     assert group["usage"]["totals"]["measured_input_tokens"] == 5
-    report = service.report()
-    assert report.usage.totals.model_calls == 3
-    assert report.usage.totals.measured_input_tokens == 115
-    chat = next(row for row in report.costs.recent_calls if row.model == "chat/m")
-    assert chat.agent_id == "before"
+    usage = _usage(service)
+    assert (usage["totals"]["calls"], usage["totals"]["input_tokens"]) == (3, 115)
+    chat = next(row for row in usage["recent_calls"] if row["model"] == "chat/m")
+    assert chat["agent_id"] == "before"
 
 
 @pytest.mark.asyncio
@@ -425,15 +429,13 @@ async def test_partial_counters_remain_incomplete_without_invented_cache_or_outp
     details = await recorder.start(model="task/m", kind="live_voice")
     await recorder.finish(details, {"cache_read_tokens": 7, "reasoning_tokens": 4})
 
-    totals = service.report().usage.totals
+    totals = _usage(service)["totals"]
 
-    assert totals.model_calls == 2
-    assert totals.unreported_calls == 2
-    assert totals.estimated_input_tokens == 12
-    assert totals.measured_output_tokens == 0
-    assert totals.cache_turns == 0
-    assert totals.cache_read_tokens == 0
-    assert totals.reasoning_turns == 0
+    assert (totals["calls"], totals["unreported_calls"]) == (2, 2)
+    assert (totals["input_tokens"], totals["estimated_input_tokens"]) == (12, 12)
+    assert totals["output_tokens"] == 0
+    assert (totals["cache_calls"], totals["cache_read_tokens"]) == (0, 0)
+    assert totals["reasoning_tokens"] == 0
 
 
 @pytest.mark.asyncio
@@ -444,7 +446,7 @@ async def test_restored_ledger_revision_rebuilds_its_projection(accounting, monk
     saved_revision, saved_records = read_ledger(recorder)
     second = await recorder.start(model="task/m", kind="decision")
     await recorder.finish(second, {"input_tokens": 20, "output_tokens": 2})
-    assert service.report().usage.totals.model_calls == 2
+    assert _usage(service)["totals"]["calls"] == 2
 
     def restored(revision=0):
         # The same ledger id with a shorter history, as after an outside file copy.
@@ -458,9 +460,8 @@ async def test_restored_ledger_revision_rebuilds_its_projection(accounting, monk
         )
 
     monkeypatch.setattr(recorder, "read_since", restored)
-    report = service.report()
-    assert report.usage.totals.model_calls == 1
-    assert report.usage.totals.measured_input_tokens == 10
+    totals = _usage(service)["totals"]
+    assert (totals["calls"], totals["input_tokens"]) == (1, 10)
 
 
 @pytest.mark.asyncio
@@ -483,16 +484,15 @@ async def test_windowed_extension_activity_includes_requests_without_saved_outpu
 
     report = service.report(since=BASE, until=BASE + timedelta(seconds=1))
 
-    assert report.overview.total_session_records == 0
-    assert report.usage.totals.model_calls == 1
-    activity = report.extensions.extensions[0].activity
-    assert activity.model_calls == 1
-    assert activity.measured_input_tokens == 10
-    assert activity.last_activity == format_canonical_timestamp(BASE)
+    assert _session_records(report) == 0
+    assert report["usage"]["totals"]["calls"] == 1
+    activity = report["extensions"]["extensions"][0]["activity"]
+    assert (activity["model_calls"], activity["measured_input_tokens"]) == (1, 10)
+    assert activity["last_activity"] == format_canonical_timestamp(BASE)
 
 
 def _models(service: StatisticsService) -> set[str]:
-    return {row.model for row in service.report().usage.models}
+    return {row["key"] for row in _usage(service)["breakdowns"]["model"]}
 
 
 @pytest.mark.asyncio

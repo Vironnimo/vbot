@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { ApiClientError } from '../api/transport.js';
 import { ensureSessionState } from '../chatState.js';
 import {
   deferred,
@@ -266,13 +267,47 @@ describe('Subagent rows', () => {
   });
 });
 
+const OUTCOME = { memory: 1, skills: 0, undone: false };
+const REVIEW_CHANGES = [
+  {
+    store: 'memory',
+    kind: 'added',
+    revisions: [1],
+    undone: false,
+    scope: 'user',
+    text: 'Prefers short answers.',
+  },
+];
+
+// A source Session whose finished review saved one Memory entry.
+function reviewedSource(chatState, agentAddress = 'alpha') {
+  const source = ensureSessionState(chatState, agentAddress, 'source');
+  source.reflectionTasks = {
+    'review-one': {
+      sessionId: 'review-session',
+      runKind: 'memory_reflection',
+      status: 'completed',
+      startedAt: '2026-09-05T10:00:00Z',
+      outcome: OUTCOME,
+    },
+  };
+  return source;
+}
+
+const runChanges = (undone) => ({
+  agent_id: 'alpha',
+  run_id: 'review-one',
+  summary: { ...OUTCOME, undone },
+  changes: REVIEW_CHANGES.map((change) => ({ ...change, undone })),
+});
+
 describe('Reflection reviews', () => {
   it('restores completed reflections on fresh history load without touching another Session', async () => {
     const { chatState, controller } = setupController({
       operationOverrides: {
         loadChatHistory: vi.fn().mockResolvedValue({
           messages: [],
-          reflection_runs: [reflectionRun()],
+          reflection_runs: [{ ...reflectionRun(), outcome: OUTCOME }],
         }),
       },
     });
@@ -285,6 +320,7 @@ describe('Reflection reviews', () => {
       runKind: 'memory_reflection',
       status: 'completed',
       startedAt: '2026-09-05T10:00:00Z',
+      outcome: OUTCOME,
     });
     expect(other.reflectionTasks).toEqual({});
   });
@@ -359,6 +395,120 @@ describe('Reflection reviews', () => {
     response.resolve({ reflection_runs: [reflectionRun('running')] });
     await Promise.resolve();
     expect(source.reflectionTasks).toEqual({});
+  });
+});
+
+describe('Review changes', () => {
+  it('loads the changes of one review and undoes them into its row', async () => {
+    const loadLearningChanges = vi.fn().mockResolvedValue(runChanges(false));
+    const undoLearningChanges = vi.fn().mockResolvedValue(runChanges(true));
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadLearningChanges, undoLearningChanges },
+    });
+    const source = reviewedSource(chatState);
+
+    expect(await controller.loadReflectionChanges(source, 'review-one')).toBe(
+      true,
+    );
+    expect(loadLearningChanges).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      'review-one',
+    );
+    expect(source.reflectionDetails['review-one']).toMatchObject({
+      changes: REVIEW_CHANGES,
+      loading: false,
+      loadError: '',
+    });
+
+    expect(await controller.undoReflection(source, 'review-one')).toBe(true);
+    expect(undoLearningChanges).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      'review-one',
+    );
+    // The row now says it was undone, and its list shows what was taken back.
+    expect(source.reflectionTasks['review-one'].outcome).toEqual({
+      ...OUTCOME,
+      undone: true,
+    });
+    expect(source.reflectionDetails['review-one']).toMatchObject({
+      changes: [{ ...REVIEW_CHANGES[0], undone: true }],
+      undoing: false,
+      undoError: null,
+    });
+
+    // Only Identity Agents learn: a Project Session has no review changes.
+    const project = reviewedSource(chatState, 'alpha@project');
+    expect(await controller.loadReflectionChanges(project, 'review-one')).toBe(
+      false,
+    );
+    expect(await controller.undoReflection(project, 'review-one')).toBe(false);
+    expect(loadLearningChanges).toHaveBeenCalledOnce();
+    expect(undoLearningChanges).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a refused undo with the later change that blocks it until the list reopens', async () => {
+    const conflict = {
+      store: 'memory',
+      revision: 1,
+      scope: 'user',
+      text: 'Prefers short answers.',
+      later: { revision: 2, at: '2026-09-05T10:30:00Z', actor: 'rpc' },
+    };
+    const refusal = new ApiClientError(
+      'learning_undo_conflict',
+      'Nothing was undone.',
+      { details: { code: 'learning_undo_conflict', data: conflict } },
+    );
+    const failure = new ApiClientError(
+      'domain_error',
+      'The undo failed part-way. Undo again to finish.',
+    );
+    const loadLearningChanges = vi.fn().mockResolvedValue(runChanges(false));
+    const undoLearningChanges = vi
+      .fn()
+      .mockRejectedValueOnce(refusal)
+      .mockRejectedValueOnce(failure);
+    const { chatState, controller } = setupController({
+      operationOverrides: { loadLearningChanges, undoLearningChanges },
+    });
+    const source = reviewedSource(chatState);
+
+    expect(await controller.undoReflection(source, 'review-one')).toBe(false);
+
+    expect(source.reflectionDetails['review-one']).toMatchObject({
+      undoing: false,
+      undoError: { conflict, message: 'Nothing was undone.' },
+    });
+    expect(source.reflectionTasks['review-one'].outcome).toEqual(OUTCOME);
+    expect(loadLearningChanges).not.toHaveBeenCalled();
+
+    // A failure while writing may leave part of the review undone, so the
+    // review is read again.
+    expect(await controller.undoReflection(source, 'review-one')).toBe(false);
+    expect(source.reflectionDetails['review-one'].undoError).toEqual({
+      conflict: null,
+      message: failure.message,
+    });
+    await vi.waitFor(() =>
+      expect(source.reflectionDetails['review-one'].changes).toEqual(
+        REVIEW_CHANGES,
+      ),
+    );
+    expect(loadLearningChanges).toHaveBeenCalledExactlyOnceWith(
+      'alpha',
+      'review-one',
+    );
+    expect(source.reflectionDetails['review-one'].undoError).toEqual({
+      conflict: null,
+      message: failure.message,
+    });
+
+    // Reopening the list reads the review again; an old refusal no longer
+    // describes it.
+    expect(await controller.loadReflectionChanges(source, 'review-one')).toBe(
+      true,
+    );
+    expect(source.reflectionDetails['review-one'].undoError).toBeNull();
   });
 });
 

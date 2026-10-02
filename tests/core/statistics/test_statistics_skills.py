@@ -323,23 +323,26 @@ def test_report_joins_seen_skills_and_activation_notes_per_agent_key(
     manager.record_seen_skills(librarian.address, SeenSkillsUpdate(baseline=("teach",)))
     inventory = _FakeInventory(global_skills=[("deploy", "bundled"), ("teach", "global")])
 
-    report = statistics(
-        ["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory
-    ).report()
+    skills = statistics(["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory).report(
+        sections=["skills"]
+    )["skills"]
 
-    skills = report.skills
-    deploy = next(row for row in skills.skills if row.name == "deploy")
-    teach = next(row for row in skills.skills if row.name == "teach")
-    assert (deploy.offered_sessions, deploy.activated_sessions) == (2, 2)
-    assert deploy.usage_rate == 1.0
+    deploy = next(row for row in skills["skills"] if row["name"] == "deploy")
+    teach = next(row for row in skills["skills"] if row["name"] == "teach")
+    assert (deploy["offered_sessions"], deploy["activated_sessions"]) == (2, 2)
+    assert deploy["usage_rate"] == 1.0
     # A project Agent is keyed by its address form.
-    assert [(entry.key, entry.count) for entry in deploy.by_agent] == [
-        ("builder@vbot", 1),
-        ("main", 1),
+    assert deploy["by_agent"] == [
+        {"key": "builder@vbot", "count": 1},
+        {"key": "main", "count": 1},
     ]
-    assert (teach.offered_sessions, teach.activated_sessions) == (2, 0)
-    assert (skills.total_skills, skills.used_skills, skills.never_used_skills) == (2, 1, 1)
-    assert skills.offered_unactivated_skills == 1
+    assert (teach["offered_sessions"], teach["activated_sessions"]) == (2, 0)
+    assert (skills["total_skills"], skills["used_skills"], skills["never_used_skills"]) == (
+        2,
+        1,
+        1,
+    )
+    assert skills["offered_unactivated_skills"] == 1
 
 
 def test_report_window_filters_offers_by_session_start_and_activations_by_note_time(
@@ -350,12 +353,12 @@ def test_report_window_filters_offers_by_session_start_and_activations_by_note_t
     inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
 
     report = statistics(skill_inventory=inventory).report(
-        since=BASE - timedelta(hours=1), until=BASE + timedelta(hours=1)
+        since=BASE - timedelta(hours=1), until=BASE + timedelta(hours=1), sections=["skills"]
     )
 
-    [deploy] = report.skills.skills
-    assert (deploy.offered_sessions, deploy.activated_sessions) == (0, 1)
-    assert deploy.usage_rate is None
+    [deploy] = report["skills"]["skills"]
+    assert (deploy["offered_sessions"], deploy["activated_sessions"]) == (0, 1)
+    assert deploy["usage_rate"] is None
 
 
 def test_skill_usage_returns_each_agents_last_activation_and_count(
@@ -390,10 +393,9 @@ def test_service_without_an_inventory_reports_an_empty_skills_section(
 ) -> None:
     _offer_session(manager, "main", ("deploy",), [_skill_note("deploy", BASE)])
 
-    report = statistics().report()
+    skills = statistics().report(sections=["skills"])["skills"]
 
-    assert report.skills.skills == []
-    assert report.skills.total_skills == 0
-    assert report.skills.offered_unactivated_skills == 0
-    assert report.skills.skills_without_offer_data == 0
-    assert json.loads(json.dumps(report.to_dict()))["skills"]["total_skills"] == 0
+    assert skills["skills"] == []
+    assert skills["total_skills"] == 0
+    assert skills["offered_unactivated_skills"] == 0
+    assert skills["skills_without_offer_data"] == 0

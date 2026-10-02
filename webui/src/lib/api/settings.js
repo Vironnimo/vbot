@@ -458,7 +458,19 @@ export function setExtensionSecret(params = {}, options = {}) {
   return rpc('extensions.set_secret', params, options);
 }
 
-export function getStatisticsReport(params = {}, options = {}) {
+// One Statistics report: the requested `sections` (all without them) over
+// `since`/`until`, with calendar days in the IANA `timezone`.
+export function getStatisticsReport(
+  { since, until, timezone, sections } = {},
+  options = {},
+) {
+  const params = {};
+  if (since) params.since = since;
+  if (until) params.until = until;
+  if (timezone) params.timezone = timezone;
+  if (Array.isArray(sections) && sections.length > 0) {
+    params.sections = [...sections];
+  }
   return rpc('statistics.report', params, options);
 }
 

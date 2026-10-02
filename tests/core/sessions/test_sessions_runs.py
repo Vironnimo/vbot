@@ -10,7 +10,9 @@ from core.chat import ChatMessage
 from core.chat.errors import ChatSessionError
 from core.chat.messages import ToolCall
 from core.runs import ChatRunManager, RunAdmission, RunKind
-from core.sessions import SESSION_RUN_KINDS_META_KEY
+from core.sessions import SESSION_RUN_KINDS_META_KEY, SessionRunRecord
+from core.sessions._types import SessionRunCompletion
+from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import complete_run
 
 
@@ -282,3 +284,55 @@ def test_snapshot_lists_page_runs_in_start_order(manager):
         ("run-b", True),
         ("run-a", True),
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_records_read_the_sessions_own_runs_with_completion_facts(manager):
+    source = manager.create("coder")
+    source.start_run("done").append(ChatMessage.user("question"))
+    source._store.finish_run(
+        source.address,
+        SessionRunCompletion(
+            run_id="done",
+            status="completed",
+            timing={
+                "started_at": "2026-09-19T10:00:01Z",
+                "completed_at": "2026-09-19T10:00:03Z",
+                "duration_ms": 2000,
+            },
+            iteration_count=3,
+            change_stats={"files": 2, "added": 10, "removed": 3, "paths": ["a.py", "b.py"]},
+            completion_reason="answered",
+        ),
+    )
+    source.start_run("open")
+    done, running = source.run_records()
+    assert done == SessionRunRecord(
+        "done",
+        "user",
+        "completed",
+        done.started_at,
+        "2026-09-19T10:00:03.000000Z",
+        2000,
+        "2026-09-19T10:00:01.000000Z",
+        "answered",
+        3,
+        2,
+        10,
+        3,
+    )
+    assert (running.run_id, running.status, running.completed_at, running.duration_ms) == (
+        "open",
+        "running",
+        None,
+        None,
+    )
+
+    # A fork's copies of its source's Runs are never its own, even once materialized.
+    fork = await manager.fork(source.address)
+    fork.start_run("own")
+    generation = fork.load_since().cursor.generation_id
+    manager.delete(source.address)
+    assert [record.run_id for record in fork.run_records(generation)] == ["own"]
+    with pytest.raises(SessionNotFoundError):
+        fork.run_records("another-generation")

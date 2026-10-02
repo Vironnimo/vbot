@@ -166,6 +166,8 @@ export {
   loadChatRunResult,
   loadChatHistory,
   loadReflectionRuns,
+  loadLearningChanges,
+  undoLearningChanges,
   inspectSubAgentWork,
   createSession,
   startChatRun,

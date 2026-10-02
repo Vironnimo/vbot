@@ -293,12 +293,12 @@ BOOTSTRAP_HELP = {
 
 
 STATISTICS_HELP = {
-    "overview": "Show the overview section: agents, sessions, runs, and message totals",
-    "usage": "Show the usage section: token totals and per-provider/model breakdowns",
-    "runs": "Show the runs section: counts, status rates, and durations",
+    "overview": "Show cost, tokens, cache, Run outcomes, leaders, and insights",
+    "usage": "Show cost and tokens by Model, Provider, Agent, Project, origin, and kind",
+    "runs": "Show Run outcomes, duration and cost percentiles, and notable Runs",
     "compactions": "Show checkpoint counts, reclaimed context, Strategies, and top Sessions",
-    "errors": "Show the errors section: totals and breakdowns by kind, provider, and agent",
-    "tools": "Show the tools section: call counts and per-tool success rates",
+    "errors": "Show Run errors and failed Model requests by kind, Provider, Model, and Agent",
+    "tools": "Show Tool calls, rejections, latency, and rejection codes",
     "skills": "Show Skill offers, activations, and evidence-backed offer conversion",
 }
 

@@ -6,14 +6,11 @@ import json
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import replace
-from datetime import datetime
 from typing import override
 
-from core.projects.address import format_agent_address
 from core.sessions import SessionAddress
 from core.statistics._accumulators import ReportLedger
-from core.statistics._extensions import extension_actor_key
-from core.statistics._projection import CALL_COLUMNS, datetime_instant
+from core.statistics._projection import CALL_COLUMNS
 from core.statistics._units import ReportUnit, UnitScan
 from core.statistics._usage import (
     ESTIMATED_INPUT_SQL,
@@ -27,78 +24,23 @@ RunKey = tuple[SessionAddress | int, str]
 
 
 class AccountingScan(UnitScan):
-    """Select durable call facts, retaining live labels and Extension slices."""
+    """Select the durable requests of owned Run slices as a unit scan.
+
+    Each unit's requests are the ledger requests recorded for its Session
+    address and Run id; a unit without any keeps its saved usage.
+    """
 
     call_status_sql = "r.status"
 
-    def __init__(
-        self,
-        connection: sqlite3.Connection,
-        live_units: Sequence[ReportUnit],
-        *,
-        since: datetime | None = None,
-        until: datetime | None = None,
-        group: bool = False,
-    ) -> None:
-        self._prefix = "stat_selected_usage" if group else "stat_usage"
-        if group:
-            _select_runs(connection, live_units)
-            units = list(live_units)
-            self.live_positions: list[int | None] = list(range(len(units)))
-        else:
-            live = {
-                unit.address: (position, unit)
-                for position, unit in enumerate(live_units)
-                if unit.address is not None
-            }
-            units = []
-            self.live_positions = []
-            conditions = ["c.session_key = a.session_key"]
-            bounds = []
-            if since is not None:
-                conditions.append("c.instant >= ?")
-                bounds.append(datetime_instant(since))
-            if until is not None:
-                conditions.append("c.instant <= ?")
-                bounds.append(datetime_instant(until))
-            for key, project, agent, session, owner, title in connection.execute(
-                "SELECT a.session_key, a.project_id, a.agent_id, a.session_id, a.owner_name, "
-                "a.session_title FROM stat_usage_units a WHERE EXISTS "
-                f"(SELECT 1 FROM stat_usage_calls c WHERE {' AND '.join(conditions)}) "
-                "ORDER BY a.session_key",
-                bounds,
-            ):
-                address = (
-                    SessionAddress(project or None, agent, session) if agent and session else None
-                )
-                current = live.get(address) if address is not None else None
-                if current is not None:
-                    position, unit = current
-                    units.append(replace(unit, session_key=key))
-                    self.live_positions.append(position)
-                else:
-                    display = (
-                        extension_actor_key(owner)
-                        if owner
-                        else format_agent_address(agent, project or None)
-                        if agent
-                        else ""
-                    )
-                    units.append(ReportUnit(display, key, session, title=title, address=address))
-                    self.live_positions.append(None)
-        super().__init__(connection, units, since=since, until=until)
+    def __init__(self, connection: sqlite3.Connection, units: Sequence[ReportUnit]) -> None:
+        _select_runs(connection, units)
+        super().__init__(connection, units)
 
     @override
     def table(self, table: str) -> str:
         if table in {"stat_calls", "stat_records"}:
-            return f"{self._prefix}_{table.removeprefix('stat_')}"
+            return f"stat_selected_usage_{table.removeprefix('stat_')}"
         return table
-
-    @override
-    def _scanned_sessions(self) -> set[int]:
-        # Archived and standalone requests have no live Session range. Their
-        # own indexed request timestamps supply the authoritative window.
-        return {unit.session_key for unit in self.units}
 
 
 def _select_runs(connection: sqlite3.Connection, units: Sequence[ReportUnit]) -> None:

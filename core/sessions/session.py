@@ -25,6 +25,7 @@ from core.sessions._types import (
     SessionReadBatch,
     SessionReadCursor,
     SessionRunAdmission,
+    SessionRunRecord,
     SessionRunResult,
     SessionStatusSnapshot,
     ToolResultFacts,
@@ -526,6 +527,16 @@ class ChatSession:
             SessionHistoryRecord(sequence=sequence, message=message)
             for sequence, message in records
         )
+
+    def run_records(
+        self, expected_generation_id: str | None = None
+    ) -> tuple[SessionRunRecord, ...]:
+        """Read the Runs this Session admitted itself, in start order.
+
+        Raises ``SessionNotFoundError`` when the Session is gone or, with
+        *expected_generation_id*, when another generation is live.
+        """
+        return self._store.run_records(self.address, expected_generation_id)
 
     def reflection_runs(self) -> list[JsonObject]:
         return self._store.reflection_runs(self.address)

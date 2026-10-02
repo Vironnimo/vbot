@@ -1,10 +1,11 @@
 """Statistics RPC handler.
 
-``statistics.report`` returns a full :class:`StatisticsReport` from the
-incrementally reconciled Session read model. ``statistics.run_activity`` returns
-the bounded Run projection overlapping a required time window for Provider-limit
-correlation. Both run on the Statistics index database's worker pool and expose
-no raw Tool arguments or Reasoning.
+``statistics.report`` returns the requested report sections (default: all of
+``REPORT_SECTIONS``) for an optional hour-aligned window, with day series in an
+IANA timezone (default: the Settings timezone). ``statistics.run_activity``
+returns the bounded Run projection overlapping a required time window for
+Provider-limit correlation. Both run on the Statistics index database's worker
+pool and expose no raw Tool arguments or Reasoning.
 """
 
 from __future__ import annotations
@@ -12,15 +13,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from core.settings.settings import SettingsValidationError, validate_timezone_name
 from core.skills import project_skill_origin, scan_skill_names
-from core.statistics import StatisticsService
+from core.statistics import REPORT_SECTIONS, StatisticsService
 from server.rpc.dispatcher import RpcMethodHandler
 from server.rpc.errors import RPC_ERROR_INVALID_REQUEST, RpcError
 from server.rpc.validation import _reject_unsupported
 
 JsonObject = dict[str, Any]
 
-_SUPPORTED_FIELDS = {"since", "until"}
+_SUPPORTED_FIELDS = {"since", "until", "timezone", "sections"}
 _RUN_ACTIVITY_SUPPORTED_FIELDS = {"since", "until"}
 
 
@@ -32,8 +34,39 @@ async def _statistics_report(state: Any, params: JsonObject) -> JsonObject:
     if since is not None and until is not None and since > until:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "params.since must not be after params.until")
 
-    report = await statistics_service(state).report_async(since=since, until=until)
-    return report.to_dict()
+    timezone = _report_timezone(state, params)
+    sections = _report_sections(params)
+    return await statistics_service(state).report_async(
+        since=since, until=until, timezone=timezone, sections=sections
+    )
+
+
+def _report_timezone(state: Any, params: JsonObject) -> str:
+    value = params.get("timezone")
+    if value is None:
+        return cast(str, state.runtime.timezone_name())
+    try:
+        return validate_timezone_name(value, label="params.timezone")
+    except SettingsValidationError as error:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(error)) from error
+
+
+def _report_sections(params: JsonObject) -> tuple[str, ...] | None:
+    value = params.get("sections")
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value or not all(isinstance(v, str) for v in value):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST, "params.sections must be a non-empty list of section names"
+        )
+    unknown = sorted(set(value) - set(REPORT_SECTIONS))
+    if unknown:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"unknown statistics sections: {', '.join(unknown)}; "
+            f"expected any of {', '.join(REPORT_SECTIONS)}",
+        )
+    return tuple(name for name in REPORT_SECTIONS if name in value)
 
 
 async def _statistics_run_activity(state: Any, params: JsonObject) -> JsonObject:

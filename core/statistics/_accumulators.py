@@ -1,4 +1,4 @@
-"""Internal mutable records used while aggregating one Statistics report."""
+"""Internal mutable records used while aggregating one Extension group report."""
 
 from __future__ import annotations
 
@@ -9,19 +9,13 @@ from core.statistics._measurements import _provider_of
 from core.statistics._projection import day_key
 
 if TYPE_CHECKING:
-    from core.statistics._extensions import ExtensionSlice
     from core.statistics._units import ReportUnit
 
 
 @dataclass
 class _AgentAcc:
     agent_id: str
-    sessions: int = 0
     runs: int = 0
-    chat_messages: int = 0
-    session_records: int = 0
-    errors: int = 0
-    last_activity: str | None = None
 
 
 @dataclass
@@ -87,25 +81,23 @@ class _DailyAcc:
 class ReportLedger:
     """Report units plus the tallies that several report sections feed.
 
-    Units and their Extension slices are indexed by processing position.
-    Agent rows keep first-registration order; Model, Provider and daily
-    tallies are filled by the usage, error and Run sections alike and read
-    by every section that reports them.
+    Units are indexed by processing position. Agent rows keep
+    first-registration order; Model, Provider and daily tallies are filled by
+    the usage, error and Run sections alike and read by every section that
+    reports them.
     """
 
     def __init__(self) -> None:
         self.units: list[ReportUnit] = []
-        self.slices: list[ExtensionSlice | None] = []
         self.agent_order: list[str] = []
         self.agents: dict[str, _AgentAcc] = {}
         self.models: dict[str, _ModelAcc] = {}
         self.providers: dict[str, _ProviderAcc] = {}
         self.daily: dict[str, _DailyAcc] = {}
 
-    def add_unit(self, unit: ReportUnit, unit_slice: ExtensionSlice | None) -> None:
+    def add_unit(self, unit: ReportUnit) -> None:
         self.agent(unit.display_key)
         self.units.append(unit)
-        self.slices.append(unit_slice)
 
     def agent(self, agent_id: str) -> _AgentAcc:
         accumulator = self.agents.get(agent_id)

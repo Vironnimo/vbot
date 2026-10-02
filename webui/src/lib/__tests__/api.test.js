@@ -138,6 +138,8 @@ describe('RPC wrappers', () => {
   const statisticsWindow = {
     since: '2026-06-01T00:00:00Z',
     until: '2026-06-07T12:00:00Z',
+    timezone: 'Europe/Berlin',
+    sections: ['tools', 'skills'],
   };
   const subAgentWork = {
     id: 'sub-work-one',
@@ -207,6 +209,16 @@ describe('RPC wrappers', () => {
       'subagent.inspect',
       (o) => api.inspectSubAgentWork(subAgentWork, o),
       subAgentWork,
+    ],
+    [
+      'learning.changes',
+      (o) => api.loadLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
+    ],
+    [
+      'learning.undo',
+      (o) => api.undoLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
     ],
     [
       'agent.rename',
@@ -689,6 +701,11 @@ describe('RPC wrappers', () => {
       'a non-positive Memory entry id',
       () => api.removeAgentMemory('coder', 'agent', 0),
       'memory.remove',
+    ],
+    [
+      'an undo without a Run id',
+      () => api.undoLearningChanges('coder', ''),
+      'learning.undo',
     ],
     [
       'a Project without cwd',

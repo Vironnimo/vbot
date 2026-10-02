@@ -11,25 +11,27 @@ from __future__ import annotations
 from collections import Counter
 
 from core.statistics._accumulators import ReportLedger, _ModelAcc, _ProviderAcc
-from core.statistics._cache import CacheFacts, load_cache_facts
-from core.statistics._projection import CALL_KIND_CHAT, CALL_KIND_COMPACTION
+from core.statistics._cache import (
+    TOP_CACHE_BREAK_INCIDENTS,
+    CacheFacts,
+    cache_section,
+    load_cache_facts,
+)
+from core.statistics._projection import (
+    CACHE_SQL,
+    CALL_KIND_CHAT,
+    CALL_KIND_COMPACTION,
+    REASONING_SQL,
+)
 from core.statistics._units import UnitScan
 from core.statistics.report import (
-    CacheSection,
     ModelUsage,
     ProviderUsage,
-    SuspectedCacheBreaks,
     UsageDailyPoint,
     UsageKind,
     UsageSection,
     UsageTotals,
 )
-
-TOP_CACHE_SESSIONS = 20
-
-
-TOP_CACHE_BREAK_INCIDENTS = 20
-
 
 # Token sums over ``stat_calls`` rows aliased ``c``, shared by every section
 # that reports call tokens.
@@ -45,12 +47,6 @@ MEASURED_OUTPUT_SQL = (
 ESTIMATED_OUTPUT_SQL = (
     "SUM(CASE WHEN c.output_estimated = 1 THEN COALESCE(c.output_tokens, 0) ELSE 0 END)"
 )
-# Reasoning counts only for a measured output with a valid reported breakdown.
-_REASONING = (
-    "(c.output_estimated = 0 AND c.output_tokens IS NOT NULL AND c.reasoning_tokens IS NOT NULL)"
-)
-# Cache fields count only for a measured prompt that reported them.
-_CACHE = "(c.input_estimated = 0 AND c.input_tokens IS NOT NULL AND c.has_cache = 1)"
 
 
 class UsageAccumulator:
@@ -109,12 +105,12 @@ class UsageAccumulator:
                     AND c.input_tokens IS NOT NULL AND c.output_tokens IS NOT NULL),
                 {MEASURED_INPUT_SQL}, {ESTIMATED_INPUT_SQL},
                 {MEASURED_OUTPUT_SQL}, {ESTIMATED_OUTPUT_SQL},
-                SUM(CASE WHEN {_REASONING} THEN c.reasoning_tokens ELSE 0 END),
-                SUM({_REASONING}),
-                SUM({_CACHE}),
-                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.input_tokens, 0) ELSE 0 END),
-                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END),
-                SUM(CASE WHEN {_CACHE} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)
+                SUM(CASE WHEN {REASONING_SQL} THEN c.reasoning_tokens ELSE 0 END),
+                SUM({REASONING_SQL}),
+                SUM({CACHE_SQL}),
+                SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.input_tokens, 0) ELSE 0 END),
+                SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_read_tokens, 0) ELSE 0 END),
+                SUM(CASE WHEN {CACHE_SQL} THEN COALESCE(c.cache_write_tokens, 0) ELSE 0 END)
             FROM {scan.source("stat_calls", "c")}
             WHERE {scan.where("c")}
             GROUP BY c.kind, c.purpose, c.model_key, c.day
@@ -219,7 +215,7 @@ class UsageAccumulator:
                 )
                 for date, bucket in ledger.sorted_daily()
             ],
-            cache=self._build_cache(),
+            cache=cache_section(self.cache),
             kinds=[
                 UsageKind(
                     kind,
@@ -230,22 +226,6 @@ class UsageAccumulator:
                 )
                 for kind, counts in sorted(self.kinds.items())
             ],
-        )
-
-    def _build_cache(self) -> CacheSection:
-        # Worst hit rate first; equal rates surface the bigger session (more
-        # tokens paid) before the smaller one.
-        sessions = sorted(
-            self.cache.sessions,
-            key=lambda record: (record.hit_rate, -record.input_tokens, record.session_id),
-        )[:TOP_CACHE_SESSIONS]
-        return CacheSection(
-            lowest_hit_rate_sessions=sessions,
-            suspected_breaks=SuspectedCacheBreaks(
-                evaluated_turns=self.cache.evaluated_turns,
-                suspected_turns=self.cache.suspected_turns,
-                incidents=self.cache.incidents,
-            ),
         )
 
 

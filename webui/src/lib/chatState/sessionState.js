@@ -143,6 +143,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       compactionPolicy: null,
       backgroundBashStatuses: {},
       reflectionTasks: {},
+      // Per review Run id: its loaded change list and undo state.
+      reflectionDetails: {},
       hasOlderHistory: false,
       historyBefore: '',
       loadingOlderHistory: false,

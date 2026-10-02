@@ -5,15 +5,27 @@ from __future__ import annotations
 import builtins
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
 from core.chat.messages import ChatMessage
-from core.sessions import ChatSession, ChatSessionManager, SessionReadBatch, SessionReadCursor
+from core.sessions import (
+    ChatSession,
+    ChatSessionManager,
+    SessionAddress,
+    SessionReadBatch,
+    SessionReadCursor,
+)
+from core.sessions._types import SessionRunAdmission
 from core.statistics import StatisticsService
+from core.usage import UsageRecorder
+from core.utils.timestamps import format_canonical_timestamp
 from tests.core.sessions.history_fixtures import seed_history
 
 BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -141,6 +153,58 @@ def _write_session(
     session = manager.create(agent_id, session_id=session_id, project_id=project_id)
     seed_history(session, messages)
     return session.id
+
+
+def _admit(
+    manager: ChatSessionManager,
+    address: SessionAddress,
+    run_id: str,
+    kind: str = "user",
+    *,
+    at: datetime = BASE,
+) -> None:
+    """Admit a Run of ``kind`` started at ``at``; ``seed_history`` then writes and ends it."""
+    manager._store.admit_run(
+        address,
+        SessionRunAdmission(
+            run_id=run_id, run_kind=kind, started_at=format_canonical_timestamp(at)
+        ),
+    )
+
+
+async def _call(
+    ledger: UsageRecorder,
+    usage: dict[str, Any] | None,
+    *,
+    kind: str = "chat",
+    model: str = "chat/m",
+    address: SessionAddress | None = None,
+    run_id: str | None = None,
+    owner_name: str | None = None,
+    status: str = "completed",
+    at: datetime | None = None,
+) -> str:
+    """Record one finished ledger request, started at ``at`` (default: the ledger clock)."""
+    started = (
+        nullcontext()
+        if at is None
+        else patch(
+            "core.usage.usage.utc_now_timestamp", return_value=format_canonical_timestamp(at)
+        )
+    )
+    with started:
+        call = await ledger.start(
+            model=model,
+            kind=kind,
+            agent_id=None if address is None else address.agent_id,
+            project_id=None if address is None else address.project_id,
+            session_id=None if address is None else address.session_id,
+            run_id=run_id,
+            owner_name=owner_name,
+            group_id=None if owner_name is None else "group",
+        )
+    await ledger.finish(call, usage, status=status)
+    return call
 
 
 def _index_path(data_dir: Path) -> Path:

@@ -421,8 +421,12 @@ async def test_active_runs_lists_running_runs_of_every_session_only() -> None:
     assert set(manager.active_runs()) == {run for run, _release in held_runs.values()}
     assert all(run.status == RunStatus.RUNNING for run in manager.active_runs())
     assert manager.active_run(agent_id="coder", session_id="session-three", project_id=None) is None
+    assert all(manager.is_running(run.id) for run, _release in held_runs.values())
+    assert not manager.is_running(finished.id)
+    assert not manager.is_running("run-unknown")
 
     for session_id, (run, release) in held_runs.items():
         release.set()
         assert await run.wait() == session_id
+        assert not manager.is_running(run.id)
     assert manager.active_runs() == []
