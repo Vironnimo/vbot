@@ -679,8 +679,7 @@ class MCPService:
                 return self._status(identifier)
             if operation == "reconnect":
                 # A new client and, for a local server, a new process.
-                await self._stop(identifier)
-                self._runner(config).start()
+                (await self._replace_runner(identifier, config)).start()
                 self.api.logger.info("MCP connection restarted (connection=%s)", identifier)
                 return self._status(identifier)
             if operation == "events":
@@ -885,19 +884,13 @@ class MCPService:
                 await self._store_connections(records)
             if operation == "remove":
                 self.catalogs.forget(identifier)
-            if operation in {"disable", "remove"}:
-                previous = self.runners.get(identifier)
                 await self._stop(identifier)
-                if operation == "disable":
-                    # Its Tools stay registered but not ready, so the Agent no longer
-                    # sees them and naming one says the connection is disabled.
-                    runner = self._runner(config)
-                    if previous is not None and previous.catalog:
-                        runner.catalog = previous.catalog
-                        self._publish(runner, runner.catalog)
-            if operation == "remove":
                 forget_sign_in(self._host(), identifier)
-            elif config["enabled"]:
+            elif operation == "disable":
+                # Its Tools stay registered but not ready, so the Agent no longer
+                # sees them and naming one says the connection is disabled.
+                await self._replace_runner(identifier, config)
+            else:
                 runner = self._runner(config)
                 # Republished, its Tools no longer say the connection is disabled.
                 self._publish(runner, runner.catalog or None)
@@ -924,6 +917,20 @@ class MCPService:
         self.connections = records
         if changed:
             self._connection_changed(*changed)
+
+    async def _replace_runner(self, identifier: str, config: dict[str, Any]) -> ConnectionRunner:
+        """Close *identifier*'s client and give the connection a new, unstarted runner.
+
+        The connection's Tools stay registered with the last catalog but are not
+        ready until the new runner connects; naming one tells the Agent why.
+        """
+        previous = self.runners.get(identifier)
+        await self._stop(identifier)
+        runner = self._runner(config)
+        if previous is not None and previous.catalog:
+            runner.catalog = previous.catalog
+            self._publish(runner, runner.catalog)
+        return runner
 
     async def _stop(self, identifier: str) -> None:
         runner = self.runners.pop(identifier, None)

@@ -302,10 +302,13 @@ async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_o
 ):
     started: list[ConnectionRunner] = []
     monkeypatch.setattr(ConnectionRunner, "start", lambda runner: started.append(runner))
-    service, _registry = await start_service(host)
+    service, registry = await start_service(host)
     try:
         await service.manage("save", {"connection": _CONNECTION})
         first = service.runners["example"]
+        first.catalog = dict(_CATALOG)
+        service._publish(first, first.catalog)
+        remote = remote_tool_name("example", "get_scene_info")
 
         with caplog.at_level(logging.INFO):
             await service.manage("reconnect", {"id": "example"})
@@ -314,6 +317,9 @@ async def test_reconnect_restarts_an_enabled_connection_and_refuses_a_disabled_o
         assert started == [first, service.runners["example"]]
         assert service.runners["example"] is not first
         assert "MCP connection restarted (connection=example)" in caplog.text
+        # Its Tools stay registered meanwhile, not ready until it is connected again.
+        assert registry.get(remote) is not None
+        assert remote not in _tool_names(registry, ready_only=True)
         await service.manage("save", {"connection": {**_CONNECTION, "enabled": False}})
         with pytest.raises(ValueError, match="disabled"):
             await service.manage("reconnect", {"id": "example"})
