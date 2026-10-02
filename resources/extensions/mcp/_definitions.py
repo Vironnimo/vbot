@@ -200,9 +200,9 @@ MCP_MESSAGES = {
         "the MCP server {connection} cannot be reached."
     ),
     "disconnected": (
-        "The MCP connection {connection} is not connected, so nothing was run. Call "
-        "mcp_{connection} with action search to reconnect it, then call this tool again. If "
-        "it cannot connect, tell the user that the MCP server {connection} cannot be reached."
+        "The MCP connection {connection} is not connected, so nothing was run. Call this tool "
+        "again through mcp_{connection}, which reconnects first. If it cannot connect, tell the "
+        "user that the MCP server {connection} cannot be reached."
     ),
     "invalid_result": (
         "The MCP tool {tool} ran, but its result does not match the output schema the tool "

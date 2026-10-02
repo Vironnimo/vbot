@@ -47,6 +47,11 @@ _DISABLED = (
     "Tell the user to enable it in Settings -> Integrations -> Extensions -> MCP connections "
     "if it is needed.\nretryable: false"
 )
+_DISCONNECTED = (
+    "Error (tool_not_ready): The MCP connection example is not connected, so nothing was run. "
+    "Call this tool again through mcp_example, which reconnects first. If it cannot connect, "
+    "tell the user that the MCP server example cannot be reached.\nretryable: false"
+)
 
 
 @pytest.mark.asyncio
@@ -63,6 +68,14 @@ async def test_disabling_a_connection_that_ignores_cancellation_still_retires_it
     service._publish(runner, runner.catalog)
     names = ["mcp_example", remote_tool_name("example", "echo")]
     assert set(names) <= set(_tool_names(registry, ready_only=True))
+    # While the connection is down, its remote Tools are hidden and say how to reconnect.
+    runner.state = "failed"
+    assert names[1] not in _tool_names(registry, ready_only=True)
+    result = await registry.dispatch(
+        replace(context(host), tool_name=names[1]), {}, allowed_tools=names
+    )
+    assert model_text(result) == _DISCONNECTED
+    runner.state = "connected"
     release = asyncio.Event()
 
     async def stuck() -> None:
