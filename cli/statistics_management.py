@@ -291,6 +291,11 @@ def _format_runs(section: Section, window: object) -> str:
         f"(failed model requests={_int(errors.get('failed_attempts'))}; "
         "details: vbot statistics errors)"
     )
+    lines.append(
+        "run cost: the Model requests made inside each Run, counted in the window the Run "
+        "started in; requests outside any Run (background work) count only in overview "
+        "and usage"
+    )
 
     lines.append("")
     lines.append("by origin:")

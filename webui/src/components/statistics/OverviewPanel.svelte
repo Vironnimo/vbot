@@ -6,6 +6,7 @@
   import Button from '../ui/Button.svelte';
   import DataTable from '../ui/DataTable.svelte';
   import EmptyState from '../ui/EmptyState.svelte';
+  import InfoHint from '../ui/InfoHint.svelte';
   import TrendChart from './TrendChart.svelte';
   import {
     barEntries,
@@ -320,6 +321,7 @@
       <div class="stats-block__head">
         <h3 class="stats-block__title">
           {t('statistics.overview.costByOrigin')}
+          <InfoHint text={t('statistics.overview.costByOriginHint')} />
         </h3>
         {@render allLink('origin', t('statistics.overview.allOrigins'))}
       </div>

@@ -147,8 +147,9 @@
     ...durationColumnsOf('origin'),
     {
       id: 'cost_usd',
-      label: t('statistics.col.cost'),
+      label: t('statistics.col.runCost'),
       align: 'end',
+      hint: t('statistics.runs.runCostHint'),
       cell: costCell,
     },
     {
@@ -191,8 +192,9 @@
     ...durationColumnsOf('agent'),
     {
       id: 'cost_usd',
-      label: t('statistics.col.cost'),
+      label: t('statistics.col.runCost'),
       align: 'end',
+      hint: t('statistics.runs.runCostHint'),
       cell: costCell,
     },
     {

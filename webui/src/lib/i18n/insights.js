@@ -517,6 +517,7 @@ export default Object.freeze({
   'statistics.col.p95Approx': 'P95 ≈',
   'statistics.col.perMillion': 'Per 1M tokens',
   'statistics.col.retrospective': 'Priced today',
+  'statistics.col.runCost': 'Run cost',
   'statistics.col.role': 'Role',
   'statistics.col.run': 'Run',
   'statistics.col.sessionRecords': 'Session records',
@@ -606,6 +607,8 @@ export default Object.freeze({
   'statistics.overview.cacheDetail': '{tokens} read from cache',
   'statistics.overview.cost': 'Cost',
   'statistics.overview.costByOrigin': 'Cost by origin',
+  'statistics.overview.costByOriginHint':
+    'Every Model request in this period by who started it, including requests made outside any Run, such as speech recognition, search indexing and other background work. The Runs tab counts only requests made inside Runs, so its costs can be lower.',
   'statistics.overview.costDetail':
     '{reported} reported · {estimated} estimated',
   'statistics.overview.costHint':
@@ -653,6 +656,8 @@ export default Object.freeze({
   'statistics.runs.notable': 'Notable Runs',
   'statistics.runs.runCount': '{count} Runs',
   'statistics.runs.running': '{count} still running',
+  'statistics.runs.runCostHint':
+    'What the Runs that started in this period cost: the Model requests made inside them, retries included. Requests made outside any Run, such as speech recognition, search indexing and other background work, are not included, so this can be lower than Cost by origin on the Overview.',
   'statistics.runs.share': '{share} of Runs',
   'statistics.runs.stepsHint':
     'Model responses in the Run, including Thinking-only and Tool-call-only steps.',
