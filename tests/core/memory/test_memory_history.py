@@ -234,7 +234,7 @@ def test_a_revert_whose_write_fails_changes_nothing(
     assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
 
 
-def test_a_revert_that_cannot_be_undone_names_the_scopes_it_changed(
+def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
     service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
@@ -257,10 +257,17 @@ def test_a_revert_that_cannot_be_undone_names_the_scopes_it_changed(
         "user": [],
         "agent": ["Uses pytest."],
     }
-    # The history did not record the change and notices it as an external one.
-    assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
-        (3, "user", "external")
-    ]
+    # The scope left reverted is recorded, so reverting again takes back only the rest.
+    [recorded] = incomplete.value.revisions
+    assert service.history(workspace, "coder")[2:] == [recorded]
+    assert (recorded.id, recorded.scope, recorded.kind, recorded.reverts) == (
+        3,
+        "user",
+        "revert",
+        (1,),
+    )
+    assert service.revert(workspace, [2], writer=_RPC).changed == ("agent",)
+    assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
 
 
 def _memory_files(workspace: Path) -> dict[str, bytes]:
