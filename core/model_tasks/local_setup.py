@@ -36,6 +36,7 @@ import threading
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -213,15 +214,8 @@ class LocalSetup:
         if error not in {"python_missing", "python_changed"}:
             return False
         if self.directory.exists():
-            # A Torch environment holds tens of thousands of files: remove them
-            # off the Event Loop, and finish even when the installation is
-            # cancelled, so no later installation starts in a half-removed tree.
-            removal = asyncio.ensure_future(asyncio.to_thread(shutil.rmtree, self.directory))
-            try:
-                await asyncio.shield(removal)
-            except asyncio.CancelledError:
-                await asyncio.wait([removal])
-                raise
+            # A Torch environment holds tens of thousands of files.
+            await _remove_off_loop(partial(shutil.rmtree, self.directory))
         return True
 
     def install(self) -> dict[str, Any]:
@@ -341,14 +335,24 @@ class LocalSetup:
             return False
         return True
 
-    def _publish_model(self) -> None:
-        """Write the model's receipt and remove revisions this release no longer pins."""
+    async def _publish_model(self) -> None:
+        """Remove revisions this release no longer pins, then write the model's receipt.
+
+        A cancelled installation still finishes the removal but writes no
+        receipt, so the model reads ``model_missing`` like any cancelled one.
+        """
         assert self.model is not None and self.model_directory is not None
+        current = self.model_directory
+
+        def remove_superseded() -> None:
+            # A superseded revision may hold gigabytes of model files.
+            for entry in current.parent.iterdir():
+                if entry.is_dir() and entry != current:
+                    shutil.rmtree(entry, ignore_errors=True)
+
+        await _remove_off_loop(remove_superseded)
         receipt = {"repo": self.model.repo, "revision": self.model.revision}
-        self._write_marker(self.model_directory / "verified.json", json.dumps(receipt) + "\n")
-        for entry in self.model_directory.parent.iterdir():
-            if entry.is_dir() and entry != self.model_directory:
-                shutil.rmtree(entry, ignore_errors=True)
+        self._write_marker(current / "verified.json", json.dumps(receipt) + "\n")
 
     def _recipe(self, config: Mapping[str, Any]) -> Mapping[str, Any]:
         """This setup's recipe in *config*, the parsed ``pyproject.toml``."""
@@ -552,6 +556,22 @@ class LocalSetup:
         self.close()
         if self._task is not None:
             await asyncio.gather(self._task, return_exceptions=True)
+
+
+async def _remove_off_loop(remove: Callable[[], None]) -> None:
+    """Run the blocking removal *remove* in a thread and let it finish.
+
+    Removing an environment or a model revision can take seconds, which must
+    not stall the Event Loop. A cancelled caller still waits for the removal to
+    end before it sees the cancellation, so no later installation starts in a
+    half-removed tree.
+    """
+    removal = asyncio.ensure_future(asyncio.to_thread(remove))
+    try:
+        await asyncio.shield(removal)
+    except asyncio.CancelledError:
+        await asyncio.wait([removal])
+        raise
 
 
 def environment_error(directory: Path, python: Path, python_version: str) -> str:

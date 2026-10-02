@@ -288,7 +288,7 @@ class LocalEmbeddingSetup(LocalSetup):
         if code != 0:
             self._fail("verification_failed")
             return
-        self._publish_model()
+        await self._publish_model()
         self._state = "ready"
         _LOGGER.info(
             "Local embedding model installed (model=%s revision=%s)",
