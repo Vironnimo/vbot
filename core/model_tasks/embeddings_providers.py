@@ -304,7 +304,7 @@ def _non_negative_number(value: Any) -> float | None:
         return None
     try:
         normalized = float(value)
-    except (TypeError, ValueError, OverflowError):
+    except TypeError, ValueError, OverflowError:
         return None
     if not math.isfinite(normalized) or normalized < 0:
         return None
@@ -338,7 +338,7 @@ def _describe_payload(payload: Any) -> str:
             return error
     try:
         rendered = json.dumps(payload, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         rendered = repr(payload)
     if len(rendered) > _PAYLOAD_DETAIL_LIMIT:
         rendered = rendered[:_PAYLOAD_DETAIL_LIMIT] + "…"

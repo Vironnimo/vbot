@@ -510,7 +510,7 @@ def _cancel_subagent_child(
         return
     try:
         started_run = cast(Run, queued_item.future.result())
-    except (asyncio.CancelledError, Exception):
+    except asyncio.CancelledError, Exception:
         return
     started_run.request_cancel(reason=parent_reason, initiator=initiator)
 

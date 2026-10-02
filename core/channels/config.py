@@ -201,7 +201,7 @@ def validate_channel_data(data: Any) -> list[JsonDiagnostic]:
                 and bool(url.hostname)
                 and not (url.username or url.password or url.query or url.fragment)
             )
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             valid = False
         if not valid:
             add_error(

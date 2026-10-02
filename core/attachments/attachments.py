@@ -553,7 +553,7 @@ def _sniff_ooxml_media_type(data: bytes) -> str | None:
             # Bounded read = bounded decompression: ``read(n)`` inflates at most ``n``
             # bytes, so a zip bomb in this entry cannot exhaust memory here.
             content_types_bytes = handle.read(_MAX_OOXML_CONTENT_TYPES_BYTES + 1)
-    except (BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error, lzma.LZMAError):
+    except BadZipFile, KeyError, OSError, EOFError, RuntimeError, zlib.error, lzma.LZMAError:
         # Encrypted entries, unsupported compression and invalid compressed data
         # are unrecognizable input, not failures of the attachment service.
         return None

@@ -380,7 +380,7 @@ class _WorkerProcess:
         if process.poll() is None:
             try:
                 kill_process_tree(process)
-            except (OSError, ProcessLookupError):
+            except OSError, ProcessLookupError:
                 with suppress(OSError):
                     process.kill()
             with suppress(subprocess.TimeoutExpired):

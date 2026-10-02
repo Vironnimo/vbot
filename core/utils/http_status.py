@@ -113,7 +113,7 @@ def parse_retry_after(headers: Mapping[str, str]) -> float | None:
     # HTTP-date form: seconds from now, never negative (a past date means "now").
     try:
         retry_at = parsedate_to_datetime(raw)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if retry_at is None:
         return None

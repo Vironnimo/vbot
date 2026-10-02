@@ -148,7 +148,7 @@ def _git(repo_root: Path, *args: str) -> str | None:
             timeout=10,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     return completed.stdout.strip() if completed.returncode == 0 else None
 

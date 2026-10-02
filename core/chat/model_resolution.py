@@ -97,7 +97,7 @@ def resolve_request_temperature(
     try:
         model = models.get(provider_id, model_id)
         recommended = model.recommended_temperature
-    except (AttributeError, KeyError):
+    except AttributeError, KeyError:
         return None
     return recommended
 
@@ -125,7 +125,7 @@ def resolve_request_top_p(
     try:
         model = models.get(provider_id, model_id)
         recommended = model.recommended_top_p
-    except (AttributeError, KeyError):
+    except AttributeError, KeyError:
         return None
     return recommended
 
@@ -192,7 +192,7 @@ def _model_accepts_unlisted_tool_calls(
 
     try:
         model = dependencies.models.get(provider_id, model_id)
-    except (AttributeError, ChatError, KeyError):
+    except AttributeError, ChatError, KeyError:
         return True
     capabilities = getattr(model, "capabilities", None)
     return getattr(capabilities, "unlisted_tool_calls", True) is not False
@@ -267,7 +267,7 @@ def _resolve_fallback_candidate(
             usable = dependencies.provider_credentials.is_usable(
                 fallback_provider_id, pinned_connection_id
             )
-        except (ChatError, ConfigError, KeyError):
+        except ChatError, ConfigError, KeyError:
             usable = False
         if not usable:
             return None

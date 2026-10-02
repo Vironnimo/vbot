@@ -670,7 +670,7 @@ class FileDelivery:
             if not path.is_absolute():
                 return None
             resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError, UnicodeDecodeError, ValueError):
+        except OSError, RuntimeError, UnicodeDecodeError, ValueError:
             return None
         return self._presentation_for_path(str(resolved))
 
@@ -705,7 +705,7 @@ class FileDelivery:
                 return None
             with resolved.open("rb") as file_handle:
                 probe = file_handle.read(FILE_SNIFF_BYTES)
-        except (OSError, RuntimeError, ValueError):
+        except OSError, RuntimeError, ValueError:
             return None
         # A bounded probe may split the final UTF-8 character of a large report.
         if len(probe) == FILE_SNIFF_BYTES:

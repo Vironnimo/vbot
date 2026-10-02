@@ -514,7 +514,7 @@ def _parse_revision(line: bytes) -> MemoryRevision | None:
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is
     # deeply nested JSON.
-    except (KeyError, TypeError, ValueError, RecursionError):
+    except KeyError, TypeError, ValueError, RecursionError:
         return None
 
 

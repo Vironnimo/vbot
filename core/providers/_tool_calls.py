@@ -173,7 +173,7 @@ def _decode_tool_argument_sequence(arguments: Any) -> list[Any] | None:
             break
         try:
             value, position = decoder.raw_decode(arguments, position)
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             return None
         values.append(value)
     return values if len(values) > 1 else None
@@ -204,7 +204,7 @@ def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | No
     elif isinstance(arguments, str):
         try:
             decoded = json.loads(arguments)
-        except (ValueError, RecursionError):
+        except ValueError, RecursionError:
             return {}, (
                 "the arguments contain malformed or incomplete JSON "
                 f"({len(arguments)} chars): {_preview_malformed_tool_arguments(arguments)}"
@@ -269,7 +269,7 @@ def _tool_call_rejection_fingerprint(name: Any, arguments: Any, detail: str) -> 
                 separators=(",", ":"),
                 default=lambda value: f"<{type(value).__name__}>",
             )
-        except (TypeError, ValueError, OverflowError, RecursionError):
+        except TypeError, ValueError, OverflowError, RecursionError:
             argument_evidence = f"<{type(arguments).__name__}>"
     evidence = f"{name!r}\0{argument_evidence}\0{detail}"
     return hashlib.sha256(evidence.encode("utf-8", errors="replace")).hexdigest()

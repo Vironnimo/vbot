@@ -46,11 +46,11 @@ def installed_differences(node_modules: Path, lock_file: Path) -> list[str]:
     """
     try:
         locked = _packages(lock_file)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return [f"{lock_file.name} is missing or unreadable"]
     try:
         installed = _packages(node_modules / INSTALLED_RECORD)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return [f"{node_modules.name}/{INSTALLED_RECORD} is missing: npm installed nothing here"]
     differences: list[str] = []
     for path in sorted((locked.keys() | installed.keys()) - {""}):  # "": the project itself
@@ -84,11 +84,11 @@ def manifest_differences(manifest: Path, lock_file: Path) -> list[str]:
     """
     try:
         wanted = _dependency_maps(_json_object(manifest))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return [f"{manifest.name} is missing or unreadable"]
     try:
         recorded = _dependency_maps(_packages(lock_file).get("", {}))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return [f"{lock_file.name} is missing or unreadable"]
     for name in wanted["optionalDependencies"]:
         wanted["dependencies"].pop(name, None)

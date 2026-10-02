@@ -876,7 +876,7 @@ class RequestBuilder:
 
         try:
             model_entry = self._dependencies.models.get(provider_id, resolved_model_id)
-        except (KeyError, AttributeError):
+        except KeyError, AttributeError:
             return None
 
         model_context_window = model_entry.context_window
@@ -887,7 +887,7 @@ class RequestBuilder:
             context_window_for = getattr(model_entry, "context_window_for", None)
             if callable(context_window_for):
                 model_context_window = context_window_for(local_connection_id)
-        except (AttributeError, ChatError, ConfigError, KeyError):
+        except AttributeError, ChatError, ConfigError, KeyError:
             # Status/build callers can be partially wired. Preserve the existing
             # Model-wide fallback when the active Connection cannot be resolved.
             pass
@@ -914,7 +914,7 @@ class RequestBuilder:
         """
         try:
             return self._dependencies.providers.get(provider_id)
-        except (KeyError, AttributeError):
+        except KeyError, AttributeError:
             return None
 
     def _raise_if_measured_context_exhausted(
@@ -991,7 +991,7 @@ class RequestBuilder:
             summary_adapter = self._dependencies.get_adapter(
                 ConnectionRef(provider_id, connection_id)
             )
-        except (ChatError, ConfigError, VBotError, KeyError):
+        except ChatError, ConfigError, VBotError, KeyError:
             _LOGGER.warning(
                 "Invalid compaction summary model %r; using active run model instead.",
                 summary_model,

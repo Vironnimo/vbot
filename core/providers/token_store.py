@@ -70,7 +70,7 @@ def validate_oauth_token_data(data: Any) -> list[JsonDiagnostic]:
     if expires_at is not None:
         try:
             _parse_datetime(expires_at)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             add_error(diagnostics, "$.expires_at", "must be an ISO 8601 timestamp or null")
     extra = data.get("extra", {})
     if not isinstance(extra, dict) or any(not isinstance(value, str) for value in extra.values()):

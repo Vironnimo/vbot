@@ -137,7 +137,7 @@ def make_project_handler(
             if PROJECT_ID_PATTERN.fullmatch(project_id) is None:
                 raise ProjectNotFoundError(project_id)
             project = projects.get(project_id)
-        except (InvalidProjectIdError, ProjectNotFoundError):
+        except InvalidProjectIdError, ProjectNotFoundError:
             return tool_failure(
                 "project_not_found",
                 _project_not_found_message(projects, project_id),
@@ -307,7 +307,7 @@ def _normalize_project_arguments(arguments: Any) -> Any:
 def _project_not_found_message(projects: ProjectStore, project_id: str) -> str:
     try:
         registered = sorted(projects.list(), key=lambda project: project.project_id)
-    except (ProjectError, OSError):
+    except ProjectError, OSError:
         _LOGGER.warning("Failed to list Projects for a project_not_found message", exc_info=True)
         registered = []
     if not registered:

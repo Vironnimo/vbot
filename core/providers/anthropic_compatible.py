@@ -622,7 +622,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 detail = f"{status_code} ({error_type}): {error_message}"
             elif error_message:
                 detail = f"{status_code}: {error_message}"
-        except (json.JSONDecodeError, AttributeError):
+        except json.JSONDecodeError, AttributeError:
             if response_body:
                 detail = f"{status_code}: {response_body}"
         return detail

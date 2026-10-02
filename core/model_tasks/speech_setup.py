@@ -302,5 +302,5 @@ def _dependencies_available() -> bool:
                 util.find_spec(name) is not None for name in ("torch", "numpy", "av", "librosa")
             )
         )
-    except (metadata.PackageNotFoundError, ImportError, ValueError):
+    except metadata.PackageNotFoundError, ImportError, ValueError:
         return False

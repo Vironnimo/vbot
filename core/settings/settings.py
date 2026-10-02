@@ -157,7 +157,7 @@ def default_timezone_name() -> str:
     """Return the host IANA zone used when Settings has no explicit override."""
     try:
         return validate_timezone_name(get_localzone_name(), label="system timezone")
-    except (SettingsValidationError, OSError):
+    except SettingsValidationError, OSError:
         return "UTC"
 
 

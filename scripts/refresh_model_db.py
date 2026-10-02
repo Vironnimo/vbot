@@ -87,7 +87,7 @@ def _is_branch_checkout() -> bool:
 def _worktree_data_dir() -> Path | None:
     try:
         payload = json.loads(_WORKTREE_MARKER.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
     raw_data_dir = payload.get("data_dir") if isinstance(payload, dict) else None
     if not isinstance(raw_data_dir, str) or not raw_data_dir:

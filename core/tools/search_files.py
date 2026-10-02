@@ -101,7 +101,7 @@ def _repair_name_list(value: Any) -> Any:
         return value
     try:
         decoded = _load_json_value(value)
-    except (ValueError, ToolContractError):
+    except ValueError, ToolContractError:
         return value
     if isinstance(decoded, list) and decoded and all(isinstance(item, str) for item in decoded):
         return decoded

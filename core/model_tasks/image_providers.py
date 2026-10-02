@@ -536,7 +536,7 @@ def _parse_unified_image_response(
             continue
         try:
             image_bytes_list.append(base64.b64decode(b64_json, validate=True))
-        except (binascii.Error, ValueError):
+        except binascii.Error, ValueError:
             continue
         entry_media_type = entry.get("media_type")
         if not detected_media_type and isinstance(entry_media_type, str):
@@ -599,7 +599,7 @@ def _parse_openai_codex_image_response(
             continue
         try:
             image_bytes_list.append(base64.b64decode(result, validate=True))
-        except (binascii.Error, ValueError):
+        except binascii.Error, ValueError:
             continue
 
     if not image_bytes_list:
@@ -699,7 +699,7 @@ def _parse_openai_image_response(
         if isinstance(b64_json, str) and b64_json:
             try:
                 image_bytes_list.append(base64.b64decode(b64_json, validate=True))
-            except (binascii.Error, ValueError):
+            except binascii.Error, ValueError:
                 continue
         elif isinstance(entry.get("url"), str):
             # URL responses require an extra fetch; we surface a clear

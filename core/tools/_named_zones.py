@@ -41,7 +41,7 @@ def named_zone(name: str) -> tzinfo | None:
     key = _zone_keys().get(text.casefold(), text)
     try:
         return ZoneInfo(key)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         return None
 
 

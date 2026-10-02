@@ -406,7 +406,7 @@ def _resolve_control_process(instance: ServerInstance) -> psutil.Process | None:
             > PROCESS_CREATE_TIME_TOLERANCE_SECONDS
         ):
             return None
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         return None
     return process
 
@@ -446,7 +446,7 @@ def classify_server(
             recorded = "expected" if is_expected is None or is_expected(process) else "other"
         except psutil.NoSuchProcess:
             recorded = None
-        except (psutil.Error, OSError):
+        except psutil.Error, OSError:
             # A live process that cannot be inspected is never taken for the server.
             recorded = "other"
     if recorded == "other" or (health.reachable and not health.is_vbot):
@@ -649,7 +649,7 @@ def _restart_handoff_wait_pid(instance: ServerInstance) -> int:
                 return int(descendant.pid)
             descendant = parent
             parent = descendant.parent()
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         pass
     return os.getppid()
 

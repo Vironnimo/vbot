@@ -1010,7 +1010,7 @@ def git_info() -> dict[str, Any]:
                 timeout=10,
                 check=True,
             )
-        except (OSError, subprocess.SubprocessError):
+        except OSError, subprocess.SubprocessError:
             return None
         return completed.stdout.strip()
 

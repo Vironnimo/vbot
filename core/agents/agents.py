@@ -398,7 +398,7 @@ class AgentStore:
                 if agent_path is None:
                     return None
                 return self._read_agent_config(agent_path)
-            except (AgentError, OSError):
+            except AgentError, OSError:
                 return None
 
     def list(self) -> list[Agent]:
@@ -992,7 +992,7 @@ class AgentStore:
         for agent_path in sorted((self._data_dir / "agents").glob("*/agent.json")):
             try:
                 agent = self._read_agent_config(agent_path)
-            except (AgentError, OSError):
+            except AgentError, OSError:
                 continue
             subagent = agent.tools.get("subagent")
             if not isinstance(subagent, dict):
@@ -1195,7 +1195,7 @@ class AgentStore:
         """Both ids of a readable pending rename, which no new Agent may take."""
         try:
             rename = self._load_rename_record()
-        except (AgentError, OSError):
+        except AgentError, OSError:
             return frozenset()
         if rename is None:
             return frozenset()

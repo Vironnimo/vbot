@@ -331,7 +331,7 @@ class ToolDisplay:
         if configured_part.kind == "path" and context is not None:
             try:
                 full_value = model_path(context.resolve_path(full_value))
-            except (OSError, RuntimeError, ValueError):
+            except OSError, RuntimeError, ValueError:
                 full_value = visible_value
         payload: JsonObject = {
             "kind": configured_part.kind,

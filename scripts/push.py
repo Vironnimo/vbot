@@ -167,7 +167,7 @@ def _last_failed(checkout: Path) -> set[str]:
     record = checkout / ".pytest_cache" / "v" / "cache" / "lastfailed"
     try:
         failed = json.loads(record.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return set()
     return set(failed) if isinstance(failed, dict) else set()
 

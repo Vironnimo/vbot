@@ -144,7 +144,7 @@ def _resolve_context_window(state: Any, model: str) -> int | None:
         return None
     try:
         model_entry = state.runtime.models.get(provider_id, model_id)
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         return None
     return resolve_effective_context_window(
         model_entry.context_window,
@@ -159,7 +159,7 @@ def _local_context_windows(state: Any) -> Any:
     """Return the live local-model window map from settings, or empty."""
     try:
         return state.runtime.storage.load_local_models_settings()["context_windows"]
-    except (AttributeError, KeyError):
+    except AttributeError, KeyError:
         return {}
 
 
@@ -167,7 +167,7 @@ def _provider_config(state: Any, provider_id: str) -> Any:
     """Return the ProviderConfig for the read-side window default, or None."""
     try:
         return state.runtime.providers.get(provider_id)
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         return None
 
 

@@ -137,7 +137,7 @@ async def _probe_shell_env() -> dict[str, str]:
             return os.environ.copy()
         # Decode exactly like ``os.environ`` so undecodable bytes round-trip.
         return _parse_null_env(os.fsdecode(stdout))
-    except (OSError, TimeoutError):
+    except OSError, TimeoutError:
         if sys.platform == "win32":
             return _overlay_registry_path(os.environ.copy())
         return os.environ.copy()
@@ -229,7 +229,7 @@ async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
                     proc.kill()
         else:
             os.killpg(proc.pid, HARD_KILL_SIGNAL)
-    except (OSError, ProcessLookupError):
+    except OSError, ProcessLookupError:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
 
@@ -238,7 +238,7 @@ async def _terminate_probe_process(proc: asyncio.subprocess.Process) -> None:
             proc.communicate(),
             timeout=SHELL_ENV_PROBE_REAP_TIMEOUT_SECONDS,
         )
-    except (ProcessLookupError, RuntimeError, TimeoutError):
+    except ProcessLookupError, RuntimeError, TimeoutError:
         return
 
 

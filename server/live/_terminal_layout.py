@@ -259,7 +259,7 @@ class LiveTerminalLayout:
         try:
             self._ctx.ensure_active()
             await self._ctx.view(op, **args)
-        except (LiveToolError, LiveUiError):
+        except LiveToolError, LiveUiError:
             return False
         except Exception:
             _LOGGER.exception("Live Terminal layout update failed unexpectedly")

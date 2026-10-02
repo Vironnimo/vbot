@@ -448,21 +448,21 @@ def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
     if isinstance(value, int | float):
         try:
             return datetime.fromtimestamp(float(value), tz=UTC)
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return fallback
     if not isinstance(value, str) or not value:
         return fallback
     if value.isdecimal():
         try:
             return datetime.fromtimestamp(float(value), tz=UTC)
-        except (OverflowError, OSError, ValueError):
+        except OverflowError, OSError, ValueError:
             return fallback
     try:
         parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)
-    except (OverflowError, ValueError):
+    except OverflowError, ValueError:
         return fallback
 
 
@@ -474,7 +474,7 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=UTC)
             return parsed.astimezone(UTC)
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             pass
 
     expires_in = data.get("expires_in")
@@ -483,7 +483,7 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
     if isinstance(expires_in, int) or (isinstance(expires_in, str) and expires_in.isdecimal()):
         try:
             return now + timedelta(seconds=int(expires_in))
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             pass
     return now + timedelta(minutes=TOKEN_EXCHANGE_FALLBACK_MINUTES)
 
@@ -610,7 +610,7 @@ def _oauth_error_code(response_body: str) -> str | None:
 
     try:
         payload = json.loads(response_body)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return None
     if not isinstance(payload, dict):
         return None

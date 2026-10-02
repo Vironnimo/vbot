@@ -35,7 +35,7 @@ def _read_worktree_marker(marker_path: Path) -> dict[str, object] | None:
     """Read a worktree marker JSON object."""
     try:
         data = json.loads(marker_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except OSError, UnicodeError, json.JSONDecodeError:
         return None
 
     if not isinstance(data, dict):
@@ -55,7 +55,7 @@ def _read_settings_port(data_dir: Path | None) -> int | None:
 
     try:
         settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
 
     if not isinstance(settings, dict):

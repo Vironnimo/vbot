@@ -349,7 +349,7 @@ async def _channel_config_if_available(
     """
     try:
         return cast(ChannelConfig, await channel_service.get_channel(channel_id))
-    except (ChannelError, DatabaseError):
+    except ChannelError, DatabaseError:
         return None
 
 

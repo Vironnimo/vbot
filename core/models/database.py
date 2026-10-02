@@ -75,7 +75,7 @@ def read_model_database_manifest(models_dir: Path) -> ModelDatabaseManifest | No
         return None
     try:
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
     if not isinstance(data, dict):
         return None

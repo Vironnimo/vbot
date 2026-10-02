@@ -193,7 +193,7 @@ def _argument_object(value: Any) -> dict[str, Any] | None:
     if isinstance(value, str) and value.lstrip().startswith("{"):
         try:
             value = _load_json_value(value)
-        except (ValueError, ToolContractError):
+        except ValueError, ToolContractError:
             return None
     return value if isinstance(value, dict) else None
 
@@ -202,7 +202,7 @@ def _shown(value: Any) -> str:
     """Quote a sent value as JSON, cut short enough to tell two values apart."""
     try:
         text = json.dumps(value, ensure_ascii=False)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         text = repr(value)
     return text if len(text) <= 40 else text[:37] + "..."
 

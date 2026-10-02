@@ -126,7 +126,7 @@ def _current_run_read_media_outputs(
             continue
         try:
             result = json.loads(message.content)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         if isinstance(result, dict):
             outputs.extend(

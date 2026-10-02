@@ -749,7 +749,7 @@ def _support_file_hint(authoring: SkillAuthoringService, target_root: Path, call
             relative = path.relative_to(package).as_posix()
             try:
                 text = authoring.read_text(target_root, call.name, relative)
-            except (SkillAuthoringError, OSError):
+            except SkillAuthoringError, OSError:
                 continue
             if _find(text, old, old, False) is not None:
                 matches.append(relative)

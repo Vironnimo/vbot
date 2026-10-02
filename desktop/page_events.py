@@ -374,7 +374,7 @@ class PageEventDispatcher:
             return
         try:
             script = voice_push_script(detail)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             logger.exception("Voice push is not serializable; dropping it")
             return
         self._evaluate(window, script)

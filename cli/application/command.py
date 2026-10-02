@@ -357,7 +357,7 @@ def _dispatch_installed(args: argparse.Namespace, install: Installation) -> int 
 def _answer(prompt: str) -> str | None:
     try:
         return input(prompt).strip()
-    except (EOFError, KeyboardInterrupt):
+    except EOFError, KeyboardInterrupt:
         return None
 
 

@@ -301,7 +301,7 @@ class UiProbe:
                 if process.stdin is not None:
                     process.stdin.close()
                 process.wait(timeout=10)
-            except (OSError, subprocess.TimeoutExpired):
+            except OSError, subprocess.TimeoutExpired:
                 stop_process_tree(process.pid)
         if self._log_file is not None:
             self._log_file.close()

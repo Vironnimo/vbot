@@ -57,7 +57,7 @@ def remove_notification_identity(install: Installation) -> None:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _NOTIFICATION_IDENTITY_KEY) as key:
             icon, _kind = winreg.QueryValueEx(key, "IconUri")
         owned = Path(str(icon)).resolve().is_relative_to(install.root.resolve())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return
     if owned:
         try:
@@ -309,7 +309,7 @@ def begin_removal(install: Installation) -> dict[str, Any]:
                 and first_phase is not None
                 and same_path(Path(first_phase.exe()).resolve(), uninstaller.resolve())
             )
-        except (OSError, psutil.Error):
+        except OSError, psutil.Error:
             owned_uninstaller = False
             first_phase = None
         if not owned_uninstaller or first_phase is None:

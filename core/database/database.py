@@ -334,7 +334,7 @@ def _open_canonical(spec: DatabaseSpec) -> Database:
         return _open_existing(
             spec, expected_database_id=entry.database_id, data_dir=data_dir, restore_id=restore_id
         )
-    except (DatabaseCorruptError, OSError):
+    except DatabaseCorruptError, OSError:
         # Only corruption, identity failures and unreadable files may be
         # restored; a format or schema mismatch is never grounds to replace data.
         if auto_restore_if_needed(data_dir, spec, entry.database_id):

@@ -341,6 +341,6 @@ def _status_timezone(*, storage: Any | None) -> ZoneInfo | None:
         return None
     try:
         return ZoneInfo(effective_timezone_name(storage.load_settings()))
-    except (AttributeError, OSError, ValueError):
+    except AttributeError, OSError, ValueError:
         _LOGGER.warning("Failed to load application timezone", exc_info=True)
         return None

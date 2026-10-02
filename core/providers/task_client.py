@@ -399,7 +399,7 @@ def _response_usage(response: httpx.Response) -> Mapping[str, Any] | None:
     """Read optional telemetry without retaining a response or changing parsing."""
     try:
         payload = response.json()
-    except (ValueError, UnicodeError):
+    except ValueError, UnicodeError:
         return None
     usage = payload.get("usage") if isinstance(payload, Mapping) else None
     return usage if isinstance(usage, Mapping) else None

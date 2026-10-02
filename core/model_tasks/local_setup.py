@@ -241,7 +241,7 @@ class LocalSetup:
             raise
         except TimeoutError:
             self._fail("timeout")
-        except (OSError, ValueError, KeyError, StopIteration):
+        except OSError, ValueError, KeyError, StopIteration:
             self._fail("setup_unavailable")
         except Exception:
             self._fail("install_failed")

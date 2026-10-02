@@ -231,7 +231,7 @@ async def _evaluate_case(
                         for line in path.read_text(encoding="utf-8-sig").splitlines()
                         if line.strip()
                     ]
-                except (OSError, ValueError):
+                except OSError, ValueError:
                     rows = []
                 checks["transcript"] = [row.get("role") for row in rows] == [
                     "user",

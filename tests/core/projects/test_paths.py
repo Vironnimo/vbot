@@ -35,7 +35,7 @@ def test_cwd_identity_key_resolves_symlink(tmp_path: Path) -> None:
     link = tmp_path / "link"
     try:
         link.symlink_to(target, target_is_directory=True)
-    except (OSError, NotImplementedError):
+    except OSError, NotImplementedError:
         pytest.skip("symlink creation not permitted on this host")
 
     assert cwd_identity_key(link) == cwd_identity_key(target)

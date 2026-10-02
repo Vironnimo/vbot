@@ -574,7 +574,7 @@ def _local_zone(timezone_name_loader: Callable[[], str] | None) -> _Zone:
     try:
         name = timezone_name_loader()
         return _Zone(ZoneInfo(name), name)
-    except (ZoneInfoNotFoundError, ValueError, OSError):
+    except ZoneInfoNotFoundError, ValueError, OSError:
         _LOGGER.warning("session_search could not load the configured timezone; using UTC")
         return _UTC_ZONE
 

@@ -59,7 +59,7 @@ def detect_vbot_version(root: Path = _VBOT_ROOT) -> str:
             version = tomllib.load(handle)["project"]["version"]
         if isinstance(version, str) and version:
             return version
-    except (OSError, KeyError, tomllib.TOMLDecodeError):
+    except OSError, KeyError, tomllib.TOMLDecodeError:
         pass
     try:
         return _installed_package_version(PACKAGE_NAME)
@@ -169,7 +169,7 @@ def _revision(value: object) -> str | None:
 def _read_text(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
 
 
@@ -177,6 +177,6 @@ def _read_json_object(path: Path) -> dict[str, Any] | None:
     try:
         with path.open("rb") as handle:
             value = json.load(handle)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return value if isinstance(value, dict) else None

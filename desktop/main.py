@@ -598,7 +598,7 @@ def _run_desktop(
         # after a monitor is disconnected or the display layout changes.
         try:
             write_window_size(window.width, window.height, settings_file)
-        except (AttributeError, OSError, RuntimeError, ValueError):
+        except AttributeError, OSError, RuntimeError, ValueError:
             logger.warning("Desktop window size could not be persisted", exc_info=True)
 
     window.events.closing += persist_window_size
@@ -788,7 +788,7 @@ def _primary_screen(webview: WebviewModule) -> Any | None:
             if cx <= 0 < cx + cw and cy <= 0 < cy + ch:
                 return _windows.logical_primary_screen(candidate)
         return screens[0]
-    except (AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError):
+    except AttributeError, IndexError, OSError, RuntimeError, TypeError, ValueError:
         return None
 
 
@@ -815,7 +815,7 @@ def _screen_work_area(screen: Any) -> tuple[int, int, int, int]:
                         work_x = int(getattr(frame, x_attr, getattr(screen, "x", 0)))
                         work_y = int(getattr(frame, y_attr, getattr(screen, "y", 0)))
                         return work_x, work_y, work_width, work_height
-                except (TypeError, ValueError, AttributeError):
+                except TypeError, ValueError, AttributeError:
                     continue
     return (
         int(getattr(screen, "x", 0)),

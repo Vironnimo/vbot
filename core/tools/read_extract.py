@@ -415,7 +415,7 @@ def _cell_text(cell: ElementTree.Element, shared_strings: list[str]) -> str:
     if cell_type == "s":
         try:
             return shared_strings[int(value)]
-        except (ValueError, IndexError):
+        except ValueError, IndexError:
             return ""
     if cell_type == "inlineStr":
         return inline

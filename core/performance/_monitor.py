@@ -462,7 +462,7 @@ def _render_code_path(filename: str) -> tuple[str, bool]:
         return filename, False
     try:
         path = Path(filename).resolve()
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return filename.replace("\\", "/"), False
     for root in _LIBRARY_ROOTS:
         if path.is_relative_to(root):

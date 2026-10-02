@@ -318,7 +318,7 @@ class TelegramTransport:
             return None
         try:
             message_id = int(reply_to_message_id)
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             _LOGGER.debug(
                 "Ignoring non-integer reply target message id (channel=%s)",
                 self._channel_id,
@@ -517,7 +517,7 @@ class TelegramTransport:
             bot = self._require_bot()
             chat_id = _parse_platform_target(platform_target)
             message_thread_id = _parse_thread_id(thread_id)
-        except (ChannelError, ChannelConfigError):
+        except ChannelError, ChannelConfigError:
             return
 
         payload: dict[str, Any] = {"chat_id": chat_id, "action": _TYPING_ACTION}

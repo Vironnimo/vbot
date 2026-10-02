@@ -152,7 +152,7 @@ class WhatsAppChannelAdapter(NetworkChannelAdapter):
                     "WhatsApp operation failed; check connection and attachment size"
                 )
             return response
-        except (TimeoutError, OSError):
+        except TimeoutError, OSError:
             # Delivery might already have happened; do not automatically resend.
             raise ChannelError("WhatsApp operation could not be confirmed") from None
         finally:

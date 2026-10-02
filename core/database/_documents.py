@@ -95,7 +95,7 @@ def _contained_file(root: Path, parts: list[str]) -> Path | None:
                 return None
         if not stat.S_ISREG(os.lstat(current).st_mode):
             return None
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     return current
 
@@ -121,7 +121,7 @@ def _data_path(data_dir: Path, path: str) -> Path:
                 raise DatabaseUnavailableError(
                     f"the directory of document {path} is a link; it is not restored"
                 )
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError, NotADirectoryError:
             break
     return Path(data_dir).joinpath(*parts)
 

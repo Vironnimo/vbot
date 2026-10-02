@@ -213,7 +213,7 @@ class ImageService:
             )
             wire_media_types = frozenset(adapter.wire_media_support(target_ref.model_id))
             return any(media_type.startswith("image/") for media_type in wire_media_types)
-        except (ImageConfigurationError, VBotError, KeyError, RuntimeError):
+        except ImageConfigurationError, VBotError, KeyError, RuntimeError:
             return False
         finally:
             if adapter is not None and target_ref is not None:

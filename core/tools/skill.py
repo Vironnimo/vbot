@@ -776,7 +776,7 @@ def _package_relative_path(file_path: str, skill_name: str, skill_directory: Pat
     if PurePosixPath(file_path).is_absolute() or re.match(r"^[A-Za-z]:/", file_path):
         try:
             return Path(file_path).resolve().relative_to(directory).as_posix()
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return file_path
     first, _, rest = file_path.partition("/")
     if (

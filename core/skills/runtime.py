@@ -826,7 +826,7 @@ class SkillRuntime:
         """
         try:
             origin = self.skills_for(project_id, agent_id).get(name).origin
-        except (KeyError, ProjectNotFoundError):
+        except KeyError, ProjectNotFoundError:
             return None
         if origin == SKILL_ORIGIN_AGENT:
             return "shared"

@@ -533,7 +533,7 @@ def dispatch_config_command(
         if args.stdin:
             try:
                 coerced = json.loads(_read_stdin_utf8())
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 return CommandResult(
                     ok=False,
                     message="--stdin requires one valid UTF-8 JSON value; no setting was changed",

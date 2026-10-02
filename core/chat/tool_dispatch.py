@@ -685,7 +685,7 @@ def _safe_schema_fingerprint(registry: Any, tool_name: str) -> str:
         return ""
     try:
         return str(resolver(tool_name))
-    except (KeyError, ToolNotFoundError, ValueError):
+    except KeyError, ToolNotFoundError, ValueError:
         return ""
 
 
@@ -935,7 +935,7 @@ def _tool_display_payload(
 
     try:
         payload = display_for_call(tool_name, arguments, context=context, result=result)
-    except (ToolNotFoundError, TypeError, ValueError):
+    except ToolNotFoundError, TypeError, ValueError:
         return _empty_tool_display_payload()
 
     if not isinstance(payload, dict):

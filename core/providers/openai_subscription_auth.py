@@ -44,6 +44,6 @@ def _decode_jwt_payload(access_token: str) -> Mapping[str, Any]:
     try:
         payload_bytes = base64.urlsafe_b64decode(f"{encoded_payload}{padding}")
         payload = json.loads(payload_bytes.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return {}
     return payload if isinstance(payload, Mapping) else {}

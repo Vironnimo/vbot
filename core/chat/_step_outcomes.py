@@ -118,7 +118,7 @@ class _RegisteredNames:
             return True
         try:
             self.registry.get(name)
-        except (KeyError, ToolNotFoundError):
+        except KeyError, ToolNotFoundError:
             return False
         return True
 
@@ -149,7 +149,7 @@ class _FailedToolCallCircuitBreaker:
             if callable(fingerprint_resolver):
                 try:
                     fingerprint = str(fingerprint_resolver(tool_call.name))
-                except (KeyError, ToolNotFoundError, ValueError):
+                except KeyError, ToolNotFoundError, ValueError:
                     fingerprint = ""
             signature = (
                 tool_call.name,
@@ -196,7 +196,7 @@ def _tool_message_failure_code(message: ChatMessage) -> str | None:
         return None
     try:
         result = json.loads(message.content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(result, dict) or result.get("ok") is not False:
         return None
@@ -225,7 +225,7 @@ def tool_result_facts(tool_messages: Sequence[ChatMessage]) -> dict[str, ToolRes
         if isinstance(message.content, str):
             try:
                 result = json.loads(message.content)
-            except (TypeError, ValueError):
+            except TypeError, ValueError:
                 result = None
         if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
             facts[message.tool_call_id] = ToolResultFacts(status="completed")

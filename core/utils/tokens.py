@@ -270,7 +270,7 @@ def _render_without_normalization(value: Any) -> str | None:
         return _render_token_estimate_value(value)
     try:
         rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return None if _NORMALIZATION_MARKERS.search(rendered) else rendered
 
@@ -282,7 +282,7 @@ def _render_token_estimate_value(value: Any) -> str:
         return value
     try:
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return str(value)
 
 

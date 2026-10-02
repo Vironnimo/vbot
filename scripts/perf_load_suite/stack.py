@@ -249,7 +249,7 @@ class FakeProvider:
                 ready = (
                     response.status_code == 200 and response.json().get("service") == SERVICE_NAME
                 )
-            except (httpx.HTTPError, ValueError):
+            except httpx.HTTPError, ValueError:
                 ready = False  # still starting up
             if ready:
                 return
@@ -354,7 +354,7 @@ class VbotServer:
             try:
                 response = self.rpc.get("/health")
                 healthy = response.status_code == 200 and response.json() == {"status": "ok"}
-            except (httpx.HTTPError, ValueError):
+            except httpx.HTTPError, ValueError:
                 healthy = False  # still starting up
             if healthy:
                 self._serving_pid = self._resolve_serving_pid()

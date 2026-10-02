@@ -312,7 +312,7 @@ class WakewordModelCatalog:
     def _read_custom_descriptor(self, metadata_path: Path) -> WakewordModelDescriptor | None:
         try:
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             logger.warning("Ignoring unreadable wakeword model metadata: %s", metadata_path.name)
             return None
         if not isinstance(metadata, dict):

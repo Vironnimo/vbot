@@ -1086,7 +1086,7 @@ def _display_port(value: Any) -> int:
 
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return 0
 
 

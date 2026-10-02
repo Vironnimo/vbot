@@ -193,7 +193,7 @@ def _status_provider_config(providers: ProviderRegistry | None, provider_id: str
         return None
     try:
         return providers.get(provider_id)
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         return None
 
 

@@ -105,7 +105,7 @@ def _resolve_fake_provider(instance: ServerInstance) -> FakeProviderInstance | N
         custom = providers["custom"]
         provider = custom[FAKE_PROVIDER_ID]
         base_url = provider["base_url"]
-    except (KeyError, OSError, TypeError, json.JSONDecodeError):
+    except KeyError, OSError, TypeError, json.JSONDecodeError:
         return None
 
     if not isinstance(provider, dict) or provider.get("adapter") != "openai_compatible":
@@ -140,7 +140,7 @@ def _fake_provider_is_ready(instance: FakeProviderInstance) -> bool:
         connection.request("GET", "/health")
         response = connection.getresponse()
         payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    except OSError, ValueError, json.JSONDecodeError:
         return False
     finally:
         connection.close()
@@ -161,7 +161,7 @@ def _read_fake_provider_process(instance: FakeProviderInstance) -> FakeProviderP
         payload = json.loads(instance.pid_path.read_text(encoding="utf-8"))
         pid = payload["pid"]
         create_time = payload["create_time"]
-    except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+    except KeyError, OSError, TypeError, ValueError, json.JSONDecodeError:
         return None
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return None
@@ -181,12 +181,12 @@ def _owned_fake_provider_process(identity: FakeProviderProcess) -> psutil.Proces
         for argument in process.cmdline()[1:]:
             try:
                 command_paths.append(Path(argument).resolve())
-            except (OSError, ValueError):
+            except OSError, ValueError:
                 continue
         if expected_entry not in command_paths:
             return None
         return process
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         return None
 
 
@@ -197,7 +197,7 @@ def _write_fake_provider_process(instance: FakeProviderInstance, pid: int) -> bo
             json.dumps({"pid": pid, "create_time": create_time}) + "\n",
             encoding="utf-8",
         )
-    except (OSError, psutil.Error):
+    except OSError, psutil.Error:
         return False
     return True
 
@@ -345,9 +345,9 @@ def _terminate_fake_provider_process(process: psutil.Process) -> bool:
             process.kill()
             process.wait(timeout=FAKE_PROVIDER_STARTUP_TIMEOUT_SECONDS)
             return True
-        except (psutil.Error, OSError):
+        except psutil.Error, OSError:
             return False
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         return False
 
 

@@ -431,7 +431,7 @@ def _event_object(event: _Event) -> dict[str, Any]:
 def _read_summary(path: Path, recording_id: str) -> dict[str, Any] | None:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         document = None
     if (
         not isinstance(document, dict)

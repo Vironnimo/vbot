@@ -370,7 +370,7 @@ def _epoch_to_iso(value: Any) -> str | None:
         seconds /= 1000.0
     try:
         return datetime.fromtimestamp(seconds, UTC).isoformat()
-    except (OverflowError, OSError, ValueError):
+    except OverflowError, OSError, ValueError:
         return None
 
 

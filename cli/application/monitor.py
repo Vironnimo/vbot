@@ -140,7 +140,7 @@ class ServerMonitor:
                 f"{url}{RPC_PATH}", json={"method": method, "params": params}
             )
             payload = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPError, ValueError:
             return None
         if isinstance(payload, dict) and payload.get("ok") is True:
             result = payload.get("result")
@@ -220,7 +220,7 @@ class ServerMonitor:
     async def _hello(connection: ClientConnection) -> dict[str, Any] | None:
         try:
             hello = json.loads(await asyncio.wait_for(connection.recv(), timeout=10))
-        except (ConnectionClosed, TimeoutError, ValueError):
+        except ConnectionClosed, TimeoutError, ValueError:
             return None
         if not isinstance(hello, dict) or hello.get("type") != "connection_ready":
             return None

@@ -62,10 +62,9 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = ["error::RuntimeWarning"]
 
 [tool.ruff]
-# vBot runs on 3.14 (PROJECT.md -> Development -> Python version). The target
-# stays at 3.13 so the formatter keeps `except (A, B):` instead of PEP 758
-# `except A, B:`. Files that other interpreters run keep their own targets.
-target-version = "py313"
+# vBot runs on 3.14 (PROJECT.md -> Development -> Python version). Files that
+# other interpreters run keep their own targets.
+target-version = "py314"
 line-length = 100
 
 [tool.ruff.per-file-target-version]

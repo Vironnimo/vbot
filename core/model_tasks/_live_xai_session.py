@@ -494,7 +494,7 @@ class XaiSession:
             return
         try:
             pcm = base64.b64decode(delta, validate=True)
-        except (binascii.Error, ValueError):
+        except binascii.Error, ValueError:
             return
         if not pcm:
             return

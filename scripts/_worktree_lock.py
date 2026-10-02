@@ -155,7 +155,7 @@ def _read_holder_record(holder_path: Path) -> dict[str, object] | None:
     """Read a lock holder record, tolerating absence or corruption."""
     try:
         data = json.loads(holder_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
     return data if isinstance(data, dict) else None
 

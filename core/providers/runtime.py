@@ -376,13 +376,13 @@ class ProviderRuntime:
             bare_model_id = model_id.split("::", 1)[0]
             try:
                 model = self._models.get(provider_id, bare_model_id)
-            except (KeyError, AttributeError):
+            except KeyError, AttributeError:
                 return None
             if not model_is_local(model.metadata):
                 return None
             try:
                 provider_config = self._providers.get(provider_id)
-            except (KeyError, AttributeError):
+            except KeyError, AttributeError:
                 provider_config = None
             return resolve_effective_context_window(
                 model.context_window,

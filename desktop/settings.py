@@ -127,7 +127,7 @@ def read_settings(path: Path | None = None) -> dict[str, Any]:
     with _settings_lock(resolved_path):
         try:
             return _read_settings_unlocked(resolved_path)
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return {}
 
 

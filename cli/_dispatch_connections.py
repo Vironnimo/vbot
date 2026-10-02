@@ -212,7 +212,7 @@ def dispatch_provider_command(
     if args.command == "custom-save":
         try:
             api_key = _read_stdin_utf8() if args.api_key_stdin else args.api_key
-        except (OSError, UnicodeError):
+        except OSError, UnicodeError:
             return CommandResult(
                 ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
             )
@@ -242,7 +242,7 @@ def dispatch_provider_command(
     if args.command == "set-key":
         try:
             value = _read_stdin_utf8() if args.stdin else args.value
-        except (OSError, UnicodeError):
+        except OSError, UnicodeError:
             return CommandResult(
                 ok=False, message="cannot read API key from UTF-8 stdin", instance=instance
             )

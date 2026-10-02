@@ -58,7 +58,7 @@ def has_id_entry(directory: Path, identifier: str) -> bool:
     try:
         with os.scandir(directory) as entries:
             return any(entry.name == identifier for entry in entries)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return False
 
 

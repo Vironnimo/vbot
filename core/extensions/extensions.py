@@ -485,7 +485,7 @@ class ExtensionRegistry:
 
         try:
             denied = normalize_tool_access(binding.config.get("tool_access")).denied
-        except (AttributeError, TypeError, ValueError):
+        except AttributeError, TypeError, ValueError:
             return None
         return SessionCapability(
             tool_names=tuple(

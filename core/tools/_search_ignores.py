@@ -66,7 +66,7 @@ def _compiled_source(path: Path, *, casefold: bool) -> tuple[int, list]:
     """Return one ignore file's line count and compiled patterns; missing is empty."""
     try:
         stamp = _stamp(path)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return 0, []
     except OSError as error:
         raise _unreadable(f"the ignore file {path.name}", error) from error
@@ -76,7 +76,7 @@ def _compiled_source(path: Path, *, casefold: bool) -> tuple[int, list]:
     try:
         with path.open("r", encoding="utf-8", errors="replace") as stream:
             text = stream.read(_MAX_IGNORE_FILE_CHARS + 1)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return 0, []
     except OSError as error:
         raise _unreadable(f"the ignore file {path.name}", error) from error
@@ -96,7 +96,7 @@ def _configured_excludes_file(config: Path) -> str | None:
     """Return ``core.excludesfile`` from one Git configuration file, if set."""
     try:
         stamp = _stamp(config)
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return None
     cached = _cached(_CONFIG_EXCLUDES, config, stamp)
     if cached is not None:

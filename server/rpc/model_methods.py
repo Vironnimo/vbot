@@ -263,7 +263,7 @@ def _model_reachability(
 def _provider_config_or_none(runtime: Any, provider_id: str) -> Any:
     try:
         return runtime.providers.get(provider_id)
-    except (KeyError, AttributeError):
+    except KeyError, AttributeError:
         return None
 
 

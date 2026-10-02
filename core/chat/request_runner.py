@@ -904,7 +904,7 @@ class WireRequestRunner:
         """
         try:
             provider_config = self._dependencies.providers.get(connection.provider_id)
-        except (KeyError, AttributeError):
+        except KeyError, AttributeError:
             return None
         local_id = _connection_local_id(connection)
         get_connection = getattr(provider_config, "get_connection", None)

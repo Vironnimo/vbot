@@ -40,7 +40,7 @@ def _parse_envelope(content: Any) -> JsonObject | None:
         return None
     try:
         parsed = json.loads(content)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return None
     if not isinstance(parsed, dict) or not is_tool_result_envelope(parsed):
         return None

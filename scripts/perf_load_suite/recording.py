@@ -119,7 +119,7 @@ def read_finished_recording(data_dir: Path, recording_id: str) -> dict[str, Any]
         document = json.loads(
             (directory / f"{recording_id}{SUMMARY_SUFFIX}").read_text(encoding="utf-8")
         )
-    except (OSError, json.JSONDecodeError):
+    except OSError, json.JSONDecodeError:
         return None
     if not isinstance(document, dict):
         return None

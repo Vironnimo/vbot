@@ -395,7 +395,7 @@ def _runtime_setting_details(
         desired = details.get("value")
         try:
             active = state.runtime.attachment_store.max_size_bytes
-        except (AttributeError, RuntimeError):
+        except AttributeError, RuntimeError:
             active = details.get("value")
         details["value"] = active
         _set_restart_state(details, active, desired)
@@ -403,7 +403,7 @@ def _runtime_setting_details(
         desired = details.get("value")
         try:
             active = state.runtime.speech_upload_max_size_bytes
-        except (AttributeError, RuntimeError):
+        except AttributeError, RuntimeError:
             active = details.get("value")
         details["value"] = active
         _set_restart_state(details, active, desired)
@@ -790,7 +790,7 @@ async def _trace_count(runtime: Any) -> int:
             trace_limit=debug_settings.get("trace_limit", 50),
         )
         return len(await store.get_traces_async())
-    except (FileNotFoundError, OSError):
+    except FileNotFoundError, OSError:
         # Expected when the trace store has never been written; not an error.
         return 0
     except Exception:

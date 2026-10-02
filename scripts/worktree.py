@@ -239,7 +239,7 @@ def _owns_data_dir(
         if owner_path.is_symlink():
             return False
         return _read_worktree_marker(owner_path) == _data_owner_record(worktree_path, token)
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return False
 
 
@@ -817,7 +817,7 @@ def cmd_delete(args: argparse.Namespace) -> int:
     if marker.exists():
         try:
             marker_text = marker.read_text(encoding="utf-8")
-        except (OSError, UnicodeError):
+        except OSError, UnicodeError:
             marker_text = None
     if marker.exists() and checkout_present and not args.force:
         # Remove only the script-managed marker so legacy branches without the

@@ -642,7 +642,7 @@ def _cancelled(batch: _Batch) -> list[str]:
 def _call_cwd(context: ToolContext) -> Path:
     try:
         return context.effective_cwd.resolve()
-    except (OSError, RuntimeError):
+    except OSError, RuntimeError:
         return context.effective_cwd
 
 
@@ -653,7 +653,7 @@ def _locate_context(context: ToolContext, batch: _Batch, name: str, lines: list[
         if path.stat().st_size > _CONTEXT_SEARCH_MAX_BYTES:
             return []
         content = _decode(path.read_bytes(), path)
-    except (OSError, _PatchError):
+    except OSError, _PatchError:
         return []
     text = "\n".join(lines)
     found = replace_fuzzy(
@@ -814,7 +814,7 @@ def _display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:
             path = normalized.get("path")
             if not isinstance(path, str):
                 path = patch_operations(normalized)[0].path
-    except (ValueError, _PatchError):
+    except ValueError, _PatchError:
         patch = (
             arguments.get("patch", arguments.get("input")) if isinstance(arguments, dict) else None
         )

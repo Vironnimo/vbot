@@ -370,7 +370,7 @@ class ProviderUsageService:
                 connection.provider_id,
                 connection.local_connection_id,
             )
-        except (KeyError, ConfigError):
+        except KeyError, ConfigError:
             return None
         return replace(connection, account_id=account_id)
 
@@ -416,7 +416,7 @@ class ProviderUsageService:
     def _display_name(self, connection: _SupportedConnection) -> str:
         try:
             name = self._runtime.providers.get(connection.provider_id).name
-        except (KeyError, AttributeError):
+        except KeyError, AttributeError:
             return connection.provider_id
         return name if isinstance(name, str) and name else connection.provider_id
 

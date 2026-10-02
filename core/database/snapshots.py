@@ -257,7 +257,7 @@ def read_snapshot_health(data_dir: Path) -> dict[str, Any]:
     """Return the durable outcome of the latest snapshot attempt."""
     try:
         payload = json.loads(_health_path(data_dir).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except OSError, UnicodeError, json.JSONDecodeError:
         return {"state": "unknown", "reason": None, "snapshot_id": None, "observed_at": None}
     if (
         not isinstance(payload, dict)
@@ -446,7 +446,7 @@ def read_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | None
         return None
     except OSError as exc:
         raise DatabaseUnavailableError("snapshot manifest is unavailable") from exc
-    except (UnicodeError, json.JSONDecodeError, DatabaseCorruptError):
+    except UnicodeError, json.JSONDecodeError, DatabaseCorruptError:
         return None
 
 
@@ -766,7 +766,7 @@ def _shallow_manifest(data_dir: Path, snapshot_dir: Path) -> SnapshotManifest | 
                 return None
         if not documents_present(snapshot_dir, manifest.documents):
             return None
-    except (OSError, DatabaseUnavailableError):
+    except OSError, DatabaseUnavailableError:
         return None
     return manifest
 

@@ -108,7 +108,7 @@ def server_control_claim(data_dir: str | Path, port: int):
                     abs(process_started(process) - existing.process_create_time) < 0.001
                     and process.is_running()
                 )
-            except (OSError, psutil.Error):
+            except OSError, psutil.Error:
                 alive = False
             if alive:
                 raise RuntimeError("Another live server owns this control authority")
@@ -239,7 +239,7 @@ def read_server_control(data_dir: str | Path, port: int) -> ServerControlRecord 
         if path.stat().st_size > CONTROL_RECORD_MAX_BYTES:
             return None
         payload: Any = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except OSError, UnicodeError, json.JSONDecodeError:
         return None
     if not isinstance(payload, dict) or payload.get("version") != CONTROL_RECORD_VERSION:
         return None

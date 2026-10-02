@@ -76,7 +76,7 @@ def scan_used_ports(worktrees_dir: Path) -> set[int]:
             parsed_port = urlsplit(base_url).port
             if parsed_port is not None:
                 ports.add(parsed_port)
-        except (OSError, ValueError, json.JSONDecodeError):
+        except OSError, ValueError, json.JSONDecodeError:
             continue
 
     return ports

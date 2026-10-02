@@ -483,7 +483,7 @@ def _write_activation_request(path: Path, request: Mapping[str, Any], *, created
             temporary_file.write(payload)
             temporary_file.close()
             Path(temporary_file.name).replace(path)
-    except (OSError, TypeError, ValueError):
+    except OSError, TypeError, ValueError:
         logger.warning("The request for the running Desktop could not be written", exc_info=True)
 
 
@@ -494,7 +494,7 @@ def _take_activation_request(path: Path, *, now: float) -> ActivationRequest | N
         payload = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         logger.warning("The request of another Desktop launch could not be read", exc_info=True)
         payload = None
     try:

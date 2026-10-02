@@ -178,7 +178,7 @@ def _configured_zone(timezone_name_loader: Callable[[], str] | None) -> tzinfo |
         return None
     try:
         return ZoneInfo(timezone_name_loader())
-    except (ZoneInfoNotFoundError, ValueError, OSError):
+    except ZoneInfoNotFoundError, ValueError, OSError:
         _LOGGER.warning("status could not load the configured timezone; using UTC", exc_info=True)
         return UTC
 

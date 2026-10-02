@@ -483,7 +483,7 @@ class OperationLock:
                 import fcntl
 
                 fcntl.flock(self.fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
-        except (ImportError, OSError):
+        except ImportError, OSError:
             pass
         finally:
             with contextlib.suppress(OSError):
@@ -534,7 +534,7 @@ def acquire_operation_lock(
                 os.ftruncate(descriptor, 0)
                 os.write(descriptor, f"pid={os.getpid()}".encode())
             return OperationLock(lock_path, descriptor)
-        except (ImportError, OSError):
+        except ImportError, OSError:
             if descriptor is not None:
                 with contextlib.suppress(OSError):
                     os.close(descriptor)

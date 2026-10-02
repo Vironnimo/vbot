@@ -383,7 +383,7 @@ def _document(path: Path) -> dict[str, Any] | None:
     try:
         with path.open(encoding="utf-8") as stream:
             value = json.load(stream)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return None
     return value if isinstance(value, dict) else None
 
@@ -455,7 +455,7 @@ def _outside(workspace: str, data_dir: Path) -> bool:
         return False
     try:
         return not path.resolve().is_relative_to(Path(data_dir).resolve())
-    except (OSError, RuntimeError):
+    except OSError, RuntimeError:
         return not path.is_relative_to(data_dir)
 
 

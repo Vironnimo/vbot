@@ -280,7 +280,7 @@ class DebugTraceStore:
         try:
             with open(self._index_path, encoding="utf-8") as file:
                 data = json.load(file)
-        except (OSError, json.JSONDecodeError):
+        except OSError, json.JSONDecodeError:
             _logger.warning("Debug trace index is unreadable; treating as empty")
             return []
         if not isinstance(data, list):

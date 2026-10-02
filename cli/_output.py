@@ -211,7 +211,7 @@ def _operation_duration(operation: Operation) -> str | None:
         elapsed = datetime.fromisoformat(operation.updated_at) - datetime.fromisoformat(
             operation.created_at
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     seconds = round(elapsed.total_seconds())
     if seconds < 0:

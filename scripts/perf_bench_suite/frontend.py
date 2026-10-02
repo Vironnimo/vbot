@@ -208,7 +208,7 @@ def _node_version() -> str | None:
         completed = subprocess.run(
             [node, "--version"], capture_output=True, text=True, timeout=30, check=False
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     return completed.stdout.strip() or None
 

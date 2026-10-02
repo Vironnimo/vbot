@@ -126,7 +126,7 @@ class TerminalSessionIO:
         try:
             await asyncio.to_thread(session.adapter.write, command)
             await asyncio.to_thread(session.adapter.write, "\r")
-        except (EOFError, OSError):
+        except EOFError, OSError:
             return
         except asyncio.CancelledError:
             return
@@ -188,7 +188,7 @@ class TerminalSessionIO:
                     session.output_event.set()
         except asyncio.CancelledError:
             raise
-        except (EOFError, OSError):
+        except EOFError, OSError:
             pass
         except BaseException as caught:
             error = caught

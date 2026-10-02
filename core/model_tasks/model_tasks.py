@@ -439,7 +439,7 @@ class TaskModelService:
                 self.validate_binding(task_type, binding.to_dict())
                 return self._local_targets.get(target_ref.local_id).can_execute()
             return True
-        except (VBotError, ValueError):
+        except VBotError, ValueError:
             return False
 
     def validate_execution_target(self, binding: TaskModelBinding) -> None:

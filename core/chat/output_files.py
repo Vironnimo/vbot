@@ -181,5 +181,5 @@ def _resolve_regular_file(candidate: str, *, cwd: Path | None) -> Path | None:
             path = cwd / path
         resolved = path.resolve()
         return resolved if resolved.is_file() else None
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return None

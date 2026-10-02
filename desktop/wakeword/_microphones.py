@@ -109,7 +109,7 @@ def _candidate_device_indices(sd: Any, requested_device: dict[str, Any] | None) 
     candidates: list[int] = []
     try:
         default_input = int(sd.default.device[0])
-    except (IndexError, TypeError, ValueError):
+    except IndexError, TypeError, ValueError:
         default_input = -1
     if default_input >= 0:
         candidates.append(default_input)

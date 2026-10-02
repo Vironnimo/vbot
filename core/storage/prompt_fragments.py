@@ -128,7 +128,7 @@ class PromptFragmentStore:
         prompt_path = self.agent_prompts_dir(agent_id) / safe_name
         try:
             return prompt_path.read_text(encoding="utf-8")
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError, NotADirectoryError:
             return ""
         except OSError as exc:
             raise StorageError(f"Cannot read Agent prompt fragment {safe_name}: {exc}") from exc
@@ -146,7 +146,7 @@ class PromptFragmentStore:
         try:
             try:
                 return data_path.read_text(encoding="utf-8")
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError, NotADirectoryError:
                 return resource_path.read_text(encoding="utf-8")
         except OSError as exc:
             raise StorageError(f"Cannot read prompt fragment {safe_name}: {exc}") from exc

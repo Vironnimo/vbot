@@ -68,7 +68,7 @@ def _configure_console_output() -> None:
             continue
         try:
             reconfigure(encoding="utf-8", errors="backslashreplace")
-        except (OSError, ValueError):
+        except OSError, ValueError:
             # Imported/test streams may expose ``reconfigure`` while refusing an
             # encoding change. CLI output still uses the stream's own contract.
             continue

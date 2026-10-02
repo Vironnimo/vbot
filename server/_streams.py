@@ -132,7 +132,7 @@ def _parse_after_sequence(raw: str | None) -> int:
         return 0
     try:
         value = int(raw)
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return 0
     return max(value, 0)
 

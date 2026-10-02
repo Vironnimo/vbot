@@ -961,14 +961,14 @@ class DeviceFlowEngine:
         if isinstance(value, int | float):
             try:
                 return datetime.fromtimestamp(float(value), tz=UTC)
-            except (OverflowError, OSError, ValueError):
+            except OverflowError, OSError, ValueError:
                 return None
         if not isinstance(value, str) or not value:
             return None
         if value.isdecimal():
             try:
                 return datetime.fromtimestamp(float(value), tz=UTC)
-            except (OverflowError, OSError, ValueError):
+            except OverflowError, OSError, ValueError:
                 return None
         try:
             parsed = datetime.fromisoformat(value)

@@ -461,7 +461,7 @@ class LiveCallSession:
                 await self._wire.aclose()
                 if self._reader is not None:
                     await asyncio.shield(self._reader)
-        except (TimeoutError, asyncio.CancelledError):
+        except TimeoutError, asyncio.CancelledError:
             if self._reader is not None and self._reader is not asyncio.current_task():
                 self._reader.cancel()
             # Only a cancellation of this task propagates, not the shielded reader's.

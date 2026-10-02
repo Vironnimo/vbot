@@ -255,7 +255,7 @@ def has_local_listener(instance: ServerInstance) -> bool:
         return False
     try:
         connections = psutil.net_connections(kind="tcp")
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         return False
     return any(
         connection.status == psutil.CONN_LISTEN
@@ -287,7 +287,7 @@ def is_local_target(instance: ServerInstance) -> bool:
         return True
     try:
         interfaces = psutil.net_if_addrs()
-    except (psutil.Error, OSError):
+    except psutil.Error, OSError:
         return False
     local_addresses = set()
     for entries in interfaces.values():
@@ -350,5 +350,5 @@ def _connection_local_ip(local_address: object) -> str:
         return str(ip)
     try:
         return str(local_address[0])  # type: ignore[index]
-    except (IndexError, TypeError):
+    except IndexError, TypeError:
         return ""

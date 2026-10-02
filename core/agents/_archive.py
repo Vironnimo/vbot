@@ -147,14 +147,14 @@ def inspect_archived(store: AgentStore, source: Path) -> ArchivedAgentPayload:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return ArchivedAgentPayload(None, "payload_missing")
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return ArchivedAgentPayload(None, "payload_invalid")
     version = document_version_state(raw, AGENT_FORMAT_VERSION)
     if version != "current":
         return ArchivedAgentPayload(None, f"{version}_format")
     try:
         data = load_validated_agent_json(path)
-    except (AgentError, OSError):
+    except AgentError, OSError:
         return ArchivedAgentPayload(None, "payload_invalid")
     return ArchivedAgentPayload(
         _agent_from_dict(

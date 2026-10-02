@@ -60,7 +60,7 @@ def _copy_tree(source: Path, destination: Path) -> bool:
 
     try:
         shutil.copytree(source, destination, symlinks=True, ignore=ignore_caches)
-    except (OSError, shutil.Error):
+    except OSError, shutil.Error:
         return False
     return True
 

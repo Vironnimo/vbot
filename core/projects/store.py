@@ -200,7 +200,7 @@ class ProjectStore:
                 if config_path is None:
                     return False
                 self._read_project(config_path)
-            except (ProjectError, OSError):
+            except ProjectError, OSError:
                 return False
             return True
 
@@ -405,7 +405,7 @@ class ProjectStore:
                 raise ProjectNotFoundError(f"Project not found: {project_id}")
             try:
                 project: Project | None = self._read_project(project_dir / _PROJECT_CONFIG_FILENAME)
-            except (ProjectError, OSError):
+            except ProjectError, OSError:
                 project = None
             try:
                 tree.parent.mkdir(parents=True, exist_ok=True)
@@ -425,14 +425,14 @@ class ProjectStore:
             raw = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return ArchivedProjectPayload(None, "payload_missing")
-        except (OSError, ValueError):
+        except OSError, ValueError:
             return ArchivedProjectPayload(None, "payload_invalid")
         version = document_version_state(raw, PROJECT_FORMAT_VERSION)
         if version != "current":
             return ArchivedProjectPayload(None, f"{version}_format")
         try:
             return ArchivedProjectPayload(project_from_dict(load_validated_project_json(path)))
-        except (ProjectError, OSError, ValueError):
+        except ProjectError, OSError, ValueError:
             return ArchivedProjectPayload(None, "payload_invalid")
 
     def restore_target_problem(self, project_id: str) -> str | None:

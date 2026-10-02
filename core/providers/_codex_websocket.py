@@ -71,7 +71,7 @@ def _codex_websocket_response_head(websocket: Any) -> tuple[int, dict[str, str]]
     raw_headers = getattr(response, "headers", None)
     try:
         headers = dict(raw_headers) if raw_headers is not None else {}
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         headers = {}
     return status_code, {str(name): str(value) for name, value in headers.items()}
 

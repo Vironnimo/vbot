@@ -480,7 +480,7 @@ def is_snapshot_document_path(path: str) -> bool:
     if any(part in {"", ".", ".."} for part in parts):
         return False
     return any(
-        len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern))
+        len(parts) == len(pattern) and all(map(_segment_matches, parts, pattern, strict=True))
         for pattern in (tuple(value.split("/")) for value in SNAPSHOT_DOCUMENTS.values())
     )
 
@@ -498,7 +498,7 @@ def _document_data_dirs(path: Path) -> tuple[Path, ...]:
     for pattern in _SNAPSHOT_PATTERNS:
         for depth in range(1, min(len(pattern), len(parts) - 1) + 1):
             tail = parts[len(parts) - depth :]
-            if all(map(_segment_matches, tail, pattern[:depth])):
+            if all(map(_segment_matches, tail, pattern[:depth], strict=True)):
                 found.add(Path(*parts[: len(parts) - depth]))
     return tuple(sorted(found))
 
@@ -517,14 +517,14 @@ def _matching_documents(
                 names = sorted(
                     entry.name for entry in entries if _segment_matches(entry.name, segment)
                 )
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError, NotADirectoryError:
             return
     else:
         names = [segment]
     for name in names:
         try:
             status = os.lstat(directory / name)
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError, NotADirectoryError:
             continue
         if is_link_status(status):
             continue

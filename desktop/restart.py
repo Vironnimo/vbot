@@ -200,7 +200,7 @@ def discard_restart_request(config_directory: Path, nonce: str) -> None:
     path = Path(config_directory) / RESTART_REQUEST_FILE_NAME
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, ValueError):
+    except OSError, UnicodeDecodeError, ValueError:
         return
     if isinstance(document, dict) and document.get("nonce") == nonce:
         with contextlib.suppress(OSError):
@@ -221,7 +221,7 @@ def take_restart_request(config_directory: Path, *, now: float) -> RestartReques
         payload: str | None = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-    except (OSError, UnicodeDecodeError, ValueError):
+    except OSError, UnicodeDecodeError, ValueError:
         logger.warning("The restart request of the previous Desktop could not be read")
         payload = None
     with contextlib.suppress(OSError):
@@ -514,7 +514,7 @@ class DesktopRestart:
             return
         try:
             active = path.read_text(encoding="ascii").strip()
-        except (OSError, UnicodeError):
+        except OSError, UnicodeError:
             return
         self._version_signature = signature
         if not _is_version_id(active):

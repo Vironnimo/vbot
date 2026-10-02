@@ -46,7 +46,7 @@ def _windows_color(stream: TextIO) -> bool:
             kernel.GetConsoleMode(handle, ctypes.byref(mode))
             and kernel.SetConsoleMode(handle, mode.value | 0x0004)
         )
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return False
 
 
@@ -68,7 +68,7 @@ def status_line(status: Status, message: str, *, stream: TextIO | None = None) -
     if terminal:
         try:
             symbol.encode(stream.encoding or "ascii")
-        except (UnicodeEncodeError, LookupError):
+        except UnicodeEncodeError, LookupError:
             terminal = False
     marker = f"{symbol} {label}" if terminal else f"[{label}]"
     if terminal and color_enabled(stream):

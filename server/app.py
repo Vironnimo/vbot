@@ -609,7 +609,7 @@ def create_app(
                 )
                 return Response(content, media_type="text/html", headers=headers)
             return FileResponse(delivered.path, media_type=delivered.media_type, headers=headers)
-        except (ValueError, OSError):
+        except ValueError, OSError:
             content, headers = await FILE_PREVIEW_WORKERS.run(
                 delivery.preview_unavailable, str(request.base_url), token
             )
@@ -656,7 +656,7 @@ def create_app(
                 media_type=delivered.media_type,
                 headers=delivery.extension_page_headers(str(request.base_url), token),
             )
-        except (OSError, ValueError, KeyError):
+        except OSError, ValueError, KeyError:
             return Response(status_code=404)
 
     @app.get("/api/runs/{run_id}/events")
@@ -713,7 +713,7 @@ def create_app(
                 raise ValueError("Extension Run is unavailable")
             if inspection.run is None:
                 raise ValueError("Extension Run is not live")
-        except (KeyError, ValueError, ExtensionUnavailableError):
+        except KeyError, ValueError, ExtensionUnavailableError:
             raise HTTPException(status_code=404, detail="Extension Run is unavailable") from None
         return StreamingResponse(
             _sse_run_events(

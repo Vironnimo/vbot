@@ -506,7 +506,7 @@ def _change_text(path: Path) -> str | None:
         if path.stat().st_size > MAX_CHANGE_TEXT_BYTES:
             return None
         return _normalize_newlines(_read_raw_text(path))
-    except (OSError, UnicodeDecodeError):
+    except OSError, UnicodeDecodeError:
         return None
 
 

@@ -163,7 +163,7 @@ def _contract_cache_key(
             separators=(",", ":"),
             sort_keys=True,
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -510,13 +510,13 @@ def _coerce_numeric_string(text: str, *, integer_only: bool) -> int | float | No
             return None
         try:
             return int(decimal)
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             return None
 
     if decimal == decimal.to_integral_value():
         try:
             return int(decimal)
-        except (OverflowError, ValueError):
+        except OverflowError, ValueError:
             return None
     if not (_MIN_FLOAT_DECIMAL_EXPONENT <= decimal.adjusted() <= _MAX_FLOAT_DECIMAL_EXPONENT):
         return None
@@ -548,7 +548,7 @@ def _normalize_array_value(
             decoded = _load_json_value(value)
         except ToolContractError:
             raise
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             decoded = None
         if isinstance(decoded, list):
             parsed = decoded
@@ -585,7 +585,7 @@ def _normalize_object_string(
         parsed = _load_json_value(value)
     except ToolContractError:
         raise
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not isinstance(parsed, dict):
         return None

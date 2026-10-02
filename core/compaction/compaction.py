@@ -1037,7 +1037,7 @@ def is_compacted_tool_result_content(content: Any) -> bool:
         return False
     try:
         parsed = json.loads(content)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     return isinstance(parsed, dict) and parsed.get(TOOL_RESULT_COMPACTED_FIELD) is True
 

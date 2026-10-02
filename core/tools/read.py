@@ -113,7 +113,7 @@ def _call_cwd(context: ToolContext) -> Path:
     """Return the working directory in the resolved form that tool paths use."""
     try:
         return context.effective_cwd.resolve()
-    except (OSError, RuntimeError):
+    except OSError, RuntimeError:
         return context.effective_cwd
 
 
@@ -471,7 +471,7 @@ def _normalized_for_display(arguments: Any) -> JsonObject:
     """Return the arguments the handler would see, or the raw call if they are invalid."""
     try:
         normalized = normalize_read_arguments(arguments)
-    except (ToolContractError, ValueError):
+    except ToolContractError, ValueError:
         normalized = arguments
     return normalized if isinstance(normalized, dict) else {}
 

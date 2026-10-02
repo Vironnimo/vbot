@@ -224,7 +224,7 @@ def _fts_health_from_connection(
     try:
         target_value = int(target) if target is not None else -1
         completed_value = int(completed) if completed is not None else -1
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return FtsHealth(
             state="degraded",
             reason="FTS high-water metadata is malformed",

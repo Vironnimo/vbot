@@ -144,7 +144,7 @@ def _posix_login_shell() -> str | None:
         if not callable(get_user_id) or not callable(get_password_entry):
             return None
         shell = getattr(get_password_entry(get_user_id()), "pw_shell", None)
-    except (ImportError, KeyError, OSError):
+    except ImportError, KeyError, OSError:
         return None
     return str(shell) if shell else None
 

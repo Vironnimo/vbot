@@ -147,7 +147,7 @@ def read_history(
             break
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeDecodeError):
+        except OSError, UnicodeDecodeError:
             _LOGGER.warning("Skipped an unreadable performance history file (day=%s)", day)
             continue
         for line in reversed(lines):
@@ -186,7 +186,7 @@ def _parse_window(line: str) -> tuple[datetime, datetime, dict[str, Any]] | None
         record = json.loads(line)
         started_at = datetime.fromisoformat(record["started_at"])
         ended_at = datetime.fromisoformat(record["ended_at"])
-    except (ValueError, TypeError, KeyError):
+    except ValueError, TypeError, KeyError:
         return None
     if not isinstance(record, dict) or started_at.tzinfo is None or ended_at.tzinfo is None:
         return None
