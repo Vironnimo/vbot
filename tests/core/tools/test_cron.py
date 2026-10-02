@@ -367,17 +367,21 @@ def test_finished_job_cannot_resume(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("fields", "value"),
     [
-        ("schedule", "whenever"),
+        ({"schedule": "whenever"}, "whenever"),
         # Digits int() cannot read are no epoch time or compact date.
-        ("run_at", "\u00b2" * 10),
+        ({"run_at": "\u00b2" * 10}, "\u00b2" * 10),
+        # A date has no time of day for Z to place in UTC, in any time zone.
+        ({"schedule": "2030-01-10Z", "timezone": "Asia/Tokyo"}, "2030-01-10Z"),
     ],
 )
-def test_invalid_schedule_lists_the_forms(tmp_path: Path, field: str, value: str) -> None:
+def test_invalid_schedule_lists_the_forms(
+    tmp_path: Path, fields: dict[str, str], value: str
+) -> None:
     tool = cron_tool(tmp_path)
 
-    envelope, _text = tool.call({"action": "create", "prompt": PROMPT, field: value})
+    envelope, _text = tool.call({"action": "create", "prompt": PROMPT, **fields})
 
     message = _error(envelope)["message"]
     assert message.startswith(f'cron was not run: schedule "{value}" is not valid')

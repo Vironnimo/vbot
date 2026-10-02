@@ -500,6 +500,10 @@ class TestImpossibleValues:
                 "event, send its length in days as duration.",
             ),
             (
+                {"action": "create", "title": "E", "start": "2030-01-10Z"},
+                "start must be a valid ISO 8601 datetime",
+            ),
+            (
                 {"action": "add_action", "when": "2030-02-30", "prompt": "p"},
                 "when must be start or end",
             ),
@@ -512,6 +516,7 @@ class TestImpossibleValues:
             "end-time",
             "all-day-end-time",
             "all-day-end-missing-date",
+            "date-with-utc-marker",
             "action-date",
             "action-target",
         ],

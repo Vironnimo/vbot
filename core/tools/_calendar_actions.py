@@ -343,7 +343,7 @@ def action_lines(action: dict[str, Any], rows: list[dict[str, Any]], zone: ZoneI
 
 
 def _instant(value: str) -> datetime:
-    return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    return datetime.fromisoformat(value)
 
 
 __all__ = [

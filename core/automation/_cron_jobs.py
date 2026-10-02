@@ -548,9 +548,8 @@ def _parse_iso_datetime(value: str, *, field_name: str, allow_naive: bool) -> da
     if not isinstance(value, str) or not value:
         raise CronJobValidationError(f"{field_name} must be a non-empty ISO 8601 timestamp")
 
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(value)
     except ValueError as error:
         raise CronJobValidationError(f"{field_name} must be a valid ISO 8601 timestamp") from error
 

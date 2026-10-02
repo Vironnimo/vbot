@@ -288,6 +288,11 @@ async def test_provider_usage_history_clear_is_explicit(history_state: SimpleNam
             {"since": "yesterday"},
             "params.since must be an ISO 8601 timestamp string",
         ),
+        (
+            "provider.usage_history",
+            {"since": "2026-08-01Z"},
+            "params.since must be an ISO 8601 timestamp string",
+        ),
     ],
 )
 async def test_malformed_provider_usage_requests_reach_no_service(

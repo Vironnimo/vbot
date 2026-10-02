@@ -356,6 +356,10 @@ async def test_a_start_date_uses_the_shortest_covering_window(tmp_path: Path, br
             'date_after must be a date such as 2026-09-01; received "last release".',
         ),
         (
+            {"query": "python", "date_after": "2026-07-01Z"},
+            'date_after must be a date such as 2026-09-01; received "2026-07-01Z".',
+        ),
+        (
             {"query": "python", "domains": ["docs.python.org/3/library"]},
             "domains take site names such as example.com, not addresses with a path "
             '("docs.python.org/3/library"). Pass {"domains": ["docs.python.org"]} and put '

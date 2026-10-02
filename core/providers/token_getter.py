@@ -458,7 +458,7 @@ def _parse_exchange_expiry(value: object, now: datetime) -> datetime:
         except (OverflowError, OSError, ValueError):
             return fallback
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
         if parsed.tzinfo is None:
             return parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)
@@ -470,7 +470,7 @@ def _parse_oauth_expiry(data: dict[str, object], now: datetime) -> datetime:
     expires_at = data.get("expires_at")
     if isinstance(expires_at, str) and expires_at:
         try:
-            parsed = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(expires_at)
             if parsed.tzinfo is None:
                 return parsed.replace(tzinfo=UTC)
             return parsed.astimezone(UTC)

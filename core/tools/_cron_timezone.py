@@ -136,7 +136,7 @@ def _moment_in_zone(
 ) -> tuple[dict[str, Any], str | None]:
     text = schedule.strip()
     try:
-        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+        parsed = datetime.fromisoformat(text)
     except ValueError:
         # The schedule parser explains the form; a time zone cannot fix it.
         return arguments, None

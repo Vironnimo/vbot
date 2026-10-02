@@ -566,7 +566,7 @@ def parse_local(text: str) -> datetime | None:
     if is_date(value):
         return None
     try:
-        return datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+        return datetime.fromisoformat(value)
     except ValueError:
         return None
 

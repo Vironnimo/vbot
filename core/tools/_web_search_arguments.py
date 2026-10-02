@@ -195,7 +195,7 @@ def parse_date(value: str) -> datetime | None:
     """Parse an ISO-like date or timestamp as an aware UTC datetime."""
     text = value.strip()
     try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace("z", "+00:00"))
+        parsed = datetime.fromisoformat(text[:-1] + "Z" if text.endswith("z") else text)
     except ValueError:
         match = _DATE.fullmatch(text)
         if match is None:

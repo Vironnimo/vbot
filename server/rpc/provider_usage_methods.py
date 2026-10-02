@@ -72,8 +72,7 @@ def _optional_utc_timestamp(params: JsonObject, key: str) -> datetime | None:
             f"params.{key} must be an ISO 8601 timestamp string",
         )
     try:
-        normalized = value.removesuffix("Z") + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise RpcError(
             RPC_ERROR_INVALID_REQUEST,

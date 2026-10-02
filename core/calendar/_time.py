@@ -39,9 +39,8 @@ def _local_naive_iso(value: datetime, zone: ZoneInfo) -> str:
 
 
 def _parse_iso_datetime(value: str, *, field_name: str) -> datetime:
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
-        return datetime.fromisoformat(normalized)
+        return datetime.fromisoformat(value)
     except ValueError as error:
         raise CalendarValidationError(f"{field_name} must be a valid ISO 8601 datetime") from error
 
