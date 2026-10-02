@@ -1,269 +1,313 @@
-"""Native window and desktop control with owned observations and bounded execution."""
+"""Computer Use: operate the server host's desktop with screenshots, mouse and keyboard.
+
+``ComputerUseService`` owns the lifecycle, the Agent permission check, the
+per-Session app grants and access requests, call serialization on one desktop
+worker thread, stop control and result assembly. Platform work happens behind
+``DesktopTarget``; ``Desktop`` runs one call's work on the worker thread.
+"""
 
 from __future__ import annotations
 
-import shutil
+import asyncio
+import contextlib
+import functools
+import sys
 import threading
 import time
-import uuid
-from typing import Any
+from collections import Counter
+from collections.abc import AsyncIterator, Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from typing import Any, Protocol
 
 from core.extensions import ExtensionAPI
-from core.extensions.operations import ExtensionHost
+from core.extensions.operations import PENDING_INPUTS_RESOURCE, ExtensionHost
 from core.tools import ToolContext, ToolDisplay, tool_failure, tool_success
 from core.tools.availability import resolve_tool_access
 from core.utils.ids import new_id
 
-from . import observations
-from ._arguments import (
-    _BACKGROUND_FOCUS_HINT,
-    _MUTATIONS,
-    _NO_EFFECT_HINT,
-    _POST_INPUT_OBSERVATION_MS,
-    _READINESS_HINT,
-    _TARGET,
-    _TARGETED,
-    _WINDOW,
+from ._access import (
+    TIER_WORDS,
+    AccessRequests,
+    Grant,
+    Sessions,
+    SessionState,
+    category_tier,
+    request_message,
+    resolve_app,
+    resolve_apps,
+    tier_text,
+)
+from ._actions import Action, ActionError, parse_action
+from ._desktop import CallRefusedError, Desktop, request_call
+from ._screens import describe_displays
+from ._tools import (
+    COMPUTER_APPS_DESCRIPTION,
+    COMPUTER_APPS_PARAMETERS,
+    COMPUTER_BATCH_DESCRIPTION,
+    COMPUTER_BATCH_PARAMETERS,
     COMPUTER_DESCRIPTION,
     COMPUTER_PARAMETERS,
-    UNADVERTISED_PARAMETERS,
-    InvalidComputerArgumentsError,
-    _describe_target,
-    _target,
-    _target_fields,
-    _validate_arguments,
-    call_text,
-    capture_call,
+    RESULT_SCHEMA,
+    normalize_apps,
+    normalize_batch,
+    normalize_computer,
 )
-from ._dialects import normalize_computer_arguments
-from ._session_views import (
-    DesktopSession,
-    _observation,
-    _outcome,
-    _reference,
-    with_latest_view,
-)
-from .driver import ComputerUseError, ComputerUseInterruptedError, CuaDriver, EmergencyHotkey
+from .target import AppInfo, DesktopTarget, InputInterrupted, TargetError
 
-# Failures raised before the driver sends anything: the requested input did not happen.
-_NOT_SENT = {
-    "capture_required",
-    "computer_session_expired",
-    "focus_refused",
-    "foreground_required",
-    "invalid_arguments",
-    "invalid_coordinates",
-    "stale_element",
-    "stale_view",
-    "stale_window",
-    "target_blocked",
-    "unknown_element",
-    "unsupported_capability",
-    "window_not_visible",
+UNSUPPORTED = "Computer Use currently supports Windows server hosts."
+READINESS_HINT = (
+    "Computer Use works when the vBot server runs on Windows in a signed-in desktop session."
+)
+TOOL_FAMILY = "computer_use"
+# After input, the screen gets this long to react before the result's screenshot.
+SETTLE_SECONDS = 0.5
+# Between two input actions of a batch, so menus and focus can follow.
+STEP_SETTLE_SECONDS = 0.2
+# After bringing an app to the front, which may launch it.
+OPEN_SETTLE_SECONDS = 1.5
+# A cached "not ready" is checked again at most this often.
+READINESS_RECHECK_SECONDS = 30.0
+_LIST_LIMIT = 25
+_STOPPED_BY = {
+    "control": "The user stopped Computer Use",
+    "double_escape": "The user stopped Computer Use by pressing Esc twice",
+    "run_cancel": "The Run was cancelled",
+    "shutdown": "vBot is shutting down, which stopped Computer Use",
 }
 
-_DESKTOP_ROUTE = (
-    'capture the desktop with {"action":"capture"}, click the window or its taskbar entry '
-    "there, then capture the window with foreground=true"
-)
+
+class Hotkey(Protocol):
+    """The global double-Esc stop, armed only while a call runs."""
+
+    available: bool
+
+    def start(self) -> None: ...
+
+    def set_armed(self, owner: object | None) -> None: ...
+
+    def close(self) -> None: ...
 
 
-def _explained(error: ComputerUseError, args: dict[str, Any]) -> str:
-    """Return the failure message with the exact next call for runtime refusals."""
-    code = error.code
-    target = _target(args) if _TARGET & args.keys() else ("desktop", None)
-    name = _describe_target(target)
-    foreground = bool(args.get("foreground", target[0] != "window"))
-    if target[0] == "window" and code in {"target_not_foreground", "focus_refused"}:
-        cause = (
-            f"{name.capitalize()} is not the active window, so a foreground capture cannot show "
-            "what foreground input would reach."
-            if code == "target_not_foreground"
-            else f"Windows refused to bring {name} to the front."
-        )
-        return (
-            f"{cause} No input was sent. For background input, capture it with "
-            f"{capture_call(target, False)}. For foreground input, {_DESKTOP_ROUTE}."
-        )
-    if code == "window_not_visible":
-        return (
-            f"{name.capitalize()} is minimized. No input was sent. Capture the desktop with "
-            '{"action":"capture"} and restore the window from its taskbar entry, then capture '
-            "the window again."
-        )
-    if code == "target_blocked" and target[0] == "window":
-        return (
-            f"{name.capitalize()} has an open dialog that blocks input. No input was sent. "
-            f"Capture it with {capture_call(target, foreground)}; the capture shows the dialog "
-            "and returns its window_id for the next input."
-        )
-    if code == "stale_window":
-        return (
-            f"{name.capitalize()} no longer exists. No input was sent. List the current windows "
-            'with {"action":"windows"}.'
-        )
-    if code == "capture_required" and "No input was sent" not in str(error):
-        return (
-            f"{name.capitalize()} moved, resized or was not captured with this delivery setting "
-            f"since its screenshot. No input was sent. Capture it with "
-            f"{capture_call(target, foreground)} and measure the coordinates in the new image."
-        )
-    if code == "computer_session_expired":
-        return (
-            "The desktop connection was renewed, so earlier screenshots no longer apply. No "
-            f"input was sent. Capture the target again with {capture_call(target, foreground)}."
-        )
-    return str(error)
+async def _sleep(seconds: float, stop: asyncio.Event) -> bool:
+    """Wait *seconds* unless *stop* is set first; return whether it was set."""
+    try:
+        async with asyncio.timeout(seconds):
+            await stop.wait()
+    except TimeoutError:
+        return stop.is_set()
+    return True
 
 
-_LISTING_CHARACTERS = 16_000
+def _new_target() -> DesktopTarget:
+    """Create the platform's desktop target; runs on the desktop worker thread."""
+    if sys.platform == "win32":
+        from .windows_target import WindowsTarget
+
+        return WindowsTarget()
+    raise TargetError(UNSUPPORTED, "computer_use_unavailable")
 
 
-def _listing(action: str, items: Any, args: dict[str, Any]) -> dict[str, Any]:
-    """Return apps or windows as one line each, filtered by pid, app or query."""
-    rows = [item for item in items or [] if isinstance(item, dict)]
-    if action == "windows" and "pid" in args:
-        rows = [item for item in rows if item.get("pid") == args["pid"]]
-    searched = ("name",) if action == "apps" else ("app_name", "title")
-    for text in dict.fromkeys(value for value in (args.get("app"), args.get("query")) if value):
-        needle = text.casefold()
-        rows = [
-            item
-            for item in rows
-            if any(needle in str(item.get(key) or "").casefold() for key in searched)
-        ]
-    lines = []
-    for item in rows:
-        if action == "apps":
-            details = [
-                label
-                for label, shown in (
-                    ("running", item.get("running")),
-                    (f"pid {item.get('pid')}", item.get("pid") is not None),
-                    ("active", item.get("active")),
-                )
-                if shown
-            ]
-            lines.append(f"{item.get('name')}" + (f" ({', '.join(details)})" if details else ""))
-        else:
-            title = str(item.get("title") or "").strip()
-            name = str(item.get("app_name") or "").strip()
-            label = f"{title} ({name})" if title and name else title or name or "untitled"
-            flags = [
-                flag
-                for flag, shown in (
-                    ("minimized", item.get("minimized")),
-                    ("off-screen", item.get("is_on_screen") is False),
-                )
-                if shown
-            ]
-            lines.append(
-                f"pid {item.get('pid')} window_id {item.get('window_id')}: {label}"
-                + (f" [{', '.join(flags)}]" if flags else "")
-            )
-    result: dict[str, Any] = {"count": len(lines)}
-    shown = []
-    size = 0
-    for line in lines:
-        size += len(line) + 1
-        if size > _LISTING_CHARACTERS:
-            break
-        shown.append(line)
-    if len(shown) < len(lines):
-        result["note"] = (
-            f"Showing {len(shown)} of {len(lines)}. Narrow the list with app, for example "
-            f"{call_text({'action': action, 'app': 'name'})}."
-        )
-    elif not lines and (args.get("app") or args.get("query") or "pid" in args):
-        result["note"] = f"Nothing matches. List all with {call_text({'action': action})}."
-    if shown:
-        result["content"] = "\n".join(shown)
-    return result
+def _new_hotkey(callback: Callable[[object], None]) -> Hotkey:
+    from .hotkey import EmergencyHotkey
+
+    hotkey: Hotkey = EmergencyHotkey(callback)
+    return hotkey
 
 
-def _foreground_mismatch(
-    observation: observations.Observation, foreground: bool
-) -> ComputerUseError:
-    target = observation.target
-    setting = "foreground" if observation.foreground else "background"
-    wanted = "foreground" if foreground else "background"
-    return ComputerUseError(
-        f"View {observation.view_id} was captured for {setting} input, but this call asks for "
-        f"{wanted} input, and coordinates must come from a screenshot with the same setting. No "
-        f"input was sent. Omit foreground to send {setting} input with this view, or capture "
-        f"with {capture_call(target, foreground)} first and measure the coordinates in that "
-        "image.",
-        "capture_required",
-    )
+def _summary(arguments: dict[str, Any]) -> str | None:
+    actions = arguments.get("actions")
+    if not isinstance(actions, list):
+        return None
+    words = [
+        str(item.get("action_summary") or item.get("action") or "?")
+        for item in actions
+        if isinstance(item, dict)
+    ]
+    return f"{len(actions)} actions: " + "; ".join(words)
 
 
-__all__ = [
-    "COMPUTER_DESCRIPTION",
-    "COMPUTER_PARAMETERS",
-    "ComputerUseService",
-    "DesktopSession",
-    "InvalidComputerArgumentsError",
-    "register",
-]
+def _apps_summary(arguments: dict[str, Any]) -> str | None:
+    apps = arguments.get("apps")
+    subject = arguments.get("app") or arguments.get("query")
+    if isinstance(apps, list):
+        subject = ", ".join(str(app) for app in apps)
+    action = arguments.get("action")
+    return f"{action} · {subject}" if action and subject else None
 
 
 class ComputerUseService:
-    "Own authority, connection lifetime, observations, and ordered input end to end."
+    """Desktop access for Agents: permission, grants, serialization and stop control."""
 
     def __init__(self, api: ExtensionAPI) -> None:
         self.api = api
         self.host: ExtensionHost | None = None
-        self.executable = shutil.which("cua-driver")
-        self._lock = threading.RLock()
-        self._sessions: dict[tuple[str | None, str, str, str], DesktopSession] = {}
-        self._driver: CuaDriver | None = None
+        self.sessions = Sessions()
+        self.access = AccessRequests(self._inputs_changed)
+        self._target: DesktopTarget | None = None
+        self._unready: str | None = "Computer Use is starting."
+        self._checked = 0.0
+        self._rechecking = False
+        self._tasks: set[asyncio.Task[None]] = set()
+        self._executor: ThreadPoolExecutor | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._hotkey: Hotkey | None = None
         self._closed = False
+        # Serializes whole Tool calls; a batch is atomic.
+        self._lock = asyncio.Lock()
+        # The target checks this between input events; ``_stopped`` wakes pauses.
+        self._stop = threading.Event()
+        self._stopped = asyncio.Event()
         self._control_lock = threading.RLock()
-        self._wake = threading.Event()
         self._active: str | None = None
-        self._interrupted: object | None = None
-        self._active_driver: CuaDriver | None = None
-        self._active_context: ToolContext | None = None
+        self._stop_source: str | None = None
         self._control_revision = 0
-        self._hotkey = EmergencyHotkey(lambda owner: self.stop(owner, source="double_escape"))
+        self._inputs_revision = 0
+        # The Run whose left_mouse_down still holds the left button.
+        self._held_run: str | None = None
+
+    # Lifecycle
 
     async def start(self, host: ExtensionHost) -> None:
         self.host = host
-        if self.executable:
-            self._hotkey.start()
+        self._loop = asyncio.get_running_loop()
+        self._executor = ThreadPoolExecutor(1, thread_name_prefix="computer-use")
+        target: DesktopTarget | None = None
+        try:
+            target = await self._on_worker(_new_target)
+            await self._on_worker(target.set_stop_event, self._stop)
+            reason = await self._on_worker(target.readiness)
+        except TargetError as error:
+            reason = str(error)
+        except Exception:
+            self.api.logger.exception("Computer Use could not start its desktop target")
+            target, reason = None, "Computer Use could not start on this host."
+        self._target, self._unready, self._checked = target, reason, time.monotonic()
+        if reason is not None:
+            self.api.logger.info("Computer Use is not ready: %s", reason)
+
+    async def close(self) -> None:
+        self._closed = True
+        self.stop(source="shutdown")
+        self.access.cancel_all()
+        if self._hotkey is not None:
+            self._hotkey.close()
+        executor, target = self._executor, self._target
+        if executor is not None:
+            if target is not None:
+                try:
+                    release = asyncio.get_running_loop().run_in_executor(
+                        executor, target.release_all
+                    )
+                    await asyncio.wait_for(release, 2)
+                except Exception:
+                    self.api.logger.warning("Computer Use could not release input", exc_info=True)
+            executor.shutdown(wait=False, cancel_futures=True)
+        self.sessions.clear()
+
+    async def run_end(self, context: Any, **_: Any) -> None:
+        """Release a mouse button the ending Run left pressed."""
+        run_id = getattr(context, "run_id", None)
+        if self._held_run is None or self._held_run != run_id or self._target is None:
+            return
+        async with self._lock:
+            if self._held_run == run_id and not self._closed:
+                self._held_run = None
+                try:
+                    await self._on_worker(self._target.release_all)
+                except Exception:
+                    self.api.logger.warning("Computer Use could not release input", exc_info=True)
+
+    def ready(self) -> bool:
+        if self._closed or self._target is None:
+            return False
+        if self._unready is not None:
+            self._recheck_soon()
+        return self._unready is None
+
+    def _recheck_soon(self) -> None:
+        """Schedule a readiness check of the target; never blocks the caller."""
+        loop = self._loop
+        if loop is None or self._rechecking:
+            return
+        if time.monotonic() - self._checked < READINESS_RECHECK_SECONDS:
+            return
+        self._rechecking = True
+        try:
+            loop.call_soon_threadsafe(self._spawn_recheck)
+        except RuntimeError:
+            self._rechecking = False
+
+    def _spawn_recheck(self) -> None:
+        task = asyncio.ensure_future(self._recheck())
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _recheck(self) -> None:
+        try:
+            if self._target is not None and not self._closed:
+                self._readiness(await self._on_worker(self._target.readiness))
+        except Exception:
+            self.api.logger.warning("Computer Use readiness check failed", exc_info=True)
+        finally:
+            self._checked = time.monotonic()
+            self._rechecking = False
+
+    def _readiness(self, reason: str | None) -> None:
+        if reason != self._unready:
+            self.api.logger.info("Computer Use readiness changed: %s", reason or "ready")
+        self._unready = reason
+        self._checked = time.monotonic()
+
+    async def _on_worker[T](self, function: Callable[..., T], *args: Any) -> T:
+        """Run *function* on the desktop worker thread."""
+        executor = self._executor
+        if executor is None or self._closed:
+            raise TargetError("Computer Use has stopped.", "computer_use_unavailable")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(executor, functools.partial(function, *args))
+
+    # Stop control
 
     def stop(self, owner: object | None = None, *, source: str = "control") -> None:
-        # This lock is never held while waiting for a Driver call or the service lock.
+        """Stop the active call (only *owner*'s, when given); safe from any thread."""
         with self._control_lock:
-            if self._active is None or self._interrupted is self._active:
+            active = self._active
+            if active is None or self._stop_source is not None:
                 return
-            if owner is not None and self._active != owner:
+            if owner is not None and owner != active:
                 return
-            self._interrupted = self._active
-            self._hotkey.set_armed(None)
-            self._wake.set()
-            driver = self._active_driver
-            if driver is not None:
-                try:
-                    driver.interrupt()
-                except OSError:
-                    # Further steps still stop even if the OS refuses termination.
-                    driver.broken = True
-                    self.api.logger.exception("Could not interrupt the Computer Use worker")
-            context = self._active_context
-            self.api.logger.debug(
-                "Interrupted Computer Use call (source=%s run=%s tool_call=%s)",
-                source,
-                context.run_id if context is not None else None,
-                context.tool_call_id if context is not None else None,
-            )
-            self._control_changed(self._active)
+            self._stop_source = source
+            self._stop.set()
+            if self._hotkey is not None:
+                self._hotkey.set_armed(None)
+            loop, stopped = self._loop, self._stopped
+            if loop is not None:
+                # A closed loop has nothing waiting any more.
+                with contextlib.suppress(RuntimeError):
+                    loop.call_soon_threadsafe(stopped.set)
+            self.api.logger.debug("Computer Use call stopped (source=%s)", source)
+            self._control_changed(active)
+
+    async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        action = arguments.get("action", "status")
+        with self._control_lock:
+            if (
+                action == "stop"
+                and self._active is not None
+                and arguments.get("call_id") == self._active
+            ):
+                self.stop(source="control")
+            return {
+                "available": self.ready(),
+                "active": self._active is not None,
+                "stopping": self._active is not None and self._stop_source is not None,
+                "hotkey_available": self._hotkey is not None and self._hotkey.available,
+                **({"call_id": self._active} if self._active is not None else {}),
+            }
 
     def _control_changed(self, call_id: str) -> None:
-        """Tell accessors that ``control`` status changed for the call *call_id*.
-
-        Called with ``_control_lock`` held, so revisions follow the changes.
-        """
+        """Tell accessors that the ``control`` status changed; ``_control_lock`` is held."""
         host = self.host
         if self._closed or host is None or host.publish_change is None:
             return
@@ -271,780 +315,503 @@ class ComputerUseService:
         try:
             host.publish_change("control", [call_id], self._control_revision)
         except ValueError:
-            # The registration retired for a reload or disable, which
-            # invalidates every Extension surface itself.
+            # A retired registration invalidates every Extension surface itself.
             self.api.logger.debug("Computer Use change not published: registration retired")
 
-    async def control(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        action = arguments.get("action", "status")
-        with self._control_lock:
-            context = self._active_context
-            if (
-                action == "stop"
-                and context is not None
-                and arguments.get("call_id") == self._active
-            ):
-                self.stop()
-            return {
-                "available": self.ready(),
-                "active": self._active is not None,
-                "stopping": self._active is not None and self._interrupted is self._active,
-                "hotkey_available": self._hotkey.available,
-                **({"call_id": self._active} if context is not None else {}),
-            }
+    def _inputs_changed(self, request_id: str) -> None:
+        """Tell accessors that the pending inputs gained or lost *request_id*."""
+        host = self.host
+        if self._closed or host is None or host.publish_change is None:
+            return
+        self._inputs_revision += 1
+        try:
+            host.publish_change(PENDING_INPUTS_RESOURCE, [request_id], self._inputs_revision)
+        except ValueError:
+            self.api.logger.debug("Pending input change not published: registration retired")
 
-    def ready(self) -> bool:
-        return bool(self.executable) and not self._closed
+    async def respond(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.access.respond(arguments.get("request_id"), arguments.get("response"))
 
-    def _client(self) -> CuaDriver:
-        if not self.executable:
-            raise ComputerUseError(_READINESS_HINT, "tool_not_ready")
-        if self._driver is not None and self._driver.broken:
-            self._driver.close()
-            self._driver = None
-            self._sessions.clear()
-        if self._driver is None:
-            self._driver = CuaDriver(self.executable)
-        return self._driver
+    @asynccontextmanager
+    async def _active_call(self, context: ToolContext) -> AsyncIterator[None]:
+        """Hold the desktop for one call: stoppable, with the hotkey armed."""
+        async with self._lock:
+            owner = new_id("ctl")
+            self._loop = asyncio.get_running_loop()
+            if self._hotkey is None:
+                # The global keyboard hook starts with the first call that needs it.
+                hotkey = _new_hotkey(lambda armed: self.stop(armed, source="double_escape"))
+                await asyncio.to_thread(hotkey.start)
+                self._hotkey = hotkey
+            with self._control_lock:
+                self._active, self._stop_source = owner, None
+                self._stop.clear()
+                self._stopped = asyncio.Event()
+                if self._hotkey is not None:
+                    self._hotkey.set_armed(owner)
+                self._control_changed(owner)
+            context.on_cancel(lambda: self.stop(owner, source="run_cancel"))
+            try:
+                if context.is_cancelled() or context.was_cancelled_by_user():
+                    self.stop(owner, source="run_cancel")
+                yield
+            finally:
+                with self._control_lock:
+                    if self._active == owner:
+                        if self._hotkey is not None:
+                            self._hotkey.set_armed(None)
+                        self._active = None
+                        self._control_changed(owner)
 
-    def _check_access(self, context: ToolContext) -> None:
-        if self._active is not None and (
-            self._interrupted is self._active or self._hotkey.pending_owner is self._active
-        ):
-            raise ComputerUseInterruptedError()
-        if self._closed or self.host is None or self.api.operations.tool_registry is None:
-            raise ComputerUseError(
-                "Computer Use has stopped. Retry after Extensions have reloaded."
+    def _check_stop(self) -> None:
+        if self._stop.is_set():
+            raise InputInterrupted()
+
+    async def _pause(self, seconds: float) -> None:
+        """Wait *seconds*, ending early with ``InputInterrupted`` on a stop."""
+        self._check_stop()
+        if seconds > 0:
+            await _sleep(seconds, self._stopped)
+        self._check_stop()
+
+    def _stopped_text(self) -> str:
+        return _STOPPED_BY.get(self._stop_source or "control", _STOPPED_BY["control"])
+
+    # Calls
+
+    async def _handle(
+        self,
+        context: ToolContext,
+        tool: str,
+        work: Callable[[SessionState, Any, Desktop], Awaitable[str]],
+    ) -> dict[str, Any]:
+        """Run one Tool call: permission and Session checks, then *work*, as an envelope."""
+        desktop: Desktop | None = None
+        try:
+            state, agent = await self._begin(context, tool)
+            assert self._target is not None
+            desktop = Desktop(self._target, state, context)
+            content = await work(state, agent, desktop)
+        except ActionError as error:
+            return self._failed(tool, "invalid_arguments", str(error))
+        except CallRefusedError as refusal:
+            return self._failed(tool, refusal.code, str(refusal))
+        except InputInterrupted:
+            return self._failed(
+                tool,
+                "computer_use_interrupted",
+                f"{self._stopped_text()}; held keys and buttons were released. Do not continue "
+                "operating the computer unless the user asks you to.",
             )
-        if not context.session_id or not context.run_id:
-            raise ComputerUseError(
-                "Computer Use requires a Session. Start a Session before calling this Tool."
+        except TargetError as error:
+            return self._failed(tool, error.code, _target_text(error, desktop))
+        except Exception as error:
+            self.api.logger.exception("Computer Use %s call failed", tool)
+            return self._failed(
+                tool,
+                "computer_use_failed",
+                f"Computer Use failed unexpectedly ({type(error).__name__}). "
+                + _sent_text(desktop),
+            )
+        self.api.logger.debug("Computer Use %s call succeeded", tool)
+        return tool_success({"content": content})
+
+    def _failed(self, tool: str, code: str, message: str) -> dict[str, Any]:
+        self.api.logger.debug("Computer Use %s call failed (code=%s)", tool, code)
+        return tool_failure(code, message, retryable=False)
+
+    async def _begin(self, context: ToolContext, tool: str) -> tuple[SessionState, Any]:
+        """Refuse the call unless Computer Use is ready and this Agent may use *tool*."""
+        registry = self.api.operations.tool_registry
+        stopped = "Computer Use has stopped. Retry after Extensions have reloaded."
+        if self._closed:
+            raise CallRefusedError("computer_use_unavailable", stopped)
+        if self._target is None or self._unready is not None:
+            raise CallRefusedError("computer_use_unavailable", self._unready or UNSUPPORTED)
+        if self.host is None or registry is None:
+            raise CallRefusedError("computer_use_unavailable", stopped)
+        if not context.session_id:
+            raise CallRefusedError(
+                "computer_use_unavailable",
+                "Computer Use works only inside a Session, because app access is granted per "
+                "Session. Nothing was done.",
             )
         try:
             agent = self.host.resolve_tool_agent(context)
         except ValueError as error:
-            raise ComputerUseError(
+            raise CallRefusedError(
+                "computer_use_unavailable",
                 f"Computer Use cannot identify the calling Agent ({error}), so it cannot check "
                 "that this Agent may use the computer. Nothing was done. Tell the user that "
                 "Computer Use is unavailable for this Agent.",
-                "computer_use_unavailable",
             ) from error
         allowed = resolve_tool_access(
             agent.tool_access,
-            self.api.operations.tool_registry.list_tools(),
+            registry.list_tools(),
             agent.memory_prompt_mode,
             workspace=str(agent.workspace or ""),
         ).allowed_tools
-        if "computer" not in allowed:
-            raise ComputerUseError(
-                "Computer Use is not permitted for this Agent. Ask the user to grant "
-                "the computer Tool."
+        if tool not in allowed:
+            raise CallRefusedError(
+                "tool_not_allowed",
+                f"This Agent may not use the {tool} Tool. Nothing was done. Ask the user to "
+                f"allow {tool} for this Agent.",
             )
         if context.is_cancelled() or context.was_cancelled_by_user():
-            raise ComputerUseInterruptedError()
-
-    def _call(
-        self, context: ToolContext, session: DesktopSession, name: str, args: dict[str, Any]
-    ) -> dict[str, Any]:
-        self._check_access(context)
-        client = self._client()
-        client.connect()
-        self._check_access(context)
-        payload = dict(args)
-        if "session" in client.schemas.get(name, {}).get("properties", {}):
-            payload["session"] = session.name
-        try:
-            result = client.call(name, payload)
-        except ComputerUseError:
-            self._check_access(context)
-            raise
-        return result
-
-    def _invalidate(self, target: tuple[Any, ...] | None = None) -> None:
-        for session in self._sessions.values():
-            session.retired_views.update(
-                (key, view.target)
-                for key, view in session.views.items()
-                if target is None or view.target == target
+            raise CallRefusedError(
+                "computer_use_interrupted", "The Run was cancelled. Nothing was done."
             )
-            while len(session.retired_views) > 32:
-                del session.retired_views[next(iter(session.retired_views))]
-            if target is None:
-                session.observations.clear()
-                session.views.clear()
-                session.latest.clear()
-                session.observation_data.clear()
+        reason = await self._on_worker(self._target.readiness)
+        self._readiness(reason)
+        if reason is not None:
+            raise CallRefusedError("computer_use_unavailable", reason)
+        key = (context.project_id, context.agent_id, context.session_id)
+        return self.sessions.use(key), agent
+
+    async def computer(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
+        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+            action = parse_action(arguments)
+            async with self._active_call(context):
+                return await self._computer(context, desktop, action)
+
+        return await self._handle(context, "computer", work)
+
+    async def _computer(self, context: ToolContext, desktop: Desktop, action: Action) -> str:
+        exact = bool(action.frame_points()) or action.region is not None
+        frame = await self._on_worker(desktop.frame, exact)
+        desktop.check_bounds(action, frame)
+        lines: list[str] = []
+        try:
+            if action.name == "screenshot":
+                lines.append(
+                    await self._on_worker(desktop.screenshot, action.scale, action.display)
+                )
+            elif action.name == "zoom":
+                lines.append(await self._on_worker(desktop.zoom, frame, action))
+            elif action.name == "cursor_position":
+                lines.append(await self._on_worker(desktop.cursor, frame))
+            elif action.name == "wait":
+                await self._pause(action.seconds)
+                lines.append(f"Waited {action.seconds:g} s.")
+                lines.append(await self._on_worker(desktop.screenshot))
             else:
-                session.observations.pop(target, None)
-                session.latest.pop(target, None)
-                session.observation_data.pop(target, None)
-                session.views = {
-                    key: view for key, view in session.views.items() if view.target != target
-                }
+                self._check_stop()
+                lines.append(f"Done: {await self._act(context, desktop, action, frame)}.")
+                if action.name != "left_mouse_down":
+                    await self._pause(SETTLE_SECONDS)
+                    lines.append(await self._on_worker(desktop.screenshot))
+        except InputInterrupted:
+            sent = desktop.input_started and action.sends_input
+            raise TargetError(
+                f"{self._stopped_text()} during {action.describe()}"
+                + ("; it may have been partly sent" if sent else "")
+                + ". Held keys and buttons were released. Do not continue operating the "
+                "computer unless the user asks you to.",
+                "computer_use_interrupted",
+            ) from None
+        return "\n".join([*lines, *action.notes])
 
-    @staticmethod
-    def _remember(
-        session: DesktopSession, observation: observations.Observation, *, crop: bool = False
-    ) -> None:
-        if not crop:
-            session.observations[observation.target] = observation
-            session.last_target = observation.target
-            session.issued_elements.update(
-                (token, observation.target) for token in observation.elements.values()
-            )
-            while len(session.issued_elements) > 2000:
-                del session.issued_elements[next(iter(session.issued_elements))]
-        if observation.view_id:
-            session.views[observation.view_id] = observation
-            session.latest[observation.target] = observation.view_id
-        # Cropping is read-only: retain the parent and recent sibling crops.
-        while len(session.views) > 16:
-            del session.views[next(iter(session.views))]
+    async def _act(self, context: ToolContext, desktop: Desktop, action: Action, frame: Any) -> str:
+        done = await self._on_worker(desktop.act, action, frame)
+        if action.name == "left_mouse_down":
+            self._held_run = context.run_id
+        elif action.name == "left_mouse_up":
+            self._held_run = None
+        return done
 
-    def _observe(
-        self,
-        context: ToolContext,
-        session: DesktopSession,
-        target: tuple[Any, ...],
-        args: dict[str, Any],
+    async def computer_batch(
+        self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        # A replacement snapshot also invalidates coordinates held by another Run.
-        self._invalidate(target)
-        mode = args.get("mode", "vision")
-        requested_target = target
-        if target[0] == "window":
-            resolved = self._call(context, session, "resolve_window", _target_fields(target))
-            target = _target(resolved)
-            self._invalidate(target)
-        payload: dict[str, Any]
-        if target[0] == "window":
-            request = {
-                **_target_fields(target),
-                "include_screenshot": mode != "ax",
-                "max_elements": args.get("limit", 200),
-            }
-            if args.get("query"):
-                request["query"] = args["query"]
-            if not args["foreground"]:
-                request["_background_capture"] = True
-            name = "capture_pixels" if mode == "vision" else "get_window_state"
-            payload = self._call(context, session, name, request)
-        else:
-            payload = self._call(context, session, "get_desktop_state", _target_fields(target))
-        observation, result = observations.capture(
-            context, target, payload, mode=mode, resolution=args.get("resolution", "auto")
-        )
-        observation.foreground = args["foreground"]
-        session.resolutions[target] = observation.resolution
-        session.foregrounds[target] = observation.foreground
-        self._remember(session, observation)
-        if target_fields := _target_fields(target):
-            result["target"] = target_fields
-        result["foreground"] = observation.foreground
-        if mode != "vision":
-            result["mode"] = mode
-        if requested_target != target:
-            result["requested_target"] = _target_fields(requested_target)
-        session.observation_data[target] = result
-        return result
+        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+            actions = []
+            for number, item in enumerate(arguments["actions"], start=1):
+                try:
+                    actions.append(parse_action(item))
+                except ActionError as error:
+                    raise ActionError(f"Action {number}: {error} Nothing was run.") from None
+            async with self._active_call(context):
+                return await self._batch(context, desktop, actions)
 
-    def _reference_failure(self, context: ToolContext, error: ComputerUseError) -> dict[str, Any]:
-        # Reference messages name current views, which only an authorized caller may learn.
-        self._check_access(context)
-        return tool_failure(error.code, str(error), retryable=False)
+        return await self._handle(context, "computer_batch", work)
 
-    def _recovery(
-        self,
-        context: ToolContext,
-        args: dict[str, Any],
-        error: Exception | None = None,
-    ) -> dict[str, Any]:
-        """Return a read-only next call without reviving an observation or sending input."""
-        if args["action"] in {"status", "close", "launch", "apps", "windows", "monitors"}:
-            return {}
+    async def _batch(self, context: ToolContext, desktop: Desktop, actions: list[Action]) -> str:
+        exact = any(action.frame_points() or action.region is not None for action in actions)
+        frame = await self._on_worker(desktop.frame, exact)
+        for number, action in enumerate(actions, start=1):
+            try:
+                desktop.check_bounds(action, frame)
+            except CallRefusedError as refusal:
+                raise CallRefusedError(
+                    refusal.code, f"Action {number}: {refusal} Nothing was run."
+                ) from None
+        lines: list[str] = []
+        sent = False
+        number = 0
         try:
-            self._check_access(context)
-        except ComputerUseError:
-            return {}
-        target = _target_fields(_target(args))
-        code = error.code if isinstance(error, ComputerUseError) else None
-        recovery: dict[str, Any] = {"action": "capture", **target, "foreground": args["foreground"]}
-        if args.get("mode", "vision") != "vision":
-            recovery["mode"] = args["mode"]
-            for field in ("query", "limit"):
-                if field in args:
-                    recovery[field] = args[field]
-        if args.get("resolution", "auto") != "auto":
-            recovery["resolution"] = args["resolution"]
-        if code == "stale_window":
-            recovery = {"action": "windows"}
-        elif code in {"target_not_foreground", "focus_refused", "window_not_visible"}:
-            # Selecting the window happens on the desktop, never through a guessed activation.
-            recovery = {"action": "capture"}
-        return {"recovery": recovery}
+            for number, action in enumerate(actions, start=1):
+                if action.sends_input and sent:
+                    await self._pause(STEP_SETTLE_SECONDS)
+                self._check_stop()
+                lines.append(f"{number}. {await self._step(context, desktop, action, frame)}")
+                lines.extend(f"   {note}" for note in action.notes)
+                sent = sent or action.sends_input
+        except (CallRefusedError, TargetError) as error:
+            raise _batch_error(error, actions, number, lines, self._stopped_text()) from None
+        if sent and actions[-1].name != "screenshot":
+            try:
+                await self._pause(SETTLE_SECONDS)
+            except InputInterrupted:
+                raise TargetError(
+                    f"{self._stopped_text()} after all {len(actions)} actions ran, before the "
+                    "final screenshot. Do not continue operating the computer unless the user "
+                    "asks you to.\n" + "\n".join(lines),
+                    "computer_use_interrupted",
+                ) from None
+            lines.append(await self._on_worker(desktop.screenshot))
+        return f"Ran {len(actions)} actions:\n" + "\n".join(lines)
 
-    def _unexpected(self, context: ToolContext, args: dict[str, Any], error: Exception) -> str:
-        action = args["action"]
-        message = (
-            f"Computer Use failed unexpectedly during {action} ({type(error).__name__}). This is "
-            "a vBot problem, not a problem with the call; the server log has the details. "
-        )
-        if action in _MUTATIONS:
-            message += "Input may have been sent. "
-            if recovery := self._recovery(context, args).get("recovery"):
-                message += f"See the current state with {call_text(recovery)} before more input. "
-        else:
-            message += "Nothing was changed, so one more try is safe. "
-        return message + "If it happens again, tell the user that Computer Use is failing."
+    async def _step(
+        self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
+    ) -> str:
+        if action.name == "screenshot":
+            return await self._on_worker(desktop.screenshot, action.scale)
+        if action.name == "zoom":
+            return await self._on_worker(desktop.zoom, frame, action)
+        if action.name == "cursor_position":
+            return await self._on_worker(desktop.cursor, frame)
+        if action.name == "wait":
+            await self._pause(action.seconds)
+            return action.describe()
+        return await self._act(context, desktop, action, frame)
 
-    def _mutation(
-        self,
-        context: ToolContext,
-        session: DesktopSession,
-        args: dict[str, Any],
-        observation: observations.Observation | None,
+    async def computer_apps(
+        self, context: ToolContext, arguments: dict[str, Any]
     ) -> dict[str, Any]:
-        action = args["action"]
-        if action == "launch":
-            return self._call(context, session, "launch_app", {"name": args["app"]})
-        target = _target(args)
-        payload = _target_fields(target)
-        payload["delivery_mode"] = "foreground" if args["foreground"] else "background"
-        if "duration_ms" in args:
-            payload["duration_ms"] = args["duration_ms"]
-        if "modifiers" in args:
-            payload["modifiers"] = args["modifiers"]
-        if "element" in args:
-            assert observation is not None
-            payload["element_token"] = observation.token(args["element"])
-        if "coordinate" in args and "view_id" in args and action != "resize":
-            assert observation is not None
-            if observation.foreground != args["foreground"]:
-                raise _foreground_mismatch(observation, args["foreground"])
-            x, y = observation.point(args["view_id"], *args["coordinate"])
-            if action == "drag":
-                x2, y2 = observation.point(args["view_id"], *args["to_coordinate"])
-                payload.update(from_x=x, from_y=y, to_x=x2, to_y=y2)
+        async def work(state: SessionState, agent: Any, desktop: Desktop) -> str:
+            action = arguments.get("action")
+            if action == "list":
+                return await self._on_worker(_listing, desktop, arguments.get("query"))
+            if action == "request":
+                return await self._request(context, state, agent, arguments)
+            return await self._open(context, state, desktop, arguments.get("app"))
+
+        return await self._handle(context, "computer_apps", work)
+
+    async def _request(
+        self, context: ToolContext, state: SessionState, agent: Any, arguments: dict[str, Any]
+    ) -> str:
+        names = [name for name in arguments.get("apps") or [] if isinstance(name, str)]
+        if not names:
+            raise ActionError(
+                'request needs "apps", for example {"action":"request","apps":["Notepad"],'
+                '"reason":"Write the meeting notes"}.'
+            )
+        assert self._target is not None
+        apps = await self._on_worker(self._target.apps)
+        own = await self._on_worker(self._target.own_app_keys)
+        resolution = resolve_apps(names, apps)
+        problems = list(resolution.problems)
+        wanted: list[Grant] = []
+        for app in resolution.apps:
+            if app.keys & own:
+                problems.append(f"{app.name} is part of vBot, which Computer Use never operates.")
             else:
-                payload.update(x=x, y=y)
-        if action == "move":
-            name = "move_cursor"
-        elif action == "click":
-            name = "click"
-            fields = self._client().schemas.get(name, {}).get("properties", {})
-            if "button" in fields:
-                payload["button"] = args["button"]
-                payload["count"] = args["count"]
-            elif args["button"] == "right" and args["count"] == 1:
-                name = "right_click"
-            elif args["button"] == "left" and args["count"] == 2:
-                name = "double_click"
-            elif args["button"] != "left" or args["count"] != 1:
-                raise ComputerUseError(
-                    f"This driver cannot send {args['count']} {args['button']} click(s) to this "
-                    "target; it supports single left or right clicks and left double clicks. "
-                    "No input was sent.",
-                    "unsupported_capability",
-                )
-        elif action in {"type", "set_value"}:
-            name = "type_text" if action == "type" else "set_value"
-            payload["text" if action == "type" else "value"] = args["text"]
-            if "text_mode" in args:
-                payload["text_mode"] = args["text_mode"]
-        elif action == "key":
-            keys = [key.strip().lower() for key in args["shortcut"].split("+") if key.strip()]
-            name = "press_key" if len(keys) == 1 else "hotkey"
-            payload["key" if len(keys) == 1 else "keys"] = keys[0] if len(keys) == 1 else keys
-        elif action == "scroll":
-            name = "scroll"
-            payload.update(direction=args["direction"], amount=args["amount"])
-        elif action == "drag":
-            name = "drag"
-            payload["button"] = args["button"]
-            if not args["foreground"]:
-                payload.setdefault("duration_ms", 250)
-        elif action == "menu":
-            name = "invoke_menu"
-            payload["path"] = args["menu_path"]
-        elif action == "resize":
-            name = "set_window_frame"
-            payload.update(
-                zip(
-                    ("x", "y", "width", "height"), (*args["coordinate"], *args["size"]), strict=True
-                )
+                wanted.append(Grant(app, category_tier(app.category)))
+        notes = " ".join(problems)
+        if not wanted:
+            raise ActionError(f"{notes} Nothing was requested.")
+        new = [
+            grant
+            for grant in wanted
+            if (held := state.grant_for(grant.app)) is None or held.tier != grant.tier
+        ]
+        if not new:
+            return f"Already granted in this Session: {state.describe()}. {notes}".strip()
+        message = request_message(str(agent.name), new, arguments.get("reason"))
+        answer = await self._ask(context, message)
+        tiers = Counter(TIER_WORDS[grant.tier] for grant in new)
+        self.api.logger.info(
+            "Computer Use access %s (apps=%d, tiers=%s)",
+            "granted" if answer == "accept" else answer,
+            len(new),
+            dict(tiers),
+        )
+        listed = ", ".join(grant.app.name for grant in new)
+        if answer == "timeout":
+            raise CallRefusedError(
+                "access_declined",
+                f"Nobody answered the access request for {listed} within 5 minutes, so it counts "
+                "as declined. Ask the user in chat before requesting these apps again.",
             )
-        else:
-            raise InvalidComputerArgumentsError(f"{action} does not send input.")
-        if (
-            name in {"set_value", "invoke_menu", "set_window_frame"}
-            and "delivery_mode" not in self._client().schemas.get(name, {}).get("properties", {})
-            and payload.pop("delivery_mode", None) == "background"
-        ):
-            payload["_background_input"] = True
-        return self._call(context, session, name, payload)
+        if answer != "accept":
+            raise CallRefusedError(
+                "access_declined",
+                f"The user declined access to {listed}. Continue without these apps or ask the "
+                "user how to proceed; do not request them again unless the user asks you to.",
+            )
+        state = self.sessions.use((context.project_id, context.agent_id, context.session_id))
+        for grant in new:
+            state.add(grant.app, grant.tier)
+        granted = "\n".join(f"- {grant.app.name}: {tier_text(grant.tier)}" for grant in new)
+        first = new[0].app.name
+        return (
+            f"The user granted access in this Session:\n{granted}\n"
+            + (f"{notes}\n" if notes else "")
+            + f'Next: bring the app to the front with computer_apps {{"action":"open","app":'
+            f'"{first}"}}, or take a screenshot with computer {{"action":"screenshot"}}.'
+        )
 
-    def _after_input(
-        self,
-        context: ToolContext,
-        session: DesktopSession,
-        target: tuple[Any, ...],
-        args: dict[str, Any],
-        result: dict[str, Any],
-    ) -> dict[str, Any]:
-        session.resolutions[target] = args["resolution"]
-        if result.get("applied"):
-            session.foregrounds[target] = args["foreground"]
-        if not args["capture_after"] and not result.get("partial"):
-            try:
-                self._check_access(context)
-            except ComputerUseInterruptedError as error:
-                return {
-                    **result,
-                    "partial": True,
-                    "error": {"code": error.code, "message": str(error)},
-                    "next_action": str(error),
-                }
-            return {
-                **result,
-                **self._recovery(context, args),
-                "next_action": result.get(
-                    "next_action",
-                    "Input was sent without a new screenshot. Call computer with recovery as "
-                    "the arguments before further input.",
-                ),
-            }
+    async def _ask(self, context: ToolContext, message: str) -> str:
+        """Wait for the user's answer; a cancelled Run withdraws the request."""
+        waiter = asyncio.ensure_future(self.access.ask(context.session_id, message))
+        loop = asyncio.get_running_loop()
+
+        def withdraw() -> None:
+            # A closed loop has ended the request already.
+            with contextlib.suppress(RuntimeError):
+                loop.call_soon_threadsafe(waiter.cancel)
+
+        context.on_cancel(withdraw)
+        if context.is_cancelled() or context.was_cancelled_by_user():
+            waiter.cancel()
         try:
-            # SendInput and UIA acknowledgements do not await application rendering.
-            # Do not infer completion from changing or quiet pixels (animations/carets).
-            self._wait(context, {"duration_ms": _POST_INPUT_OBSERVATION_MS})
-            result["observation"] = self._observe(context, session, target, args)
-        except Exception as error:
-            if not isinstance(error, (ComputerUseError, OSError)):
-                self.api.logger.exception("Computer Use observation failed")
-                error = ComputerUseError(
-                    "The observation failed unexpectedly. Capture the target before further input.",
-                    "observation_failed",
-                )
-            result.update(
-                observation_error={
-                    "code": error.code
-                    if isinstance(error, ComputerUseError)
-                    else "observation_failed",
-                    "message": str(error),
-                },
-                **self._recovery(context, args, error),
-            )
-            if result.get("applied"):
-                result["next_action"] = (
-                    str(error)
-                    if "recovery" not in result
-                    else "Input was sent but its result could not be captured. Call computer "
-                    "with recovery as the arguments to see the current state before deciding "
-                    "what remains; do not repeat the input."
-                )
-        return result
-
-    def _sequence(
-        self, context: ToolContext, session: DesktopSession, args: dict[str, Any]
-    ) -> dict[str, Any]:
-        target = _target(args)
-        initial = _observation(session, target, args.get("view_id"))
-        step_observations = []
-        for step in args["steps"]:
-            observation = (
-                _observation(session, target, step["view_id"]) if "view_id" in step else initial
-            )
-            step_observations.append(observation)
-            if "coordinate" in step and observation.foreground != args["foreground"]:
-                raise _foreground_mismatch(observation, args["foreground"])
-            if "coordinate" in step:
-                observation.point(step["view_id"], *step["coordinate"])
-                if step["action"] == "drag":
-                    observation.point(step["view_id"], *step["to_coordinate"])
-            if "element" in step:
-                observation.token(step["element"])
-        completed = 0
-        result: dict[str, Any] = {
-            "action": "sequence",
-            "applied": False,
-            "completed_steps": 0,
-            "total_steps": len(args["steps"]),
-            "step_results": [],
-        }
-        for index, (step, observation) in enumerate(
-            zip(args["steps"], step_observations, strict=True)
-        ):
-            step_args = {
-                **{key: value for key, value in args.items() if key != "view_id"},
-                **step,
-            }
-            step_args.setdefault("button", "left")
-            step_args.setdefault("count", 1)
-            try:
-                self._check_access(context)
-                self._invalidate()
-                if step["action"] == "wait":
-                    self._wait(context, step_args)
-                    outcome = {"effect": "waited"}
-                else:
-                    outcome = self._mutation(context, session, step_args, observation)
-                completed += 1
-                result["step_results"].append(
-                    {
-                        "step": index + 1,
-                        "action": step["action"],
-                        **_outcome(outcome),
-                    }
-                )
-                if outcome.get("target_became_foreground"):
-                    raise ComputerUseError(_BACKGROUND_FOCUS_HINT, "background_focus_changed")
-                if outcome.get("effect") in {"suspected_noop", "partial"}:
-                    raise ComputerUseError(_NO_EFFECT_HINT, "effect_uncertain")
-            except Exception as error:
-                if not isinstance(error, ComputerUseError):
-                    self.api.logger.exception("Computer Use input step failed")
-                    error = ComputerUseError(
-                        (
-                            f"Step {index + 1} stopped unexpectedly ({type(error).__name__}) "
-                            "and may have partial effects. This is a vBot problem, not a "
-                            "problem with the call."
-                        ),
-                        "computer_use_failed",
-                    )
-                result.update(
-                    partial=True,
-                    stopped_step=index + 1,
-                    error={"code": error.code, "message": _explained(error, step_args)},
-                    next_action=(
-                        f"The sequence stopped at step {index + 1}; {completed} earlier "
-                        f"step(s) were sent. Check the new screenshot before continuing, and "
-                        "do not repeat completed steps."
-                    ),
-                )
-                break
-        result.update(applied=completed > 0, completed_steps=completed)
-        routine = {"dispatched", "waited", "unverifiable"}
-        if not result.get("partial") and all(
-            set(item) <= {"step", "action", "effect"} and item.get("effect") in routine
-            for item in result["step_results"]
-        ):
-            del result["step_results"]
-        return self._after_input(context, session, target, args, result)
-
-    def _wait(self, context: ToolContext, args: dict[str, Any]) -> None:
-        deadline = time.monotonic() + args.get("duration_ms", 1000) / 1000
-        while True:
-            self._check_access(context)
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return
-            self._wake.wait(min(remaining, 0.05))
-
-    def _verify(
-        self, context: ToolContext, session: DesktopSession, args: dict[str, Any]
-    ) -> dict[str, Any]:
-        target = _target(args)
-        deadline = time.monotonic() + args["timeout_ms"] / 1000
-        result: dict[str, Any] = {}
-        # Short bounded driver waits let cancellation/revocation interrupt a long verification.
-        while True:
-            remaining = max(0, round((deadline - time.monotonic()) * 1000))
-            result = self._call(
-                context,
-                session,
-                "verify_state",
-                {
-                    **_target_fields(target),
-                    "expect": args["expect"],
-                    "timeout_ms": min(remaining, 250),
-                    "include_screenshot": False,
-                },
-            )
-            if (
-                result.get("status") in {"satisfied", "verified"}
-                or result.get("satisfied") is True
-                or result.get("verified") is True
-            ):
-                break
-            if time.monotonic() >= deadline:
-                result["next_action"] = (
-                    "The requested state was not verified before the timeout. Inspect "
-                    "the observation before continuing."
-                )
-                break
-        verification = {"action": "verify", "verification": observations.bounded(context, result)}
-        try:
-            verification["observation"] = self._observe(context, session, target, args)
-        except ComputerUseError as error:
-            # A verified closed window cannot supply another window screenshot.
-            verification["observation_error"] = {"code": error.code, "message": str(error)}
-            verification.update(self._recovery(context, args, error))
-        return verification
-
-    def _execute(
-        self, context: ToolContext, session: DesktopSession, args: dict[str, Any]
-    ) -> dict[str, Any]:
-        action = args["action"]
-        if action in {"apps", "windows"}:
-            payload = self._call(context, session, "list_" + action, {})
-            return {"action": action, **_listing(action, payload.get(action), args)}
-        if action == "capture":
-            return {"action": action, **self._observe(context, session, _target(args), args)}
-        if action == "monitors":
-            return {"action": action, **self._call(context, session, "list_monitors", {})}
-        if action == "zoom":
-            target = _target(args)
-            current = _observation(session, target, args["view_id"])
-            zoomed, result = observations.zoom(
-                context, current, args["view_id"], *args["coordinate"], *args["to_coordinate"]
-            )
-            self._remember(session, zoomed, crop=True)
-            return {"action": action, **result}
-        if action == "wait":
-            self._invalidate()
-            self._wait(context, args)
-            return {"action": action, **self._observe(context, session, _target(args), args)}
-        if action == "verify":
-            return self._verify(context, session, args)
-        if action in _MUTATIONS and not args["apply"]:
-            # A preview never sends input and does not echo text or file contents.
-            return {
-                "action": action,
-                "applied": False,
-                "preview": True,
-                "next_action": (
-                    "Preview only; no input was sent. Repeat with apply=true to execute."
-                ),
-            }
-        if action == "sequence":
-            return self._sequence(context, session, args)
-        if action == "launch":
-            try:
-                payload = self._mutation(context, session, args, None)
-            finally:
-                self._invalidate()
-            return {"action": action, "applied": True, **observations.bounded(context, payload)}
-        target = _target(args)
-        observation = _observation(session, target, args.get("view_id"))
-        # Resolve references before invalidating, including on uncertain input.
-        if "element" in args:
-            observation.token(args["element"])
-        if "view_id" in args and "coordinate" in args and action != "resize":
-            if observation.foreground != args["foreground"]:
-                raise _foreground_mismatch(observation, args["foreground"])
-            observation.point(args["view_id"], *args["coordinate"])
-            if args["action"] == "drag":
-                observation.point(args["view_id"], *args["to_coordinate"])
-        failure = None
-        try:
-            payload = self._mutation(context, session, args, observation)
-        except Exception as error:
-            if isinstance(error, ComputerUseError) and error.code in _NOT_SENT:
+            return await waiter
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
                 raise
-            if not isinstance(error, ComputerUseError):
-                self.api.logger.exception("Computer Use input failed")
-                error = ComputerUseError(
-                    f"Input stopped unexpectedly ({type(error).__name__}) and may have partial "
-                    "effects. This is a vBot problem, not a problem with the call. Check the "
-                    "current state before deciding what remains.",
-                    "computer_use_failed",
-                )
-            failure = {
-                "action": action,
-                "applied": False,
-                "partial": True,
-                "error": {"code": error.code, "message": _explained(error, args)},
-            }
-            payload = {}
-        finally:
-            self._invalidate()
-        if failure is not None:
-            return self._after_input(context, session, target, args, failure)
-        result = {"action": action, "applied": True, **_outcome(payload)}
-        if payload.get("target_became_foreground"):
-            result["next_action"] = _BACKGROUND_FOCUS_HINT
-        elif payload.get("effect") in {"suspected_noop", "partial"}:
-            result["next_action"] = _NO_EFFECT_HINT
-        return self._after_input(context, session, target, args, result)
+            raise CallRefusedError(
+                "computer_use_interrupted",
+                "The Run was cancelled, so the access request was withdrawn. Nothing was granted.",
+            ) from None
 
-    def handle(self, context: ToolContext, arguments: dict[str, Any]) -> dict[str, Any]:
-        with self._lock:
-            key = (context.project_id, context.agent_id, context.session_id, context.run_id)
-            session = self._sessions.get(key)
+    async def _open(
+        self, context: ToolContext, state: SessionState, desktop: Desktop, name: Any
+    ) -> str:
+        if not isinstance(name, str) or not name.strip():
+            raise ActionError('open needs "app", for example {"action":"open","app":"Notepad"}.')
+        assert self._target is not None
+        match = resolve_app(name, [grant.app for grant in state.grants])
+        if isinstance(match, str):
+            known = resolve_app(name, await self._on_worker(self._target.apps))
+            if isinstance(known, AppInfo):
+                raise CallRefusedError(
+                    "access_required",
+                    f"{known.name} is not granted in this Session. Ask the user for it first "
+                    f"with {request_call(known.name)}.",
+                )
+            granted = f" Granted apps: {state.describe()}." if state.grants else ""
+            raise ActionError(f"{known}{granted}")
+        async with self._active_call(context):
             try:
-                reference = None
-                reference_error = None
-                if isinstance(arguments, dict):
-                    try:
-                        arguments = with_latest_view(session, arguments)
-                        reference = _reference(session, arguments)
-                    except ComputerUseError as error:
-                        reference_error = error
-                foreground = (
-                    session.foregrounds.get(_target(arguments))
-                    if session is not None
-                    and isinstance(arguments, dict)
-                    and ("pid" not in arguments or arguments.keys() >= _WINDOW)
-                    and all(type(arguments[k]) is int for k in _TARGET & arguments.keys())
-                    else None
-                )
-                args = _validate_arguments(
-                    arguments,
-                    reference,
-                    foreground,
-                    unresolved_reference=reference_error is not None,
-                )
-                if reference_error is not None:
-                    raise reference_error
-            except ComputerUseError as error:
-                if reference_error is None and isinstance(error, InvalidComputerArgumentsError):
-                    return tool_failure("invalid_arguments", str(error))
-                try:
-                    return self._reference_failure(context, error)
-                except ComputerUseError as denied:
-                    return tool_failure(denied.code, str(denied), retryable=False)
-            ignored = args.pop("_ignored", None)
-            if (
-                args["action"] in _TARGETED
-                and "resolution" not in arguments
-                and reference is None
-                and session is not None
-            ):
-                args["resolution"] = session.resolutions.get(_target(args), args["resolution"])
-            owner = new_id("ctl")
-            try:
-                self._check_access(context)
-                client = self._client()
-                with self._control_lock:
-                    self._active = owner
-                    self._interrupted = None
-                    self._active_driver = client
-                    self._active_context = context
-                    self._wake.clear()
-                    if args["action"] not in {"status", "close"}:
-                        self._hotkey.set_armed(owner)
-                    self._control_changed(owner)
-                context.on_cancel(lambda: self.stop(owner, source="tool_cancel"))
-                self._check_access(context)
-                client.connect()
-                self._check_access(context)
-                # Selecting the client may retire a broken worker and its cached sessions.
-                session = self._sessions.get(key)
-                if args["action"] == "status":
-                    return tool_success(
-                        {
-                            "action": "status",
-                            "ready": True,
-                            "version": client.version,
-                            "host": "server",
-                        }
-                    )
-                if args["action"] == "close":
-                    if session is not None:
-                        self._call(context, session, "end_session", {})
-                        del self._sessions[key]
-                    return tool_success({"action": "close", "closed": True})
-                if session is None:
-                    session = DesktopSession("vbot-" + uuid.uuid4().hex)
-                    self._call(context, session, "start_session", {})
-                    self._sessions[key] = session
-                self._check_access(context)
-                result = self._execute(context, session, args)
-                if args["action"] not in _MUTATIONS:
-                    self._check_access(context)
-                if result.get("error") and not result["applied"]:
-                    failure = tool_failure(
-                        result["error"]["code"],
-                        ("No sequence step completed. " if args["action"] == "sequence" else "")
-                        + result["error"]["message"].rstrip()
-                        + (
-                            f" See the current state with "
-                            f"{capture_call(_target(args), args['foreground'])} before deciding "
-                            "whether to repeat input."
-                            if result.get("observation") or result.get("recovery")
-                            else ""
-                        ),
-                        retryable=False,
-                    )
-                    failure["artifacts"].append(
-                        {
-                            "kind": "computer_observation",
-                            **{key: value for key, value in result.items() if key != "error"},
-                        }
-                    )
-                    return failure
-                if ignored:
-                    result["note"] = (
-                        f"Ignored {', '.join(ignored)}: {args['action']} does not use "
-                        f"{'it' if len(ignored) == 1 else 'them'}."
-                    )
-                return tool_success(result)
-            except ComputerUseError as error:
-                if self._driver is not None and self._driver.broken:
-                    self._sessions.clear()
-                return tool_failure(error.code, _explained(error, args), retryable=False)
-            except Exception as error:
-                self.api.logger.exception("Computer Use request failed")
-                return tool_failure(
-                    "computer_use_failed", self._unexpected(context, args, error), retryable=False
-                )
-            finally:
-                try:
-                    if self._driver is not None and (self._driver.broken or not self._sessions):
-                        if self._driver.broken:
-                            self._sessions.clear()
-                        driver, self._driver = self._driver, None
-                        driver.close()
-                finally:
-                    with self._control_lock:
-                        if self._active is owner:
-                            self._hotkey.set_armed(None)
-                            self._active = None
-                            self._interrupted = None
-                            self._active_driver = None
-                            self._active_context = None
-                            self._control_changed(owner)
+                desktop.input_started = True
+                await self._on_worker(self._target.open, match)
+                await self._pause(OPEN_SETTLE_SECONDS)
+                shot = await self._on_worker(desktop.screenshot)
+            except InputInterrupted:
+                raise TargetError(
+                    f"{self._stopped_text()} while {match.name} was opening.",
+                    "computer_use_interrupted",
+                ) from None
+        return f"Opened {match.name}.\n{shot}"
 
-    def _close_sessions(self, run_id: str | None = None) -> None:
-        if self._driver is not None and self._driver.broken:
-            # Its owned worker has already stopped. Never reconnect during cleanup.
-            self._sessions.clear()
-        else:
-            for key, session in list(self._sessions.items()):
-                if run_id is not None and key[3] != run_id:
-                    continue
-                try:
-                    self._client().call("end_session", {"session": session.name})
-                except ComputerUseError:
-                    self.api.logger.warning("Computer Use session cleanup failed", exc_info=True)
-                    if self._driver is not None and self._driver.broken:
-                        self._sessions.clear()
-                        break
-                else:
-                    self._sessions.pop(key, None)
-        # Cua also owns an implicit transport session used by discovery tools.
-        # Retire it with the last Run instead of retaining idle/ended state.
-        if not self._sessions and self._driver is not None:
-            driver, self._driver = self._driver, None
-            driver.close()
 
-    def run_end(self, context: Any, **kwargs: Any) -> None:
-        with self._lock:
-            self._close_sessions(context.run_id)
+def _listing(desktop: Desktop, query: Any) -> str:
+    """The text of ``computer_apps list``; runs on the desktop worker thread."""
+    target, state = desktop.target, desktop.state
+    own = target.own_app_keys()
+    apps = [app for app in target.apps() if not app.keys & own]
+    if state.grants:
+        lines = [f"Granted in this Session: {state.describe()}."]
+    else:
+        lines = [
+            "No apps are granted in this Session yet. Ask the user with "
+            'computer_apps {"action":"request","apps":["..."],"reason":"..."}.'
+        ]
+    lines.append("Displays:\n" + describe_displays(target.displays(), state.shown))
 
-    def close(self) -> None:
-        self._closed = True
-        self._hotkey.close()
-        self.stop(source="shutdown")
-        with self._lock:
-            self._close_sessions()
-            if self._driver is not None:
-                self._driver.close()
+    def described(app: AppInfo) -> str:
+        grant = state.grant_for(app)
+        tier = grant.tier if grant is not None else category_tier(app.category)
+        return f"{app.name} ({TIER_WORDS[tier]})"
+
+    running = sorted({app.name: app for app in apps if app.running}.values(), key=_name)
+    lines.append(
+        "Running apps (access they get): "
+        + (", ".join(described(app) for app in running) or "none")
+        + "."
+    )
+    if isinstance(query, str) and query.strip():
+        text = query.strip().casefold()
+        found = sorted(
+            {app.name: app for app in apps if text in app.name.casefold()}.values(), key=_name
+        )
+        shown = ", ".join(described(app) for app in found[:_LIST_LIMIT])
+        more = (
+            f", and {len(found) - _LIST_LIMIT} more; use a longer query"
+            if len(found) > _LIST_LIMIT
+            else ""
+        )
+        lines.append(f'Installed apps matching "{query.strip()}": {shown or "none"}{more}.')
+    else:
+        lines.append('Search installed apps with {"action":"list","query":"..."}.')
+    return "\n".join(lines)
+
+
+def _name(app: AppInfo) -> str:
+    return app.name.casefold()
+
+
+def _sent_text(desktop: Desktop | None) -> str:
+    if desktop is not None and desktop.input_started:
+        return "Input may have been sent; take a screenshot before repeating it."
+    return "No input was sent."
+
+
+def _target_text(error: TargetError, desktop: Desktop | None) -> str:
+    message = str(error).rstrip()
+    if error.code == "computer_use_failed":
+        return f"{message} {_sent_text(desktop)}"
+    return message
+
+
+def _batch_error(
+    error: CallRefusedError | TargetError,
+    actions: list[Action],
+    number: int,
+    lines: list[str],
+    stopped: str,
+) -> Exception:
+    """The error of a batch stopped at action *number*, naming the steps that ran."""
+    action = actions[number - 1]
+    ran = (
+        "Actions that ran (take a screenshot to see the current state):\n" + "\n".join(lines)
+        if lines
+        else "No action ran before it."
+    )
+    rest = len(actions) - number
+    skipped = f" The remaining {rest} did not run." if rest else ""
+    if isinstance(error, InputInterrupted):
+        message = (
+            f"{stopped} during action {number} of {len(actions)} ({action.describe()}).{skipped} "
+            "Held keys and buttons were released. Do not continue operating the computer "
+            f"unless the user asks you to.\n{ran}"
+        )
+        return TargetError(message, "computer_use_interrupted")
+    detail = str(error).rstrip()
+    if isinstance(error, TargetError) and error.code == "computer_use_failed":
+        detail += " Input may have been sent." if action.sends_input else " No input was sent."
+    message = f"Action {number} of {len(actions)} ({action.name}) failed: {detail}{skipped}\n{ran}"
+    if isinstance(error, CallRefusedError):
+        return CallRefusedError(error.code, message)
+    return TargetError(message, error.code)
 
 
 def register(api: ExtensionAPI) -> None:
     service = ComputerUseService(api)
     api.operations.startup.append(service.start)
+    api.operations.pending_inputs = service.access.list
+    api.operations.input_response_operation = "respond"
     api.operations.register(
         "control",
         "Inspect or interrupt the active Computer Use call on the server host.",
@@ -1064,20 +831,56 @@ def register(api: ExtensionAPI) -> None:
         },
         service.control,
     )
+    api.operations.register(
+        "respond",
+        "Answer one pending Computer Use access request with accept, decline or cancel.",
+        {
+            "type": "object",
+            "properties": {"request_id": {"type": "string"}, "response": {"type": "object"}},
+            "required": ["request_id", "response"],
+            "additionalProperties": False,
+        },
+        service.respond,
+        secret=True,
+    )
     api.on_shutdown(service.close)
     api.on("run_end", service.run_end)
+    api.register_tool_family(TOOL_FAMILY, "Computer Use")
+    shared: dict[str, Any] = {
+        "requires_opt_in": True,
+        "parallel_safe": False,
+        "ready": service.ready,
+        "readiness_hint": READINESS_HINT,
+        "result_schema": RESULT_SCHEMA,
+        "family": TOOL_FAMILY,
+    }
     api.register_tool(
         "computer",
         COMPUTER_DESCRIPTION,
         COMPUTER_PARAMETERS,
-        service.handle,
-        requires_opt_in=True,
-        parallel_safe=False,
-        open_input_schema=True,
-        unadvertised_parameters=UNADVERTISED_PARAMETERS,
-        argument_normalizer=normalize_computer_arguments,
-        ready=service.ready,
-        readiness_hint=_READINESS_HINT,
-        display=ToolDisplay(summary_fields=("action", "pid", "window_id")),
-        result_schema={"type": "object", "required": ["action"]},
+        service.computer,
+        display=ToolDisplay(summary_fields=("action", "action_summary")),
+        argument_normalizer=normalize_computer,
+        **shared,
     )
+    api.register_tool(
+        "computer_batch",
+        COMPUTER_BATCH_DESCRIPTION,
+        COMPUTER_BATCH_PARAMETERS,
+        service.computer_batch,
+        display=ToolDisplay(summary_builder=_summary),
+        argument_normalizer=normalize_batch,
+        **shared,
+    )
+    api.register_tool(
+        "computer_apps",
+        COMPUTER_APPS_DESCRIPTION,
+        COMPUTER_APPS_PARAMETERS,
+        service.computer_apps,
+        display=ToolDisplay(summary_fields=("action",), summary_builder=_apps_summary),
+        argument_normalizer=normalize_apps,
+        **shared,
+    )
+
+
+__all__ = ["ComputerUseService", "register"]

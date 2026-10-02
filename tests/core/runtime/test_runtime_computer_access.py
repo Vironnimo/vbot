@@ -11,12 +11,15 @@ from core.runs import RunExecutionOwner
 from core.runtime.runtime import Runtime
 from core.tools.availability import ToolAccess
 from core.utils.config import Config
-from tests.resources.extensions.computer_use.computer_use_test_support import computer as computer
+from tests.resources.extensions.computer_use.computer_use_test_support import Harness
+from tests.resources.extensions.computer_use.computer_use_test_support import (
+    computer as computer,
+)
 
 
 @pytest.mark.asyncio
 async def test_temporary_computer_dispatch_checks_binding_and_permission(
-    config: Config, tmp_path: Path, computer: Any
+    config: Config, tmp_path: Path, computer: Harness
 ) -> None:
     runtime = Runtime(config)
     runtime.start()
@@ -26,10 +29,8 @@ async def test_temporary_computer_dispatch_checks_binding_and_permission(
         assert root.for_owner is not None
         groups = root.for_owner(runtime.extensions.registration_identity("swarm")).temporary_agents
         assert groups is not None
-        service, ctx, client, _ = computer
-        service.host = root
-        registry = service.api.operations.tool_registry
-        arguments = {"action": "capture", "pid": 1, "window_id": 2, "mode": "ax"}
+        computer.service.host = root
+        arguments = {"action": "screenshot"}
 
         async def participant_call(participant_id: str, *, granted: bool) -> tuple[Any, Any]:
             binding = await groups.create(
@@ -52,7 +53,7 @@ async def test_temporary_computer_dispatch_checks_binding_and_permission(
                 "swarm", "group", participant_id, binding.generation_id, "epoch"
             )
             call = replace(
-                ctx,
+                computer.context_for("computer"),
                 agent_id=binding.address.agent_id,
                 session_id=binding.address.session_id,
                 project_id=binding.address.project_id,
@@ -63,15 +64,14 @@ async def test_temporary_computer_dispatch_checks_binding_and_permission(
 
         # Without the permission grant the desktop is never touched.
         denied_call, _ = await participant_call("denied", granted=False)
-        result = await registry.dispatch(denied_call, arguments, ["computer"])
-        assert result["ok"] is False
-        assert client.calls == [] and client.connects == 0
+        result = await computer.call("computer", arguments, denied_call)
+        assert result["error"]["code"] == "tool_not_allowed"
+        assert denied_call.result_media == []
 
         granted_call, owner = await participant_call("granted", granted=True)
-        result = await registry.dispatch(granted_call, arguments, ["computer"])
+        result = await computer.call("computer", arguments, granted_call)
         assert result["ok"] is True
-        assert any(name == "get_window_state" for name, _ in client.calls)
-        assert result["data"]["elements"]
+        assert len(granted_call.result_media) == 1
 
         # A call whose execution owner does not match its binding is rejected unused.
         for invalid in (
@@ -81,11 +81,10 @@ async def test_temporary_computer_dispatch_checks_binding_and_permission(
             replace(owner, group_id="other"),
             replace(owner, extension="other"),
         ):
-            before = (list(client.calls), client.connects)
-            rejected = await registry.dispatch(
-                replace(granted_call, execution_owner=invalid), arguments, ["computer"]
-            )
-            assert not rejected["ok"]
-            assert (client.calls, client.connects) == before
+            rejected_call = replace(granted_call, execution_owner=invalid, result_media=[])
+            rejected = await computer.call("computer", arguments, rejected_call)
+            assert rejected["error"]["code"] == "computer_use_unavailable"
+            assert rejected_call.result_media == []
+        assert computer.target.inputs == []
     finally:
         await runtime.aclose()

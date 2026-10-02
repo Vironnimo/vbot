@@ -63,7 +63,11 @@ CANONICAL_BUILTIN_TOOLS = [
 # token, but absent from provider definitions, which filter on readiness.
 HOME_ASSISTANT_TOOLS = ["ha_call_service", "ha_get_state", "ha_list_entities", "ha_list_services"]
 
-CANONICAL_REGISTERED_TOOLS = sorted(CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + ["computer"])
+COMPUTER_USE_TOOLS = ["computer", "computer_apps", "computer_batch"]
+
+CANONICAL_REGISTERED_TOOLS = sorted(
+    CANONICAL_BUILTIN_TOOLS + HOME_ASSISTANT_TOOLS + COMPUTER_USE_TOOLS
+)
 
 BUNDLED_SKILLS = [
     "coding-agents",

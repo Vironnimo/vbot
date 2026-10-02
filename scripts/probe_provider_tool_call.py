@@ -82,7 +82,6 @@ from scripts.provider_probe.common import (  # noqa: E402
     ProbeScenario,
     _start_probe_runtime,
 )
-from scripts.provider_probe.computer_cases import COMPUTER_CASE_ARGUMENTS  # noqa: E402
 from scripts.provider_probe.measurements import _compile_probe_contracts  # noqa: E402
 from scripts.provider_probe.scenarios import _scenario  # noqa: E402
 from scripts.provider_probe.trace import (  # noqa: E402
@@ -174,9 +173,6 @@ def _parser() -> argparse.ArgumentParser:
         "--swarm-tool",
         choices=("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
         default="swarm_board",
-    )
-    parser.add_argument(
-        "--computer-case", choices=tuple(COMPUTER_CASE_ARGUMENTS), default="windows"
     )
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
