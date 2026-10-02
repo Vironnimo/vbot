@@ -103,7 +103,7 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     assert learning_eval.main(["export-pack", str(pack)]) == 0
     (pack / "blocks" / "skill_maintenance.md").write_text("## Skill Maintenance\n\nCANDIDATE-BLOCK")
     (pack / "tools" / "memory" / "description.md").write_text("CANDIDATE-TOOL")
-    (pack / "fragments" / "reflect-memory-closing.md").write_text("CANDIDATE-FRAGMENT")
+    (pack / "fragments" / "review-closing.md").write_text("CANDIDATE-FRAGMENT")
     add = {"action": "add", "scope": "user", "content": "User prefers German responses."}
     # A Librarian attempt that deletes the user's own Skill without absorbed_into.
     delete = {"action": "delete", "name": "sales-report-weekly"}
@@ -149,7 +149,7 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     assert "CANDIDATE-FRAGMENT" in first["messages"][-1]["content"]
     assert sorted(report["run"]["text_pack"]["changed"]) == [
         "block:core:skill_maintenance",
-        "fragment:reflect-memory-closing.md",
+        "fragment:review-closing.md",
         "tool:memory:description",
     ]
     # The Librarian brief lists the Skills a pass may change: neither the user's

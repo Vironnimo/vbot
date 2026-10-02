@@ -877,10 +877,9 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     if scope == "librarian":
         # A Librarian pass runs its own brief over the Skills it can change.
         tools: tuple[str, ...] = LIBRARIAN_TOOL_RESTRICTION
+        limit = LIBRARIAN_TOOL_ITERATION_LIMIT
         review: dict[str, Any] = {
-            "message": librarian_brief(
-                bundled, [_LIBRARIAN_CANDIDATE], limit=LIBRARIAN_TOOL_ITERATION_LIMIT
-            ),
+            "message": librarian_brief(bundled, [_LIBRARIAN_CANDIDATE], limit=limit),
             "tool_denial_resolver": librarian_tool_denial_resolver(),
         }
         boundary = "in this maintenance pass. This pass"
@@ -892,17 +891,31 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
 
         [review] = loop.started
         tools = _REVIEWS[scope][0]
+        limit = REFLECTION_TOOL_ITERATION_LIMIT
         assert review["tool_restriction"] == tools
+        assert review["max_tool_iterations"] == limit
+        # A review that can write Skills learns that the list marks the ones it cannot change.
+        assert (
+            "does not mark as read-only; all other Skills are read-only" in review["message"]
+        ) == ("skill_manage" in tools)
         boundary = "in this review. This review"
     # The production brief names exactly the Tools its Run can call: backticked
-    # identifiers are Tool names unless they are parameters of those Tools.
-    # ``skill_manage`` accepts ``absorbed_into`` without advertising it; the
-    # briefs that need it teach it.
-    parameters = {name for tool in tools for name in _TOOL_PARAMETERS[tool]["properties"]}
+    # identifiers are Tool names unless they are parameters of those Tools or
+    # values those parameters take. ``skill_manage`` accepts ``absorbed_into``
+    # without advertising it; the briefs that need it teach it.
+    properties = [
+        (name, schema)
+        for tool in tools
+        for name, schema in _TOOL_PARAMETERS[tool]["properties"].items()
+    ]
+    parameters = {name for name, _schema in properties}
     if "skill_manage" in tools:
         parameters.add("absorbed_into")
+    values = {value for _name, schema in properties for value in schema.get("enum", ())}
     identifiers = {token for token in review["message"].split("`")[1::2] if token.isidentifier()}
-    assert identifiers - parameters == set(tools)
+    assert identifiers - parameters - values == set(tools)
+    # The brief states the Tool-call limit the Run enforces.
+    assert f"at most {limit} calls" in review["message"]
     # Any other Tool is refused before it runs, naming what the review can call.
     deny = review["tool_denial_resolver"]
     assert [deny(tool) for tool in tools] == [None] * len(tools)
@@ -973,8 +986,8 @@ def test_real_skill_authoring_prompts_do_not_teach_removed_fields(
         else reflection_brief(bundled, cast("Any", prompt))
     )
 
-    # Private authoring uses the compact contract, without edit or file fields.
-    for removed in ("old_string", "new_string", "file_content", "`match`"):
+    # Retired authoring fields are not taught.
+    for removed in ("file_content", "`match`"):
         assert removed not in text
     # The catalog shows origin headings, not origin tags.
     assert "origin `agent`" not in text

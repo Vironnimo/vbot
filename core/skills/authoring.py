@@ -625,6 +625,26 @@ class SkillAuthoringService:
                 return {}
             return records
 
+    def background_protection(self, target_root: Path) -> dict[str, SkillProtection]:
+        """Return why background writers may not change each protected Skill of a home.
+
+        Skills a background writer may change are absent. When the history
+        cannot be read, every Skill of the home is ``unknown``, as a write would be.
+        """
+        records = self.records(target_root)
+        with self._write_lock:
+            names = [package.name for package in _live_packages(self._resolve(target_root))]
+        protection: dict[str, SkillProtection] = {}
+        for name in names:
+            record = records.get(name)
+            if record is None:
+                protection[name] = "unknown"
+            elif record.pinned:
+                protection[name] = "pinned"
+            elif record.origin not in BACKGROUND_WRITABLE_ORIGINS:
+                protection[name] = "user"
+        return protection
+
     def record(self, target_root: Path, skill_name: str) -> SkillRecord | None:
         """Return the record of one Skill in a writable home, if it exists there."""
         with self._write_lock:

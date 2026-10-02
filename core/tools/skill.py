@@ -5,17 +5,21 @@ from __future__ import annotations
 import inspect
 import json
 import re
-from collections.abc import Awaitable, Callable, Collection, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from difflib import SequenceMatcher
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.projects import ProjectNotFoundError
+from core.runs import is_unattended_run_kind
 from core.skills._packages import PackageError, excluded, package_path
 from core.skills.authoring import ArchivedSkill
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
+    SKILL_ORIGIN_AGENT,
+    SkillCatalogEntry,
     SkillRegistry,
     format_skill_activation_context,
     format_skill_catalog_entries,
@@ -60,6 +64,24 @@ SkillRefresh = Callable[[], None | Awaitable[None]]
 # identity Agent's own home (``None`` for other runs) and the global home. The
 # runtime wires this to ``Runtime.archived_skill``.
 ArchivedSkillResolver = Callable[[str | None, str], ArchivedSkill | None]
+
+# Answers why a background Run of an Agent cannot change each of the named Skills
+# it sees as its own (reason ``pinned``, ``user``, ``unknown`` or ``shared``); the
+# runtime wires this to ``Runtime.background_skill_protection``.
+BackgroundProtectionResolver = Callable[[str, list[str]], Mapping[str, str]]
+
+# Marks a Skill in a background Run's list that the Run cannot change.
+SKILL_READ_ONLY_MARKS = {
+    "pinned": "read-only here: pinned by the user",
+    "user": "read-only here: created by the user",
+    "unknown": "read-only here: its creator is unknown",
+    "shared": "read-only here: shared by another Agent",
+}
+# Opens a background Run's load of a Skill it cannot change. ``{mark}`` is a
+# read-only mark or ``read-only here`` for a Skill that is not the Agent's own.
+SKILL_READ_ONLY_NOTE = (
+    "Skill '{name}' is {mark}. Do not change it; name a needed change in your closing reply."
+)
 
 # A name whose Skill was deleted into the archive. ``{date}`` is YYYY-MM-DD.
 SKILL_ARCHIVED_MESSAGE = (
@@ -282,6 +304,7 @@ def make_skill_handler(
     resolve_registry: SkillRegistryResolver,
     refresh_skills: SkillRefresh,
     resolve_archived: ArchivedSkillResolver | None = None,
+    resolve_protection: BackgroundProtectionResolver | None = None,
 ) -> Any:
     """Return a skill handler that resolves its registry per call from the run.
 
@@ -296,6 +319,10 @@ def make_skill_handler(
     ``resolve_archived`` answers a remaining miss of a deleted (archived) name: a
     Skill merged into one this call may load loads that one with a note; any other
     archived name fails with when and why it was archived.
+
+    ``resolve_protection`` marks, in the list a background Run (no user present)
+    gets, each own Skill that Run cannot change, so it can plan before writing;
+    loading any Skill such a Run cannot change opens with a read-only note.
     """
 
     async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -327,11 +354,16 @@ def make_skill_handler(
             )
         except ValueError as error:
             return tool_failure("invalid_arguments", str(error))
+        protect = (
+            partial(resolve_protection, identity_agent_id)
+            if resolve_protection is not None
+            and identity_agent_id is not None
+            and is_unattended_run_kind(context.run_kind)
+            else None
+        )
         if requested is None and file_path is None:
             return await run_tool_worker(
-                _skill_catalog_result,
-                skill_registry,
-                context.allowed_skills,
+                _skill_catalog_result, skill_registry, context.allowed_skills, protect
             )
         if requested is None:
             # A package path such as ``name/references/guide.md`` names its Skill.
@@ -423,6 +455,10 @@ def make_skill_handler(
         )
         if unavailable_message is not None:
             return tool_failure("skill_unavailable", unavailable_message)
+        if protect is not None:
+            mark = await run_tool_worker(_read_only_mark, skill, protect)
+            if mark is not None:
+                notes.insert(0, SKILL_READ_ONLY_NOTE.format(name=skill_name, mark=mark))
 
         if isinstance(file_path, str):
             file_path = _package_relative_path(file_path, skill_name, skill.path.parent)
@@ -498,6 +534,7 @@ def register_skill_tool(
     resolve_registry: SkillRegistryResolver,
     refresh_skills: SkillRefresh,
     resolve_archived: ArchivedSkillResolver | None = None,
+    resolve_protection: BackgroundProtectionResolver | None = None,
 ) -> None:
     """Register the skill activation tool with a per-project registry resolver.
 
@@ -512,7 +549,7 @@ def register_skill_tool(
         SKILL_TOOL_NAME,
         SKILL_TOOL_DESCRIPTION,
         SKILL_TOOL_PARAMETERS,
-        make_skill_handler(resolve_registry, refresh_skills, resolve_archived),
+        make_skill_handler(resolve_registry, refresh_skills, resolve_archived, resolve_protection),
         argument_normalizer=_normalize_skill_arguments,
         unadvertised_parameters=_SKILL_UNADVERTISED_PARAMETERS,
         family="skills",
@@ -709,19 +746,17 @@ def _loaded_skill_result(skill_name: str, loaded: JsonObject, notes: list[str]) 
     statistics, and post-compaction re-injection — keep
     ``name``/``status``/``content`` stable.
     """
-    data: JsonObject = {
-        "name": skill_name,
-        "status": SKILL_STATUS_LOADED,
-        "content": loaded["content"],
-    }
+    data: JsonObject = {"name": skill_name, "status": SKILL_STATUS_LOADED}
+    # Notes precede the instructions, like in the other load results.
+    if notes:
+        data["note"] = " ".join(notes)
+    data["content"] = loaded["content"]
     resource_files = loaded.get("resource_files")
     if isinstance(resource_files, dict):
         data["resource_files"] = resource_files
     environment_access = loaded.get("environment_access")
     if isinstance(environment_access, str) and environment_access:
         data["environment_access"] = environment_access
-    if notes:
-        data["note"] = " ".join(notes)
     return tool_success(data)
 
 
@@ -768,12 +803,35 @@ def _already_active_result(skill_name: str, notes: list[str]) -> JsonObject:
 def _skill_catalog_result(
     skill_registry: SkillRegistry,
     allowed_skills: Sequence[str] | None,
+    resolve_protection: Callable[[list[str]], Mapping[str, str]] | None = None,
 ) -> JsonObject:
-    """Return the currently available Skills grouped by origin, like the catalog."""
+    """Return the currently available Skills grouped by origin, like the catalog.
+
+    With ``resolve_protection``, own Skills the Run cannot change are marked.
+    """
     allowed = ["*"] if allowed_skills is None else list(allowed_skills)
     skills = skill_registry.filter_allowed(allowed)
-    content = format_skill_catalog_entries(skills) if skills else "No Skills are available."
+    marks: dict[str, str] = {}
+    if resolve_protection is not None:
+        own = [skill.name for skill in skills if skill.origin == SKILL_ORIGIN_AGENT]
+        marks = {
+            name: SKILL_READ_ONLY_MARKS[reason]
+            for name, reason in resolve_protection(own).items()
+            if reason in SKILL_READ_ONLY_MARKS
+        }
+    content = (
+        format_skill_catalog_entries(skills, marks=marks) if skills else "No Skills are available."
+    )
     return tool_success({"count": len(skills), "content": content})
+
+
+def _read_only_mark(
+    skill: SkillCatalogEntry, resolve_protection: Callable[[list[str]], Mapping[str, str]]
+) -> str | None:
+    """Return why a background Run cannot change *skill*, or ``None`` when it can."""
+    if skill.origin != SKILL_ORIGIN_AGENT:
+        return "read-only here"
+    return SKILL_READ_ONLY_MARKS.get(resolve_protection([skill.name]).get(skill.name, ""))
 
 
 def _allowed_skill_names(

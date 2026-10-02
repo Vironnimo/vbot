@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -291,6 +291,29 @@ class SkillRuntime:
             if archived is not None:
                 return archived
         return None
+
+    def background_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
+        """Return why a background Run of *agent_id* cannot change each named Skill.
+
+        Names are Skills the Agent sees as its own. The reason is ``pinned``,
+        ``user`` or ``unknown`` for a package in its private home (see
+        ``SkillAuthoringService.background_protection``) and ``shared`` for one
+        shared into it. Names a background Run can change are absent.
+        """
+        if self._authoring is None:
+            return {}
+        own_root = self.agent_skills_dir(agent_id)
+        own = self._authoring.background_protection(own_root)
+        environment = self._skill_environment(self._storage.load_environment())
+        protection: dict[str, str] = {}
+        for name in names:
+            package = find_skill_package_dir(own_root, name, environment)
+            if package is not None:
+                if package.name in own:
+                    protection[name] = own[package.name]
+            elif self._resolve_shared_skills_dir(agent_id, name) is not None:
+                protection[name] = "shared"
+        return protection
 
     def skills_for(
         self, project_id: str | None, identity_agent_id: str | None = None

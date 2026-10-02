@@ -207,6 +207,8 @@ def test_background_writers_leave_user_and_pinned_skills_alone(
     if setup == "pinned":
         service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
     before = (root / "demo" / "SKILL.md").read_bytes()
+    # The same rule answers ahead of a write, so a background list can mark it.
+    assert service.background_protection(root) == {"demo": reason}
 
     for action in (
         lambda: service.edit(root, "demo", skill_document(body="x\n"), writer=REFLECTION),
@@ -227,6 +229,7 @@ def test_background_writers_change_skills_agents_created(
 ) -> None:
     service.create(root, "agent-made", skill_document("agent-made"), writer=AGENT)
     service.create(root, "learned", skill_document("learned"), writer=REFLECTION)
+    assert service.background_protection(root) == {}
 
     service.edit(root, "agent-made", skill_document("agent-made", body="New.\n"), writer=REFLECTION)
     service.delete(root, "agent-made", writer=REFLECTION, absorbed_into="learned")

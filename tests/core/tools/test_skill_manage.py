@@ -321,34 +321,37 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
             "user",
             {"action": "patch", "name": "demo", "old_string": "# Demo", "new_string": "# New"},
             "skill_protected",
-            "Skill 'demo' comes from the user, so this review cannot change it; nothing "
-            "changed. Leave it as it is.",
+            "Skill 'demo' was created by the user, so it cannot be changed in the background; "
+            "nothing changed. Leave it as it is and name the needed change in your closing "
+            "reply.",
             id="user-skill",
         ),
         pytest.param(
             "pinned",
             {"action": "edit", "name": "demo", "content": _skill_md(body="# New\n")},
             "skill_protected",
-            "Skill 'demo' is pinned by the user, so this review cannot change it; nothing "
-            "changed. Leave it as it is.",
+            "Skill 'demo' is pinned by the user, so it cannot be changed in the background; "
+            "nothing changed. Leave it as it is and name the needed change in your closing "
+            "reply.",
             id="pinned-skill",
         ),
         pytest.param(
             "shared",
             {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "#"},
             "skill_protected",
-            "Skill 'deploy' is shared with you by another Agent, so this review cannot change "
-            "it; nothing changed. Leave it as it is.",
+            "Skill 'deploy' is shared with you by another Agent, so it cannot be changed in "
+            "the background; nothing changed. Leave it as it is and name the needed change in "
+            "your closing reply.",
             id="shared-skill",
         ),
         pytest.param(
             "agent",
             {"action": "delete", "name": "demo"},
             "invalid_arguments",
-            "delete in this review needs absorbed_into: the name of another of your own Skills "
-            "that now holds the instructions of 'demo'; nothing changed. Merge the instructions "
-            "into that Skill with patch or edit first, then call delete with absorbed_into. If "
-            "no other Skill holds them, leave 'demo' as it is.",
+            "In the background, delete needs absorbed_into: the name of another of your own "
+            "Skills that now holds the instructions of 'demo'; nothing changed. Merge the "
+            "instructions into that Skill with patch or edit first, then call delete with "
+            "absorbed_into. If no other Skill holds them, leave 'demo' as it is.",
             id="delete-without-absorbed-into",
         ),
     ],

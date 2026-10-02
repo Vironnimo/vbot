@@ -39,7 +39,7 @@ Gotchas:
 ```bash
 vbot agent create coder Coder --model openai/gpt-5.2 --tool-access-mode all --allowed-skills '*'
 vbot agent update coder --temperature 0.4 --thinking-effort high
-vbot agent update librarian --project second-brain
+vbot agent update researcher --project second-brain
 vbot agent rename coder researcher
 ```
 

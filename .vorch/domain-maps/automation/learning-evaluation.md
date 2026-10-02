@@ -12,6 +12,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 ## Evaluation rules
 
 - Run at least three repetitions per (case, scope); weak Models carry the signal. `--reflection-case` (comma-separated ids) and `--reflection-scope` (one or more of `memory`, `skill`, `combined`, `learn`, `librarian`, or `all`) narrow the matrix.
+- Run the arms on `--provider opencode-go --model deepseek-v4.1-flash` and `--provider ollama-cloud --connection ollama-cloud:api-key --model glm-5.3-flash` (user decision 2026-10-02: on opencode-go only that Model; `--connection` defaults to `opencode-go:api-key`).
 - Compare arms only with equal attempt counts per (case, scope); never drop an attempt from one arm. A crashed attempt stays in the report with its error and counts as a failure.
 - Scoring is code only, no LLM judge. Every attempt is a Provider request loop: do not run the full matrix casually.
 
@@ -41,7 +42,7 @@ Read when running, extending or interpreting the learning evaluation of Reflecti
 
 An attempt passes when the Model finished with a final answer, its effect matched one acceptable outcome (`effect_passed`) and no violation occurred:
 
-- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. Calls of one Model turn are checked before any of them runs.
+- `memory_write_without_current_list`, `create_without_current_catalog`, `skill_write_without_current_file`: the write was not based on a current read in this attempt. A Memory change without `scope` needs both scopes listed; a `patch` of SKILL.md also counts a plain load of the Skill (status `loaded`) as its read. Calls of one Model turn are checked before any of them runs.
 - `tool_call_rejected`: any failed result of a dispatched call, out-of-scope denials included.
 - `tool_iteration_limit`, `repeated_failed_call`: Tool use ended by the iteration limit or the failed-call breaker.
 - `protected_skill_write`: any `skill_manage` call naming a read-only, pinned or human-origin Skill in `name` or `absorbed_into`, whatever the result. Production refuses such a background write (`skill_protected`), so it usually also counts as `tool_call_rejected`.
@@ -61,3 +62,14 @@ An attempt passes when the Model finished with a final answer, its effect matche
 `--reflection-report PATH` is rewritten after every attempt. Top level: `format`, `kind: learning_evaluation`, `run` (Provider, Model, thinking effort, repetitions, pairs, case notes, commit, `text_pack` with changed text ids and warnings, effective text digests, tool route note), `summary`, `pass_rates` per (case, scope), `attempts`, and the distinct `system_prompts` and `definitions` by digest. Each attempt has case, scope, repetition, `passed`, `effect_passed`, `effect` detail, `violations`, `finished`, `stopped_reason` (`final_answer`, a terminal outcome, or `tool_calls_after_finalization`), `error`, steps, Tool iterations, summed `usage`, final text, Memory/Skill `state` before and after, and the transcript (request messages after the System Prompt plus every call with arguments and result). Stdout gets a compact result without transcripts; stderr a per-attempt line and the pass-rate table.
 
 `compare A B` recomputes pass rates from the attempts, prints per (case, scope) `passed/attempts` and the delta for equal attempt counts, flags other cells as not comparable, lists the texts whose digests differ and the overall delta over comparable cells; `--json` prints the comparison as JSON.
+
+## Results
+
+Skill-first learning texts (`learning-texts`, 2026-10-02) against the texts at `3edacbd2b`, 3 repetitions of all 58 (case, scope) pairs, both arms rescored with the current scorer:
+
+| Model | Baseline | Candidate |
+|---|---|---|
+| `opencode-go/deepseek-v4.1-flash` | 140/174 | 167/174 |
+| `ollama-cloud/glm-5.3-flash` | 137/174 | 153/174 |
+
+Writes without a current Memory list fell from 19 and 27 to 1 and 5, duplicated preferences from 7 to 0. A focused rerun after the last text fix (6 Skill cases) met every expected effect except `human_skill_wrong` on glm-5.3-flash (1 of 6). Known weakness: glm-5.3-flash patches its own Skills from the conversation without reading the current file in about a third of Skill writes (14 of 45 attempts in the focused rerun); the patches had the expected effect, and writes to protected Skills are refused by the handler. If real reviews show collateral loss from such patches, enforce read-before-write for background Runs in `skill_manage`.

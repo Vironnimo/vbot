@@ -33,6 +33,10 @@ def ticket_like_skill_name(name: str, extra_tokens: Sequence[str] = ()) -> bool:
     )
 
 
+# Read marker of a Skill whose instructions loaded without its frontmatter.
+_BODY = "SKILL.md body"
+
+
 class CallObserver:
     """Collect process violations while an attempt's Tool calls run.
 
@@ -62,10 +66,12 @@ class CallObserver:
         """Check one call before it runs; ``own_file_exists`` names its target file."""
         arguments = arguments if isinstance(arguments, dict) else {}
         action = str(arguments.get("action", ""))
+        # A change without scope matches its old_text in both scopes.
+        scopes = (arguments["scope"],) if arguments.get("scope") else ("user", "agent")
         if (
             name == "memory"
             and action in MEMORY_MUTATIONS
-            and ("memory", str(arguments.get("scope", ""))) not in self._reads
+            and any(("memory", str(scope)) not in self._reads for scope in scopes)
         ):
             self.violations.append("memory_write_without_current_list")
         if name != "skill_manage":
@@ -77,7 +83,14 @@ class CallObserver:
                 self.violations.append("create_without_current_catalog")
             if target and ticket_like_skill_name(target, self._name_excludes):
                 self.violations.append("ticket_like_skill_name")
-        elif own_file_exists and (target, file_path) not in self._reads:
+        elif (
+            own_file_exists
+            and (target, file_path) not in self._reads
+            # A loaded body is the current text a patch of SKILL.md matches against.
+            and not (
+                action == "patch" and file_path == "SKILL.md" and (target, _BODY) in self._reads
+            )
+        ):
             self.violations.append("skill_write_without_current_file")
         if target in self._protected or str(arguments.get("absorbed_into", "")) in self._protected:
             self.violations.append("protected_skill_write")
@@ -118,6 +131,8 @@ class CallObserver:
             self._reads.add(("skill", "catalog"))
         elif name == "skill" and arguments.get("file_path"):
             self._reads.add((str(arguments["name"]), str(arguments["file_path"])))
+        elif name == "skill" and (result.get("data") or {}).get("status") == "loaded":
+            self._reads.add((str(arguments["name"]), _BODY))
 
 
 def _changed_files(before: Mapping[str, str], after: Mapping[str, str]) -> list[str]:

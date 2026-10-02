@@ -72,29 +72,32 @@ SKILL_MANAGE_ABSORBED = (
     "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
     "kept in the archive, where the user can restore it."
 )
-# Refusals of a background review (a Run without the user, such as a reflection
-# review). It changes only Skills an Agent created that the user has not pinned.
+# Refusals of a background Run (no user present: a reflection review or the
+# Librarian). It changes only Skills an Agent created that the user has not
+# pinned. The closing reply is where the Run reports what it could not change;
+# the review briefs ask for the same.
+_LEAVE_IT = "Leave it as it is and name the needed change in your closing reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
-    "Skill '{name}' is pinned by the user, so this review cannot change it; nothing changed. "
-    "Leave it as it is."
+    "Skill '{name}' is pinned by the user, so it cannot be changed in the background; "
+    f"nothing changed. {_LEAVE_IT}"
 )
 SKILL_MANAGE_USER_SKILL_REFUSAL = (
-    "Skill '{name}' comes from the user, so this review cannot change it; nothing changed. "
-    "Leave it as it is."
+    "Skill '{name}' was created by the user, so it cannot be changed in the background; "
+    f"nothing changed. {_LEAVE_IT}"
 )
 SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
-    "Who created Skill '{name}' cannot be determined right now, so this review cannot change "
-    "it; nothing changed. Leave it as it is."
+    "Who created Skill '{name}' cannot be determined, so it cannot be changed in the "
+    f"background; nothing changed. {_LEAVE_IT}"
 )
 SKILL_MANAGE_SHARED_REFUSAL = (
-    "Skill '{name}' is shared with you by another Agent, so this review cannot change it; "
-    "nothing changed. Leave it as it is."
+    "Skill '{name}' is shared with you by another Agent, so it cannot be changed in the "
+    f"background; nothing changed. {_LEAVE_IT}"
 )
 SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
-    "delete in this review needs absorbed_into: the name of another of your own Skills that "
-    "now holds the instructions of '{name}'; nothing changed. Merge the instructions into "
-    "that Skill with patch or edit first, then call delete with absorbed_into. If no other "
-    "Skill holds them, leave '{name}' as it is."
+    "In the background, delete needs absorbed_into: the name of another of your own Skills "
+    "that now holds the instructions of '{name}'; nothing changed. Merge the instructions "
+    "into that Skill with patch or edit first, then call delete with absorbed_into. If no "
+    "other Skill holds them, leave '{name}' as it is."
 )
 # ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
 SKILL_MANAGE_ABSORBED_INTO_ACTION = (

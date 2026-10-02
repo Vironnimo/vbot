@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -600,6 +600,9 @@ class Runtime:
     def archived_skill(self, agent_id: str | None, name: str) -> ArchivedSkill | None:
         return self._skill_operations().archived_skill(agent_id, name)
 
+    def background_skill_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
+        return self._skill_operations().background_protection(agent_id, names)
+
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
 
@@ -881,7 +884,11 @@ class Runtime:
         if self._tools is not None:
             self._tools.unregister("skill")
             register_skill_tool(
-                self._tools, self.skills_for, self.reload_skills_async, self.archived_skill
+                self._tools,
+                self.skills_for,
+                self.reload_skills_async,
+                self.archived_skill,
+                self.background_skill_protection,
             )
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")

@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.prompts.briefs import ReflectionScope, reflection_brief
+from core.prompts.briefs import REVIEW_TOOL_CALL_LIMIT, ReflectionScope, reflection_brief
 from core.runs import RunKind
 from core.sessions import SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
@@ -67,7 +67,7 @@ REFLECTION_TOOL_RESTRICTIONS: dict[ReflectionScope, tuple[str, ...]] = {
 }
 # Cost bound for one review Run: dispatched Tool iterations before the Run must
 # answer without Tools. A review lists, reads and writes a handful of entries.
-REFLECTION_TOOL_ITERATION_LIMIT = 16
+REFLECTION_TOOL_ITERATION_LIMIT = REVIEW_TOOL_CALL_LIMIT
 # Tool result for a review's call outside its scope. ``tool`` is the called Tool
 # and ``tools`` the scope's Tools, both as the Model names them.
 REVIEW_TOOL_DENIAL_MESSAGE = (

@@ -1,1 +1,0 @@
-If no supported change remains, reply "Nothing to save." and stop. Otherwise, make the changes with the permitted Tools, check their results, and finish with one or two sentences stating what changed and why it will help. Report failed writes accurately; do not paste full Memory or Skill contents.
