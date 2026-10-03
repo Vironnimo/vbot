@@ -38,6 +38,7 @@
   import { createChatViewNavigation } from './chat/view/navigation.svelte.js';
   import { createChatViewActions } from './chat/view/actions.svelte.js';
   import { createChatViewLayout } from './chat/view/layout.svelte.js';
+  import { createSessionChanges } from './chat/view/sessionChanges.svelte.js';
   import './chat/view/chatView.css';
 
   let {
@@ -264,6 +265,21 @@
     },
     get target() {
       return target;
+    },
+  });
+
+  const sessionChanges = createSessionChanges({
+    get target() {
+      return target;
+    },
+    get chatController() {
+      return chatController;
+    },
+    get sessionsRefreshToken() {
+      return sessionsRefreshToken;
+    },
+    get timelineItems() {
+      return activeTimelineItems;
     },
   });
 
@@ -1029,6 +1045,8 @@
           ?.backgroundBashStatuses}
         backgroundBashProcesses={chatState.backgroundBashProcesses}
         reflectionTasks={reflectionTaskRows(target.activeSessionState)}
+        sessionStats={sessionChanges.stats}
+        onSessionStatsWanted={sessionChanges.setWanted}
         parentSession={navigation.sessionParentLink}
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
         onNavigateToParentSession={navigation.navigateToParentSession}

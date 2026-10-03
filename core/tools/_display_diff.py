@@ -8,8 +8,7 @@ cannot bloat the persisted Tool display.
 
 from __future__ import annotations
 
-from difflib import SequenceMatcher
-
+from core.tools._line_diff import grouped_line_opcodes
 from core.tools.arguments import split_text_lines
 from core.tools.contracts import JsonObject
 
@@ -17,9 +16,6 @@ MAX_DISPLAY_DIFF_LINES = 2000
 MAX_DISPLAY_DIFF_LINE_LENGTH = 1000
 DISPLAY_DIFF_CONTEXT_LINES = 3
 DISPLAY_FILE_CHANGE_KINDS = frozenset({"created", "updated", "replaced", "deleted", "moved"})
-# Matching lines costs up to the product of both line counts; larger pairs
-# read as a complete removal plus a complete addition instead.
-_MAX_MATCHED_LINE_PAIRS = 25_000_000
 
 
 def display_file_diff(
@@ -55,7 +51,7 @@ def display_file_diff(
 
     old = split_text_lines(before or "", keepends=True)
     new = split_text_lines(after or "", keepends=True)
-    groups = _grouped_changes(old, new)
+    groups = grouped_line_opcodes(old, new, DISPLAY_DIFF_CONTEXT_LINES)
     added = removed = shown = omitted = 0
     hunks: list[JsonObject] = []
     for group in groups:
@@ -89,15 +85,6 @@ def display_diff_line_count(change: JsonObject) -> int:
     if not isinstance(hunks, list):
         return 0
     return sum(len(hunk.get("lines", ())) for hunk in hunks if isinstance(hunk, dict))
-
-
-def _grouped_changes(old: list[str], new: list[str]) -> list[list[tuple[str, int, int, int, int]]]:
-    if old == new:
-        return []
-    if len(old) * len(new) > _MAX_MATCHED_LINE_PAIRS:
-        return [[("replace", 0, len(old), 0, len(new))]]
-    matcher = SequenceMatcher(None, old, new, autojunk=False)
-    return list(matcher.get_grouped_opcodes(DISPLAY_DIFF_CONTEXT_LINES))
 
 
 def _display_line(line: str) -> str:
