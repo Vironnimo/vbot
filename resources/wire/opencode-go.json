@@ -86,5 +86,37 @@
       "set": {"request": {"list_announced_tools": true}},
       "note": "GLM 5.3 Flash drops calls to Tools that are not in the request's Tool list."
     }
-  ]
+  ],
+  "models": {
+    "glm-5.1": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:none, sampling, tool_replay, replay"
+      }
+    },
+    "kimi-k2.6": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "deepseek-flash": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
 }

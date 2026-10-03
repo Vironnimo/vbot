@@ -36,5 +36,27 @@
       "set": {"request": {"prompt_cache": "anthropic_breakpoints"}},
       "note": "Anthropic cache_control breakpoints on the last system message and the most recent history messages."
     }
-  ]
+  ],
+  "models": {
+    "anthropic/claude-sonnet-4.6": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    },
+    "deepseek/deepseek-v4-flash": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:high, effort:xhigh, effort:none, sampling, tool_replay, replay"
+      }
+    }
+  }
 }

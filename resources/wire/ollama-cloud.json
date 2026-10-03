@@ -70,5 +70,23 @@
       "set": {"media": {"types": ["image/jpeg", "image/png", "image/webp"]}},
       "note": "DeepSeek V4.1 Flash carries JPEG, PNG and WebP images only."
     }
-  ]
+  ],
+  "models": {
+    "glm-5.3": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay"
+      }
+    },
+    "minimax-m3": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning", "reasoning_content", "reasoning_text", "thinking"]}
+      },
+      "note": "Every other check passed on 2026-10-03, but the Model named a solid red test image Gray or Brown in three of four runs while kimi-k2.6 and gemma4:31b on this wire named it, so the image reaches the Model and the entry stays unverified."
+    }
+  }
 }

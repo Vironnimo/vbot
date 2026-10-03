@@ -159,5 +159,17 @@
       "set": {"replay": {"scope": "none"}},
       "note": "GPT 6.1 Sol ignores historical Reasoning (verified 2026-10-02), so none is replayed."
     }
-  ]
+  ],
+  "models": {
+    "glm-5.3": {
+      "set": {
+        "response": {"reasoning_fields": ["reasoning_content", "reasoning", "reasoning_text", "thinking"]}
+      },
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay"
+      }
+    }
+  }
 }

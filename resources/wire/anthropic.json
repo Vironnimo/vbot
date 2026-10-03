@@ -29,5 +29,14 @@
       "set": {"reasoning": {"off": "omit"}},
       "note": "These adaptive-only Models reject thinking type disabled, so the Agent effort none sends no thinking field."
     }
-  ]
+  ],
+  "models": {
+    "claude-sonnet-4-6": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
+    }
+  }
 }
