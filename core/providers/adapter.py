@@ -531,6 +531,24 @@ class ProviderAdapter(ABC):
         del request_kwargs
         return {}
 
+    def _stable_request_headers(
+        self,
+        model_id: str,
+        request_kwargs: JsonObject,
+    ) -> dict[str, str]:
+        """Return the headers every attempt of one request to ``model_id`` adds.
+
+        These are the Adapter's own context headers
+        (:meth:`_request_headers_from_kwargs`, which may pop its private kwargs)
+        plus the wire profile's ``request.extra_headers``, which win. Every
+        request path merges them over each attempt's rebuilt auth and Provider
+        headers, so a profile header also replaces one of those.
+        """
+
+        headers = self._request_headers_from_kwargs(request_kwargs)
+        headers.update(self.wire_profile(model_id).request.extra_headers)
+        return headers
+
     @abstractmethod
     async def aclose(self) -> None:
         """Close the HTTP client and release resources.

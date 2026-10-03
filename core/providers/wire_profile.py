@@ -272,6 +272,16 @@ def _same_json_value(left: Any, right: Any) -> bool:
     return type(left) is type(right) and left == right
 
 
+def thaw_json(value: Any) -> Any:
+    """Return a mutable deep copy of a frozen JSON value (for payload building)."""
+
+    if isinstance(value, Mapping):
+        return {key: thaw_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [thaw_json(item) for item in value]
+    return value
+
+
 @dataclass(frozen=True)
 class RequestRules:
     """Request shaping that does not depend on reasoning.
@@ -279,8 +289,12 @@ class RequestRules:
     ``allowed_parameters`` is an allowlist of optional caller parameters (for
     example the Responses wires that accept only some sampling fields); ``None``
     allows every parameter the codec knows. ``parameters`` refines individual
-    parameters. ``body_defaults`` are set when the caller supplied no value;
-    ``extra_body`` and ``extra_headers`` are always added.
+    parameters. ``body_defaults`` are set when the request body has no value for
+    the key; ``extra_body`` is always added and replaces any value the body
+    holds (both through :meth:`apply_body`, at the top level of the request body
+    on every protocol); ``extra_headers`` are always added to the request's
+    headers and replace any header of the same name the Adapter sets, auth
+    included. Every chat request path of every Adapter applies all three.
     ``output_limit_collapse`` sends exactly one output-limit field: every
     output-limit alias a caller supplies collapses into ``output_limit_field``
     and the smallest positive value wins.
@@ -301,6 +315,22 @@ class RequestRules:
     prompt_cache: PromptCacheStyle = "none"
     options: Mapping[str, JsonValue] = field(default_factory=lambda: _EMPTY)
 
+    def apply_body(self, payload: dict[str, Any]) -> None:
+        """Add ``body_defaults`` and ``extra_body`` to a built request body.
+
+        A codec calls this once its body is complete (caller values, Provider
+        defaults and the rendered reasoning included) and before
+        :meth:`shape_parameters` shapes that body: a body default fills only a
+        top-level key the body lacks, and an ``extra_body`` entry then replaces
+        whatever the body holds. Values are mutable copies, so later shaping may
+        change them.
+        """
+
+        for key, value in self.body_defaults.items():
+            payload.setdefault(key, thaw_json(value))
+        for key, value in self.extra_body.items():
+            payload[key] = thaw_json(value)
+
     def shape_parameters(
         self,
         payload: dict[str, Any],
@@ -316,13 +346,15 @@ class RequestRules:
         values is clamped into range, dropped or rejected (an exclusive lower
         bound or an allowed-value list cannot be clamped onto, so such a value
         is dropped unless the rule rejects it). ``protected`` fields (the
-        reasoning dialect's own output) are never shaped.
+        reasoning dialect's own output) are never shaped, unless ``extra_body``
+        replaced them: an ``extra_body`` value is shaped like a caller's.
 
         Raises:
             ProviderError: (not retryable) when the payload carries a ``reject``
                 parameter or a value a ``reject`` rule refuses; nothing was sent.
         """
 
+        protected = frozenset(protected).difference(self.extra_body)
         refused = sorted(
             name
             for name, rule in self.parameters.items()

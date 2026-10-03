@@ -72,7 +72,6 @@ from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
 )
-from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
@@ -360,23 +359,20 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
         if self._config.defaults:
             for key, value in self._config.defaults.items():
                 payload.setdefault(key, value)
-        for key, value in rules.body_defaults.items():
-            payload.setdefault(key, thaw_json(value))
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
-        for key, value in rules.extra_body.items():
-            payload[key] = thaw_json(value)
-        # Pin the resolved output allowance last so the model's own ceiling wins
+        # Pin the resolved output allowance so the model's own ceiling wins
         # over the provider-default fallback (Anthropic requires a positive
         # ``max_tokens`` and rejects one above the model's output ceiling).
         if resolved_max_tokens is not None:
             payload["max_tokens"] = resolved_max_tokens
+        rules.apply_body(payload)
         if rules.parameters:
             # Sampling parameters are typically not sent while thinking is active.
             rules.shape_parameters(
                 payload,
                 reasoning_active=_thinking_type(payload.get("thinking")) in _ACTIVE_THINKING,
-                protected=rendered - set(request_kwargs) - set(rules.extra_body),
+                protected=rendered - set(request_kwargs),
                 provider_label=provider_label,
             )
         # Cache stable prefixes last, after every other payload mutation, so the
@@ -587,7 +583,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
-        request_headers = self._request_headers_from_kwargs(kwargs)
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
 
         auth_recovery = OAuthRequestRecovery(self._token_getter, self._auth_config)
@@ -670,7 +666,7 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
-        request_headers = self._request_headers_from_kwargs(kwargs)
+        request_headers = self._stable_request_headers(model_id, kwargs)
 
         def build_stream_payload() -> dict[str, Any]:
             built = self._build_payload(messages, model_id, **kwargs)

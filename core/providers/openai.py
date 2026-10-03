@@ -412,6 +412,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         # The Codex Responses endpoint owns its required headers; provider-level
         # extra_headers are deliberately not merged here so a stray config entry can
         # never leak onto the Codex wire (the OpenAI provider forbids extra_headers).
+        # A wire profile's per-Model ``request.extra_headers`` is a deliberate
+        # declaration: the request paths add it after these headers.
         headers.update(CODEX_EXTRA_HEADERS)
         # Pin the prompt cache to the conversation (see CODEX_CACHE_SCOPE_HEADERS).
         if cache_scope_id:
@@ -475,6 +477,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 raise NetworkError("Stream ended without a completed Responses object")
             return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: states[-1].normalized_response()}
 
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
         def build() -> dict[str, Any]:
             return self._build_responses_payload(
                 messages,
@@ -484,7 +488,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         payload = build()
         response = await execute_learning_from_rejections(
-            lambda: self._post_json(RESPONSES_POLICY_ENDPOINT, payload),
+            lambda: self._post_json(
+                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+            ),
             payload,
             rebuild=build,
             wire=self.wire,
@@ -540,6 +546,8 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     yield delta
             return
 
+        request_headers = self._stable_request_headers(model_id, kwargs)
+
         def build() -> dict[str, Any]:
             return self._build_responses_payload(
                 messages,
@@ -551,7 +559,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload = build()
 
         async def stream_payload() -> AsyncGenerator[dict[str, Any]]:
-            response = await self._connect_stream(RESPONSES_POLICY_ENDPOINT, payload)
+            response = await self._connect_stream(
+                RESPONSES_POLICY_ENDPOINT, payload, request_headers=request_headers
+            )
             async with aclosing(
                 self._responses_sse_deltas(response, _responses_stream_state())
             ) as deltas:
@@ -642,16 +652,18 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         )
         if self._connection_mode == CODEX_RESPONSES_MODE:
             self._ensure_required_instructions(payload)
-        if profile.request.parameters:
+        payload["store"] = False
+        rules = profile.request
+        rules.apply_body(payload)
+        if rules.parameters:
             # Configured or learned parameter rules; the reasoning fields are
             # the dialect's own output.
-            profile.request.shape_parameters(
+            rules.shape_parameters(
                 payload,
                 reasoning_active="reasoning" in payload,
                 protected=RESPONSES_REASONING_FIELDS,
                 provider_label=self._config.name,
             )
-        payload["store"] = False
         return payload
 
     def _ensure_required_instructions(self, payload: dict[str, Any]) -> None:
@@ -692,12 +704,15 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         collects the stream state of every attempt (the last one completed).
         """
 
+        request_kwargs = dict(kwargs)
+        request_headers = self._stable_request_headers(model_id, request_kwargs)
+
         def build() -> dict[str, Any]:
             return self._build_responses_payload(
                 messages,
                 model_id=model_id,
                 stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
+                **self._request_kwargs_with_defaults(request_kwargs),
             )
 
         payload = build()
@@ -709,6 +724,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             return self._stream_responses(
                 payload,
                 endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
                 conversation_id=conversation_id,
                 state=state,
@@ -752,18 +768,28 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             response_headers=response_headers,
         )
 
+    async def _attempt_headers(
+        self, cache_scope_id: str | None, request_headers: Mapping[str, str]
+    ) -> dict[str, str]:
+        """Rebuild one attempt's auth headers, then add the request's stable headers."""
+
+        headers = await self._build_headers(cache_scope_id)
+        headers.update(request_headers)
+        return headers
+
     async def _post_json(
         self,
         endpoint_path: str,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> dict[str, Any]:
         return await post_json_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
+            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
             handle_error_status=self._handle_error_status,
             provider_context="OpenAI provider",
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
@@ -774,13 +800,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         endpoint_path: str,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
     ) -> httpx.Response:
         return await connect_streaming_with_retry(
             self._client,
             endpoint_path,
             payload,
-            build_headers=lambda: self._build_headers(cache_scope_id),
+            build_headers=lambda: self._attempt_headers(cache_scope_id, request_headers),
             handle_error_status=self._handle_error_status,
             auth_recovery=OAuthRequestRecovery(self._token_getter, self._auth_config),
         )
@@ -790,6 +817,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         endpoint_path: str,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None = None,
         conversation_id: str | None = None,
         state: ResponsesStreamState | None = None,
@@ -804,6 +832,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             async with aclosing(
                 self._stream_codex_auto(
                     payload,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     conversation_id=conversation_id,
                     state=stream_state,
@@ -816,6 +845,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             self._stream_responses_sse(
                 payload,
                 endpoint_path=endpoint_path,
+                request_headers=request_headers,
                 cache_scope_id=cache_scope_id,
                 state=stream_state,
             )
@@ -828,10 +858,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         endpoint_path: str,
+        request_headers: Mapping[str, str],
         cache_scope_id: str | None,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_stream(endpoint_path, payload, cache_scope_id=cache_scope_id)
+        response = await self._connect_stream(
+            endpoint_path,
+            payload,
+            request_headers=request_headers,
+            cache_scope_id=cache_scope_id,
+        )
         async with aclosing(self._responses_sse_deltas(response, state)) as deltas:
             async for delta in deltas:
                 yield delta
@@ -873,12 +909,16 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         self,
         payload: dict[str, Any],
         *,
+        request_headers: Mapping[str, str],
         cache_scope_id: str,
         conversation_id: str,
         state: ResponsesStreamState,
     ) -> AsyncGenerator[dict[str, Any]]:
         websocket_headers = await self._build_codex_websocket_headers(cache_scope_id)
         account_id = websocket_headers["chatgpt-account-id"]
+        # The socket sends its handshake headers once; the request's stable
+        # headers ride on that handshake like on an SSE request.
+        websocket_headers.update(request_headers)
         model_id = payload.get("model")
         if not isinstance(model_id, str) or not model_id:
             raise ProviderError("Codex WebSocket request is missing a model", retryable=False)
@@ -891,6 +931,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 self._stream_responses_sse(
                     payload,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     state=state,
                 )
@@ -918,6 +959,7 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 self._stream_responses_sse(
                     payload,
                     endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                    request_headers=request_headers,
                     cache_scope_id=cache_scope_id,
                     state=state,
                 )

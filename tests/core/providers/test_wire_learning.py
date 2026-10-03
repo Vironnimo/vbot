@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -21,116 +21,12 @@ import respx
 from core.providers.errors import ProviderAuthError, ProviderError
 
 from . import anthropic_test_support as anthropic
-from . import github_copilot_test_support as copilot
 from . import openai_compatible_test_support as compatible
 from . import openai_test_support as openai
 from . import opencode_go_test_support as go
-from . import opencode_zen_test_support as zen
-from . import openrouter_test_support as openrouter
+from . import wire_paths_test_support as paths
 
 ABSENT = object()
-
-MESSAGES = [{"role": "user", "content": "Hello"}]
-
-
-@dataclass(frozen=True)
-class _Path:
-    """One Adapter request path: the Adapter, the endpoint it posts to and a completed reply."""
-
-    adapter: Callable[[], Any]
-    url: str
-    model_id: str
-    success: Callable[[], httpx.Response]
-    stream: bool = False
-
-    def streaming(self, success: Callable[[], httpx.Response], url: str | None = None) -> _Path:
-        return replace(self, success=success, url=url or self.url, stream=True)
-
-
-def _chat_sse(*chunks: dict[str, Any]) -> httpx.Response:
-    finish = {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]}
-    return compatible.sse_response(compatible.sse(*chunks, finish))
-
-
-def _responses_stream(response: dict[str, Any]) -> httpx.Response:
-    return openai.codex_sse_response(response)
-
-
-_GEMINI_DONE = {"candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}]}
-
-_CHAT = _Path(
-    lambda: compatible.make_adapter(
-        model=compatible.catalog_model(levels=("low", "medium", "high"))
-    ),
-    compatible.OPENAI_URL,
-    compatible.MODEL_ID,
-    lambda: httpx.Response(200, json=compatible.SUCCESS_RESPONSE),
-)
-_MESSAGES = _Path(
-    anthropic.make_adapter,
-    anthropic.ANTHROPIC_URL,
-    anthropic.MODEL_ID,
-    lambda: httpx.Response(200, json=anthropic.SUCCESS_RESPONSE),
-)
-_PLATFORM = _Path(
-    lambda: openai.platform_adapter(model_lookup=openai.bundled_model_lookup()),
-    openai.PLATFORM_RESPONSES_URL,
-    "gpt-6-sol",
-    lambda: httpx.Response(200, json=openai.COMPLETED_RESPONSE),
-)
-_CODEX = _Path(
-    lambda: openai.codex_adapter(model_lookup=openai.bundled_model_lookup()),
-    openai.OPENAI_SUBSCRIPTION_URL,
-    "gpt-6-sol",
-    lambda: _responses_stream(openai.COMPLETED_RESPONSE),
-)
-_OPENROUTER = _Path(
-    openrouter.openrouter_adapter,
-    openrouter.RESPONSES_URL,
-    openrouter.RESPONSES_MODEL,
-    lambda: httpx.Response(200, json=openai.COMPLETED_RESPONSE),
-)
-_COPILOT_RESPONSES = _Path(
-    copilot.make_adapter,
-    copilot.RESPONSES_URL,
-    "gpt-5-mini",
-    lambda: httpx.Response(200, json={"output": []}),
-)
-_COPILOT_MESSAGES = _Path(
-    lambda: copilot.make_adapter(
-        metadata=copilot.copilot_metadata(
-            "Anthropic", "claude-opus-4.8", ["/chat/completions", "/v1/messages"]
-        )
-    ),
-    copilot.MESSAGES_URL,
-    "claude-opus-4.8",
-    lambda: httpx.Response(200, json={"content": []}),
-)
-_GO_RESPONSES = _Path(
-    go.go_adapter,
-    go.RESPONSES_URL,
-    go.RESPONSES_MODEL,
-    lambda: go.success_response("responses", streaming=False),
-)
-_GO_MESSAGES = _Path(
-    go.go_adapter,
-    go.MESSAGES_URL,
-    go.MESSAGES_MODEL,
-    lambda: go.success_response("messages", streaming=False),
-)
-_ZEN_GEMINI = _Path(
-    zen.zen_adapter,
-    zen.GEMINI_URL,
-    zen.GEMINI_MODEL,
-    lambda: httpx.Response(200, json=_GEMINI_DONE),
-)
-
-
-async def _request(adapter: Any, path: _Path, kwargs: dict[str, Any]) -> None:
-    if path.stream:
-        [_ async for _ in adapter.stream(MESSAGES, model_id=path.model_id, **kwargs)]
-    else:
-        await adapter.send(MESSAGES, model_id=path.model_id, **kwargs)
 
 
 def _sent(request: httpx.Request, field: tuple[str, ...]) -> Any:
@@ -159,7 +55,7 @@ _THINKING_OFF = {"type": "disabled"}
     ("path", "kwargs", "rejection", "field", "expected"),
     [
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {"thinking_effort": "high"},
             "invalid value for 'reasoning_effort': 'high'",
             ("reasoning_effort",),
@@ -167,7 +63,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="chat-send-effort",
         ),
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {},
             "Unsupported parameter: 'temperature'",
             ("temperature",),
@@ -175,7 +71,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="chat-send-parameter",
         ),
         pytest.param(
-            _CHAT.streaming(_chat_sse),
+            paths.CHAT.streaming(paths.chat_sse),
             {},
             "Unsupported parameter: 'temperature'",
             ("temperature",),
@@ -183,7 +79,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="chat-stream-parameter",
         ),
         pytest.param(
-            _MESSAGES,
+            paths.MESSAGES,
             {"temperature": 0.5, "thinking_effort": "none"},
             _error("temperature is not supported for this model"),
             ("temperature",),
@@ -191,7 +87,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="messages-send-parameter",
         ),
         pytest.param(
-            _MESSAGES.streaming(lambda: anthropic.sse_response(anthropic.sse())),
+            paths.MESSAGES.streaming(lambda: anthropic.sse_response(anthropic.sse())),
             {"temperature": 0.5, "thinking_effort": "none"},
             _error("temperature is not supported for this model"),
             ("temperature",),
@@ -199,7 +95,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="messages-stream-parameter",
         ),
         pytest.param(
-            _MESSAGES,
+            paths.MESSAGES,
             {"thinking_effort": "none"},
             _error("thinking.type: 'disabled' is not supported for this model"),
             ("thinking",),
@@ -207,7 +103,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="messages-send-off-switch",
         ),
         pytest.param(
-            _PLATFORM,
+            paths.PLATFORM,
             {"thinking_effort": "max"},
             {"error": {"message": "Invalid value for 'reasoning.effort': 'max'"}},
             ("reasoning", "effort"),
@@ -215,7 +111,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="platform-send-effort",
         ),
         pytest.param(
-            replace(_PLATFORM, model_id="gpt-5.5"),
+            replace(paths.PLATFORM, model_id="gpt-5.5"),
             {"top_p": 0.9},
             {"error": {"message": "Unsupported parameter: 'top_p'"}},
             ("top_p",),
@@ -223,7 +119,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="platform-send-parameter",
         ),
         pytest.param(
-            _PLATFORM.streaming(lambda: _responses_stream(openai.COMPLETED_RESPONSE)),
+            paths.PLATFORM.streaming(lambda: paths.responses_sse()),
             {"thinking_effort": "max"},
             {"error": {"message": "Invalid value for 'reasoning.effort': 'max'"}},
             ("reasoning", "effort"),
@@ -231,7 +127,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="platform-stream-effort",
         ),
         pytest.param(
-            _CODEX,
+            paths.CODEX,
             {"thinking_effort": "max"},
             {"error": {"message": "Invalid value for 'reasoning.effort': 'max'"}},
             ("reasoning", "effort"),
@@ -239,7 +135,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="codex-sse-send-effort",
         ),
         pytest.param(
-            _OPENROUTER,
+            paths.OPENROUTER,
             {"thinking_effort": "high"},
             "Invalid value for 'reasoning.effort': 'high'",
             ("reasoning", "effort"),
@@ -247,7 +143,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="openrouter-responses-send-effort",
         ),
         pytest.param(
-            _OPENROUTER.streaming(lambda: _responses_stream(openai.COMPLETED_RESPONSE)),
+            paths.OPENROUTER.streaming(lambda: paths.responses_sse()),
             {"thinking_effort": "low"},
             "Invalid value for 'reasoning.effort': 'low'",
             ("reasoning", "effort"),
@@ -255,7 +151,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="openrouter-responses-stream-effort",
         ),
         pytest.param(
-            _COPILOT_RESPONSES,
+            paths.COPILOT_RESPONSES,
             {"thinking_effort": "high"},
             _error("Invalid value for 'reasoning.effort': 'high'"),
             ("reasoning", "effort"),
@@ -263,14 +159,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="copilot-responses-send-effort",
         ),
         pytest.param(
-            _COPILOT_MESSAGES.streaming(
-                lambda: copilot.sse_response(
-                    copilot.sse_events(
-                        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}},
-                        {"type": "message_stop"},
-                    )
-                )
-            ),
+            paths.COPILOT_MESSAGES_STREAM,
             {"temperature": 0.4},
             _error("temperature is not supported for this model"),
             ("temperature",),
@@ -280,7 +169,7 @@ _THINKING_OFF = {"type": "disabled"}
         pytest.param(
             # The bundled Model entry sends temperature; the retry still drops it,
             # but the explicit entry outranks the learned fact for later requests.
-            replace(_COPILOT_MESSAGES, model_id="claude-sonnet-4.6"),
+            replace(paths.COPILOT_MESSAGES, model_id="claude-sonnet-4.6"),
             {"temperature": 0.4},
             _error("temperature is not supported for this model"),
             ("temperature",),
@@ -288,7 +177,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="model-entry-outranks-the-learned-parameter",
         ),
         pytest.param(
-            _GO_RESPONSES.streaming(lambda: go.success_response("responses", streaming=True)),
+            paths.GO_RESPONSES.streaming(lambda: go.success_response("responses", streaming=True)),
             {"thinking_effort": "none"},
             "Invalid value for 'reasoning.effort': 'none'",
             ("reasoning",),
@@ -296,7 +185,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="go-responses-stream-none-rung",
         ),
         pytest.param(
-            _GO_MESSAGES,
+            paths.GO_MESSAGES,
             {"thinking_effort": "none"},
             "thinking type 'disabled' is not supported for minimax-m3",
             ("thinking",),
@@ -304,7 +193,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="go-messages-send-off-switch",
         ),
         pytest.param(
-            _ZEN_GEMINI,
+            paths.ZEN_GEMINI,
             {"top_p": 0.9},
             "generationConfig.topP is not supported for this model",
             ("generationConfig", "topP"),
@@ -312,10 +201,7 @@ _THINKING_OFF = {"type": "disabled"}
             id="zen-gemini-send-parameter",
         ),
         pytest.param(
-            _ZEN_GEMINI.streaming(
-                lambda: httpx.Response(200, text=zen.gemini_sse(_GEMINI_DONE)),
-                zen.GEMINI_STREAM_URL,
-            ),
+            paths.ZEN_GEMINI_STREAM,
             {"thinking_effort": "low"},
             "thinking_level 'low' is not supported for this model",
             ("generationConfig", "thinkingConfig", "thinkingLevel"),
@@ -326,7 +212,7 @@ _THINKING_OFF = {"type": "disabled"}
 )
 @pytest.mark.asyncio
 async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
-    path: _Path,
+    path: paths.RequestPath,
     kwargs: dict[str, Any],
     rejection: str | dict[str, Any],
     field: tuple[str, ...],
@@ -338,7 +224,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             side_effect=[_rejection(400, rejection), path.success(), path.success()]
         )
         for _ in range(2):
-            await _request(adapter, path, kwargs)
+            await paths.request(adapter, path, kwargs)
 
     assert [_sent(call.request, field) for call in route.calls] == expected
 
@@ -347,7 +233,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
     ("path", "kwargs", "status", "body", "error_type", "attempts"),
     [
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {},
             401,
             "Unsupported parameter: 'temperature'",
@@ -356,10 +242,16 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             id="auth",
         ),
         pytest.param(
-            _CHAT, {}, 503, "Unsupported parameter: 'temperature'", ProviderError, 4, id="retryable"
+            paths.CHAT,
+            {},
+            503,
+            "Unsupported parameter: 'temperature'",
+            ProviderError,
+            4,
+            id="retryable",
         ),
         pytest.param(
-            _OPENROUTER,
+            paths.OPENROUTER,
             {"thinking_effort": "high"},
             400,
             {"error": {"code": 400, "message": "Invalid value for 'reasoning.effort': 'high'"}},
@@ -368,7 +260,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             id="lenient-retryable",
         ),
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {},
             400,
             "Unsupported parameter: 'top_k'",
@@ -377,7 +269,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             id="parameter-not-sent",
         ),
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {},
             400,
             "temperature must be at most 1.0",
@@ -386,7 +278,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             id="no-rejection-marker",
         ),
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             {"thinking_effort": "high"},
             400,
             "invalid value for 'reasoning_effort'",
@@ -395,7 +287,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
             id="effort-value-not-named",
         ),
         pytest.param(
-            _MESSAGES,
+            paths.MESSAGES,
             {"thinking_effort": "none"},
             400,
             _error("thinking is not supported for this model"),
@@ -407,7 +299,7 @@ async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
 )
 @pytest.mark.asyncio
 async def test_an_unattributable_rejection_passes_through_unchanged_and_teaches_nothing(
-    path: _Path,
+    path: paths.RequestPath,
     kwargs: dict[str, Any],
     status: int,
     body: str | dict[str, Any],
@@ -420,9 +312,9 @@ async def test_an_unattributable_rejection_passes_through_unchanged_and_teaches_
             side_effect=[*(_rejection(status, body) for _ in range(attempts)), path.success()]
         )
         with pytest.raises(ProviderError) as caught:
-            await _request(adapter, path, kwargs)
+            await paths.request(adapter, path, kwargs)
         assert route.call_count == attempts
-        await _request(adapter, path, kwargs)
+        await paths.request(adapter, path, kwargs)
 
     assert type(caught.value) is error_type
     detail = body if isinstance(body, str) else body["error"]["message"]
@@ -447,7 +339,7 @@ _REASONING_ITEM = {
     ("path", "reply", "returned"),
     [
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             lambda: httpx.Response(
                 200,
                 json={
@@ -467,19 +359,19 @@ _REASONING_ITEM = {
             id="chat-send",
         ),
         pytest.param(
-            _CHAT,
+            paths.CHAT,
             lambda: httpx.Response(200, json=compatible.SUCCESS_RESPONSE),
             False,
             id="chat-send-without-reasoning",
         ),
         pytest.param(
-            _CHAT.streaming(_chat_sse),
-            lambda: _chat_sse({"choices": [{"delta": {"reasoning_content": "Checking."}}]}),
+            paths.CHAT.streaming(paths.chat_sse),
+            lambda: paths.chat_sse({"choices": [{"delta": {"reasoning_content": "Checking."}}]}),
             True,
             id="chat-stream",
         ),
         pytest.param(
-            _MESSAGES,
+            paths.MESSAGES,
             lambda: httpx.Response(
                 200,
                 json={
@@ -491,7 +383,7 @@ _REASONING_ITEM = {
             id="messages-send",
         ),
         pytest.param(
-            _PLATFORM,
+            paths.PLATFORM,
             lambda: httpx.Response(
                 200, json={**openai.COMPLETED_RESPONSE, "output": [_REASONING_ITEM]}
             ),
@@ -499,13 +391,13 @@ _REASONING_ITEM = {
             id="responses-send",
         ),
         pytest.param(
-            _PLATFORM.streaming(lambda: _responses_stream(openai.COMPLETED_RESPONSE)),
-            lambda: _responses_stream(openai.COMPLETED_RESPONSE),
+            paths.PLATFORM.streaming(lambda: paths.responses_sse()),
+            lambda: paths.responses_sse(),
             False,
             id="responses-stream-without-reasoning",
         ),
         pytest.param(
-            _ZEN_GEMINI,
+            paths.ZEN_GEMINI,
             lambda: httpx.Response(
                 200,
                 json=_gemini_reply({"text": "Checking.", "thought": True}, {"text": "ok"}),
@@ -517,12 +409,12 @@ _REASONING_ITEM = {
 )
 @pytest.mark.asyncio
 async def test_a_reply_with_reasoning_records_that_the_model_returned_reasoning(
-    path: _Path, reply: Callable[[], httpx.Response], returned: bool
+    path: paths.RequestPath, reply: Callable[[], httpx.Response], returned: bool
 ) -> None:
     adapter = path.adapter()
     with respx.mock:
         respx.post(path.url).mock(return_value=reply())
-        await _request(adapter, path, {})
+        await paths.request(adapter, path, {})
 
     wire = adapter.wire
     facts = wire.observations.facts_for(wire.provider_id, wire.connection_id, path.model_id)

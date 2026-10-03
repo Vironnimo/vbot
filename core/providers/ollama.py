@@ -338,7 +338,9 @@ class OllamaAdapter(ProviderAdapter):
         Readable reasoning replays under the profile's ``replay.history_field``
         (never on a ``meta_only`` wire), the planned reasoning decision is
         spelled in the profile's dialect, and sampling plus the output limit
-        ride under ``options`` shaped by the profile's request rules.
+        ride under ``options`` shaped by the profile's request rules. The
+        profile's body rules name top-level keys, so an ``options`` entry in
+        them replaces or fills the whole object.
         """
 
         request_kwargs = {key: value for key, value in kwargs.items() if value is not None}
@@ -397,6 +399,7 @@ class OllamaAdapter(ProviderAdapter):
 
         if options:
             payload["options"] = options
+        rules.apply_body(payload)
         return payload
 
     def _resolve_enforced_context(self, model_id: str) -> int | None:
@@ -463,12 +466,14 @@ class OllamaAdapter(ProviderAdapter):
         ``retry_async``; fails immediately on fatal statuses.
         """
 
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = False
         reasoning_fields = self._reasoning_fields(model_id)
 
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request_headers)
             try:
                 response = await self._client.post(CHAT_ENDPOINT, json=payload, headers=headers)
             except httpx.TransportError as exc:
@@ -513,8 +518,14 @@ class OllamaAdapter(ProviderAdapter):
         counters; the stream ending without it is a mid-stream failure.
         """
 
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_payload(messages, model_id, **kwargs)
         payload["stream"] = True
+
+        async def _build_headers() -> dict[str, str]:
+            headers = await self._build_headers()
+            headers.update(request_headers)
+            return headers
 
         def _handle_error_status(
             status_code: int,
@@ -532,7 +543,7 @@ class OllamaAdapter(ProviderAdapter):
             self._client,
             CHAT_ENDPOINT,
             payload,
-            build_headers=self._build_headers,
+            build_headers=_build_headers,
             handle_error_status=_handle_error_status,
             wrap_transport_error=self._wrap_transport_error,
         )
