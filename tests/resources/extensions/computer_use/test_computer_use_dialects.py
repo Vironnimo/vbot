@@ -92,6 +92,7 @@ CLICK: tuple = ("click", 200, 150, "left", 1, [])
 async def test_unambiguous_dialects_run_as_the_canonical_call(
     computer: Harness, tool: str, arguments, inputs: list
 ) -> None:
+    await computer.computer(action="screenshot", view="display")
     computer.target.inputs.clear()
     result = await computer.call(tool, arguments)
     assert result["ok"], result

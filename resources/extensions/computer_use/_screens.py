@@ -1,10 +1,9 @@
 """Platform-neutral imaging: coordinate frames, display choice, masking and images.
 
-A display's frame is its physical size scaled down (never up) so that every
-current Model reads the image without server-side downscaling. The frame
-depends only on the display's geometry, so a coordinate the Agent measured in
-a screenshot maps to the same physical pixel for as long as the display keeps
-its size. Masking hides every window whose application the Agent may not see.
+Each published image carries its own pixel space and physical rectangle.
+Coordinates measured in screenshots, scaled images and zooms are mapped here,
+without making the Agent reconstruct the scaling or the rectangle's origin.
+Masking hides every window whose application the Agent may not see.
 """
 
 from __future__ import annotations
@@ -45,15 +44,19 @@ def scaled(size: tuple[int, int], scale: float) -> tuple[int, int]:
 
 @dataclass(frozen=True)
 class Frame:
-    """The coordinate frame of one display: the size of its full screenshot."""
+    """One image's pixels mapped to an observed physical rectangle."""
 
     display: Display
     width: int
     height: int
+    area: Area
+    screenshot_id: str = ""
+    displays: tuple[Display, ...] = ()
+    window: WindowInfo | None = None
 
     @classmethod
     def of(cls, display: Display) -> Frame:
-        return cls(display, *fit(display.width, display.height))
+        return cls(display, *fit(display.width, display.height), display_area(display))
 
     @property
     def size_text(self) -> str:
@@ -63,27 +66,27 @@ class Frame:
         return 0 <= x < self.width and 0 <= y < self.height
 
     def to_physical(self, x: int, y: int) -> tuple[int, int]:
-        display = self.display
+        left, top, right, bottom = self.area
         return (
-            display.left + min(display.width - 1, round(x * display.width / self.width)),
-            display.top + min(display.height - 1, round(y * display.height / self.height)),
+            left + min(right - left - 1, round(x * (right - left) / self.width)),
+            top + min(bottom - top - 1, round(y * (bottom - top) / self.height)),
         )
 
     def to_frame(self, x: int, y: int) -> tuple[int, int]:
-        display = self.display
+        left, top, right, bottom = self.area
         return (
-            min(self.width - 1, max(0, round((x - display.left) * self.width / display.width))),
-            min(self.height - 1, max(0, round((y - display.top) * self.height / display.height))),
+            min(self.width - 1, max(0, round((x - left) * self.width / (right - left)))),
+            min(self.height - 1, max(0, round((y - top) * self.height / (bottom - top)))),
         )
 
     def region(self, x0: int, y0: int, x1: int, y1: int) -> Area:
-        """Return the physical area of a frame region whose corners may touch the edge."""
-        display = self.display
+        """Map image corners, including its exclusive bottom/right edges."""
+        left, top, right, bottom = self.area
         return (
-            display.left + round(x0 * display.width / self.width),
-            display.top + round(y0 * display.height / self.height),
-            display.left + round(x1 * display.width / self.width),
-            display.top + round(y1 * display.height / self.height),
+            left + round(x0 * (right - left) / self.width),
+            top + round(y0 * (bottom - top) / self.height),
+            left + round(x1 * (right - left) / self.width),
+            top + round(y1 * (bottom - top) / self.height),
         )
 
 
