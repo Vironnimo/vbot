@@ -40,6 +40,14 @@ CHECKS: tuple[str, ...] = (
 """Every check, in run order."""
 
 _PROMPT = [{"role": "user", "content": "Reply with exactly one word: ready"}]
+# Effort rungs need a question worth reasoning about: a Model with adaptive
+# reasoning answers a trivial prompt without any, whatever the requested effort.
+_REASONING_PROMPT = [
+    {
+        "role": "user",
+        "content": "How many prime numbers lie between 100 and 150? Reply with only the number.",
+    }
+]
 _OUTPUT_TOKENS = 2048
 _WEATHER_TOOL = {
     "name": "get_weather",
@@ -283,13 +291,41 @@ async def _check_efforts(adapter: ProviderAdapter, model_id: str) -> list[CheckR
         # Described per rung: a learned rejection changes the decision for later rungs.
         decision = adapter.describe_reasoning_render(model_id, effort)
         try:
-            reply = await _stream(adapter, model_id, _PROMPT, thinking_effort=effort)
+            reply = await _stream(adapter, model_id, _REASONING_PROMPT, thinking_effort=effort)
         except ProviderError as error:
             results.append(CheckResult(name, "fail", _error_summary(error)))
             continue
         facts = {"sent": _decision_label(decision), **_reply_facts(reply)}
         results.append(CheckResult(name, *_judge_effort(effort, decision, reply), facts))
-    return results
+    return _accept_adaptive_skips(results)
+
+
+def _accept_adaptive_skips(results: list[CheckResult]) -> list[CheckResult]:
+    """Accept low rungs without reasoning when a higher rung of the run reasoned.
+
+    A Model that reasons adaptively may answer at a low effort without reasoning;
+    a higher rung that reasoned shows the control reaches the Model.
+    """
+
+    accepted: list[CheckResult] = []
+    for index, result in enumerate(results):
+        reasoned_above = any(
+            later.status == "ok" and (later.facts.get("reasoning_tokens") or 0) > 0
+            for later in results[index + 1 :]
+            if later.name != "effort:none"
+        )
+        if result.detail == _ZERO_REASONING and reasoned_above:
+            result = CheckResult(
+                result.name,
+                "ok",
+                "no reasoning at this effort; higher rungs reasoned",
+                result.facts,
+            )
+        accepted.append(result)
+    return accepted
+
+
+_ZERO_REASONING = "requested reasoning came back with zero reasoning tokens"
 
 
 def _decision_label(decision: ReasoningIntent) -> str:
@@ -308,7 +344,7 @@ def _judge_effort(effort: str, decision: ReasoningIntent, reply: _Reply) -> tupl
             return "warn", "reasoning was disabled but the Model still reasoned"
         return "ok", ""
     if decision.requests_reasoning and not returned and tokens == 0:
-        return "warn", "requested reasoning came back with zero reasoning tokens"
+        return "warn", _ZERO_REASONING
     return "ok", ""
 
 
