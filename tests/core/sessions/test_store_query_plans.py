@@ -497,8 +497,10 @@ def test_session_list_reads_follow_the_declared_order_indexes(history) -> None:
     (scoped,) = plans(
         lambda recorder: _store_queries.list_summaries(recorder, "project", "agent")()
     )
-    scoped_count, scoped_page = plans(page([("project", "agent")]))
-    global_count, global_page = plans(page([("project", "agent"), (None, "other")]))
+    scoped_count, scoped_page, *scoped_changes = plans(page([("project", "agent")]))
+    global_count, global_page, *_global_changes = plans(
+        page([("project", "agent"), (None, "other")])
+    )
 
     assert "sessions_live_scope_order" in scoped
     assert "sessions_live_scope_order" in scoped_page
@@ -506,6 +508,13 @@ def test_session_list_reads_follow_the_declared_order_indexes(history) -> None:
     assert "sessions_live_scope_visibility" in scoped_count
     assert "sessions_live_scope_visibility" in global_count
     assert not [plan for plan in (scoped, scoped_page, global_page) if "USE TEMP B-TREE" in plan]
+    # The page's change totals read only the listed Sessions' Runs and their paths.
+    assert scoped_changes and all(
+        "SEARCH r USING INDEX runs_by_session" in plan
+        or "SEARCH runs USING INDEX runs_by_session" in plan
+        for plan in scoped_changes
+    )
+    assert not [plan for plan in scoped_changes if "SCAN" in plan]
 
 
 def test_payload_reads_start_from_the_payload_id(history) -> None:

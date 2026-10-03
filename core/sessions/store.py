@@ -371,6 +371,16 @@ class SessionStore:
             patience_s=TRANSCRIPT_WRITE_PATIENCE_S,
         )
 
+    def record_run_changes(
+        self, address: SessionAddress, run_id: str, change_stats: JsonObject
+    ) -> None:
+        """Store a running Run's change statistics so far; its completion replaces them."""
+        self._execute_write(
+            lambda connection: _store_runs.record_run_changes(
+                connection, address, run_id, change_stats
+            )
+        )
+
     def recover_interrupted_runs(self) -> None:
         self._execute_write(_store_runs.recover_interrupted_runs)
 
@@ -993,6 +1003,12 @@ class SessionStore:
 
     def summary(self, address: SessionAddress) -> JsonObject | None:
         return self._read_decoded(lambda connection: _store_queries.summary(connection, address))
+
+    def change_stats(self, address: SessionAddress) -> JsonObject | None:
+        """Return the Session's change statistics with its changed files, or ``None``."""
+        return self._read(
+            lambda connection: _store_queries.session_change_stats(connection, address)
+        )
 
     def list_completion_activity(
         self, scopes: Sequence[tuple[str | None, str]]

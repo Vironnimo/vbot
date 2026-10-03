@@ -188,16 +188,12 @@ def finish_run(
     )
     summary.validate()
     timing, timing_extra, _present = _store_codec._timing_fields(summary.timing)
-    changes, changes_extra, changes_present = _store_codec._split_structured_fields(
-        summary.change_stats, _CHANGE_STATS_VALIDATORS
-    )
     completed_at = _store_values._timestamp(str(timing["completed_at"]), "Run completion")
     seq = int(state["next_seq"])
     entry_key = _store_codec.insert_entry(connection, session_key, seq, summary, run_key=run_key)
     connection.execute(
         "UPDATE runs SET work_id = COALESCE(?, work_id), status = ?, completed_at = ?, "
         "duration_ms = ?, timing_started_at = ?, timing_extra_json = ?, iteration_count = ?, "
-        "changed_files = ?, lines_added = ?, lines_removed = ?, change_stats_extra_json = ?, "
         "completion_reason = ?, end_entry_key = ? WHERE run_key = ?",
         (
             completion.work_id,
@@ -207,28 +203,15 @@ def finish_run(
             _store_values._optional_timestamp(timing.get("started_at"), "Run timing"),
             timing_extra,
             completion.iteration_count,
-            changes.get("files") if changes_present else None,
-            changes.get("added") if changes_present else None,
-            changes.get("removed") if changes_present else None,
-            changes_extra,
             completion.completion_reason,
             entry_key,
             run_key,
         ),
     )
-    paths = changes.get("paths", [])
-    # Validation aligned file_stats with paths entry by entry.
-    line_counts = [
-        (entry["added"], entry["removed"]) for entry in changes.get("file_stats", ())
-    ] or [(None, None)] * len(paths)
-    connection.executemany(
-        "INSERT INTO run_change_paths (run_key, ordinal, path, lines_added, lines_removed) "
-        "VALUES (?, ?, ?, ?, ?)",
-        [
-            (run_key, ordinal, path, *counts)
-            for ordinal, (path, counts) in enumerate(zip(paths, line_counts, strict=True))
-        ],
-    )
+    # Without final statistics (a Run a restart interrupted) the Run keeps the
+    # statistics it recorded while running.
+    if summary.change_stats is not None:
+        _write_change_stats(connection, run_key, summary.change_stats)
     connection.execute(
         "UPDATE tool_calls SET status = ?, completed_at = ? WHERE result_entry_key IS NULL "
         "AND status IN ('pending', 'running') AND entry_key IN "
@@ -267,6 +250,63 @@ def finish_run(
         "history_generation_id": generation_id,
         "history_cursor": _encode_chat_history_cursor(generation_id, seq + 1),
     }
+
+
+def record_run_changes(
+    connection: sqlite3.Connection,
+    address: SessionAddress,
+    run_id: str,
+    change_stats: JsonObject,
+) -> None:
+    """Store a running Run's change statistics so far; its completion replaces them.
+
+    A Run that a process restart interrupts keeps the statistics it reached.
+    """
+    from core.chat.messages import ChatMessage
+
+    state = _store_values._require_live(connection, address)
+    run = connection.execute(
+        "SELECT run_key, status, inherited FROM runs WHERE session_key = ? AND run_id = ?",
+        (int(state["session_key"]), run_id),
+    ).fetchone()
+    if run is None or run["status"] != "running" or run["inherited"]:
+        raise ChatSessionError("Only an admitted running Run records change statistics")
+    ChatMessage.validate_change_stats(change_stats)
+    _write_change_stats(connection, int(run["run_key"]), change_stats)
+
+
+def _write_change_stats(
+    connection: sqlite3.Connection, run_key: int, change_stats: JsonObject
+) -> None:
+    """Replace one Run's stored change statistics with validated ``change_stats``."""
+    changes, changes_extra, _present = _store_codec._split_structured_fields(
+        change_stats, _CHANGE_STATS_VALIDATORS
+    )
+    connection.execute(
+        "UPDATE runs SET changed_files = ?, lines_added = ?, lines_removed = ?, "
+        "change_stats_extra_json = ? WHERE run_key = ?",
+        (
+            changes.get("files"),
+            changes.get("added"),
+            changes.get("removed"),
+            changes_extra,
+            run_key,
+        ),
+    )
+    connection.execute("DELETE FROM run_change_paths WHERE run_key = ?", (run_key,))
+    paths = changes.get("paths", [])
+    # Validation aligned file_stats with paths entry by entry.
+    line_counts = [
+        (entry["added"], entry["removed"]) for entry in changes.get("file_stats", ())
+    ] or [(None, None)] * len(paths)
+    connection.executemany(
+        "INSERT INTO run_change_paths (run_key, ordinal, path, lines_added, lines_removed) "
+        "VALUES (?, ?, ?, ?, ?)",
+        [
+            (run_key, ordinal, path, *counts)
+            for ordinal, (path, counts) in enumerate(zip(paths, line_counts, strict=True))
+        ],
+    )
 
 
 def recover_interrupted_runs(connection: sqlite3.Connection) -> None:

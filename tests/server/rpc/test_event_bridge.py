@@ -158,6 +158,13 @@ def test_run_started_event_carries_the_run_address_and_attribution(
 
 _SESSION_USAGE = {"measured_turns": 3, "input_tokens": 1200, "cache_read_tokens": 900}
 _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
+_CHANGE_STATS = {
+    "files": 1,
+    "added": 2,
+    "removed": 0,
+    "paths": ["/repo/a.py"],
+    "file_stats": [{"path": "/repo/a.py", "added": 2, "removed": 0}],
+}
 
 
 @pytest.mark.parametrize(
@@ -176,6 +183,7 @@ _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
                 "session_usage": _SESSION_USAGE,
                 "context_usage": _CONTEXT_USAGE,
                 "timing": _TIMING,
+                "change_stats": _CHANGE_STATS,
             },
             {
                 "status": "completed",
@@ -183,6 +191,7 @@ _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
                 "session_usage": _SESSION_USAGE,
                 "context_usage": _CONTEXT_USAGE,
                 "timing": _TIMING,
+                "change_stats": _CHANGE_STATS,
             },
             (),
             id="completed-with-usage",
@@ -191,7 +200,7 @@ _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
             RUN_COMPLETED_EVENT,
             {"status": "completed"},
             {"status": "completed"},
-            ("usage", "session_usage", "context_usage", "timing"),
+            ("usage", "session_usage", "context_usage", "timing", "change_stats"),
             id="completed-without-usage",
         ),
         # Only a completed Run reports usage; internal continuation state stays hidden.
@@ -210,8 +219,8 @@ _CONTEXT_USAGE = {"tokens": 1245, "estimated": False}
         ),
         pytest.param(
             RUN_INTERRUPTED_EVENT,
-            {"status": "interrupted", "cause": "network"},
-            {"status": "interrupted", "cause": "network"},
+            {"status": "interrupted", "cause": "network", "change_stats": _CHANGE_STATS},
+            {"status": "interrupted", "cause": "network", "change_stats": _CHANGE_STATS},
             ("error",),
             id="interrupted",
         ),

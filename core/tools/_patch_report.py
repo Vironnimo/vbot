@@ -16,10 +16,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from difflib import SequenceMatcher
 from pathlib import Path
 
 from core.tools._change_preview import _PREVIEW_CONTEXT_LINES, _change_preview
+from core.tools._line_diff import line_opcodes
 from core.tools.arguments import LINE_NUMBER_GUTTER_SEPARATOR, split_text_lines
 from core.tools.model_names import model_tool_name
 from core.tools.syntax_check import warning_for_edited_file, warning_for_written_file
@@ -57,9 +57,7 @@ def _after_preview(before: str, after: str) -> list[str]:
     for line in new_lines:
         new_starts.append(new_starts[-1] + len(line))
     changes: list[list[int]] = []
-    for tag, i1, i2, j1, j2 in SequenceMatcher(
-        None, old_lines, new_lines, autojunk=False
-    ).get_opcodes():
+    for tag, i1, i2, j1, j2 in line_opcodes(old_lines, new_lines):
         if tag == "equal":
             continue
         # Changes whose shown surroundings would touch or overlap read as one region.
