@@ -18,6 +18,8 @@ from ._tools import ACTIONS
 type Point = tuple[int, int]
 
 READ_ACTIONS = frozenset({"screenshot", "zoom", "cursor_position", "wait"})
+# Keyboard input goes to the foreground window, wherever the pointer is.
+KEYBOARD = frozenset({"type", "key", "hold_key"})
 CLICKS = {
     "left_click": ("left", 1),
     "right_click": ("right", 1),
@@ -40,9 +42,10 @@ _FIELDS: dict[str, frozenset[str]] = {
     "scroll": frozenset(
         {"coordinate", "scroll_direction", "scroll_amount", "text", "screenshot_id"}
     ),
-    "type": frozenset({"text"}),
-    "key": frozenset({"text", "repeat"}),
-    "hold_key": frozenset({"text", "duration"}),
+    # On keyboard actions screenshot_id names the image whose app must still be in front.
+    "type": frozenset({"text", "screenshot_id"}),
+    "key": frozenset({"text", "repeat", "screenshot_id"}),
+    "hold_key": frozenset({"text", "duration", "screenshot_id"}),
     "wait": frozenset({"duration"}),
     "cursor_position": frozenset({"screenshot_id"}),
 }
@@ -130,7 +133,7 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         values["point"] = _point(arguments["coordinate"], "coordinate")
     elif name in {"mouse_move", "left_click_drag"}:
         raise ActionError(
-            f'{name} needs "coordinate": [x, y] from the latest screenshot, for example '
+            f'{name} needs "coordinate": [x, y] in a screenshot or zoom image, for example '
             f'{{"action":"{name}","coordinate":[640, 360]}}.'
         )
     if name == "left_click_drag" and arguments.get("start_coordinate") is not None:
@@ -191,11 +194,6 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
 
 def _refuse_misplaced(name: str, unused: list[str]) -> None:
     """Refuse fields whose presence means the Agent expects a different effect."""
-    if "screenshot_id" in unused:
-        raise ActionError(
-            f"{name} does not use screenshot_id. It selects the image for coordinates, "
-            "zoom or cursor_position; it does not change keyboard focus. Nothing was done."
-        )
     if "coordinate" in unused and name in {"type", "key", "hold_key"}:
         raise ActionError(
             f"{name} acts on the focused field and does not click first. Click the field "
@@ -245,7 +243,7 @@ def _region(value: Any) -> tuple[int, int, int, int]:
             return x0, y0, x1, y1
     raise ActionError(
         'zoom needs "region": [x0, y0, x1, y1], the top-left and bottom-right corners of a '
-        'rectangle in the latest screenshot, for example {"action":"zoom","region":'
+        'rectangle in a screenshot, for example {"action":"zoom","region":'
         "[100, 200, 500, 400]}."
     )
 
@@ -275,6 +273,7 @@ def _seconds(value: Any, name: str, default: float | None) -> tuple[float, str |
 
 __all__ = [
     "CLICKS",
+    "KEYBOARD",
     "READ_ACTIONS",
     "Action",
     "ActionError",

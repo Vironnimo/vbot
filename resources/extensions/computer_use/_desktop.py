@@ -14,7 +14,7 @@ from PIL import Image
 from core.tools import ToolContext
 
 from ._access import Access
-from ._actions import CLICKS, Action, Point
+from ._actions import CLICKS, KEYBOARD, Action, Point
 from ._screens import (
     Area,
     Frame,
@@ -59,6 +59,13 @@ class Desktop:
 
     def frame(self, action: Action) -> Frame:
         """Resolve an image reference before the call or batch sends any input."""
+        if action.name in KEYBOARD:
+            # Keys need no coordinates; the image only tells which app was in front.
+            images = self.state.images
+            found = images.get(action.screenshot_id or "") or images.get(
+                self.state.latest_image or ""
+            )
+            return found or Frame.of(self._chosen(self.target.displays()))
         needs_image = (
             bool(action.frame_points())
             or action.region is not None
@@ -237,20 +244,28 @@ class Desktop:
                     (left - item.left, top - item.top, right - item.left, bottom - item.top)
                 )
                 capture.paste(image, (left - area[0], top - area[1]))
-        covered, hidden = mask(capture, area, self.target.windows(), self.access.window_visible)
+        visible = self.access.window_visible
+        covered, hidden = mask(capture, area, self.target.windows(), visible)
         size = scaled(fit(*covered.size), scale)
         path = publish_image(self.context, resized(covered, size))
-        frame = Frame(display, *size, area, path.stem, tuple(displays), window)
+        foreground = self.target.foreground()
+        front = foreground.app if foreground is not None and visible(foreground) else None
+        frame = Frame(display, *size, area, path.stem, tuple(displays), window, front)
         self.state.images[frame.screenshot_id] = frame
         self.state.latest_image = frame.screenshot_id
         self.state.shown = display
         # Keep references bounded without retaining image bytes in Session state.
         while len(self.state.images) > 64:
             del self.state.images[next(iter(self.state.images))]
-        text = (
-            f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{frame.screenshot_id}". '
-            "Use this image's pixels for coordinates."
+        ratio = frame.screen_pixels
+        detail = (
+            "Coordinates are this image's pixels, 1:1 with the screen."
+            if ratio < 1.05
+            else f"Coordinates are this image's pixels; one covers {ratio:.1f} screen pixels, "
+            "so zoom in where an exact pixel matters."
         )
+        text = f'{label}: {size[0]}x{size[1]} pixels, screenshot_id="{frame.screenshot_id}". '
+        text += detail
         if hidden:
             text += f" Hidden apps (gray, not approved): {', '.join(hidden)}."
         return text
@@ -289,9 +304,12 @@ class Desktop:
 
     def act(self, action: Action, frame: Frame) -> str:
         """Check access for *action*, send its input and describe what was done."""
-        self.validate_frame(frame)
+        if action.uses_pointer:
+            self.validate_frame(frame)
         points = self._points(action, frame)
         self._check_access(action, frame, points)
+        if action.name in KEYBOARD and not self.input_started:
+            self._check_front(action, frame)
         self.input_started = True
         target = self.target
         modifiers = list(action.modifiers)
@@ -361,7 +379,7 @@ class Desktop:
                 raise CallRefusedError(
                     "access_required",
                     f"No app window is at {shown}, so {action.name} was not sent. Use "
-                    "coordinates on an app window in the latest screenshot.",
+                    "coordinates on an app window in that image.",
                 )
             self._allow(action, window, f"The window at {shown}")
             if frame.window is not None and not window.app.matches(frame.window.app):
@@ -371,6 +389,23 @@ class Desktop:
                     f"{action.name} was not sent. Bring {frame.window.app.name} to the front "
                     "and take a new screenshot before retrying.",
                 )
+
+    def _check_front(self, action: Action, frame: Frame) -> None:
+        """Refuse keys when another app came to the front since the Agent's image.
+
+        Only the call's first input is checked: later keys may follow a window
+        the call itself brought up, such as a dialog or the Start menu.
+        """
+        expected, current = frame.front, self.target.foreground()
+        if expected is None or current is None or current.app.matches(expected):
+            return
+        raise CallRefusedError(
+            "focus_changed",
+            f'{expected.name} was in front in image "{frame.screenshot_id}", but the foreground '
+            f"window now belongs to {current.app.name}, so {action.name} was not sent. Click "
+            "into the window you want to type into, or take a screenshot to see what is in "
+            "front.",
+        )
 
     def _allow(self, action: Action, window: WindowInfo, where: str) -> None:
         app = window.app.name
