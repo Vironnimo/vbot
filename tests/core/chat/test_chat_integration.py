@@ -169,6 +169,15 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
                 return original(run_key)
 
             monkeypatch.setattr(tracker, name, recording)
+        store = runtime.chat_sessions._store
+        stored: list[Any] = []
+        record_run_changes = store.record_run_changes
+
+        def record(address: Any, run_id: str, change_stats: Any) -> None:
+            stored.append(change_stats)
+            record_run_changes(address, run_id, change_stats)
+
+        monkeypatch.setattr(store, "record_run_changes", record)
 
         await build_chat_loop(runtime).send("coder", "Write files", session_id="session-one")
 
@@ -200,6 +209,8 @@ async def test_change_stats_stream_after_each_tool_round_and_match_terminal(
                 "file_stats": [a_stats, b_stats],
             },
         ]
+        # Each streamed value was stored on the running Run, so a restart keeps it.
+        assert stored == live_stats
         assert run.terminal_payload_extras["change_stats"] == live_stats[-1]
         assert messages[-1].change_stats == live_stats[-1]
 

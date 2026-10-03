@@ -1,4 +1,5 @@
 import { asText as asSharedText } from '$lib/values.js';
+import { changeStatsLabel } from '$lib/chatTimelinePresentation.js';
 import { activeLocaleTag, t } from '$lib/i18n.js';
 import { formatMoment } from '$lib/timeText.js';
 import {
@@ -14,7 +15,8 @@ export const autofocusRename = (node) => {
 // Details card beside a Session row: to its right, so sweeping the list
 // never puts the card over the neighbouring rows. The row already shows the
 // name (and the Agent in the all-Agents list); the card adds when the Session
-// was active and created, its Channel and the Session it descends from. A
+// was active and created, the files its Runs changed, its Channel and the
+// Session it descends from. A
 // parent or fork source leads with its name when the loaded list knows it,
 // otherwise with its Agent, followed by its id. `agents` is the roster
 // ({address, name}) used to name Agents; `sessions` the loaded Session list.
@@ -33,6 +35,12 @@ export function sessionHoverDetails(
     rows.push({
       label: t('sessions.details.created'),
       value: formatMoment(session.created_at, { nowMs }),
+    });
+  }
+  if (session.change_stats) {
+    rows.push({
+      label: t('sessions.details.changes'),
+      value: changeStatsLabel(session.change_stats),
     });
   }
   if (session.source_channel_id) {

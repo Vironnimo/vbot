@@ -953,17 +953,25 @@ class AgenticProgression:
                 finally:
                     await session.flush_deferred_notes_async()
 
-            # Live git-style change statistics after each dispatched Tool round,
-            # so the UI shows the same real totals during the Run that the
-            # terminal payload will carry instead of summing per-call estimates.
-            # Emitted only when the totals changed; best-effort like every
-            # transient projection. The line diffs run off the Event Loop.
+            # Change statistics after each dispatched Tool round, when they
+            # changed: stored on the running Run first (a restart keeps them and
+            # Session totals include them), then streamed live. The line diffs
+            # run off the Event Loop.
             if self._dependencies.change_tracker is not None:
                 current_change_stats = await _CHAT_TRANSFORM_WORKERS.run(
                     self._dependencies.change_tracker.peek_run_stats, (session_address, run.id)
                 )
-                if current_change_stats != emitted_change_stats:
+                if (
+                    current_change_stats is not None
+                    and current_change_stats != emitted_change_stats
+                ):
                     emitted_change_stats = current_change_stats
+                    try:
+                        await session.record_change_stats_async(current_change_stats)
+                    except Exception:
+                        _LOGGER.warning(
+                            "Failed to store change statistics for run %s", run.id, exc_info=True
+                        )
                     run.emit(RUN_CHANGE_STATS_EVENT, {"change_stats": current_change_stats})
 
             # Bound the live request view as well, before Compaction estimates or

@@ -150,6 +150,26 @@ export function getSession(agentId, sessionId, options = {}) {
   );
 }
 
+// Read the lines one live Session's own Runs changed, with its changed files;
+// `change_stats` is null when the Session changed no file.
+export function getSessionChangeStats(agentId, sessionId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'session.change_stats',
+  );
+  requireNonEmptyString(
+    sessionId,
+    'Session id must be a non-empty string',
+    'session.change_stats',
+  );
+  return rpc(
+    'session.change_stats',
+    { agent_id: agentId, session_id: sessionId },
+    options,
+  );
+}
+
 export function listSessionActivity(agentIds, options = {}) {
   if (
     !Array.isArray(agentIds) ||

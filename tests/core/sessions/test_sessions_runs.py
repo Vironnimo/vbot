@@ -16,11 +16,12 @@ from core.sessions.errors import SessionNotFoundError
 from tests.core.sessions.history_fixtures import complete_run
 
 
-def _summary(run_id: str) -> ChatMessage:
+def _summary(run_id: str, change_stats: dict[str, object] | None = None) -> ChatMessage:
     return ChatMessage.run_summary(
         run_id=run_id,
         status="completed",
         iteration_count=1,
+        change_stats=change_stats,
         timing={
             "started_at": "2026-09-19T10:00:00Z",
             "completed_at": "2026-09-19T10:00:01Z",
@@ -336,3 +337,58 @@ async def test_run_records_read_the_sessions_own_runs_with_completion_facts(mana
     assert [record.run_id for record in fork.run_records(generation)] == ["own"]
     with pytest.raises(SessionNotFoundError):
         fork.run_records("another-generation")
+
+
+def _changes(*files: tuple[str, int, int]) -> dict[str, object]:
+    return {
+        "files": len(files),
+        "added": sum(added for _path, added, _removed in files),
+        "removed": sum(removed for _path, _added, removed in files),
+        "paths": [path for path, _added, _removed in files],
+        "file_stats": [
+            {"path": path, "added": added, "removed": removed} for path, added, removed in files
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_change_statistics_persist_while_running_and_sum_per_session(manager):
+    session = manager.create("coder")
+    interrupted = session.start_run("interrupted")
+    await interrupted.record_change_stats_async(
+        _changes(("/repo/a.py", 2, 1), ("/repo/b.py", 1, 0))
+    )
+    # A restart keeps what the Run recorded while running.
+    manager.recover_interrupted_runs()
+    assert session.find_run_summary(run_id="interrupted").change_stats == _changes(
+        ("/repo/a.py", 2, 1), ("/repo/b.py", 1, 0)
+    )
+    with pytest.raises(ChatSessionError):
+        await interrupted.record_change_stats_async(_changes(("/repo/a.py", 1, 0)))
+
+    finished = session.start_run("finished")
+    await finished.record_change_stats_async(_changes(("/repo/stale.py", 9, 9)))
+    # Final statistics replace those recorded while running; these have no per-file counts.
+    legacy = {"files": 1, "added": 4, "removed": 0, "paths": ["/repo/legacy.py"]}
+    complete_run(session, _summary("finished", legacy))
+    assert session.find_run_summary(run_id="finished").change_stats == legacy
+    running = session.start_run("running")
+    await running.record_change_stats_async(_changes(("/repo/a.py", 3, 3)))
+
+    totals = {"files": 3, "added": 10, "removed": 4}
+    assert manager.change_stats(session.address) == {
+        **totals,
+        "file_stats": [
+            {"path": "/repo/a.py", "added": 5, "removed": 4},
+            {"path": "/repo/b.py", "added": 1, "removed": 0},
+            {"path": "/repo/legacy.py", "added": None, "removed": None},
+        ],
+    }
+    assert manager.summary(session.address)["change_stats"] == totals
+    page = manager.list_summaries_page([(None, "coder")], limit=10)
+    assert [summary.get("change_stats") for summary in page.sessions] == [totals]
+
+    # A fork's inherited Runs stay its source's; only its own Runs count.
+    fork = await manager.fork(session.address)
+    assert manager.change_stats(fork.address) is None
+    assert "change_stats" not in manager.summary(fork.address)
