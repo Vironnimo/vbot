@@ -71,7 +71,7 @@ def test_catalog_entry_maps_standard_fields_to_model() -> None:
     assert "image_generation" in model.capabilities.task_types
 
 
-def test_catalog_entry_without_optional_fields_keeps_limits_unknown() -> None:
+def test_catalog_entry_without_optional_fields_keeps_limits_and_reasoning_unknown() -> None:
     model = OpenAICompatibleAdapter.normalize_catalog_entry({"id": "minimal-model"}, {})
 
     assert model.name == "minimal-model"
@@ -80,10 +80,15 @@ def test_catalog_entry_without_optional_fields_keeps_limits_unknown() -> None:
     assert model.max_output_tokens is None
     assert model.capabilities.tools is True
     assert model.capabilities.json_mode is False
-    assert model.capabilities.reasoning.supported is False
+    # No reasoning signal leaves support unknown; only an explicit false denies it.
+    assert model.capabilities.reasoning.supported is None
     assert model.capabilities.input_modalities == ("text",)
     assert model.capabilities.output_modalities == ("text",)
     assert model.capabilities.task_types == ("chat", "text_output")
+    denied = OpenAICompatibleAdapter.normalize_catalog_entry(
+        {"id": "plain-model", "supports_reasoning": False}, {}
+    )
+    assert denied.capabilities.reasoning.supported is False
 
 
 # ---------------------------------------------------------------------------

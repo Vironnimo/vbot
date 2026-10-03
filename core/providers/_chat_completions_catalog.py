@@ -150,26 +150,37 @@ def _supports_reasoning(
     top_provider: Mapping[str, Any],
     architecture: Mapping[str, Any],
     supported_parameters: set[str],
-) -> bool:
-    if supported_parameters & REASONING_PARAMETER_NAMES:
-        return True
-    if _read_reasoning_supported(raw) or _read_reasoning_supported(architecture):
-        return True
-    explicit_value = _read_first_optional_bool(
-        (raw, top_provider, architecture),
-        ("supports_reasoning", "reasoning_supported"),
+) -> bool | None:
+    """Return the listing's reasoning support: ``None`` when it says nothing.
+
+    A listing without any reasoning signal leaves support unknown, so file
+    defaults, models.dev and wire rules still decide; only an explicit ``false``
+    marks the Model as not reasoning.
+    """
+
+    flags = (
+        _read_reasoning_flag(raw),
+        _read_reasoning_flag(architecture),
+        _read_first_optional_bool(
+            (raw, top_provider, architecture),
+            ("supports_reasoning", "reasoning_supported"),
+        ),
     )
-    if explicit_value is True:
+    if (
+        supported_parameters & REASONING_PARAMETER_NAMES
+        or True in flags
+        or _has_non_empty_list(raw, "reasoning_efforts")
+        or _has_non_empty_list(raw, "reasoningEfforts")
+    ):
         return True
-    return _has_non_empty_list(raw, "reasoning_efforts") or _has_non_empty_list(
-        raw,
-        "reasoningEfforts",
-    )
+    return False if False in flags else None
 
 
-def _read_reasoning_supported(data: Mapping[str, Any]) -> bool:
+def _read_reasoning_flag(data: Mapping[str, Any]) -> bool | None:
     reasoning = data.get("reasoning")
-    return isinstance(reasoning, dict) and reasoning.get("supported") is True
+    if isinstance(reasoning, dict) and isinstance(reasoning.get("supported"), bool):
+        return bool(reasoning["supported"])
+    return None
 
 
 def _read_first_optional_bool(

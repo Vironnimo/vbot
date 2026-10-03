@@ -80,7 +80,9 @@ class ReasoningCapabilities:
     """How a model exposes reasoning through a specific provider.
 
     ``supported`` is the only required field and stays the load-bearing flag
-    that runtime/snapping read (``model_reasoning_supported``). The typed
+    that runtime/snapping read (``model_reasoning_supported``). ``None`` means
+    unknown: the source said nothing, so a lower layer or the wire profile
+    decides and requests render the selected effort. The typed
     control fields describe *how* the provider steers reasoning and are all
     optional:
 
@@ -100,7 +102,7 @@ class ReasoningCapabilities:
     construction sites keep working unchanged.
     """
 
-    supported: bool
+    supported: bool | None
     control: str | None = None
     levels: tuple[str, ...] = ()
     budget_max: int | None = None
