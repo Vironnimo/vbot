@@ -122,6 +122,13 @@
         "connections": ["api-key"],
         "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay, image"
       }
+    },
+    "grok-4.7": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:none, sampling, tool_replay, replay, image"
+      }
     }
   }
 }

@@ -173,6 +173,20 @@
         "connections": ["api-key"],
         "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:high, effort:max, effort:none, sampling, tool_replay, replay"
       }
+    },
+    "gpt-5.4-mini": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:none, effort:low, effort:medium, effort:high, effort:xhigh, sampling, tool_replay, replay, image"
+      }
+    },
+    "claude-haiku-4-5": {
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["api-key"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:minimal, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
     }
   }
 }
