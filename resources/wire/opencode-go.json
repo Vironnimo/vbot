@@ -24,6 +24,11 @@
   },
   "rules": [
     {
+      "when": {"prefix": ["gpt-"]},
+      "set": {"request": {"allowed_parameters": ["max_tokens", "max_output_tokens"]}},
+      "note": "The GPT Models (gpt-5.6-luna, gpt-6-luna) answer top_p with HTTP 400 {\"model\": ...}, which names no parameter, so it cannot be learned; Grok and Muse Spark accept it (live 2026-10-03)."
+    },
+    {
       "when": {
         "ids": ["minimax-m2.5", "qwen3.6-plus", "qwen3.7-max", "qwen3.7-plus", "qwen3.8-max"]
       },

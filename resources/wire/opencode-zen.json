@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "_comment": "OpenCode Zen gateway. One credential reaches four wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes and admits every Model it names a known package for (today the Messages, Responses and Gemini Models), a rule routes and admits the reviewed Chat Completions Models the catalog names no package for, and a Model with neither is refused. Free Models serve only OpenCode itself (FreeTierError) and retired Models are refused before sending; discovery writes none of these refused Models. Messages carries images and PDFs with prompt-cache breakpoints; Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
+  "_comment": "OpenCode Zen gateway. One credential reaches four wires; the catalog protocol hint (the Model's AI SDK package on models.dev) routes and admits every Model it names a known package for (today the Messages, Responses and Gemini Models), a rule routes and admits the reviewed Chat Completions Models the catalog names no package for, and a Model with neither is refused. Free Models serve only OpenCode itself (FreeTierError) and retired Models are refused before sending; discovery writes none of these refused Models. Messages carries images and PDFs with prompt-cache breakpoints and sends only temperature when a request carries temperature and top_p (Claude Haiku 4.5 rejected both, live 2026-10-03); Chat Completions and Responses carry images only (Zen's converters establish no native document, audio or video forwarding there). Responses is stateless (store false) and takes only max_output_tokens and top_p. Gemini generateContent carries Gemini's inline media up to Zen's documented 20 MB request body and reasons at thinkingLevel; none asks for the lowest level.",
   "defaults": {
     "admission": {
       "state": "restricted",
@@ -12,7 +12,10 @@
       "media": {"types": ["image/jpeg", "image/png", "image/gif", "image/webp"]}
     },
     "messages": {
-      "request": {"prompt_cache": "anthropic_breakpoints"},
+      "request": {
+        "prompt_cache": "anthropic_breakpoints",
+        "exclusive_parameters": [["temperature", "top_p"]]
+      },
       "media": {
         "types": ["image/jpeg", "image/png", "image/gif", "image/webp", "application/pdf"]
       }
