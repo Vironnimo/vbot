@@ -202,9 +202,9 @@ def model_supports_task(model: Any, task_type: str) -> bool:
     """Return whether a Model can execute one specialized task.
 
     Image understanding is defined by the request and response modalities
-    actually used at runtime. Provider catalogs may carry an incomplete
-    ``task_types`` list even when their modality declarations are accurate, so
-    that task must not depend on a redundant derived tag.
+    actually used at runtime. A hand-written ``task_types`` list (a Custom
+    Provider Model or an override) may omit the derived tag even when its
+    modality declarations are accurate, so that task must not depend on it.
     """
 
     capabilities = getattr(model, "capabilities", None)

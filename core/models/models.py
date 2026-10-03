@@ -61,6 +61,21 @@ MODEL_TASK_ORDER = (
     "live_voice",
 )
 
+# The tasks that name what a chat request may carry. They follow a Model's final
+# input modalities; every other task names a Provider route (see
+# ``_settle_task_types``).
+INPUT_TASK_TYPES = frozenset(
+    {
+        "image_input",
+        "image_understanding",
+        "file_input",
+        "file_understanding",
+        "audio_input",
+        "video_input",
+        "video_understanding",
+    }
+)
+
 # How the provider exposes the reasoning control on the wire. ``levels`` is an
 # effort ladder (e.g. low/medium/high), ``on_off`` a binary thinking toggle,
 # ``budget`` a token budget. Derived from models.dev ``reasoning_options`` at
@@ -185,6 +200,62 @@ def text_embedding_capabilities(supported_parameters: tuple[str, ...] = ()) -> C
         output_modalities=("embeddings",),
         supported_parameters=supported_parameters,
     )
+
+
+def _settle_task_types(
+    record: dict[str, Any],
+    override_model: Mapping[str, Any] | None,
+) -> None:
+    """Align an assembled record's input tasks with its final input modalities.
+
+    A generated catalog stores the tasks its Adapter derived from the
+    modalities the endpoint reported, but enrichment and overrides may widen
+    those modalities later. The input tasks (what a chat request may carry)
+    follow the assembled modalities; every other task stays as the catalog
+    lists it, because it names a Provider route such as transcription or image
+    generation that widened modalities do not create. An override's
+    ``task_types`` is a hand-curated complete list and stays as it is.
+    """
+
+    override_capabilities = (override_model or {}).get("capabilities")
+    if (
+        isinstance(override_capabilities, Mapping)
+        and override_capabilities.get("task_types") is not None
+    ):
+        return
+    capabilities = record.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return
+    stored = capabilities.get("task_types")
+    final_modalities = _record_modalities(capabilities)
+    if not isinstance(stored, list) or final_modalities is None:
+        return
+    tasks = ({task for task in stored if isinstance(task, str)} - INPUT_TASK_TYPES) | (
+        set(derive_model_task_types(*final_modalities)) & INPUT_TASK_TYPES
+    )
+    capabilities["task_types"] = [task for task in MODEL_TASK_ORDER if task in tasks]
+
+
+def _record_modalities(
+    capabilities: Mapping[str, Any],
+) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """Return a record's input and output modalities with the Capabilities defaults."""
+
+    inputs = capabilities.get("input_modalities")
+    outputs = capabilities.get("output_modalities")
+    if not _is_string_list(inputs, allow_none=True) or not _is_string_list(
+        outputs, allow_none=True
+    ):
+        return None
+    if not inputs:
+        inputs = ["text", "image"] if capabilities.get("vision") is True else ["text"]
+    return tuple(inputs), tuple(outputs or ["text"])
+
+
+def _is_string_list(value: Any, *, allow_none: bool = False) -> bool:
+    if value is None:
+        return allow_none
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
 def derive_model_task_types(
@@ -603,6 +674,7 @@ class ModelRegistry:
                         override_model,
                         canonical_layer,
                     )
+                    _settle_task_types(record, override_model)
                     models[(provider_id, wire_id)] = _model_from_record(wire_id, record, report)
                 except _MODEL_DATA_ERRORS as exc:
                     layer_sources: tuple[Path | None, ...]

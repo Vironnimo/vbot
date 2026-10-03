@@ -622,6 +622,60 @@ def test_override_files_apply_at_load_without_becoming_providers(
     assert caplog.records == []
 
 
+@pytest.mark.parametrize(
+    ("catalog_capabilities", "override_capabilities", "task_types"),
+    [
+        pytest.param(
+            {"input_modalities": ["text", "image"], "task_types": ["chat", "text_output"]},
+            None,
+            ("chat", "text_output", "image_input", "image_understanding"),
+            id="stale-catalog-list",
+        ),
+        pytest.param(
+            {"input_modalities": ["text"], "task_types": ["chat", "text_output"]},
+            {"input_modalities": ["text", "video"]},
+            ("chat", "text_output", "video_input", "video_understanding"),
+            id="override-widens-modalities",
+        ),
+        pytest.param(
+            {
+                "input_modalities": ["text"],
+                "output_modalities": ["text", "audio"],
+                "task_types": ["chat", "text_output", "audio_generation", "music_generation"],
+            },
+            {"input_modalities": ["text", "audio"]},
+            ("chat", "text_output", "audio_input", "audio_generation", "music_generation"),
+            id="route-tasks-stay-as-listed",
+        ),
+        pytest.param(
+            {"input_modalities": ["audio", "text"], "output_modalities": ["transcription"]},
+            {"task_types": ["audio_input", "speech_to_text", "text_output"]},
+            ("audio_input", "speech_to_text", "text_output"),
+            id="override-list-wins",
+        ),
+    ],
+)
+def test_derived_task_types_follow_the_assembled_modalities(
+    tmp_path: Path,
+    catalog_capabilities: dict[str, Any],
+    override_capabilities: dict[str, Any] | None,
+    task_types: tuple[str, ...],
+) -> None:
+    _write_catalog(
+        tmp_path, "p", {"model-a": _record(capabilities=_capabilities(**catalog_capabilities))}
+    )
+    if override_capabilities is not None:
+        _write_json(
+            tmp_path / "models" / "p.overrides.json",
+            {"models": {"model-a": {"capabilities": override_capabilities}}},
+        )
+
+    model = ModelRegistry.load(tmp_path).get("p", "model-a")
+
+    assert model is not None
+    assert model.capabilities.task_types == task_types
+
+
 # ---------------------------------------------------------------------------
 # Registry: cache and reload
 # ---------------------------------------------------------------------------
