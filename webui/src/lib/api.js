@@ -175,6 +175,7 @@ export {
   editChatMessage,
   listSessions,
   getSession,
+  getSessionChangeStats,
   listSessionActivity,
   markSessionRead,
   renameSession,
