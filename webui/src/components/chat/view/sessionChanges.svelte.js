@@ -27,7 +27,10 @@ export function createSessionChanges(context) {
     const open = wanted;
     const addressing = context.target.activeAddressing();
     const displayKey = context.target.displayedSessionKey();
-    const key = `${displayKey}::${context.sessionsRefreshToken}::${runRevision}`;
+    // Closed, the panel does not follow the streaming timeline at all.
+    const key = open
+      ? `${displayKey}::${context.sessionsRefreshToken}::${runRevision}`
+      : '';
     untrack(() => {
       if (displayKey !== statsSessionKey) {
         statsSessionKey = displayKey;
