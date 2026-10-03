@@ -99,7 +99,7 @@ async def test_api_key_fallback_posts_chat_completions_without_codex_routing(
     ):
         assert codex_header not in request.headers
     payload = json.loads(request.content)
-    assert 0 < payload.pop("max_tokens") < 8192
+    assert payload.pop("max_tokens") > 0
     assert payload == {"model": "gpt-4.1", "messages": SAMPLE_MESSAGES}
     assert adapter.normalize_response(response) == {
         "role": "assistant",

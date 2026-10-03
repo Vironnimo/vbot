@@ -12,6 +12,7 @@ from core.providers import AnthropicCompatibleAdapter
 from core.providers._http_shared import PROVIDER_NON_STREAMING_READ_TIMEOUT_SECONDS
 from core.providers.adapter import IMAGE_WIRE_MEDIA_TYPES, TOOL_RESULT_CONTENT_BLOCKS_FIELD
 from core.providers.errors import ProviderError
+from core.providers.providers import GLOBAL_CONTEXT_WINDOW_FLOOR
 from core.providers.reasoning import REASONING_REPLAY_FULL_HISTORY
 
 from .anthropic_test_support import (
@@ -153,19 +154,20 @@ async def test_output_allowance_prefers_caller_then_model_ceiling_then_config(
 
 
 @pytest.mark.parametrize(
-    ("config", "url", "kwargs"),
-    [
-        (ANTHROPIC_CONFIG, None, {"max_tokens": 8192}),
-        (CUSTOM_CONFIG, CUSTOM_URL, {}),
-    ],
+    ("config", "url"),
+    [(ANTHROPIC_CONFIG, None), (CUSTOM_CONFIG, CUSTOM_URL)],
 )
 @pytest.mark.asyncio
-async def test_unknown_model_output_allowance_is_clamped_to_the_context(
-    config, url, kwargs
-) -> None:
-    payload = await sent_payload(make_adapter(config), **({"url": url} if url else {}), **kwargs)
+async def test_unknown_model_output_allowance_is_clamped_to_the_context(config, url) -> None:
+    # An unknown Model's window is the global floor; an allowance as large as the
+    # whole window leaves room for the request's input.
+    payload = await sent_payload(
+        make_adapter(config),
+        **({"url": url} if url else {}),
+        max_tokens=GLOBAL_CONTEXT_WINDOW_FLOOR,
+    )
 
-    assert 4096 < payload["max_tokens"] < 8192
+    assert GLOBAL_CONTEXT_WINDOW_FLOOR // 2 < payload["max_tokens"] < GLOBAL_CONTEXT_WINDOW_FLOOR
 
 
 def test_request_image_estimate_receives_active_model() -> None:

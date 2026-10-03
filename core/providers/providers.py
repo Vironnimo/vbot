@@ -36,13 +36,15 @@ _PROVIDER_CONFIG_ERRORS = (
 
 # Last-resort context-window floor, used when neither the model nor the
 # provider config supplies a window (e.g. custom models and thin providers
-# whose endpoint reports no window). Deliberately small and conservative:
-# better to under-promise the budget — compaction triggers a little early,
-# the token badge reads a little low — than to over-promise and let a real
-# request blow past the model's true window. 8192 is a safe floor every
-# modern chat model clears. This is a read-side FLOOR, never written into the
-# catalog as a discovered fact (see ``resolve_context_window``).
-GLOBAL_CONTEXT_WINDOW_FLOOR = 8192
+# whose endpoint reports no window). Conservative: better to under-promise the
+# budget (compaction triggers a little early, the token badge reads a little
+# low) than to over-promise and let a real request blow past the model's true
+# window. It must still hold a normal Session, though: vBot's own System Prompt
+# and Tool definitions alone can exceed 8k tokens, so 32768, which every
+# current chat model clears, keeps an unknown Model usable. This is a read-side
+# FLOOR, never written into the catalog as a discovered fact (see
+# ``resolve_context_window``).
+GLOBAL_CONTEXT_WINDOW_FLOOR = 32768
 
 # Default cap for the EFFECTIVE context window of flagged-local models (e.g.
 # Ollama). A local endpoint reports the model's *theoretical* max (262k for an
