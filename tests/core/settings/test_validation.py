@@ -284,7 +284,6 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
                     "interval_days": 7,
                     "archive_after_days": 90,
                     "consolidate": False,
-                    "model": "openai/gpt-5.2",
                 },
                 "extensions": {
                     "disabled": ["legacy-ext"],
@@ -519,11 +518,17 @@ def test_validate_settings_file_accepts_every_known_section(tmp_path: Path) -> N
             },
             [
                 ("warning", "$.librarian.extra", "unknown librarian field: extra"),
+                # An earlier vBot's Librarian Model is explained, never an error.
+                (
+                    "warning",
+                    "$.librarian.model",
+                    "no longer used: the Librarian is an Agent with its own Model now; set it "
+                    "with: vbot agent update librarian --model <provider/model>",
+                ),
                 ("error", "$.librarian.enabled", "must be a boolean"),
                 ("error", "$.librarian.consolidate", "must be a boolean"),
                 ("error", "$.librarian.interval_days", "must be a positive integer"),
                 ("error", "$.librarian.archive_after_days", "must be at least 1"),
-                ("error", "$.librarian.model", "must be a string"),
             ],
             id="librarian-fields",
         ),

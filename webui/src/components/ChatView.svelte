@@ -652,6 +652,10 @@
     agents={chatState.agents}
     agentActivity={identityAgentActivity}
     selectedAgentId={target.displayedIdentityAgentId}
+    displayedAgentName={target.displayedIdentityAgentId &&
+    target.activeAgent?.__overrideAddress
+      ? target.activeAgent.name
+      : ''}
     loadingAgents={chatState.loadingAgents}
     {projects}
     {selectedProjectId}

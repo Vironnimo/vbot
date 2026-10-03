@@ -111,7 +111,6 @@ ACCESSOR_DEFAULTS: list[tuple[Read, dict[str, Any], Any]] = [
             "interval_days": 7,
             "archive_after_days": 90,
             "consolidate": True,
-            "model": "",
         },
     ),
     (
@@ -401,6 +400,7 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
         StorageManager.load_reflection_settings,
         {"enabled": False, "memory_turn_interval": 12, "skill_model_step_interval": 33},
     ),
+    # The Librarian's Model belongs to its Agent; a stored `model` from before is ignored.
     "librarian-merges-into-stored-section": (
         {"librarian": {"enabled": False, "interval_days": 3, "model": "openai/gpt-5.2"}},
         {"librarian": {"consolidate": False}},
@@ -410,7 +410,6 @@ SECTION_UPDATES: dict[str, tuple[dict[str, Any], dict[str, Any], Read, Any]] = {
             "interval_days": 3,
             "archive_after_days": 90,
             "consolidate": False,
-            "model": "openai/gpt-5.2",
         },
     ),
     "local-models-merge-set-and-remove-windows": (

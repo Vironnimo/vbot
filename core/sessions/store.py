@@ -161,10 +161,16 @@ class SessionStore:
         *,
         generate_id: bool = False,
         run_kind: str | None = None,
+        metadata: JsonObject | None = None,
     ) -> SessionAddress:
         return self._execute_write(
             lambda connection: _store_mutations.create(
-                connection, address, created_at, generate_id=generate_id, run_kind=run_kind
+                connection,
+                address,
+                created_at,
+                generate_id=generate_id,
+                run_kind=run_kind,
+                metadata=metadata,
             )
         )
 
@@ -238,6 +244,15 @@ class SessionStore:
         return self._execute_write(
             lambda connection: _store_mutations.retarget_identity_agent_references(
                 connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def retarget_metadata_value(
+        self, agent_id: str, key: str, old_value: str, new_value: str
+    ) -> int:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_metadata_value(
+                connection, agent_id, key, old_value, new_value
             )
         )
 

@@ -62,14 +62,14 @@ Read domain roots and task-relevant references under `.vorch/domain-maps/` as de
 | prompts.md | `core/prompts/` | System Prompt assembly, fragments, variables |
 | attachments.md | `core/attachments/` | Blob storage, MIME sniffing, text extraction |
 | extensions.md | `core/extensions/` | Extension kernel boundary, loading/lifecycle, management operations, live Tool catalogs, bundled MCP |
-| agent.md | `core/agents/` | Agent schema, workspace lifecycle, archive and restore files |
+| agent.md | `core/agents/` | Agent schema, workspace lifecycle, archive and restore files, the built-in Librarian Agent |
 | archive.md | `core/archive/` | Archive entries: archive on delete, restore, purge, retention, recovery |
 | projects.md | `core/projects/` | Project boundary, anchor/ceiling invariants |
 | subagents.md | `core/subagents/` | Sub-agent coordinator, batch tracking, run linkage |
 | tools.md | `core/tools/` | Tool contracts and policy; index to per-tool maps |
 | storage.md | `core/storage/` | Data-directory layout, temp-file lifecycle, persistence |
 | skills.md | `core/skills/` | Skill loading/validation, scopes, authoring, history and archive, Prompt-Epoch Catalog |
-| automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics |
+| automation.md | `core/automation/` | Cron/Bootstrap triggering, queue semantics, Reflection, Librarian passes |
 | calendar.md | `core/calendar/` | Local events, recurrence, event-relative Agent actions, cron projection, calendar tool |
 | channels.md | `core/channels/` | Channel adapters, conversation engine, outbound send |
 | model-communication.md | cross-cutting | Sanctioned kernel-to-Model channels; never invent one |

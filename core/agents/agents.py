@@ -49,6 +49,7 @@ from core.agents._config import (
     _validate_thinking_effort,
     _validate_tool_access,
     _validated_agent_data,
+    _with_builtin_capabilities,
     load_validated_agent_json,
     validate_agent_data,
     validate_agent_file,
@@ -60,6 +61,11 @@ from core.agents._config import (
 from core.agents._types import (
     DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
     DEFAULT_LIBRARIAN_ENABLED,
+    LIBRARIAN_AGENT_ID,
+    LIBRARIAN_AGENT_NAME,
+    LIBRARIAN_BUILTIN,
+    LIBRARIAN_TOOLS,
+    SKILL_AGENT_ID_KEY,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
@@ -72,9 +78,15 @@ from core.agents._types import (
     AgentUpdateResult,
     ArchivedAgent,
     ArchivedAgentPayload,
+    BuiltinAgent,
+    BuiltinAgentError,
     InvalidAgentIdError,
     InvalidAgentOrderError,
+    LibrarianProblem,
     _AgentOrderDocument,
+    is_librarian,
+    librarian_problem_message,
+    skill_subject_id,
 )
 from core.agents._workspace import (
     WORKSPACE_IDENTITY_FILES,
@@ -117,8 +129,17 @@ from core.utils.logging import get_logger
 from core.utils.timestamps import utc_now_timestamp
 
 __all__ = [
+    "LIBRARIAN_AGENT_ID",
+    "LIBRARIAN_AGENT_NAME",
+    "LIBRARIAN_TOOLS",
+    "SKILL_AGENT_ID_KEY",
     "Agent",
     "AgentAlreadyExistsError",
+    "BuiltinAgentError",
+    "LibrarianProblem",
+    "is_librarian",
+    "librarian_problem_message",
+    "skill_subject_id",
     "ArchivedAgent",
     "ArchivedAgentPayload",
     "AgentError",
@@ -157,6 +178,12 @@ _BOOTSTRAP_AGENT_NAME = "Main"
 _AGENT_ORDER_FILE_NAME = "order.json"
 
 _AGENT_RENAME_FILE_NAME = "rename-pending.json"
+
+# What the user may change on a built-in Agent: its Model settings. The current
+# Session follows the Session the user opens.
+_BUILTIN_EDITABLE_FIELDS = frozenset(
+    {"model", "fallback_models", "temperature", "thinking_effort", "current_session_id"}
+)
 
 _LOGGER = get_logger("agents")
 
@@ -248,9 +275,53 @@ class AgentStore:
         compaction_policy: dict[str, Any] | None = None,
         librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
     ) -> Agent:
-        """Create and persist a new Agent, initial Session, and Workspace."""
+        """Create and persist a new Agent, initial Session, and Workspace.
+
+        The id must be free and may not be one vBot reserves (:class:`InvalidAgentIdError`).
+        """
+        _validate_new_agent_id(agent_id)
+        return self._create(
+            agent_id,
+            name,
+            builtin=None,
+            model=model,
+            fallback_models=fallback_models,
+            workspace=workspace,
+            temperature=temperature,
+            thinking_effort=thinking_effort,
+            memory_prompt_mode=memory_prompt_mode,
+            tool_access=tool_access,
+            allowed_skills=allowed_skills,
+            excluded_skills=excluded_skills,
+            tools=tools,
+            custom_system_prompt_enabled=custom_system_prompt_enabled,
+            compaction_policy=compaction_policy,
+            librarian_enabled=librarian_enabled,
+        )
+
+    def _create(
+        self,
+        agent_id: str,
+        name: str | None,
+        *,
+        builtin: BuiltinAgent | None,
+        model: str = DEFAULT_MODEL,
+        fallback_models: list[str] | None = None,
+        workspace: str | Path | None = None,
+        temperature: float | None = DEFAULT_TEMPERATURE,
+        thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
+        memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
+        tool_access: ToolAccess | Mapping[str, Any] | None = None,
+        allowed_skills: list[str] | None = None,
+        excluded_skills: list[str] | None = None,
+        tools: Mapping[str, Any] | None = None,
+        custom_system_prompt_enabled: bool = DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED,
+        compaction_policy: dict[str, Any] | None = None,
+        librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED,
+    ) -> Agent:
+        """:meth:`create` past the reserved-id rules; ``builtin`` marks a built-in Agent."""
         with self._snapshot_barrier.compound_mutation(), self._change():
-            _validate_new_agent_id(agent_id)
+            _validate_agent_id(agent_id)
             agent_dir = self._agent_dir(agent_id)
             if exists_strict(agent_dir):
                 raise AgentAlreadyExistsError(f"Agent already exists: {agent_id}")
@@ -319,7 +390,9 @@ class AgentStore:
                 current_session_id=session.id,
                 created_at=now,
                 updated_at=now,
+                builtin=builtin,
             )
+            agent = _with_builtin_capabilities(agent)
 
             try:
                 self._seed_workspace(Path(agent.workspace))
@@ -407,8 +480,73 @@ class AgentStore:
                 return None
 
     def list(self) -> list[Agent]:
-        """Return valid persisted Agents in the canonical roster order."""
+        """Return valid persisted Agents in the canonical roster order.
+
+        The roster holds the user's Agents; built-in Agents are never part of it.
+        """
         return list(self.list_with_order().agents)
+
+    def list_with_builtins(self) -> builtins.list[Agent]:
+        """Return the roster followed by the built-in Agents that are available."""
+        librarian = self.librarian()
+        return [*self.list(), *([librarian] if librarian is not None else [])]
+
+    def librarian(self) -> Agent | None:
+        """Return the built-in Librarian with defaults applied, ``None`` while unavailable."""
+        if self.librarian_problem() is not None:
+            return None
+        try:
+            return self.get(LIBRARIAN_AGENT_ID)
+        except AgentError, OSError:
+            return None
+
+    def librarian_problem(self) -> LibrarianProblem | None:
+        """Why the built-in Librarian is unavailable, ``None`` while it is available.
+
+        ``missing``: no Agent has its id yet (startup creates it); ``agent_id_taken``:
+        an Agent of the user or an unfinished rename holds the id;
+        ``invalid_config``: its ``agent.json`` cannot be loaded. Never raises.
+        """
+        with self._write_lock:
+            try:
+                agent_path = self._stored_agent_path(LIBRARIAN_AGENT_ID)
+                if agent_path is None:
+                    if LIBRARIAN_AGENT_ID in self._pending_rename_ids() or exists_strict(
+                        self._agent_dir(LIBRARIAN_AGENT_ID)
+                    ):
+                        return "agent_id_taken"
+                    return "missing"
+                agent = self._read_agent_config(agent_path)
+            except AgentError, OSError:
+                return "invalid_config"
+            return None if is_librarian(agent) else "agent_id_taken"
+
+    def ensure_librarian(self) -> Agent | None:
+        """Create the built-in Librarian when it is missing; return it, ``None`` while unavailable.
+
+        It gets a new Agent's defaults, so it runs the default Model until the user
+        picks one. An Agent of the user that holds its id and an ``agent.json``
+        that cannot be loaded stay as they are; the warning names the problem.
+        """
+        with self._snapshot_barrier.compound_mutation(), self._change():
+            problem = self.librarian_problem()
+            if problem == "missing":
+                try:
+                    self._create(
+                        LIBRARIAN_AGENT_ID, LIBRARIAN_AGENT_NAME, builtin=LIBRARIAN_BUILTIN
+                    )
+                except (AgentError, OSError) as error:
+                    _LOGGER.warning("Could not create the built-in Librarian: %s", error)
+                    return None
+                _LOGGER.info("Built-in Librarian created (agent=%s)", LIBRARIAN_AGENT_ID)
+            elif problem is not None:
+                _LOGGER.warning(
+                    "The built-in Librarian is unavailable (agent=%s problem=%s)",
+                    LIBRARIAN_AGENT_ID,
+                    problem,
+                )
+                return None
+        return self.librarian()
 
     def list_with_order(self) -> AgentListResult:
         """Return the canonical roster plus its conflict-detection revision.
@@ -437,9 +575,12 @@ class AgentStore:
         loaded: list[tuple[Path, Agent]] = []
         for agent_path in agent_paths:
             try:
-                loaded.append((agent_path, self._load_seeded_agent(agent_path)))
+                agent = self._load_seeded_agent(agent_path)
             except (AgentError, OSError) as error:
                 _LOGGER.warning("Skipping invalid Agent config %s: %s", agent_path, error)
+                continue
+            if agent.builtin is None:
+                loaded.append((agent_path, agent))
         # One Session read verifies every current pointer of the roster.
         live = self._live_current_session_agent_ids([agent for _path, agent in loaded])
         agents: list[Agent] = []
@@ -585,6 +726,13 @@ class AgentStore:
             changes.pop("id", None)
             agent_path = self._require_agent_path(agent_id)
             agent = self._load_verified_agent(agent_path)
+            fixed_fields = sorted(set(changes) - _BUILTIN_EDITABLE_FIELDS)
+            if agent.builtin is not None and (fixed_fields or copy_workspace_identity_files):
+                raise BuiltinAgentError(
+                    f"The {agent.name} is built into vBot: only its model, fallback_models, "
+                    "temperature and thinking_effort can change, not "
+                    f"{', '.join(fixed_fields or ['copy_workspace_identity_files'])}"
+                )
             if not changes:
                 if copy_workspace_identity_files:
                     raise AgentError("copy_workspace_identity_files requires a workspace change")
@@ -742,6 +890,11 @@ class AgentStore:
             source_dir = self._agent_dir(agent_id)
             destination_dir = self._agent_dir(new_agent_id)
             agent_path = self._require_agent_path(agent_id)
+            source = self._read_agent_config(agent_path)
+            if source.builtin is not None:
+                raise BuiltinAgentError(
+                    f"The {source.name} is built into vBot and cannot be renamed"
+                )
             case_only = _paths_are_same_location(source_dir, destination_dir)
             if exists_strict(destination_dir) and not case_only:
                 raise AgentAlreadyExistsError(f"Agent already exists: {new_agent_id}")
@@ -876,6 +1029,10 @@ class AgentStore:
         sessions.retarget_identity_agent_sessions(rename.source_id, rename.target_id)
         link_count = len(
             sessions.retarget_identity_agent_references(rename.source_id, rename.target_id)
+        )
+        # The Librarian Sessions that maintain the Agent's Skills keep doing so.
+        sessions.retarget_metadata_value(
+            LIBRARIAN_AGENT_ID, SKILL_AGENT_ID_KEY, rename.source_id, rename.target_id
         )
         if workspace_ops._move_renamed_tree(self._data_dir / "agents", rename):
             self._write_renamed_config(rename)

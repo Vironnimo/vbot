@@ -95,14 +95,13 @@ REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
     "skill_model_step_interval": 10,
 }
 
-# The Librarian's scheduled passes over each Agent's own Skills. An empty
-# ``model`` runs consolidation on each Agent's own Model.
+# The Librarian's scheduled passes over each Agent's own Skills. The Librarian is
+# an Agent: its Model settings live in its Agent configuration, not here.
 LIBRARIAN_SETTING_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "interval_days": 7,
     "archive_after_days": 90,
     "consolidate": True,
-    "model": "",
 }
 
 
@@ -492,7 +491,11 @@ def _normalize_reflection_interval(key: str, value: Any) -> int:
 
 
 def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
-    """Return the normalized Librarian settings section."""
+    """Return the normalized Librarian settings section.
+
+    Fields it does not know are left out, among them ``model`` of an earlier vBot,
+    so the next write of the section drops them.
+    """
 
     if librarian is None:
         section: dict[str, Any] = {}
@@ -519,12 +522,6 @@ def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
         ):
             raise StorageError(f"Librarian setting {key} {LIBRARIAN_DAYS_RULE}")
         normalized[key] = value
-    model = section.get("model")
-    if model is None:
-        model = LIBRARIAN_SETTING_DEFAULTS["model"]
-    elif not isinstance(model, str):
-        raise StorageError("Librarian setting model must be a string")
-    normalized["model"] = model.strip()
     return normalized
 
 

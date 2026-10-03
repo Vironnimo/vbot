@@ -19,7 +19,7 @@ from core.automation import (
     LearningUndoFailedError,
 )
 from core.memory import MemoryError, MemoryScope, MemoryService, MemoryWriter
-from core.skills import HUMAN_WRITER, SkillAuthoringService, SkillWriter
+from core.skills import HUMAN_WRITER, SkillAuthoringService, SkillReference, SkillWriter
 
 AGENT_ID = "coder"
 REVIEW = "run-review"
@@ -94,7 +94,13 @@ def review(agent: _Agent) -> None:
     agent.skills.edit(
         agent.home, "notes", skill_document("notes", "# Better\n"), writer=REVIEW_SKILLS
     )
-    agent.skills.delete(agent.home, "old", writer=REVIEW_SKILLS, absorbed_into="deploy")
+    agent.skills.delete(
+        agent.home,
+        "old",
+        writer=REVIEW_SKILLS,
+        absorbed_into="deploy",
+        followed=[SkillReference("cron", "job-1", "Daily report")],
+    )
 
 
 def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
@@ -148,6 +154,7 @@ def test_the_changes_of_a_run_come_from_both_histories(agent: _Agent) -> None:
                 "skill": "old",
                 "files": [],
                 "absorbed_into": "deploy",
+                "followed": [{"kind": "cron", "id": "job-1", "name": "Daily report"}],
             },
         ],
     }

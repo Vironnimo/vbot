@@ -47,7 +47,7 @@ class _FakeAgents:
     def __init__(self, agent_ids: list[str]) -> None:
         self._agents = [_FakeAgent(agent_id) for agent_id in agent_ids]
 
-    def list(self) -> list[_FakeAgent]:
+    def list_with_builtins(self) -> list[_FakeAgent]:
         return list(self._agents)
 
 

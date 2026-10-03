@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from core.memory import (
     DEFAULT_MEMORY_PROMPT_MODE,
@@ -17,6 +17,24 @@ from core.tools.availability import (
 DEFAULT_CUSTOM_SYSTEM_PROMPT_ENABLED = False
 # Librarian passes curate an Agent's own Skills unless its switch is off.
 DEFAULT_LIBRARIAN_ENABLED = True
+
+# The built-in Agents vBot creates itself. ``agent.json`` marks one with
+# ``builtin``; the mark is valid only on its reserved id.
+BuiltinAgent = Literal["librarian"]
+LIBRARIAN_BUILTIN: BuiltinAgent = "librarian"
+BUILTIN_AGENTS: frozenset[str] = frozenset({LIBRARIAN_BUILTIN})
+# The Librarian curates other Agents' Skills in Sessions of its own.
+LIBRARIAN_AGENT_ID = "librarian"
+LIBRARIAN_AGENT_NAME = "Librarian"
+# The Librarian's whole Tool set; nothing widens it.
+LIBRARIAN_TOOLS = ("skill", "skill_manage")
+# Why the Librarian is unavailable: no Agent has its id yet, a user's Agent (or
+# an unfinished rename) holds the id, or its ``agent.json`` cannot be loaded.
+LibrarianProblem = Literal["missing", "agent_id_taken", "invalid_config"]
+# Session metadata binding a Session of the Librarian to the Agent whose Skills
+# it maintains, its Skill subject. vBot writes it when a pass starts; a Session
+# without it works on the Librarian's own Skills.
+SKILL_AGENT_ID_KEY = "skill_agent_id"
 
 
 class AgentError(ValueError):
@@ -49,6 +67,10 @@ class AgentReferencedError(AgentError):
 
 class InvalidAgentIdError(AgentError):
     """Raised when an agent ID is unsafe for filesystem use."""
+
+
+class BuiltinAgentError(AgentError):
+    """Raised when an operation would rename, delete or reconfigure a built-in Agent."""
 
 
 class InvalidAgentOrderError(AgentError):
@@ -90,6 +112,42 @@ class Agent:
     # Whether Librarian passes curate this Agent's own Skills; ``librarian.enabled``
     # still switches scheduled passes off for every Agent.
     librarian_enabled: bool = DEFAULT_LIBRARIAN_ENABLED
+    # Which built-in Agent this is, ``None`` for an Agent of the user. A built-in
+    # Agent is left out of the roster and keeps fixed capabilities.
+    builtin: BuiltinAgent | None = None
+    # Never persisted: the Agent whose Skills this Agent works on, set only on the
+    # Librarian as one of its bound Sessions runs it (``SKILL_AGENT_ID_KEY``).
+    skill_agent_id: str | None = None
+
+
+def is_librarian(agent: object) -> bool:
+    """Whether ``agent`` (any resolved Agent) is the built-in Librarian."""
+    return getattr(agent, "builtin", None) == LIBRARIAN_BUILTIN
+
+
+def librarian_problem_message(problem: LibrarianProblem) -> str:
+    """Say why the Librarian is unavailable and what the user can do about it."""
+    if problem == "agent_id_taken":
+        return (
+            f"The Librarian is unavailable: one of your Agents uses its id {LIBRARIAN_AGENT_ID}. "
+            f"Rename that Agent (vbot agent rename {LIBRARIAN_AGENT_ID} <new-id>) and restart "
+            "vBot to create the Librarian."
+        )
+    if problem == "invalid_config":
+        return (
+            f"The Librarian is unavailable: agents/{LIBRARIAN_AGENT_ID}/agent.json cannot be "
+            "loaded. Fix that file (vbot doctor config names the problem) and restart vBot."
+        )
+    return "The Librarian is unavailable: it does not exist yet. Restart vBot to create it."
+
+
+def skill_subject_id(agent: Any) -> str:
+    """Return the id of the Agent whose Skills ``agent`` (any resolved Agent) works on.
+
+    That is the subject of a Librarian Session, otherwise the Agent itself.
+    """
+    subject = getattr(agent, "skill_agent_id", None)
+    return subject if isinstance(subject, str) and subject else str(agent.id)
 
 
 @dataclass(frozen=True)

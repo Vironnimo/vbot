@@ -305,7 +305,7 @@ def _validate_public_settings_candidate(
     changed_roots = {operation.resolved.path.values[0] for operation in operations}
     if "recall" in changed_roots:
         _validate_recall_backend_known(runtime, effective["recall"]["backend"])
-    model_sections = changed_roots & {"defaults", "compaction", "session_titles", "librarian"}
+    model_sections = changed_roots & {"defaults", "compaction", "session_titles"}
     if model_sections:
         _validate_model_connections(
             runtime.models,
@@ -583,7 +583,7 @@ def _available_recall_backends(runtime: Any) -> list[str]:
 
 
 def _validate_model_connections(models: Any, settings_update: JsonObject) -> None:
-    """Reject default-agent, summary, title and Librarian models on a forbidden connection."""
+    """Reject default-agent, summary and title models on a forbidden connection."""
     agent_defaults = settings_update.get("defaults", {}).get("agent", {})
     model_binding = agent_defaults.get("model")
     if isinstance(model_binding, str):
@@ -605,10 +605,9 @@ def _validate_model_connections(models: Any, settings_update: JsonObject) -> Non
     if isinstance(summary_model, str):
         _ensure_model_connection_supported(models, "compaction.summary_model", summary_model)
 
-    for section in ("session_titles", "librarian"):
-        binding = settings_update.get(section, {}).get("model")
-        if isinstance(binding, str) and binding:
-            _ensure_model_connection_supported(models, f"{section}.model", binding)
+    title_model = settings_update.get("session_titles", {}).get("model")
+    if isinstance(title_model, str) and title_model:
+        _ensure_model_connection_supported(models, "session_titles.model", title_model)
 
 
 def _validate_recall_backend_known(runtime: Any, backend: str) -> None:

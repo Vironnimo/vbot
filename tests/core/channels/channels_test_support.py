@@ -29,13 +29,17 @@ from core.sessions import ChatSessionManager
 
 
 class AgentStoreStub:
+    """The user's Agents ``known_agent_ids`` plus the built-in Librarian."""
+
     def __init__(self, *, known_agent_ids: set[str] | None = None) -> None:
         self._known_agent_ids = set(known_agent_ids or {"assistant"})
 
     def get(self, agent_id: str) -> SimpleNamespace:
+        if agent_id == "librarian":
+            return SimpleNamespace(id=agent_id, name="Librarian", builtin="librarian")
         if agent_id not in self._known_agent_ids:
             raise KeyError(agent_id)
-        return SimpleNamespace(id=agent_id)
+        return SimpleNamespace(id=agent_id, name=agent_id, builtin=None)
 
 
 def make_service(

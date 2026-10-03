@@ -203,6 +203,24 @@ def test_start_bootstraps_main_agent_when_data_dir_is_empty(shared_runtime: Runt
     assert shared_runtime.chat_sessions.get(address).load() == []
 
 
+def test_start_creates_the_hidden_librarian_that_can_only_maintain_skills(
+    shared_runtime: Runtime,
+) -> None:
+    librarian = shared_runtime.agents.librarian()
+
+    assert librarian is not None and librarian.name == "Librarian"
+    prompts = shared_runtime.system_prompts
+    assert [definition["name"] for definition in prompts.provider_tool_definitions(librarian)] == [
+        "skill",
+        "skill_manage",
+    ]
+    # It is in no other Agent's System Prompt or Tool definitions (the checkout path aside).
+    main = shared_runtime.agents.get("main")
+    prompt = prompts.build_system_prompt(main).replace(_VBOT_ROOT.as_posix(), "<vbot root>")
+    assert "librarian" not in prompt.casefold()
+    assert "librarian" not in str(prompts.provider_tool_definitions(main)).casefold()
+
+
 def test_start_loads_the_bundled_skills_without_diagnostics(shared_runtime: Runtime) -> None:
     assert [skill.name for skill in shared_runtime.skills.list_all()] == BUNDLED_SKILLS
     assert shared_runtime.skills.invalid_diagnostics() == []

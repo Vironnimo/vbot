@@ -6,6 +6,10 @@ of it: every Run it starts goes there. Deleting an Agent, removing a Project or
 deleting or moving such a Session would make each later start fail, so whoever
 does that asks this owner first, and every such check and every edit that
 chooses a target holds :attr:`AutomationReferences.lock`.
+
+The texts an automation's Runs receive can trigger the Identity Agent's Skills
+by name; when a Skill is merged into another one, this owner also moves those
+triggers to the other Skill.
 """
 
 from __future__ import annotations
@@ -19,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from core.automation.bootstrap import TERMINAL_BOOTSTRAP_STATUSES
 from core.automation.cron import TERMINAL_CRON_JOB_STATUSES
 from core.projects.address import parse_agent_address
-from core.skills import triggered_skill_names
+from core.skills import rename_skill_triggers, triggered_skill_names
 
 if TYPE_CHECKING:
     from core.automation.bootstrap import BootstrapService
@@ -31,6 +35,8 @@ AutomationKind = Literal["bootstrap", "cron", "calendar"]
 
 # Whether a target (Agent id, Project id or None, selected Session id or None) counts.
 _Selector = Callable[[str, str | None, str | None], bool]
+# Who changes an automation's texts when a Skill merge moves its triggers.
+_MERGE_ACTOR = "tool"
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,15 +133,69 @@ class AutomationReferences:
         Bootstrap or Cron job's prompt, and a Calendar action's prompt plus the
         title and notes of its event.
         """
-        automations = self._live_automations(
-            lambda agent, project, _session: (agent, project) == (agent_id, None)
-        )
+        automations = self._live_automations(_identity_agent(agent_id))
         return frozenset(
             name
             for automation in automations
             for text in automation.texts()
             for name in triggered_skill_names(text)
         )
+
+    def agent_skill_triggers(self, agent_id: str, name: str) -> tuple[AutomationReference, ...]:
+        """Return the live automations of the Identity Agent ``agent_id`` that trigger ``name``.
+
+        They read the texts :meth:`agent_triggered_skill_names` reads; sorted by label.
+        """
+        references = [
+            automation.reference
+            for automation in self._live_automations(_identity_agent(agent_id))
+            if any(name in triggered_skill_names(text) for text in automation.texts())
+        ]
+        return tuple(sorted(references, key=lambda reference: reference.label))
+
+    async def rename_skill_triggers(
+        self, agent_id: str, reference: AutomationReference, name: str, new_name: str
+    ) -> None:
+        """Make one automation of the Identity Agent ``agent_id`` trigger ``new_name`` for ``name``.
+
+        For a Skill merged into another one; the caller holds :attr:`lock`. A
+        Bootstrap job keeps its status and arming. A Calendar action's prompt
+        changes, and its event's title and notes change while every action of the
+        event starts Runs of this Agent: they reach the Runs of each action.
+        Raises the error of the automation's owner when it cannot change.
+        """
+        if reference.kind == "bootstrap":
+            job = self._bootstrap.get_job(reference.id)
+            self._bootstrap.rename_prompt_skill(
+                job.id, rename_skill_triggers(job.prompt, name, new_name), actor=_MERGE_ACTOR
+            )
+            return
+        if reference.kind == "cron":
+            cron_job = self._cron.get_job(reference.id)
+            prompt = rename_skill_triggers(cron_job.prompt, name, new_name)
+            if prompt != cron_job.prompt:
+                await self._cron.update_job(cron_job.id, actor=_MERGE_ACTOR, prompt=prompt)
+            return
+        actions = self._calendar.actions
+        action = next((item for item in actions.list_actions() if item["id"] == reference.id), None)
+        if action is None:
+            raise LookupError(f"Calendar action not found: {reference.id}")
+        prompt = rename_skill_triggers(action["prompt"], name, new_name)
+        if prompt != action["prompt"]:
+            await actions.update(action["id"], actor=_MERGE_ACTOR, prompt=prompt)
+        if any(
+            parse_agent_address(item["target"]) != (agent_id, None)
+            for item in actions.list_actions(action["event_id"])
+        ):
+            return
+        event = self._calendar.get_event(action["event_id"])
+        fields = {
+            field: rename_skill_triggers(text, name, new_name)
+            for field, text in (("title", event.title), ("notes", event.notes))
+            if text and rename_skill_triggers(text, name, new_name) != text
+        }
+        if fields:
+            await self._calendar.update_event(event.id, actor=_MERGE_ACTOR, **fields)
 
     def _live(self, selects: _Selector) -> tuple[AutomationReference, ...]:
         """Return the live automations whose target ``selects`` accepts, sorted by label."""
@@ -176,6 +236,11 @@ class AutomationReferences:
                     )
                 )
         return automations
+
+
+def _identity_agent(agent_id: str) -> _Selector:
+    """Select the targets that name the Identity Agent ``agent_id`` (no Project)."""
+    return lambda agent, project, _session: (agent, project) == (agent_id, None)
 
 
 __all__ = ["AutomationKind", "AutomationReference", "AutomationReferences"]

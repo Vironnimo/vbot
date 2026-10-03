@@ -182,7 +182,7 @@ def test_a_failing_history_never_fails_an_attended_write(
         patch.setattr(SkillHistory, "append", failing)
         patch.setattr(SkillHistory, "observe", failing)
         written = service.write_file(root, "demo", "references/a.md", "a\n", writer=AGENT)
-        # A background writer cannot know the origin, so it is refused.
+        # A background writer cannot know whether the user pinned it, so it is refused.
         with pytest.raises(SkillProtectedError) as refused:
             service.write_file(root, "demo", "references/b.md", "b\n", writer=REFLECTION)
 
@@ -193,23 +193,14 @@ def test_a_failing_history_never_fails_an_attended_write(
     assert summary(service, root)[0] == (2, "demo", "external", "external")
 
 
-@pytest.mark.parametrize(
-    ("setup", "reason"),
-    [
-        pytest.param("user", "user", id="user-created"),
-        pytest.param("pinned", "pinned", id="pinned"),
-    ],
-)
-def test_background_writers_leave_user_and_pinned_skills_alone(
-    service: SkillAuthoringService, root: Path, setup: str, reason: str
+def test_background_writers_leave_pinned_skills_alone(
+    service: SkillAuthoringService, root: Path
 ) -> None:
-    writer = HUMAN_WRITER if setup == "user" else AGENT
-    service.create(root, "demo", skill_document(), writer=writer)
-    if setup == "pinned":
-        service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
+    service.create(root, "demo", skill_document(), writer=HUMAN_WRITER)
+    service.set_pinned(root, "demo", True, writer=HUMAN_WRITER)
     before = (root / "demo" / "SKILL.md").read_bytes()
     # The same rule answers ahead of a write, so a background list can mark it.
-    assert service.background_protection(root) == {"demo": reason}
+    assert service.background_protection(root) == {"demo": "pinned"}
 
     for action in (
         lambda: service.edit(root, "demo", skill_document(body="x\n"), writer=REFLECTION),
@@ -218,20 +209,22 @@ def test_background_writers_leave_user_and_pinned_skills_alone(
     ):
         with pytest.raises(SkillProtectedError) as refused:
             action()
-        assert refused.value.reason == reason
+        assert refused.value.reason == "pinned"
 
     assert (root / "demo" / "SKILL.md").read_bytes() == before
     # Attended Agents are not limited by pins.
     service.write_file(root, "demo", "references/a.md", "a\n", writer=AGENT)
 
 
-def test_background_writers_change_skills_agents_created(
+def test_background_writers_change_unpinned_skills_whoever_created_them(
     service: SkillAuthoringService, root: Path
 ) -> None:
+    service.create(root, "user-made", skill_document("user-made"), writer=HUMAN_WRITER)
     service.create(root, "agent-made", skill_document("agent-made"), writer=AGENT)
     service.create(root, "learned", skill_document("learned"), writer=REFLECTION)
     assert service.background_protection(root) == {}
 
+    service.edit(root, "user-made", skill_document("user-made", body="New.\n"), writer=REFLECTION)
     service.edit(root, "agent-made", skill_document("agent-made", body="New.\n"), writer=REFLECTION)
     service.delete(root, "agent-made", writer=REFLECTION, absorbed_into="learned")
 

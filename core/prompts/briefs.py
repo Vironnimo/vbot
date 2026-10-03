@@ -113,15 +113,18 @@ BRIEF_FRAGMENT_NAMES: frozenset[str] = frozenset(
 )
 """Every prompt fragment a brief reads; Storage must allowlist and bundle each."""
 
-# The Librarian brief's placeholders. The candidate list is rendered here; a
-# fragment copy without its marker gets the list appended as a last paragraph.
+# The Librarian brief's placeholders. The Agent and the candidate list are
+# rendered here; a fragment copy without a marker gets the Agent named in a first
+# paragraph and the list appended as a last paragraph.
 _LIBRARIAN_MAX_CHARS = "{max_chars}"
+_LIBRARIAN_AGENT = "{generated:agent}"
 _LIBRARIAN_CANDIDATES = "{generated:candidates}"
 # A SKILL.md longer than about this many characters is hard to use.
 LIBRARIAN_SKILL_MD_MAX_CHARS = 12000
 # Who created a candidate, in the words of the Agent the brief addresses.
 _LIBRARIAN_ORIGIN_TEXTS = {
-    "agent": "you, during a conversation",
+    "human": "the user",
+    "agent": "the Agent, during a conversation",
     "reflection": "a background reflection on a conversation",
     "librarian": "an earlier Librarian pass",
 }
@@ -142,7 +145,7 @@ class LibrarianCandidate:
     Dates are ISO dates (``YYYY-MM-DD``). ``changed`` is the last change of
     the Skill's files, ``last_used`` its last use in a conversation (``None``
     when it was never used there) and ``uses`` the number of Sessions that used
-    it. ``scheduled`` is set when a schedule's instructions name the Skill.
+    it.
     """
 
     name: str
@@ -154,7 +157,6 @@ class LibrarianCandidate:
     uses: int
     skill_md_chars: int
     support_files: tuple[str, ...]
-    scheduled: bool
 
 
 class BriefFragmentReader(Protocol):
@@ -194,15 +196,20 @@ def librarian_brief(
     fragments: BriefFragmentReader,
     candidates: Sequence[LibrarianCandidate],
     *,
-    limit: int,
+    agent_id: str,
+    agent_name: str,
 ) -> str:
-    """Return the Librarian brief listing ``candidates``, with ``limit`` Tool calls."""
+    """Return the Librarian brief for the Skills of Agent ``agent_id``, listing ``candidates``."""
     brief = (
         fragments.read_prompt_fragment(_LIBRARIAN)
         .strip()
-        .replace(_TOOL_CALL_LIMIT_MARK, str(limit))
         .replace(_LIBRARIAN_MAX_CHARS, str(LIBRARIAN_SKILL_MD_MAX_CHARS))
     )
+    named = agent_id if agent_name in ("", agent_id) else f"{agent_name} (id {agent_id})"
+    if _LIBRARIAN_AGENT in brief:
+        brief = brief.replace(_LIBRARIAN_AGENT, named)
+    else:
+        brief = f"You maintain the Skills of the Agent {named}.\n\n{brief}"
     listed = "\n".join(_candidate_text(candidate) for candidate in candidates)
     if _LIBRARIAN_CANDIDATES in brief:
         return brief.replace(_LIBRARIAN_CANDIDATES, listed)
@@ -215,8 +222,6 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
     uses = "1 use" if candidate.uses == 1 else f"{candidate.uses} uses"
     used = "never" if candidate.last_used is None else f"{candidate.last_used} ({uses})"
     files = ", ".join(candidate.support_files) or "none"
-    # skill_manage refuses to delete a Skill a schedule triggers by name.
-    scheduled = "yes, so it cannot be deleted" if candidate.scheduled else "no"
     return "\n".join(
         (
             f"- {candidate.name}",
@@ -227,7 +232,6 @@ def _candidate_text(candidate: LibrarianCandidate) -> str:
             f"  Last used: {used}",
             f"  SKILL.md: {candidate.skill_md_chars} characters",
             f"  Support files: {files}",
-            f"  Used by a schedule: {scheduled}",
         )
     )
 

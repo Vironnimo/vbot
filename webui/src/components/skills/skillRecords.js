@@ -4,6 +4,7 @@
 // helpers only present them.
 import { activeLocaleTag, t } from '$lib/i18n.js';
 import { formatDateTimeInApplicationZone } from '$lib/dateTimePrefs.svelte.js';
+import { skillMergedText } from '$lib/skillMerges.js';
 import { agentDisplayName } from './skillsView.js';
 
 // The Skill page shows at most this many revisions of one Skill.
@@ -94,9 +95,10 @@ export function skillPageFacts(entry) {
 function archiveRevisionText(revision) {
   switch (revision.reason) {
     case 'absorbed':
-      return t('skills.revision.absorbed', {
-        target: revision.absorbed_into ?? '',
-      });
+      return skillMergedText(
+        t('skills.revision.absorbed', { target: revision.absorbed_into ?? '' }),
+        revision.followed,
+      );
     case 'inactive':
       return t('skills.revision.inactive');
     default:

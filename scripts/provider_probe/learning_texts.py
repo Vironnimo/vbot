@@ -186,9 +186,9 @@ def brief_text(
     This is the single seam between the harness and production brief assembly:
     it calls production ``reflection_brief`` (a review without user focus, as
     the cadence trigger starts it), ``learn_brief`` with the case's request, or
-    ``librarian_brief`` listing ``candidates`` (production
-    ``LibrarianCandidate``s) with the production Tool call limit, reading
-    ``texts.fragments`` in place of Storage.
+    ``librarian_brief`` for the evaluated Agent's Skills listing ``candidates``
+    (production ``LibrarianCandidate``s), reading ``texts.fragments`` in place of
+    Storage.
     """
     from core.prompts.briefs import learn_brief, librarian_brief, reflection_brief
 
@@ -196,9 +196,11 @@ def brief_text(
     if scope == "learn":
         return learn_brief(fragments, case.get("learn_request"))
     if scope == "librarian":
-        from core.automation.librarian import LIBRARIAN_TOOL_ITERATION_LIMIT
+        from scripts.provider_probe.learning_fixture import EVAL_AGENT_ID
 
-        return librarian_brief(fragments, candidates, limit=LIBRARIAN_TOOL_ITERATION_LIMIT)
+        return librarian_brief(
+            fragments, candidates, agent_id=EVAL_AGENT_ID, agent_name=EVAL_AGENT_ID
+        )
     if scope not in ("memory", "skill", "combined"):
         raise ValueError(f"Unknown evaluation scope: {scope}")
     return reflection_brief(fragments, scope)  # type: ignore[arg-type]

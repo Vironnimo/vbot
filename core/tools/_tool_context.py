@@ -116,6 +116,10 @@ class ToolContext:
     # skills the run's catalog advertises. Kept separate from ``project_id`` so
     # skill resolution stays rooted-aware without changing subagent inheritance.
     skill_project_id: str | None = None
+    # The Agent whose Skills this call reads and changes when it is not the calling
+    # Agent: the Agent a Librarian Session is bound to. ``None`` (every other
+    # Session) is the calling Agent; read :attr:`skill_subject_id`.
+    skill_agent_id: str | None = None
     # Kind of the Run that dispatched this call, or ``None`` outside Runs (direct
     # callers). ``core.runs.is_unattended_run_kind`` tells background Runs apart.
     run_kind: RunKind | None = None
@@ -190,6 +194,11 @@ class ToolContext:
         repr=False,
         compare=False,
     )
+
+    @property
+    def skill_subject_id(self) -> str:
+        """Return the id of the Agent whose Skills this call works on."""
+        return self.skill_agent_id or self.agent_id
 
     @property
     def effective_cwd(self) -> Path:
@@ -497,6 +506,8 @@ class ToolExecutionConfig:
     project_id: str | None = None
     # Effective skill project for this group; see ``ToolContext.skill_project_id``.
     skill_project_id: str | None = None
+    # Agent whose Skills this group works on; see ``ToolContext.skill_agent_id``.
+    skill_agent_id: str | None = None
     # Kind of the owning Run; see ``ToolContext.run_kind``.
     run_kind: RunKind | None = None
     allowed_tools: Sequence[str] | None = None

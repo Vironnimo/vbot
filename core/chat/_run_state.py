@@ -712,7 +712,7 @@ async def create_run_execution_context(
                 project_id,
             )
             skill_project_id, identity_agent_id = resolve_skill_scope(
-                project_id, prompt_project, run.agent_id
+                project_id, prompt_project, agent
             )
         else:
             soul_context = memory_files_context = None

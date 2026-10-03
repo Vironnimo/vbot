@@ -38,7 +38,7 @@ from cli.debug_management import (
     debug_trace_list,
     debug_trace_show,
 )
-from cli.librarian_management import librarian_run, librarian_status
+from cli.librarian_management import librarian_overview, librarian_run, librarian_status
 from cli.log_management import log_read
 from cli.memory_management import (
     memory_add,
@@ -323,6 +323,8 @@ def dispatch_librarian_command(
     """Dispatch one parsed Librarian command against the server RPC client."""
 
     if args.command == "status":
+        if args.agent is None:
+            return librarian_overview(instance)
         return librarian_status(instance, args.agent)
     if args.command == "run":
         return librarian_run(instance, args.agent)

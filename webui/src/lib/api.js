@@ -136,6 +136,7 @@ export {
   skillHistory,
   revertSkillRevisions,
   librarianStatus,
+  librarianOverview,
   runLibrarian,
   restoreSkill,
   purgeSkill,

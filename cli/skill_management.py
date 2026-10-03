@@ -569,6 +569,13 @@ _REVISION_KIND_TEXT = {
     "unpin": "unpinned",
 }
 _ARCHIVE_REASON_TEXT = {"deleted": "deleted", "inactive": "retired after long disuse"}
+# What moved to the Skill that absorbed a merged one.
+_FOLLOWED_TEXT = {
+    "shared": "share with Agent {name}",
+    "bootstrap": "bootstrap job {name}",
+    "cron": "cron job {name}",
+    "calendar": "calendar event {name}",
+}
 
 
 def _records(value: object) -> list[Mapping[str, Any]]:
@@ -616,6 +623,11 @@ def format_skill_revision(revision: Mapping[str, Any]) -> list[str]:
             f"  {_string_or_default(change.get('change'), '?')} "
             f"{_string_or_default(change.get('path'), '?')}"
         )
+    target = _string_or_default(revision.get("absorbed_into"), "?")
+    for reference in _records(revision.get("followed")):
+        text = _FOLLOWED_TEXT.get(str(reference.get("kind")), "{name}")
+        name = _string_or_default(reference.get("name"), "?")
+        lines.append(f"  moved to {target}: {text.format(name=name)}")
     return lines
 
 

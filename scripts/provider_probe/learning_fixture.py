@@ -292,8 +292,7 @@ class EvalWorker:
     def librarian_candidates(self) -> tuple[Any, ...]:
         """Return the Skills a Librarian pass may change, as production lists them.
 
-        The fixture has no Skill use and no schedules, so every candidate reads
-        as never used and not named by a schedule.
+        The fixture has no Skill use, so every candidate reads as never used.
         """
         from core.automation.librarian import librarian_candidates
 
@@ -302,17 +301,13 @@ class EvalWorker:
             runtime.skill_authoring,
             runtime.agent_skills_dir(EVAL_AGENT_ID),
             usage={},
-            scheduled=frozenset(),
         )
 
     async def prepare(
         self, case: Mapping[str, Any], scope: str, *, attempt_id: str
     ) -> PreparedAttempt:
         """Seed one attempt's state and build its first request like production."""
-        from core.automation.librarian import (
-            LIBRARIAN_TOOL_RESTRICTION,
-            librarian_tool_denial_resolver,
-        )
+        from core.agents import LIBRARIAN_TOOLS
         from core.automation.reflection import (
             REFLECTION_RUN_KINDS,
             REFLECTION_TOOL_RESTRICTIONS,
@@ -361,8 +356,7 @@ class EvalWorker:
             restriction, denial_resolver = LEARN_DISPATCH_TOOLS, None
             run_kind = "user"
         elif scope == "librarian":
-            restriction = tuple(LIBRARIAN_TOOL_RESTRICTION)
-            denial_resolver = librarian_tool_denial_resolver()
+            restriction, denial_resolver = LIBRARIAN_TOOLS, None
             run_kind = RunKind.LIBRARIAN.value
             candidates = self.librarian_candidates()
         else:

@@ -130,7 +130,9 @@ _LIST_VISIBILITY_VALID_RUN_KINDS = 1 << 6
 _LIST_VISIBILITY_USER_FACING = 1 << 7
 _LIST_VISIBILITY_SUBAGENT_RUN_KIND = 1 << 8
 _LIST_VISIBILITY_SUBAGENT_PARENT = 1 << 9
-# A Librarian pass Session: never listed, never recalled.
+# A Session with a Librarian Run: never recalled. Listed only in the built-in
+# Librarian's scope; elsewhere it is a pass Session of an earlier vBot, which ran
+# passes in a hidden Session of the curated Agent.
 _LIST_VISIBILITY_LIBRARIAN = 1 << 10
 
 # Metadata facade keys stored in dedicated columns.
@@ -385,6 +387,8 @@ def _session_list_visibility_sql(
     include_channels: bool,
 ) -> tuple[str, list[Any]]:
     """Return the ``sessions AS s`` predicate of one Session-list filter set."""
+    from core.agents import LIBRARIAN_AGENT_ID
+
     is_subagent = (
         "((s.list_visibility_mask & "
         f"{_LIST_VISIBILITY_SUBAGENT_SESSION | _LIST_VISIBILITY_SUBAGENT_PARENT}) != 0)"
@@ -397,7 +401,8 @@ def _session_list_visibility_sql(
         f"AND ((s.list_visibility_mask & {_LIST_VISIBILITY_REFLECTION}) = 0 OR (? = 1 OR ? = 1))"
     )
     visible = (
-        f"(s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 AND "
+        f"((s.list_visibility_mask & {_LIST_VISIBILITY_LIBRARIAN}) = 0 OR "
+        f"(s.project_id = '' AND s.agent_id = '{LIBRARIAN_AGENT_ID}')) AND "
         "NOT EXISTS (SELECT 1 FROM temporary_session_bindings AS owner_binding "
         "WHERE owner_binding.session_key = s.session_key) AND "
         "(? = 1 OR COALESCE(TRIM(s.platform), '') = '' "

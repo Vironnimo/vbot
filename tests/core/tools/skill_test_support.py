@@ -56,9 +56,12 @@ class SkillTool:
         project_id: str | None = None,
         allowed_skills: list[str] | None = None,
         run_kind: RunKind | None = None,
+        skill_agent_id: str | None = None,
     ) -> dict[str, Any]:
+        """Call the Tool as ``coder``; ``skill_agent_id`` binds a Librarian Session."""
         context = ToolContext(
             agent_id="coder",
+            skill_agent_id=skill_agent_id,
             session_id="session-one",
             run_id="run-one",
             tool_call_id="call-one",

@@ -29,11 +29,13 @@ from core.agents._config import (
     load_validated_agent_json,
 )
 from core.agents._types import (
+    LIBRARIAN_AGENT_ID,
     Agent,
     AgentAlreadyExistsError,
     AgentError,
     ArchivedAgent,
     ArchivedAgentPayload,
+    BuiltinAgentError,
     _AgentOrderDocument,
 )
 from core.agents._workspace import (
@@ -68,6 +70,8 @@ def archive_files(store: AgentStore, agent_id: str, tree: Path) -> Iterator[Arch
     """
     with store._snapshot_barrier.compound_mutation(), store._change():
         agent = store._read_agent_config(store._require_agent_path(agent_id))
+        if agent.builtin is not None:
+            raise BuiltinAgentError(f"The {agent.name} is built into vBot and cannot be deleted")
         order = store._load_agent_order()
         roster_index = (
             order.agent_ids.index(agent_id)
@@ -166,11 +170,13 @@ def inspect_archived(store: AgentStore, source: Path) -> ArchivedAgentPayload:
 
 def restore_target_problem(store: AgentStore, target_id: str) -> str | None:
     """``invalid_target_id``, ``agent_id_taken`` (an Agent or an unfinished rename
-    holds it) or ``None`` when an archived Agent can return as ``target_id``."""
+    holds it, or the built-in Librarian reserves it) or ``None`` when an archived
+    Agent can return as ``target_id``."""
     if not is_valid_agent_id(target_id):
         return "invalid_target_id"
     if (
-        has_id_entry(store.data_dir / "agents", target_id)
+        target_id.casefold() == LIBRARIAN_AGENT_ID
+        or has_id_entry(store.data_dir / "agents", target_id)
         or os.path.lexists(store._agent_dir(target_id))
         or target_id in store._pending_rename_ids()
     ):

@@ -436,9 +436,8 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._resolve_external_skill_scope,
             lifecycle_guard=runtime._agents.lifecycle_guard,
             on_changed=runtime._notify_skills_changed,
-            triggered_skill_names=runtime.automation_triggered_skill_names,
-            shared_skill_names=runtime.shared_skill_names,
             run_started_at=runtime.run_started_at,
+            follow_merge=runtime.follow_skill_merge,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(
@@ -478,10 +477,12 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )
-        # Creating the bootstrap Agent enters the snapshot barrier on the calling thread,
-        # the Event Loop in the server lifespan. It never waits there: no request, and so
-        # no data snapshot, is served before startup completes.
+        # Creating the bootstrap Agent and the built-in Librarian enters the snapshot
+        # barrier on the calling thread, the Event Loop in the server lifespan. It never
+        # waits there: no request, and so no data snapshot, is served before startup
+        # completes.
         runtime._agents.ensure_bootstrap()
+        runtime._agents.ensure_librarian()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
             sessions=runtime._chat_sessions,

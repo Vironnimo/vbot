@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import threading
-from collections.abc import Callable, Collection
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,12 +14,12 @@ from typing import Any
 
 import yaml
 
-from core.runs import RunKind, is_unattended_run_kind
+from core.runs import RunKind
 from core.skills.authoring import (
-    SkillActor,
     SkillAuthoringError,
     SkillAuthoringService,
     SkillProtectedError,
+    SkillReference,
     SkillWriter,
     SkillWriteResult,
 )
@@ -46,7 +46,12 @@ from core.tools.fuzzy_match import (
     preserve_typography,
     replace_fuzzy,
 )
-from core.tools.skill import clean_skill_file_path, similar_skill_names
+from core.tools.skill import (
+    LIBRARIAN_SKILL_ACTOR,
+    clean_skill_file_path,
+    similar_skill_names,
+    skill_writer,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
@@ -75,28 +80,32 @@ SKILL_MANAGE_ABSORBED = (
     "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
     "kept in the archive, where the user can restore it."
 )
-# Refusals of a background Run (no user present: a reflection review or the
-# Librarian). It changes only Skills an Agent created that the user has not
-# pinned, and never deletes a Skill that one of the Agent's live automations
-# triggers by name or that the Agent shares with other Agents. The closing reply
-# is where the Run reports what it could not change; the review briefs ask for
-# the same.
-_LEAVE_IT = "Leave it as it is and name the needed change in your closing reply."
+# After a merge: the deleted Skill's shares and the automations that loaded it
+# now use the Skill that absorbed it, so nobody has to change them by hand. One
+# that could not be changed still names the deleted Skill and finds nothing, so
+# the Agent passes it on to the user.
+SKILL_MANAGE_FOLLOWED_NOTE = "These now use Skill '{target}' in place of '{name}': {items}."
+SKILL_MANAGE_NOT_FOLLOWED_WARNING = (
+    "These could not be changed and still name '{name}', which no longer exists: {items}. "
+    "Name them in your reply so the user can change them to '{target}'."
+)
+_REFERENCE_LABELS = {
+    "shared": "the share with Agent '{name}'",
+    "bootstrap": "Bootstrap job '{name}'",
+    "cron": "Cron job '{name}'",
+    "calendar": "Calendar event '{name}'",
+}
+# Refusals of a background writer: a Reflection, or the Librarian, also while
+# the user talks with it in a Librarian Session. It never changes a Skill the
+# user pinned, and deletes a Skill only into another one (``absorbed_into``). The
+# reply is where it reports what it could not change; the briefs ask for the same.
+_LEAVE_IT = "Leave it as it is and name the needed change in your reply."
 SKILL_MANAGE_PINNED_REFUSAL = (
-    "Skill '{name}' is pinned by the user, so it cannot be changed in the background; "
-    f"nothing changed. {_LEAVE_IT}"
+    f"Skill '{{name}}' is pinned by the user, so you cannot change it; nothing changed. {_LEAVE_IT}"
 )
-SKILL_MANAGE_USER_SKILL_REFUSAL = (
-    "Skill '{name}' was created by the user, so it cannot be changed in the background; "
-    f"nothing changed. {_LEAVE_IT}"
-)
-SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL = (
-    "Who created Skill '{name}' cannot be determined, so it cannot be changed in the "
-    f"background; nothing changed. {_LEAVE_IT}"
-)
-SKILL_MANAGE_SHARED_REFUSAL = (
-    "Skill '{name}' is shared with you by another Agent, so it cannot be changed in the "
-    f"background; nothing changed. {_LEAVE_IT}"
+SKILL_MANAGE_HISTORY_UNREADABLE_REFUSAL = (
+    "The history of Skill '{name}' cannot be read, so whether the user pinned it is unknown "
+    f"and you cannot change it; nothing changed. {_LEAVE_IT}"
 )
 # A Librarian pass builds its changes from what it read; a Skill that someone else
 # changed after the pass started is read again first.
@@ -105,21 +114,11 @@ SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL = (
     "Load '{name}' again with skill and build your change from that text, or leave it as "
     "it is."
 )
-SKILL_MANAGE_SHARED_OUT_REFUSAL = (
-    "Skill '{name}' is shared with other Agents, so it cannot be deleted in the background; "
-    f"nothing changed. {_LEAVE_IT}"
-)
-SKILL_MANAGE_SCHEDULED_REFUSAL = (
-    "Skill '{name}' is used by one of your schedules, which loads it by its name, so it "
-    "cannot be deleted in the background; nothing changed. To merge it with other Skills, "
-    "move their instructions into '{name}' and delete them with absorbed_into '{name}'. "
-    "Otherwise leave '{name}' as it is."
-)
 SKILL_MANAGE_ABSORBED_INTO_REQUIRED = (
-    "In the background, delete needs absorbed_into: the name of another of your own Skills "
-    "that now holds the instructions of '{name}'; nothing changed. Merge the instructions "
-    "into that Skill with patch or edit first, then call delete with absorbed_into. If no "
-    "other Skill holds them, leave '{name}' as it is."
+    "delete needs absorbed_into: the name of another of your own Skills that now holds the "
+    "instructions of '{name}'; nothing changed. Merge the instructions into that Skill with "
+    "patch or edit first, then call delete with absorbed_into. If no other Skill holds "
+    "them, leave '{name}' as it is."
 )
 # ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
 SKILL_MANAGE_ABSORBED_INTO_ACTION = (
@@ -135,18 +134,19 @@ SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
 )
 
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
+# follow_merge(owner_id, name, target, delete) -> the references that could not move.
+SkillMergeFollower = Callable[
+    [str, str, str, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
+    Awaitable[tuple[SkillReference, ...]],
+]
 # Actions that may operate on a Skill shared into the caller (maintained in the
-# owner's package). ``create`` is own-home-only by definition; ``delete`` stays
-# owner/human-only so a receiver cannot remove someone else's playbook.
+# owner's package), by every writer. ``create`` is own-home-only by definition;
+# ``delete`` stays owner/human-only so a receiver cannot remove someone else's
+# playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
-# The Skill history actor of a Run without the user: a Librarian pass writes as
-# ``librarian``; every other unattended kind is a reflection review.
-_BACKGROUND_ACTOR: SkillActor = "reflection"
-_LIBRARIAN_ACTOR: SkillActor = "librarian"
 _PROTECTED_MESSAGES = {
     "pinned": SKILL_MANAGE_PINNED_REFUSAL,
-    "user": SKILL_MANAGE_USER_SKILL_REFUSAL,
-    "unknown": SKILL_MANAGE_UNKNOWN_ORIGIN_REFUSAL,
+    "unknown": SKILL_MANAGE_HISTORY_UNREADABLE_REFUSAL,
 }
 _LOGGER = get_logger("tools.skill_manage")
 # How many (Run, Skill) pairs remember the outside change they were told about.
@@ -297,21 +297,19 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-    shared_skill_names: Callable[[str], Collection[str]] | None = None,
-) -> Callable[[ToolContext, JsonObject, Collection[str], str | None], JsonObject]:
+) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], JsonObject]:
     """Return the direct Skill-management handler.
 
-    The handler's third argument names the caller's Skills that its live
-    automations trigger by name; a background Run never deletes one of them,
-    because the automation would then trigger nothing. Nor does it delete one
-    that ``shared_skill_names(agent_id)`` names: the caller shares it with other
-    Agents, whose shares would then name no Skill.
+    A background writer (a Reflection or the Librarian) never changes a Skill
+    the user pinned, and deletes a Skill only with ``absorbed_into``.
 
-    The fourth argument is when the calling Run started, given for a Librarian
-    Run. Such a Run builds its changes from Skills it read during the Run, so a
+    The handler's third argument is when the calling Run started, given for a
+    Librarian Run. Such a Run builds its changes from Skills it read during the Run, so a
     change to an existing Skill that someone else changed after the Run started
     is refused once per outside change; the Run reads the Skill again and
-    retries, or leaves it.
+    retries, or leaves it. The fourth is what a delete with ``absorbed_into``
+    moves to the absorbing Skill (``register_skill_manage_tool``); the archive
+    revision records it.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -360,28 +358,26 @@ def make_skill_manage_handler(
     def skill_manage_handler(
         context: ToolContext,
         arguments: JsonObject,
-        scheduled: Collection[str] = (),
         run_started_at: str | None = None,
+        followed: tuple[SkillReference, ...] = (),
     ) -> JsonObject:
-        writer = _writer(context)
+        writer = skill_writer(context)
+        # The Skills of the calling Agent, or of the Agent a Librarian Session maintains.
+        owner_id = context.skill_subject_id
         try:
             call = _read_call(arguments)
-            own_root = resolve_agent_skills_dir(context.agent_id)
+            own_root = resolve_agent_skills_dir(owner_id)
             target_root = own_root
             shared_target = False
             if call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
             ):
                 shared_root = (
-                    resolve_shared_skills_dir(context.agent_id, call.name)
+                    resolve_shared_skills_dir(owner_id, call.name)
                     if resolve_shared_skills_dir is not None
                     else None
                 )
                 if shared_root is not None:
-                    if writer.background:
-                        raise _RefusalError(
-                            "skill_protected", SKILL_MANAGE_SHARED_REFUSAL.format(name=call.name)
-                        )
                     target_root = shared_root
                     shared_target = True
             # A missing target package on a mutate/delete action is not always an
@@ -391,16 +387,10 @@ def make_skill_manage_handler(
             # name, which is the established override path.
             if call.action != "create" and find_skill_package_dir(target_root, call.name) is None:
                 scope = (
-                    resolve_external_skill_scope(
-                        context.agent_id, call.name, context.skill_project_id
-                    )
+                    resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
                     if resolve_external_skill_scope is not None
                     else None
                 )
-                if scope == "shared" and writer.background:
-                    raise _RefusalError(
-                        "skill_protected", SKILL_MANAGE_SHARED_REFUSAL.format(name=call.name)
-                    )
                 if scope is not None:
                     return tool_failure(
                         "skill_write_rejected",
@@ -411,26 +401,14 @@ def make_skill_manage_handler(
             if writer.background and call.action != "create":
                 authoring.check_writable(target_root, call.name, writer=writer)
             if (
-                writer.actor == _LIBRARIAN_ACTOR
+                writer.actor == LIBRARIAN_SKILL_ACTOR
                 and run_started_at is not None
                 and call.action != "create"
             ):
                 check_unchanged_since(target_root, call.name, writer, run_started_at)
             if call.action == "delete":
-                if writer.background and call.name in scheduled:
-                    raise _RefusalError(
-                        "skill_protected", SKILL_MANAGE_SCHEDULED_REFUSAL.format(name=call.name)
-                    )
-                if (
-                    writer.background
-                    and shared_skill_names is not None
-                    and call.name in shared_skill_names(context.agent_id)
-                ):
-                    raise _RefusalError(
-                        "skill_protected", SKILL_MANAGE_SHARED_OUT_REFUSAL.format(name=call.name)
-                    )
                 _check_absorbed_into(call, own_root, writer)
-            result, summary = _apply(authoring, target_root, call, writer)
+            result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
         except SkillProtectedError as error:
@@ -450,14 +428,14 @@ def make_skill_manage_handler(
 
         # An own-home invalidation also reaches its shared receivers. Receiver
         # edits conservatively invalidate all Agent scopes through the same owner.
-        invalidate_agent_skills(None if shared_target else context.agent_id)
+        invalidate_agent_skills(None if shared_target else owner_id)
         if on_changed is not None:
             on_changed()
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
             "shared" if shared_target else "own",
-            target_root.parent.name if shared_target else context.agent_id,
+            target_root.parent.name if shared_target else owner_id,
             call.action,
             context.agent_id,
         )
@@ -470,22 +448,6 @@ def make_skill_manage_handler(
         return tool_success({"content": "\n".join(lines)})
 
     return skill_manage_handler
-
-
-def _writer(context: ToolContext) -> SkillWriter:
-    """Name the call's writer: an attended Agent, a Librarian pass or a review."""
-    kind = context.run_kind
-    actor: SkillActor = "agent"
-    if kind is RunKind.LIBRARIAN:
-        actor = _LIBRARIAN_ACTOR
-    elif is_unattended_run_kind(kind):
-        actor = _BACKGROUND_ACTOR
-    return SkillWriter(
-        actor=actor,
-        session_id=context.session_id or None,
-        run_id=context.run_id or None,
-        run_kind=None if kind is None else kind.value,
-    )
 
 
 def _after(timestamp: str, moment: datetime) -> bool:
@@ -813,7 +775,11 @@ def _read_hint(name: str, file_path: str) -> str:
 
 
 def _apply(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
+    authoring: SkillAuthoringService,
+    target_root: Path,
+    call: _Call,
+    writer: SkillWriter,
+    followed: tuple[SkillReference, ...] = (),
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
@@ -835,7 +801,7 @@ def _apply(
         return result, f"Removed {file_path} from Skill '{name}'."
     if call.absorbed_into is not None:
         result = authoring.delete(
-            target_root, name, writer=writer, absorbed_into=call.absorbed_into
+            target_root, name, writer=writer, absorbed_into=call.absorbed_into, followed=followed
         )
         return result, SKILL_MANAGE_ABSORBED.format(name=name, target=call.absorbed_into)
     result = authoring.delete(target_root, name, writer=writer)
@@ -1128,17 +1094,20 @@ def register_skill_manage_tool(
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
-    triggered_skill_names: Callable[[str], Collection[str]] | None = None,
-    shared_skill_names: Callable[[str], Collection[str]] | None = None,
     run_started_at: Callable[[str], str | None] | None = None,
+    follow_merge: SkillMergeFollower | None = None,
 ) -> None:
     """Register identity-only direct Skill management.
 
-    ``triggered_skill_names(agent_id)`` names the Skills an Identity Agent's live
-    automations trigger by name, and ``run_started_at(run_id)`` returns when a
-    Run started (``None`` when unknown). Both read Event Loop state, so they run
-    on the Loop, before the write moves to a worker. ``shared_skill_names(agent_id)``
-    names the Skills an Agent shares with other Agents; it runs on the worker.
+    ``run_started_at(run_id)`` returns when a Run started (``None`` when
+    unknown). It reads Event Loop state, so it runs on the Loop, before the
+    write moves to a worker.
+
+    ``follow_merge(owner_id, name, target, delete)`` runs a delete with
+    ``absorbed_into``: it calls ``delete(followed)`` with what names the Skill
+    (its shares, the automations that trigger it), and once that delete
+    succeeded moves each of them to ``target``, returning those it could not
+    move. The result then notes both.
     """
     handler = make_skill_manage_handler(
         authoring,
@@ -1147,30 +1116,39 @@ def register_skill_manage_tool(
         resolve_shared_skills_dir,
         resolve_external_skill_scope,
         on_changed=on_changed,
-        shared_skill_names=shared_skill_names,
     )
 
     def guarded_handler(
         context: ToolContext,
         arguments: JsonObject,
-        scheduled: Collection[str],
         started: str | None,
+        followed: tuple[SkillReference, ...],
     ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments, scheduled, started)
+            return handler(context, arguments, started, followed)
 
     async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
-        scheduled: Collection[str] = ()
-        if (
-            triggered_skill_names is not None
-            and arguments.get("action") == "delete"
-            and is_unattended_run_kind(context.run_kind)
-        ):
-            scheduled = triggered_skill_names(context.agent_id)
         started = None
         if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
             started = run_started_at(context.run_id)
-        return await run_tool_worker(guarded_handler, context, arguments, scheduled, started)
+        merge = _merge(arguments)
+        if follow_merge is None or merge is None:
+            return await run_tool_worker(guarded_handler, context, arguments, started, ())
+        name, target = merge
+        results: list[JsonObject] = []
+        planned: list[SkillReference] = []
+
+        async def delete(followed: tuple[SkillReference, ...]) -> bool:
+            result = await run_tool_worker(guarded_handler, context, arguments, started, followed)
+            results.append(result)
+            planned.extend(followed)
+            return result.get("ok") is True
+
+        failed = await follow_merge(context.skill_subject_id, name, target, delete)
+        result = results[0]
+        if result.get("ok") is True and planned:
+            _note_followed(result, name, target, planned, failed)
+        return result
 
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
@@ -1189,6 +1167,41 @@ def register_skill_manage_tool(
             details=True,
         ),
     )
+
+
+def _merge(arguments: JsonObject) -> tuple[str, str] | None:
+    """The Skill name and the absorbing Skill of a delete with ``absorbed_into``."""
+    name, target = arguments.get("name"), arguments.get("absorbed_into")
+    if arguments.get("action") != "delete" or not isinstance(name, str):
+        return None
+    if not isinstance(target, str) or not target or target == name:
+        return None
+    return name, target
+
+
+def _note_followed(
+    result: JsonObject,
+    name: str,
+    target: str,
+    planned: list[SkillReference],
+    failed: tuple[SkillReference, ...],
+) -> None:
+    """Add what now uses ``target`` (a note), and what still names ``name`` (a warning)."""
+    lines = [result["data"]["content"]]
+    moved = [reference for reference in planned if reference not in failed]
+    if moved:
+        items = "; ".join(_reference_label(reference) for reference in moved)
+        note = SKILL_MANAGE_FOLLOWED_NOTE.format(target=target, name=name, items=items)
+        lines.append(f"Note: {note}")
+    if failed:
+        items = "; ".join(_reference_label(reference) for reference in failed)
+        warning = SKILL_MANAGE_NOT_FOLLOWED_WARNING.format(name=name, target=target, items=items)
+        lines.append(f"Warning: {warning}")
+    result["data"]["content"] = "\n".join(lines)
+
+
+def _reference_label(reference: SkillReference) -> str:
+    return _REFERENCE_LABELS[reference.kind].format(name=reference.name)
 
 
 def _skill_manage_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

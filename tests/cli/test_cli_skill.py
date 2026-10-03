@@ -266,6 +266,10 @@ def test_skill_history_archive_and_pin_commands_send_their_requests(
         "absorbed_into": "catalog",
         "run_id": "run-1",
         "files": [{"path": "SKILL.md", "change": "deleted"}],
+        "followed": [
+            {"kind": "shared", "id": "coder", "name": "Coder"},
+            {"kind": "cron", "id": "job-1", "name": "Daily report"},
+        ],
     }
     archived = {
         "archive_id": "librarian_01",
@@ -311,7 +315,9 @@ def test_skill_history_archive_and_pin_commands_send_their_requests(
     ]
     assert (
         "revision 7  2026-09-30T08:00:00.000000Z  librarian  archived (merged into catalog) "
-        "by reflection (run run-1)\n  deleted SKILL.md"
+        "by reflection (run run-1)\n  deleted SKILL.md\n"
+        "  moved to catalog: share with Agent Coder\n"
+        "  moved to catalog: cron job Daily report"
     ) in outputs["history"][1]
     assert "librarian  revert of revision 7 by reflection" in outputs["revert"][1]
     assert (

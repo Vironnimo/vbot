@@ -66,6 +66,21 @@ def triggered_skill_names(content: str) -> list[str]:
     return names
 
 
+def rename_skill_triggers(content: str, name: str, new_name: str) -> str:
+    """Return ``content`` with every trigger of the Skill ``name`` naming ``new_name``.
+
+    The triggers are exactly those :func:`triggered_skill_names` reads: a leading
+    ``/name`` and every ``$name``. Triggers of other Skills, including longer
+    names that start with ``name``, stay as they are.
+    """
+    slash_match = SKILL_SLASH_TRIGGER_PATTERN.match(content)
+    if slash_match is not None and slash_match.group(1) == name:
+        content = f"/{new_name}{content[slash_match.end() :]}"
+    return SKILL_INLINE_TRIGGER_PATTERN.sub(
+        lambda match: f"${new_name}" if match.group(1) == name else match.group(0), content
+    )
+
+
 @dataclass(frozen=True)
 class ValidationResult:
     """Result of validating one skill's parsed YAML metadata."""

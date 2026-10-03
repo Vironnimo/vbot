@@ -28,9 +28,12 @@ class _AgentLike(Protocol):
 
 
 class AgentDirectory(Protocol):
-    """The agent-id source for the scan (satisfied by ``AgentStore``)."""
+    """The agent-id source for the scan (satisfied by ``AgentStore``).
 
-    def list(self) -> list[_AgentLike]: ...
+    The scan covers the built-in Agents too: their Runs cost like any other.
+    """
+
+    def list_with_builtins(self) -> list[_AgentLike]: ...
 
 
 class _ProjectLike(Protocol):

@@ -86,6 +86,10 @@
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
     sessionsRefreshToken = 0,
+    // A Librarian pass starts and ends as a Skills change.
+    skillsRefreshToken = 0,
+    // Opens a Session in Chat (Skill maintenance opens the Librarian's).
+    onOpenSession = noop,
     initialScrollPosition = null,
     onScrollPositionChange = noop,
     // The App's Extension invalidations (see app/extensions.svelte.js).
@@ -976,9 +980,13 @@
   {:else if panelId === 'librarian'}
     <SettingsLibrarianPanel
       {settings}
+      {agents}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
+      {onOpenSession}
       {modelsRefreshToken}
+      {agentsRefreshToken}
+      {skillsRefreshToken}
     />
   {:else if panelId === 'notifications'}
     <SettingsNotificationsPanel

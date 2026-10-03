@@ -11,11 +11,6 @@ from typing import Any, cast
 
 import pytest
 
-from core.automation.librarian import (
-    LIBRARIAN_TOOL_ITERATION_LIMIT,
-    LIBRARIAN_TOOL_RESTRICTION,
-    librarian_tool_denial_resolver,
-)
 from core.automation.reflection import (
     COUNTER_GENERATION_KEY,
     MEMORY_REFLECTION_TOOL_RESTRICTION,
@@ -27,12 +22,7 @@ from core.automation.reflection import (
     ReflectionUnavailableError,
 )
 from core.chat import ChatMessage
-from core.prompts.briefs import (
-    LibrarianCandidate,
-    learn_brief,
-    librarian_brief,
-    reflection_brief,
-)
+from core.prompts.briefs import learn_brief, reflection_brief
 from core.runs import RunKind
 from core.sessions import ChatSessionManager, SessionAddress
 from core.storage import StorageManager
@@ -546,6 +536,23 @@ async def test_run_end_accounting_follows_the_review_cadence(
             None,
             id="skill-unavailable",
         ),
+        # The built-in Librarian can call skill and skill_manage but is never reviewed.
+        pytest.param(
+            SimpleNamespace(
+                **{
+                    **vars(_without(memory=True)),
+                    "id": "librarian",
+                    "builtin": "librarian",
+                    "tool_access": ToolAccess(mode="selected", allowed=("skill", "skill_manage")),
+                }
+            ),
+            (1, 1),
+            (1, 5),
+            {"iteration_count": 3, "tool_call_names": {"skill_manage"}},
+            (1, 5),
+            None,
+            id="librarian",
+        ),
     ],
 )
 async def test_unavailable_dimension_is_neither_counted_nor_reviewed(
@@ -905,38 +912,27 @@ async def test_run_review_narrows_to_the_callable_scope_or_refuses_before_forkin
         ("memory", "`memory`"),
         ("skill", "`skill` and `skill_manage`"),
         ("combined", "`memory`, `skill`, and `skill_manage`"),
-        ("librarian", "`skill` and `skill_manage`"),
     ],
 )
 async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     tmp_path: Path, scope: str, callable_tools: str
 ) -> None:
     bundled = StorageManager(data_dir=tmp_path / "data")
-    if scope == "librarian":
-        # A Librarian pass runs its own brief over the Skills it can change.
-        tools: tuple[str, ...] = LIBRARIAN_TOOL_RESTRICTION
-        limit = LIBRARIAN_TOOL_ITERATION_LIMIT
-        review: dict[str, Any] = {
-            "message": librarian_brief(bundled, [_LIBRARIAN_CANDIDATE], limit=limit),
-            "tool_denial_resolver": librarian_tool_denial_resolver(),
-        }
-        boundary = "in this maintenance pass. This pass"
-    else:
-        service, _sessions, loop = _make_service()
-        service._runtime.storage.read_prompt_fragment = bundled.read_prompt_fragment  # type: ignore[method-assign]
+    service, _sessions, loop = _make_service()
+    service._runtime.storage.read_prompt_fragment = bundled.read_prompt_fragment  # type: ignore[method-assign]
 
-        await service.run_review("main", "s1", review_scope=cast("Any", scope))
+    await service.run_review("main", "s1", review_scope=cast("Any", scope))
 
-        [review] = loop.started
-        tools = _REVIEWS[scope][0]
-        limit = REFLECTION_TOOL_ITERATION_LIMIT
-        assert review["tool_restriction"] == tools
-        assert review["max_tool_iterations"] == limit
-        # A review that can write Skills learns that the list marks the ones it cannot change.
-        assert (
-            "does not mark as read-only; all other Skills are read-only" in review["message"]
-        ) == ("skill_manage" in tools)
-        boundary = "in this review. This review"
+    [review] = loop.started
+    tools = _REVIEWS[scope][0]
+    limit = REFLECTION_TOOL_ITERATION_LIMIT
+    assert review["tool_restriction"] == tools
+    assert review["max_tool_iterations"] == limit
+    # A review that can write Skills learns that the list marks the ones it cannot change.
+    assert ("does not mark as read-only; all other Skills are read-only" in review["message"]) == (
+        "skill_manage" in tools
+    )
+    boundary = "in this review. This review"
     # The production brief names exactly the Tools its Run can call: backticked
     # identifiers are Tool names unless they are parameters of those Tools or
     # values those parameters take. ``skill_manage`` accepts ``absorbed_into``
@@ -962,20 +958,6 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
             f"Nothing was run: `{other}` is not available {boundary} "
             f"can call only {callable_tools}. Do not retry this call."
         )
-
-
-_LIBRARIAN_CANDIDATE = LibrarianCandidate(
-    name="deploy-web",
-    description="Deploy the web app.",
-    origin="reflection",
-    created="2026-05-01",
-    changed="2026-06-01",
-    last_used=None,
-    uses=0,
-    skill_md_chars=1200,
-    support_files=("references/env.md",),
-    scheduled=False,
-)
 
 
 _TOOL_PARAMETERS: dict[str, Any] = {

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -83,6 +83,7 @@ from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
+from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -94,7 +95,7 @@ from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.settings.settings import effective_timezone_name
-from core.skills.authoring import ArchivedSkill, SkillAuthoringService
+from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillReference
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
@@ -617,6 +618,32 @@ class Runtime:
         """Name the Skills the Identity Agent ``owner_id`` shares with other Agents."""
         return self._skill_operations().shared_skill_names(owner_id)
 
+    async def follow_skill_merge(
+        self,
+        owner_id: str,
+        name: str,
+        target: str,
+        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+    ) -> tuple[SkillReference, ...]:
+        """Delete an Identity Agent's Skill into another one and move what named it there.
+
+        ``delete(followed)`` deletes the Skill and records ``followed``; returns
+        what could not move (``core/runtime/_skill_merge.py``).
+        """
+        if self._skill_policy is None:
+            raise RuntimeError("Skill policy service not available")
+        services = SkillMergeServices(
+            policy=self._skill_policy,
+            automation=self.automation_references,
+            agent_name=self._agent_name,
+            shares_changed=lambda: self.invalidate_agent_skills(None),
+        )
+        return await follow_skill_merge(services, owner_id, name, target, delete)
+
+    def _agent_name(self, agent_id: str) -> str:
+        agent = self.agents.find(agent_id)
+        return agent.name if agent is not None and agent.name else agent_id
+
     def run_started_at(self, run_id: str) -> str | None:
         """When the Run ``run_id`` was created, while the Run manager still holds it."""
         if self._chat_run_manager is None:
@@ -625,10 +652,6 @@ class Runtime:
             return self._chat_run_manager.get(run_id).created_at
         except RunNotFoundError:
             return None
-
-    def automation_triggered_skill_names(self, agent_id: str) -> frozenset[str]:
-        """Name the Skills the live automations of the Identity Agent ``agent_id`` trigger."""
-        return self.automation_references.agent_triggered_skill_names(agent_id)
 
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
@@ -928,9 +951,8 @@ class Runtime:
                     self._resolve_external_skill_scope,
                     lifecycle_guard=self.agents.lifecycle_guard,
                     on_changed=self._notify_skills_changed,
-                    triggered_skill_names=self.automation_triggered_skill_names,
-                    shared_skill_names=self.shared_skill_names,
                     run_started_at=self.run_started_at,
+                    follow_merge=self.follow_skill_merge,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))

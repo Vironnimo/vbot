@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from core.agents import skill_subject_id
 from core.chat._request_builder import (
     RequestBuilder,
     _finalize_compaction_checkpoint,
@@ -206,7 +207,7 @@ class ChatCompactionHost:
             skill_project_id, identity_agent_id = resolve_skill_scope(
                 run.project_id,
                 prompt_project,
-                run.agent_id,
+                agent,
             )
             skill_registry = await self.run_transform(
                 self._dependencies.resolve_skills,
@@ -359,7 +360,7 @@ class ChatCompactionHost:
         prompt_skill_project_id, prompt_identity_agent_id = resolve_skill_scope(
             project_id,
             prompt_project,
-            agent_id,
+            agent,
         )
         if is_temporary:
             prompt_skill_project_id, prompt_identity_agent_id = working_project_id, None
@@ -367,7 +368,9 @@ class ChatCompactionHost:
             prompt_skill_project_id,
             prompt_identity_agent_id,
         )
-        activation_identity_agent_id = agent_id if project_id is None and not is_temporary else None
+        activation_identity_agent_id = (
+            skill_subject_id(agent) if project_id is None and not is_temporary else None
+        )
         if (
             activation_skill_project_id == prompt_skill_project_id
             and activation_identity_agent_id == prompt_identity_agent_id

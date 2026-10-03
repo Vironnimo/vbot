@@ -66,5 +66,8 @@ Workspace-less Run configuration synthesized from a scanned Project Team profile
 ## Identity Agent
 A stored Agent at `<datadir>/agents/<id>/` with `agent.json`, Workspace, and durable identity/Memory across Sessions. `memory_prompt_mode` controls Memory prompt visibility; Tool Access Policy independently controls `memory` Tool access. Unlike a Config Agent, it owns a persistent Memory home, not a workspace-less Project profile synthesized for a Run.
 
+## Librarian
+vBot's built-in hidden Identity Agent (id `librarian`, marked `"builtin": "librarian"` in its `agent.json`) that maintains other Identity Agents' own Skills: each scheduled or manual pass for an Agent runs in a new Session of the Librarian bound to that Agent. It can call only `skill` and `skill_manage`, is left out of the roster, delegation and Channels, and is never reviewed by a Reflection. Not a Tool, a Reflection, or a user's Agent that happens to be named "librarian". The Agent: `agent.md`; passes: `automation.md` -> Librarian.
+
 ## Rooted Agent
 An Identity Agent whose nullable saved `Project` selection names a registered Project. Retains its Workspace, Memory, private Skills, Sessions, permissions, and bare addressing; relative file/shell work, Project Files, and Project Skills use that Project. Not a Project Agent or Config Agent. Rooting does not move Session ownership, apply Project Config-Agent ceilings, or automatically expose the Team; Workspace path equality does not imply Rooting.

@@ -148,7 +148,12 @@ SPEECH_FIELDS = frozenset({"transcription_audio"})
 TRANSCRIPTION_AUDIO_FIELDS = frozenset({"profile", "format", "sample_rate_hz"})
 MAX_TRACE_LIMIT = 500
 REFLECTION_FIELDS = frozenset({"enabled", "memory_turn_interval", "skill_model_step_interval"})
-LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS, "model"})
+LIBRARIAN_FIELDS = frozenset({*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS})
+# ``librarian.model`` of an earlier vBot: loading ignores it, validation explains it.
+_RETIRED_LIBRARIAN_MODEL_WARNING = (
+    "no longer used: the Librarian is an Agent with its own Model now; set it with: "
+    "vbot agent update librarian --model <provider/model>"
+)
 LOCAL_MODELS_FIELDS = frozenset({"context_windows"})
 PROVIDERS_FIELDS = frozenset({"connections", "custom", "openrouter"})
 OPENROUTER_PROVIDER_FIELDS = frozenset({"routing"})
@@ -1112,7 +1117,17 @@ def _validate_librarian(diagnostics: list[JsonDiagnostic], value: Any) -> None:
         _error(diagnostics, "$.librarian", "must be an object")
         return
 
-    _warn_unknown_keys(diagnostics, "$.librarian", value, LIBRARIAN_FIELDS, "librarian field")
+    _warn_unknown_keys(
+        diagnostics, "$.librarian", value, LIBRARIAN_FIELDS | {"model"}, "librarian field"
+    )
+    if "model" in value:
+        diagnostics.append(
+            JsonDiagnostic(
+                severity="warning",
+                path="$.librarian.model",
+                message=_RETIRED_LIBRARIAN_MODEL_WARNING,
+            )
+        )
     for field in LIBRARIAN_BOOLEAN_FIELDS:
         if field in value and not isinstance(value[field], bool):
             _error(diagnostics, f"$.librarian.{field}", "must be a boolean")
@@ -1126,8 +1141,6 @@ def _validate_librarian(diagnostics: list[JsonDiagnostic], value: Any) -> None:
             _error(diagnostics, f"$.librarian.{field}", "must be at least 1")
         elif days > MAX_LIBRARIAN_DAYS:
             _error(diagnostics, f"$.librarian.{field}", f"must be at most {MAX_LIBRARIAN_DAYS}")
-    if "model" in value and not isinstance(value["model"], str):
-        _error(diagnostics, "$.librarian.model", "must be a string")
 
 
 def validate_temperature_diagnostic(

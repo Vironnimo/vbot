@@ -24,6 +24,9 @@ class _FakeLibrarian:
     async def run(self, agent_id: str) -> dict[str, Any]:
         return await self._answer("run", agent_id)
 
+    async def overview(self) -> dict[str, Any]:
+        return await self._answer("overview", "librarian")
+
     async def _answer(self, method: str, agent_id: str) -> dict[str, Any]:
         self.calls.append((method, agent_id))
         if self.error is not None:
@@ -36,16 +39,24 @@ def _state(librarian: _FakeLibrarian) -> Any:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["status", "run"])
-async def test_librarian_methods_answer_for_one_agent(method: str) -> None:
+@pytest.mark.parametrize(
+    ("method", "params", "agent_id"),
+    [
+        ("status", {"agent_id": "main"}, "main"),
+        ("run", {"agent_id": "main"}, "main"),
+        # Every Agent's passes at once, with the Librarian's availability.
+        ("overview", {}, "librarian"),
+    ],
+)
+async def test_librarian_methods_answer(method: str, params: dict[str, Any], agent_id: str) -> None:
     librarian = _FakeLibrarian()
 
     response = await dispatch_rpc(
-        _state(librarian), {"method": f"librarian.{method}", "params": {"agent_id": "main"}}
+        _state(librarian), {"method": f"librarian.{method}", "params": params}
     )
 
-    assert response == {"ok": True, "result": {"agent_id": "main", "running": method == "run"}}
-    assert librarian.calls == [(method, "main")]
+    assert response == {"ok": True, "result": {"agent_id": agent_id, "running": method == "run"}}
+    assert librarian.calls == [(method, agent_id)]
 
 
 @pytest.mark.asyncio
@@ -54,6 +65,7 @@ async def test_librarian_methods_answer_for_one_agent(method: str) -> None:
     [
         ("status", {}, None, "invalid_request"),
         ("run", {"agent_id": "main", "force": True}, None, "invalid_request"),
+        ("overview", {"agent_id": "main"}, None, "invalid_request"),
         (
             "status",
             {"agent_id": "ghost"},
@@ -64,7 +76,13 @@ async def test_librarian_methods_answer_for_one_agent(method: str) -> None:
         (
             "run",
             {"agent_id": "main"},
-            LibrarianUnavailableError("No skill_manage."),
+            LibrarianUnavailableError("Agent main has no Skills of its own."),
+            "invalid_request",
+        ),
+        (
+            "status",
+            {"agent_id": "librarian"},
+            LibrarianUnavailableError("The Librarian gets no pass itself."),
             "invalid_request",
         ),
         ("status", {"agent_id": "main"}, LibrarianStateError("unreadable"), "domain_error"),

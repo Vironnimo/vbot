@@ -234,6 +234,13 @@ async def test_project_caller_cannot_reach_another_project(harness: SubAgentHarn
             "Agent not found: workre. Omit agent_id to delegate to a copy of yourself, or use "
             "one of these Agent ids exactly: worker.",
         ),
+        # The built-in Librarian resolves as an Agent but is no delegation target.
+        (
+            {"content": BRIEF, "agent_id": "librarian"},
+            None,
+            "Agent not found: librarian. Omit agent_id to delegate to a copy of yourself, or "
+            "use one of these Agent ids exactly: worker.",
+        ),
         (
             {"content": BRIEF, "agent_id": "ghost"},
             "acme",

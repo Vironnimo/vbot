@@ -105,8 +105,8 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
     (pack / "tools" / "memory" / "description.md").write_text("CANDIDATE-TOOL")
     (pack / "fragments" / "review-closing.md").write_text("CANDIDATE-FRAGMENT")
     add = {"action": "add", "scope": "user", "content": "User prefers German responses."}
-    # A Librarian attempt that deletes the user's own Skill without absorbed_into.
-    delete = {"action": "delete", "name": "sales-report-weekly"}
+    # A Librarian attempt that deletes the pinned Skill without absorbed_into.
+    delete = {"action": "delete", "name": "sales-report-monthly"}
     adapter = ScriptedAdapter(
         _call("memory", {"action": "list", "scope": "user"}),
         _call("memory", add),
@@ -152,12 +152,12 @@ def test_learning_evaluation_runs_a_text_pack_arm_and_compares_reports(
         "fragment:review-closing.md",
         "tool:memory:description",
     ]
-    # The Librarian brief lists the Skills a pass may change: neither the user's
-    # Skill nor the pinned one.
+    # The Librarian brief lists the Skills a pass may change: every one but the
+    # pinned one, the user's Skill included.
     brief = adapter.requests[3]["messages"][-1]["content"]
     assert "- sales-report-quarterly\n  Description:" in brief
     assert "Created by: a background reflection on a conversation" in brief
-    assert "- sales-report-weekly\n" not in brief
+    assert "- sales-report-weekly\n  Description:" in brief
     assert "- sales-report-monthly\n" not in brief
     assert [(row["passed"], row["effect_passed"]) for row in report["pass_rates"]] == [
         (1, 1),

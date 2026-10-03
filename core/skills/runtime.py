@@ -295,8 +295,8 @@ class SkillRuntime:
     def shared_skill_names(self, owner_id: str) -> frozenset[str]:
         """Name the Skills of ``owner_id``'s private home that it shares with other Agents.
 
-        Sharing is the user's choice, so background maintenance never deletes one
-        of these Skills: the receivers' shares would then name no Skill.
+        Sharing is the user's choice, so Librarian aging never retires one of
+        these Skills: the receivers' shares would then name no Skill.
         """
         shared = self._policy.load().shared.get(owner_id, {})
         return frozenset(name for name, receivers in shared.items() if receivers - {owner_id})
@@ -304,24 +304,31 @@ class SkillRuntime:
     def background_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
         """Return why a background Run of *agent_id* cannot change each named Skill.
 
-        Names are Skills the Agent sees as its own. The reason is ``pinned``,
-        ``user`` or ``unknown`` for a package in its private home (see
-        ``SkillAuthoringService.background_protection``) and ``shared`` for one
-        shared into it. Names a background Run can change are absent.
+        Names are Skills the Agent sees as its own: its private Skills and those
+        other Agents share with it. The reason is ``pinned`` or ``unknown`` for
+        the package that owns the name (see
+        ``SkillAuthoringService.background_protection``). Names a background Run
+        can change are absent.
         """
         if self._authoring is None:
             return {}
-        own_root = self.agent_skills_dir(agent_id)
-        own = self._authoring.background_protection(own_root)
         environment = self._skill_environment(self._storage.load_environment())
+        homes: dict[Path, dict[str, str]] = {}
         protection: dict[str, str] = {}
+        own_root = self.agent_skills_dir(agent_id)
         for name in names:
+            home: Path | None = own_root
             package = find_skill_package_dir(own_root, name, environment)
-            if package is not None:
-                if package.name in own:
-                    protection[name] = own[package.name]
-            elif self._resolve_shared_skills_dir(agent_id, name) is not None:
-                protection[name] = "shared"
+            if package is None:
+                home = self._resolve_shared_skills_dir(agent_id, name)
+                package = None if home is None else find_skill_package_dir(home, name, environment)
+            if home is None or package is None:
+                continue
+            if home not in homes:
+                homes[home] = dict(self._authoring.background_protection(home))
+            reason = homes[home].get(package.name)
+            if reason is not None:
+                protection[name] = reason
         return protection
 
     def skills_for(

@@ -1,10 +1,10 @@
 """The Librarian: scheduled curation of each Identity Agent's own Skills.
 
 A Librarian pass keeps one Agent's private Skill library small, current and
-free of duplicates. It touches only Skills that the background rules of Skill
-authoring let it change (unpinned, created by the Agent, a Reflection review or
-an earlier pass; see ``core.skills``), and every change it makes is a recorded
-Skill revision under the actor ``librarian`` that the user can see and revert.
+free of duplicates. It never touches a Skill the user pinned (the background
+rule of Skill authoring; see ``core.skills``), and every change it makes is a
+recorded Skill revision under the actor ``librarian`` that the user can see
+and revert.
 
 A pass has two parts:
 
@@ -19,36 +19,41 @@ A pass has two parts:
    the Agent or the user created are never aged.
 2. **Consolidation** (``librarian.consolidate``): when at least two Skills are
    candidates and the candidates changed since the last consolidation (their
-   fingerprint: names and latest revision ids), one internal Run of kind
-   ``librarian`` in a new hidden Session of the Agent reads the Librarian brief
-   and may merge and fix the candidates with ``skill`` and ``skill_manage``
-   only. The Run uses the Agent's own Model unless ``librarian.model`` names
-   one: that Model then runs on its own defaults (no temperature, thinking
-   effort or fallback Models of the Agent), as overrides of the hidden Session
-   alone.
+   fingerprint: names and latest revision ids), the built-in Librarian Agent
+   (``core.agents``: its own Model and Model settings, only the Tools ``skill``
+   and ``skill_manage``) gets one internal Run of kind ``librarian`` in a new
+   Session of its own. The Session's metadata binds it to the Agent
+   (``SKILL_AGENT_ID_KEY``), so the Librarian's Tools and System Prompt work on
+   that Agent's Skills there; it is titled ``Skills of <Agent name> · <date>``.
+   The Run reads the Librarian brief and may merge and fix the candidates. The
+   Session is kept: the user can open it and go on talking with the Librarian
+   about that Agent's Skills.
 
 The service checks every hour (the first check waits until startup settled)
-and runs a pass for each Identity Agent that can call ``skill`` and
-``skill_manage``, whose own ``librarian_enabled`` switch is on, whose last pass
-is ``librarian.interval_days`` old, and that has no active or queued Run. An
-Agent without a pass is due one interval after the first check that saw it, so
-a new or upgraded installation gets a full interval before its first pass.
-Passes run one at a time. ``run`` starts a pass at once regardless of the
-interval and of ``librarian.enabled``; it refuses while the Agent is not idle,
-for an Agent whose switch is off, and for one that cannot call both Tools.
+and runs a pass for each Identity Agent of the user that has Skills of its own,
+whose own ``librarian_enabled`` switch is on, whose last pass is
+``librarian.interval_days`` old and that has no active or queued Run, while the
+Librarian is available and has no active or queued Run itself. An Agent without
+a pass is due one interval after the first check that saw it, so a new or
+upgraded installation gets a full interval before its first pass. Passes run
+one at a time. ``run`` starts a pass at once regardless of the interval and of
+``librarian.enabled``; it refuses while a pass runs or the Agent or the
+Librarian is not idle, and when no pass can run for the Agent at all
+(``UnscheduledReason``).
 
 Each Agent's state is the durable JSON document ``agents/<id>/librarian.json``:
-when the schedule first saw the Agent, when the last pass ran, what it did
-(counts, the archive revisions of aging, the consolidation Session and Run)
-and the fingerprint of the last consolidation. A running pass keeps a running
-record there, written when it starts, after aging archived Skills and once the
-consolidation Run started; a pass that ends without a final record (vBot
-stopped during it) is reported from that record as interrupted. A pass that
-fails records itself as failed. Either way the next scheduled pass comes one
-interval later, as after a completed pass. The report of a pass is derived
+when the schedule first saw the Agent, its recent passes (``last_pass`` and the
+``earlier_passes`` before it, at most ``LIBRARIAN_PASS_HISTORY`` together), what
+each did (counts, the archive revisions of aging, the consolidation Session and
+Run) and the fingerprint of the last consolidation. A running pass keeps a
+running record there, written when it starts, after aging archived Skills and
+once the consolidation Run started; a pass that ends without a final record
+(vBot stopped during it) is reported from that record as interrupted. A pass
+that fails records itself as failed. Either way the next scheduled pass comes
+one interval later, as after a completed pass. The report of a pass is derived
 from the Skill history: the revisions aging recorded and the revisions of the
-consolidation Run. Only the newest pass keeps its hidden consolidation Session;
-a pass deletes the one of the pass before it.
+consolidation Run. vBot never deletes the Session of a pass that started its
+Run.
 
 Blocking reads and writes run on the ``librarian`` workers, never on the Event
 Loop; Skill writes hold the Agent lifecycle guard.
@@ -66,11 +71,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from core.agents import AgentNotFoundError
-from core.automation.reflection import (
-    SKILL_REFLECTION_TOOL_RESTRICTION,
-    callable_review_dimensions,
-    tool_denial_resolver,
+from core.agents import (
+    LIBRARIAN_AGENT_ID,
+    SKILL_AGENT_ID_KEY,
+    AgentNotFoundError,
+    LibrarianProblem,
+    is_librarian,
+    librarian_problem_message,
 )
 from core.config_validation import (
     JsonDiagnostic,
@@ -84,14 +91,14 @@ from core.config_validation import (
 from core.json_documents import (
     JsonDocumentFormat,
     json_document,
+    json_list,
     json_object,
     validate_format_version,
     write_json_document,
 )
-from core.projects import MODEL_DEFAULTS_FIELD
 from core.prompts.briefs import LibrarianCandidate, librarian_brief
 from core.runs import RunKind
-from core.sessions import SessionAddress, SessionNotFoundError
+from core.sessions import SESSION_AUTO_TITLE_INITIALIZED_KEY, SESSION_AUTO_TITLE_KEY
 from core.settings import is_valid_agent_id
 from core.skills import (
     SkillAuthoringError,
@@ -100,7 +107,7 @@ from core.skills import (
     SkillRegistry,
     SkillWriter,
 )
-from core.skills._history import BACKGROUND_WRITABLE_ORIGINS, EXTERNAL_ACTOR
+from core.skills._history import EXTERNAL_ACTOR
 from core.skills.skills import scan_skill_resources
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
@@ -117,16 +124,6 @@ _LOGGER = get_logger("automation.librarian")
 # Blocking state, history and package work of passes and status reads.
 _LIBRARIAN_WORKERS = BoundedWorkerPool(name="librarian", max_workers=2)
 
-# The consolidation Run's dispatch boundary and its cost bound.
-LIBRARIAN_TOOL_RESTRICTION = SKILL_REFLECTION_TOOL_RESTRICTION
-LIBRARIAN_TOOL_ITERATION_LIMIT = 60
-# Tool result for a call outside the boundary. ``tool`` is the called Tool and
-# ``tools`` the allowed ones, both as the Model names them.
-LIBRARIAN_TOOL_DENIAL_MESSAGE = (
-    "Nothing was run: {tool} is not available in this maintenance pass. "
-    "This pass can call only {tools}. Do not retry this call."
-)
-
 # The first check waits until startup has settled; later checks run hourly.
 FIRST_CHECK_DELAY_SECONDS = 300.0
 CHECK_INTERVAL_SECONDS = 3600.0
@@ -139,6 +136,10 @@ _LIBRARIAN_WRITER = SkillWriter(actor="librarian", run_kind=RunKind.LIBRARIAN.va
 
 LIBRARIAN_STATE_FILENAME = "librarian.json"
 LIBRARIAN_STATE_FORMAT_VERSION = 1
+# How many passes an Agent's state keeps, the last pass included.
+LIBRARIAN_PASS_HISTORY = 10
+# How many recent passes over all Agents the overview lists.
+LIBRARIAN_OVERVIEW_PASSES = 20
 _PASS_FIELDS = frozenset(
     {
         "started_at",
@@ -158,16 +159,23 @@ _PASS_FIELDS = frozenset(
     }
 )
 LIBRARIAN_STATE_SHAPE = json_document(
-    {"first_seen_at", "last_pass", "running_pass", "consolidation_fingerprint"},
-    {"last_pass": json_object(_PASS_FIELDS), "running_pass": json_object(_PASS_FIELDS)},
+    {"first_seen_at", "last_pass", "earlier_passes", "running_pass", "consolidation_fingerprint"},
+    {
+        "last_pass": json_object(_PASS_FIELDS),
+        "earlier_passes": json_list(json_object(_PASS_FIELDS), key="started_at"),
+        "running_pass": json_object(_PASS_FIELDS),
+    },
 )
 PassTrigger = Literal["schedule", "manual"]
 # How a pass ended: it finished, an error stopped it, or vBot stopped during it.
 PassOutcome = Literal["completed", "failed", "interrupted"]
 ConsolidationOutcome = Literal["ran", "unchanged", "too_few", "disabled", "failed"]
-# Why an Agent gets no scheduled pass, in the order status reports them: its own
-# switch is off, it cannot call both Tools, or scheduled passes are off.
-UnscheduledReason = Literal["agent_disabled", "skill_tools_unavailable", "schedule_disabled"]
+# Why an Agent gets no scheduled pass, in the order status reports them: the
+# Librarian is unavailable, the Agent's own switch is off, it has no Skills of its
+# own, or scheduled passes are off. Only the last still allows a manual pass.
+UnscheduledReason = Literal[
+    "librarian_unavailable", "agent_disabled", "no_skills", "schedule_disabled"
+]
 _TRIGGERS = frozenset({"schedule", "manual"})
 _OUTCOMES = frozenset({"completed", "failed", "interrupted"})
 _CONSOLIDATION_OUTCOMES = frozenset({"ran", "unchanged", "too_few", "disabled", "failed"})
@@ -184,7 +192,8 @@ class LibrarianBusyError(LibrarianError):
 
 
 class LibrarianUnavailableError(LibrarianError):
-    """The Agent cannot be curated: its switch is off or it cannot call both Tools."""
+    """No pass can run for the Agent: the Librarian is unavailable, the Agent's switch
+    is off, it has no Skills of its own, or it is the Librarian."""
 
 
 class LibrarianStateError(LibrarianError):
@@ -262,20 +271,37 @@ class LibrarianState:
     """One Agent's Librarian state document.
 
     ``first_seen_at`` is when a scheduled check first saw the Agent; it dates
-    the first scheduled pass while ``last_pass`` is ``None``. ``running_pass``
-    is the record of the pass in progress (see :class:`LibrarianPass`).
+    the first scheduled pass while ``last_pass`` is ``None``. ``earlier_passes``
+    are the passes before the last one, newest first. ``running_pass`` is the
+    record of the pass in progress (see :class:`LibrarianPass`).
     """
 
     last_pass: LibrarianPass | None = None
     consolidation_fingerprint: str | None = None
     first_seen_at: str | None = None
     running_pass: LibrarianPass | None = None
+    earlier_passes: tuple[LibrarianPass, ...] = ()
+
+    @property
+    def passes(self) -> tuple[LibrarianPass, ...]:
+        """The recorded passes, newest first, at most ``LIBRARIAN_PASS_HISTORY``."""
+        newest = () if self.last_pass is None else (self.last_pass,)
+        return (*newest, *self.earlier_passes)[:LIBRARIAN_PASS_HISTORY]
+
+    def recorded(self, record: LibrarianPass) -> LibrarianState:
+        """This state with ``record`` as the last pass, the older passes kept up to the bound."""
+        return replace(
+            self,
+            last_pass=record,
+            running_pass=None,
+            earlier_passes=self.passes[: LIBRARIAN_PASS_HISTORY - 1],
+        )
 
     def settled(self) -> LibrarianState:
         """The state while no pass runs: a running record left behind is the last pass."""
         if self.running_pass is None:
             return self
-        return replace(self, last_pass=self.running_pass, running_pass=None)
+        return self.recorded(self.running_pass)
 
     def to_document(self) -> dict[str, Any]:
         document: dict[str, Any] = {}
@@ -283,6 +309,8 @@ class LibrarianState:
             document["first_seen_at"] = self.first_seen_at
         if self.last_pass is not None:
             document["last_pass"] = self.last_pass.to_dict()
+        if self.earlier_passes:
+            document["earlier_passes"] = [record.to_dict() for record in self.earlier_passes]
         if self.running_pass is not None:
             document["running_pass"] = self.running_pass.to_dict()
         if self.consolidation_fingerprint is not None:
@@ -312,6 +340,12 @@ def _validate_state_document(data: Any) -> list[JsonDiagnostic]:
     for key in ("last_pass", "running_pass"):
         if data.get(key) is not None:
             _validate_pass(diagnostics, f"$.{key}", data[key])
+    earlier = data.get("earlier_passes", [])
+    if not isinstance(earlier, list):
+        add_error(diagnostics, "$.earlier_passes", "must be a list")
+    else:
+        for index, record in enumerate(earlier):
+            _validate_pass(diagnostics, f"$.earlier_passes[{index}]", record)
     return diagnostics
 
 
@@ -391,6 +425,8 @@ class _ActivePass:
 
     started_at: str
     trigger: PassTrigger
+    # The name of the Agent whose Skills the pass curates, for its Session title and brief.
+    agent_name: str = ""
     task: asyncio.Task[None] | None = field(default=None, repr=False)
     base: LibrarianState | None = None
     # Every Agent's Skill use by ``(agent id, name)``, read for this pass or its check.
@@ -429,26 +465,17 @@ class _ActivePass:
         )
 
 
-def librarian_tool_denial_resolver() -> Callable[[str], str | None]:
-    """Deny every Tool but ``skill`` and ``skill_manage`` in a consolidation Run."""
-    return tool_denial_resolver(LIBRARIAN_TOOL_RESTRICTION, LIBRARIAN_TOOL_DENIAL_MESSAGE)
-
-
 def librarian_candidates(
     authoring: SkillAuthoringService,
     root: Path,
     *,
     usage: Mapping[str, SkillUse],
-    scheduled: frozenset[str],
-    shared: frozenset[str] = frozenset(),
     records: Mapping[str, SkillRecord] | None = None,
 ) -> tuple[LibrarianCandidate, ...]:
     """Return the Skills of the home ``root`` that a Librarian pass may change.
 
-    A candidate is a loadable, unpinned Skill that the Agent, a Reflection
-    review or an earlier pass created and that the Agent does not share with
-    other Agents (``shared``). ``usage`` is the Agent's Skill use by name and
-    ``scheduled`` the names live automations trigger. Blocking.
+    A candidate is a loadable Skill the user has not pinned, whoever created
+    it. ``usage`` is the Agent's Skill use by name. Blocking.
     """
     if records is None:
         records = authoring.records(root)
@@ -456,7 +483,7 @@ def librarian_candidates(
     candidates: list[LibrarianCandidate] = []
     for name in sorted(records):
         record = records[name]
-        if record.pinned or record.origin not in BACKGROUND_WRITABLE_ORIGINS or name in shared:
+        if record.pinned:
             continue
         try:
             skill = registry.get(name)
@@ -475,14 +502,16 @@ def librarian_candidates(
                 uses=0 if use is None else use.count,
                 skill_md_chars=len(text),
                 support_files=tuple(scan_skill_resources(skill.path.parent)),
-                scheduled=name in scheduled,
             )
         )
     return tuple(candidates)
 
 
 class LibrarianService:
-    """Scheduled and on-demand Librarian passes over Identity Agents' own Skills."""
+    """Scheduled and on-demand Librarian passes over Identity Agents' own Skills.
+
+    Passes run as the built-in Librarian Agent (``core.agents``), one at a time.
+    """
 
     def __init__(
         self,
@@ -506,8 +535,8 @@ class LibrarianService:
         other Agents. ``skills_changed`` runs after aging archived Skills of an Agent
         (consolidation writes report themselves through ``skill_manage``), and
         ``status_changed`` whenever a pass starts or ends. ``reviewing(agent_id)``
-        says whether a background review of the Agent is starting or running; a
-        pass waits for it like for any other Run of the Agent.
+        says whether a Reflection of the Agent is starting or running; a pass
+        waits for it like for any other Run of the Agent.
         """
         self._runtime = runtime
         self._authoring = authoring
@@ -559,14 +588,18 @@ class LibrarianService:
 
         ``available`` says whether a pass can run for the Agent at all.
         ``unscheduled_reason`` names why it gets no scheduled pass, ``None``
-        while it gets them: ``agent_disabled`` (its ``librarian_enabled`` is
-        off), ``skill_tools_unavailable`` (it cannot call ``skill`` and
-        ``skill_manage``) or ``schedule_disabled`` (``librarian.enabled`` is
-        off; a pass started by hand still runs). ``next_due_at`` is set only
-        while the Agent gets scheduled passes.
+        while it gets them: ``librarian_unavailable`` (the Librarian Agent is
+        unavailable; ``librarian_problem`` says why), ``agent_disabled`` (its
+        ``librarian_enabled`` is off), ``no_skills`` (it has no Skills of its own)
+        or ``schedule_disabled`` (``librarian.enabled`` is off; a pass started by
+        hand still runs). ``next_due_at`` is set only while the Agent gets
+        scheduled passes. ``passes`` are its recent passes, newest first, the
+        first being ``last_pass``; a pass whose consolidation Run started names
+        the Librarian's Session and Run.
 
-        Raises ``AgentNotFoundError`` unless ``agent_id`` is an Identity Agent and
-        :class:`LibrarianStateError` when its state document cannot be read.
+        Raises ``AgentNotFoundError`` unless ``agent_id`` is an Identity Agent,
+        :class:`LibrarianUnavailableError` for the Librarian itself and
+        :class:`LibrarianStateError` when the state document cannot be read.
         """
         agent = await self._identity_agent(agent_id)
         settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
@@ -574,13 +607,15 @@ class LibrarianService:
         active = self._active.get(agent_id)
         if active is None:
             state = state.settled()
+        passes = list(state.passes)
         last_pass = state.last_pass
         changes = await _LIBRARIAN_WORKERS.run(self._pass_revisions, agent_id, last_pass)
         if last_pass is not None and last_pass.outcome == "interrupted":
             # An interrupted pass never counted what its consolidation Run did.
             created, changed, merged = _counts(changes, last_pass.run_id)
             last_pass = replace(last_pass, created=created, changed=changed, merged=merged)
-        blocked = self._unavailable_reason(agent)
+            passes[0] = last_pass
+        problem, blocked = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
         unscheduled = blocked or (None if settings["enabled"] else "schedule_disabled")
         next_due = None
         if unscheduled is None:
@@ -592,44 +627,67 @@ class LibrarianService:
             "settings": dict(settings),
             "available": blocked is None,
             "unscheduled_reason": unscheduled,
+            "librarian_problem": problem,
             "running": active is not None,
             "running_since": None if active is None else active.started_at,
             "last_pass": None if last_pass is None else last_pass.to_dict(),
+            "passes": [record.to_dict() for record in passes],
             "next_due_at": next_due,
             "changes": [revision.to_dict() for revision in changes],
+        }
+
+    async def overview(self) -> dict[str, Any]:
+        """Return whether the Librarian is available and its recent passes over all Agents.
+
+        ``problem`` says why the Librarian is unavailable, ``None`` while it is
+        available. ``running`` names the Agent whose pass runs, if one does.
+        ``passes`` are the recent passes of every Identity Agent, newest first
+        (at most ``LIBRARIAN_OVERVIEW_PASSES``), each with its ``agent_id`` and
+        ``agent_name``; an Agent whose state cannot be read is left out.
+        """
+        settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
+        problem, passes = await _LIBRARIAN_WORKERS.run(self._overview_passes, set(self._active))
+        return {
+            "agent_id": LIBRARIAN_AGENT_ID,
+            "available": problem is None,
+            "problem": problem,
+            "settings": dict(settings),
+            "running": next(iter(self._active), None),
+            "passes": passes,
         }
 
     async def run(self, agent_id: str) -> dict[str, Any]:
         """Start a pass of ``agent_id`` now, ignoring the interval; return its status.
 
-        Raises :class:`LibrarianBusyError` while a pass of the Agent runs or the
-        Agent has active or queued Runs, :class:`LibrarianUnavailableError` when
-        the Agent's ``librarian_enabled`` is off or it cannot call ``skill`` and
-        ``skill_manage``, and the errors of :meth:`status`.
+        Raises :class:`LibrarianUnavailableError` when no pass can run for the
+        Agent (see :meth:`status`), :class:`LibrarianBusyError` while a pass
+        runs or the Agent or the Librarian has active or queued Runs, and the
+        errors of :meth:`status`.
         """
         if self._closed:
             raise LibrarianBusyError("The Librarian is shutting down.")
         agent = await self._identity_agent(agent_id)
         # An unreadable state document refuses here, before any Skill changes.
         await _LIBRARIAN_WORKERS.run(self._read_state, agent_id)
-        reason = self._unavailable_reason(agent)
-        if reason == "agent_disabled":
-            raise LibrarianUnavailableError(
-                f"The Librarian is off for Agent {agent_id} (librarian_enabled is false), "
-                "so it does not curate its Skills."
-            )
+        problem, reason = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
         if reason is not None:
-            raise LibrarianUnavailableError(
-                f"Agent {agent_id} cannot call skill and skill_manage, so the Librarian "
-                "cannot curate its Skills."
-            )
+            raise LibrarianUnavailableError(_unavailable_message(agent_id, reason, problem))
         if agent_id in self._active:
             raise LibrarianBusyError(f"A Librarian pass of Agent {agent_id} is already running.")
+        if self._active:
+            raise LibrarianBusyError(
+                f"A Librarian pass of Agent {next(iter(self._active))} is running; passes run "
+                "one at a time, so start this one when it has finished."
+            )
         if self._agent_active(agent_id):
             raise LibrarianBusyError(
                 f"Agent {agent_id} has an active or queued Run; run the Librarian when it is idle."
             )
-        active = self._begin(agent_id, "manual")
+        if self._librarian_active():
+            raise LibrarianBusyError(
+                "The Librarian has an active or queued Run; start the pass when it is idle."
+            )
+        active = self._begin(agent_id, "manual", agent)
         active.task = asyncio.get_running_loop().create_task(
             self._guarded_pass(agent_id, active), name=f"librarian-pass:{agent_id}"
         )
@@ -660,6 +718,9 @@ class LibrarianService:
         settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
         if not settings["enabled"]:
             return
+        if await _LIBRARIAN_WORKERS.run(self._runtime.agents.librarian_problem) is not None:
+            return
+        # The roster: the user's Agents, never the Librarian itself.
         agent_ids = await _LIBRARIAN_WORKERS.run(
             lambda: [agent.id for agent in self._runtime.agents.list()]
         )
@@ -708,14 +769,15 @@ class LibrarianService:
         except Exception:
             # A removed or broken Agent is skipped; the next check sees it again.
             return usage
-        if self._unavailable_reason(agent) is not None or self._busy(agent_id):
+        _problem, blocked = await _LIBRARIAN_WORKERS.run(self._blocked, agent_id, agent)
+        if blocked is not None or self._busy(agent_id):
             return usage
         if usage is None:
             usage = await self._skill_usage()
         # Checked again after the last await, so no Run or manual pass starts in between.
         if self._busy(agent_id):
             return usage
-        active = self._begin(agent_id, "schedule")
+        active = self._begin(agent_id, "schedule", agent)
         active.usage = usage
         await self._guarded_pass(agent_id, active)
         return usage if active.run_id is None else None
@@ -725,8 +787,8 @@ class LibrarianService:
         return agent_id in self._active
 
     def _busy(self, agent_id: str) -> bool:
-        """Whether a pass of the Agent runs or the Agent has an active or queued Run."""
-        return agent_id in self._active or self._agent_active(agent_id)
+        """Whether a pass runs, or the Agent or the Librarian has an active or queued Run."""
+        return bool(self._active) or self._agent_active(agent_id) or self._librarian_active()
 
     def _agent_active(self, agent_id: str) -> bool:
         """Whether the Agent has an active or queued Run, or a review is starting.
@@ -738,25 +800,71 @@ class LibrarianService:
             agent_id, project_id=None
         ) or self._reviewing(agent_id)
 
+    def _librarian_active(self) -> bool:
+        """Whether the Librarian has an active or queued Run, a pass's or the user's."""
+        return self._runtime.chat_run_manager.has_activity_for_agent(
+            LIBRARIAN_AGENT_ID, project_id=None
+        )
+
     async def _identity_agent(self, agent_id: str) -> Any:
-        """Resolve ``agent_id`` as an Identity Agent, never a Config Agent or Sub-Agent."""
+        """Resolve ``agent_id`` as an Identity Agent of the user, never a Config Agent,
+        a Sub-Agent or the Librarian."""
         if not await _LIBRARIAN_WORKERS.run(self._runtime.agents.exists, agent_id):
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
-        return await self._runtime.agent_resolver.resolve_agent_async(None, agent_id)
+        agent = await self._runtime.agent_resolver.resolve_agent_async(None, agent_id)
+        if is_librarian(agent):
+            raise LibrarianUnavailableError(
+                "The Librarian maintains the Skills of other Agents and gets no pass itself."
+            )
+        return agent
 
-    def _unavailable_reason(self, agent: Any) -> UnscheduledReason | None:
-        """Why no pass can run for ``agent`` at all, ``None`` when one can."""
+    def _blocked(
+        self, agent_id: str, agent: Any
+    ) -> tuple[LibrarianProblem | None, UnscheduledReason | None]:
+        """Why the Librarian is unavailable, and why no pass can run for the Agent.
+
+        Each is ``None`` when there is no such reason. Blocking.
+        """
+        problem = self._runtime.agents.librarian_problem()
+        if problem is not None:
+            return problem, "librarian_unavailable"
         if getattr(agent, "librarian_enabled", True) is False:
-            return "agent_disabled"
-        if (
-            not getattr(agent, "workspace", None)
-            or not callable_review_dimensions(agent, self._runtime.tools.list_tools())[1]
-        ):
-            return "skill_tools_unavailable"
-        return None
+            return None, "agent_disabled"
+        if not self._has_own_skills(agent_id):
+            return None, "no_skills"
+        return None, None
 
-    def _begin(self, agent_id: str, trigger: PassTrigger) -> _ActivePass:
-        active = _ActivePass(started_at=format_canonical_timestamp(self._clock()), trigger=trigger)
+    def _has_own_skills(self, agent_id: str) -> bool:
+        """Whether the Agent's private Skill home holds a Skill. Blocking."""
+        root = self._skills_dir(agent_id)
+        return root.is_dir() and bool(SkillRegistry.load(root).list_all())
+
+    def _overview_passes(
+        self, running: set[str]
+    ) -> tuple[LibrarianProblem | None, list[dict[str, Any]]]:
+        """The Librarian's problem and the recent passes over all Agents. Blocking."""
+        problem = self._runtime.agents.librarian_problem()
+        passes: list[dict[str, Any]] = []
+        for agent in self._runtime.agents.list():
+            try:
+                state = self._read_state(agent.id)
+            except LibrarianStateError:
+                continue
+            if agent.id not in running:
+                state = state.settled()
+            passes.extend(
+                {"agent_id": agent.id, "agent_name": agent.name, **record.to_dict()}
+                for record in state.passes
+            )
+        passes.sort(key=lambda record: str(record["started_at"]), reverse=True)
+        return problem, passes[:LIBRARIAN_OVERVIEW_PASSES]
+
+    def _begin(self, agent_id: str, trigger: PassTrigger, agent: Any) -> _ActivePass:
+        active = _ActivePass(
+            started_at=format_canonical_timestamp(self._clock()),
+            trigger=trigger,
+            agent_name=str(getattr(agent, "name", "") or agent_id),
+        )
         self._active[agent_id] = active
         self._announce()
         return active
@@ -819,11 +927,9 @@ class LibrarianService:
         elif library.fingerprint == fingerprint:
             active.consolidation = "unchanged"
         else:
-            error = await self._consolidate(agent_id, library, active, settings["model"])
+            error = await self._consolidate(agent_id, library, active)
             if active.consolidation == "ran":
-                fingerprint = await _LIBRARIAN_WORKERS.run(
-                    self._fingerprint_now, agent_id, usage, kept
-                )
+                fingerprint = await _LIBRARIAN_WORKERS.run(self._fingerprint_now, agent_id, usage)
         finished = await self._finish(agent_id, active, "completed", fingerprint, error)
         _LOGGER.info(
             "Librarian pass completed (agent=%s trigger=%s archived=%d candidates=%d "
@@ -854,7 +960,7 @@ class LibrarianService:
         fingerprint: str | None,
         error: str | None,
     ) -> LibrarianPass:
-        """Write the pass's final record, then delete the Session of the pass before it."""
+        """Write the pass's final record as the last pass of the Agent's state."""
         assert active.base is not None
         counts = (
             await _LIBRARIAN_WORKERS.run(self._run_counts, agent_id, active.run_id)
@@ -864,16 +970,8 @@ class LibrarianService:
         finished = active.record(
             format_canonical_timestamp(self._clock()), outcome, counts=counts, error=error
         )
-        await _LIBRARIAN_WORKERS.run(
-            self._write_state,
-            agent_id,
-            LibrarianState(
-                last_pass=finished,
-                consolidation_fingerprint=fingerprint,
-                first_seen_at=active.base.first_seen_at,
-            ),
-        )
-        await self._delete_session(agent_id, active.base.last_pass, keep=finished.session_id)
+        state = replace(active.base.recorded(finished), consolidation_fingerprint=fingerprint)
+        await _LIBRARIAN_WORKERS.run(self._write_state, agent_id, state)
         return finished
 
     async def _record_failure(self, agent_id: str, active: _ActivePass, error: str) -> None:
@@ -887,31 +985,6 @@ class LibrarianService:
         except Exception:
             _LOGGER.warning(
                 "Librarian could not record a failed pass (agent=%s)", agent_id, exc_info=True
-            )
-
-    async def _delete_session(
-        self, agent_id: str, previous: LibrarianPass | None, *, keep: str | None
-    ) -> None:
-        """Delete the hidden consolidation Session of the pass before, unless a Run uses it."""
-        session_id = None if previous is None else previous.session_id
-        if session_id is None or session_id == keep:
-            return
-        if self._runtime.chat_run_manager.has_activity_for_session(
-            agent_id, session_id, project_id=None
-        ):
-            return
-        address = SessionAddress(project_id=None, agent_id=agent_id, session_id=session_id)
-        try:
-            await _LIBRARIAN_WORKERS.run(self._runtime.chat_sessions.delete, address)
-        except SessionNotFoundError:
-            # The user deleted it already.
-            return
-        except Exception:
-            _LOGGER.warning(
-                "Librarian kept the Session of an earlier pass (agent=%s session=%s)",
-                agent_id,
-                session_id,
-                exc_info=True,
             )
 
     def _age_library(
@@ -953,14 +1026,7 @@ class LibrarianService:
                     revisions.append(result.revision)
             if archived:
                 records = self._authoring.records(root)
-            candidates = librarian_candidates(
-                self._authoring,
-                root,
-                usage=usage,
-                scheduled=kept.scheduled,
-                shared=kept.shared,
-                records=records,
-            )
+            candidates = librarian_candidates(self._authoring, root, usage=usage, records=records)
             return _Library(
                 tuple(archived),
                 tuple(revisions),
@@ -968,17 +1034,13 @@ class LibrarianService:
                 _fingerprint(self._latest_revisions(root, candidates)),
             )
 
-    def _fingerprint_now(
-        self, agent_id: str, usage: Mapping[str, SkillUse], kept: _KeptSkills
-    ) -> str:
+    def _fingerprint_now(self, agent_id: str, usage: Mapping[str, SkillUse]) -> str:
         """Fingerprint the candidates as a consolidation Run left them."""
         with self._runtime.agents.lifecycle_guard():
             root = self._skills_dir(agent_id)
             if not root.is_dir():
                 return _fingerprint({})
-            candidates = librarian_candidates(
-                self._authoring, root, usage=usage, scheduled=kept.scheduled, shared=kept.shared
-            )
+            candidates = librarian_candidates(self._authoring, root, usage=usage)
             return _fingerprint(self._latest_revisions(root, candidates))
 
     def _latest_revisions(
@@ -992,38 +1054,40 @@ class LibrarianService:
         return {name: latest.get(name, 0) for name in names}
 
     async def _consolidate(
-        self, agent_id: str, library: _Library, active: _ActivePass, model: str
+        self, agent_id: str, library: _Library, active: _ActivePass
     ) -> str | None:
-        """Run the consolidation Run; return why it failed, if it did.
+        """Run the Librarian's consolidation Run; return why it failed, if it did.
 
-        ``model`` is ``librarian.model``; empty runs the Agent's own Model.
-        Sets the pass's consolidation outcome, Session and Run, and records them
-        before awaiting the Run.
+        The Run executes in a new Session of the Librarian bound to the Agent,
+        with the Librarian's own Model, Model settings and Tools. Sets the pass's
+        consolidation outcome, Session and Run, and records them before awaiting
+        the Run.
         """
         brief = await _LIBRARIAN_WORKERS.run(
             librarian_brief,
             self._runtime.storage,
             library.candidates,
-            limit=LIBRARIAN_TOOL_ITERATION_LIMIT,
+            agent_id=agent_id,
+            agent_name=active.agent_name,
         )
+        title = f"Skills of {active.agent_name} · {self._clock().astimezone().date().isoformat()}"
         sessions = self._runtime.chat_sessions
-        session = await sessions.create_async(agent_id, run_kind=RunKind.LIBRARIAN)
+        session = await sessions.create_async(
+            LIBRARIAN_AGENT_ID,
+            run_kind=RunKind.LIBRARIAN,
+            metadata={
+                SKILL_AGENT_ID_KEY: agent_id,
+                SESSION_AUTO_TITLE_KEY: title,
+                SESSION_AUTO_TITLE_INITIALIZED_KEY: True,
+            },
+        )
         try:
-            if model:
-                # The binding replaces the Agent's Model settings in this Session only.
-                await self._runtime.agent_resolver.update_session_overrides_async(
-                    session.address, {"model": model, MODEL_DEFAULTS_FIELD: True}
-                )
             run = await self._runtime.streaming_chat_loop.start_run(
-                agent_id,
+                LIBRARIAN_AGENT_ID,
                 brief,
                 session_id=session.id,
                 internal=True,
-                tool_restriction=LIBRARIAN_TOOL_RESTRICTION,
-                tool_denial_resolver=librarian_tool_denial_resolver(),
-                max_tool_iterations=LIBRARIAN_TOOL_ITERATION_LIMIT,
                 run_kind=RunKind.LIBRARIAN,
-                contributes_to_agent_activity=False,
             )
         except Exception as error:
             # Nothing ran in the new Session: remove it rather than leave it empty.
@@ -1076,6 +1140,9 @@ class LibrarianService:
             consolidation_fingerprint=data.get("consolidation_fingerprint"),
             first_seen_at=data.get("first_seen_at"),
             running_pass=None if running_pass is None else LibrarianPass.from_dict(running_pass),
+            earlier_passes=tuple(
+                LibrarianPass.from_dict(record) for record in data.get("earlier_passes", ())
+            )[: LIBRARIAN_PASS_HISTORY - 1],
         )
 
     def _write_state(self, agent_id: str, state: LibrarianState) -> None:
@@ -1175,6 +1242,20 @@ def _next_due(state: LibrarianState, interval_days: int) -> str | None:
     return format_canonical_timestamp(parse_timestamp(since) + timedelta(days=interval_days))
 
 
+def _unavailable_message(
+    agent_id: str, reason: UnscheduledReason, problem: LibrarianProblem | None
+) -> str:
+    """Why ``run`` refuses a pass of ``agent_id``, for the user."""
+    if problem is not None:
+        return librarian_problem_message(problem)
+    if reason == "agent_disabled":
+        return (
+            f"The Librarian is off for Agent {agent_id} (librarian_enabled is false), "
+            "so it does not curate its Skills."
+        )
+    return f"Agent {agent_id} has no Skills of its own, so the Librarian has nothing to curate."
+
+
 def _date(timestamp: str) -> str:
     """The ISO date of a timestamp, in UTC."""
     try:
@@ -1191,11 +1272,10 @@ async def _wait(seconds: float) -> None:
 __all__ = [
     "CHECK_INTERVAL_SECONDS",
     "FIRST_CHECK_DELAY_SECONDS",
+    "LIBRARIAN_OVERVIEW_PASSES",
+    "LIBRARIAN_PASS_HISTORY",
     "LIBRARIAN_STATE_FILENAME",
     "LIBRARIAN_STATE_FORMAT",
-    "LIBRARIAN_TOOL_DENIAL_MESSAGE",
-    "LIBRARIAN_TOOL_ITERATION_LIMIT",
-    "LIBRARIAN_TOOL_RESTRICTION",
     "LibrarianBusyError",
     "LibrarianError",
     "LibrarianPass",
@@ -1205,6 +1285,5 @@ __all__ = [
     "LibrarianUnavailableError",
     "UnscheduledReason",
     "librarian_candidates",
-    "librarian_tool_denial_resolver",
     "validate_librarian_state_file",
 ]

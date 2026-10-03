@@ -64,6 +64,8 @@
     settings = null,
     onSettingsCommit = noop,
     onToast = noop,
+    // Opens a Session in Chat (a Librarian pass opens the Librarian's).
+    onOpenSession = noop,
     skillsRefreshToken = 0,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
@@ -796,6 +798,7 @@
                 onOpenHistory={openHistory}
                 onOpenArchived={openArchived}
                 onRevertPass={actions.requestRevertPass}
+                {onOpenSession}
                 {onToast}
               />
               <AgentSkillsPanel

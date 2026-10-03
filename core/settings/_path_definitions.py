@@ -340,12 +340,6 @@ _DEFINITIONS: tuple[SettingDefinition, ...] = (
         default=LIBRARIAN_SETTING_DEFAULTS["consolidate"],
     ),
     _static(
-        "librarian.model",
-        "string",
-        "Optional Model binding for Librarian consolidation Runs; empty uses each Agent's Model.",
-        default=LIBRARIAN_SETTING_DEFAULTS["model"],
-    ),
-    _static(
         "web_fetch.provider",
         "string",
         "Optional extraction service for web_fetch; direct uses no service.",

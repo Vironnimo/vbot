@@ -396,6 +396,9 @@ describe('sessionListView helpers', () => {
         },
       },
       { id: 'mixed-session', run_kinds: ['cron', 'user'] },
+      // The server lists a Librarian Session only in the Librarian's own
+      // scope, where it is an ordinary conversation.
+      { id: 'librarian-session', run_kinds: ['librarian'] },
       {
         id: 'channel-session',
         run_kinds: ['cron'],
@@ -406,13 +409,13 @@ describe('sessionListView helpers', () => {
 
     expect(
       visibleSessionsForSelection(next.sessions).map((session) => session.id),
-    ).toEqual(['mixed-session', 'user-session']);
+    ).toEqual(['librarian-session', 'mixed-session', 'user-session']);
 
     expect(
       visibleSessionsForSelection(next.sessions, {
         filters: createSessionListFilters(),
       }).map((session) => session.id),
-    ).toEqual(['mixed-session', 'user-session']);
+    ).toEqual(['librarian-session', 'mixed-session', 'user-session']);
 
     expect(
       isSessionHiddenByDefault(
@@ -455,7 +458,6 @@ describe('sessionListView helpers', () => {
       { id: 'memory-reflection-session', run_kinds: ['memory_reflection'] },
       { id: 'skill-reflection-session', run_kinds: ['skill_reflection'] },
       { id: 'subagent-session', is_subagent_session: true },
-      { id: 'librarian-session', run_kinds: ['librarian'] },
     ]);
 
     const visibleIds = (filters) =>
@@ -494,8 +496,6 @@ describe('sessionListView helpers', () => {
       skillReflections: true,
       cron: true,
     };
-    // No filter reveals a Librarian pass Session.
-    expect(visibleIds(everyFilter)).not.toContain('librarian-session');
     expect(visibleIds(everyFilter)).toHaveLength(6);
   });
 

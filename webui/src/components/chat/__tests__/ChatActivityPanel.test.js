@@ -168,6 +168,7 @@ const SAVED_CHANGES = [
     skill: 'old-deploy',
     files: [],
     absorbed_into: 'deploy',
+    followed: [{ kind: 'calendar', id: 'act-1', name: 'Weekly review' }],
   },
 ];
 
@@ -691,7 +692,7 @@ describe('ChatActivityPanel', () => {
     ).toEqual([
       'Added User Memory Prefers short answers.',
       'Created deploy SKILL.md, references/hosts.md',
-      'Archived old-deploy Undone Merged into deploy',
+      'Archived old-deploy Undone Merged into deploy · calendar event “Weekly review” moved along',
     ]);
 
     // The undo asks first; Keep returns to the summary without undoing.

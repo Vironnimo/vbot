@@ -75,7 +75,10 @@ class _Trigger:
 
 
 class _Resolver:
-    """Resolves every Agent except ``ghost``, recording each resolve target."""
+    """Resolves every Agent except ``ghost``, recording each resolve target.
+
+    ``librarian`` resolves as the built-in Librarian.
+    """
 
     def __init__(
         self,
@@ -96,6 +99,8 @@ class _Resolver:
         self.resolved.append((project_id, agent_id))
         if agent_id == "ghost":
             raise ResolutionAgentNotFoundError(f"unknown agent: {agent_id}")
+        if agent_id == "librarian":
+            return SimpleNamespace(**{**vars(self.agent), "builtin": "librarian"})
         return self.agent
 
     async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
@@ -247,6 +252,9 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     ("message", "active", "answer", "started_runs", "reason"),
     [
         pytest.param("/handoff agent:ghost", False, None, 0, "ghost", id="unknown-target"),
+        pytest.param(
+            "/handoff agent:librarian", False, None, 0, "built-in Librarian", id="librarian"
+        ),
         pytest.param("/handoff agent:a@b@c", False, None, 0, "a@b@c", id="invalid-address"),
         pytest.param("/handoff", True, None, 0, "current run", id="run-active"),
         # The writer ran but produced no handoff text.

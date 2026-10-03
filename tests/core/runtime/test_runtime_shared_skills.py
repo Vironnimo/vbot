@@ -16,6 +16,7 @@ import yaml
 
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SkillRegistry, project_skills_dir
+from core.tools import ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
@@ -170,6 +171,61 @@ def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_buil
     shutil.rmtree(package)
     [again] = warnings_of_builds(2)
     assert "deploy" in again
+
+
+@pytest.mark.asyncio
+async def test_a_merged_skills_shares_and_automations_move_to_the_skill_that_absorbed_it(
+    config: Config, tmp_path: Path
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        runtime.agents.create("receiver", "Receiver")
+        data_dir = runtime.storage.data_dir
+        write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
+        write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
+        runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
+        job = await runtime.cron_service.create_job(
+            agent_id="main",
+            name="Nightly",
+            prompt="/deploy-web tonight",
+            schedule_type="interval",
+            interval_seconds=3600,
+        )
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-one",
+            run_id="run-one",
+            tool_call_id="call-one",
+            tool_name="skill_manage",
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=data_dir,
+            cwd=tmp_path,
+        )
+
+        result = await runtime.tools.dispatch(
+            context,
+            {"action": "delete", "name": "deploy-web", "absorbed_into": "deploy"},
+            ["skill_manage"],
+        )
+
+        assert result["data"]["content"].endswith(
+            "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
+            "Agent 'Receiver'; Cron job 'Nightly'."
+        )
+        assert runtime.skill_policy.load().shared == {"main": {"deploy": frozenset({"receiver"})}}
+        assert _names(runtime.skills_for(None, "receiver")) >= {"deploy"}
+        assert runtime.cron_service.get_job(job.id).prompt == "/deploy tonight"
+        home = runtime.agent_skills_dir("main")
+        [revision] = runtime.skill_authoring.history(home, "deploy-web", limit=1)
+        assert [reference.to_dict() for reference in revision.followed] == [
+            {"kind": "shared", "id": "receiver", "name": "Receiver"},
+            {"kind": "cron", "id": job.id, "name": "Nightly"},
+        ]
+    finally:
+        runtime.stop()
 
 
 def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(

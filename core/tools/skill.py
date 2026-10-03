@@ -12,9 +12,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from core.projects import ProjectNotFoundError
-from core.runs import is_unattended_run_kind
+from core.runs import RunKind, is_unattended_run_kind
 from core.skills._packages import PackageError, excluded, package_path
-from core.skills.authoring import ArchivedSkill
+from core.skills.authoring import ArchivedSkill, SkillActor, SkillWriter
 from core.skills.requirements import environment_requirement_names
 from core.skills.skill_validator import split_skill_document
 from core.skills.skills import (
@@ -66,21 +66,47 @@ SkillRefresh = Callable[[], None | Awaitable[None]]
 ArchivedSkillResolver = Callable[[str | None, str], ArchivedSkill | None]
 
 # Answers why a background Run of an Agent cannot change each of the named Skills
-# it sees as its own (reason ``pinned``, ``user``, ``unknown`` or ``shared``); the
-# runtime wires this to ``Runtime.background_skill_protection``.
+# it sees as its own (reason ``pinned`` or ``unknown``); the runtime wires this to
+# ``Runtime.background_skill_protection``.
 BackgroundProtectionResolver = Callable[[str, list[str]], Mapping[str, str]]
+
+# The Skill history actors of background writers: the Librarian, and a Reflection
+# in every other Run without the user.
+LIBRARIAN_SKILL_ACTOR: SkillActor = "librarian"
+REFLECTION_SKILL_ACTOR: SkillActor = "reflection"
+
+
+def skill_writer(context: ToolContext) -> SkillWriter:
+    """Name who changes Skills in this call; its history revisions record it.
+
+    The Librarian writes in its passes and in every Session bound to the Agent whose
+    Skills it maintains, also while the user talks with it there; a Reflection in
+    every other Run without the user; the calling Agent otherwise. The first two
+    are background writers, which never change a pinned Skill.
+    """
+    kind = context.run_kind
+    actor: SkillActor = "agent"
+    if kind is RunKind.LIBRARIAN or context.skill_agent_id is not None:
+        actor = LIBRARIAN_SKILL_ACTOR
+    elif is_unattended_run_kind(kind):
+        actor = REFLECTION_SKILL_ACTOR
+    return SkillWriter(
+        actor=actor,
+        session_id=context.session_id or None,
+        run_id=context.run_id or None,
+        run_kind=None if kind is None else kind.value,
+    )
+
 
 # Marks a Skill in a background Run's list that the Run cannot change.
 SKILL_READ_ONLY_MARKS = {
     "pinned": "read-only here: pinned by the user",
-    "user": "read-only here: created by the user",
-    "unknown": "read-only here: its creator is unknown",
-    "shared": "read-only here: shared by another Agent",
+    "unknown": "read-only here: its history cannot be read",
 }
 # Opens a background Run's load of a Skill it cannot change. ``{mark}`` is a
 # read-only mark or ``read-only here`` for a Skill that is not the Agent's own.
 SKILL_READ_ONLY_NOTE = (
-    "Skill '{name}' is {mark}. Do not change it; name a needed change in your closing reply."
+    "Skill '{name}' is {mark}. Do not change it; name a needed change in your reply."
 )
 
 # A name whose Skill was deleted into the archive. ``{date}`` is YYYY-MM-DD.
@@ -320,9 +346,12 @@ def make_skill_handler(
     Skill merged into one this call may load loads that one with a note; any other
     archived name fails with when and why it was archived.
 
-    ``resolve_protection`` marks, in the list a background Run (no user present)
-    gets, each own Skill that Run cannot change, so it can plan before writing;
-    loading any Skill such a Run cannot change opens with a read-only note.
+    ``resolve_protection`` marks, in the list a background writer (``skill_writer``)
+    gets, each own Skill it cannot change, so it can plan before writing; loading
+    any Skill such a writer cannot change opens with a read-only note.
+
+    A call works on the Skills of ``ToolContext.skill_subject_id``: the calling
+    Agent, or in a Librarian Session the Agent whose Skills it maintains.
     """
 
     async def skill_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
@@ -330,7 +359,7 @@ def make_skill_handler(
         # project-local slug must not resolve a same-named identity agent's
         # private skill home (those skills bypass the project whitelist as
         # always-allowed for their owner).
-        identity_agent_id = context.agent_id if context.project_id is None else None
+        identity_agent_id = context.skill_subject_id if context.project_id is None else None
 
         async def current_registry() -> SkillRegistry:
             registry: SkillRegistry = await run_tool_worker(
@@ -358,7 +387,7 @@ def make_skill_handler(
             partial(resolve_protection, identity_agent_id)
             if resolve_protection is not None
             and identity_agent_id is not None
-            and is_unattended_run_kind(context.run_kind)
+            and skill_writer(context).background
             else None
         )
         if requested is None and file_path is None:

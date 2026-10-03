@@ -314,6 +314,11 @@ export default Object.freeze({
   'skills.revision.external': 'Changed outside vBot',
   'skills.revision.deleted': 'Deleted',
   'skills.revision.absorbed': 'Merged into {target}',
+  'skills.followed': '{items} moved along',
+  'skills.followed.shared': 'share with {name}',
+  'skills.followed.bootstrap': 'bootstrap job “{name}”',
+  'skills.followed.cron': 'cron job “{name}”',
+  'skills.followed.calendar': 'calendar event “{name}”',
   'skills.revision.inactive': 'Retired as unused',
   'skills.revision.restore': 'Restored',
   'skills.revision.revert': 'Reverted revision {revisions}',
@@ -337,7 +342,7 @@ export default Object.freeze({
   'skills.revert.error': 'The change could not be reverted.',
   'skills.librarian.title': 'Skill maintenance',
   'skills.librarian.help':
-    'The Librarian keeps the Skills this Agent made for itself small and current. A pass retires unpinned Skills that Reflection or an earlier pass created and that went unused for a long time. It then lets the Agent merge its overlapping Skills and correct outdated instructions. Pinned Skills and Skills you created are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
+    'The Librarian keeps this Agent’s own Skills small and current. A pass retires unpinned Skills that Reflection or an earlier pass created and that went unused for a long time. The Librarian then merges overlapping Skills and corrects outdated instructions in a Session of its own, which Open session shows. Pinned Skills are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Librarian’s Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
   'skills.librarian.run': 'Run now',
   'skills.librarian.schedule': 'Schedule',
   'skills.librarian.daily': 'Every day while the Agent is idle',
@@ -358,6 +363,8 @@ export default Object.freeze({
     'Stopped early because vBot stopped; the next pass comes after the usual interval',
   'skills.librarian.retired': 'Retired as unused',
   'skills.librarian.merging': 'Merging',
+  'skills.librarian.session': 'Session',
+  'skills.librarian.openSession': 'Open session',
   'skills.librarian.mergeRan':
     '{merged} merged away, {changed} changed, {created} created',
   'skills.librarian.mergeFailed':
@@ -371,13 +378,23 @@ export default Object.freeze({
   'skills.librarian.changes': 'Changes of the last pass: {count}',
   'skills.librarian.openHistory': 'Open the history of {name}',
   'skills.librarian.openArchived': 'Show {name} in Archived',
-  'skills.librarian.unavailable':
-    'This Agent cannot use the skill and skill_manage Tools, so its Skills are not maintained.',
+  'skills.librarian.noSkills':
+    'This Agent has no Skills of its own, so the Librarian has nothing to maintain.',
+  'skills.librarian.unavailable': 'The Librarian cannot run. {problem}',
   'skills.librarian.agentOff':
     'Skill maintenance is off for this Agent, so its Skills are not maintained. Its Librarian switch under Agents → Context & Memory turns it on.',
   'skills.librarian.alreadyRunning': 'A pass is running.',
   'skills.librarian.busy':
-    'Skill maintenance starts only while the Agent is idle and no other pass of it runs. Try again later.',
+    'Skill maintenance starts only while no other pass runs and neither this Agent nor the Librarian is busy. Try again later.',
+  'librarian.name': 'Librarian',
+  'librarian.problem.agentIdTaken':
+    'One of your Agents uses the ID librarian. Give that Agent another ID on its page under Agents, then restart vBot.',
+  'librarian.problem.invalidConfig':
+    'Its file agents/librarian/agent.json cannot be loaded. vbot doctor config names the problem; fix the file and restart vBot.',
+  'librarian.problem.missing':
+    'It does not exist yet. Restart vBot to create it.',
+  'librarian.problem.unknown':
+    'Restart vBot; vbot doctor config names any problem.',
   'skills.librarian.started':
     'Skill maintenance of {name} started. Its result appears here when the pass ends.',
   'skills.librarian.runError': 'Skill maintenance could not start.',
@@ -419,9 +436,9 @@ export default Object.freeze({
   'agents.form.customSystemPrompt': 'Custom system prompt',
   'agents.form.librarian': 'Librarian',
   'agents.form.librarianDescription':
-    'Lets Skill maintenance tidy up the Skills this Agent made for itself.',
+    'Lets the Librarian tidy up this Agent’s own Skills.',
   'agents.form.librarianHelp':
-    'While this is on, Librarian passes retire this Agent’s unused Skills that Reflection or an earlier pass made, and let the Agent merge overlapping Skills. Pinned Skills and Skills you created are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
+    'While this is on, Librarian passes retire this Agent’s unused Skills that Reflection or an earlier pass made, and the Librarian merges this Agent’s overlapping Skills. Pinned Skills are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',
