@@ -166,16 +166,16 @@ def main() -> None:
             return
 
 
-def _load_stt_source(app_root: str) -> Any:
+def _load_stt_source(app_root: str, module: str = "speech_local") -> Any:
     root = str(Path(app_root).resolve())
     if root not in sys.path:
         sys.path.insert(0, root)
-    return importlib.import_module("core.model_tasks.speech_local")
+    return importlib.import_module(f"core.model_tasks.{module}")
 
 
 def verify_stt(app_root: str) -> None:
-    local = _load_stt_source(app_root)
-    assert local._dependencies_available()
+    setup = _load_stt_source(app_root, "speech_setup")
+    assert setup._dependencies_available()
     importlib.import_module("av")
 
 

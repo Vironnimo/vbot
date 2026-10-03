@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -498,7 +500,11 @@ async def test_setup_installs_only_shipped_dependencies_and_verifies_before_rest
     assert all("-e" not in argv and ".[local-speech]" not in argv for argv in pip_commands)
     assert "--no-deps" in pip_commands[0] and "--force-reinstall" in pip_commands[0]
     assert ("https://download.pytorch.org/whl/cu128" in pip_commands[0]) is gpu
-    assert "AutoModelForTDT" in commands[-1][-1]
+    probe = commands[-1][-1]
+    assert "AutoModelForTDT" in probe
+    # The probe runs in a fresh process; every vBot name it imports must exist.
+    for module, name in re.findall(r"from (core\.[\w.]+) import (\w+)", probe):
+        assert hasattr(importlib.import_module(module), name)
     await setup.aclose()
 
 
@@ -506,7 +512,7 @@ async def test_setup_installs_only_shipped_dependencies_and_verifies_before_rest
 async def test_packaged_stt_setup_installs_only_in_managed_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from core.model_tasks import speech_setup
+    from core.model_tasks import speech_setup, speech_worker
 
     setup = LocalSpeechSetup(directory=tmp_path / "speech-engines" / "stt")
     from cli.application.state import Installation
@@ -561,6 +567,10 @@ async def test_packaged_stt_setup_installs_only_in_managed_environment(
     assert installs[-1][-len(requirements) :] == requirements
     assert commands[-1][:3] == [str(setup.python), "-I", "-B"]
     assert "--verify-stt" in commands[-1]
+    # The managed environment runs that verification against the app source it names.
+    monkeypatch.setattr(speech_setup, "_dependencies_available", lambda: True)
+    monkeypatch.setitem(sys.modules, "av", ModuleType("av"))
+    speech_worker.verify_stt(commands[-1][-1])
     assert commands[0][:7] == [
         str(install.interpreter()),
         "-m",
