@@ -80,7 +80,12 @@ const PASS = Object.freeze({
   merged: 1,
 });
 
-function serve({ problem = null, passes = [PASS], running = null } = {}) {
+function serve({
+  problem = null,
+  passes = [PASS],
+  running = null,
+  runningSessionId = null,
+} = {}) {
   rpcMock.mockImplementation(async (method, params) => {
     if (method === 'model.list') return { models: MODELS };
     if (method === 'connection.list') return { connections: CONNECTIONS };
@@ -91,6 +96,7 @@ function serve({ problem = null, passes = [PASS], running = null } = {}) {
         problem,
         settings: SETTINGS.librarian,
         running,
+        running_session_id: runningSessionId,
         passes,
       };
     if (method === 'agent.get') return LIBRARIAN;
@@ -196,7 +202,7 @@ describe('SettingsLibrarianPanel', () => {
   });
 
   it('lists the recent passes with their Sessions and says why an unavailable Librarian cannot run', async () => {
-    serve({ running: 'coder' });
+    serve({ running: 'coder', runningSessionId: 'lib-2' });
     const onOpenSession = vi.fn();
     render({
       agents: [{ id: 'coder', name: 'Coder' }],
@@ -209,9 +215,15 @@ describe('SettingsLibrarianPanel', () => {
     expect(document.body.textContent).toContain(
       t('settings.librarian.running', { name: 'Coder' }),
     );
-    const row = [...document.body.querySelectorAll('.s-row')].find((item) =>
-      item.textContent.includes('Open session'),
+    // The running pass's Session opens while the Librarian works in it.
+    const [running, row] = [...document.body.querySelectorAll('.s-row')].filter(
+      (item) => item.textContent.includes('Open session'),
     );
+    expect(running.textContent).toContain(
+      t('settings.librarian.running', { name: 'Coder' }),
+    );
+    running.querySelector('button').click();
+    expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-2');
     expect(row.querySelector('.s-row-label').textContent).toBe('Main');
     expect(row.querySelector('.s-row-desc').textContent).toContain(
       '(scheduled) · 1 merged away, 1 changed, 0 created',

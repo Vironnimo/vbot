@@ -108,7 +108,7 @@ def _format_overview(data: Mapping[str, Any]) -> list[str]:
             "vbot librarian run <agent-id>"
         )
     if isinstance(data.get("running"), str):
-        lines.append(f"a pass of {data['running']} is running")
+        lines.append(f"a pass of {data['running']} is running{_running_session(data)}")
     passes = _records(data.get("passes"))
     if not passes:
         lines.append("no pass has run yet")
@@ -134,14 +134,15 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
     if settings.get("enabled"):
         lines.append(_schedule_line(settings))
     if data.get("running"):
-        lines.append(
-            f"a pass is running since {_string_or_default(data.get('running_since'), '?')}"
-        )
+        since = _string_or_default(data.get("running_since"), "?")
+        lines.append(f"a pass is running since {since}{_running_session(data)}")
     if isinstance(data.get("next_due_at"), str):
         lines.append(f"next scheduled pass: {data['next_due_at']} (when the agent is idle)")
     last_pass = data.get("last_pass")
     if not isinstance(last_pass, dict):
         lines.append("no pass has run yet")
+        if _running_session(data):
+            lines.append(_SESSION_HINT)
         return lines
     lines.extend(_format_pass(last_pass))
     earlier = _records(data.get("passes"))[1:]
@@ -157,9 +158,16 @@ def _format_status(agent_id: str, data: Mapping[str, Any]) -> list[str]:
             lines.extend(format_skill_revision(revision))
         ids = " ".join(str(revision.get("id")) for revision in changes)
         lines.append(f"undo them together with: vbot skill revert {ids} --scope agent:{agent_id}")
-    if any(isinstance(record.get("session_id"), str) for record in (last_pass, *earlier)):
+    if _running_session(data) or any(
+        isinstance(record.get("session_id"), str) for record in (last_pass, *earlier)
+    ):
         lines.append(_SESSION_HINT)
     return lines
+
+
+def _running_session(data: Mapping[str, Any]) -> str:
+    session_id = data.get("running_session_id")
+    return f"; its session: {session_id}" if isinstance(session_id, str) and session_id else ""
 
 
 def _schedule_line(settings: Mapping[str, Any]) -> str:

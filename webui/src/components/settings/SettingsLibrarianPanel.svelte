@@ -132,6 +132,11 @@
       : [],
   );
   let runningName = $derived(agentName(overview?.running));
+  let runningSessionId = $derived(
+    typeof overview?.running_session_id === 'string'
+      ? overview.running_session_id
+      : '',
+  );
   let effectiveConfig = $derived(
     librarianAgent?.effective && typeof librarianAgent.effective === 'object'
       ? librarianAgent.effective
@@ -566,9 +571,25 @@
   <Banner variant="neutral">{t('settings.librarian.passesLoading')}</Banner>
 {:else}
   {#if runningName}
-    <p class="s-subhead__desc">
-      {t('settings.librarian.running', { name: runningName })}
-    </p>
+    <div class="s-row s-row--compact">
+      <div class="s-row-info">
+        <div class="s-row-desc">
+          {t('settings.librarian.running', { name: runningName })}
+        </div>
+      </div>
+      {#if runningSessionId}
+        <div class="s-row-control">
+          <Button
+            variant="secondary"
+            ariaLabel={t('settings.librarian.openRunningSessionLabel', {
+              name: runningName,
+            })}
+            onClick={() => onOpenSession(LIBRARIAN_AGENT_ID, runningSessionId)}
+            >{t('settings.librarian.openSession')}</Button
+          >
+        </div>
+      {/if}
+    </div>
   {/if}
   {#if passes.length === 0}
     <EmptyState

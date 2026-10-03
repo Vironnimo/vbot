@@ -500,8 +500,15 @@ async def test_a_pass_that_stops_early_is_recorded_and_every_pass_session_stays(
     harness.authoring.create(root, "deploy-cli", _document("deploy-cli"), writer=_AGENT)
     harness.run_gate = asyncio.Event()
     harness.run_awaited.clear()
+    announced = harness.announced
     await harness.service.run("main")
     await asyncio.wait_for(harness.run_awaited.wait(), timeout=10)
+    # While its Run works, the pass names its Session, and observers heard that
+    # it started and that its Session opened.
+    assert harness.announced == announced + 2
+    assert (await harness.service.status("main"))["running_session_id"] == "lib-2"
+    running = await harness.service.overview()
+    assert (running["running"], running["running_session_id"]) == ("main", "lib-2")
     await harness.service.aclose()
 
     status = await harness.service.status("main")
@@ -533,7 +540,11 @@ async def test_a_pass_that_stops_early_is_recorded_and_every_pass_session_stays(
     ]
     assert len(status["passes"]) == LIBRARIAN_PASS_HISTORY
     overview = await harness.service.overview()
-    assert (overview["available"], overview["running"]) == (True, None)
+    assert (overview["available"], overview["running"], overview["running_session_id"]) == (
+        True,
+        None,
+        None,
+    )
     assert [
         (record["agent_id"], record["agent_name"], record.get("session_id"))
         for record in overview["passes"][:3]

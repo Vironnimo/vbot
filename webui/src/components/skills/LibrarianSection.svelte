@@ -234,6 +234,20 @@
             })}
           </dd>
         </div>
+        {#if typeof status.running_session_id === 'string' && status.running_session_id}
+          <div class="skills-page-fact">
+            <dt>{t('skills.librarian.session')}</dt>
+            <dd>
+              <button
+                type="button"
+                class="skills-librarian__link"
+                onclick={() =>
+                  onOpenSession(LIBRARIAN_AGENT_ID, status.running_session_id)}
+                >{t('skills.librarian.openSession')}</button
+              >
+            </dd>
+          </div>
+        {/if}
       {/if}
       {#if lastPass}
         <div class="skills-page-fact">

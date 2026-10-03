@@ -305,6 +305,8 @@ export default Object.freeze({
   'settings.librarian.passesEmpty': 'No pass has run yet.',
   'settings.librarian.running': 'A pass of {name} is running.',
   'settings.librarian.openSession': 'Open session',
+  'settings.librarian.openRunningSessionLabel':
+    'Open the Session of the running pass of {name}',
   'settings.librarian.openSessionLabel':
     'Open the Session of the pass of {name} on {time}',
   'settings.notifications.title': 'Desktop notifications',

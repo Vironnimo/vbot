@@ -194,6 +194,7 @@ def test_librarian_status_without_an_agent_lists_the_recent_passes_of_all_agents
         "problem": None,
         "settings": _STATUS["settings"],
         "running": "coder",
+        "running_session_id": "lib-3",
         "passes": [
             {**_LAST_PASS, "agent_id": "assistant", "agent_name": "Assistant"},
             {**_EARLIER_PASS, "agent_id": "coder", "agent_name": "coder"},
@@ -224,7 +225,7 @@ def test_librarian_status_without_an_agent_lists_the_recent_passes_of_all_agents
         "Librarian (agent librarian)",
         "scheduled passes: every 7 days; unpinned skills are archived after "
         "90 days unused; merging overlapping skills: on",
-        "a pass of coder is running",
+        "a pass of coder is running; its session: lib-3",
         "recent passes, newest first:",
         "- 2026-09-30T10:02:00Z; Assistant (assistant); scheduled; archived 1; merge: merged "
         "and fixed overlapping skills; created 0, changed 1, merged away 1; session lib-1",

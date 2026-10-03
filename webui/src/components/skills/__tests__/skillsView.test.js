@@ -1178,6 +1178,7 @@ describe('Skills manager', () => {
           ...mainStatus,
           running: true,
           running_since: '2026-10-01T09:00:00.000000Z',
+          running_session_id: 'lib-2',
           last_pass: { ...mainStatus.last_pass, outcome: 'interrupted' },
         };
       if (method === 'librarian.run')
@@ -1272,6 +1273,14 @@ describe('Skills manager', () => {
       variant: 'success',
     });
     expect(facts()).toContainEqual(['Now', expect.stringContaining('Running')]);
+    // The running pass's Session opens while the Librarian works in it.
+    const [nowIndex] = facts()
+      .map(([label], index) => (label === 'Now' ? index : -1))
+      .filter((index) => index >= 0);
+    expect(facts()[nowIndex + 1]).toEqual(['Session', 'Open session']);
+    onOpenSession.mockClear();
+    click(button('Open session', section()));
+    expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-2');
     // A pass that stopped early says so; a completed one shows no result row.
     expect(facts()).toContainEqual([
       'Result',

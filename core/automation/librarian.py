@@ -584,9 +584,10 @@ class LibrarianService:
         ``librarian_enabled`` is off), ``no_skills`` (it has no Skills of its own)
         or ``schedule_disabled`` (``librarian.enabled`` is off; a pass started by
         hand still runs). ``next_due_at`` is set only while the Agent gets
-        scheduled passes. ``passes`` are its recent passes, newest first, the
-        first being ``last_pass``; a pass whose consolidation Run started names
-        the Librarian's Session and Run.
+        scheduled passes. ``running_session_id`` names the Librarian's Session
+        of the running pass once its consolidation Run started. ``passes`` are
+        its recent passes, newest first, the first being ``last_pass``; a pass
+        whose consolidation Run started names the Librarian's Session and Run.
 
         Raises ``AgentNotFoundError`` unless ``agent_id`` is an Identity Agent,
         :class:`LibrarianUnavailableError` for the Librarian itself and
@@ -621,6 +622,7 @@ class LibrarianService:
             "librarian_problem": problem,
             "running": active is not None,
             "running_since": None if active is None else active.started_at,
+            "running_session_id": None if active is None else active.session_id,
             "last_pass": None if last_pass is None else last_pass.to_dict(),
             "passes": [record.to_dict() for record in passes],
             "next_due_at": next_due,
@@ -631,19 +633,23 @@ class LibrarianService:
         """Return whether the Librarian is available and its recent passes over all Agents.
 
         ``problem`` says why the Librarian is unavailable, ``None`` while it is
-        available. ``running`` names the Agent whose pass runs, if one does.
+        available. ``running`` names the Agent whose pass runs, if one does, and
+        ``running_session_id`` the Librarian's Session of that pass once its
+        consolidation Run started.
         ``passes`` are the recent passes of every Identity Agent, newest first
         (at most ``LIBRARIAN_OVERVIEW_PASSES``), each with its ``agent_id`` and
         ``agent_name``; an Agent whose state cannot be read is left out.
         """
         settings = await _LIBRARIAN_WORKERS.run(self._runtime.storage.load_librarian_settings)
         problem, passes = await _LIBRARIAN_WORKERS.run(self._overview_passes, set(self._active))
+        running = next(iter(self._active.items()), None)
         return {
             "agent_id": LIBRARIAN_AGENT_ID,
             "available": problem is None,
             "problem": problem,
             "settings": dict(settings),
-            "running": next(iter(self._active), None),
+            "running": None if running is None else running[0],
+            "running_session_id": None if running is None else running[1].session_id,
             "passes": passes,
         }
 
@@ -1090,6 +1096,8 @@ class LibrarianService:
         active.session_id, active.run_id = session.id, run.id
         active.consolidation = "failed"
         await self._write_progress(agent_id, active)
+        # Observers can open the Session while its Run works.
+        self._announce()
         try:
             await run.wait()
         except asyncio.CancelledError:
