@@ -74,6 +74,21 @@ jobs:
         # tiktoken downloads an encoding on first use, without a timeout; the
         # tests then read this job's cache instead of the network.
         run: python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
+      - uses: actions/setup-node@v7
+        if: matrix.platform == 'linux x64'
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Provision the pinned PDF printing browser
+        # The live PDF test needs a working browser, not the runner image's
+        # desktop Chromium and its sandbox restrictions. Reuse the locked
+        # Playwright version and the headless shell preferred by PDF discovery.
+        if: matrix.platform == 'linux x64'
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps --only-shell chromium
       - name: Warm the native host toolchain
         # The first clang-cl build on a fresh runner reads cold LLVM and SDK files
         # for 20-30 s, more than a test may take; later builds take seconds.
