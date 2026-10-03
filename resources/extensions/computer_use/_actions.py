@@ -32,8 +32,8 @@ DEFAULT_SCROLL_AMOUNT = 3
 DEFAULT_WAIT_SECONDS = 1.0
 
 _FIELDS: dict[str, frozenset[str]] = {
-    "screenshot": frozenset({"scale", "display", "view"}),
-    "zoom": frozenset({"region", "scale", "screenshot_id"}),
+    "screenshot": frozenset({"display", "view"}),
+    "zoom": frozenset({"region", "screenshot_id"}),
     **dict.fromkeys(CLICKS, frozenset({"coordinate", "text", "screenshot_id"})),
     "mouse_move": frozenset({"coordinate", "screenshot_id"}),
     "left_click_drag": frozenset({"coordinate", "start_coordinate", "text", "screenshot_id"}),
@@ -68,7 +68,6 @@ class Action:
     repeat: int = 1
     seconds: float = 0.0
     region: tuple[int, int, int, int] | None = None
-    scale: float = 1.0
     display: str | None = None
     view: str | None = None
     screenshot_id: str | None = None
@@ -176,8 +175,6 @@ def parse_action(arguments: Mapping[str, Any]) -> Action:
         )
     if name == "zoom":
         values["region"] = _region(arguments.get("region"))
-    if "scale" in fields and arguments.get("scale") is not None:
-        values["scale"] = float(arguments["scale"])
     if name == "screenshot" and isinstance(arguments.get("display"), str):
         values["display"] = arguments["display"].strip() or None
     if name == "screenshot":

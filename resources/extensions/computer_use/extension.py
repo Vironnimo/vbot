@@ -587,11 +587,7 @@ class ComputerUseService:
         lines: list[str] = []
         try:
             if action.name == "screenshot":
-                lines.append(
-                    await self._on_worker(
-                        desktop.screenshot, action.scale, action.display, action.view
-                    )
-                )
+                lines.append(await self._on_worker(desktop.screenshot, action.display, action.view))
             elif action.name == "zoom":
                 lines.append(await self._on_worker(desktop.zoom, frame, action))
             elif action.name == "cursor_position":
@@ -679,7 +675,7 @@ class ComputerUseService:
         self, context: ToolContext, desktop: Desktop, action: Action, frame: Any
     ) -> str:
         if action.name == "screenshot":
-            return await self._on_worker(desktop.screenshot, action.scale, None, action.view)
+            return await self._on_worker(desktop.screenshot, None, action.view)
         if action.name == "zoom":
             return await self._on_worker(desktop.zoom, frame, action)
         if action.name == "cursor_position":
