@@ -63,6 +63,8 @@ jobs:
     timeout-minutes: 45
     env:
       VBOT_TEST_SHARD: ${{ matrix.shard }}
+      # Tests isolate HOME; keep the provisioned PDF browser discoverable.
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/pdf-browser
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/packaged-python
