@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
@@ -27,8 +28,13 @@ from core.providers._opencode_zen_gemini import (
     _normalize_gemini_response,
     _normalize_gemini_stream_chunk,
     _to_gemini_content,
+    gemini_returned_reasoning,
 )
 from core.providers._responses_profile import take_reasoning_renderer
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.adapter import (
     ModelLookup,
     project_tool_result_content_fallbacks,
@@ -325,9 +331,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         **kwargs: Any,
     ) -> dict[str, Any]:
         payload = self._build_gemini_payload(messages, model_id, kwargs)
-        auth_recovery = OAuthRequestRecovery(
-            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
-        )
+        auth_recovery = self._gemini_auth_recovery()
 
         async def _request() -> dict[str, Any]:
             headers = await self._gemini_headers()
@@ -349,7 +353,17 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             )
             return dict(decode_response_json(response, "OpenCode Zen Gemini provider"))
 
-        return await auth_recovery.run(lambda: retry_async(_request))
+        reply = await execute_learning_from_rejections(
+            lambda: auth_recovery.run(lambda: retry_async(_request)),
+            payload,
+            rebuild=lambda: self._build_gemini_payload(messages, model_id, kwargs),
+            wire=self.wire,
+            model_id=model_id,
+            provider_label=self._config.id,
+        )
+        if gemini_returned_reasoning(reply):
+            self.wire.observe_reasoning_returned(model_id)
+        return reply
 
     async def _stream_gemini(
         self,
@@ -357,12 +371,25 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         *,
         model_id: str,
         **kwargs: Any,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         payload = self._build_gemini_payload(messages, model_id, kwargs)
-        auth_recovery = OAuthRequestRecovery(
-            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
-        )
+        auth_recovery = self._gemini_auth_recovery()
+        async with aclosing(
+            stream_learning_from_rejections(
+                lambda: self._gemini_stream_deltas(payload, model_id, auth_recovery),
+                payload,
+                rebuild=lambda: self._build_gemini_payload(messages, model_id, kwargs),
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
 
+    async def _gemini_stream_deltas(
+        self, payload: dict[str, Any], model_id: str, auth_recovery: OAuthRequestRecovery
+    ) -> AsyncGenerator[dict[str, Any]]:
         def _handle_error_status(status: int, body: str, headers: httpx.Headers) -> None:
             self._classify_http_status(
                 status,
@@ -412,6 +439,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         finally:
             await response.aclose()
 
+    def _gemini_auth_recovery(self) -> OAuthRequestRecovery:
+        return OAuthRequestRecovery(
+            self._token_getter, AuthConfig(header="x-goog-api-key", prefix="")
+        )
+
     def _build_gemini_payload(
         self,
         messages: list[dict[str, Any]],
@@ -432,6 +464,14 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         profile = self.wire_profile(model_id)
         request = {key: value for key, value in kwargs.items() if value is not None}
         reasoning_renderer = take_reasoning_renderer(profile, request)
+        if profile.request.parameters:
+            # Configured or learned parameter rules shape the request
+            # parameters before they move into ``generationConfig``.
+            thinking: dict[str, Any] = {}
+            reasoning_renderer(thinking)
+            profile.request.shape_parameters(
+                request, reasoning_active=bool(thinking), provider_label=self._config.name
+            )
         self._apply_model_output_limit(request, model_id, messages)
         if model_ceiling := self._model_max_output_tokens(model_id):
             for output_key in ("max_tokens", "max_completion_tokens", "max_output_tokens"):

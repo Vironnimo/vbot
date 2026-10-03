@@ -17,7 +17,8 @@ Key differences from the OpenAI-compatible adapter:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
+from contextlib import aclosing
 from typing import TYPE_CHECKING, Any, ClassVar, Self, override
 
 import httpx
@@ -64,9 +65,13 @@ from core.providers._messages_wire import (
     _to_anthropic_messages,
     apply_anthropic_cache_usage,
     apply_anthropic_reasoning_usage,
+    messages_returned_reasoning,
 )
 from core.providers._tool_calls import WIRE_TOOL_CALL_ID_PROFILES
-from core.providers._wire_learning import execute_learning_from_rejections
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
     ModelLookup,
@@ -90,7 +95,6 @@ from core.providers.reasoning_dialects import (
 )
 from core.providers.token_getter import OAuthRequestRecovery, StaticTokenGetter, TokenGetter
 from core.providers.wire_profile import Protocol, WireProfile
-from core.utils.logging import get_logger
 from core.utils.retry import retry_async
 from core.utils.tokens import estimate_structured_tokens
 
@@ -119,8 +123,6 @@ __all__ = [
     "apply_anthropic_cache_usage",
     "apply_anthropic_reasoning_usage",
 ]
-
-_LOGGER = get_logger("providers.anthropic_compatible")
 
 
 class AnthropicCompatibleAdapter(ProviderAdapter):
@@ -613,16 +615,17 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
             )
             return dict(decode_response_json(response, f"{self._config.name} provider"))
 
-        return await execute_learning_from_rejections(
+        response = await execute_learning_from_rejections(
             lambda: auth_recovery.run(lambda: retry_async(_do_request)),
             payload,
             rebuild=lambda: self._build_payload(messages, model_id, **kwargs),
-            sent_effort=lambda: _sent_effort(payload),
             wire=self.wire,
             model_id=model_id,
-            logger=_LOGGER,
             provider_label=self._config.id,
         )
+        if messages_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     # ------------------------------------------------------------------
     # stream() — SSE streaming
@@ -693,23 +696,36 @@ class AnthropicCompatibleAdapter(ProviderAdapter):
                 response_headers=response_headers,
             )
 
-        response = await execute_learning_from_rejections(
-            lambda: connect_streaming_with_retry(
+        async def _stream_payload() -> AsyncGenerator[dict[str, Any]]:
+            response = await connect_streaming_with_retry(
                 self._client,
                 MESSAGES_ENDPOINT,
                 payload,
                 build_headers=_build_headers,
                 handle_error_status=_handle_error_status,
                 auth_recovery=auth_recovery,
-            ),
-            payload,
-            rebuild=build_stream_payload,
-            sent_effort=lambda: _sent_effort(payload),
-            wire=self.wire,
-            model_id=model_id,
-            logger=_LOGGER,
-            provider_label=self._config.id,
-        )
+            )
+            async with aclosing(self._stream_response_deltas(response)) as deltas:
+                async for delta in deltas:
+                    yield delta
+
+        async with aclosing(
+            stream_learning_from_rejections(
+                _stream_payload,
+                payload,
+                rebuild=build_stream_payload,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
+        ) as deltas:
+            async for delta in deltas:
+                yield delta
+
+    async def _stream_response_deltas(
+        self, response: httpx.Response
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Yield the normalized deltas of an established SSE stream, then close it."""
 
         stream_decoder = AnthropicMessagesStreamDecoder()
         seen_message_stop = False
@@ -761,14 +777,3 @@ def _normalize_tool_call_ids(
     if id_profile is None:
         return messages
     return normalize_tool_call_ids(messages, id_profile)
-
-
-def _sent_effort(payload: dict[str, Any]) -> str | None:
-    """The reasoning effort level the request carries (``output_config.effort``)."""
-
-    output_config = payload.get("output_config")
-    if isinstance(output_config, dict):
-        effort = output_config.get("effort")
-        if isinstance(effort, str):
-            return effort
-    return None

@@ -440,14 +440,6 @@ def test_normalize_response_usage_keeps_only_usable_counters(usage, expected) ->
     ("status", "body", "error_type", "retryable", "attempts"),
     [
         pytest.param(401, "Invalid API key", ProviderAuthError, False, 1, id="401-auth"),
-        pytest.param(
-            400,
-            "Unsupported parameter: 'top_k'",
-            ProviderError,
-            False,
-            1,
-            id="400-names-an-unsent-sampling-parameter",
-        ),
         pytest.param(500, "Internal Server Error", ProviderError, False, 1, id="500-fatal"),
         pytest.param(429, "Rate limited", ProviderRateLimitError, True, 4, id="429-rate-limit"),
         pytest.param(502, "Bad Gateway", ProviderError, True, 4, id="502-transient"),
@@ -522,44 +514,6 @@ async def test_send_returns_the_parsed_body_after_a_transient_failure(first_fail
 
 def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
-
-
-@pytest.mark.parametrize(
-    ("detail", "kwargs", "field", "expected"),
-    [
-        pytest.param(
-            "invalid value for 'reasoning_effort': 'high'",
-            {"thinking_effort": "high"},
-            "reasoning_effort",
-            ["high", "medium", "medium"],
-            id="effort",
-        ),
-        pytest.param(
-            "Unsupported parameter: 'temperature'",
-            {},
-            "temperature",
-            [0.7, None, None],
-            id="parameter",
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_a_rejection_is_learned_retried_and_remembered_for_later_requests(
-    detail: str, kwargs: dict[str, Any], field: str, expected: list[Any]
-) -> None:
-    adapter = make_adapter(model=catalog_model(levels=("low", "medium", "high")))
-    with respx.mock:
-        route = respx.post(OPENAI_URL).mock(
-            side_effect=[
-                httpx.Response(400, text=detail),
-                httpx.Response(200, json=SUCCESS_RESPONSE),
-                httpx.Response(200, json=SUCCESS_RESPONSE),
-            ]
-        )
-        await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
-        await adapter.send(SAMPLE_MESSAGES, model_id=MODEL_ID, **kwargs)
-
-    assert [json.loads(call.request.content).get(field) for call in route.calls] == expected
 
 
 @pytest.mark.asyncio

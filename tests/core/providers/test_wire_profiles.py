@@ -90,6 +90,8 @@ def _profiles(
                 store.record_reasoning_field("acme", "api-key", target, observed.reasoning_field)
             for parameter in observed.rejected_parameters:
                 store.record_rejected_parameter("acme", "api-key", target, parameter)
+            for effort in observed.rejected_efforts:
+                store.record_rejected_effort("acme", "api-key", target, effort)
 
     profiles = WireProfiles(
         files=files,
@@ -677,6 +679,50 @@ def test_learned_rejections_expire_and_the_profile_follows(tmp_path: Path) -> No
     now[0] += timedelta(days=10)
     reloaded = WireObservations.load(path, save_delay=None, clock=lambda: now[0])
     assert reloaded.facts_for("acme", "api-key", "m").rejected_parameters == ()
+
+
+@pytest.mark.parametrize(
+    ("protocol", "levels", "entry", "off", "ladder"),
+    [
+        pytest.param("messages", ("low", "high"), {}, "omit", ("low", "high"), id="off-switch"),
+        pytest.param(
+            "chat_completions",
+            ("none", "low", "high"),
+            {},
+            "auto",
+            ("low", "high"),
+            id="ladder-rung",
+        ),
+        pytest.param(
+            "messages",
+            ("low", "high"),
+            {"m": {"set": {"reasoning": {"off": "auto"}}}},
+            "auto",
+            ("low", "high"),
+            id="model-entry-wins",
+        ),
+    ],
+)
+def test_a_learned_none_rejection_omits_an_off_switch_or_narrows_the_ladder(
+    protocol: str,
+    levels: tuple[str, ...],
+    entry: Mapping[str, Any],
+    off: str,
+    ladder: tuple[str, ...],
+) -> None:
+    """A rejected explicit off: an off spelled outside the ladder becomes omission."""
+
+    profiles, _ = _profiles(
+        {"format_version": 1, "defaults": {"protocol": protocol}, "models": entry},
+        {"m": _model("m", control="levels", levels=levels)},
+        observed=ObservedFacts(rejected_efforts=("none",)),
+    )
+
+    profile = _resolve(profiles, "m")
+
+    assert profile.protocol == protocol
+    assert profile.reasoning.off == off
+    assert profile.reasoning.ladder == ladder
 
 
 @pytest.mark.parametrize(

@@ -274,49 +274,6 @@ def classify_http_status(
 
 
 # ---------------------------------------------------------------------------
-# Sampling-parameter rejection fallback
-# ---------------------------------------------------------------------------
-
-# Sampling parameters Chat may put on the wire. Some backends reject them for
-# specific models (thinking-only models, fixed-contract gateways) while the
-# same backend accepts them for every other model, so they cannot be filtered
-# proactively in every case.
-SAMPLING_PARAMETER_NAMES: tuple[str, ...] = ("temperature", "top_p", "top_k")
-
-# A rejection detail must name one of these markers AND the parameter name;
-# both conditions together keep the detection conservative (mirrors
-# ``detail_names_rejected_effort`` in ``core.providers.reasoning``).
-_UNSUPPORTED_PARAMETER_DETAIL_MARKERS: tuple[str, ...] = (
-    "unsupported parameter",
-    "unsupported_parameter",
-    "not supported",
-    "does not support",
-    "unknown parameter",
-    "unrecognized request argument",
-    "unrecognized parameter",
-    "invalid parameter",
-)
-
-
-def unsupported_sampling_parameter(detail: str) -> str | None:
-    """Return the sampling parameter name a rejection detail blames, if any.
-
-    Matches provider wordings such as ``Unsupported parameter: 'temperature'``,
-    ``temperature is not supported when thinking is enabled``, or ``Unknown
-    parameter: top_k``. Detection never changes status classification; it only
-    gates the learn-and-retry of
-    :func:`core.providers._wire_learning.execute_learning_from_rejections`.
-    """
-    lowered = detail.lower()
-    if not any(marker in lowered for marker in _UNSUPPORTED_PARAMETER_DETAIL_MARKERS):
-        return None
-    for parameter_name in SAMPLING_PARAMETER_NAMES:
-        if parameter_name in lowered:
-            return parameter_name
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Network error wrapping
 # ---------------------------------------------------------------------------
 

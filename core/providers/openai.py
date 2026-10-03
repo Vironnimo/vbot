@@ -23,7 +23,6 @@ from core.models.models import (
     ReasoningCapabilities,
     text_embedding_capabilities,
 )
-from core.providers._chat_completions_wire import _selected_thinking_effort
 from core.providers._codex_websocket import (
     CodexWebSocket,
     _CodexWebSocketTransportError,
@@ -79,7 +78,10 @@ from core.providers._responses_profile import (
     profile_responses_policy,
     take_reasoning_renderer,
 )
-from core.providers._wire_learning import execute_learning_from_rejections
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.adapter import ModelLookup
 from core.providers.errors import (
     NetworkError,
@@ -93,18 +95,16 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.openai_subscription_auth import extract_chatgpt_account_id
 from core.providers.providers import AuthConfig, ConnectionConfig, ProviderConfig
 from core.providers.token_getter import OAuthRequestRecovery, TokenGetter
 from core.providers.wire_profile import Protocol
-from core.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from core.debug import ProviderDebugRecorder
-
-_LOGGER = get_logger("providers.openai")
 
 __all__ = [
     "CODEX_CACHE_SCOPE_HEADERS",
@@ -447,22 +447,14 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
         if not self._uses_responses(model_id):
             return await super().send(messages, model_id=model_id, **kwargs)
         if self._connection_mode == CODEX_RESPONSES_MODE:
-            payload = self._build_responses_payload(
+            states: list[ResponsesStreamState] = []
+            response_events = self._stream_codex_responses(
                 messages,
                 model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
-            )
-            state = _responses_stream_state()
-            response_events = cast(
-                AsyncGenerator[dict[str, Any]],
-                self._stream_responses(
-                    payload,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
-                    cache_scope_id=prompt_cache_affinity_id,
-                    conversation_id=conversation_id,
-                    state=state,
-                ),
+                kwargs=kwargs,
+                cache_scope_id=prompt_cache_affinity_id,
+                conversation_id=conversation_id,
+                states=states,
             )
             try:
                 while True:
@@ -479,11 +471,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 ) from exc
             finally:
                 await response_events.aclose()
-            if state.completed_response is None:
+            if not states or states[-1].completed_response is None:
                 raise NetworkError("Stream ended without a completed Responses object")
-            return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: state.normalized_response()}
-
-        selected_effort = _selected_thinking_effort(kwargs)
+            return {_NORMALIZED_CODEX_STREAM_RESPONSE_KEY: states[-1].normalized_response()}
 
         def build() -> dict[str, Any]:
             return self._build_responses_payload(
@@ -493,13 +483,17 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
 
         payload = build()
-        return await self._run_platform_responses(
+        response = await execute_learning_from_rejections(
             lambda: self._post_json(RESPONSES_POLICY_ENDPOINT, payload),
             payload,
             rebuild=build,
+            wire=self.wire,
             model_id=model_id,
-            selected_effort=selected_effort,
+            provider_label=self._config.id,
         )
+        if responses_returned_reasoning(response):
+            self.wire.observe_reasoning_returned(model_id)
+        return response
 
     @override
     async def stream(
@@ -533,16 +527,11 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                     yield delta
             return
         if self._connection_mode == CODEX_RESPONSES_MODE:
-            payload = self._build_responses_payload(
-                messages,
-                model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(kwargs),
-            )
             async with aclosing(
-                self._stream_responses(
-                    payload,
-                    endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                self._stream_codex_responses(
+                    messages,
+                    model_id=model_id,
+                    kwargs=kwargs,
                     cache_scope_id=prompt_cache_affinity_id,
                     conversation_id=conversation_id,
                 )
@@ -550,8 +539,6 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
                 async for delta in deltas:
                     yield delta
             return
-
-        selected_effort = _selected_thinking_effort(kwargs)
 
         def build() -> dict[str, Any]:
             return self._build_responses_payload(
@@ -562,15 +549,24 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
             )
 
         payload = build()
-        response = await self._run_platform_responses(
-            lambda: self._connect_stream(RESPONSES_POLICY_ENDPOINT, payload),
-            payload,
-            rebuild=build,
-            model_id=model_id,
-            selected_effort=selected_effort,
-        )
+
+        async def stream_payload() -> AsyncGenerator[dict[str, Any]]:
+            response = await self._connect_stream(RESPONSES_POLICY_ENDPOINT, payload)
+            async with aclosing(
+                self._responses_sse_deltas(response, _responses_stream_state())
+            ) as deltas:
+                async for delta in deltas:
+                    yield delta
+
         async with aclosing(
-            self._responses_sse_deltas(response, _responses_stream_state())
+            stream_learning_from_rejections(
+                stream_payload,
+                payload,
+                rebuild=build,
+                wire=self.wire,
+                model_id=model_id,
+                provider_label=self._config.id,
+            )
         ) as deltas:
             async for delta in deltas:
                 yield delta
@@ -677,32 +673,53 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
 
         return self.wire_profile(model_id).media.types & RESPONSES_DOCUMENT_TYPES
 
-    async def _run_platform_responses[T](
+    def _stream_codex_responses(
         self,
-        attempt: Callable[[], Awaitable[T]],
-        payload: dict[str, Any],
+        messages: list[dict[str, Any]],
         *,
-        rebuild: Callable[[], dict[str, Any]],
         model_id: str,
-        selected_effort: str,
-    ) -> T:
-        """Establish one Platform ``/responses`` request, learning from rejections.
+        kwargs: Mapping[str, Any],
+        cache_scope_id: str | None,
+        conversation_id: str | None,
+        states: list[ResponsesStreamState] | None = None,
+    ) -> AsyncGenerator[dict[str, Any]]:
+        """Stream one Codex request, learning from a rejection before its first delta.
 
-        A rejected optional parameter or reasoning effort becomes a learned
-        wire fact, and the request is rebuilt and retried once per lesson (see
-        :func:`execute_learning_from_rejections`).
+        The Codex wire reports a rejected request as an HTTP error on SSE and as
+        an error event on the WebSocket; either arrives before the first delta.
+        A failed WebSocket exchange drops its continuation and socket, so the
+        rebuilt request opens a fresh exchange with full context. ``states``
+        collects the stream state of every attempt (the last one completed).
         """
 
-        return await execute_learning_from_rejections(
-            attempt,
+        def build() -> dict[str, Any]:
+            return self._build_responses_payload(
+                messages,
+                model_id=model_id,
+                stream=True,
+                **self._request_kwargs_with_defaults(kwargs),
+            )
+
+        payload = build()
+
+        def open_stream() -> AsyncGenerator[dict[str, Any]]:
+            state = _responses_stream_state()
+            if states is not None:
+                states.append(state)
+            return self._stream_responses(
+                payload,
+                endpoint_path=CODEX_RESPONSES_ENDPOINT,
+                cache_scope_id=cache_scope_id,
+                conversation_id=conversation_id,
+                state=state,
+            )
+
+        return stream_learning_from_rejections(
+            open_stream,
             payload,
-            rebuild=rebuild,
-            sent_effort=lambda: (
-                self.describe_reasoning_render(model_id, selected_effort or None).effort_level
-            ),
+            rebuild=build,
             wire=self.wire,
             model_id=model_id,
-            logger=_LOGGER,
             provider_label=self._config.id,
         )
 

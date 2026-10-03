@@ -133,6 +133,22 @@ def _to_gemini_user_parts(
     return parts, image_count
 
 
+def gemini_returned_reasoning(response: Mapping[str, Any]) -> bool:
+    """Whether a ``generateContent`` reply carries thought text (a reasoning summary)."""
+
+    candidates = response.get("candidates")
+    candidate = candidates[0] if isinstance(candidates, list) and candidates else None
+    content = candidate.get("content") if isinstance(candidate, Mapping) else None
+    parts = content.get("parts") if isinstance(content, Mapping) else None
+    return isinstance(parts, list) and any(
+        isinstance(part, Mapping)
+        and part.get("thought") is True
+        and isinstance(part.get("text"), str)
+        and bool(part.get("text"))
+        for part in parts
+    )
+
+
 def _normalize_gemini_response(response: Mapping[str, Any]) -> dict[str, Any]:
     candidates = response.get("candidates")
     candidate = candidates[0] if isinstance(candidates, list) and candidates else {}

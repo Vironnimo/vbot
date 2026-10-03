@@ -11,6 +11,7 @@ from typing import Any
 
 from core.providers._responses_output import (
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers._responses_stream import (
     ResponsesStreamState,
@@ -66,6 +67,7 @@ __all__ = [
     "iter_responses_sse_deltas_with_state",
     "normalize_responses_response",
     "normalize_responses_stream_event",
+    "responses_returned_reasoning",
 ]
 
 

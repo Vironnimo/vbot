@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, override
 
 import httpx
@@ -23,6 +23,10 @@ from core.providers._responses_profile import (
     profile_responses_policy,
     take_reasoning_renderer,
 )
+from core.providers._wire_learning import (
+    execute_learning_from_rejections,
+    stream_learning_from_rejections,
+)
 from core.providers.adapter import ModelLookup
 from core.providers.anthropic_compatible import (
     ANTHROPIC_OVERLOADED_STATUS,
@@ -36,6 +40,7 @@ from core.providers.github_copilot_responses import (
     estimate_responses_input_tokens,
     iter_responses_sse_deltas_with_state,
     normalize_responses_response,
+    responses_returned_reasoning,
 )
 from core.providers.openai_compatible import OpenAICompatibleAdapter
 from core.providers.providers import AuthConfig, ProviderConfig
@@ -296,12 +301,26 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             )
         if protocol == "responses":
             request_headers = self._request_headers_from_kwargs(request_kwargs)
-            payload = self._build_responses_payload(
-                messages,
+
+            def build() -> dict[str, Any]:
+                return self._build_responses_payload(
+                    messages,
+                    model_id=model_id,
+                    **self._request_kwargs_with_defaults(request_kwargs),
+                )
+
+            payload = build()
+            response = await execute_learning_from_rejections(
+                lambda: self._post_responses_json(payload, request_headers=request_headers),
+                payload,
+                rebuild=build,
+                wire=self.wire,
                 model_id=model_id,
-                **self._request_kwargs_with_defaults(request_kwargs),
+                provider_label=self._config.id,
             )
-            return await self._post_responses_json(payload, request_headers=request_headers)
+            if responses_returned_reasoning(response):
+                self.wire.observe_reasoning_returned(model_id)
+            return response
         return await super().send(messages, model_id=model_id, **request_kwargs)
 
     @override
@@ -322,13 +341,24 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             )
         if protocol == "responses":
             request_headers = self._request_headers_from_kwargs(request_kwargs)
-            payload = self._build_responses_payload(
-                messages,
+
+            def build() -> dict[str, Any]:
+                return self._build_responses_payload(
+                    messages,
+                    model_id=model_id,
+                    stream=True,
+                    **self._request_kwargs_with_defaults(request_kwargs),
+                )
+
+            payload = build()
+            return stream_learning_from_rejections(
+                lambda: self._stream_responses(payload, request_headers=request_headers),
+                payload,
+                rebuild=build,
+                wire=self.wire,
                 model_id=model_id,
-                stream=True,
-                **self._request_kwargs_with_defaults(request_kwargs),
+                provider_label=self._config.id,
             )
-            return self._stream_responses(payload, request_headers=request_headers)
         return super().stream(messages, model_id=model_id, **request_kwargs)
 
     @override
@@ -480,7 +510,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
         payload: dict[str, Any],
         *,
         request_headers: Mapping[str, str],
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncGenerator[dict[str, Any]]:
         response = await self._connect_responses_stream(
             payload,
             request_headers=request_headers,

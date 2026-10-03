@@ -11,7 +11,9 @@ intent (for example a budget on an effort-only wire) degrades it, and its
 description says so.
 :func:`dialect_request_fields` names the request fields a dialect writes, so a
 codec can keep caller-supplied copies of them away from a Model that cannot
-reason.
+reason, and :func:`dialect_carriers` says where in a rendered request the
+effort value and an explicit off switch sit, so a rejected request can be
+attributed to what it actually carried.
 """
 
 from __future__ import annotations
@@ -34,8 +36,10 @@ from core.providers.wire_profile import ReasoningDialect, ReasoningWire, WirePro
 from core.utils.logging import get_logger
 
 __all__ = [
+    "ReasoningCarriers",
     "describe_profile_reasoning",
     "describe_reasoning",
+    "dialect_carriers",
     "dialect_request_fields",
     "render_reasoning",
 ]
@@ -49,10 +53,32 @@ _Render = Callable[[ReasoningWire, ReasoningIntent, dict[str, Any], int | None],
 
 
 @dataclass(frozen=True)
+class ReasoningCarriers:
+    """Where a dialect's reasoning controls sit in a rendered request payload.
+
+    ``effort`` is the path of the effort value (a ladder rung, ``none`` included
+    where the dialect spells off as that rung). ``off_switch`` is the path of an
+    explicit off spelling outside the ladder and ``off_value`` its value
+    (``thinking.type: disabled``). An empty path means the dialect has no such
+    carrier.
+    """
+
+    effort: tuple[str, ...] = ()
+    off_switch: tuple[str, ...] = ()
+    off_value: str | None = None
+
+
+_NO_CARRIERS = ReasoningCarriers()
+_THINKING_SWITCH = ("thinking", "type")
+_THINKING_DISABLED = ReasoningCarriers(off_switch=_THINKING_SWITCH, off_value="disabled")
+
+
+@dataclass(frozen=True)
 class _Dialect:
     render: _Render
     describe: Callable[[ReasoningWire, ReasoningIntent], ReasoningIntent]
     fields: tuple[str, ...] = ()
+    carriers: ReasoningCarriers = _NO_CARRIERS
 
 
 def render_reasoning(
@@ -95,6 +121,12 @@ def dialect_request_fields(dialect: ReasoningDialect) -> tuple[str, ...]:
     """The top-level request fields ``dialect`` may write."""
 
     return _dialect(dialect).fields
+
+
+def dialect_carriers(dialect: ReasoningDialect) -> ReasoningCarriers:
+    """Where ``dialect`` writes its effort value and explicit off switch."""
+
+    return _dialect(dialect).carriers
 
 
 def _dialect(name: ReasoningDialect) -> _Dialect:
@@ -512,32 +544,68 @@ def _describe_ollama_think(wire: ReasoningWire, intent: ReasoningIntent) -> Reas
 _DIALECTS: dict[str, _Dialect] = {
     "none": _Dialect(_render_nothing, _describe_nothing),
     "reasoning_effort": _Dialect(
-        _render_reasoning_effort, _describe_reasoning_effort, ("reasoning_effort",)
+        _render_reasoning_effort,
+        _describe_reasoning_effort,
+        ("reasoning_effort",),
+        ReasoningCarriers(effort=("reasoning_effort",)),
     ),
     "responses_reasoning": _Dialect(
-        _render_responses_reasoning, _describe_reasoning_effort, ("reasoning", "include")
+        _render_responses_reasoning,
+        _describe_reasoning_effort,
+        ("reasoning", "include"),
+        ReasoningCarriers(effort=("reasoning", "effort")),
     ),
     "openrouter_reasoning": _Dialect(
         _render_openrouter_reasoning,
         _describe_openrouter_reasoning,
         ("reasoning", "include_reasoning"),
+        ReasoningCarriers(effort=("reasoning", "effort")),
     ),
-    "nous_reasoning": _Dialect(_render_nous_reasoning, _describe_nous_reasoning, ("reasoning",)),
-    "thinking_toggle": _Dialect(_render_thinking_toggle, _describe_thinking_toggle, ("thinking",)),
+    "nous_reasoning": _Dialect(
+        _render_nous_reasoning,
+        _describe_nous_reasoning,
+        ("reasoning",),
+        ReasoningCarriers(effort=("reasoning", "effort")),
+    ),
+    "thinking_toggle": _Dialect(
+        _render_thinking_toggle,
+        _describe_thinking_toggle,
+        ("thinking",),
+        _THINKING_DISABLED,
+    ),
     "thinking_toggle_with_effort": _Dialect(
         _render_thinking_toggle_with_effort,
         _describe_thinking_toggle_with_effort,
         ("thinking", "reasoning_effort"),
+        ReasoningCarriers(
+            effort=("reasoning_effort",), off_switch=_THINKING_SWITCH, off_value="disabled"
+        ),
     ),
     "gemini_thinking": _Dialect(
-        _render_gemini_thinking, _describe_reasoning_effort, ("generationConfig",)
+        _render_gemini_thinking,
+        _describe_reasoning_effort,
+        ("generationConfig",),
+        ReasoningCarriers(effort=("generationConfig", "thinkingConfig", "thinkingLevel")),
     ),
     "minimax_split": _Dialect(_render_minimax_split, _describe_minimax_split, ("reasoning_split",)),
     "minimax_thinking": _Dialect(
-        _render_minimax_thinking, _describe_minimax_thinking, ("thinking", "reasoning_split")
+        _render_minimax_thinking,
+        _describe_minimax_thinking,
+        ("thinking", "reasoning_split"),
+        _THINKING_DISABLED,
     ),
     "anthropic_thinking": _Dialect(
-        _render_anthropic_thinking, _describe_anthropic_thinking, ("thinking", "output_config")
+        _render_anthropic_thinking,
+        _describe_anthropic_thinking,
+        ("thinking", "output_config"),
+        ReasoningCarriers(
+            effort=("output_config", "effort"), off_switch=_THINKING_SWITCH, off_value="disabled"
+        ),
     ),
-    "ollama_think": _Dialect(_render_ollama_think, _describe_ollama_think, ("think",)),
+    "ollama_think": _Dialect(
+        _render_ollama_think,
+        _describe_ollama_think,
+        ("think",),
+        ReasoningCarriers(effort=("think",)),
+    ),
 }

@@ -49,6 +49,14 @@ def normalize_responses_response(response: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def responses_returned_reasoning(response: Mapping[str, Any]) -> bool:
+    """Whether a Responses result carries a reasoning output item."""
+
+    return any(
+        item.get("type") == "reasoning" for item in _response_output_items(response.get("output"))
+    )
+
+
 def _extract_output_text_parts(output_items: list[Mapping[str, Any]]) -> list[str]:
     parts: list[str] = []
     for item in output_items:

@@ -23,7 +23,6 @@ from .openai_test_support import (
     API_KEY,
     CHAT_COMPLETIONS_URL,
     CODEX_TOOLS,
-    COMPLETED_RESPONSE,
     OPENAI_SUBSCRIPTION_URL,
     PLATFORM_RESPONSES_URL,
     SAMPLE_MESSAGES,
@@ -126,46 +125,6 @@ async def test_platform_401_does_not_refresh_static_api_key() -> None:
             await adapter.send(SAMPLE_MESSAGES, model_id="gpt-5.6-terra")
 
     assert route.call_count == 1
-
-
-@pytest.mark.parametrize(
-    ("model_id", "detail", "kwargs", "field", "expected"),
-    [
-        pytest.param(
-            "gpt-6-sol",
-            "Invalid value for 'reasoning.effort': 'max'",
-            {"thinking_effort": "max"},
-            "reasoning",
-            [{"effort": effort, "summary": "auto"} for effort in ("max", "xhigh", "xhigh")],
-            id="effort",
-        ),
-        pytest.param(
-            "gpt-5.5",
-            "Unsupported parameter: 'top_p'",
-            {"top_p": 0.9},
-            "top_p",
-            [0.9, None, None],
-            id="parameter",
-        ),
-    ],
-)
-@pytest.mark.asyncio
-async def test_platform_responses_learn_a_rejection_retry_and_remember_it(
-    model_id: str, detail: str, kwargs: dict[str, Any], field: str, expected: list[Any]
-) -> None:
-    adapter = platform_adapter(model_lookup=bundled_model_lookup())
-    with respx.mock:
-        route = respx.post(PLATFORM_RESPONSES_URL).mock(
-            side_effect=[
-                httpx.Response(400, json={"error": {"message": detail}}),
-                httpx.Response(200, json=COMPLETED_RESPONSE),
-                httpx.Response(200, json=COMPLETED_RESPONSE),
-            ]
-        )
-        await adapter.send(SAMPLE_MESSAGES, model_id=model_id, **kwargs)
-        await adapter.send(SAMPLE_MESSAGES, model_id=model_id, **kwargs)
-
-    assert [json.loads(call.request.content).get(field) for call in route.calls] == expected
 
 
 @pytest.mark.parametrize(
