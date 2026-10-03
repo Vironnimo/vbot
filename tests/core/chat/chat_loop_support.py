@@ -175,7 +175,8 @@ class StubAgent:
     id: str
     model: str
     fallback_models: list[str] = field(default_factory=list)
-    temperature: float = 0.1
+    temperature: float | None = 0.1
+    top_p: float | None = None
     thinking_effort: str = "high"
     allowed_tools: list[str] | None = None
     allowed_skills: list[str] | None = None

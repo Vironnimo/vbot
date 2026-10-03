@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal
 
 from core.projects._runtime_agent import (
     ConfigAgent,
@@ -126,6 +126,7 @@ def _build_config_agent(
     compaction_policy: Any,
     *,
     project_id: str | None = None,
+    resolved_top_p: float | None = None,
 ) -> ConfigAgent:
     return ConfigAgent(
         id=scanned.agent_id,
@@ -133,6 +134,7 @@ def _build_config_agent(
         name=scanned.display_name,
         model=resolved_model,
         temperature=resolved_temperature,
+        top_p=resolved_top_p,
         thinking_effort=resolved_thinking_effort,
         body=scanned.body,
         source_path=scanned.source_path,
@@ -146,26 +148,23 @@ def _build_config_agent(
     )
 
 
-def _resolve_temperature(
-    scanned: ScannedAgent, project: Project, global_defaults: AgentDefaults
+SamplingField = Literal["temperature", "top_p"]
+
+
+def _resolve_sampling(
+    field: SamplingField,
+    scanned: ScannedAgent,
+    project: Project,
+    global_defaults: AgentDefaults,
 ) -> float | None:
-    """Resolve temperature: override → agent value → project default → global default → None.
+    """Resolve ``temperature`` or ``top_p``: override → agent → project default → global default.
 
     The first tier that carries a number wins; ``0.0`` is a real value (the
-    sampling floor) and stops the chain. An override present (not ``None``, including
-    ``0.0``) is the top tier and wins. Falling through every tier yields ``None`` →
-    the field is dropped at the wire and the provider default applies.
+    sampling floor) and stops the chain. Falling through every tier yields
+    ``None`` → the field is dropped at the wire and the provider default applies.
     """
-    candidates = (
-        _overridden_temperature(project, scanned.agent_id),
-        scanned.temperature,
-        project.default_temperature,
-        global_defaults.temperature,
-    )
-    for candidate in candidates:
-        if candidate is not None:
-            return candidate
-    return None
+    value: float | None = _config_sampling_source(field, project, scanned, global_defaults)["value"]
+    return value
 
 
 def _resolve_thinking_effort(
@@ -191,19 +190,22 @@ def _resolve_thinking_effort(
     return None
 
 
-def _config_temperature_source(
-    project: Project, scanned: ScannedAgent, global_defaults: AgentDefaults
+def _config_sampling_source(
+    field: SamplingField,
+    project: Project,
+    scanned: ScannedAgent,
+    global_defaults: AgentDefaults,
 ) -> dict[str, Any]:
-    """Return the effective temperature + source for a config agent.
+    """Return the effective ``temperature`` or ``top_p`` + source for a config agent.
 
-    Same chain as :func:`_resolve_temperature` (override → agent → project default →
-    global default) but reporting which tier won; ``0.0`` is a real stopping value.
+    Same chain as :func:`_resolve_sampling` but reporting which tier won
+    (``override`` / ``agent`` / ``project_default`` / ``global_default``).
     """
     tiers = (
-        ("override", _overridden_temperature(project, scanned.agent_id)),
-        ("agent", scanned.temperature),
-        ("project_default", project.default_temperature),
-        ("global_default", _global_default_temperature(global_defaults)),
+        ("override", _number(project.overrides.get(scanned.agent_id, {}).get(field))),
+        ("agent", _number(getattr(scanned, field))),
+        ("project_default", _number(getattr(project, f"default_{field}"))),
+        ("global_default", _number(getattr(global_defaults, field))),
     )
     for source, candidate in tiers:
         if candidate is not None:
@@ -278,8 +280,7 @@ def _identity_optional_source(own_value: Any, default_value: Any) -> dict[str, A
     return {"value": None, "source": None}
 
 
-def _global_default_temperature(global_defaults: AgentDefaults) -> float | None:
-    value = global_defaults.temperature
+def _number(value: Any) -> float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
@@ -306,12 +307,6 @@ def _config_tool_access_source(project: Project, scanned: ScannedAgent) -> dict[
 def _overridden_model(project: Project, agent_id: str) -> str:
     """Return the agent's overridden model, or ``""`` when not overridden."""
     return str(project.overrides.get(agent_id, {}).get("model", "") or "")
-
-
-def _overridden_temperature(project: Project, agent_id: str) -> float | None:
-    """Return the agent's overridden temperature, or ``None`` when not overridden."""
-    value = project.overrides.get(agent_id, {}).get("temperature")
-    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 def _overridden_thinking_effort(project: Project, agent_id: str) -> str | None:

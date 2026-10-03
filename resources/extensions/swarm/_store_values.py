@@ -20,6 +20,7 @@ from core.settings.settings import (
     SettingsValidationError,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.tools.availability import normalize_tool_access
 from core.utils.errors import StorageError
@@ -226,7 +227,7 @@ def _validate_profile(value: Mapping[str, Any]) -> Json:
 def _formation(value: object) -> Json:
     if not isinstance(value, dict):
         raise SwarmStoreError("invalid_arguments", field="participants")
-    allowed = {"model", "count", "thinking_effort", "temperature", "fallback_models"}
+    allowed = {"model", "count", "thinking_effort", "temperature", "top_p", "fallback_models"}
     if set(value) - allowed or set(value) < {"model", "count"}:
         raise SwarmStoreError("invalid_arguments", field="participants")
     model = value.get("model")
@@ -246,6 +247,11 @@ def _formation(value: object) -> Json:
             formation["temperature"] = validate_temperature(
                 value["temperature"], label="temperature", allow_none=True
             )
+        except SettingsValidationError as error:
+            raise SwarmStoreError("invalid_arguments", field="participants") from error
+    if "top_p" in value:
+        try:
+            formation["top_p"] = validate_top_p(value["top_p"], label="top_p", allow_none=True)
         except SettingsValidationError as error:
             raise SwarmStoreError("invalid_arguments", field="participants") from error
     if "fallback_models" in value:

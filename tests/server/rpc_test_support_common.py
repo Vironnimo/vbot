@@ -104,6 +104,7 @@ class StubAgent:
     workspace: str = "C:/workspace"
     root_project_id: str | None = None
     temperature: float | None = 0.1
+    top_p: float | None = None
     thinking_effort: str | None = ""
     memory_prompt_mode: str = DEFAULT_MEMORY_PROMPT_MODE
     allowed_tools: list[str] | None = None
@@ -160,6 +161,7 @@ class StubAgents:
             model=agent.model,
             fallback_models=agent.fallback_models,
             temperature=agent.temperature,
+            top_p=agent.top_p,
             thinking_effort=agent.thinking_effort,
             defaults=defaults,
         )

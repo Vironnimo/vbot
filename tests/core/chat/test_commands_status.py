@@ -23,7 +23,7 @@ from core.chat.status_report import (
     resolve_reported_thinking_effort,
     resolve_status_model_details,
     resolve_status_project_label,
-    resolve_status_temperature,
+    resolve_status_sampling,
     status_session_facts,
 )
 from core.models.models import Capabilities, Model, ModelRegistry, ReasoningCapabilities
@@ -50,6 +50,7 @@ def _make_model(
     model_id: str = "gpt-5.2",
     name: str = "GPT-5.2",
     recommended_temperature: float | None = None,
+    recommended_top_p: float | None = None,
     context_window: int | None = 200_000,
     reasoning: ReasoningCapabilities | None = None,
 ) -> Model:
@@ -65,6 +66,7 @@ def _make_model(
         context_window=context_window,
         max_output_tokens=8_192,
         recommended_temperature=recommended_temperature,
+        recommended_top_p=recommended_top_p,
     )
 
 
@@ -641,12 +643,17 @@ def test_reported_thinking_effort_without_an_agent_is_unknown() -> None:
         ),
         (_make_model(context_window=None), None, {"context_window": GLOBAL_CONTEXT_WINDOW_FLOOR}),
         (
-            _make_model(recommended_temperature=1.0),
-            _provider(defaults={"temperature": 0.7}),
-            {"recommended_temperature": 1.0, "provider_default_temperature": 0.7},
+            _make_model(recommended_temperature=1.0, recommended_top_p=0.95),
+            _provider(defaults={"temperature": 0.7, "top_p": 0.9}),
+            {
+                "recommended_temperature": 1.0,
+                "provider_default_temperature": 0.7,
+                "recommended_top_p": 0.95,
+                "provider_default_top_p": 0.9,
+            },
         ),
     ],
-    ids=["reasoning-ladder", "provider-window", "global-floor-window", "temperature-tiers"],
+    ids=["reasoning-ladder", "provider-window", "global-floor-window", "sampling-tiers"],
 )
 def test_status_model_details_resolve_through_the_model_and_provider(
     model: Model, provider: ProviderConfig | None, expected: dict[str, Any]
@@ -661,7 +668,7 @@ def test_status_model_details_resolve_through_the_model_and_provider(
 
 
 @pytest.mark.parametrize(
-    ("agent_temperature", "recommended", "provider_default", "expected"),
+    ("configured", "recommended", "provider_default", "expected"),
     [
         (0.2, 1.0, 0.7, "0.2 (agent)"),
         (None, 1.0, 0.7, "0.7 (provider config)"),
@@ -669,8 +676,8 @@ def test_status_model_details_resolve_through_the_model_and_provider(
         (None, None, None, "provider default"),
     ],
 )
-def test_status_temperature_names_what_the_request_sends(
-    agent_temperature: float | None,
+def test_status_sampling_names_what_the_request_sends(
+    configured: float | None,
     recommended: float | None,
     provider_default: float | None,
     expected: str,
@@ -680,6 +687,11 @@ def test_status_temperature_names_what_the_request_sends(
         display_name=None,
         recommended_temperature=recommended,
         provider_default_temperature=provider_default,
+        recommended_top_p=recommended,
+        provider_default_top_p=provider_default,
     )
+    agent = replace(_make_agent(), temperature=configured, top_p=configured)
 
-    assert resolve_status_temperature(agent_temperature, details) == expected
+    sampling = resolve_status_sampling(agent, details)
+
+    assert (sampling.temperature, sampling.top_p) == (expected, expected)

@@ -316,6 +316,7 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",
         "Temperature: provider default (Model recommends 1)",
+        "Top P: provider default",
     ):
         assert line in text
 

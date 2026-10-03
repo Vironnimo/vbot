@@ -29,7 +29,14 @@ from core.search_config import (
     MIN_WEB_SEARCH_COUNT,
 )
 from core.settings._json_settings import normalize_json_object
-from core.settings.agent_defaults import AGENT_DEFAULT_FIELDS, parse_agent_default_value
+from core.settings.agent_defaults import (
+    AGENT_DEFAULT_FIELDS,
+    MAX_TEMPERATURE,
+    MAX_TOP_P,
+    MIN_TEMPERATURE,
+    MIN_TOP_P,
+    parse_agent_default_value,
+)
 from core.utils.errors import StorageError
 
 JsonObject = dict[str, Any]
@@ -74,8 +81,6 @@ DEFAULT_PROJECT_SOURCE_FORMAT = "opencode"
 # validation and the Project entity reject the same forbidden value without an
 # import cycle through ``core.tools``.
 PROJECT_TOOL_ALLOWLIST_WILDCARD = "*"
-MIN_TEMPERATURE = 0.0
-MAX_TEMPERATURE = 2.0
 # Appearance chat-width preference (the WebUI chat reading-column width). The
 # constant lives here, not in normalizers.py, so the public update parser can
 # validate membership without a circular import (normalizers imports settings).
@@ -1083,6 +1088,26 @@ def validate_temperature(
     allow_none: bool = False,
 ) -> float | None:
     """Validate one agent ``temperature`` value against the canonical schema rules."""
+    return _validate_sampling_value(
+        value, label=label, allow_none=allow_none, minimum=MIN_TEMPERATURE, maximum=MAX_TEMPERATURE
+    )
+
+
+def validate_top_p(
+    value: Any,
+    *,
+    label: str,
+    allow_none: bool = False,
+) -> float | None:
+    """Validate one agent ``top_p`` value against the canonical schema rules."""
+    return _validate_sampling_value(
+        value, label=label, allow_none=allow_none, minimum=MIN_TOP_P, maximum=MAX_TOP_P
+    )
+
+
+def _validate_sampling_value(
+    value: Any, *, label: str, allow_none: bool, minimum: float, maximum: float
+) -> float | None:
     if value is None:
         if allow_none:
             return None
@@ -1090,14 +1115,12 @@ def validate_temperature(
 
     if isinstance(value, bool) or not isinstance(value, int | float):
         raise SettingsValidationError(f"{label} must be a number")
-    if value < MIN_TEMPERATURE or value > MAX_TEMPERATURE:
-        raise SettingsValidationError(
-            f"{label} must be between {MIN_TEMPERATURE:g} and {MAX_TEMPERATURE:g}"
-        )
-    temperature = float(value)
-    if not math.isfinite(temperature):
+    if value < minimum or value > maximum:
+        raise SettingsValidationError(f"{label} must be between {minimum:g} and {maximum:g}")
+    number = float(value)
+    if not math.isfinite(number):
         raise SettingsValidationError(f"{label} must be finite")
-    return temperature
+    return number
 
 
 def validate_thinking_effort(

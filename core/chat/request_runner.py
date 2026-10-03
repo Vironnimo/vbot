@@ -296,7 +296,7 @@ class WireRequestRunner:
         # Sampling reaches the wire only when configured; otherwise the
         # Provider's own default applies.
         temperature = agent.temperature
-        top_p = None
+        top_p = agent.top_p
 
         def retry_notice(notice: RetryNotice) -> None:
             run.emit(

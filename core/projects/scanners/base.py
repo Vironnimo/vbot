@@ -117,7 +117,8 @@ class ScannedAgent:
       source) or unresolvable in this instance — the resolver runs the model
       chain and the scan reports a bad/unconfigured model; the detector never
       judges the model.
-    - ``temperature`` — optional float, or ``None`` when the source omits it.
+    - ``temperature`` / ``top_p`` — optional floats, or ``None`` when the source
+      omits them.
     - ``body`` — the source file body, **verbatim**, used as the system prompt.
       Treated as opaque text: ``{...}`` in it is *not* expanded here (the prompt
       builder inserts it via the ``{include}`` path later).
@@ -149,6 +150,7 @@ class ScannedAgent:
     denied_tools: frozenset[str] = frozenset()
     agent_target_rules: tuple[AgentTargetRule, ...] = ()
     thinking_effort: str | None = None
+    top_p: float | None = None
 
 
 @runtime_checkable

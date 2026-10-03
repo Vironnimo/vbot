@@ -258,6 +258,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ("clear_model", "model"),
         ("clear_fallback_models", "fallback_models"),
         ("clear_temperature", "temperature"),
+        ("clear_top_p", "top_p"),
         ("clear_thinking_effort", "thinking_effort"),
         ("clear_compaction_policy", "compaction_policy"),
         ("default_workspace", "workspace"),
@@ -265,6 +266,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ("clear_default_agent", "default_agent"),
         ("clear_default_model", "default_model"),
         ("clear_default_temperature", "default_temperature"),
+        ("clear_default_top_p", "default_top_p"),
         ("clear_default_thinking_effort", "default_thinking_effort"),
     ):
         if getattr(args, clear, False) and getattr(args, value, None) is not None:

@@ -118,6 +118,7 @@ def _write_agent(
     model: str = "",
     body: str = "Body.",
     temperature: float | None = 0.3,
+    top_p: float | None = None,
     reasoning_effort: str | None = None,
     permission: dict[str, str] | None = None,
 ) -> Path:
@@ -128,6 +129,8 @@ def _write_agent(
         lines.append(f"model: {model}")
     if temperature is not None:
         lines.append(f"temperature: {temperature}")
+    if top_p is not None:
+        lines.append(f"top_p: {top_p}")
     if reasoning_effort is not None:
         lines.append(f"reasoningEffort: {reasoning_effort}")
     if permission:
@@ -180,6 +183,7 @@ def _project(
     default_model: str = "",
     default_temperature: float | None = None,
     default_thinking_effort: str | None = None,
+    default_top_p: float | None = None,
 ):
     return projects.create(
         "vbot",
@@ -188,6 +192,7 @@ def _project(
         default_model=default_model,
         default_temperature=default_temperature,
         default_thinking_effort=default_thinking_effort,
+        default_top_p=default_top_p,
     )
 
 
@@ -199,6 +204,7 @@ def _resolver(
     global_default: str = "",
     global_temperature: float | None = None,
     global_thinking_effort: str | None = None,
+    global_top_p: float | None = None,
     project_skill_names: dict[str, frozenset[str]] | None = None,
 ) -> AgentResolver:
     """Build a resolver whose global tier is a ``defaults.agent`` dict provider.
@@ -216,6 +222,8 @@ def _resolver(
         defaults["temperature"] = global_temperature
     if global_thinking_effort is not None:
         defaults["thinking_effort"] = global_thinking_effort
+    if global_top_p is not None:
+        defaults["top_p"] = global_top_p
     skill_names = project_skill_names or {}
     return AgentResolver(
         agents,

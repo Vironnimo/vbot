@@ -60,12 +60,14 @@ from core.settings import (
     is_valid_project_id,
     validate_temperature,
     validate_thinking_effort,
+    validate_top_p,
 )
 from core.settings.validation import (
     COMPACTION_POLICY_SHAPE,
     validate_optional_compaction_policy,
     validate_temperature_diagnostic,
     validate_thinking_effort_diagnostic,
+    validate_top_p_diagnostic,
 )
 from core.utils.timestamps import utc_now_timestamp
 
@@ -75,6 +77,7 @@ DEFAULT_DEFAULT_MODEL = ""
 # model; unset (``None``) means "fall through the resolution chain" to the global
 # agent default and finally the provider default, exactly like ``default_model``.
 DEFAULT_DEFAULT_TEMPERATURE: float | None = None
+DEFAULT_DEFAULT_TOP_P: float | None = None
 DEFAULT_DEFAULT_THINKING_EFFORT: str | None = None
 
 # The project Tool Whitelist ceiling a new project starts with (decision 2 /
@@ -116,9 +119,9 @@ def project_tool_configurability_reason(
 
 
 # The optional fields a per-agent override may carry. Each maps to the top tier of
-# the matching config-agent resolver chain (model / temperature / thinking effort).
+# the matching config-agent resolver chain (model / temperature / top_p / thinking effort).
 OVERRIDE_FIELDS: frozenset[str] = frozenset(
-    {"model", "temperature", "thinking_effort", "compaction_policy", "tool_access"}
+    {"model", "temperature", "top_p", "thinking_effort", "compaction_policy", "tool_access"}
 )
 
 _PROJECT_CONFIG_FIELDS = frozenset(
@@ -131,6 +134,7 @@ _PROJECT_CONFIG_FIELDS = frozenset(
         "default_model",
         "default_temperature",
         "default_thinking_effort",
+        "default_top_p",
         "display_name",
         "overrides",
         "project_id",
@@ -249,6 +253,9 @@ def validate_project_data(data: Any) -> list[JsonDiagnostic]:
     validate_temperature_diagnostic(
         diagnostics, "$.default_temperature", data.get("default_temperature"), allow_none=True
     )
+    validate_top_p_diagnostic(
+        diagnostics, "$.default_top_p", data.get("default_top_p"), allow_none=True
+    )
     validate_thinking_effort_diagnostic(
         diagnostics,
         "$.default_thinking_effort",
@@ -349,6 +356,10 @@ def _validate_one_override_schema(
             override["temperature"],
             allow_none=False,
         )
+    if "top_p" in override:
+        validate_top_p_diagnostic(
+            diagnostics, child_path(path, "top_p"), override["top_p"], allow_none=False
+        )
     if "thinking_effort" in override:
         validate_thinking_effort_diagnostic(
             diagnostics,
@@ -419,6 +430,7 @@ class Project:
     default_model: str
     default_temperature: float | None
     default_thinking_effort: str | None
+    default_top_p: float | None
     # The project's single source format (GLOSSARY → Source Format): which
     # coding-agent ecosystem its Team agents and project skills come from
     # (".opencode/" vs ".claude/"). Exactly one per project — every consumer
@@ -437,7 +449,7 @@ class Project:
     skills_project_disabled: list[str]
     # Per-agent overrides keyed by scanned ``agent_id`` → an override object with
     # optional ``model`` (user-facing ``<provider>/<model-id>[::connection]``),
-    # ``temperature`` (number), and ``thinking_effort`` (effort string, ``""`` = force
+    # ``temperature`` / ``top_p`` (numbers), and ``thinking_effort`` (effort string, ``""`` = force
     # provider default). The vBot-owned per-agent override layer (GLOSSARY → Model):
     # data-dir only (never the repo); the resolver applies each override field as the
     # **top** tier of the matching config-agent chain, so an override wins over the
@@ -448,8 +460,12 @@ class Project:
     overrides: dict[str, dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
-        """Return the JSON-serializable mapping persisted to ``project.json``."""
-        return {
+        """Return the JSON-serializable mapping persisted to ``project.json``.
+
+        ``default_top_p`` is written only when set, so a Project without one keeps
+        the document earlier vBot versions read without a field warning.
+        """
+        data = {
             "project_id": self.project_id,
             "display_name": self.display_name,
             "cwd": self.cwd,
@@ -469,6 +485,9 @@ class Project:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
+        if self.default_top_p is not None:
+            data["default_top_p"] = self.default_top_p
+        return data
 
 
 def build_project(
@@ -480,6 +499,7 @@ def build_project(
     default_model: str = DEFAULT_DEFAULT_MODEL,
     default_temperature: float | None = DEFAULT_DEFAULT_TEMPERATURE,
     default_thinking_effort: str | None = DEFAULT_DEFAULT_THINKING_EFFORT,
+    default_top_p: float | None = DEFAULT_DEFAULT_TOP_P,
     source_format: str = DEFAULT_PROJECT_SOURCE_FORMAT,
     auto_load: list[str] | None = None,
     allowed_tools: list[str] | None = None,
@@ -506,6 +526,7 @@ def build_project(
     validated_default_model = _validate_optional_string("default_model", default_model)
     validated_default_temperature = _validate_default_temperature(default_temperature)
     validated_default_thinking_effort = _validate_default_thinking_effort(default_thinking_effort)
+    validated_default_top_p = _validate_default_top_p(default_top_p)
     validated_source_format = _validate_source_format(source_format)
     validated_auto_load = _validate_auto_load(auto_load)
     validated_allowed_tools = _validate_allowed_tools(allowed_tools)
@@ -527,6 +548,7 @@ def build_project(
         default_model=validated_default_model,
         default_temperature=validated_default_temperature,
         default_thinking_effort=validated_default_thinking_effort,
+        default_top_p=validated_default_top_p,
         source_format=validated_source_format,
         auto_load=validated_auto_load,
         allowed_tools=validated_allowed_tools,
@@ -558,6 +580,7 @@ def project_from_dict(data: dict[str, Any]) -> Project:
         default_thinking_effort=data.get(
             "default_thinking_effort", DEFAULT_DEFAULT_THINKING_EFFORT
         ),
+        default_top_p=data.get("default_top_p", DEFAULT_DEFAULT_TOP_P),
         source_format=data.get("source_format") or DEFAULT_PROJECT_SOURCE_FORMAT,
         auto_load=list(cast("list[str]", data.get("auto_load") or [])),
         allowed_tools=_allowed_tools_from_data(data.get("allowed_tools")),
@@ -620,6 +643,14 @@ def _validate_default_temperature(value: Any) -> float | None:
     """
     try:
         return validate_temperature(value, label="default_temperature", allow_none=True)
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
+
+
+def _validate_default_top_p(value: Any) -> float | None:
+    """Validate the optional project-default ``top_p`` via the canonical ``[0, 1]`` rule."""
+    try:
+        return validate_top_p(value, label="default_top_p", allow_none=True)
     except SettingsValidationError as exc:
         raise ProjectError(str(exc)) from exc
 
@@ -690,7 +721,7 @@ def _validate_overrides(value: dict[str, dict[str, Any]] | None) -> dict[str, di
     model string (shape only, exactly like ``default_model`` — the model's
     *configured-ness* is the ``/model`` set-time gate, not a file-load concern, so a
     credential going away never makes an existing ``project.json`` fail to load).
-    ``temperature`` and ``thinking_effort`` reuse the canonical agent field validators,
+    ``temperature``, ``top_p`` and ``thinking_effort`` reuse the canonical agent field validators,
     so their ranges and effort ladder can never drift from an agent's;
     ``thinking_effort = ""`` is a real value meaning "force provider default". An empty
     override object stands for an entry whose fields this vBot does not model (or whose
@@ -724,6 +755,8 @@ def _validate_override(agent_id: str, override: Any) -> dict[str, Any]:
         validated["model"] = model
     if "temperature" in override:
         validated["temperature"] = _validate_override_temperature(agent_id, override["temperature"])
+    if "top_p" in override:
+        validated["top_p"] = _validate_override_top_p(agent_id, override["top_p"])
     if "thinking_effort" in override:
         validated["thinking_effort"] = _validate_override_thinking_effort(
             agent_id, override["thinking_effort"]
@@ -777,6 +810,15 @@ def _validate_override_temperature(agent_id: str, value: Any) -> float:
     except SettingsValidationError as exc:
         raise ProjectError(str(exc)) from exc
     return cast("float", temperature)
+
+
+def _validate_override_top_p(agent_id: str, value: Any) -> float:
+    """Validate an override ``top_p`` via the canonical rule (``None`` is not one)."""
+    try:
+        top_p = validate_top_p(value, label=f"overrides[{agent_id!r}].top_p", allow_none=False)
+    except SettingsValidationError as exc:
+        raise ProjectError(str(exc)) from exc
+    return cast("float", top_p)
 
 
 def _validate_override_thinking_effort(agent_id: str, value: Any) -> str:

@@ -83,6 +83,7 @@ from core.settings.settings import (
     validate_temperature,
     validate_thinking_effort,
     validate_timezone_name,
+    validate_top_p,
 )
 from core.utils.errors import StorageError
 
@@ -1123,6 +1124,12 @@ def validate_temperature_diagnostic(
     diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
 ) -> None:
     _delegate_field_rule(diagnostics, path, validate_temperature, value, allow_none=allow_none)
+
+
+def validate_top_p_diagnostic(
+    diagnostics: list[JsonDiagnostic], path: str, value: Any, *, allow_none: bool
+) -> None:
+    _delegate_field_rule(diagnostics, path, validate_top_p, value, allow_none=allow_none)
 
 
 def validate_thinking_effort_diagnostic(

@@ -67,6 +67,7 @@ def _temporary_config_from_binding(binding: Any) -> TemporaryAgentConfig:
             tools=raw["tools"],
             name=raw["name"],
             temperature=raw.get("temperature"),
+            top_p=raw.get("top_p"),
             thinking_effort=raw.get("thinking_effort"),
             fallback_models=raw.get("fallback_models"),
             instructions=raw.get("instructions", ""),

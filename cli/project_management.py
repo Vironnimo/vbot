@@ -41,6 +41,8 @@ PROJECT_SET_FLAGS = (
     "--clear-default-model",
     "--default-temperature",
     "--clear-default-temperature",
+    "--default-top-p",
+    "--clear-default-top-p",
     "--default-thinking-effort",
     "--clear-default-thinking-effort",
     "--format",
@@ -306,6 +308,7 @@ def _project_config_lines(project: object) -> list[str]:
     if not isinstance(project, dict):
         return ["  config: invalid project entry"]
     temperature = _number_or_default(project.get("default_temperature"), "-")
+    top_p = _number_or_default(project.get("default_top_p"), "-")
     thinking_effort = _thinking_effort_text(project.get("default_thinking_effort"))
     lines = [
         f"  display_name: {_string_or_default(project.get('display_name'), '-')}",
@@ -314,6 +317,7 @@ def _project_config_lines(project: object) -> list[str]:
         f"  default_agent: {_string_or_default(project.get('default_agent'), '-')}",
         f"  default_model: {_string_or_default(project.get('default_model'), '-')}",
         f"  default_temperature: {temperature}",
+        f"  default_top_p: {top_p}",
         f"  default_thinking_effort: {thinking_effort}",
         f"  format: {_string_or_default(project.get('source_format'), '-')}",
         f"  auto_load: {_format_string_list(project.get('auto_load'))}",
@@ -421,7 +425,7 @@ def _format_project_row(project: object) -> str:
 
 
 def _number_or_default(value: object, default: str) -> str:
-    # bool is an int subclass; never render a stray boolean as a temperature.
+    # bool is an int subclass; never render a stray boolean as a number.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return str(value)
     return default
@@ -439,11 +443,11 @@ def _thinking_effort_text(value: object) -> str:
 
 
 def _coerce_override_value(field: str, raw_value: str) -> object:
-    if field == "temperature":
+    if field in {"temperature", "top_p"}:
         try:
             return float(raw_value)
         except ValueError as exc:
-            raise ValueError("temperature override must be a number") from exc
+            raise ValueError(f"{field} override must be a number") from exc
     if field in {"compaction_policy", "tool_access"}:
         try:
             value = json.loads(raw_value)

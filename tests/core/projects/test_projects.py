@@ -38,6 +38,7 @@ def test_build_project_fills_every_optional_field_with_its_default(tmp_path: Pat
         "default_model": "",
         "default_temperature": None,
         "default_thinking_effort": None,
+        # No default_top_p: an unset one is not written.
         "source_format": "opencode",
         "auto_load": [],
         "allowed_tools": list(PROJECT_DEFAULT_ALLOWED_TOOLS),
@@ -60,6 +61,7 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         # 0.0 is the sampling floor and "" the explicit Provider default; neither is unset.
         "default_temperature": 0.0,
         "default_thinking_effort": "",
+        "default_top_p": 0.0,
         "source_format": "claude",
         "auto_load": ["AGENTS.md"],
         "allowed_tools": ["read", "grep"],
@@ -69,7 +71,7 @@ def test_build_project_keeps_every_explicit_field_through_a_round_trip(tmp_path:
         "overrides": {
             "builder": {"model": "openai/gpt-5", "temperature": 0.4, "thinking_effort": "high"},
             "planner": {"model": "anthropic/claude-sonnet-4"},
-            "floor": {"temperature": 0.0, "thinking_effort": ""},
+            "floor": {"temperature": 0.0, "top_p": 0.0, "thinking_effort": ""},
             "reviewer": {
                 "tool_access": {
                     "mode": "selected",
@@ -129,6 +131,14 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
             ProjectError,
             "default_temperature must be between 0 and 2",
             id="default-temperature",
+        ),
+        pytest.param(
+            "vbot",
+            None,
+            {"default_top_p": 1.5},
+            ProjectError,
+            "default_top_p must be between 0 and 1",
+            id="default-top-p",
         ),
         pytest.param(
             "vbot",
@@ -238,6 +248,14 @@ def test_explicit_empty_tool_whitelist_is_kept(tmp_path: Path) -> None:
         pytest.param(
             "vbot",
             None,
+            {"overrides": {"builder": {"top_p": 1.5}}},
+            ProjectError,
+            "overrides['builder'].top_p must be between 0 and 1",
+            id="override-top-p",
+        ),
+        pytest.param(
+            "vbot",
+            None,
             {"overrides": {"builder": {"thinking_effort": "ultra"}}},
             ProjectError,
             "overrides['builder'].thinking_effort must be one of",
@@ -273,7 +291,9 @@ def test_build_project_rejects_invalid_fields(
 
 def test_override_fields_constant_contains_all_overridable_fields() -> None:
     assert (
-        frozenset({"model", "temperature", "thinking_effort", "compaction_policy", "tool_access"})
+        frozenset(
+            {"model", "temperature", "top_p", "thinking_effort", "compaction_policy", "tool_access"}
+        )
         == OVERRIDE_FIELDS
     )
 

@@ -48,6 +48,7 @@ class TemporaryAgentConfig:
     tools: dict[str, Any]
     name: str
     temperature: float | None = None
+    top_p: float | None = None
     thinking_effort: str | None = None
     fallback_models: list[str] | None = None
     instructions: str = ""
@@ -82,6 +83,12 @@ class TemporaryAgentConfig:
             or not 0 <= self.temperature <= 2
         ):
             raise ValueError("temporary temperature must be between 0 and 2")
+        if self.top_p is not None and (
+            isinstance(self.top_p, bool)
+            or not isinstance(self.top_p, (int, float))
+            or not 0 <= self.top_p <= 1
+        ):
+            raise ValueError("temporary top_p must be between 0 and 1")
         if self.thinking_effort is not None and not isinstance(self.thinking_effort, str):
             raise ValueError("temporary thinking_effort must be a string or null")
         if not all(isinstance(item, str) and item for item in self.allowed_skills):
@@ -123,6 +130,7 @@ class TemporaryAgent:
     workspace: str = ""
     root_project_id: str | None = None
     temperature: float | None = None
+    top_p: float | None = None
     thinking_effort: str | None = None
     memory_prompt_mode: MemoryPromptMode = MEMORY_PROMPT_MODE_OFF
     custom_system_prompt_enabled: bool = False
@@ -169,6 +177,8 @@ class TemporaryAgentRegistry:
         # idempotent re-creation still reconciles.
         if config.compaction_policy is not None:
             binding_config["compaction_policy"] = deepcopy(config.compaction_policy)
+        if config.top_p is not None:
+            binding_config["top_p"] = config.top_p
         return self._sessions.create_bound_temporary_session(
             address,
             owner_name=owner_name,
@@ -198,6 +208,7 @@ class TemporaryAgentRegistry:
                 instructions=str(config.get("instructions", "")),
                 prompt_blocks=deepcopy(config.get("prompt_blocks")),
                 temperature=config.get("temperature"),
+                top_p=config.get("top_p"),
                 thinking_effort=config.get("thinking_effort"),
                 current_session_id=address.session_id,
                 compaction_policy=deepcopy(compaction_policy),

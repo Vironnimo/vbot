@@ -28,6 +28,7 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
         "description: Writes code and tests.\n"
         "model: opencode-go/minimax-m3\n"
         "temperature: 0.4\n"
+        "top_p: 0.9\n"
         "reasoningEffort: high\n"
         "permission:\n"
         "  task: deny\n"
@@ -50,6 +51,7 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
     # The Model string is carried verbatim, never rewritten.
     assert agent.model == "opencode-go/minimax-m3"
     assert agent.temperature == 0.4
+    assert agent.top_p == 0.9
     assert agent.thinking_effort == "high"
     assert agent.source_format == OPENCODE_FORMAT_KEY
     # permission.task: deny turns off only the subagent Tool and every target.
@@ -64,12 +66,14 @@ def test_detect_parses_frontmatter_and_body(tmp_path: Path) -> None:
         pytest.param(
             "description: x\n",
             "Body.\n",
-            {"model": "", "temperature": None, "thinking_effort": None},
+            {"model": "", "temperature": None, "top_p": None, "thinking_effort": None},
             id="no-fields",
         ),
         pytest.param(
             "temperature: true\n", "Body.\n", {"temperature": None}, id="bool-temperature"
         ),
+        # A top_p outside [0, 1] falls through like an unknown effort.
+        pytest.param("top_p: 1.5\n", "Body.\n", {"top_p": None}, id="out-of-range-top-p"),
         pytest.param(
             'reasoningEffort: "  High  "\n',
             "Body.\n",

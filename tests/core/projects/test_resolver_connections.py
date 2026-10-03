@@ -138,22 +138,25 @@ def test_session_overrides_persist_in_the_session_and_never_in_the_agent(
     )
 
     resolver.update_session_overrides(
-        address, {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 1}
+        address,
+        {"model": "openai/gpt-mini", "thinking_effort": "high", "temperature": 1, "top_p": 0.9},
     )
     # A partial update keeps the other fields; None clears one.
     updated = resolver.update_session_overrides(address, {"temperature": None})
 
     resolved = resolver.resolve_agent(None, "identity", session_id=session.id)
-    assert updated == AgentOverrides(model="openai/gpt-mini", thinking_effort="high")
-    assert (resolved.model, resolved.thinking_effort, resolved.temperature) == (
+    assert updated == AgentOverrides(model="openai/gpt-mini", thinking_effort="high", top_p=0.9)
+    assert (resolved.model, resolved.thinking_effort, resolved.temperature, resolved.top_p) == (
         "openai/gpt-mini",
         "high",
         0.2,
+        0.9,
     )
     assert sessions.metadata_value(address, "agent_overrides") == {
         "future": True,
         "model": "openai/gpt-mini",
         "thinking_effort": "high",
+        "top_p": 0.9,
     }
     effective = resolver.effective_config(None, "identity", session_id=session.id)
     assert effective["model"] == {"value": "openai/gpt-mini", "source": "session"}

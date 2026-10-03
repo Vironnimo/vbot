@@ -16,7 +16,7 @@ Resolution failures are `AgentResolutionError`. A missing address part keeps its
 
 ### Session Agent overrides
 
-A Session can override its Agent's `model`, `thinking_effort` and `temperature` (`AGENT_OVERRIDE_FIELDS`, frozen `AgentOverrides` in `_runtime_agent.py`). The resolver owns them end to end: `resolve_agent(..., session_id=...)`, `resolve_agent_async(..., session_id=...)` and the temporary variants' `session=` read the Session's stored overrides and return a replaced runtime dataclass; they never mutate the stored Identity Agent, repository Agent, Project overrides or other Sessions. Without a Session, for a Session that does not exist yet, or with nothing stored, resolution is the ordinary path. `effective_config(..., session_id=...)` reports an overridden field with source `session`.
+A Session can override its Agent's `model`, `thinking_effort`, `temperature` and `top_p` (`AGENT_OVERRIDE_FIELDS`, frozen `AgentOverrides` in `_runtime_agent.py`). The resolver owns them end to end: `resolve_agent(..., session_id=...)`, `resolve_agent_async(..., session_id=...)` and the temporary variants' `session=` read the Session's stored overrides and return a replaced runtime dataclass; they never mutate the stored Identity Agent, repository Agent, Project overrides or other Sessions. Without a Session, for a Session that does not exist yet, or with nothing stored, resolution is the ordinary path. `effective_config(..., session_id=...)` reports an overridden field with source `session`.
 
 `update_session_overrides(address, changes)` (async: `update_session_overrides_async`) is the only writer: unknown fields raise `ValueError`, values validate like Agent settings, a Model must pass `require_configured`, `None` clears one field, other fields and keys an unknown newer version stored survive, and an empty result removes the stored value. Storage is the Session metadata key `agent_overrides` (`sessions.md`), so forks inherit it. A stored Model that can no longer run fails that Session's resolution with `ModelConfigurationError` instead of silently falling back.
 
@@ -40,7 +40,7 @@ Temperature and thinking effort use:
 per-Agent override -> repository Agent -> Project default -> global default -> Provider default or None
 ```
 
-`effective_config()` exposes the chosen value and provenance (`override`, `agent`, `project_default`, `global_default`, or `null`) for model, temperature, and thinking effort. Preserve those labels as an API/UI contract when changing fallback behavior.
+`effective_config()` exposes the chosen value and provenance (`override`, `agent`, `project_default`, `global_default`, or `null`) for model, temperature, top_p, and thinking effort. Preserve those labels as an API/UI contract when changing fallback behavior.
 
 Compaction policy is a supported per-Agent Project override passed into the synthesized `ConfigAgent`, but it is not one of the three fields in the current effective-config provenance result. Do not imply provenance coverage until that contract is deliberately extended end to end.
 

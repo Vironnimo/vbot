@@ -54,7 +54,7 @@ def test_every_field_dispatches_through_all_three_surfaces(field: str) -> None:
         assert parse_agent_default_value(field, "openai/gpt-4", label="l") == "openai/gpt-4"
     elif field == "fallback_models":
         assert parse_agent_default_value(field, ["openai/gpt-4"], label="l") == ["openai/gpt-4"]
-    elif field == "temperature":
+    elif field in {"temperature", "top_p"}:
         assert parse_agent_default_value(field, 0.5, label="l") == 0.5
     else:
         assert parse_agent_default_value(field, "high", label="l") == "high"
@@ -80,6 +80,7 @@ def test_agent_defaults_round_trips_non_null_fields() -> None:
         "model": "openai/gpt-4",
         "fallback_models": ["openai/gpt-mini"],
         "temperature": 0.7,
+        "top_p": 0.9,
         "thinking_effort": "high",
     }
     assert AgentDefaults.from_dict(data).to_dict() == data
@@ -90,6 +91,7 @@ def test_agent_defaults_absent_fields_are_none() -> None:
     assert defaults.model is None
     assert defaults.fallback_models is None
     assert defaults.temperature is None
+    assert defaults.top_p is None
     assert defaults.thinking_effort is None
     assert defaults.to_dict() == {}
 
@@ -109,6 +111,7 @@ def _bake_defaults(agent_defaults: dict[str, Any]) -> dict[str, Any]:
         model="",
         fallback_models=[],
         temperature=None,
+        top_p=None,
         thinking_effort=None,
         defaults=AgentDefaults.from_dict(agent_defaults),
     )

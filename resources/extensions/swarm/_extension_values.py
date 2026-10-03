@@ -143,6 +143,7 @@ def _participant_config(profile: Json, participant: Json, cwd: Path) -> Temporar
         tools=profile["tools"],
         name=participant["display_name"],
         temperature=formation.get("temperature"),
+        top_p=formation.get("top_p"),
         thinking_effort=formation.get("thinking_effort"),
         fallback_models=formation.get("fallback_models", []),
         instructions=profile["instructions"],

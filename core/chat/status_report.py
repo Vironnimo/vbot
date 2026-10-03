@@ -98,9 +98,9 @@ class StatusModelDetails:
     reasoning sent on the wire — a snapped effort for a ladder, ``on``/``off`` for
     a toggle, or the rendered token budget for a budget model.
 
-    ``recommended_temperature`` and ``provider_default_temperature`` feed
-    ``resolve_status_temperature`` so the temperature line reports the resolved
-    value with its source rather than only the configured agent field.
+    The ``recommended_*`` and ``provider_default_*`` sampling values feed
+    ``resolve_status_sampling`` so the temperature and top_p lines report the
+    resolved value with its source rather than only the configured agent field.
     """
 
     context_window: int | None
@@ -110,6 +110,16 @@ class StatusModelDetails:
     reasoning_budget_max: int | None = None
     recommended_temperature: float | None = None
     provider_default_temperature: float | None = None
+    recommended_top_p: float | None = None
+    provider_default_top_p: float | None = None
+
+
+@dataclass(frozen=True)
+class StatusSampling:
+    """The rendered temperature and top_p lines, each with its source."""
+
+    temperature: str
+    top_p: str
 
 
 @dataclass(frozen=True)
@@ -207,17 +217,19 @@ def resolve_status_model_details(
         reasoning_control=model.capabilities.reasoning.control,
         reasoning_budget_max=model.capabilities.reasoning.budget_max,
         recommended_temperature=model.recommended_temperature,
-        provider_default_temperature=_provider_default_temperature(provider_config),
+        provider_default_temperature=_provider_default_number(provider_config, "temperature"),
+        recommended_top_p=model.recommended_top_p,
+        provider_default_top_p=_provider_default_number(provider_config, "top_p"),
     )
 
 
-def _provider_default_temperature(provider_config: Any) -> float | None:
-    """Read the provider-config ``defaults.temperature``, None when absent."""
+def _provider_default_number(provider_config: Any, key: str) -> float | None:
+    """Read a numeric provider-config ``defaults`` entry, None when absent."""
 
     defaults = getattr(provider_config, "defaults", None)
     if not isinstance(defaults, Mapping):
         return None
-    value = defaults.get("temperature")
+    value = defaults.get(key)
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value)
@@ -340,11 +352,11 @@ def resolve_reported_thinking_effort(
     )
 
 
-def resolve_status_temperature(
-    agent_temperature: float | None,
+def resolve_status_sampling(
+    agent: RuntimeAgent | None,
     model_details: StatusModelDetails,
-) -> str:
-    """Render the temperature a request sends, with its source.
+) -> StatusSampling:
+    """Render the temperature and top_p a request sends, each with its source.
 
     Chat sends the Agent's configured value; without one, a Custom Provider's
     configured default goes out, else nothing and the Provider's own default
@@ -352,12 +364,29 @@ def resolve_status_temperature(
     Adapter-level sampling drops (active thinking, sampling-free models) are
     wire policy and stay invisible here.
     """
-    if agent_temperature is not None:
-        return f"{agent_temperature:g} (agent)"
-    if model_details.provider_default_temperature is not None:
-        return f"{model_details.provider_default_temperature:g} (provider config)"
-    if model_details.recommended_temperature is not None:
-        return f"provider default (Model recommends {model_details.recommended_temperature:g})"
+    return StatusSampling(
+        temperature=_sampling_status(
+            agent.temperature if agent is not None else None,
+            model_details.provider_default_temperature,
+            model_details.recommended_temperature,
+        ),
+        top_p=_sampling_status(
+            agent.top_p if agent is not None else None,
+            model_details.provider_default_top_p,
+            model_details.recommended_top_p,
+        ),
+    )
+
+
+def _sampling_status(
+    configured: float | None, provider_default: float | None, recommended: float | None
+) -> str:
+    if configured is not None:
+        return f"{configured:g} (agent)"
+    if provider_default is not None:
+        return f"{provider_default:g} (provider config)"
+    if recommended is not None:
+        return f"provider default (Model recommends {recommended:g})"
     return "provider default"
 
 
@@ -384,7 +413,7 @@ def build_status_reply(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
-    temperature_status: str | None = None,
+    sampling_status: StatusSampling | None = None,
     timezone: tzinfo | None = None,
     wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
@@ -398,7 +427,7 @@ def build_status_reply(
             activity,
             actual_thinking_effort=actual_thinking_effort,
             project_label=project_label,
-            temperature_status=temperature_status,
+            sampling_status=sampling_status,
             timezone=timezone,
             wire_profile=wire_profile,
         )
@@ -412,7 +441,7 @@ def build_status_text(
     activity: StatusActivity | None = None,
     actual_thinking_effort: str | None = None,
     project_label: str | None = None,
-    temperature_status: str | None = None,
+    sampling_status: StatusSampling | None = None,
     timezone: tzinfo | None = None,
     wire_profile: StatusWireProfile | None | _WireProfileOmitted = _WireProfileOmitted.OMITTED,
 ) -> str:
@@ -421,9 +450,9 @@ def build_status_text(
     ``actual_thinking_effort`` is what reaches the wire after the model's ladder
     snaps the agent's selection (see :func:`resolve_actual_thinking_effort`); it
     is rendered alongside the selected effort so the two can differ visibly.
-    ``temperature_status`` is the resolved temperature with its source (see
-    :func:`resolve_status_temperature`); without it the line degrades to the
-    configured agent value alone.
+    ``sampling_status`` is the resolved temperature and top_p with their sources
+    (see :func:`resolve_status_sampling`); without it the lines degrade to the
+    configured agent values alone.
     ``project_label`` names the session's project (``None`` for an identity
     session, rendered as the placeholder).
     ``wire_profile`` describes the Connection the Model resolves to (see
@@ -441,17 +470,18 @@ def build_status_text(
         fallback_models = STATUS_PLACEHOLDER
         selected_thinking_effort = STATUS_PLACEHOLDER
         temperature = STATUS_PLACEHOLDER
+        top_p = STATUS_PLACEHOLDER
     else:
         model_string = agent.model.strip() or STATUS_PLACEHOLDER
         agent_summary = f"{agent.name} ({model_string})"
         model_display = _STATUS_MODEL_DISPLAY_OVERRIDE.get() or _model_display_name(model_string)
         fallback_models = ", ".join(agent.fallback_models) or STATUS_PLACEHOLDER
         selected_thinking_effort = _thinking_effort_text(agent.thinking_effort)
-        temperature = (
-            temperature_status
-            if temperature_status is not None
-            else _temperature_text(agent.temperature)
-        )
+        if sampling_status is not None:
+            temperature, top_p = sampling_status.temperature, sampling_status.top_p
+        else:
+            temperature = _sampling_text(agent.temperature)
+            top_p = _sampling_text(agent.top_p)
 
     actual_thinking_effort_text = _actual_thinking_effort_text(actual_thinking_effort)
     facts = messages if isinstance(messages, StatusSessionFacts) else status_session_facts(messages)
@@ -473,6 +503,7 @@ def build_status_text(
         f"Selected thinking effort: {selected_thinking_effort}",
         f"Actual model thinking effort: {actual_thinking_effort_text}",
         f"Temperature: {temperature}",
+        f"Top P: {top_p}",
         *_wire_profile_lines(wire_profile),
         f"Activity: {activity_name}",
         f"Run created at: {run_created_at or STATUS_PLACEHOLDER}",
@@ -570,7 +601,7 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
     return "; ".join(parts)
 
 
-def _temperature_text(value: float | None) -> str:
+def _sampling_text(value: float | None) -> str:
     if value is None:
         return "provider default"
     return f"{value:g}"

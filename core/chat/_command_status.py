@@ -29,7 +29,7 @@ from core.chat.status_report import (
     resolve_status_activity,
     resolve_status_model_details,
     resolve_status_project_label,
-    resolve_status_temperature,
+    resolve_status_sampling,
     resolve_status_wire_profile,
 )
 from core.projects import format_agent_address
@@ -269,10 +269,7 @@ async def _execute_status(
         activity,
         actual_thinking_effort=actual_thinking_effort,
         project_label=resolve_status_project_label(projects, context.project_id),
-        temperature_status=resolve_status_temperature(
-            agent.temperature if agent is not None else None,
-            model_details,
-        ),
+        sampling_status=resolve_status_sampling(agent, model_details),
         timezone=_status_timezone(storage=storage),
         wire_profile=wire_profile,
     )

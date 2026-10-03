@@ -202,6 +202,7 @@ def _agent_response(state: Any, agent: Any) -> JsonObject:
         # ``workspace`` differs from this (a custom identity/Memory home).
         "default_workspace": state.runtime.agents.default_workspace(agent.id),
         "temperature": agent.temperature,
+        "top_p": agent.top_p,
         "thinking_effort": agent.thinking_effort,
         "memory_prompt_mode": agent.memory_prompt_mode,
         "tool_access": agent.tool_access.to_dict(),
@@ -237,6 +238,7 @@ def _agent_raw_config(state: Any, agent_id: str) -> JsonObject:
         "model": raw.model,
         "fallback_models": list(getattr(raw, "fallback_models", ()) or ()),
         "temperature": raw.temperature,
+        "top_p": raw.top_p,
         "thinking_effort": raw.thinking_effort,
         "compaction_policy": dict(raw_policy) if raw_policy is not None else None,
     }
@@ -311,6 +313,7 @@ def _model_detail_response(
     capabilities["task_options"] = _json_compatible(model.capabilities.task_options)
     response["family"] = model.family
     response["recommended_temperature"] = model.recommended_temperature
+    response["recommended_top_p"] = model.recommended_top_p
     response["metadata"] = _json_compatible(model.metadata)
     return response
 

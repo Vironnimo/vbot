@@ -48,6 +48,7 @@ from core.agents._config import (
     _validate_temperature,
     _validate_thinking_effort,
     _validate_tool_access,
+    _validate_top_p,
     _validated_agent_data,
     load_validated_agent_json,
     validate_agent_data,
@@ -237,6 +238,7 @@ class AgentStore:
         fallback_models: list[str] | None = None,
         workspace: str | Path | None = None,
         temperature: float | None = DEFAULT_TEMPERATURE,
+        top_p: float | None = None,
         thinking_effort: str | None = DEFAULT_THINKING_EFFORT,
         memory_prompt_mode: MemoryPromptMode = DEFAULT_MEMORY_PROMPT_MODE,
         tool_access: ToolAccess | Mapping[str, Any] | None = None,
@@ -264,6 +266,7 @@ class AgentStore:
                 "fallback_models", fallback_models or []
             )
             validated_temperature = _validate_temperature(temperature)
+            validated_top_p = _validate_top_p(top_p)
             validated_thinking_effort = _validate_thinking_effort(thinking_effort)
             validated_memory_prompt_mode = _validate_memory_prompt_mode(memory_prompt_mode)
             validated_tool_access = _validate_tool_access(tool_access)
@@ -302,6 +305,7 @@ class AgentStore:
                 workspace=str(workspace_path.resolve()),
                 root_project_id=None,
                 temperature=validated_temperature,
+                top_p=validated_top_p,
                 thinking_effort=validated_thinking_effort,
                 memory_prompt_mode=validated_memory_prompt_mode,
                 tool_access=validated_tool_access,
@@ -623,6 +627,8 @@ class AgentStore:
                 changes["root_project_id"] = _validate_root_project_id(changes["root_project_id"])
             if "temperature" in changes:
                 changes["temperature"] = _validate_temperature(changes["temperature"])
+            if "top_p" in changes:
+                changes["top_p"] = _validate_top_p(changes["top_p"])
             if "thinking_effort" in changes:
                 changes["thinking_effort"] = _validate_thinking_effort(changes["thinking_effort"])
             if "memory_prompt_mode" in changes:

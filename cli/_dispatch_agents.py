@@ -102,6 +102,10 @@ def _agent_changes_from_args(args: argparse.Namespace) -> dict[str, Any]:
         changes["temperature"] = None
     elif args.temperature is not None:
         changes["temperature"] = args.temperature
+    if args.clear_top_p:
+        changes["top_p"] = None
+    elif args.top_p is not None:
+        changes["top_p"] = args.top_p
     if args.clear_thinking_effort:
         changes["thinking_effort"] = None
     elif args.thinking_effort is not None:
@@ -245,7 +249,7 @@ def _apply_project_capability_fields(args: argparse.Namespace, target: dict[str,
 
 
 def _apply_project_default_knobs(args: argparse.Namespace, target: dict[str, Any]) -> None:
-    """Map the temperature/thinking flags into a project add/set payload.
+    """Map the sampling/thinking flags into a project add/set payload.
 
     Mirrors ``_agent_changes_from_args``: a ``--clear-*`` flag wins and sends
     ``null`` (fall through to the global default); otherwise a provided value is
@@ -256,6 +260,10 @@ def _apply_project_default_knobs(args: argparse.Namespace, target: dict[str, Any
         target["default_temperature"] = None
     elif args.default_temperature is not None:
         target["default_temperature"] = args.default_temperature
+    if args.clear_default_top_p:
+        target["default_top_p"] = None
+    elif args.default_top_p is not None:
+        target["default_top_p"] = args.default_top_p
     if args.clear_default_thinking_effort:
         target["default_thinking_effort"] = None
     elif args.default_thinking_effort is not None:
@@ -351,6 +359,8 @@ def dispatch_chat_command(args: argparse.Namespace, instance: ServerInstance) ->
         overrides["thinking_effort"] = args.thinking_effort
     if args.temperature is not None:
         overrides["temperature"] = args.temperature
+    if args.top_p is not None:
+        overrides["top_p"] = args.top_p
     return chat(
         instance,
         ChatRequest(
