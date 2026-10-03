@@ -44,6 +44,7 @@
       }
     },
     "glm-5.1": {
+      "canonical": "zhipuai/glm-5.1",
       "name": "glm-5.1",
       "capabilities": {
         "reasoning": {
@@ -124,6 +125,7 @@
       }
     },
     "minimax-m2.5": {
+      "canonical": "minimax/MiniMax-M2.5",
       "name": "minimax-m2.5",
       "capabilities": {
         "reasoning": {
