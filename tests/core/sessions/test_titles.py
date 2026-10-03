@@ -75,12 +75,7 @@ class StubAdapter(AdapterHookDefaults):
 
 
 class StubModels:
-    def __init__(
-        self,
-        recommended: dict[tuple[str, str], float] | None = None,
-        prices: dict[str, tuple[float, float]] | None = None,
-    ) -> None:
-        self._recommended = recommended or {}
+    def __init__(self, prices: dict[str, tuple[float, float]] | None = None) -> None:
         self._prices = prices or {}
 
     def pricing_for(self, model_reference: str) -> TokenPricing | None:
@@ -88,12 +83,6 @@ class StubModels:
         if price is None:
             return None
         return TokenPricing("catalog", TokenRates(input=price[0], output=price[1]))
-
-    def get(self, provider_id: str, model_id: str) -> Any:
-        recommended = self._recommended.get((provider_id, model_id))
-        if recommended is None:
-            raise KeyError(model_id)
-        return SimpleNamespace(recommended_temperature=recommended)
 
 
 class StubRuntime:
@@ -104,12 +93,11 @@ class StubRuntime:
         enabled: bool,
         configured_model: str = "",
         adapters: list[StubAdapter] | None = None,
-        recommended_temperatures: dict[tuple[str, str], float] | None = None,
         prices: dict[str, tuple[float, float]] | None = None,
     ) -> None:
         self.chat_sessions = chat_sessions
         self.storage = StubStorage(enabled=enabled, model=configured_model)
-        self.models = StubModels(recommended_temperatures, prices)
+        self.models = StubModels(prices)
         self._adapters = list(adapters or [StubAdapter()])
         self.adapter_calls: list[tuple[str, str]] = []
 
@@ -260,7 +248,7 @@ async def test_configured_title_model_replaces_local_title_with_bounded_request(
     assert len(title_input.encode("utf-8")) <= text_bound + 200
     assert "max_tokens" not in request
     assert request["thinking_effort"] == "none"
-    assert request["temperature"] is None
+    assert "temperature" not in request
     assert _metadata(runtime)["auto_title"] == "Review report"
     assert adapter.closed is True
     assert adapter.debug_context.run_id == "title-run-one"
@@ -320,24 +308,6 @@ async def test_reasoning_mandatory_endpoint_retries_with_default_effort(manager)
     assert completed["connection_id"] == "openrouter:api-key"
     assert completed["group_id"] is None
     assert (completed["usage"]["input_tokens"], completed["usage"]["output_tokens"]) == (50, 5)
-
-
-@pytest.mark.asyncio
-async def test_generated_title_uses_model_recommended_temperature(manager) -> None:
-    adapter = StubAdapter('Title: "Audit".')
-    runtime = StubRuntime(
-        manager,
-        enabled=True,
-        configured_model="ollama-cloud/glm-5.2::cloud",
-        adapters=[adapter],
-        recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
-    )
-    _append_first_user(runtime, "Audit the workspace")
-    service = SessionTitleService(cast(Any, runtime))
-
-    await _title_first_message(service, "Audit the workspace")
-
-    assert adapter.requests[0]["temperature"] == 1.0
 
 
 # The parser carries its own contract: it must pick exactly one unambiguous

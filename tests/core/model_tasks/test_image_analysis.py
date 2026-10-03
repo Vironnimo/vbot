@@ -171,25 +171,12 @@ class _BlockingUnderstandingAdapter(_UnderstandingAdapter):
             self.active_requests -= 1
 
 
-class _UnderstandingModels:
-    def __init__(self, recommended: dict[tuple[str, str], float] | None = None) -> None:
-        self._recommended = recommended or {}
-
-    def get(self, provider_id: str, model_id: str) -> Any:
-        recommended = self._recommended.get((provider_id, model_id))
-        if recommended is None:
-            raise KeyError(model_id)
-        return SimpleNamespace(recommended_temperature=recommended)
-
-
 class _UnderstandingRuntime:
     def __init__(
         self,
         adapter: _UnderstandingAdapter | Exception,
-        models: _UnderstandingModels | None = None,
     ) -> None:
         self.adapter = adapter
-        self.models = models or _UnderstandingModels()
         self.calls: list[tuple[str, str]] = []
 
     def get_adapter(self, connection: ConnectionRef) -> _UnderstandingAdapter:
@@ -299,25 +286,12 @@ async def test_analysis_availability_requires_an_adapter_with_an_image_wire(
     assert ("adapter cleanup failed" in caplog.text) is (close_error is not None)
 
 
-@pytest.mark.parametrize(
-    ("recommended", "temperature"),
-    [
-        pytest.param({}, None, id="provider-default-temperature"),
-        pytest.param(
-            {("openrouter", "vision-model"): 1.0}, 1.0, id="model-recommended-temperature"
-        ),
-    ],
-)
 @pytest.mark.asyncio
-async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
-    tmp_path: Path,
-    recommended: dict[tuple[str, str], float],
-    temperature: float | None,
-) -> None:
+async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(tmp_path: Path) -> None:
     first = _png(tmp_path / "first.png", b"first")
     second = _png(tmp_path / "second.png", b"second")
     adapter = _UnderstandingAdapter()
-    runtime = _UnderstandingRuntime(adapter, models=_UnderstandingModels(recommended))
+    runtime = _UnderstandingRuntime(adapter)
     service = ImageService(
         _UnderstandingModelTasks(task_types=("chat", "text_output")),
         cast(Any, runtime),
@@ -344,7 +318,8 @@ async def test_analyze_sends_fixed_isolated_prompt_and_ordered_images(
     assert runtime.calls == [("openrouter", "openrouter:api-key")]
     request = adapter.requests[0]
     assert request["model_id"] == "vision-model"
-    assert request["kwargs"] == {"temperature": temperature, "tools": []}
+    # No sampling parameters: the Provider's own defaults apply.
+    assert request["kwargs"] == {"tools": []}
     assert request["messages"][0]["role"] == "system"
     assert request["messages"][0]["content"]
     user_content = request["messages"][1]["content"]

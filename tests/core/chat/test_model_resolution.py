@@ -18,12 +18,9 @@ from core.chat.model_resolution import (
     _resolve_fallback_chain,
     parse_bare_model,
     parse_model_with_connection,
-    resolve_request_temperature,
-    resolve_request_top_p,
 )
 from core.utils.errors import ConfigError
 from core.utils.log_conditions import LoggedConditions
-from tests.core.chat.chat_loop_support import StubModels
 
 
 def _agent(model: str, *, fallback_models: list[str] | None = None) -> Any:
@@ -95,47 +92,6 @@ def test_model_binding_splits_into_provider_model_and_connection(
 def test_invalid_model_binding_is_a_chat_error(model: str) -> None:
     with pytest.raises(ChatError):
         parse_model_with_connection(model)
-
-
-RECOMMENDING_MODELS = StubModels(
-    {("ollama-cloud", "glm-5.2"): 200_000, ("openai", "gpt-5.2"): 128_000},
-    recommended_temperatures={("ollama-cloud", "glm-5.2"): 1.0},
-    recommended_top_ps={("ollama-cloud", "glm-5.2"): 0.95},
-)
-
-
-@pytest.mark.parametrize(
-    ("agent_temperature", "provider_id", "model_id", "temperature", "top_p"),
-    [
-        (0.1, "ollama-cloud", "glm-5.2", 0.1, 0.95),
-        (0.0, "ollama-cloud", "glm-5.2", 0.0, 0.95),
-        (None, "ollama-cloud", "glm-5.2", 1.0, 0.95),
-        (None, "openai", "gpt-5.2", None, None),
-        (None, "ollama-cloud", "unknown", None, None),
-        (None, "", "glm-5.2", None, None),
-    ],
-    ids=[
-        "agent-wins",
-        "agent-zero-wins",
-        "model-recommendation",
-        "no-recommendation",
-        "unknown-model",
-        "no-provider",
-    ],
-)
-def test_request_sampling_prefers_the_agent_then_the_model_recommendation(
-    agent_temperature: float | None,
-    provider_id: str,
-    model_id: str,
-    temperature: float | None,
-    top_p: float | None,
-) -> None:
-    # None leaves the choice to the Provider configuration or the API default.
-    assert (
-        resolve_request_temperature(agent_temperature, RECOMMENDING_MODELS, provider_id, model_id)
-        == temperature
-    )
-    assert resolve_request_top_p(RECOMMENDING_MODELS, provider_id, model_id) == top_p
 
 
 def _raising(error: BaseException) -> Callable[[str, str], Any]:

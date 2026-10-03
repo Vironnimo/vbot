@@ -27,7 +27,6 @@ from core.chat.model_resolution import (
     _model_input_modalities_for_target,
     _resolve_agent_connection,
     _split_agent_model,
-    resolve_request_temperature,
 )
 from core.memory import DEFAULT_MEMORY_PROMPT_MODE
 from core.projects import resolve_prompt_project, resolve_skill_scope, runtime_agent_body
@@ -67,8 +66,6 @@ class ManualCompactionRequest:
     summary_adapter: Any
     summary_provider_id: str
     summary_model_id: str
-    summary_temperature: float | None
-    active_temperature: float | None
 
 
 class ChatCompactionHost:
@@ -136,9 +133,6 @@ class ChatCompactionHost:
 
     def resolve_context_window(self, agent: Any, target: Any) -> int | None:
         return self._requests.resolve_context_window(agent, target)
-
-    def resolve_temperature(self, provider_id: str, model_id: str) -> float | None:
-        return resolve_request_temperature(None, self.models, provider_id, model_id)
 
     async def materialize_manual_request(
         self,
@@ -260,18 +254,6 @@ class ChatCompactionHost:
                 summary_adapter=summary_adapter,
                 summary_provider_id=summary_provider_id,
                 summary_model_id=summary_model_id,
-                summary_temperature=resolve_request_temperature(
-                    None,
-                    self.models,
-                    summary_provider_id,
-                    summary_model_id,
-                ),
-                active_temperature=resolve_request_temperature(
-                    None,
-                    self.models,
-                    provider_id,
-                    model_id,
-                ),
             )
         except BaseException:
             if summary_adapter is not None and summary_adapter is not adapter:

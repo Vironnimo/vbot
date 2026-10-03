@@ -315,7 +315,7 @@ def test_status_tool_reports_through_the_services_it_was_registered_with(tmp_pat
         "Model display name: GPT-5.2 Registry",
         "Selected thinking effort: xhigh",
         "Actual model thinking effort: max",
-        "Temperature: 1 (model recommendation)",
+        "Temperature: provider default (Model recommends 1)",
     ):
         assert line in text
 

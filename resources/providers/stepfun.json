@@ -30,9 +30,6 @@
       "models_endpoint": "/models"
     }
   ],
-  "defaults": {
-    "temperature": 0.5
-  },
   "context_window": 256000,
   "models_dev_id": "stepfun"
 }

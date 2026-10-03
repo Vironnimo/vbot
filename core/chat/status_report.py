@@ -344,20 +344,21 @@ def resolve_status_temperature(
     agent_temperature: float | None,
     model_details: StatusModelDetails,
 ) -> str:
-    """Render the resolved temperature with the tier that supplied it.
+    """Render the temperature a request sends, with its source.
 
-    Mirrors the chat resolution chain — explicit agent value, then the model's
-    recommended temperature, then the provider-config default — and reports the
-    API default when no tier has a value. Adapter-level sampling drops (active
-    thinking, sampling-free models) are wire policy and stay invisible here.
+    Chat sends the Agent's configured value; without one, a Custom Provider's
+    configured default goes out, else nothing and the Provider's own default
+    applies. A known Model recommendation is only named, never sent.
+    Adapter-level sampling drops (active thinking, sampling-free models) are
+    wire policy and stay invisible here.
     """
     if agent_temperature is not None:
         return f"{agent_temperature:g} (agent)"
-    if model_details.recommended_temperature is not None:
-        return f"{model_details.recommended_temperature:g} (model recommendation)"
     if model_details.provider_default_temperature is not None:
-        return f"{model_details.provider_default_temperature:g} (provider default)"
-    return "default"
+        return f"{model_details.provider_default_temperature:g} (provider config)"
+    if model_details.recommended_temperature is not None:
+        return f"provider default (Model recommends {model_details.recommended_temperature:g})"
+    return "provider default"
 
 
 def resolve_status_wire_profile(
@@ -571,7 +572,7 @@ def _learned_wire_facts_text(facts: ObservedFacts) -> str:
 
 def _temperature_text(value: float | None) -> str:
     if value is None:
-        return "default"
+        return "provider default"
     return f"{value:g}"
 
 

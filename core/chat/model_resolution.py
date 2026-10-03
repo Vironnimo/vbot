@@ -71,65 +71,6 @@ def _split_agent_model(model: str) -> tuple[str, str]:
     return provider_id, model_id
 
 
-def resolve_request_temperature(
-    agent_temperature: float | None,
-    models: ModelRegistry | Any,
-    provider_id: str,
-    model_id: str,
-) -> float | None:
-    """Resolve the temperature for one model request.
-
-    Priority (highest wins):
-    1. ``agent_temperature`` — an explicit per-agent or baked-global-default value.
-    2. ``Model.recommended_temperature`` — a per-model fallback from the Model DB
-       (e.g. GLM-5.2 recommends 1.0 to avoid low-temperature reasoning loops).
-    3. ``None`` — not specified; provider-config defaults or the API default apply.
-
-    The model recommendation only applies when no explicit value was given, so
-    caller intent always wins. Kernel-internal callers (compaction, titles,
-    image understanding) pass ``agent_temperature=None`` — they are not the
-    agent's voice, so only the model/provider tiers apply.
-    """
-    if agent_temperature is not None:
-        return agent_temperature
-    if not provider_id or not model_id:
-        return None
-    try:
-        model = models.get(provider_id, model_id)
-        recommended = model.recommended_temperature
-    except AttributeError, KeyError:
-        return None
-    return recommended
-
-
-def resolve_request_top_p(
-    models: ModelRegistry | Any,
-    provider_id: str,
-    model_id: str,
-) -> float | None:
-    """Resolve the top_p for one model request.
-
-    Priority (highest wins):
-    1. ``Model.recommended_top_p`` — a per-model fallback from the Model DB
-       (e.g. DeepSeek V4 Flash recommends 0.95 for agentic scenarios).
-    2. ``None`` — not specified; provider-config defaults or the API default
-       apply.
-
-    There is no agent-level top_p setting, so unlike temperature there is no
-    caller-intent tier — the model recommendation is the only vBot source.
-    Kernel-internal callers (compaction, titles, image understanding) pass
-    through the same path, so the model/provider tiers apply there too.
-    """
-    if not provider_id or not model_id:
-        return None
-    try:
-        model = models.get(provider_id, model_id)
-        recommended = model.recommended_top_p
-    except AttributeError, KeyError:
-        return None
-    return recommended
-
-
 def _model_input_modalities(
     dependencies: ModelResolutionDependencies, agent: Any
 ) -> frozenset[str]:

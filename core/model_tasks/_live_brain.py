@@ -19,7 +19,6 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from core.chat.model_resolution import resolve_request_temperature
 from core.model_tasks.model_tasks import TaskModelTargetRef
 from core.model_tasks.task_execution import TaskUsage
 from core.providers.accounts import ConnectionRef
@@ -234,12 +233,6 @@ class LiveBrain:
                 response: JsonObject = await adapter.send(
                     messages,
                     model_id=self._target.model_id,
-                    temperature=resolve_request_temperature(
-                        None,
-                        self._runtime.models,
-                        self._target.provider_id,
-                        self._target.model_id,
-                    ),
                     thinking_effort=self._target.thinking_effort,
                     tools=[dict(tool) for tool in self._tools],
                     **request_context,

@@ -164,16 +164,16 @@ async def test_session_agent_overrides_apply_to_every_run_of_only_that_session(
 @pytest.mark.parametrize(
     ("model", "agent_temperature", "temperature", "top_p"),
     [
-        ("ollama-cloud/glm-5.2", None, 1.0, 0.95),
+        ("ollama-cloud/glm-5.2", None, None, None),
         ("openai/gpt-5.2", 0.1, 0.1, None),
     ],
-    ids=["model-recommendations", "agent-temperature"],
+    ids=["unset-ignores-model-recommendations", "agent-temperature"],
 )
 async def test_resolved_sampling_parameters_reach_the_adapter(
     tmp_path: Path,
     model: str,
     agent_temperature: float | None,
-    temperature: float,
+    temperature: float | None,
     top_p: float | None,
 ) -> None:
     agent = StubAgent(

@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any, cast
 
 import core.providers.adapter_types  # noqa: F401  (load every Adapter before patching)
-from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
 from core.models.models import Model
 from core.providers.accounts import ConnectionRef
 from core.providers.adapter import (
@@ -252,12 +251,6 @@ class _ModelCapture:
         self._model = target.model
         self._agent_model = f"{self._provider_id}/{self._model_id}::{connection_id}"
         self._key = f"{scope}|{self._model_id}"
-        models = self._environment.models
-        # Chat passes the Agent's temperature (unset here) through the same resolution.
-        self._temperature = resolve_request_temperature(
-            None, models, self._provider_id, self._model_id
-        )
-        self._top_p = resolve_request_top_p(models, self._provider_id, self._model_id)
 
     async def run(self, render_adapter: ProviderAdapter, respond_adapter: ProviderAdapter) -> None:
         record: dict[str, Any] = {"key": f"model|{self._key}", "kind": "model"}
@@ -368,7 +361,6 @@ class _ModelCapture:
             record["request_context_error"] = self._masker.error(error)
             return {}
         record["request_context_kwargs"] = self._masker.json_value(to_jsonable(context))
-        record["sampling"] = {"temperature": self._temperature, "top_p": self._top_p}
         return context
 
     def _estimate(
@@ -460,10 +452,9 @@ class _ModelCapture:
     ) -> Any:
         """Call the Adapter the way Chat does; return the response or the stream deltas."""
 
+        # An Agent without sampling settings sends none (the sampling variants do).
         kwargs = {
             "model_id": self._model_id,
-            "temperature": self._temperature,
-            "top_p": self._top_p,
             **(sampling or {}),
             "thinking_effort": effort,
             "tools": tools,

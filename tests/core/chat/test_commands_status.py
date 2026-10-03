@@ -222,7 +222,7 @@ def test_status_in_a_project_session_resolves_its_config_agent() -> None:
     assert "Project: vBot (vbot)" in result.feedback.text
 
 
-def test_status_reports_the_model_recommended_temperature() -> None:
+def test_status_names_the_model_recommended_temperature_without_sending_it() -> None:
     dispatcher, _, _ = _status_dispatcher(
         resolver=_StubResolver(_make_agent(temperature=None)),
         model=_make_model(recommended_temperature=1.0),
@@ -231,7 +231,7 @@ def test_status_reports_the_model_recommended_temperature() -> None:
     result = _execute_sync(dispatcher, "/status")
 
     assert result.feedback is not None
-    assert "Temperature: 1 (model recommendation)" in result.feedback.text
+    assert "Temperature: provider default (Model recommends 1)" in result.feedback.text
 
 
 def _wire_profile_fails(_agent: Any) -> StatusWireProfile | None:
@@ -513,7 +513,7 @@ def test_status_text_renders_unset_defaults_and_the_effort_split() -> None:
     )
 
     assert "Selected thinking effort: default" in unset
-    assert "Temperature: default" in unset
+    assert "Temperature: provider default" in unset
     assert "Selected thinking effort: max" in snapped
     assert "Actual model thinking effort: high" in snapped
 
@@ -664,12 +664,12 @@ def test_status_model_details_resolve_through_the_model_and_provider(
     ("agent_temperature", "recommended", "provider_default", "expected"),
     [
         (0.2, 1.0, 0.7, "0.2 (agent)"),
-        (None, 1.0, 0.7, "1 (model recommendation)"),
-        (None, None, 0.7, "0.7 (provider default)"),
-        (None, None, None, "default"),
+        (None, 1.0, 0.7, "0.7 (provider config)"),
+        (None, 1.0, None, "provider default (Model recommends 1)"),
+        (None, None, None, "provider default"),
     ],
 )
-def test_status_temperature_names_the_winning_tier(
+def test_status_temperature_names_what_the_request_sends(
     agent_temperature: float | None,
     recommended: float | None,
     provider_default: float | None,

@@ -25,7 +25,6 @@ from core.chat.events import (
     _exception_to_error_kind,
 )
 from core.chat.messages import JsonObject
-from core.chat.model_resolution import resolve_request_temperature, resolve_request_top_p
 from core.chat.recovery import IncompleteResponseError, RecoveryBudget
 from core.chat.streaming import (
     STREAM_CHUNK_TIMEOUT_SECONDS,
@@ -294,17 +293,10 @@ class WireRequestRunner:
             run,
             prompt_cache_affinity_id,
         )
-        temperature = resolve_request_temperature(
-            agent.temperature,
-            self._dependencies.models,
-            provider_id,
-            model_id,
-        )
-        top_p = resolve_request_top_p(
-            self._dependencies.models,
-            provider_id,
-            model_id,
-        )
+        # Sampling reaches the wire only when configured; otherwise the
+        # Provider's own default applies.
+        temperature = agent.temperature
+        top_p = None
 
         def retry_notice(notice: RetryNotice) -> None:
             run.emit(
