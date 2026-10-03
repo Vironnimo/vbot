@@ -142,6 +142,11 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
     assert json.loads(written)["models"]["m"] == json.loads(path.read_text())["models"]["m"]
     write_entry(tmp_path, "hand", "m", entry)
     assert hand_path.read_text(encoding="utf-8") == written
+    # Verifying another Connection adds it to the evidence.
+    other = {"verified": {**entry["verified"], "connections": ["subscription"]}}
+    write_entry(tmp_path, "hand", "m", other)
+    verified = json.loads(hand_path.read_text(encoding="utf-8"))["models"]["m"]["verified"]
+    assert verified["connections"] == ["api-key", "subscription"]
 
     # A Custom Provider's entry goes into its Settings wire block, next to what is there.
     storage = StorageManager(tmp_path / "data")

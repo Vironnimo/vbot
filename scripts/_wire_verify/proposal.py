@@ -250,7 +250,14 @@ def _merge_entry(document: dict[str, Any], model_id: str, entry: Mapping[str, An
     if "set" in entry:
         current["set"] = _merged(current.get("set", {}), entry["set"])
     if "verified" in entry:
-        current["verified"] = dict(entry["verified"])
+        verified = dict(entry["verified"])
+        earlier = current.get("verified")
+        if isinstance(earlier, Mapping) and isinstance(earlier.get("connections"), list):
+            # Verifying another Connection adds to the evidence, never replaces it.
+            verified["connections"] = list(
+                dict.fromkeys([*earlier["connections"], *verified.get("connections", [])])
+            )
+        current["verified"] = verified
 
 
 def _merged(base: Mapping[str, Any], update: Mapping[str, Any]) -> dict[str, Any]:
