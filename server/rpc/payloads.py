@@ -288,6 +288,9 @@ def _model_response(
         "local": model_is_local(model.metadata),
         "max_output_tokens": model.max_output_tokens,
         "connections": list(model.connections),
+        # Shown as hints next to the sampling settings; never sent on their own.
+        "recommended_temperature": model.recommended_temperature,
+        "recommended_top_p": model.recommended_top_p,
     }
 
 
@@ -312,8 +315,6 @@ def _model_detail_response(
     capabilities["supported_voices"] = list(model.capabilities.supported_voices)
     capabilities["task_options"] = _json_compatible(model.capabilities.task_options)
     response["family"] = model.family
-    response["recommended_temperature"] = model.recommended_temperature
-    response["recommended_top_p"] = model.recommended_top_p
     response["metadata"] = _json_compatible(model.metadata)
     return response
 

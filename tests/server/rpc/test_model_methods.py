@@ -100,6 +100,8 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 64000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
                 "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
@@ -127,6 +129,8 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 8192,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
                 "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
@@ -154,6 +158,8 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 16000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
                 "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
             {
@@ -186,6 +192,8 @@ async def test_model_list_returns_all_models_across_providers_with_full_ids(
                 "local": False,
                 "max_output_tokens": 32000,
                 "connections": [],
+                "recommended_temperature": None,
+                "recommended_top_p": None,
                 "wire_profiles": {"api-key": {"wire_status": "inferred", "verified_at": None}},
             },
         ]

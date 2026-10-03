@@ -86,7 +86,7 @@ def test_model_payload_carries_raw_and_effective_context_window(
 
 
 @pytest.mark.parametrize(("temperature", "top_p"), [(1.0, 0.95), (None, None)])
-def test_model_detail_projects_the_recommended_sampling(
+def test_model_list_and_detail_project_the_recommended_sampling(
     temperature: float | None, top_p: float | None
 ) -> None:
     model = _model(
@@ -96,9 +96,14 @@ def test_model_detail_projects_the_recommended_sampling(
         recommended_top_p=top_p,
     )
 
-    detail = _model_detail_response("ollama-cloud", model)
-
-    assert (detail["recommended_temperature"], detail["recommended_top_p"]) == (temperature, top_p)
+    for payload in (
+        _model_response("ollama-cloud", model),
+        _model_detail_response("ollama-cloud", model),
+    ):
+        assert (payload["recommended_temperature"], payload["recommended_top_p"]) == (
+            temperature,
+            top_p,
+        )
 
 
 def _agent_window_state(model: Model, local_windows: dict[str, int]) -> SimpleNamespace:
