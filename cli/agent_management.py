@@ -35,6 +35,7 @@ AGENT_UPDATE_FLAGS = (
     "--clear-thinking-effort",
     "--memory-prompt-mode",
     "--custom-system-prompt",
+    "--librarian",
     "--tool-access-mode",
     "--tool-allow",
     "--tool-deny",
@@ -306,6 +307,13 @@ def _format_agent_row(agent: object) -> str:
     )
 
 
+# The built-in Librarian: what it is and what an update may change.
+_LIBRARIAN_LINE = (
+    "builtin: librarian (curates the skills of your other agents; only model, "
+    "fallback_models, temperature, top_p and thinking_effort can change)"
+)
+
+
 def _format_agent_detail(agent: Mapping[str, Any]) -> str:
     custom_prompt_text = _bool_text(agent.get("custom_system_prompt_enabled"))
     lines = [
@@ -321,6 +329,7 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"thinking_effort: {_value_text(agent.get('thinking_effort'))}",
         f"memory_prompt_mode: {_string_or_default(agent.get('memory_prompt_mode'), '-')}",
         f"custom_system_prompt_enabled: {custom_prompt_text}",
+        f"librarian_enabled: {_bool_text(agent.get('librarian_enabled'))}",
         f"tool_access: {_json_text(agent.get('tool_access'))}",
         f"allowed_skills: {_format_string_list(agent.get('allowed_skills'))}",
         f"current_session_id: {_string_or_default(agent.get('current_session_id'), '-')}",
@@ -328,6 +337,8 @@ def _format_agent_detail(agent: Mapping[str, Any]) -> str:
         f"created_at: {_string_or_default(agent.get('created_at'), '-')}",
         f"updated_at: {_string_or_default(agent.get('updated_at'), '-')}",
     ]
+    if agent.get("builtin") == "librarian":
+        lines.insert(3, _LIBRARIAN_LINE)
     project_index = next(index for index, line in enumerate(lines) if line.startswith("project:"))
     if "default_workspace" in agent:
         lines.insert(

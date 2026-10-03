@@ -30,6 +30,7 @@ describe('createAgentFormValues', () => {
       tools: {},
       compaction_policy: null,
       custom_system_prompt_enabled: false,
+      librarian_enabled: true,
     });
   });
 
@@ -135,6 +136,7 @@ describe('normalizeAgentForm', () => {
         subagent: { allowed_agents: [' worker ', 'builder@vbot'] },
       },
       custom_system_prompt_enabled: true,
+      librarian_enabled: false,
     });
 
     expect(result.isValid).toBe(true);
@@ -156,6 +158,7 @@ describe('normalizeAgentForm', () => {
       },
       compaction_policy: null,
       custom_system_prompt_enabled: true,
+      librarian_enabled: false,
     });
   });
 

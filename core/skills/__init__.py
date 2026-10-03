@@ -1,10 +1,19 @@
 """core.skills — local skill metadata registry."""
 
 from core.skills.authoring import (
+    HUMAN_WRITER,
     SKILL_ARCHIVE_MAX_BYTES,
+    ArchivedSkill,
     SkillAuthor,
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillProtectedError,
+    SkillRecord,
+    SkillReference,
+    SkillRevertConflictError,
+    SkillRevertIncompleteError,
+    SkillRevision,
+    SkillWriter,
     SkillWriteResult,
     normalize_skill_file_path,
 )
@@ -16,7 +25,11 @@ from core.skills.policy import (
     validate_skill_policy_file,
 )
 from core.skills.requirements import SkillAvailability, SkillRequirements
-from core.skills.skill_validator import FRONT_MATTER_DELIMITER
+from core.skills.skill_validator import (
+    FRONT_MATTER_DELIMITER,
+    rename_skill_triggers,
+    triggered_skill_names,
+)
 from core.skills.skills import (
     SKILL_ORIGIN_AGENT,
     SKILL_ORIGIN_BUNDLED,
@@ -35,6 +48,7 @@ from core.skills.skills import (
 )
 
 __all__ = [
+    "HUMAN_WRITER",
     "SKILL_ARCHIVE_MAX_BYTES",
     "FRONT_MATTER_DELIMITER",
     "POLICY_FORMAT_VERSION",
@@ -42,9 +56,17 @@ __all__ = [
     "SKILL_ORIGIN_BUNDLED",
     "SKILL_ORIGIN_GLOBAL",
     "SKILL_ORIGIN_PROJECT_PREFIX",
+    "ArchivedSkill",
     "SkillAuthor",
     "SkillAuthoringError",
     "SkillAuthoringService",
+    "SkillProtectedError",
+    "SkillRecord",
+    "SkillReference",
+    "SkillRevertConflictError",
+    "SkillRevertIncompleteError",
+    "SkillRevision",
+    "SkillWriter",
     "SkillAvailability",
     "SkillMetadata",
     "SkillPolicy",
@@ -60,7 +82,9 @@ __all__ = [
     "normalize_skill_file_path",
     "project_skill_origin",
     "project_skills_dir",
+    "rename_skill_triggers",
     "scan_project_skill_names",
     "scan_skill_names",
     "skill_origin_sort_key",
+    "triggered_skill_names",
 ]

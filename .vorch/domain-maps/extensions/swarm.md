@@ -621,11 +621,11 @@ Post backgrounds and left borders share the stable author color. The Swarm id
 stays under Usage (`SwarmPage.board.test.js`, `test_swarm_store_board.py`).
 Usage totals and participant Model rows abbreviate large counts with k/mio/mrd
 and at most one locale-formatted decimal (`SwarmPage.usage.test.js`).
-The Usage page combines measured and estimated input/output counts as "Tokens used"
-at total and Model-row scope. Tool Calls come from each participant's canonical
-report and span its Model rows once, including participants without Model usage.
-This is a Swarm presentation choice; canonical usage remains separated
-(`SwarmPage.svelte`, `SwarmPage.usage.test.js`).
+The Usage page shows input plus output tokens, estimated parts included, as
+"Tokens used" at total and Model-row scope; the group usage report keeps the
+estimated parts as separate fields (`statistics/group-usage.md`). Tool Calls come
+from each participant's report activity and span its Model rows once, including
+participants without Model usage (`SwarmPage.svelte`, `SwarmPage.usage.test.js`).
 
 Management Resume accepts an optional participant id. Store validation and
 request replay bind that exact target; reopening a closed epoch resets only the

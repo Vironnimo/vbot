@@ -749,9 +749,12 @@ async def _dispatch_tool_calls(
             # The owning run's project rides onto every ToolContext so the
             # subagent tool can inherit it; None keeps the identity path.
             project_id=context.project_id,
-            # The run's effective skill project (rooted-aware) so the skill tool
-            # resolves the same pool the run's catalog advertises.
+            # The run's effective skill project (rooted-aware) and, in a Librarian
+            # Session, the Agent whose Skills it maintains, so the skill tools
+            # resolve the same pool the run's catalog advertises.
             skill_project_id=context.skill_project_id,
+            skill_agent_id=getattr(agent, "skill_agent_id", None),
+            run_kind=run.run_kind,
             allowed_tools=_dispatch_allowed_tools(
                 agent,
                 context.registry,

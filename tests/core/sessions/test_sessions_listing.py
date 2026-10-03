@@ -321,14 +321,26 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
             "platform_conv_id": "chat-1",
         },
         "unknown-kind": {"run_kinds": ["future_kind"]},
+        "librarian-user": {"run_kinds": ["user", "librarian"]},
     }
     for index, (session_id, metadata) in enumerate(metadata_by_session.items()):
         address = _address("coder", session_id)
         manager._store.create(
             address,
-            created_at=f"2026-08-01T00:0{index}:00+00:00",
+            created_at=f"2026-08-01T00:{index:02d}:00+00:00",
         )
         _classify(manager, address, metadata)
+    # A Librarian pass of an earlier vBot ran in a Session of the Agent it curated.
+    manager.create("coder", "librarian", run_kind=RunKind.LIBRARIAN)
+    # Now it runs in a Session of the Librarian, labelled, titled and bound to the
+    # Agent in the creating write.
+    title = "Skills of Coder · 2026-10-03"
+    bound = manager.create(
+        "librarian",
+        "pass",
+        run_kind=RunKind.LIBRARIAN,
+        metadata={"skill_agent_id": "coder", "auto_title": title, "auto_title_initialized": True},
+    )
 
     def listed(filters: SessionListFilters) -> set[str]:
         return {
@@ -369,6 +381,18 @@ def test_session_list_filters_execution_categories_in_sql(manager) -> None:
         "channel-cron",
         "unknown-kind",
     }
+    # Sessions with a Librarian Run are never listed in another Agent's scope.
+    assert listed(SessionListFilters(True, True, True, True)) == set(metadata_by_session) - {
+        "librarian-user"
+    }
+    # The Librarian's own Sessions are listed like any conversation.
+    librarian_sessions = manager.list_summaries_page(
+        [(None, "librarian")], limit=100, filters=hidden
+    ).sessions
+    assert [(summary["id"], summary["auto_title"]) for summary in librarian_sessions] == [
+        ("pass", title)
+    ]
+    assert manager.metadata_value(bound.address, "skill_agent_id") == "coder"
 
 
 RECALL_VISIBILITY_CASES = {
@@ -383,6 +407,7 @@ RECALL_VISIBILITY_CASES = {
     "reflection": ({"run_kinds": ["reflection"]}, "hidden"),
     "memory": ({"run_kinds": ["memory_reflection"]}, "hidden"),
     "user-skill": ({"run_kinds": ["user", "skill_reflection"]}, "hidden"),
+    "user-librarian": ({"run_kinds": ["user", "librarian"]}, "hidden"),
     "subagent-kind": ({"run_kinds": ["subagent"]}, "subagent"),
     "subagent-flag": ({"is_subagent_session": True}, "subagent"),
     "subagent-user": ({"is_subagent_session": True, "run_kinds": ["user"]}, "subagent"),

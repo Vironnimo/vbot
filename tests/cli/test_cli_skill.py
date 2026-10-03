@@ -221,7 +221,10 @@ def test_skill_editable_scope_commands_send_their_requests(rpc: FakeRpc, run_cli
         "delete": "deleted",
     }
     for method, operation in operations.items():
-        rpc.reply(f"skill.{method}", {"name": "librarian", "operation": operation, "warnings": []})
+        result = {"name": "librarian", "operation": operation, "warnings": []}
+        if method == "delete":
+            result["archive_id"] = "librarian_01"
+        rpc.reply(f"skill.{method}", result)
     scope = ("--scope", "agent:assistant")
     commands = {
         "read": ("read", *scope),
@@ -242,7 +245,85 @@ def test_skill_editable_scope_commands_send_their_requests(rpc: FakeRpc, run_cli
     assert "agent:assistant" in outputs["read"][1]
     for method, operation in operations.items():
         assert operation in outputs[method][1] and "librarian" in outputs[method][1]
+    # A delete names the archive entry and how to restore it.
+    assert (
+        "restore with: vbot skill restore librarian_01 --scope agent:assistant"
+        in (outputs["delete"][1])
+    )
     assert rpc.methods == [f"skill.{name}" for name in commands]
+
+
+def test_skill_history_archive_and_pin_commands_send_their_requests(
+    rpc: FakeRpc, run_cli: RunCli
+) -> None:
+    revision = {
+        "id": 7,
+        "at": "2026-09-30T08:00:00.000000Z",
+        "skill": "librarian",
+        "kind": "archive",
+        "actor": "reflection",
+        "reason": "absorbed",
+        "absorbed_into": "catalog",
+        "run_id": "run-1",
+        "files": [{"path": "SKILL.md", "change": "deleted"}],
+        "followed": [
+            {"kind": "shared", "id": "coder", "name": "Coder"},
+            {"kind": "cron", "id": "job-1", "name": "Daily report"},
+        ],
+    }
+    archived = {
+        "archive_id": "librarian_01",
+        "name": "librarian",
+        "archived_at": "2026-09-30T08:00:00.000000Z",
+        "reason": "deleted",
+        "absorbed_into": None,
+        "archived_by": "human",
+    }
+    rpc.reply("skill.history", {"scope": "global", "revisions": [revision]})
+    rpc.reply(
+        "skill.revert",
+        {"scope": "global", "revisions": [{**revision, "id": 8, "kind": "revert", "reverts": [7]}]},
+    )
+    rpc.reply("skill.archived", {"scope": "global", "archived": [archived]})
+    rpc.reply("skill.restore", {"name": "librarian", "operation": "restore", "warnings": []})
+    rpc.reply("skill.purge", {"scope": "global", "purged": archived})
+    rpc.reply("skill.set_pinned", {"name": "librarian", "operation": "pin", "warnings": []})
+    scope = ("--scope", "global")
+    commands = {
+        "history": ("history", "librarian", "--limit", "5", *scope),
+        "revert": ("revert", "7", *scope),
+        "archived": ("archived", *scope),
+        "restore": ("restore", "librarian_01", *scope),
+        "purge": ("purge", "librarian_01", "--yes", *scope),
+        "pin": ("pin", "librarian", *scope),
+        "unpin": ("unpin", "librarian", *scope),
+    }
+
+    outputs = {name: run_cli("skill", *argv) for name, argv in commands.items()}
+
+    assert {name: code for name, (code, _out, _err) in outputs.items()} == dict.fromkeys(
+        commands, 0
+    )
+    assert rpc.calls == [
+        ("skill.history", {"scope": "global", "limit": 5, "name": "librarian"}),
+        ("skill.revert", {"scope": "global", "revisions": [7]}),
+        ("skill.archived", {"scope": "global"}),
+        ("skill.restore", {"scope": "global", "archive_id": "librarian_01"}),
+        ("skill.purge", {"scope": "global", "archive_id": "librarian_01"}),
+        ("skill.set_pinned", {"scope": "global", "name": "librarian", "pinned": True}),
+        ("skill.set_pinned", {"scope": "global", "name": "librarian", "pinned": False}),
+    ]
+    assert (
+        "revision 7  2026-09-30T08:00:00.000000Z  librarian  archived (merged into catalog) "
+        "by reflection (run run-1)\n  deleted SKILL.md\n"
+        "  moved to catalog: share with Agent Coder\n"
+        "  moved to catalog: cron job Daily report"
+    ) in outputs["history"][1]
+    assert "librarian  revert of revision 7 by reflection" in outputs["revert"][1]
+    assert (
+        "- librarian_01  librarian  archived 2026-09-30T08:00:00.000000Z (deleted) by human"
+    ) in outputs["archived"][1]
+    assert "permanently deleted archived skill librarian (librarian_01)" in outputs["purge"][1]
 
 
 @pytest.mark.parametrize(
@@ -250,6 +331,7 @@ def test_skill_editable_scope_commands_send_their_requests(rpc: FakeRpc, run_cli
     [
         pytest.param(("delete", "librarian"), id="delete"),
         pytest.param(("remove-file", "librarian", "references/schema.md"), id="remove-file"),
+        pytest.param(("purge", "librarian_01"), id="purge"),
     ],
 )
 def test_skill_destructive_commands_require_confirmation(
@@ -303,6 +385,11 @@ def test_skill_inventory_prints_every_source_stale_share_and_diagnostic(
                     "description": "Maintain the catalog",
                     "origin": "agent",
                     "owner_id": "assistant",
+                    "editable_scope": "agent:assistant",
+                    "created_by": "reflection",
+                    "pinned": True,
+                    "uses": 3,
+                    "last_used_at": "2026-09-30T08:00:00.000000Z",
                     "status": "available",
                     "shared_with": ["researcher"],
                     "missing": [],
@@ -321,6 +408,16 @@ def test_skill_inventory_prints_every_source_stale_share_and_diagnostic(
                     "warnings": ["duplicate name"],
                 },
             ],
+            "archived": [
+                {
+                    "scope": "global",
+                    "archive_id": "notes_01",
+                    "name": "notes",
+                    "archived_at": "2026-09-29T08:00:00.000000Z",
+                    "reason": "deleted",
+                    "archived_by": "human",
+                }
+            ],
             "stale_shared": [{"agent_id": "ghost", "name": "gone"}],
             "policy_diagnostics": ["policy file warning"],
         },
@@ -332,7 +429,9 @@ def test_skill_inventory_prints_every_source_stale_share_and_diagnostic(
     assert rpc.calls == [("skill.inventory", {})]
     for text in (
         "- librarian  Maintain the catalog  [agent]",
-        "status: available; owner: assistant; shared_with: researcher",
+        "status: available; owner: assistant; shared_with: researcher; created_by: reflection; "
+        "pinned: yes; last_used: 2026-09-30T08:00:00.000000Z (3 sessions)",
+        "- notes_01  notes  archived 2026-09-29T08:00:00.000000Z (deleted) by human; scope: global",
         "- native-build  Build native projects  [bundled]",
         "status: disabled; owner: -; shared_with: -; "
         "optional missing: missing binary 'jq'; warnings: duplicate name",

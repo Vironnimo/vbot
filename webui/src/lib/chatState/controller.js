@@ -5,6 +5,7 @@ import {
   controlRun as requestControlRun,
   createSession as requestCreateSession,
   editChatMessage as requestEditChatMessage,
+  getAgent as requestGetAgent,
   getSession as requestGetSession,
   inspectSubAgentWork as requestInspectSubAgentWork,
   listAgents as requestListAgents,
@@ -14,6 +15,7 @@ import {
   listSessionActivity as requestListSessionActivity,
   listSessions as requestListSessions,
   loadChatHistory as requestLoadChatHistory,
+  loadLearningChanges as requestLoadLearningChanges,
   loadReflectionRuns as requestLoadReflectionRuns,
   markSessionRead as requestMarkSessionRead,
   removeFromQueue as requestRemoveFromQueue,
@@ -21,14 +23,14 @@ import {
   startChatRun as requestStartChatRun,
   updateQueueItem as requestUpdateQueueItem,
   steerQueueItem as requestSteerQueueItem,
+  undoLearningChanges as requestUndoLearningChanges,
 } from '../api.js';
 import { t } from '../i18n.js';
 import { createChatActivity } from './activity.js';
 import { createChatChildTasks } from './childTasks.js';
+import { createChatReflections } from './reflections.js';
 import { formatAgentAddress, parseAgentAddress } from '../agentAddress.js';
-import { isReflectionRunKind } from '../chatTimelinePresentation.js';
 import {
-  TERMINAL_RUN_STATUSES,
   setAgents,
   selectAgent,
   selectedAgent,
@@ -96,6 +98,7 @@ function defaultChatOperations() {
     createSession: (...args) => requestCreateSession(...args),
     editChatMessage: (...args) => requestEditChatMessage(...args),
     inspectSubAgentWork: (...args) => requestInspectSubAgentWork(...args),
+    getAgent: (...args) => requestGetAgent(...args),
     listAgents: (...args) => requestListAgents(...args),
     listChatCommands: (...args) => requestListChatCommands(...args),
     listFiles: (...args) => requestListFiles(...args),
@@ -104,6 +107,7 @@ function defaultChatOperations() {
     listSessions: (...args) => requestListSessions(...args),
     getSession: (...args) => requestGetSession(...args),
     loadChatHistory: (...args) => requestLoadChatHistory(...args),
+    loadLearningChanges: (...args) => requestLoadLearningChanges(...args),
     loadReflectionRuns: (...args) => requestLoadReflectionRuns(...args),
     markSessionRead: (...args) => requestMarkSessionRead(...args),
     removeFromQueue: (...args) => requestRemoveFromQueue(...args),
@@ -111,6 +115,7 @@ function defaultChatOperations() {
     startChatRun: (...args) => requestStartChatRun(...args),
     updateQueueItem: (...args) => requestUpdateQueueItem(...args),
     steerQueueItem: (...args) => requestSteerQueueItem(...args),
+    undoLearningChanges: (...args) => requestUndoLearningChanges(...args),
   };
 }
 
@@ -135,7 +140,6 @@ export function createChatController({
   let agentsLoadVersion = 0;
   let initialHistoryPending = false;
   const historyLoadVersions = new Map();
-  const reflectionLoadVersions = new Map();
   const queueSyncVersions = new Map();
 
   let displayedHistoryLoad = null;
@@ -152,6 +156,11 @@ export function createChatController({
     applyBackgroundBashStatusEvents,
   } = childTasks;
   const activity = createChatActivity({ chatState, operations, errorMessage });
+  const reflections = createChatReflections({
+    operations,
+    isDisplayedSession,
+    errorMessage,
+  });
   const {
     applySessionInvalidations,
     markSessionCompletionRead,
@@ -231,12 +240,32 @@ export function createChatController({
         chatState.loadingAgents = false;
       }
     }
+    // A hidden Agent's Model, and with it its context window, can change too.
+    for (const agentId of Object.keys(chatState.hiddenAgents)) {
+      void loadHiddenAgent(agentId);
+    }
     const loadInitialHistory = initialHistoryPending;
     initialHistoryPending = false;
     if (selectedAgentId && loadInitialHistory && shouldLoadCurrentHistory()) {
       await loadCurrentHistory();
     }
     return true;
+  }
+
+  // An Identity Agent outside the roster, such as the hidden Librarian, gets
+  // the same payload as a roster Agent once one of its Sessions is shown. An
+  // Agent that cannot be read (deleted meanwhile) keeps no entry.
+  const hiddenAgentLoads = new Map();
+  async function loadHiddenAgent(agentId) {
+    const version = (hiddenAgentLoads.get(agentId) ?? 0) + 1;
+    hiddenAgentLoads.set(agentId, version);
+    const agent = await operations.getAgent(agentId).catch(() => null);
+    if (hiddenAgentLoads.get(agentId) !== version) return;
+    const others = Object.fromEntries(
+      Object.entries(chatState.hiddenAgents).filter(([id]) => id !== agentId),
+    );
+    chatState.hiddenAgents =
+      agent?.id === agentId ? { ...others, [agentId]: agent } : others;
   }
 
   async function loadCurrentHistory() {
@@ -303,7 +332,7 @@ export function createChatController({
     const request = beginHistoryRequest(sessionState);
     const reflectionRequest = sessionState.historyAfter
       ? null
-      : beginReflectionRequest(sessionState);
+      : reflections.beginRequest(sessionState);
     const isLatestRequest = request.isLatest;
     const isDisplayed = () => isDisplayedSession(agentId, sessionId);
     const startedDisplayed = isDisplayed();
@@ -388,7 +417,7 @@ export function createChatController({
     const request = beginHistoryRequest(sessionState);
     const reflectionRequest = sessionState.historyAfter
       ? null
-      : beginReflectionRequest(sessionState);
+      : reflections.beginRequest(sessionState);
     const isLatestRequest = request.isLatest;
     try {
       const history = await readCurrentHistory(sessionState);
@@ -786,72 +815,6 @@ export function createChatController({
     }
   }
 
-  function beginReflectionRequest(sessionState) {
-    const version = (reflectionLoadVersions.get(sessionState.key) ?? 0) + 1;
-    reflectionLoadVersions.set(sessionState.key, version);
-    const baseline = { ...sessionState.reflectionTasks };
-    const isLatest = () =>
-      reflectionLoadVersions.get(sessionState.key) === version;
-    return {
-      isLatest,
-      apply(rows) {
-        if (!isLatest() || !Array.isArray(rows)) return;
-        const restored = {};
-        for (const row of rows) {
-          if (
-            !row?.run_id ||
-            !row.session_id ||
-            !isReflectionRunKind(row.run_kind)
-          )
-            continue;
-          if (
-            row.status !== 'running' &&
-            !TERMINAL_RUN_STATUSES.has(row.status)
-          )
-            continue;
-          restored[row.run_id] = {
-            sessionId: row.session_id,
-            runKind: row.run_kind,
-            status: row.status,
-            startedAt: row.started_at ?? '',
-          };
-        }
-        // Events received during the read are newer than its snapshot. A
-        // terminal result also never regresses to a stale running snapshot.
-        for (const [runId, entry] of Object.entries(
-          sessionState.reflectionTasks,
-        )) {
-          if (
-            entry !== baseline[runId] ||
-            (restored[runId]?.status === 'running' &&
-              TERMINAL_RUN_STATUSES.has(entry.status))
-          ) {
-            restored[runId] = entry;
-          }
-        }
-        sessionState.reflectionTasks = restored;
-      },
-    };
-  }
-
-  async function refreshReflectionTasks(sessionState) {
-    const request = beginReflectionRequest(sessionState);
-    try {
-      const result = await operations.loadReflectionRuns({
-        agent_id: sessionState.agentId,
-        session_id: sessionState.sessionId,
-      });
-      request.apply(result?.reflection_runs);
-    } catch (error) {
-      if (
-        request.isLatest() &&
-        isDisplayedSession(sessionState.agentId, sessionState.sessionId)
-      ) {
-        sessionState.actionError = errorMessage(error);
-      }
-    }
-  }
-
   function applyConnectionSnapshot(snapshot) {
     if (!snapshot || snapshot === handledConnectionSnapshot) {
       return false;
@@ -896,7 +859,7 @@ export function createChatController({
     runStream.applyConnectionSnapshot(snapshot);
     for (const sessionState of Object.values(chatState.sessions)) {
       if (isDisplayedSession(sessionState.agentId, sessionState.sessionId)) {
-        void refreshReflectionTasks(sessionState);
+        void reflections.refresh(sessionState);
       }
     }
     return true;
@@ -987,20 +950,24 @@ export function createChatController({
     listSessions: (...args) => operations.listSessions(...args),
     loadAdoptedSelectionHistory,
     loadAgents,
+    loadHiddenAgent,
     loadCommands,
     loadCurrentHistory,
     loadHistoryForSession,
     loadOlderHistory,
+    loadReflectionChanges: reflections.loadChanges,
     loadProject: (projectId) => operations.showProject(projectId),
     markSessionCompletionRead,
     reconcileRunSession,
     reconcileSubAgentRows,
     refreshAgentActivity,
+    refreshReflections: reflections.refresh,
     removeQueued,
     steerQueued,
     sendMessage,
     syncAgentActivity,
     syncSessionQueue,
+    undoReflection: reflections.undo,
     updateQueued,
   };
 }

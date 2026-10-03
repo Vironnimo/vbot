@@ -6,6 +6,7 @@ import argparse
 
 from cli._parser_common import (
     AREA_HELP,
+    LIBRARIAN_HELP,
     LOG_HELP,
     MEMORY_HELP,
     PROMPT_HELP,
@@ -370,6 +371,74 @@ def _add_skill_parsers(subparsers: argparse._SubParsersAction[argparse.ArgumentP
     remove_file_parser.add_argument("--yes", action="store_true", help="Confirm removal")
     _add_skill_scope_argument(remove_file_parser)
 
+    history_parser = _add_command_parser(
+        skill_subparsers,
+        "history",
+        SKILL_HELP["history"],
+        example="skill history librarian --scope agent:assistant",
+    )
+    history_parser.add_argument(
+        "name", nargs="?", metavar="<skill-name>", help="Only changes of this Skill"
+    )
+    history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        metavar="<n>",
+        help="Newest revisions to show (default: 20)",
+    )
+    _add_skill_scope_argument(history_parser)
+
+    revert_parser = _add_command_parser(
+        skill_subparsers,
+        "revert",
+        SKILL_HELP["revert"],
+        example="skill revert 14 --scope agent:assistant",
+    )
+    revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+    _add_skill_scope_argument(revert_parser)
+
+    archived_parser = _add_command_parser(
+        skill_subparsers,
+        "archived",
+        SKILL_HELP["archived"],
+        example="skill archived --scope agent:assistant",
+    )
+    _add_skill_scope_argument(archived_parser)
+
+    restore_parser = _add_command_parser(
+        skill_subparsers,
+        "restore",
+        SKILL_HELP["restore"],
+        example="skill restore <archive-id> --scope agent:assistant",
+    )
+    restore_parser.add_argument(
+        "archive_id", metavar="<archive-id>", help="Archive id from skill archived"
+    )
+    _add_skill_scope_argument(restore_parser)
+
+    purge_parser = _add_command_parser(
+        skill_subparsers,
+        "purge",
+        SKILL_HELP["purge"],
+        example="skill purge <archive-id> --scope agent:assistant --yes",
+    )
+    purge_parser.add_argument(
+        "archive_id", metavar="<archive-id>", help="Archive id from skill archived"
+    )
+    purge_parser.add_argument("--yes", action="store_true", help="Confirm permanent deletion")
+    _add_skill_scope_argument(purge_parser)
+
+    for command in ("pin", "unpin"):
+        pin_parser = _add_command_parser(
+            skill_subparsers,
+            command,
+            SKILL_HELP[command],
+            example=f"skill {command} librarian --scope agent:assistant",
+        )
+        pin_parser.add_argument("name", metavar="<skill-name>", help="Skill directory name")
+        _add_skill_scope_argument(pin_parser)
+
 
 def _add_skill_scope_argument(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
@@ -464,6 +533,30 @@ def _add_memory_parsers(subparsers: argparse._SubParsersAction[argparse.Argument
     )
     revert_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
     revert_parser.add_argument("revisions", type=int, nargs="+", metavar="<revision>")
+
+
+def _add_librarian_parsers(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    librarian_parser = subparsers.add_parser(
+        "librarian",
+        help=AREA_HELP["librarian"],
+        description=AREA_HELP["librarian"],
+    )
+    commands = librarian_parser.add_subparsers(dest="command", required=True)
+    status_parser = _add_command_parser(
+        commands, "status", LIBRARIAN_HELP["status"], example="librarian status assistant"
+    )
+    status_parser.add_argument(
+        "agent",
+        nargs="?",
+        metavar="<agent-id>",
+        help="Identity Agent id; without it, the recent passes over all agents",
+    )
+    run_parser = _add_command_parser(
+        commands, "run", LIBRARIAN_HELP["run"], example="librarian run assistant"
+    )
+    run_parser.add_argument("agent", metavar="<agent-id>", help="Identity Agent id")
 
 
 def _add_memory_agent_argument(parser: argparse.ArgumentParser) -> None:

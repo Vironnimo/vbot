@@ -462,10 +462,7 @@ function responseText(model, prompt, messages = []) {
   if (prompt.includes("E2E handoff brief 9182")) {
     return "E2E handoff received by target Agent.";
   }
-  if (
-    prompt.includes("Review this Session") &&
-    prompt.includes("E2E reflection focus")
-  ) {
+  if (prompt.includes("E2E reflection focus")) {
     return "E2E reflection completed.";
   }
   if (prompt.includes("E2E_QUEUE_FIRST")) {

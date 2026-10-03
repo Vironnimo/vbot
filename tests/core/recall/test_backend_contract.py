@@ -1,5 +1,7 @@
 """Contracts every Recall backend shares: scope isolation and continuation binding."""
 
+from collections.abc import Awaitable, Callable, Iterator
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,16 +32,30 @@ pytestmark = pytest.mark.asyncio
 BACKENDS = ["canonical_scan", "sqlite_fts", "vector", "hybrid"]
 
 
-async def _backend(name: str, tmp_path: Path, sessions: ChatSessionManager) -> RecallBackend:
-    """Create *name* over the existing Sessions, their documents already embedded."""
-    if name == "canonical_scan":
-        return CanonicalSessionRecallBackend(sessions)
-    embeddings = StubEmbeddings()
-    context = RecallBackendContext(tmp_path, sessions, embeddings=embeddings)
-    backend = RecallBackendRegistry.with_builtins().create(name, context)
-    if isinstance(backend, VectorRecallBackend | HybridRecallBackend):
-        await embed_documents(backend.index, sessions, embeddings)
-    return backend
+OpenBackend = Callable[[str], Awaitable[RecallBackend]]
+
+
+@pytest.fixture
+def open_backend(tmp_path: Path, sessions: ChatSessionManager) -> Iterator[OpenBackend]:
+    """Create a backend by name over the existing Sessions, their documents already embedded.
+
+    A backend that owns a Passage index is closed when the test ends.
+    """
+
+    with ExitStack() as opened:
+
+        async def create(name: str) -> RecallBackend:
+            if name == "canonical_scan":
+                return CanonicalSessionRecallBackend(sessions)
+            embeddings = StubEmbeddings()
+            context = RecallBackendContext(tmp_path, sessions, embeddings=embeddings)
+            backend = RecallBackendRegistry.with_builtins().create(name, context)
+            if isinstance(backend, VectorRecallBackend | HybridRecallBackend):
+                opened.callback(backend.close)
+                await embed_documents(backend.index, sessions, embeddings)
+            return backend
+
+        yield create
 
 
 # Every backend binds its continuation through the shared scope read, so the
@@ -70,12 +86,15 @@ _SELECTION_CHANGES: dict[str, dict[str, Any]] = {
     ],
 )
 async def test_changed_selection_rejects_continuation(
-    tmp_path: Path, sessions: ChatSessionManager, backend_name: str, changed: dict[str, Any]
+    sessions: ChatSessionManager,
+    open_backend: OpenBackend,
+    backend_name: str,
+    changed: dict[str, Any],
 ) -> None:
     session = sessions.create("coder", session_id="one")
     for day in (1, 2):
         session.append(ChatMessage.user("needle", timestamp=datetime(2026, 5, day, tzinfo=UTC)))
-    recall = await _backend(backend_name, tmp_path, sessions)
+    recall = await open_backend(backend_name)
     original = request("needle", limit=1)
     first = await recall.search_page(original)
     continuation = replace(original, offset=1, limit=2, snapshot_id=first.snapshot_id)
@@ -90,7 +109,7 @@ async def test_changed_selection_rejects_continuation(
 
 @pytest.mark.parametrize("backend_name", BACKENDS)
 async def test_project_scope_isolates_sessions_that_share_an_id(
-    tmp_path: Path, sessions: ChatSessionManager, backend_name: str
+    sessions: ChatSessionManager, open_backend: OpenBackend, backend_name: str
 ) -> None:
     shared_id = "11111111-1111-1111-1111-111111111111"
     sessions.create("coder", session_id=shared_id).append(
@@ -99,7 +118,7 @@ async def test_project_scope_isolates_sessions_that_share_an_id(
     sessions.create("coder", session_id=shared_id, project_id="alpha").append(
         ChatMessage.user("project bananas", timestamp=timestamp(2))
     )
-    recall = await _backend(backend_name, tmp_path, sessions)
+    recall = await open_backend(backend_name)
 
     for project_id, text in ((None, "global carrots"), ("alpha", "project bananas")):
         page = await recall.search_page(

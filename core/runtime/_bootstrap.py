@@ -7,7 +7,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import partial
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import uuid4
 
 from core.agents.agents import AgentStore
@@ -18,6 +18,8 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    LearningChanges,
+    LibrarianService,
     ReflectionService,
     TriggerService,
 )
@@ -87,7 +89,7 @@ from core.settings.settings import effective_timezone_name
 from core.skills.authoring import SkillAuthoringService
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime, load_global_skill_registry
-from core.statistics import StatisticsIndex
+from core.statistics import StatisticsIndex, StatisticsService
 from core.storage.errors import StorageError
 from core.storage.storage import StorageManager
 from core.subagents import SubAgentCoordinator
@@ -414,7 +416,13 @@ def bootstrap(runtime: Runtime) -> None:
                 "see vbot.skills warnings for details",
                 invalid_skill_count,
             )
-        register_skill_tool(runtime._tools, runtime.skills_for, runtime.reload_skills_async)
+        register_skill_tool(
+            runtime._tools,
+            runtime.skills_for,
+            runtime.reload_skills_async,
+            runtime.archived_skill,
+            runtime.background_skill_protection,
+        )
         # The agent skill-authoring write core refuses the bundled skills root;
         # ``skill_manage`` writes only the calling agent's private home.
         runtime._skill_authoring = SkillAuthoringService(
@@ -429,6 +437,8 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._resolve_external_skill_scope,
             lifecycle_guard=runtime._agents.lifecycle_guard,
             on_changed=runtime._notify_skills_changed,
+            run_started_at=runtime.run_started_at,
+            follow_merge=runtime.follow_skill_merge,
         )
         register_history_tool(runtime._tools, runtime._chat_sessions)
         runtime._projects = ProjectStore(
@@ -446,6 +456,7 @@ def bootstrap(runtime: Runtime) -> None:
             resources_path=resources_path,
             logger=runtime.logger,
             reload_skills=runtime.reload_skills,
+            authoring=runtime._skill_authoring,
         )
         register_project_tool(
             runtime._tools,
@@ -467,10 +478,12 @@ def bootstrap(runtime: Runtime) -> None:
             temporary_agents=runtime._temporary_agents,
             sessions=runtime._chat_sessions,
         )
-        # Creating the bootstrap Agent enters the snapshot barrier on the calling thread,
-        # the Event Loop in the server lifespan. It never waits there: no request, and so
-        # no data snapshot, is served before startup completes.
+        # Creating the bootstrap Agent and the built-in Librarian enters the snapshot
+        # barrier on the calling thread, the Event Loop in the server lifespan. It never
+        # waits there: no request, and so no data snapshot, is served before startup
+        # completes.
         runtime._agents.ensure_bootstrap()
+        runtime._agents.ensure_librarian()
         runtime._recall = RecallIntegration(
             storage=runtime._storage,
             sessions=runtime._chat_sessions,
@@ -500,7 +513,24 @@ def bootstrap(runtime: Runtime) -> None:
         # The reflection service starts review runs through the runtime's
         # streaming loop lazily at review time, so constructing it before the
         # loops is safe — the loops only need its notify hook.
-        runtime._reflection_service = ReflectionService(runtime)
+        runtime._reflection_service = ReflectionService(
+            runtime,
+            # Built later; a background review leaves the Skills to a running pass.
+            librarian_running=lambda agent_id: (
+                runtime._librarian_service is not None
+                and runtime._librarian_service.running(agent_id)
+            ),
+        )
+        # What a Run changed in Memory and the Agent's own Skills, and its undo.
+        assert runtime._memory_service is not None
+        assert runtime._skill_authoring is not None
+        assert runtime._chat_run_manager is not None
+        runtime._learning_changes = LearningChanges(
+            memory=runtime._memory_service,
+            skills=runtime._skill_authoring,
+            skill_home=runtime.agent_skills_dir,
+            run_active=runtime._chat_run_manager.is_running,
+        )
         runtime._session_title_service = SessionTitleService(
             runtime, usage_recorder=runtime._usage_recorder
         )
@@ -600,6 +630,7 @@ def bootstrap(runtime: Runtime) -> None:
             cron=runtime._cron_service,
             calendar=runtime._calendar_service,
         )
+        runtime._librarian_service = _librarian_service(runtime)
         runtime._archive = ArchiveService(_archive_services(runtime))
         runtime._command_dispatcher = CommandDispatcher(
             runtime._chat_run_manager,
@@ -721,6 +752,7 @@ def bootstrap(runtime: Runtime) -> None:
             runtime._start_provider_usage_service()
             runtime._start_recall_indexing()
             runtime._start_archive_retention()
+            runtime._start_librarian()
         runtime.logger.debug("Runtime started (%s)", runtime._startup_summary.describe())
     except Exception as error:
         _log_startup_failure(runtime)
@@ -731,6 +763,44 @@ def bootstrap(runtime: Runtime) -> None:
     # startup traceback as its context.
     clean_up_failed_startup(runtime)
     raise startup_error
+
+
+def _librarian_service(runtime: Runtime) -> LibrarianService:
+    """The Librarian over the private Skill homes, Skill use and live automations."""
+    authoring = runtime._skill_authoring
+    automation = runtime._automation_references
+    sessions = runtime._chat_sessions
+    agents = runtime._agents
+    if authoring is None or automation is None or sessions is None or agents is None:
+        raise RuntimeError("Librarian services are not available")
+    # The Agent and Project stores satisfy the directory protocols structurally.
+    usage = StatisticsService(
+        sessions,
+        cast(Any, agents),
+        cast(Any, runtime._projects),
+        index=runtime._statistics_index,
+        usage_recorder=runtime._usage_recorder,
+    )
+
+    def skills_changed(agent_id: str) -> None:
+        runtime.invalidate_agent_skills(agent_id)
+        runtime._notify_skills_changed()
+
+    return LibrarianService(
+        runtime,
+        authoring=authoring,
+        skills_dir=runtime.agent_skills_dir,
+        skill_usage=usage.skill_usage_async,
+        triggered_skill_names=automation.agent_triggered_skill_names,
+        shared_skill_receivers=runtime.shared_skill_receivers,
+        skills_changed=skills_changed,
+        # The Skill manager shows the Librarian; its observers reload on Skill changes.
+        status_changed=runtime._notify_skills_changed,
+        reviewing=lambda agent_id: (
+            runtime._reflection_service is not None
+            and runtime._reflection_service.reviewing(agent_id)
+        ),
+    )
 
 
 def _archive_services(runtime: Runtime) -> ArchiveServices:

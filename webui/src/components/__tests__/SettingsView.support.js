@@ -492,6 +492,28 @@ export function createSettingsRpcMock(options = {}) {
       return { agents };
     }
 
+    // Skill maintenance: the built-in Librarian Agent with no pass yet.
+    if (method === 'librarian.overview') {
+      return {
+        agent_id: 'librarian',
+        available: true,
+        problem: null,
+        settings: deepClone(currentSettings.librarian ?? {}),
+        running: null,
+        passes: [],
+      };
+    }
+
+    if (method === 'agent.get' && params.id === 'librarian') {
+      return {
+        id: 'librarian',
+        name: 'Librarian',
+        builtin: 'librarian',
+        config: { model: '', fallback_models: [] },
+        effective: {},
+      };
+    }
+
     if (method === 'channel.list') {
       return {
         channels: channels.map((channel) => ({

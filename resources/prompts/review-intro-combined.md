@@ -1,0 +1,1 @@
+Review the conversation above for lessons worth keeping in your Skills and Memory. This is a background review: the user does not see your replies, and the user can see and undo every change you make. From now on only `memory`, `skill` and `skill_manage` work; do not continue the task under review.

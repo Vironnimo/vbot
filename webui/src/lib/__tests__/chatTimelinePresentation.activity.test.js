@@ -16,6 +16,7 @@ import {
   reasoningDurationLabel,
   reflectionElapsedLabel,
   reflectionTaskRows,
+  reflectionUndoErrorText,
   runChangeStats,
   runFooterDetails,
   runFooterNotice,
@@ -24,7 +25,7 @@ import {
   visibleRunChildren,
 } from '../chatTimelinePresentation.js';
 import { t } from '../i18n.js';
-import { formatMoment } from '../timeText.js';
+import { formatAbsoluteTime, formatMoment } from '../timeText.js';
 import { backgroundBashTool } from './chatTimelinePresentation.support.js';
 
 const status = (name) => t(`chat.runStatus.${name}`);
@@ -915,6 +916,51 @@ describe('Reflection rows', () => {
     expect(rows[0]).toMatchObject({ sessionId: 'fork-b', status: 'running' });
     expect(reflectionTaskRows(undefined)).toEqual([]);
     expect(reflectionTaskRows({})).toEqual([]);
+  });
+
+  it.each([
+    [
+      'a later Memory change by a background Reflection',
+      {
+        store: 'memory',
+        scope: 'agent',
+        text: 'Uses pytest.',
+        later: { actor: 'tool', run_kind: 'memory_reflection' },
+      },
+      'Nothing was undone: the Agent Memory entry “Uses pytest.” was changed again later by a background Reflection',
+    ],
+    [
+      'a Skill edited outside vBot',
+      { store: 'skill', skill: 'deploy', later: { actor: 'external' } },
+      'Nothing was undone: Skill “deploy” was changed again later by an edit outside vBot',
+    ],
+    [
+      'a later change of unknown revision',
+      { store: 'skill', skill: 'deploy', later: null },
+      'Nothing was undone: Skill “deploy” was changed again later. Change it directly instead.',
+    ],
+  ])('names %s that blocks an undo', (_label, conflict, expected) => {
+    const at = '2026-09-05T10:30:00Z';
+    const later = conflict.later
+      ? { ...conflict.later, revision: 2, at }
+      : null;
+
+    const text = reflectionUndoErrorText({
+      conflict: { revision: 1, ...conflict, later },
+      message: 'server text',
+    });
+
+    expect(text).toContain(expected);
+    if (later) {
+      expect(text).toContain(`(${formatAbsoluteTime(at)})`);
+    }
+  });
+
+  it('keeps the server message of any other undo failure', () => {
+    expect(
+      reflectionUndoErrorText({ conflict: null, message: 'Disk full.' }),
+    ).toBe('Disk full.');
+    expect(reflectionUndoErrorText(null)).toBe('');
   });
 
   it('formats coarse elapsed labels and stays empty without a parseable start', () => {

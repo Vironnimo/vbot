@@ -288,7 +288,7 @@ async def _preview_prompt(state: Any, params: JsonObject) -> JsonObject:
     # private-skill layer applies to identity previews only (a project-qualified
     # preview renders a config agent, whose slug must not resolve a same-named
     # identity agent's private home).
-    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent_id)
+    skill_project_id, identity_agent_id = resolve_skill_scope(project_id, prompt_project, agent)
 
     try:
         prompt_manager = state.runtime.system_prompts

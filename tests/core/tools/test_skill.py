@@ -7,7 +7,8 @@ from typing import Any
 
 import pytest
 
-from core.skills import SkillAuthoringService
+from core.runs import RunKind
+from core.skills import ArchivedSkill, SkillAuthoringService
 from core.skills.skills import SkillRegistry
 from core.tools import SKILL_TOOL_NAME, ToolContractError, tool_failure
 from core.tools.model_names import SHELL_MODEL_NAME
@@ -163,6 +164,104 @@ def test_unknown_skill_rescans_once_then_fails(tmp_path: Path) -> None:
         "skill_not_found", "Skill not found: missing. Available Skills: debugging."
     )
     assert len(refreshes) == 1
+
+
+def _archived(
+    name: str,
+    reason: str,
+    absorbed_into: str | None = None,
+    *,
+    holder: str | None = None,
+    holder_since: str | None = None,
+) -> ArchivedSkill:
+    """An archived Skill; without ``holder``, an absorbing Skill still holds it."""
+    archived_at = "2026-09-30T08:00:00.000000Z"
+    return ArchivedSkill(
+        archive_id=f"{name}_0000",
+        name=name,
+        archived_at=archived_at,
+        reason=reason,
+        absorbed_into=absorbed_into,
+        archived_by="reflection",
+        origin="agent",
+        description="",
+        holder=holder or absorbed_into,
+        holder_since=holder_since or (archived_at if absorbed_into else None),
+    )
+
+
+@pytest.mark.parametrize(
+    ("archived", "arguments", "expected"),
+    [
+        pytest.param(
+            _archived("debug-notes", "absorbed", "debugging"),
+            {"name": "debug-notes"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-09-30; these are "
+            "the instructions of 'debugging'.",
+            id="merged-loads-its-target",
+        ),
+        pytest.param(
+            _archived(
+                "debug-notes",
+                "absorbed",
+                "debug-tips",
+                holder="debugging",
+                holder_since="2026-10-01T09:00:00.000000Z",
+            ),
+            {"name": "debug-notes"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-10-01; these are "
+            "the instructions of 'debugging'.",
+            id="merged-on-loads-the-skill-holding-it-now",
+        ),
+        pytest.param(
+            _archived("debug-notes", "absorbed", "debugging"),
+            {"name": "debug-notes", "file_path": "references/guide.md"},
+            "Skill 'debug-notes' was merged into Skill 'debugging' on 2026-09-30 and has no "
+            "files of its own anymore. Load 'debugging' with skill and read its files instead.",
+            id="merged-file-read",
+        ),
+        pytest.param(
+            _archived("old-notes", "deleted"),
+            {"name": "old-notes"},
+            "Skill 'old-notes' was deleted on 2026-09-30 and cannot be loaded. The user can "
+            "restore it in the Skill controls. Call skill without arguments to list the "
+            "available Skills.",
+            id="deleted",
+        ),
+        pytest.param(
+            _archived("old-notes", "absorbed", "hidden"),
+            {"name": "old-notes"},
+            "Skill 'old-notes' was merged into Skill 'hidden' on 2026-09-30 and cannot be "
+            "loaded. The user can restore it in the Skill controls. Call skill without "
+            "arguments to list the available Skills.",
+            id="merged-into-a-skill-this-agent-cannot-load",
+        ),
+    ],
+)
+def test_archived_names_load_their_merged_skill_or_explain_the_archive(
+    tmp_path: Path, archived: ArchivedSkill, arguments: dict[str, object], expected: str
+) -> None:
+    lookups: list[tuple[str | None, str]] = []
+
+    def resolve(agent_id: str | None, name: str) -> ArchivedSkill | None:
+        lookups.append((agent_id, name))
+        return archived if name == archived.name else None
+
+    recorder = ActivationRecorder()
+    tool = SkillTool(tmp_path, SkillRegistry.load(debugging_skills(tmp_path)), archived=resolve)
+
+    result = tool.call(arguments, activation_hook=recorder)
+
+    if result["ok"]:
+        assert (result["data"]["name"], result["data"]["note"]) == ("debugging", expected)
+        assert list(recorder.activations) == ["debugging"]
+    else:
+        assert result == tool_failure("skill_not_found", expected)
+        assert recorder.activations == {}
+    # Only after a real miss, with the identity Agent whose own home it searches.
+    assert lookups == [("coder", archived.name)]
+    assert tool.call({"name": "debugging"})["ok"] is True
+    assert len(lookups) == 1
 
 
 def test_rescan_makes_a_newly_dropped_skill_loadable(tmp_path: Path) -> None:
@@ -528,6 +627,95 @@ def test_call_without_a_name_lists_the_live_grouped_catalog(
     }
     display = tool.tools.display_for_call(SKILL_TOOL_NAME, arguments, result=result)
     assert display["facts"] == [{"kind": "count", "value": 2, "unit": "results", "at_least": False}]
+
+
+_BACKGROUND_LIST = (
+    "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
+    "- pinned: Pinned. (read-only here: pinned by the user)\n- unreadable: "
+    "Unreadable. (read-only here: its history cannot be read)"
+)
+_BACKGROUND_NOTES = {
+    "pinned": "Skill 'pinned' is read-only here: pinned by the user. Do not change "
+    "it; name a needed change in your reply.",
+    "debugging": "Skill 'debugging' is read-only here. Do not change it; name a "
+    "needed change in your reply.",
+}
+
+
+# A Librarian Session (``skill_agent_id``) works on its Agent's Skills like a pass,
+# also in a Run of the user.
+@pytest.mark.parametrize(
+    ("run_kind", "skill_agent_id", "listed", "notes"),
+    [
+        pytest.param(
+            RunKind.SKILL_REFLECTION, None, _BACKGROUND_LIST, _BACKGROUND_NOTES, id="background"
+        ),
+        pytest.param(
+            RunKind.USER, "subject", _BACKGROUND_LIST, _BACKGROUND_NOTES, id="librarian-session"
+        ),
+        pytest.param(
+            RunKind.USER,
+            None,
+            "Your global skills:\n- debugging: Debugging.\nYour own skills:\n- mine: Mine.\n"
+            "- pinned: Pinned.\n- unreadable: Unreadable.",
+            {},
+            id="attended",
+        ),
+    ],
+)
+def test_background_runs_see_which_skills_they_cannot_change(
+    tmp_path: Path,
+    run_kind: RunKind,
+    skill_agent_id: str | None,
+    listed: str,
+    notes: dict[str, str],
+) -> None:
+    for root, name in (
+        ("agent", "mine"),
+        ("agent", "pinned"),
+        ("agent", "unreadable"),
+        ("global", "debugging"),
+    ):
+        write_skill(
+            tmp_path / root,
+            name,
+            f"---\nname: {name}\ndescription: {name.title()}.\n---\n\nBody.\n",
+        )
+    asked: list[tuple[str, list[str]]] = []
+
+    def protection(agent_id: str, names: list[str]) -> dict[str, str]:
+        asked.append((agent_id, names))
+        return {"pinned": "pinned", "unreadable": "unknown"}
+
+    registry = SkillRegistry.load(
+        tmp_path / "agent", extra_dirs=[tmp_path / "global"], origins=["agent", "global"]
+    )
+    owners: set[str | None] = set()
+
+    def resolve(_project_id: str | None, agent_id: str | None) -> SkillRegistry:
+        owners.add(agent_id)
+        return registry
+
+    tool = SkillTool(tmp_path, resolve, protection=protection)
+
+    result = tool.call({}, run_kind=run_kind, skill_agent_id=skill_agent_id)
+    # A load opens with the note, so a Run that skips the list still learns it
+    # before writing; a Skill it can change loads without one.
+    loads = {
+        name: tool.call({"name": name}, run_kind=run_kind, skill_agent_id=skill_agent_id)["data"]
+        for name in ("mine", "pinned", "debugging")
+    }
+    owner = skill_agent_id or "coder"
+
+    assert result["data"]["content"] == listed
+    assert {name: data["note"] for name, data in loads.items() if "note" in data} == notes
+    assert all(
+        list(data).index("note") < list(data).index("content")
+        for data in loads.values()
+        if "note" in data
+    )
+    assert owners == {owner}
+    assert asked[:1] == ([(owner, ["mine", "pinned", "unreadable"])] if notes else [])
 
 
 def test_agent_own_skill_loads_despite_an_empty_allowlist(tmp_path: Path) -> None:

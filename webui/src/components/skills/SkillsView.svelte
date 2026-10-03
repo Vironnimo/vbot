@@ -12,7 +12,9 @@
   import { contextMenuAnchor } from '../ui/contextMenu.js';
   import TextField from '../ui/TextField.svelte';
   import AgentSkillsPanel from './AgentSkillsPanel.svelte';
+  import LibrarianSection from './LibrarianSection.svelte';
   import SkillAddMenu from './SkillAddMenu.svelte';
+  import SkillArchiveList from './SkillArchiveList.svelte';
   import SkillCollectionNav from './SkillCollectionNav.svelte';
   import SkillDialogs from './SkillDialogs.svelte';
   import SkillDirectoryEditor from './SkillDirectoryEditor.svelte';
@@ -28,10 +30,13 @@
   } from './skillAccess.js';
   import {
     agentRowMenu,
+    archivedRowMenu,
     libraryRowMenu,
     projectRowMenu,
   } from './skillMenus.js';
+  import { filterArchivedSkills } from './skillRecords.js';
   import {
+    ARCHIVED_COLLECTION,
     filterSkills,
     LIBRARY_SCOPES,
     SKILL_PAGE_SIZE,
@@ -40,13 +45,13 @@
   } from './skillsView.js';
   import './skills.css';
 
-  // The Skills manager: collection navigation (library filters, Agents,
-  // Projects) beside one content area. The content shows the collection page
-  // (the package list, or an Agent's / Project's Skill selection) or, in its
-  // place, the page of one package; returning restores the collection page's
-  // scroll position, filters and focused row. The server owns precedence and
-  // write scopes; skill.inventory projects the effective access this view
-  // presents and edits.
+  // The Skills manager: collection navigation (library filters, archived
+  // Skills, Agents, Projects) beside one content area. The content shows the
+  // collection page (the package list, the archived packages, or an Agent's /
+  // Project's Skill selection) or, in its place, the page of one package;
+  // returning restores the collection page's scroll position, filters and
+  // focused row. The server owns precedence and write scopes; skill.inventory
+  // projects the effective access this view presents and edits.
   //
   // Its place: `[collection]` for a collection page, `[collection, skillId]`
   // for a package page, `['directories']` for the Skill folders. Filters,
@@ -59,12 +64,15 @@
     settings = null,
     onSettingsCommit = noop,
     onToast = noop,
+    // Opens a Session in Chat (a Librarian pass opens the Librarian's).
+    onOpenSession = noop,
     skillsRefreshToken = 0,
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
   } = $props();
 
   let inventory = $state([]);
+  let archived = $state([]);
   let agents = $state([]);
   let projects = $state([]);
   let staleShared = $state([]);
@@ -107,6 +115,9 @@
   let lastOpenedId = $state(null);
   // The open row context menu (components/ui/ContextMenu.svelte), or null.
   let menu = $state(null);
+  // The content tab the next opened package page starts on, when a link
+  // asked for one (the Librarian's changes open a Skill's history).
+  let pendingContentTab = null;
 
   const actions = createSkillActions({
     get agents() {
@@ -123,10 +134,13 @@
     },
   });
 
-  let collections = $derived(skillCollections(inventory, agents, projects));
+  let collections = $derived(
+    skillCollections(inventory, agents, projects, archived),
+  );
   let collection = $derived(collections.find((item) => item.key === scope));
   let collectionText = $derived(skillCollectionText(collection));
   let isLibrary = $derived(LIBRARY_SCOPES.includes(scope));
+  let isArchive = $derived(scope === ARCHIVED_COLLECTION);
   let scopeAgent = $derived(
     collection?.section === 'agents'
       ? agents.find((agent) => agent.id === collection.id)
@@ -146,6 +160,9 @@
     isLibrary
       ? filterSkills(inventory, searchQuery, scope, statusFilter, agents)
       : [],
+  );
+  let filteredArchived = $derived(
+    isArchive ? filterArchivedSkills(archived, searchQuery, agents) : [],
   );
   let pageCount = $derived(
     Math.max(1, Math.ceil(filtered.length / SKILL_PAGE_SIZE)),
@@ -370,7 +387,8 @@
     selectedId = entry.id;
     if (inspected?.id !== entry.id) inspected = null;
     if (focus) {
-      contentTab = 'instructions';
+      contentTab = pendingContentTab ?? 'instructions';
+      pendingContentTab = null;
       const request = inspect(entry, false);
       await tick();
       skillPage?.focus();
@@ -385,6 +403,17 @@
     if (entry) showSkill(entry);
   }
 
+  function openHistory(entry) {
+    pendingContentTab = 'history';
+    showSkill(entry);
+  }
+
+  // The archived packages, searched for one name.
+  function openArchived(name) {
+    changeSearch(name);
+    navigation.navigate([ARCHIVED_COLLECTION]);
+  }
+
   async function loadInventory() {
     const version = ++inventoryVersion;
     loading = true;
@@ -393,6 +422,7 @@
       const result = await skillInventory();
       if (disposed || version !== inventoryVersion) return;
       inventory = Array.isArray(result?.skills) ? result.skills : [];
+      archived = Array.isArray(result?.archived) ? result.archived : [];
       agents = Array.isArray(result?.agents) ? result.agents : [];
       projects = Array.isArray(result?.projects) ? result.projects : [];
       staleShared = result?.stale_shared ?? [];
@@ -496,6 +526,8 @@
     copyName: (name) => void copyName(name),
     setDisabled: (entry, disabled) => actions.setDisabled(entry, disabled),
     remove: (entry) => actions.requestDelete(entry),
+    restore: (item) => void actions.restoreArchived(item),
+    purge: (item) => actions.requestPurge(item),
   };
 
   function packageOf(item) {
@@ -508,6 +540,10 @@
 
   function openLibraryMenu(entry, event) {
     openMenu(event, libraryRowMenu(entry, menuActions));
+  }
+
+  function openArchivedMenu(item, event) {
+    openMenu(event, archivedRowMenu(item, menuActions));
   }
 
   function openAgentMenu(item, event, toggle) {
@@ -598,6 +634,8 @@
         onEdit={actions.startEdit}
         onDelete={actions.requestDelete}
         onSetDisabled={actions.setDisabled}
+        onSetPinned={actions.setPinned}
+        onRevert={actions.requestRevert}
         onAgentAccess={actions.updateAgentAccess}
         onShare={actions.setSharing}
         onProjectSkills={actions.updateProjectSkills}
@@ -692,10 +730,10 @@
               type="search"
               value={searchQuery}
               onInput={changeSearch}
-              placeholder={isLibrary
+              placeholder={isLibrary || isArchive
                 ? t('skills.searchLibrary')
                 : t('skills.panel.filterPlaceholder')}
-              ariaLabel={isLibrary
+              ariaLabel={isLibrary || isArchive
                 ? t('skills.searchLibrary')
                 : t('skills.panel.filter')}
             />
@@ -738,8 +776,31 @@
                 changeStatus('all');
               }}
             />
+          {:else if isArchive}
+            <SkillArchiveList
+              items={filteredArchived}
+              {loading}
+              {loaded}
+              filtersActive={Boolean(searchQuery)}
+              emptyTitle={collectionText.empty}
+              emptyHelp={collectionText.emptyHelp}
+              {agents}
+              onMenu={openArchivedMenu}
+              onClearFilters={() => changeSearch('')}
+            />
           {:else if scopeAgent}
             <div class="skills-panel-scroll">
+              <LibrarianSection
+                agent={scopeAgent}
+                {inventory}
+                {archived}
+                busy={actions.busy}
+                onOpenHistory={openHistory}
+                onOpenArchived={openArchived}
+                onRevertPass={actions.requestRevertPass}
+                {onOpenSession}
+                {onToast}
+              />
               <AgentSkillsPanel
                 agent={scopeAgent}
                 access={skillAccessOf(scopeAgent)}

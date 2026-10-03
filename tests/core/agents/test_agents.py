@@ -10,12 +10,16 @@ from typing import Any
 import pytest
 
 from core.agents import (
+    LIBRARIAN_AGENT_ID,
     AgentAlreadyExistsError,
     AgentError,
     AgentNotFoundError,
     AgentOrderConflictError,
     AgentStore,
+    BuiltinAgentError,
     InvalidAgentIdError,
+    is_librarian,
+    validate_agent_file,
 )
 from core.sessions import SessionAddress
 from core.tools.availability import ToolAccess
@@ -53,6 +57,7 @@ def test_create_writes_agent_json_sessions_and_workspace(store: AgentStore) -> N
     assert "excluded_skills" not in data
     assert agent.excluded_skills == []
     assert data["custom_system_prompt_enabled"] is False
+    assert data["librarian_enabled"] is True
     assert isinstance(data["current_session_id"], str)
     assert data["current_session_id"]
     assert is_canonical_timestamp(data["created_at"])
@@ -184,6 +189,111 @@ def test_ensure_bootstrap_avoids_invalid_main_directory(store: AgentStore) -> No
     assert created is not None
     assert created.id == "main-2"
     assert [agent.id for agent in store.list()] == ["main-2"]
+
+
+def test_ensure_librarian_creates_the_builtin_agent_outside_the_roster(
+    store: AgentStore,
+) -> None:
+    store.ensure_bootstrap()
+
+    librarian = store.ensure_librarian()
+
+    assert librarian is not None and is_librarian(librarian)
+    assert (librarian.id, librarian.name, librarian.model) == ("librarian", "Librarian", "")
+    assert persisted(store, "librarian")["builtin"] == "librarian"
+    assert "builtin" not in persisted(store, "main")
+    assert [agent.id for agent in store.list()] == ["main"]
+    assert [agent.id for agent in store.list_with_builtins()] == ["main", "librarian"]
+    assert json.loads((store.data_dir / "agents" / "order.json").read_text())["agent_ids"] == [
+        "main"
+    ]
+    assert store.get_raw("librarian").current_session_id == librarian.current_session_id
+    # Later starts find it; offline edits never widen what it can do.
+    rewrite(
+        store,
+        "librarian",
+        tool_access={"mode": "all"},
+        memory_prompt_mode="agent_user",
+        custom_system_prompt_enabled=True,
+        librarian_enabled=True,
+        tools={"subagent": {"allowed_agents": ["*"]}},
+    )
+    again = store.ensure_librarian()
+    assert again is not None and again.created_at == librarian.created_at
+    assert again.tool_access == ToolAccess(
+        mode="selected", allowed=("skill", "skill_manage"), fixed=True
+    )
+    assert (
+        again.memory_prompt_mode,
+        again.custom_system_prompt_enabled,
+        again.librarian_enabled,
+        again.tools,
+    ) == ("off", False, False, {})
+    assert store.librarian_problem() is None
+
+
+@pytest.mark.parametrize("problem", ["agent_id_taken", "invalid_config"])
+def test_an_agent_holding_the_librarian_id_stays_and_the_librarian_is_unavailable(
+    store: AgentStore, problem: str
+) -> None:
+    # A user's Agent with the id from before vBot reserved it, or a broken config.
+    store.create("keeper", "Keeper")
+    (store.data_dir / "agents" / "keeper").rename(store.data_dir / "agents" / "librarian")
+    if problem == "agent_id_taken":
+        rewrite(store, "librarian", id="librarian")
+    else:
+        rewrite(store, "librarian", id="librarian", builtin="unknown")
+    before = agent_path(store, "librarian").read_bytes()
+
+    assert store.ensure_librarian() is None
+
+    assert store.librarian_problem() == problem
+    assert store.librarian() is None
+    assert agent_path(store, "librarian").read_bytes() == before
+    # vbot doctor config names the cause at the file.
+    report = validate_agent_file(agent_path(store, "librarian"))
+    assert [(item.severity, item.path) for item in report.diagnostics] == [
+        ("warning", "$.id") if problem == "agent_id_taken" else ("error", "$.builtin")
+    ]
+    assert [agent.id for agent in store.list_with_builtins()] == (
+        ["librarian"] if problem == "agent_id_taken" else []
+    )
+
+
+def test_the_librarian_keeps_its_id_and_existence_and_changes_only_model_settings(
+    store: AgentStore,
+) -> None:
+    store.ensure_bootstrap()
+    store.ensure_librarian()
+
+    updated = store.update(
+        LIBRARIAN_AGENT_ID,
+        model="openai/gpt-5",
+        fallback_models=["anthropic/claude"],
+        temperature=0.2,
+        top_p=0.9,
+        thinking_effort="high",
+    )
+
+    assert (updated.model, updated.fallback_models, updated.temperature, updated.top_p) == (
+        "openai/gpt-5",
+        ["anthropic/claude"],
+        0.2,
+        0.9,
+    )
+    for operation in (
+        lambda: store.update(LIBRARIAN_AGENT_ID, name="Curator"),
+        lambda: store.update(LIBRARIAN_AGENT_ID, tool_access={"mode": "all"}),
+        lambda: store.rename(LIBRARIAN_AGENT_ID, "curator"),
+        lambda: store.archive_files(LIBRARIAN_AGENT_ID, store.data_dir / "payload").__enter__(),
+    ):
+        with pytest.raises(BuiltinAgentError):
+            operation()
+    with pytest.raises(InvalidAgentIdError):
+        store.rename("main", "LIBRARIAN")
+    assert store.restore_target_problem("librarian") == "agent_id_taken"
+    assert store.get(LIBRARIAN_AGENT_ID).name == "Librarian"
+    assert not (store.data_dir / "payload").exists()
 
 
 def test_create_with_custom_values_persists_schema_and_keeps_workspace_files(
@@ -369,8 +479,9 @@ def test_create_rejects_duplicate_agent(store: AgentStore) -> None:
 
 @pytest.mark.parametrize(
     "agent_id",
-    # Names Windows reserves are refused on every platform, so data stays portable.
-    ["", "../escape", "with space", "slash/name", "con", "Aux", "lpt0"],
+    # Names Windows reserves are refused on every platform, so data stays portable;
+    # the built-in Librarian's id is reserved in any case.
+    ["", "../escape", "with space", "slash/name", "con", "Aux", "lpt0", "librarian", "Librarian"],
 )
 def test_create_rejects_unsafe_agent_id(store: AgentStore, agent_id: str) -> None:
     with pytest.raises(InvalidAgentIdError):

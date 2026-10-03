@@ -261,21 +261,26 @@ def _store_job_state(data_root: Path, job_id: str, state: dict[str, Any]) -> Non
     jobs_path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+# An Agent rename and a Skill merge move what a job names; it runs the same work.
 @pytest.mark.parametrize("state", _JOB_STATES)
-def test_retargeting_the_agent_keeps_status_arming_and_run_history(
-    tmp_path: Path, state: dict[str, Any]
+@pytest.mark.parametrize("change", ["agent", "skill"])
+def test_renaming_the_agent_or_a_skill_keeps_status_arming_and_run_history(
+    tmp_path: Path, state: dict[str, Any], change: str
 ) -> None:
     creator = make_service(StubTriggerService(), tmp_path, "creator")
-    created = creator.create_job(agent_id="main", prompt="Verify", mode="once")
+    created = creator.create_job(agent_id="main", prompt="Verify with $check", mode="once")
     _store_job_state(tmp_path, created.id, state)
     service = make_service(StubTriggerService(), tmp_path, "later")
     before = service.get_job(created.id)
     assert before == replace(created, **state)
 
-    retargeted = service.retarget_agent(created.id, "renamed")
-
-    assert retargeted == replace(before, agent_id="renamed")
-    assert make_service(StubTriggerService(), tmp_path, "reload").get_job(created.id) == retargeted
+    if change == "agent":
+        renamed = service.retarget_agent(created.id, "renamed")
+        assert renamed == replace(before, agent_id="renamed")
+    else:
+        renamed = service.rename_prompt_skill(created.id, "Verify with $verify")
+        assert renamed == replace(before, prompt="Verify with $verify")
+    assert make_service(StubTriggerService(), tmp_path, "reload").get_job(created.id) == renamed
 
 
 @pytest.mark.parametrize("state", _JOB_STATES)

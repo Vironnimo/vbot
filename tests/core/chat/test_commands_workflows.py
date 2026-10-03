@@ -26,27 +26,32 @@ from core.chat import (
     ReplySurface,
 )
 from core.projects import ResolutionAgentNotFoundError, format_agent_address
+from core.prompts.briefs import learn_brief, reflection_brief
 from core.runs import RunKind
 from core.sessions import SessionAddress
+from core.tools.availability import ToolAccess
 from tests.core.chat.commands_test_support import _execute
 
 pytestmark = pytest.mark.asyncio
 
 WEBUI = ReplySurface.webui()
 
-_FRAGMENTS = {
-    # The trailing newline must not leak into the handoff-writing prompt.
-    "handoff.md": "Write a handoff for the next agent.\n",
-    "learn.md": (
-        "Author a reusable skill via the `skill_manage` tool: create it, then write support files."
-    ),
-    "reflect.md": "Review this session and update your memory and skill library.",
-}
+# The trailing newline must not leak into the handoff-writing prompt.
+_HANDOFF_FRAGMENT = "Write a handoff for the next agent.\n"
+
+# Registered Tools, with the activation the Tools domain declares for them.
+_TOOLS = (
+    SimpleNamespace(name="memory", activation="memory_mode", constraints=("identity_agent",)),
+    SimpleNamespace(name="skill"),
+    SimpleNamespace(name="skill_manage", constraints=("identity_agent",)),
+)
 
 
 def _fragment_storage() -> SimpleNamespace:
-    """Prompt fragments the command briefs are read from."""
-    return SimpleNamespace(read_prompt_fragment=lambda name: _FRAGMENTS[name])
+    """Prompt fragments the command briefs are read from; brief fragments read as their names."""
+    return SimpleNamespace(
+        read_prompt_fragment=lambda name: _HANDOFF_FRAGMENT if name == "handoff.md" else f"[{name}]"
+    )
 
 
 class _AnsweredRun:
@@ -70,11 +75,23 @@ class _Trigger:
 
 
 class _Resolver:
-    """Resolves every Agent except ``ghost``, recording each resolve target."""
+    """Resolves every Agent except ``ghost``, recording each resolve target.
 
-    def __init__(self, *, workspace: str = "/home/agent", memory_prompt_mode: str = "agent_user"):
+    ``librarian`` resolves as the built-in Librarian.
+    """
+
+    def __init__(
+        self,
+        *,
+        workspace: str = "/home/agent",
+        memory_prompt_mode: str = "agent_user",
+        tool_access: ToolAccess | None = None,
+    ):
         self.agent = SimpleNamespace(
-            name="Builder", workspace=workspace, memory_prompt_mode=memory_prompt_mode
+            name="Builder",
+            workspace=workspace,
+            memory_prompt_mode=memory_prompt_mode,
+            tool_access=tool_access or ToolAccess(),
         )
         self.resolved: list[tuple[str | None, str]] = []
 
@@ -82,6 +99,8 @@ class _Resolver:
         self.resolved.append((project_id, agent_id))
         if agent_id == "ghost":
             raise ResolutionAgentNotFoundError(f"unknown agent: {agent_id}")
+        if agent_id == "librarian":
+            return SimpleNamespace(**{**vars(self.agent), "builtin": "librarian"})
         return self.agent
 
     async def resolve_agent_async(self, project_id: str | None, agent_id: str) -> SimpleNamespace:
@@ -233,6 +252,9 @@ async def test_handoff_starts_the_target_on_the_written_handoff_in_a_new_session
     ("message", "active", "answer", "started_runs", "reason"),
     [
         pytest.param("/handoff agent:ghost", False, None, 0, "ghost", id="unknown-target"),
+        pytest.param(
+            "/handoff agent:librarian", False, None, 0, "built-in Librarian", id="librarian"
+        ),
         pytest.param("/handoff agent:a@b@c", False, None, 0, "a@b@c", id="invalid-address"),
         pytest.param("/handoff", True, None, 0, "current run", id="run-active"),
         # The writer ran but produced no handoff text.
@@ -281,9 +303,7 @@ async def test_learn_starts_an_internal_skill_authoring_run(argument: str | None
     assert (run["agent_id"], run["session_id"], run["project_id"]) == ("builder", "s1", None)
     assert run["internal"] is True
     assert run["reply_surface"] == WEBUI
-    assert "skill_manage" in run["message"]
-    if argument is not None:
-        assert argument in run["message"]
+    assert run["message"] == learn_brief(_fragment_storage(), argument)
     # The feedback is the authoring Run's final answer.
     assert result.feedback is not None
     assert (result.feedback.kind, result.feedback.text) == ("notice", "Created the deploy skill.")
@@ -317,6 +337,7 @@ class _ReflectSessions:
         self.forks: list[dict[str, Any]] = []
         self.titles: list[tuple[str, str]] = []
         self.metadata_writes: list[tuple[str, dict[str, Any]]] = []
+        self.stored: dict[str, Any] = {}
 
     async def fork(
         self,
@@ -350,7 +371,7 @@ class _ReflectSessions:
         self.metadata_writes.append((address.session_id, data))
 
     def mutate_metadata(self, address: SessionAddress, mutation: Any) -> dict[str, Any]:
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] = dict(self.stored)
         mutation(metadata)
         self.metadata_writes.append((address.session_id, metadata))
         return metadata
@@ -364,12 +385,15 @@ class _Reflect:
         *,
         workspace: str = "/home/agent",
         memory_prompt_mode: str = "agent_user",
+        tool_access: ToolAccess | None = None,
         active: bool = False,
     ) -> None:
         self.sessions = _ReflectSessions()
         self.review_runs: list[dict[str, Any]] = []
         self.changes: list[CommandResourceChange] = []
-        resolver = _Resolver(workspace=workspace, memory_prompt_mode=memory_prompt_mode)
+        resolver = _Resolver(
+            workspace=workspace, memory_prompt_mode=memory_prompt_mode, tool_access=tool_access
+        )
 
         async def start_run(agent_id: str, content: Any, **kwargs: Any) -> _AnsweredRun:
             self.review_runs.append({"agent_id": agent_id, "message": content, **kwargs})
@@ -380,6 +404,7 @@ class _Reflect:
             chat_sessions=self.sessions,
             storage=_fragment_storage(),
             streaming_chat_loop=SimpleNamespace(start_run=start_run),
+            tools=SimpleNamespace(list_tools=lambda: list(_TOOLS)),
         )
         self.dispatcher = CommandDispatcher(
             _runs(active=active),
@@ -422,9 +447,7 @@ async def test_reflect_reviews_a_fork_with_a_restricted_run(focus: str | None) -
     assert run["tool_restriction"] == ("memory", "skill", "skill_manage")
     assert "tool_grants" not in run
     assert run["reply_surface"] == WEBUI
-    assert run["message"].strip()
-    if focus is not None:
-        assert focus in run["message"]
+    assert run["message"] == reflection_brief(_fragment_storage(), "combined", focus=focus)
     # A manual review covers both dimensions: the SOURCE Session's counters reset.
     assert reflect.sessions.metadata_writes == [
         (
@@ -449,10 +472,44 @@ async def test_reflect_reviews_a_fork_with_a_restricted_run(focus: str | None) -
     assert result.facts == {"session_id": "fork-1", "agent_id": "builder"}
 
 
+async def test_reflect_narrows_to_the_tools_the_agent_can_call() -> None:
+    reflect = _Reflect(memory_prompt_mode="off")
+    reflect.sessions.stored = {
+        REFLECTION_COUNTERS_META_KEY: {
+            "turns_since_memory_review": 7,
+            "iterations_since_skill_review": 12,
+        }
+    }
+
+    await reflect.run("/reflect")
+
+    [run] = reflect.review_runs
+    assert run["run_kind"] is RunKind.SKILL_REFLECTION
+    assert run["tool_restriction"] == ("skill", "skill_manage")
+    assert run["message"] == reflection_brief(_fragment_storage(), "skill")
+    # Only the reviewed dimension's counter resets.
+    assert reflect.sessions.metadata_writes == [
+        (
+            "s1",
+            {
+                REFLECTION_COUNTERS_META_KEY: {
+                    "turns_since_memory_review": 7,
+                    "iterations_since_skill_review": 0,
+                    COUNTER_GENERATION_KEY: 1,
+                }
+            },
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     "refusal",
-    [{"active": True}, {"workspace": ""}, {"memory_prompt_mode": "off"}],
-    ids=["run-active", "config-agent", "memory-inactive"],
+    [
+        {"active": True},
+        {"workspace": ""},
+        {"memory_prompt_mode": "off", "tool_access": ToolAccess(denied=("skill_manage",))},
+    ],
+    ids=["run-active", "config-agent", "no-learning-tools"],
 )
 async def test_reflect_is_refused_before_forking(refusal: dict[str, Any]) -> None:
     reflect = _Reflect(**refusal)

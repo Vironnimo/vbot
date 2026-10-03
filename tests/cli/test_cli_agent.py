@@ -21,6 +21,7 @@ def agent_payload(agent_id: str = "coder") -> dict[str, Any]:
         "thinking_effort": "high",
         "memory_prompt_mode": "agent_user",
         "custom_system_prompt_enabled": False,
+        "librarian_enabled": True,
         "tool_access": {"mode": "all"},
         "allowed_skills": ["debugging"],
         "excluded_skills": ["pdf"],
@@ -48,6 +49,7 @@ def test_agent_list_prints_one_row_per_agent(rpc: FakeRpc, run_cli: RunCli) -> N
 
 def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> None:
     rpc.reply("agent.get", agent_payload())
+    rpc.reply("agent.get", agent_payload("librarian") | {"builtin": "librarian"})
 
     code, out, _err = run_cli("agent", "show", "coder")
 
@@ -65,6 +67,7 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "thinking_effort: high",
         "memory_prompt_mode: agent_user",
         "custom_system_prompt_enabled: no",
+        "librarian_enabled: yes",
         'tool_access: {"mode":"all"}',
         "allowed_skills: debugging",
         "excluded_skills: pdf",
@@ -72,6 +75,16 @@ def test_agent_show_prints_every_agent_field(rpc: FakeRpc, run_cli: RunCli) -> N
         "context_window: 256000",
         "created_at: 2026-01-01T00:00:00+00:00",
         "updated_at: 2026-01-02T00:00:00+00:00",
+    ]
+
+    # The built-in Librarian says what it is and what can change.
+    code, out, _err = run_cli("agent", "show", "librarian")
+
+    assert out.splitlines()[1:4] == [
+        "id: librarian",
+        "name: Coder",
+        "builtin: librarian (curates the skills of your other agents; only model, "
+        "fallback_models, temperature, top_p and thinking_effort can change)",
     ]
 
 
@@ -209,12 +222,14 @@ def test_agent_create_confirms_the_saved_agent(
                 "--clear-fallback-models",
                 "--subagent-allow", "reviewer", "librarian",
                 "--compaction-policy", '{"enabled":false}',
+                "--librarian", "false",
             ),
             {
                 "model": "",
                 "fallback_models": [],
                 "tools": {"subagent": {"allowed_agents": ["reviewer", "librarian"]}},
                 "compaction_policy": {"enabled": False},
+                "librarian_enabled": False,
             },
             id="clears-delegation-and-policy",
         ),

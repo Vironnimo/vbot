@@ -230,6 +230,11 @@ _INTERNAL = {"internal": True, "reply_surface": None, "project_id": None}
             {**_INTERNAL, "contributes_to_agent_activity": False},
             id="no-agent-activity",
         ),
+        pytest.param(
+            {"internal": True, "max_tool_iterations": 60},
+            {**_INTERNAL, "max_tool_iterations": 60},
+            id="tool-iteration-limit",
+        ),
     ],
 )
 async def test_trigger_run_forwards_options_to_start_and_to_the_queue(

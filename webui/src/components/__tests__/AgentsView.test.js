@@ -217,7 +217,7 @@ describe('AgentsView', () => {
     flushSync();
     expect(document.querySelector('#agent-temperature').value).toBe('');
     expect(
-      document.querySelector('.agents-view__model-group').textContent,
+      document.querySelector('.agent-model-settings').textContent,
     ).toContain('0.73');
     expect(getAgentUpdateCalls()).toHaveLength(0);
   });
@@ -335,8 +335,8 @@ describe('AgentsView', () => {
   it.each([
     [
       'agent-thinking-effort',
-      'agents-view__model-group',
-      'agents-view__thinking-list',
+      'agent-model-settings',
+      'agent-model-settings__thinking-list',
     ],
     [
       'agent-memory-prompt-mode',

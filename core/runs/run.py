@@ -109,8 +109,33 @@ class RunKind(StrEnum):
     REFLECTION = "reflection"
     MEMORY_REFLECTION = "memory_reflection"
     SKILL_REFLECTION = "skill_reflection"
+    LIBRARIAN = "librarian"
     SUBAGENT = "subagent"
     SYSTEM = "system"
+
+
+# Run kinds that act for the Agent while no person is attending the Session:
+# background learning Runs (Reflection reviews and Librarian passes). Tool guards
+# and Statistics share this one definition, so a new background kind is added
+# here only.
+UNATTENDED_RUN_KINDS: frozenset[RunKind] = frozenset(
+    {
+        RunKind.REFLECTION,
+        RunKind.MEMORY_REFLECTION,
+        RunKind.SKILL_REFLECTION,
+        RunKind.LIBRARIAN,
+    }
+)
+
+
+def is_unattended_run_kind(kind: RunKind | str | None) -> bool:
+    """Return whether *kind* names an unattended (background learning) Run kind."""
+    if kind is None:
+        return False
+    try:
+        return RunKind(kind) in UNATTENDED_RUN_KINDS
+    except ValueError:
+        return False
 
 
 class RunError(VBotError):

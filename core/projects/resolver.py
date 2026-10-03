@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from core.projects._model_configuration import (
     ConnectionRestrictedModel,
@@ -100,10 +100,15 @@ _RESOLUTION_WORKERS = BoundedWorkerPool(name="agent-resolution", max_workers=4)
 
 # The Session metadata key holding a Session's Agent overrides.
 _AGENT_OVERRIDES_KEY = "agent_overrides"
+# A Librarian Session cannot run once the Agent whose Skills it maintains is gone.
+SKILL_SUBJECT_MISSING_MESSAGE = (
+    "This Session works on the Skills of Agent {agent_id}, which no longer exists, "
+    "so it cannot continue."
+)
 
 
 class SessionMetadataStore(Protocol):
-    """The Session metadata operations the resolver needs for Agent overrides."""
+    """The Session metadata operations the resolver needs for Agent overrides and bindings."""
 
     def metadata_value(self, address: SessionAddress, key: str) -> Any: ...
 
@@ -215,12 +220,14 @@ class AgentResolver:
         project's Team scan plus the resolved model. With ``session_id`` the
         result is the Agent as that Session runs it: the Session's Agent overrides
         replace the resolved values in an immutable runtime view, never in either
-        source configuration; a Session that does not exist yet has none. Raises
+        source configuration; a Session that does not exist yet has none. A Session
+        of the Librarian bound to an Agent (``SKILL_AGENT_ID_KEY``) also runs it on
+        that Agent's Skills (:meth:`_bind_skill_subject`). Raises
         :class:`ResolutionProjectNotFoundError` / :class:`ResolutionAgentNotFoundError`
         (both :class:`AgentResolutionError`) for an unknown project/agent, a plain
         :class:`AgentResolutionError` for a config agent whose model chain fell
-        through, and :class:`ModelConfigurationError` for a Session Model that
-        cannot run.
+        through or a Librarian Session whose Agent is gone, and
+        :class:`ModelConfigurationError` for a Session Model that cannot run.
         """
         if project_id is None:
             agent: RuntimeAgent = self._resolve_identity_agent(agent_id)
@@ -228,9 +235,12 @@ class AgentResolver:
             agent = self._resolve_config_agent(project_id, agent_id)
         if session_id is None:
             return agent
-        return self._apply_overrides(
-            agent, self.session_overrides(_session_address(project_id, agent_id, session_id))
-        )
+        address = _session_address(project_id, agent_id, session_id)
+        agent = self._apply_overrides(agent, self.session_overrides(address))
+        key = _skill_binding_key(agent) if project_id is None else None
+        if key is not None:
+            agent = self._bind_skill_subject(agent, self._session_value(address, key))
+        return agent
 
     def resolve_temporary_agent(
         self,
@@ -266,12 +276,9 @@ class AgentResolver:
         Session database's pool; their Model is checked on the
         ``agent-resolution`` pool.
         """
+        address = None if session_id is None else _session_address(project_id, agent_id, session_id)
         overrides = (
-            AgentOverrides()
-            if session_id is None
-            else await self.session_overrides_async(
-                _session_address(project_id, agent_id, session_id)
-            )
+            AgentOverrides() if address is None else await self.session_overrides_async(address)
         )
         if project_id is not None:
             agent: RuntimeAgent = await _RESOLUTION_WORKERS.run(
@@ -284,9 +291,14 @@ class AgentResolver:
                 agent = await self._agents.get_async(agent_id)
             except AgentError as error:
                 raise _identity_resolution_error(error) from error
-        if overrides.is_empty:
-            return agent
-        return await _RESOLUTION_WORKERS.run(self._apply_overrides, agent, overrides)
+        if not overrides.is_empty:
+            agent = await _RESOLUTION_WORKERS.run(self._apply_overrides, agent, overrides)
+        key = _skill_binding_key(agent) if project_id is None else None
+        if address is not None and key is not None:
+            subject_id = await self._session_value_async(address, key)
+            if subject_id is not None:
+                agent = await _RESOLUTION_WORKERS.run(self._bind_skill_subject, agent, subject_id)
+        return agent
 
     async def resolve_temporary_agent_async(
         self,
@@ -316,27 +328,55 @@ class AgentResolver:
 
     def session_overrides(self, address: SessionAddress) -> AgentOverrides:
         """Return the Agent overrides *address* stores (none for a missing Session)."""
-        if self._sessions is None:
-            return AgentOverrides()
-        from core.sessions import SessionNotFoundError
-
-        try:
-            stored = self._sessions.metadata_value(address, _AGENT_OVERRIDES_KEY)
-        except SessionNotFoundError:
-            return AgentOverrides()
-        return AgentOverrides.from_stored(stored)
+        return AgentOverrides.from_stored(self._session_value(address, _AGENT_OVERRIDES_KEY))
 
     async def session_overrides_async(self, address: SessionAddress) -> AgentOverrides:
         """Event-Loop-safe :meth:`session_overrides`."""
+        return AgentOverrides.from_stored(
+            await self._session_value_async(address, _AGENT_OVERRIDES_KEY)
+        )
+
+    def _session_value(self, address: SessionAddress, key: str) -> Any:
+        """Return one metadata value of *address*, ``None`` for a missing Session."""
         if self._sessions is None:
-            return AgentOverrides()
+            return None
         from core.sessions import SessionNotFoundError
 
         try:
-            stored = await self._sessions.metadata_value_async(address, _AGENT_OVERRIDES_KEY)
+            return self._sessions.metadata_value(address, key)
         except SessionNotFoundError:
-            return AgentOverrides()
-        return AgentOverrides.from_stored(stored)
+            return None
+
+    async def _session_value_async(self, address: SessionAddress, key: str) -> Any:
+        """Event-Loop-safe :meth:`_session_value`."""
+        if self._sessions is None:
+            return None
+        from core.sessions import SessionNotFoundError
+
+        try:
+            return await self._sessions.metadata_value_async(address, key)
+        except SessionNotFoundError:
+            return None
+
+    def _bind_skill_subject(self, agent: RuntimeAgent, subject_id: Any) -> RuntimeAgent:
+        """Return the Librarian as a bound Session runs it: on its subject Agent's Skills.
+
+        The runtime view names the subject (``skill_agent_id``) and takes its Skill
+        selection (``allowed_skills``), so the Skill catalog, triggers and the Skill
+        Tools of that Session resolve the subject's Skills; nothing else changes.
+        ``None`` (an unbound Session) keeps the Librarian's own Skills. A subject that
+        is not an Agent of the user any more refuses the Session.
+        """
+        if subject_id is None:
+            return agent
+        subject = self._agents.find(subject_id) if isinstance(subject_id, str) else None
+        if subject is None or subject.builtin is not None:
+            raise AgentResolutionError(SKILL_SUBJECT_MISSING_MESSAGE.format(agent_id=subject_id))
+        return replace(
+            cast("Agent", agent),
+            skill_agent_id=subject.id,
+            allowed_skills=list(subject.allowed_skills),
+        )
 
     def update_session_overrides(
         self, address: SessionAddress, changes: Mapping[str, Any]
@@ -439,7 +479,7 @@ class AgentResolver:
         if overrides.is_empty:
             return agent
 
-        changes = overrides.as_dict()
+        changes = overrides.agent_changes()
         if overrides.model is not None:
             self._model_checker.require_configured(overrides.model)
         if isinstance(agent, ConfigAgent):
@@ -537,8 +577,9 @@ class AgentResolver:
             effective = self._config_effective_config(project_id, agent_id)
         if session_id is not None:
             overrides = self.session_overrides(_session_address(project_id, agent_id, session_id))
-            for name, value in overrides.as_dict().items():
-                effective[name] = {"value": value, "source": "session"}
+            for name, value in overrides.agent_changes().items():
+                if name in effective:
+                    effective[name] = {"value": value, "source": "session"}
         return effective
 
     def effective_tools_for_member(self, project: Project, member: ScannedAgent) -> dict[str, Any]:
@@ -850,14 +891,15 @@ def resolve_prompt_project(
 
 
 def resolve_skill_scope(
-    project_id: str | None, prompt_project: Project | None, agent_id: str
+    project_id: str | None, prompt_project: Project | None, agent: RuntimeAgent
 ) -> tuple[str | None, str | None]:
     """Return ``(skill_project_id, identity_agent_id)`` for a run's skill pool.
 
     The one skill-scoping policy shared by the chat loop, the prompt-preview RPC,
     and ``$``-autocomplete, so no surface can drift from the pool a run actually
     activates against. ``prompt_project`` is the already-resolved rooting result
-    from :func:`resolve_prompt_project` (pure — no second store lookup here):
+    from :func:`resolve_prompt_project` (pure — no second store lookup here), and
+    ``agent`` the resolved runtime Agent:
 
     - ``skill_project_id`` — the effective skill project: the run's own project,
       or, for a **rooted identity** agent (``project_id is None`` but homed in a
@@ -865,12 +907,26 @@ def resolve_skill_scope(
     - ``identity_agent_id`` — the agent's private-skill layer applies to identity
       runs only: a project run executes a config agent whose project-local slug
       must never resolve a same-named identity agent's private home (private
-      skills bypass the project skill whitelist as always-allowed).
+      skills bypass the project skill whitelist as always-allowed). It names the
+      Agent whose Skills the run works on (``skill_subject_id``): the Agent
+      itself, or the subject of a Librarian Session.
     """
     if project_id is not None:
         return project_id, None
+    from core.agents import skill_subject_id
+
     rooted_project_id = prompt_project.project_id if prompt_project is not None else None
-    return rooted_project_id, agent_id
+    return rooted_project_id, skill_subject_id(agent)
+
+
+def _skill_binding_key(agent: RuntimeAgent) -> str | None:
+    """Return the Session metadata key binding *agent* to a Skill subject, if any.
+
+    Only Sessions of the Librarian have one.
+    """
+    from core.agents import SKILL_AGENT_ID_KEY, is_librarian
+
+    return SKILL_AGENT_ID_KEY if is_librarian(agent) else None
 
 
 def _project_root(project: Project) -> Path:

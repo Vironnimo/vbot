@@ -459,8 +459,8 @@ def _reject_secret_extension_path(
         return
     extension_name, field_name = values[2], values[3]
     raise SettingsPathError(
-        f"{rendered_path} is a secret; use 'vbot extensions {extension_name} "
-        f"set {field_name} --stdin'"
+        f"{rendered_path} is a secret; use 'vbot extensions set {extension_name} "
+        f"{field_name} --stdin'"
     )
 
 
@@ -583,7 +583,7 @@ def _available_recall_backends(runtime: Any) -> list[str]:
 
 
 def _validate_model_connections(models: Any, settings_update: JsonObject) -> None:
-    """Reject default-agent and summary models pinned to a forbidden connection."""
+    """Reject default-agent, summary and title models on a forbidden connection."""
     agent_defaults = settings_update.get("defaults", {}).get("agent", {})
     model_binding = agent_defaults.get("model")
     if isinstance(model_binding, str):
@@ -692,6 +692,7 @@ async def _settings_response(state: Any) -> JsonObject:
         },
         "archive": runtime.storage.load_archive_settings(),
         "reflection": dict(reflection),
+        "librarian": runtime.storage.load_librarian_settings(),
         "speech": speech,
         "model_tasks": model_tasks,
         "session_titles": session_titles,

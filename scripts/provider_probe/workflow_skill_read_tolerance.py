@@ -9,11 +9,13 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 from core.skills import SkillRegistry
-from core.skills.authoring import SkillAuthoringService
+from core.skills.authoring import SkillAuthoringService, SkillWriter
 from core.tools import ToolContext, ToolRegistry, tool_failure
 from core.tools.skill import register_skill_tool
 from scripts.provider_probe.choices import SKILL_CASES
 from scripts.provider_probe.scenario_agents import _skill_scenario
+
+_AGENT_WRITER = SkillWriter(actor="agent")
 
 
 def skill_read_cases() -> list[dict[str, Any]]:
@@ -55,9 +57,9 @@ async def skill_read_case(
             "---\nname: vbot-cli\ndescription: Fixture instructions.\n---\nRead fixture notes.\n"
         )
         authoring = SkillAuthoringService()
-        authoring.create(root, "vbot-cli", content, author="agent")
+        authoring.create(root, "vbot-cli", content, writer=_AGENT_WRITER)
         for path in ("references/commands.md", "scripts/run.py", "assets/template.txt"):
-            authoring.write_file(root, "vbot-cli", path, "fixture content")
+            authoring.write_file(root, "vbot-cli", path, "fixture content", writer=_AGENT_WRITER)
         registry = ToolRegistry()
         register_skill_tool(registry, lambda *_: SkillRegistry.load(root), lambda: None)
         raw = await adapter.send(

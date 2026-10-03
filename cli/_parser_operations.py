@@ -234,12 +234,12 @@ def _add_statistics_window_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--since",
         metavar="<iso-datetime>",
-        help="Only count activity at or after this ISO 8601 timestamp (server-validated)",
+        help="Count activity at or after this ISO 8601 time, rounded down to a full hour",
     )
     parser.add_argument(
         "--until",
         metavar="<iso-datetime>",
-        help="Only count activity at or before this ISO 8601 timestamp (server-validated)",
+        help="Count activity before this ISO 8601 time, rounded up to a full hour",
     )
 
 

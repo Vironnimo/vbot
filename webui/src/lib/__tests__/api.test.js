@@ -138,6 +138,8 @@ describe('RPC wrappers', () => {
   const statisticsWindow = {
     since: '2026-06-01T00:00:00Z',
     until: '2026-06-07T12:00:00Z',
+    timezone: 'Europe/Berlin',
+    sections: ['tools', 'skills'],
   };
   const subAgentWork = {
     id: 'sub-work-one',
@@ -207,6 +209,16 @@ describe('RPC wrappers', () => {
       'subagent.inspect',
       (o) => api.inspectSubAgentWork(subAgentWork, o),
       subAgentWork,
+    ],
+    [
+      'learning.changes',
+      (o) => api.loadLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
+    ],
+    [
+      'learning.undo',
+      (o) => api.undoLearningChanges('coder', 'run-review', o),
+      { agent_id: 'coder', run_id: 'run-review' },
     ],
     [
       'agent.rename',
@@ -575,6 +587,38 @@ describe('RPC wrappers', () => {
       { source: 'https://example.test/demo.skill', scope: 'global' },
     ],
     [
+      'skill.set_pinned',
+      (o) => api.setSkillPinned('agent:main', 'deploy', true, o),
+      { scope: 'agent:main', name: 'deploy', pinned: true },
+    ],
+    [
+      'skill.history',
+      (o) => api.skillHistory('global', 'deploy', 50, o),
+      { scope: 'global', name: 'deploy', limit: 50 },
+    ],
+    [
+      'skill.revert',
+      (o) => api.revertSkillRevisions('global', [7, 9], o),
+      { scope: 'global', revisions: [7, 9] },
+    ],
+    [
+      'librarian.status',
+      (o) => api.librarianStatus('main', o),
+      { agent_id: 'main' },
+    ],
+    ['librarian.overview', (o) => api.librarianOverview(o), {}],
+    ['librarian.run', (o) => api.runLibrarian('main', o), { agent_id: 'main' }],
+    [
+      'skill.restore',
+      (o) => api.restoreSkill('global', 'deploy_01', o),
+      { scope: 'global', archive_id: 'deploy_01' },
+    ],
+    [
+      'skill.purge',
+      (o) => api.purgeSkill('global', 'deploy_01', o),
+      { scope: 'global', archive_id: 'deploy_01' },
+    ],
+    [
       'task_model.local_setup_status',
       (o) => api.getLocalSetupStatus('local/granite-embedding-r2', o),
       { target: 'local/granite-embedding-r2' },
@@ -635,6 +679,21 @@ describe('RPC wrappers', () => {
       'skill.share',
     ],
     [
+      'a non-boolean Skill pinned flag',
+      () => api.setSkillPinned('global', 'review', 'yes'),
+      'skill.set_pinned',
+    ],
+    [
+      'a Skill history without a positive limit',
+      () => api.skillHistory('global', 'review', 0),
+      'skill.history',
+    ],
+    [
+      'a Skill revert naming a non-positive revision',
+      () => api.revertSkillRevisions('global', [3, 0]),
+      'skill.revert',
+    ],
+    [
       'an unknown Memory scope',
       () => api.addAgentMemory('coder', 'other', 'Fact'),
       'memory.add',
@@ -643,6 +702,11 @@ describe('RPC wrappers', () => {
       'a non-positive Memory entry id',
       () => api.removeAgentMemory('coder', 'agent', 0),
       'memory.remove',
+    ],
+    [
+      'an undo without a Run id',
+      () => api.undoLearningChanges('coder', ''),
+      'learning.undo',
     ],
     [
       'a Project without cwd',

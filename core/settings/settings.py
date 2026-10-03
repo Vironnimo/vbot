@@ -107,6 +107,7 @@ SETTINGS_UPDATE_SECTIONS = frozenset(
         "web_fetch",
         "extensions",
         "reflection",
+        "librarian",
         "local_models",
         "session_titles",
         "speech",
@@ -129,6 +130,12 @@ OPENROUTER_PROVIDER_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*(?:/[a-z0-9
 OPENROUTER_PROVIDER_SLUG_MAX_LENGTH = 128
 OPENROUTER_MODEL_ID_MAX_LENGTH = 256
 REFLECTION_INTERVAL_FIELDS = ("memory_turn_interval", "skill_model_step_interval")
+# The Librarian section: switches, and day counts from 1 to 3650 (ten years,
+# like archive retention), which keeps every date computed from them valid.
+LIBRARIAN_BOOLEAN_FIELDS = ("enabled", "consolidate")
+LIBRARIAN_DAY_FIELDS = ("interval_days", "archive_after_days")
+MAX_LIBRARIAN_DAYS = 3650
+LIBRARIAN_DAYS_RULE = f"must be an integer from 1 to {MAX_LIBRARIAN_DAYS}"
 SUBAGENT_SETTING_FIELDS = (
     "max_subagent_depth",
     "max_subagents_per_turn",
@@ -253,6 +260,9 @@ def parse_settings_update(params: Mapping[str, Any]) -> JsonObject:
 
     if "reflection" in params:
         parsed_update["reflection"] = _parse_reflection_update(params["reflection"])
+
+    if "librarian" in params:
+        parsed_update["librarian"] = _parse_librarian_update(params["librarian"])
 
     if "local_models" in params:
         parsed_update["local_models"] = _parse_local_models_update(params["local_models"])
@@ -610,6 +620,37 @@ def _parse_reflection_update(reflection: Any) -> JsonObject:
     for field in REFLECTION_INTERVAL_FIELDS:
         if field in reflection:
             parsed[field] = _positive_integer(reflection[field], f"params.reflection.{field}")
+    return parsed
+
+
+def _parse_librarian_update(librarian: Any) -> JsonObject:
+    """Parse the Librarian section (partial update, like reflection)."""
+    if not isinstance(librarian, dict):
+        raise SettingsValidationError("params.librarian must be an object")
+
+    supported_fields = {*LIBRARIAN_BOOLEAN_FIELDS, *LIBRARIAN_DAY_FIELDS}
+    unsupported_fields = sorted(set(librarian) - supported_fields)
+    if unsupported_fields:
+        raise SettingsValidationError(
+            f"unsupported librarian settings: {', '.join(unsupported_fields)}"
+        )
+
+    parsed: JsonObject = {}
+    for field in LIBRARIAN_BOOLEAN_FIELDS:
+        if field in librarian:
+            if not isinstance(librarian[field], bool):
+                raise SettingsValidationError(f"params.librarian.{field} must be a boolean")
+            parsed[field] = librarian[field]
+    for field in LIBRARIAN_DAY_FIELDS:
+        if field in librarian:
+            days = librarian[field]
+            if (
+                isinstance(days, bool)
+                or not isinstance(days, int)
+                or not 1 <= days <= MAX_LIBRARIAN_DAYS
+            ):
+                raise SettingsValidationError(f"params.librarian.{field} {LIBRARIAN_DAYS_RULE}")
+            parsed[field] = days
     return parsed
 
 

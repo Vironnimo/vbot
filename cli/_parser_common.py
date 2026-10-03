@@ -119,6 +119,7 @@ AREA_HELP = {
     "task-model": "Inspect and manage specialized task-model bindings",
     "skill": "Inspect and manage skills, including the disable/share policy",
     "memory": "Inspect and manage one agent's pinned memory entries and their history",
+    "librarian": "Inspect and start Librarian passes that curate your agents' own skills",
     "extensions": "Inspect and toggle loaded extensions",
     "cron": "Inspect and manage scheduled cron jobs",
     "bootstrap": "Inspect and manage startup-triggered Agent Runs",
@@ -293,12 +294,12 @@ BOOTSTRAP_HELP = {
 
 
 STATISTICS_HELP = {
-    "overview": "Show the overview section: agents, sessions, runs, and message totals",
-    "usage": "Show the usage section: token totals and per-provider/model breakdowns",
-    "runs": "Show the runs section: counts, status rates, and durations",
+    "overview": "Show cost, tokens, cache, Run outcomes, leaders, and insights",
+    "usage": "Show cost and tokens by Model, Provider, Agent, Project, origin, and kind",
+    "runs": "Show Run outcomes, duration and cost percentiles, and notable Runs",
     "compactions": "Show checkpoint counts, reclaimed context, Strategies, and top Sessions",
-    "errors": "Show the errors section: totals and breakdowns by kind, provider, and agent",
-    "tools": "Show the tools section: call counts and per-tool success rates",
+    "errors": "Show Run errors and failed Model requests by kind, Provider, Model, and Agent",
+    "tools": "Show Tool calls, rejections, latency, and rejection codes",
     "skills": "Show Skill offers, activations, and evidence-backed offer conversion",
 }
 
@@ -356,13 +357,28 @@ SKILL_HELP = {
     "read": "Read editable skills in a global or private agent scope",
     "create": "Create a skill in a global or private agent scope",
     "update": "Replace a skill's SKILL.md in an editable scope",
-    "delete": "Delete a skill from an editable scope",
+    "delete": "Delete a skill from an editable scope into its archive",
     "write-file": "Write one supporting file inside an editable skill",
     "remove-file": "Remove one supporting file from an editable skill",
     "disable": "Disable one skill everywhere (master switch)",
     "enable": "Re-enable a disabled skill",
     "share": "Share one agent's private skill with other agents",
     "unshare": "Stop sharing one agent's private skill",
+    "history": "List recorded changes of an editable scope's skills, newest first",
+    "revert": "Take back the changes of one or more skill revisions",
+    "archived": "List the deleted skills kept in an editable scope's archive",
+    "restore": "Restore an archived skill under its name",
+    "purge": "Permanently delete one archived skill",
+    "pin": "Pin a skill so reflection and Librarian passes leave it unchanged",
+    "unpin": "Unpin a skill so reflection and Librarian passes may change it again",
+}
+
+
+LIBRARIAN_HELP = {
+    "status": (
+        "Show the Librarian's recent passes, or one agent's passes, skill changes and next pass"
+    ),
+    "run": "Start a Librarian pass of an agent now, regardless of the interval",
 }
 
 

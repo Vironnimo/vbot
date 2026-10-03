@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from typing import Any, cast
 
+import anyio
 import pytest
 
 from core.extensions.extensions import ExtensionAPI, ExtensionDeclarations
@@ -139,11 +142,13 @@ def allowed_tools(registry: ToolRegistry, host: ExtensionHost) -> tuple[str, ...
 
 
 def runner_for(
-    host: ExtensionHost, server: Any, monkeypatch: pytest.MonkeyPatch
+    host: ExtensionHost, server: Any, monkeypatch: pytest.MonkeyPatch, **config: Any
 ) -> ConnectionRunner:
-    """A connection runner whose transport is the in-memory *server*."""
+    """A connection runner whose transport is the in-memory *server*; *config* adds fields."""
     runner = ConnectionRunner(
-        validate_connection({"id": "example", "transport": "stdio", "command": sys.executable}),
+        validate_connection(
+            {"id": "example", "transport": "stdio", "command": sys.executable, **config}
+        ),
         host,
         InputRequests(),
         lambda *args: None,
@@ -154,3 +159,49 @@ def runner_for(
 
     monkeypatch.setattr(runner, "_transport", transport)
     return runner
+
+
+class StreamServer:
+    """An in-memory *server* reached over message streams, like a stdio subprocess.
+
+    Each connection runs a fresh server session; ``kill`` ends the current one the
+    way a crashed server process does, so the client sees its stream end.
+    """
+
+    def __init__(self, server: Any) -> None:
+        self._server = getattr(server, "_lowlevel_server", server)
+        self._to_client: Any = None
+        self._session: Any = None
+        self.connections = 0
+
+    @asynccontextmanager
+    async def _open(self) -> AsyncIterator[tuple[Any, Any]]:
+        to_client, client_read = anyio.create_memory_object_stream[Any](0)
+        client_write, from_client = anyio.create_memory_object_stream[Any](0)
+        self._to_client = to_client
+        self.connections += 1
+
+        async def serve() -> None:
+            async with to_client, from_client:
+                await self._server.run(
+                    from_client, to_client, self._server.create_initialization_options()
+                )
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(serve)
+            try:
+                yield client_read, client_write
+            finally:
+                await client_write.aclose()
+                group.cancel_scope.cancel()
+
+    async def __aenter__(self) -> tuple[Any, Any]:
+        self._session = self._open()
+        return cast(tuple[Any, Any], await self._session.__aenter__())
+
+    async def __aexit__(self, *exc: Any) -> bool | None:
+        return cast(bool | None, await self._session.__aexit__(*exc))
+
+    async def kill(self) -> None:
+        """End the current server session: the client's read stream ends."""
+        await self._to_client.aclose()

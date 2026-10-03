@@ -311,6 +311,7 @@
 .limit-intervals,
 .limit-activity {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-md);
   min-width: 0;
   padding: var(--space-md);
@@ -382,6 +383,7 @@
 
 .limit-runs {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-sm);
   margin: 0;
   padding: 0;
@@ -390,6 +392,7 @@
 
 .limit-runs li {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-sm);
   padding: var(--space-md);
   border: 1px solid var(--border);
@@ -397,17 +400,22 @@
   background: var(--bg);
 }
 
+/* The Agent and Session title shorten; the status badge keeps its width. */
 .limit-run__head > div,
-.limit-run__head span {
+.limit-run__head > div > span {
   min-width: 0;
 }
 
+.limit-run__head > .badge {
+  flex-shrink: 0;
+}
+
 .limit-run__head strong,
-.limit-run__head span {
+.limit-run__head > div > span {
   display: block;
 }
 
-.limit-run__head span {
+.limit-run__head > div > span {
   margin-top: 2px;
   overflow: hidden;
   color: var(--text-med);
@@ -445,9 +453,30 @@
   white-space: nowrap;
 }
 
+.limit-runs__toggle {
+  justify-self: start;
+}
+
+/* The rare, destructive action closes the section quietly. */
+.limit-history__footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-sm);
+  border-top: 1px solid var(--border);
+}
+
+.limit-history__delete:not(:disabled) {
+  color: var(--text-lo);
+}
+
+.limit-history__delete:not(:disabled):hover,
+.limit-history__delete:not(:disabled):focus-visible {
+  color: var(--red);
+}
+
 @media (max-width: 960px) {
   .limit-history__analysis {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -457,6 +486,10 @@
   .limit-history__section-head {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .limit-history__section-head > .badge {
+    align-self: flex-start;
   }
 
   .limit-history__range {
@@ -481,6 +514,6 @@
   }
 
   .limit-history__traces {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }

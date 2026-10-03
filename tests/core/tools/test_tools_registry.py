@@ -350,7 +350,10 @@ def test_raising_readiness_predicate_counts_as_not_ready_and_warns(
     assert any("readiness predicate raised" in record.getMessage() for record in caplog.records)
 
 
-def test_dispatch_of_not_ready_tool_returns_envelope_without_running_handler() -> None:
+@pytest.mark.parametrize("retryable", [False, True])
+def test_dispatch_of_not_ready_tool_returns_envelope_without_running_handler(
+    retryable: bool,
+) -> None:
     registry = ToolRegistry()
     called: list[bool] = []
 
@@ -364,13 +367,17 @@ def test_dispatch_of_not_ready_tool_returns_envelope_without_running_handler() -
         parameters={"type": "object"},
         handler=handler,
         ready=lambda: False,
+        readiness_hint="test-owned-hint",
+        readiness_retryable=retryable,
     )
 
     result = asyncio.run(registry.dispatch(make_context("gated"), {}))
 
     assert result["ok"] is False
     assert result["error"]["code"] == "tool_not_ready"
-    assert result["error"]["retryable"] is False
+    assert result["error"]["message"] == "test-owned-hint"
+    # Transient only when the Tool says a retry can succeed.
+    assert result["error"]["retryable"] is retryable
     assert called == []
 
 

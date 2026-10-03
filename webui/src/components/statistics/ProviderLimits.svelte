@@ -8,12 +8,12 @@
   import { t, activeLocaleTag } from '$lib/i18n.js';
   import { tooltip } from '$lib/tooltip.js';
   import { formatMoment } from '$lib/timeText.js';
+  import { formatInteger } from '$lib/statisticsView.js';
   import {
     clampUsagePercent,
-    formatInteger,
     formatResetAt,
     usageSeverity,
-  } from '$lib/statisticsView.js';
+  } from '$lib/statisticsLimits.js';
 
   let { active = false } = $props();
   const USAGE_REFRESH_INTERVAL_MS = 10_000;

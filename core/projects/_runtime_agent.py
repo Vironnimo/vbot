@@ -106,7 +106,8 @@ class AgentOverrides:
 
     ``None`` keeps the Agent's resolved value. A Session stores these values as
     one object in its metadata (``agent_overrides``); :meth:`from_stored` reads
-    it, ignoring fields a newer vBot may have added.
+    it, ignoring fields it does not know: those a newer vBot may have added and
+    ``model_defaults``, which an earlier vBot set on Librarian pass Sessions.
     """
 
     model: str | None = None
@@ -149,12 +150,16 @@ class AgentOverrides:
         return all(getattr(self, name) is None for name in AGENT_OVERRIDE_FIELDS)
 
     def as_dict(self) -> dict[str, Any]:
-        """Return only the replaced settings, keyed by field name."""
+        """Return only the replaced settings as stored, keyed by field name."""
         return {
             name: getattr(self, name)
             for name in AGENT_OVERRIDE_FIELDS
             if getattr(self, name) is not None
         }
+
+    def agent_changes(self) -> dict[str, Any]:
+        """Return the runtime Agent fields these overrides replace, keyed by field name."""
+        return self.as_dict()
 
 
 @dataclass(frozen=True)

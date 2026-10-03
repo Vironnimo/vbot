@@ -41,6 +41,10 @@ def test_shared_context_is_one_verifying_context() -> None:
     assert tls.shared_ssl_context() is context
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.check_hostname is True
+    # The operating system's trusted CAs count as well as the certifi bundle.
+    system = ssl.create_default_context()
+    trusted = context.get_ca_certs(binary_form=True)
+    assert all(ca in trusted for ca in system.get_ca_certs(binary_form=True))
 
 
 def test_concurrent_first_use_builds_the_context_once(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -102,14 +106,18 @@ def test_prewarm_builds_and_imports_off_the_calling_thread_once(
 
 
 def test_every_server_httpx_client_uses_an_explicit_tls_context() -> None:
-    """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client."""
+    """A bare httpx client re-parses the CA bundle, blocking the Event Loop per client.
+
+    ``httpx2`` (the MCP SDK's client) would instead verify through the system trust
+    store, unlike every other outbound client.
+    """
     missing: list[str] = []
-    for relative, tree in _server_modules("httpx."):
+    for relative, tree in _server_modules("httpx"):
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
                 continue
             target = node.func.value
-            if not (isinstance(target, ast.Name) and target.id == "httpx"):
+            if not (isinstance(target, ast.Name) and target.id in {"httpx", "httpx2"}):
                 continue
             if node.func.attr not in _HTTPX_CONSTRUCTORS:
                 continue

@@ -277,6 +277,28 @@ class TestMutations:
         # An owner without shared Skills is dropped.
         assert service.load().shared == {"two": {"deploy": frozenset({"main"})}}
 
+    def test_merged_skill_moves_its_shares_to_the_skill_that_absorbed_it(
+        self, storage: StorageManager
+    ) -> None:
+        service = SkillPolicyService(storage)
+        service.set_shared("main", "deploy-web", shared=True, receivers=["two", "three"])
+        service.set_shared("main", "deploy", shared=True, receivers=["two"])
+        service.set_shared("two", "deploy-web", shared=True, receivers=["main"])
+
+        moved = service.move_shared("main", "deploy-web", "deploy")
+
+        # The absorbing Skill reaches every receiver of either Skill; another
+        # owner's Skill of the same name keeps its shares.
+        assert moved == service.load()
+        assert service.load().shared == {
+            "main": {"deploy": frozenset({"two", "three"})},
+            "two": {"deploy-web": frozenset({"main"})},
+        }
+        # A Skill without shares moves nothing and writes nothing.
+        before = policy_path(storage).read_bytes()
+        assert service.move_shared("main", "notes", "deploy") is None
+        assert policy_path(storage).read_bytes() == before
+
     def test_write_failure_raises_skill_policy_error(
         self, storage: StorageManager, monkeypatch: pytest.MonkeyPatch
     ) -> None:

@@ -1,4 +1,4 @@
-"""Failed, rejected and blocked Tool Calls in the chat loop, and no-Tool finalization."""
+"""Failed, rejected and blocked Tool Calls in the chat loop, and Tool finalization."""
 
 from __future__ import annotations
 
@@ -38,6 +38,14 @@ _VALUE_SCHEMA = {
     "additionalProperties": False,
 }
 _VALID = {"value": "valid"}
+
+
+def _assert_requests_keep_pinned_tools(requests: list[JsonObject]) -> None:
+    """Finalization keeps the cached prefix: same Tool definitions, no tool choice."""
+    first_tools = requests[0]["kwargs"]["tools"]
+    assert first_tools
+    assert all(request["kwargs"]["tools"] == first_tools for request in requests)
+    assert all("tool_choice" not in request["kwargs"] for request in requests)
 
 
 def _counting_tool(
@@ -263,7 +271,7 @@ async def test_malformed_tool_calls_container_becomes_rejected_call(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_iteration_limit_finalizes_without_tools_and_rejects_further_calls(
+async def test_iteration_limit_finalizes_with_pinned_tools_and_rejects_further_calls(
     tmp_path: Path,
 ) -> None:
     invocations: list[JsonObject] = []
@@ -286,7 +294,7 @@ async def test_iteration_limit_finalizes_without_tools_and_rejects_further_calls
     assert invocations == []
     requests = runtime.adapter.requests
     assert len(requests) == 3
-    assert all(request["kwargs"]["tools"] == [] for request in requests[1:])
+    _assert_requests_keep_pinned_tools(requests)
     assert persisted_roles(messages) == [
         "user",
         "assistant",
@@ -304,7 +312,7 @@ async def test_iteration_limit_finalizes_without_tools_and_rejects_further_calls
 
 
 @pytest.mark.asyncio
-async def test_repeated_no_tool_finalization_violations_complete_without_unbounded_loop(
+async def test_repeated_tool_finalization_violations_complete_without_unbounded_loop(
     tmp_path: Path,
 ) -> None:
     runtime = tool_runtime(
@@ -325,7 +333,7 @@ async def test_repeated_no_tool_finalization_violations_complete_without_unbound
     assert result.tool_calls[0].id == "call_violation_2"
     requests = runtime.adapter.requests
     assert len(requests) == 3
-    assert all(request["kwargs"]["tools"] == [] for request in requests[1:])
+    _assert_requests_keep_pinned_tools(requests)
     assert [result["error"]["code"] for result in tool_results(history(runtime))][1:] == [
         TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
         TOOL_FINALIZATION_DISABLED_FAILURE_CODE,
@@ -334,7 +342,7 @@ async def test_repeated_no_tool_finalization_violations_complete_without_unbound
 
 
 @pytest.mark.asyncio
-async def test_identical_failed_tool_call_finalizes_without_tools_after_the_limit(
+async def test_identical_failed_tool_call_finalizes_with_pinned_tools_after_the_limit(
     tmp_path: Path,
 ) -> None:
     invocations: list[JsonObject] = []
@@ -354,7 +362,7 @@ async def test_identical_failed_tool_call_finalizes_without_tools_after_the_limi
     assert result.content == "The Tool remains blocked; I cannot complete it."
     assert len(invocations) == MAX_IDENTICAL_FAILED_TOOL_CALLS
     assert len(runtime.adapter.requests) == MAX_IDENTICAL_FAILED_TOOL_CALLS + 1
-    assert runtime.adapter.requests[-1]["kwargs"]["tools"] == []
+    _assert_requests_keep_pinned_tools(runtime.adapter.requests)
     assert persisted_roles(history(runtime)) == [
         "user",
         *(["assistant", "tool"] * MAX_IDENTICAL_FAILED_TOOL_CALLS),
@@ -385,6 +393,36 @@ async def test_tool_iteration_limit_is_scoped_to_current_run(tmp_path: Path) -> 
     assert (first.content, second.content) == ("First run done", "Second run done")
     run_roles = ["user", "assistant", "tool", "assistant", "tool", "assistant"]
     assert persisted_roles(history(runtime)) == run_roles * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("loop_limit", "run_limit"),
+    [(1000, 1), (1, 5)],
+    ids=["narrows-the-loop-limit", "never-raises-the-loop-limit"],
+)
+async def test_run_tool_iteration_limit_narrows_the_loop_limit(
+    tmp_path: Path, loop_limit: int, run_limit: int
+) -> None:
+    invocations: list[JsonObject] = []
+    runtime = tool_runtime(
+        tmp_path,
+        _counting_tool(invocations),
+        [tool_turn(("call_1", "probe")), tool_turn(("call_2", "probe")), final("Done")],
+    )
+    runtime.chat_sessions.create("coder", session_id="session-one")
+    loop = build_chat_loop(runtime, max_tool_iterations=loop_limit)
+
+    run = await loop.start_run(
+        "coder", "Probe twice", session_id="session-one", max_tool_iterations=run_limit
+    )
+    await run.wait()
+
+    # One dispatched iteration; the second call gets the ordinary limit failure.
+    assert len(invocations) == 1
+    rejected = tool_results(history(runtime))[1]["error"]
+    assert rejected["code"] == TOOL_ITERATION_LIMIT_FAILURE_CODE
+    assert rejected["message"].startswith("The Run reached its limit of 1 dispatched")
 
 
 def _tool_message(call: ToolCall, result: JsonObject) -> ChatMessage:

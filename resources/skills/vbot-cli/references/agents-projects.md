@@ -14,7 +14,7 @@ vbot agent reorder <agent-id>...
 vbot agent delete <agent-id> [--permanent --yes]
 ```
 
-Use command help for the full argument syntax. Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--excluded-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
+Use command help for the full argument syntax. Shared create/update flags: `--model`, `--fallback-models <model> (repeat for each fallback)`, `--temperature <0..2>`, `--clear-temperature`, `--clear-thinking-effort`, `--thinking-effort none|minimal|low|medium|high|xhigh|max`, `--memory-prompt-mode off|agent|agent_user`, `--custom-system-prompt true|false`, `--librarian true|false`, `--tool-access-mode all|selected|none`, `--tool-allow <tool> ...`, `--tool-deny <tool> ...`, `--allowed-skills <skill> ...`, `--excluded-skills <skill> ...`, `--subagent-allow <agent> ...`, `--compaction-policy <json-object>`. Update-only: `--name`, `--clear-model`, `--clear-fallback-models`, `--clear-compaction-policy`, `--current-session-id`, `--workspace <absolute-path>`, `--default-workspace`, `--copy-workspace-files`, `--project <project-id>`, `--clear-project`.
 
 On update, omitted fields remain unchanged. A setter and its matching `--clear-*` flag cannot be combined.
 
@@ -30,6 +30,7 @@ Gotchas:
 - `--clear-model` and `--clear-fallback-models` remove the Agent tier so the corresponding global default can apply.
 - `--clear-temperature`/`--clear-thinking-effort` drop the override so the agent inherits current defaults. `--thinking-effort none` is the literal no-reasoning value, not a clear.
 - `--memory-prompt-mode` controls which Workspace memory files become prompt-visible; `--custom-system-prompt` toggles the agent's own editable prompt fragments.
+- `--librarian false` stops Librarian passes over the agent's own Skills, both scheduled ones and `vbot librarian run`; `true` (the default) allows them again. `librarian.enabled` still switches scheduled passes off for every agent.
 - `--project` roots the Identity Agent in a registered Project: relative file and shell work uses the Project cwd, while Workspace, SOUL, Memory, Sessions, private Skills, and permissions remain the Agent's own. Use this when the user says an Agent should work in, point at, or use a Project; do not move its Workspace to the repo for that outcome.
 - `--workspace` relocates only the Identity Agent's SOUL/Memory home. Use it only when the user explicitly wants those identity files stored at another path. `--copy-workspace-files` copies `SOUL.md`, `USER.md`, and `MEMORY.md` to the destination; without it, the Agent points at the destination and seeds a missing `SOUL.md`. `--default-workspace` moves it back to its data-dir home. Neither flag selects a Project.
 - `--clear-project` removes the Project selection without changing Workspace or Memory.
@@ -39,7 +40,7 @@ Gotchas:
 ```bash
 vbot agent create coder Coder --model openai/gpt-5.2 --tool-access-mode all --allowed-skills '*'
 vbot agent update coder --temperature 0.4 --thinking-effort high
-vbot agent update librarian --project second-brain
+vbot agent update researcher --project second-brain
 vbot agent rename coder researcher
 ```
 

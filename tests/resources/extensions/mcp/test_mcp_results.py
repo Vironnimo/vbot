@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from dataclasses import replace
 
+import mcp.types as types
 import pytest
+from mcp.server import Server
 
 from core.attachments import AttachmentTooLargeError
 from core.tools.availability import ToolAccess
+from resources.extensions.mcp.client import ConnectionRunner
 from resources.extensions.mcp.content import (
     READ_TOO_LARGE,
     RESULT_DENIED,
@@ -25,6 +29,7 @@ from tests.resources.extensions.mcp.mcp_test_support import (
     dispatch,
     model_text,
     payloads,
+    start_service,
     tool_target,
 )
 
@@ -34,7 +39,7 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     store = ContentStore(host)
     payload = {
         "content": [{"type": "text", "text": "test-owned-text-ä" * 2000}],
-        "_meta": {"keep": True},
+        "_meta": {"keep": True, "io.modelcontextprotocol/serverInfo": {"name": "test"}},
     }
     receipt, _ = await store.present(payload, context(host), "example")
     restored = ContentStore(host)
@@ -58,6 +63,8 @@ async def test_large_result_is_kept_with_the_tool_result_and_readable_in_chunks(
     # The view shows the text start and names the read that continues it; it holds no
     # file path: read is the only way to the saved payload.
     assert set(receipt) == {"result_id", "_meta", "note", "content"}
+    # Keys MCP reserves in _meta are protocol metadata; the server's own key stays.
+    assert receipt["_meta"] == {"keep": True}
     assert receipt["content"] == text[:RESULT_TEXT_CHARACTERS]
     assert json.dumps(continuation, separators=(",", ":")) in receipt["note"]
     assert f"first {RESULT_TEXT_CHARACTERS} of {len(text)} characters" in receipt["note"]
@@ -250,6 +257,68 @@ async def test_tool_error_reads_as_the_servers_own_report(context_service, host,
         "the problem is temporary."
     )
     assert payloads(host).rows == {}
+
+
+@pytest.mark.asyncio
+async def test_a_result_that_fails_its_output_schema_reads_as_the_servers_problem(
+    host, monkeypatch
+):
+    async def call(server_context, params):
+        count = "many" if params.arguments.get("broken") else 1
+        return types.CallToolResult(
+            content=[types.TextContent(type="text", text="test-owned-count")],
+            structured_content={"count": count},
+        )
+
+    async def list_tools(server_context, params):
+        return types.ListToolsResult(
+            tools=[
+                types.Tool(
+                    name="count",
+                    input_schema={"type": "object", "properties": {"broken": {"type": "boolean"}}},
+                    output_schema={
+                        "type": "object",
+                        "properties": {"count": {"type": "integer"}},
+                        "required": ["count"],
+                    },
+                )
+            ]
+        )
+
+    server = Server("schemas", on_call_tool=call, on_list_tools=list_tools)
+
+    async def in_memory(runner, stack):
+        return server
+
+    monkeypatch.setattr(ConnectionRunner, "_transport", in_memory)
+    service, registry = await start_service(host)
+    try:
+        await service.manage(
+            "save", {"connection": {"id": "example", "transport": "stdio", "command": "unused"}}
+        )
+        async with asyncio.timeout(10):
+            target = await tool_target(registry, host)
+            client = service.runners["example"].client
+            broken = await dispatch(
+                registry,
+                host,
+                {"action": "call", "target": target, "arguments": {"broken": True}},
+            )
+            valid = await dispatch(registry, host, {"action": "call", "target": target})
+        assert model_text(broken) == (
+            "Error (mcp_invalid_result): The MCP tool count ran, but its result does not match "
+            "the output schema the tool declares: Invalid structured content returned by tool "
+            "count: 'many' is not of type 'integer'. The result as received:\n"
+            'structuredContent: {"count":"many"}\ntest-owned-count\n\n'
+            "The call ran, so repeating it runs it again. Check the received result before you "
+            "rely on it, and tell the user that the MCP server example returned a result that "
+            "does not match its own schema."
+        )
+        # The connection stays up.
+        assert valid["ok"]
+        assert service.runners["example"].client is client
+    finally:
+        await service.close()
 
 
 @pytest.mark.asyncio

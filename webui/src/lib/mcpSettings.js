@@ -1,7 +1,6 @@
 import { extensionOperation } from './api.js';
-import { t } from './i18n.js';
+import { t, tOr } from './i18n.js';
 
-export const MCP_REFRESH_MS = 3000;
 const DEFAULT_TIMEOUT_SECONDS = 120;
 export const MCP_DESCRIPTION_MAX_LENGTH = 200;
 const clone = (value) => JSON.parse(JSON.stringify(value));
@@ -10,6 +9,15 @@ const mappings = [
   'credential_environment',
   'credential_headers',
 ];
+// Settings of a pre-registered OAuth client; they exist only with OAuth.
+const oauthClientFields = [
+  'oauth_redirect_uri',
+  'oauth_client_id',
+  'oauth_client_secret',
+  'oauth_scopes',
+];
+export const MCP_SAMPLING_POLICIES = ['off', 'ask', 'allow'];
+export const MCP_ROOTS_POLICIES = ['off', 'workspace'];
 
 export function mcpDraft(configuration = null) {
   const source = configuration ?? {
@@ -26,6 +34,11 @@ export function mcpDraft(configuration = null) {
     url: source.url ?? '',
     oauth: source.oauth ?? false,
     oauth_redirect_uri: source.oauth_redirect_uri ?? '',
+    oauth_client_id: source.oauth_client_id ?? '',
+    oauth_client_secret: source.oauth_client_secret ?? '',
+    oauth_scopes: (source.oauth_scopes ?? []).join(' '),
+    sampling: source.sampling ?? 'off',
+    roots: source.roots ?? 'off',
     timeout: String(source.timeout ?? DEFAULT_TIMEOUT_SECONDS),
     ...Object.fromEntries(
       mappings.map((field) => [
@@ -54,18 +67,24 @@ export function mcpConfiguration(draft) {
     }
     record[field] = Object.fromEntries(entries);
   }
+  record.oauth_client_id = (draft.oauth_client_id ?? '').trim();
+  record.oauth_client_secret = (draft.oauth_client_secret ?? '').trim();
+  record.oauth_scopes = [
+    ...new Set((draft.oauth_scopes ?? '').split(/\s+/).filter(Boolean)),
+  ];
   if (record.transport === 'stdio') {
     delete record.url;
     delete record.oauth;
-    delete record.oauth_redirect_uri;
   } else {
     delete record.command;
     delete record.args;
     delete record.cwd;
-    if (!record.oauth) delete record.oauth_redirect_uri;
   }
+  if (!record.oauth)
+    for (const field of oauthClientFields) delete record[field];
   if (!record.cwd) delete record.cwd;
-  if (!record.oauth_redirect_uri) delete record.oauth_redirect_uri;
+  for (const field of oauthClientFields)
+    if (!record[field]?.length) delete record[field];
   return record;
 }
 
@@ -74,12 +93,98 @@ export function mcpCredentialNames(configuration) {
     ...new Set([
       ...Object.values(configuration.credential_environment ?? {}),
       ...Object.values(configuration.credential_headers ?? {}),
+      ...(configuration.oauth_client_secret
+        ? [configuration.oauth_client_secret]
+        : []),
     ]),
   ];
 }
 
-// This controller owns RPC reconciliation and polling. Drafts stay in the modal,
-// so a status refresh can never replace a half-written connection or secret.
+// The resources of the changes the MCP Extension publishes: what `list`
+// reports for a connection, and a management job that finished
+// (`CONNECTIONS_RESOURCE` and `JOBS_RESOURCE` in
+// `resources/extensions/mcp/_management.py`).
+const LIVE_RESOURCES = new Set(['connections', 'jobs']);
+
+// A connection that references credentials without a value needs setup
+// before it can connect. Its row shows the same status and "Waiting for"
+// line as an Extension waiting for its settings; `null` when nothing is
+// missing.
+export function mcpSetupNeeded(connection) {
+  const missing = connection?.missing_credentials ?? [];
+  if (!missing.length) return null;
+  return {
+    hint: t('settings.extensions.waiting'),
+    waitingFor: t('settings.extensions.waitingFor', {
+      fields: missing.join(', '),
+    }),
+  };
+}
+
+// The advice for a failed connection's diagnosed `problem` (`status`
+// reports its `code` and details); a code this WebUI does not know shows
+// the Extension's own English advice.
+export function mcpProblemText(problem) {
+  if (!problem) return '';
+  if (problem.code === 'command_not_found' && problem.requirement)
+    return t('mcp.problemInstall', {
+      command: problem.command,
+      requirement: problem.requirement,
+    });
+  return tOr(`mcp.problem.${problem.code}`, problem.message ?? '', {
+    command: problem.command,
+    directory: problem.directory,
+    credential: problem.credential,
+    host: problem.host,
+    status: problem.status,
+    seconds: problem.seconds,
+  });
+}
+
+// What importing the chosen servers of an import preview takes: the server
+// names and their connection ids for the `import` operation, then the
+// credential values the user typed for missing credentials, and the
+// connections those values complete, which are enabled after saving.
+// `values` holds the typed values by `mcpCredentialSlot`.
+export function mcpImportPlan(servers, chosen, values = {}) {
+  const plan = { servers: [], ids: {}, credentials: [], enable: [] };
+  for (const server of servers) {
+    if (!chosen.has(server.name) || server.error || server.conflict) continue;
+    plan.servers.push(server.name);
+    plan.ids[server.name] = server.id;
+    const missing = server.credentials.filter(
+      (credential) => credential.state === 'missing',
+    );
+    const typed = missing.filter(
+      (credential) => values[mcpCredentialSlot(server, credential)],
+    );
+    for (const credential of typed)
+      plan.credentials.push({
+        id: server.id,
+        key: credential.name,
+        value: values[mcpCredentialSlot(server, credential)],
+      });
+    if (
+      missing.length &&
+      typed.length === missing.length &&
+      !server.unresolved &&
+      !server.disabled
+    )
+      plan.enable.push(server.id);
+  }
+  return plan;
+}
+
+// The key of a typed credential value: its server's name and its target.
+export function mcpCredentialSlot(server, credential) {
+  return `${server.name}\n${credential.target}`;
+}
+
+// This controller owns RPC reconciliation. The MCP Extension publishes a
+// change whenever a connection's state or a job changes, so the panel reads
+// `list` again only then (`handleInvalidation`), never on a timer. Drafts
+// stay in the modal, so a status refresh can never replace a half-written
+// connection or secret.
 export function createMcpSettings({
   onChange,
   operation = extensionOperation,
@@ -94,57 +199,76 @@ export function createMcpSettings({
     inspector: null,
   };
   let disposed = false;
-  let timer;
   let generation = 0;
   let inspectionGeneration = 0;
+  // Whether the shown error is a failed read, which the next read replaces;
+  // an action's error stays until the next action.
+  let readFailed = false;
+  // One read runs at a time; changes arriving meanwhile read once more after it.
+  let reading = null;
+  let readQueued = false;
   const publish = (patch) => {
     state = { ...state, ...patch };
     if (!disposed) onChange(state);
   };
   const invoke = (name, args = {}) => operation('mcp', name, args);
-  const schedule = () => {
-    clearTimeout(timer);
-    if (!disposed) timer = setTimeout(() => void refresh(), MCP_REFRESH_MS);
-  };
   async function refresh() {
     const request = ++generation;
+    const current = () => !disposed && request === generation;
     try {
       if (state.job) {
         const result = await invoke('job', { job_id: state.job.job_id });
-        if (disposed || request !== generation) return;
-        if (result.state !== 'running') {
-          publish({ job: null });
-          if (result.state === 'failed')
-            throw new Error(
-              result.error ??
-                result.result?.error?.message ??
-                t('mcp.testFailed'),
-            );
-          publish({
-            notice:
-              result.state === 'cancelled'
-                ? t('mcp.testCancelled')
-                : t('mcp.testPassed', {
-                    checks: (result.result?.verified ?? []).join(', '),
-                  }),
-          });
-        }
+        if (!current()) return;
+        if (result.state !== 'running')
+          publish({ job: null, ...outcome(result) });
       }
       const result = await invoke('list');
-      if (!disposed && request === generation)
-        publish({ connections: result.connections, loading: false, error: '' });
+      if (!current()) return;
+      publish({
+        connections: result.connections,
+        loading: false,
+        ...(readFailed ? { error: '' } : {}),
+      });
+      readFailed = false;
     } catch (error) {
-      if (!disposed && request === generation)
-        publish({ error: error.message, loading: false });
-      // A failure stays visible until the user retries; no silent retry loop.
-      return;
+      if (!current()) return;
+      // A failure stays visible until the user retries or a change arrives.
+      readFailed = true;
+      publish({ error: error.message, loading: false });
     }
-    if (!disposed && request === generation) schedule();
+  }
+  function outcome(job) {
+    if (job.state === 'failed')
+      return {
+        error: job.error ?? job.result?.error?.message ?? t('mcp.testFailed'),
+      };
+    return {
+      notice:
+        job.state === 'cancelled'
+          ? t('mcp.testCancelled')
+          : t('mcp.testPassed', {
+              checks: (job.result?.verified ?? []).join(', '),
+            }),
+    };
+  }
+  function refreshSoon() {
+    readQueued = true;
+    reading ??= (async () => {
+      try {
+        while (readQueued && !disposed) {
+          readQueued = false;
+          await refresh();
+        }
+      } finally {
+        reading = null;
+      }
+    })();
+    return reading;
   }
   async function act(work) {
     if (state.busy || disposed) return false;
-    clearTimeout(timer);
     ++generation;
+    readFailed = false;
     publish({ busy: true, error: '', notice: '' });
     try {
       await work();
@@ -160,6 +284,16 @@ export function createMcpSettings({
   }
   return {
     refresh,
+    // An App Extension invalidation (`{owner, change}`): a change of the MCP
+    // connections or jobs, or one without an owner (reconnect or Extension
+    // reload), reads the connections again.
+    handleInvalidation({ owner, change }) {
+      if (
+        owner == null ||
+        (owner === 'mcp' && (!change || LIVE_RESOURCES.has(change.resource)))
+      )
+        void refreshSoon();
+    },
     async inspect(id, { query = '', offset = 0 } = {}) {
       const request = ++inspectionGeneration;
       publish({
@@ -231,11 +365,38 @@ export function createMcpSettings({
         });
       });
     },
+    // The servers `source` (setup text from another client, a command line
+    // or a URL) would import; saves nothing. `ids` replaces proposed
+    // connection ids by server name.
+    previewImport(source, ids = null) {
+      return invoke('import', ids ? { source, ids } : { source });
+    },
+    // Saves the planned servers of `source` (see `mcpImportPlan`), stores the
+    // typed credentials and enables the connections they complete. `saved`
+    // tells whether the connections exist even when a later step failed.
+    async importServers(source, plan) {
+      let saved = false;
+      const ok = await act(async () => {
+        await invoke('import', {
+          source,
+          apply: true,
+          servers: plan.servers,
+          ids: plan.ids,
+        });
+        saved = true;
+        for (const credential of plan.credentials)
+          await invoke('credential', credential);
+        for (const id of plan.enable) await invoke('enable', { id });
+        publish({
+          notice: t('mcp.imported', { count: plan.servers.length }),
+        });
+      });
+      return { ok, saved };
+    },
     dispose() {
       disposed = true;
       ++generation;
       ++inspectionGeneration;
-      clearTimeout(timer);
     },
   };
 }

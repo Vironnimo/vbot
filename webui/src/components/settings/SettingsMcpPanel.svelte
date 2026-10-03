@@ -13,16 +13,24 @@
   import StatusChip from '../ui/StatusChip.svelte';
   import TextField from '../ui/TextField.svelte';
   import Toggle from '../ui/Toggle.svelte';
+  import McpConnectionDiagnostics from './McpConnectionDiagnostics.svelte';
+  import McpImportDialog from './McpImportDialog.svelte';
+  import McpQuickFill from './McpQuickFill.svelte';
   import { t } from '$lib/i18n.js';
   import {
     createMcpSettings,
     MCP_DESCRIPTION_MAX_LENGTH,
     mcpDraft,
     mcpCredentialNames,
+    mcpProblemText,
+    mcpSetupNeeded,
   } from '$lib/mcpSettings.js';
   import { tooltip } from '$lib/tooltip.js';
 
   const componentId = $props.id();
+  // The App's Extension invalidations; the connections refresh on their
+  // changes instead of on a timer.
+  let { subscribeInvalidations = null } = $props();
   let state = $state({
     connections: [],
     loading: true,
@@ -39,6 +47,9 @@
   let secretKey = $state('');
   let secretValue = $state('');
   let capabilityQuery = $state('');
+  // The import dialog's starting text while it is open, otherwise null.
+  let importSource = $state(null);
+  let fillNotes = $state([]);
   // Each connection is one collapsed row; its endpoint, catalog counts and
   // actions open in its details. The details stay in the DOM so settings
   // search still matches them.
@@ -49,10 +60,26 @@
     },
   });
   let blocked = $derived(state.busy || Boolean(state.job));
+  let dialogOpen = $derived(
+    Boolean(draft || secretConnection) || importSource !== null,
+  );
   let transportOptions = $derived([
     { value: 'stdio', label: t('mcp.local') },
     { value: 'http', label: t('mcp.http') },
-    { value: 'sse', label: t('mcp.sse') },
+    {
+      value: 'sse',
+      label: t('mcp.sse'),
+      secondaryLabel: t('mcp.sseDeprecated'),
+    },
+  ]);
+  let samplingOptions = $derived([
+    { value: 'off', label: t('mcp.samplingOff') },
+    { value: 'ask', label: t('mcp.samplingAsk') },
+    { value: 'allow', label: t('mcp.samplingAllow') },
+  ]);
+  let rootsOptions = $derived([
+    { value: 'off', label: t('mcp.rootsOff') },
+    { value: 'workspace', label: t('mcp.rootsWorkspace') },
   ]);
   let mappingFields = $derived([
     {
@@ -75,6 +102,7 @@
   onMount(() => {
     void controller.refresh();
   });
+  $effect(() => subscribeInvalidations?.(controller.handleInvalidation));
   onDestroy(() => controller.dispose());
 
   function edit(connection = null) {
@@ -82,6 +110,43 @@
       ? JSON.parse(JSON.stringify(connection.configuration))
       : null;
     draft = mcpDraft(original);
+    fillNotes = [];
+  }
+  // Fills the new connection from a command line or URL; setup text with
+  // several servers or a secret to store goes to the import dialog.
+  async function quickFill(text) {
+    const { servers } = await controller.previewImport(text);
+    const [server] = servers;
+    if (
+      servers.length !== 1 ||
+      server.error ||
+      server.credentials.some((credential) => credential.state === 'provided')
+    ) {
+      draft = null;
+      importSource = text;
+      return;
+    }
+    // What the user already typed into the form stays.
+    draft = {
+      ...mcpDraft({ ...server.connection, enabled: server.enabled }),
+      id: String(draft.id ?? '').trim() || server.id,
+      description: draft.description || server.connection.description || '',
+    };
+    fillNotes = [
+      ...server.warnings.map((warning) => warning.message),
+      ...server.credentials
+        .filter((credential) => credential.state === 'missing')
+        .map((credential) =>
+          t('mcp.quickFillCredential', {
+            name: credential.name,
+            target: credential.target,
+          }),
+        ),
+    ];
+  }
+  function imported(ids) {
+    importSource = null;
+    for (const id of ids) expanded.add(id);
   }
   function set(field, value) {
     draft = { ...draft, [field]: value };
@@ -169,13 +234,22 @@
       <h4 class="s-subhead__title">{t('mcp.title')}</h4>
       <InfoHint text={t('mcp.help')} ariaLabel={t('mcp.helpAria')} />
     </div>
-    <Button
-      variant="secondary"
-      disabled={blocked || state.loading}
-      onClick={() => edit()}>{t('mcp.add')}</Button
-    >
+    <div class="mcp-subhead__actions">
+      <Button
+        variant="tertiary"
+        disabled={blocked || state.loading}
+        onClick={() => {
+          importSource = '';
+        }}>{t('mcp.import')}</Button
+      >
+      <Button
+        variant="secondary"
+        disabled={blocked || state.loading}
+        onClick={() => edit()}>{t('mcp.add')}</Button
+      >
+    </div>
   </div>
-  {#if state.error && !draft && !secretConnection}
+  {#if state.error && !dialogOpen}
     <Banner variant="error" role="alert">
       {state.error}
       <Button
@@ -185,9 +259,8 @@
       >
     </Banner>
   {/if}
-  {#if state.notice && !draft && !secretConnection}<Banner
-      variant="success"
-      role="status">{state.notice}</Banner
+  {#if state.notice && !dialogOpen}<Banner variant="success" role="status"
+      >{state.notice}</Banner
     >{/if}
   {#if state.job}
     <Banner variant="warn" role="status">
@@ -210,7 +283,12 @@
   {:else}
     <div class="s-group mcp-connections">
       {#each state.connections as connection, index (connection.id)}
-        {@const appearance = status(connection)}
+        <!-- Missing credentials need the user first, whether or not the
+             connection is enabled; the waiting line names them. -->
+        {@const setup = mcpSetupNeeded(connection)}
+        {@const appearance = setup
+          ? { label: setup.hint, variant: 'warn' }
+          : status(connection)}
         {@const open = expanded.has(connection.id)}
         {@const description = connection.configuration.description ?? ''}
         <article class="mcp-connection s-entity" aria-label={connection.id}>
@@ -232,9 +310,14 @@
                   {description}
                 </div>
               {/if}
-              {#if connection.error}
+              {#if connection.error && !(setup && connection.problem?.code === 'credential_missing')}
                 <div class="s-row-desc mcp-connection__error">
-                  {connection.error}
+                  {mcpProblemText(connection.problem) || connection.error}
+                </div>
+              {/if}
+              {#if setup}
+                <div class="s-row-desc mcp-connection__waiting">
+                  {setup.waitingFor}
                 </div>
               {/if}
             </div>
@@ -284,6 +367,16 @@
                   ? connection.configuration.command
                   : connection.configuration.url}
               </p>
+              {#if connection.oauth}
+                <p>
+                  {connection.oauth.signed_in
+                    ? t('mcp.signedIn')
+                    : t('mcp.signedOut')}
+                </p>
+                <p class="mcp-redirect">
+                  {t('mcp.redirectUri', { uri: connection.oauth.redirect_uri })}
+                </p>
+              {/if}
               {#if connection.counts}
                 <p class="mcp-catalog-counts">
                   {t('mcp.catalogCounts', {
@@ -295,6 +388,7 @@
                   })}
                 </p>
               {/if}
+              <McpConnectionDiagnostics {connection} />
             </div>
             <div class="mcp-actions">
               <Button
@@ -315,12 +409,28 @@
                 onClick={() => controller.test(connection.id)}
                 >{t('mcp.test')}</Button
               >
+              <Button
+                variant="tertiary"
+                disabled={blocked || !connection.configuration.enabled}
+                tooltip={t('mcp.reconnectHelp')}
+                onClick={() => controller.mutate('reconnect', connection.id)}
+                >{t('mcp.reconnect')}</Button
+              >
               {#if mcpCredentialNames(connection.configuration).length}
                 <Button
                   variant="tertiary"
                   disabled={blocked}
                   onClick={() => openCredentials(connection)}
                   >{t('mcp.credentials')}</Button
+                >
+              {/if}
+              {#if connection.configuration.oauth}
+                <Button
+                  variant="tertiary"
+                  disabled={blocked}
+                  onClick={() =>
+                    controller.mutate('reauthorize', connection.id)}
+                  >{t('mcp.reauthorize')}</Button
                 >
               {/if}
               <Button
@@ -504,6 +614,12 @@
         {#if state.error}<Banner variant="error" role="alert"
             >{state.error}</Banner
           >{/if}
+        {#if !original}
+          <McpQuickFill disabled={state.busy} onFill={quickFill} />
+        {/if}
+        {#each fillNotes as note, noteIndex (noteIndex)}
+          <Banner variant="warn">{note}</Banner>
+        {/each}
         <div class="mcp-grid">
           <FormField
             controlId={`${componentId}-name`}
@@ -527,6 +643,7 @@
           >
             {#snippet children(field)}<Dropdown
                 id={field.controlId}
+                ariaLabelledby={field.labelId}
                 value={draft.transport}
                 options={transportOptions}
                 disabled={state.busy}
@@ -535,6 +652,9 @@
               />{/snippet}
           </FormField>
         </div>
+        {#if draft.transport === 'sse'}
+          <Banner variant="warn">{t('mcp.sseHint')}</Banner>
+        {/if}
         <FormField
           controlId={`${componentId}-description`}
           label={t('mcp.description')}
@@ -668,6 +788,36 @@
                   />{/snippet}
               </FormField>
             </div>
+            <FormField
+              controlId={`${componentId}-sampling`}
+              label={t('mcp.sampling')}
+              help={t('mcp.samplingHelp')}
+            >
+              {#snippet children(field)}<Dropdown
+                  id={field.controlId}
+                  ariaLabelledby={field.labelId}
+                  value={draft.sampling}
+                  options={samplingOptions}
+                  disabled={state.busy}
+                  ariaLabel={t('mcp.sampling')}
+                  onValueChange={(value) => set('sampling', value)}
+                />{/snippet}
+            </FormField>
+            <FormField
+              controlId={`${componentId}-roots`}
+              label={t('mcp.roots')}
+              help={t('mcp.rootsHelp')}
+            >
+              {#snippet children(field)}<Dropdown
+                  id={field.controlId}
+                  ariaLabelledby={field.labelId}
+                  value={draft.roots}
+                  options={rootsOptions}
+                  disabled={state.busy}
+                  ariaLabel={t('mcp.roots')}
+                  onValueChange={(value) => set('roots', value)}
+                />{/snippet}
+            </FormField>
             {#if draft.transport === 'stdio'}
               <FormField
                 controlId={`${componentId}-cwd`}
@@ -684,13 +834,57 @@
               <FormField
                 controlId={`${componentId}-redirect`}
                 label={t('mcp.redirect')}
+                help={t('mcp.redirectHelp')}
               >
                 {#snippet children(field)}<TextField
                     id={field.controlId}
+                    aria-describedby={field.describedBy}
                     type="url"
                     value={draft.oauth_redirect_uri}
                     disabled={state.busy}
                     onInput={(value) => set('oauth_redirect_uri', value)}
+                  />{/snippet}
+              </FormField>
+              <FormField
+                controlId={`${componentId}-client-id`}
+                label={t('mcp.oauthClientId')}
+                help={t('mcp.oauthClientIdHelp')}
+              >
+                {#snippet children(field)}<TextField
+                    id={field.controlId}
+                    aria-describedby={field.describedBy}
+                    value={draft.oauth_client_id}
+                    disabled={state.busy}
+                    onInput={(value) => set('oauth_client_id', value)}
+                  />{/snippet}
+              </FormField>
+              {#if draft.oauth_client_id.trim()}
+                <FormField
+                  controlId={`${componentId}-client-secret`}
+                  label={t('mcp.oauthClientSecret')}
+                  help={t('mcp.oauthClientSecretHelp')}
+                >
+                  {#snippet children(field)}<TextField
+                      id={field.controlId}
+                      aria-describedby={field.describedBy}
+                      value={draft.oauth_client_secret}
+                      disabled={state.busy}
+                      pattern="[A-Za-z_][A-Za-z0-9_]*"
+                      onInput={(value) => set('oauth_client_secret', value)}
+                    />{/snippet}
+                </FormField>
+              {/if}
+              <FormField
+                controlId={`${componentId}-scopes`}
+                label={t('mcp.oauthScopes')}
+                help={t('mcp.oauthScopesHelp')}
+              >
+                {#snippet children(field)}<TextField
+                    id={field.controlId}
+                    aria-describedby={field.describedBy}
+                    value={draft.oauth_scopes}
+                    disabled={state.busy}
+                    onInput={(value) => set('oauth_scopes', value)}
                   />{/snippet}
               </FormField>
             {/if}
@@ -812,6 +1006,7 @@
         >
           {#snippet children(field)}<Dropdown
               id={field.controlId}
+              ariaLabelledby={field.labelId}
               value={secretKey}
               options={mcpCredentialNames(secretConnection.configuration)}
               disabled={state.busy}
@@ -860,6 +1055,18 @@
       >
     {/snippet}
   </Modal>
+{/if}
+{#if importSource !== null}
+  <McpImportDialog
+    {controller}
+    busy={state.busy}
+    error={state.error}
+    initialSource={importSource}
+    onClose={() => {
+      importSource = null;
+    }}
+    onImported={imported}
+  />
 {/if}
 {#if removal}
   <ConfirmDialog

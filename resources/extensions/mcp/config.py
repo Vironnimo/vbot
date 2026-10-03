@@ -36,9 +36,18 @@ from core.json_documents import (
     write_json_document,
 )
 
+from ._network import is_loopback_host
+
 CONNECTION_ID_PATTERN = r"^[a-z][a-z0-9_]{0,31}$"
 ENVIRONMENT_KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]*$"
 DEFAULT_TIMEOUT_SECONDS = 120
+# RFC 6749 section 3.3 scope tokens.
+OAUTH_SCOPE_PATTERN = r"^[!#-\[\]-~]+$"
+# Whether the server may ask for a Model completion: never, after the user approves, or always.
+SAMPLING_POLICIES = ("off", "ask", "allow")
+# Whether the server may list the invoking Agent's work directory as its root.
+ROOTS_POLICIES = ("off", "workspace")
+_OAUTH_CLIENT_FIELDS = ("oauth_client_id", "oauth_client_secret", "oauth_scopes")
 MAX_TIMEOUT_SECONDS = 86400
 # The user's one-line description of a connection, shown in its Tool description.
 MAX_DESCRIPTION_CHARACTERS = 200
@@ -59,6 +68,16 @@ CONNECTION_SCHEMA: dict[str, Any] = {
         "timeout": {"type": "number", "exclusiveMinimum": 0, "maximum": MAX_TIMEOUT_SECONDS},
         "oauth": {"type": "boolean"},
         "oauth_redirect_uri": {"type": "string"},
+        "oauth_client_id": {"type": "string", "minLength": 1},
+        # The name of the credential holding the client secret, never the secret.
+        "oauth_client_secret": {"type": "string"},
+        "oauth_scopes": {
+            "type": "array",
+            "items": {"type": "string", "pattern": OAUTH_SCOPE_PATTERN},
+            "uniqueItems": True,
+        },
+        "sampling": {"enum": list(SAMPLING_POLICIES)},
+        "roots": {"enum": list(ROOTS_POLICIES)},
     },
     "required": ["id", "transport"],
     "additionalProperties": False,
@@ -93,8 +112,21 @@ def validate_connection(value: Any) -> dict[str, Any]:
             raise ValueError("HTTP MCP connections require an http or https URL")
         if parsed.username or parsed.password or parsed.fragment:
             raise ValueError("MCP URL must not contain credentials or fragments")
+        if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+            raise ValueError(
+                "Plain http:// MCP URLs are only allowed for this machine (localhost, "
+                "127.0.0.1 or ::1); use https:// for any other server"
+            )
         if record.get("command") or record.get("args") or record.get("cwd"):
             raise ValueError("HTTP MCP connections cannot specify a local command or directory")
+    if any(field in record for field in _OAUTH_CLIENT_FIELDS) and not record.get("oauth"):
+        raise ValueError("OAuth client settings require an HTTP connection with OAuth enabled")
+    if record.get("oauth_client_secret") and not record.get("oauth_client_id"):
+        raise ValueError("An OAuth client secret requires an OAuth client ID")
+    if record.get("oauth_client_secret") is not None and not re.fullmatch(
+        ENVIRONMENT_KEY_PATTERN, record["oauth_client_secret"]
+    ):
+        raise ValueError("MCP credentials must reference named environment credentials")
     for field in ("environment", "credential_environment"):
         if any(not re.fullmatch(ENVIRONMENT_KEY_PATTERN, key) for key in record.get(field, {})):
             raise ValueError("MCP environment names must be valid environment variable names")
@@ -107,6 +139,8 @@ def validate_connection(value: Any) -> dict[str, Any]:
         raise ValueError("MCP header names cannot contain line breaks")
     record.setdefault("enabled", True)
     record.setdefault("timeout", DEFAULT_TIMEOUT_SECONDS)
+    record.setdefault("sampling", "off")
+    record.setdefault("roots", "off")
     return record
 
 

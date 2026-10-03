@@ -50,6 +50,9 @@ export const isRecord = (value) =>
 export function createChatState() {
   return {
     agents: [],
+    // Identity Agents outside the roster whose Session is shown, such as the
+    // hidden Librarian: id -> the same Agent payload the roster holds.
+    hiddenAgents: {},
     selectedAgentId: '',
     sessions: {},
     loadingAgents: false,
@@ -143,6 +146,8 @@ export function ensureSessionState(state, agentId, sessionId) {
       compactionPolicy: null,
       backgroundBashStatuses: {},
       reflectionTasks: {},
+      // Per review Run id: its loaded change list and undo state.
+      reflectionDetails: {},
       hasOlderHistory: false,
       historyBefore: '',
       loadingOlderHistory: false,

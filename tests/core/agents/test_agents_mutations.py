@@ -177,6 +177,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
         memory_prompt_mode="off",
         custom_system_prompt_enabled=True,
         excluded_skills=["pdf"],
+        librarian_enabled=False,
     )
 
     assert updated.id == "coder"
@@ -189,6 +190,7 @@ def test_update_changes_mutable_fields_and_preserves_id(store: AgentStore) -> No
     assert updated.memory_prompt_mode == "off"
     assert updated.custom_system_prompt_enabled is True
     assert updated.excluded_skills == ["pdf"]
+    assert updated.librarian_enabled is False
     assert updated.current_session_id == current_session_id
     assert store.get("coder") == updated
     # Clearing the exclusions removes the optional field from agent.json.
@@ -330,6 +332,7 @@ def test_workspace_copy_rolls_back_destination_when_the_move_fails(
             "invalid environment key name",
         ),
         ({"custom_system_prompt_enabled": 1}, "custom_system_prompt_enabled must be a boolean"),
+        ({"librarian_enabled": None}, "librarian_enabled must be a boolean"),
         ({"current_session_id": "missing"}, "current session does not exist: missing"),
         ({"id": "other"}, "Agent id is immutable"),
         ({"unknown": True}, "Unknown agent fields: unknown"),

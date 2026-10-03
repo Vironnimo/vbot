@@ -1019,6 +1019,7 @@
           onToast={desktop.showToast}
           settings={setup.settings}
           onSettingsCommit={(nextSettings) => (setup.settings = nextSettings)}
+          onOpenSession={navigateToSession}
           {skillsRefreshToken}
           agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
@@ -1051,8 +1052,11 @@
           agentsRefreshToken={selection.agentsRefreshToken}
           {projectsRefreshToken}
           {sessionsRefreshToken}
+          {skillsRefreshToken}
+          onOpenSession={navigateToSession}
           initialScrollPosition={settingsScrollPosition}
           onScrollPositionChange={rememberSettingsScrollPosition}
+          subscribeExtensionInvalidations={extensions.subscribeInvalidations}
         />
       {:else if activeViewId === 'logs'}
         <LogsView navigation={navigator.view('logs')} />

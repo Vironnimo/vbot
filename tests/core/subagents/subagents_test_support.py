@@ -186,10 +186,14 @@ class RecordingTriggerService:
 
 
 class FakeAgents:
+    """The roster ``agent_ids``, plus the built-in Librarian that resolves but is never listed."""
+
     def __init__(self, agent_ids: set[str] | None = None) -> None:
         self._agent_ids = agent_ids or {"parent", "worker"}
 
     def get(self, agent_id: str) -> SimpleNamespace:
+        if agent_id == "librarian":
+            return SimpleNamespace(id=agent_id, builtin="librarian")
         if agent_id not in self._agent_ids:
             raise AgentNotFoundError(f"Agent not found: {agent_id}")
         return SimpleNamespace(id=agent_id)
@@ -238,7 +242,7 @@ class FakeAgentResolver:
         overrides = await self.session_overrides_async(address(agent_id, session_id, project_id))
         if overrides.model is not None:
             self.models.require_configured(overrides.model)
-        return SimpleNamespace(**{**vars(agent), **overrides.as_dict()})
+        return SimpleNamespace(**{**vars(agent), **overrides.agent_changes()})
 
     async def require_model_configured_async(self, model: str) -> None:
         self.models.require_configured(model)

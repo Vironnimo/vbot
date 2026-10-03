@@ -51,12 +51,18 @@ TOOL_ACCESS_FIELDS = frozenset({"mode", "allowed", "denied", "granted"})
 
 @dataclass(frozen=True, slots=True)
 class ToolAccess:
-    """One Agent's explicit Tool policy, independent of runtime availability."""
+    """One Agent's explicit Tool policy, independent of runtime availability.
+
+    ``fixed`` makes a ``selected`` policy the whole Tool set: no Tool activates
+    through the memory mode, a Session grant or by following another Tool. The
+    Agent owner sets it for a built-in Agent; it is never persisted.
+    """
 
     mode: str = TOOL_ACCESS_MODE_ALL
     allowed: tuple[str, ...] = ()
     denied: tuple[str, ...] = ()
     granted: tuple[str, ...] = ()
+    fixed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return the canonical persisted/public JSON representation."""
@@ -168,7 +174,7 @@ def resolve_tool_access(
     requested_grants = set(session_tool_grants)
     for name, tool in catalog.items():
         activation = _activation_kind(tool)
-        if not _constraints_allow(tool, workspace=workspace):
+        if tool_access.fixed or not _constraints_allow(tool, workspace=workspace):
             continue
         memory_activated = activation == TOOL_ACTIVATION_MEMORY_MODE and memory_tool_enabled(
             memory_prompt_mode
@@ -177,7 +183,8 @@ def resolve_tool_access(
         if memory_activated or session_granted:
             active.add(name)
 
-    _add_followed_tools(active, catalog, workspace=workspace)
+    if not tool_access.fixed:
+        _add_followed_tools(active, catalog, workspace=workspace)
     active.difference_update(tool_access.denied)
     _remove_orphaned_followers(active, catalog)
 

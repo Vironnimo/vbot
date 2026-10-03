@@ -29,20 +29,56 @@ MISSING_FRONT_MATTER_FALLBACK_WARNING = (
 )
 
 # Fragment (no anchors) for a skill name that the `/name` and `$name` chat triggers
-# (core.chat.tool_dispatch's trigger regexes) can actually match: a leading letter or
-# digit, then up to MAX_SKILL_NAME_LENGTH - 1 more letters/digits/``-``/``_``. The
-# trigger regexes are built from this same fragment, and SkillAuthoringService enforces
-# SKILL_NAME_TRIGGER_PATTERN as a hard requirement, so a newly authored skill is always
-# trigger-compatible. The loader stays lenient (see the charset warning below) so an
-# already-existing on-disk skill with an unusual name keeps loading unchanged.
+# (the trigger regexes below) can actually match: a leading letter or digit, then up
+# to MAX_SKILL_NAME_LENGTH - 1 more letters/digits/``-``/``_``. SkillAuthoringService
+# enforces SKILL_NAME_TRIGGER_PATTERN as a hard requirement, so a newly authored skill
+# is always trigger-compatible. The loader stays lenient (see the charset warning
+# below) so an already-existing on-disk skill with an unusual name keeps loading
+# unchanged.
 SKILL_NAME_CHARSET_FRAGMENT = rf"[A-Za-z0-9][A-Za-z0-9_-]{{0,{MAX_SKILL_NAME_LENGTH - 1}}}"
 SKILL_NAME_TRIGGER_PATTERN = re.compile(f"^{SKILL_NAME_CHARSET_FRAGMENT}$")
+# ``/name`` at the very start of a message, and ``$name`` anywhere in it.
+SKILL_SLASH_TRIGGER_PATTERN = re.compile(rf"^/({SKILL_NAME_CHARSET_FRAGMENT})(?=\s|$)")
+SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
 # Charset only, no length bound, so a name that is merely too long is not also (and
 # misleadingly) reported as having bad characters by the warning below.
 _SKILL_NAME_SAFE_CHARSET_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 
 _SCALAR_WITH_COLON_PATTERN = re.compile(r"^(?P<key>[A-Za-z0-9_-]+):(?P<space>\s+)(?P<value>.+)$")
 _QUOTED_OR_STRUCTURED_PREFIXES = ('"', "'", "[", "{", "&", "*", "!", ">", "|", "#")
+
+
+def triggered_skill_names(content: str) -> list[str]:
+    """Return the Skill names a message triggers, in order and without repeats.
+
+    A message triggers the Skill of a leading ``/name`` and of every ``$name``.
+    Chat activation and every check of what an automation's text triggers share
+    this one grammar.
+    """
+    names: list[str] = []
+    slash_match = SKILL_SLASH_TRIGGER_PATTERN.search(content)
+    if slash_match:
+        names.append(slash_match.group(1))
+    for inline_match in SKILL_INLINE_TRIGGER_PATTERN.finditer(content):
+        name = inline_match.group(1)
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def rename_skill_triggers(content: str, name: str, new_name: str) -> str:
+    """Return ``content`` with every trigger of the Skill ``name`` naming ``new_name``.
+
+    The triggers are exactly those :func:`triggered_skill_names` reads: a leading
+    ``/name`` and every ``$name``. Triggers of other Skills, including longer
+    names that start with ``name``, stay as they are.
+    """
+    slash_match = SKILL_SLASH_TRIGGER_PATTERN.match(content)
+    if slash_match is not None and slash_match.group(1) == name:
+        content = f"/{new_name}{content[slash_match.end() :]}"
+    return SKILL_INLINE_TRIGGER_PATTERN.sub(
+        lambda match: f"${new_name}" if match.group(1) == name else match.group(0), content
+    )
 
 
 @dataclass(frozen=True)

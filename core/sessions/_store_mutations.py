@@ -52,8 +52,14 @@ def create(
     created_at: str | None = None,
     *,
     generate_id: bool = False,
+    run_kind: str | None = None,
+    metadata: JsonObject | None = None,
 ) -> SessionAddress:
-    """Create a live Session; with *generate_id*, allocate a fresh id in its scope."""
+    """Create a live Session; with *generate_id*, allocate a fresh id in its scope.
+
+    A *run_kind* labels the Session and *metadata* sets facade values from its
+    first write, so no reader sees the Session without them.
+    """
     timestamp = (
         utc_now_timestamp()
         if created_at is None
@@ -62,9 +68,14 @@ def create(
     if generate_id:
         address = _store_values._allocate_address(connection, address)
     try:
-        _insert_session(connection, address, timestamp)
+        session_key = _insert_session(connection, address, timestamp)
     except sqlite3.IntegrityError as exc:
         raise ChatSessionError(f"session already exists: {address.session_id}") from exc
+    if run_kind is not None:
+        record_run_kind_by_key(connection, session_key, run_kind)
+    if metadata:
+        initial = dict(metadata)
+        mutate_metadata(connection, address, lambda current: current.update(initial))
     return address
 
 
@@ -435,6 +446,25 @@ def retarget_identity_agent(
         "WHERE project_id = '' AND agent_id = ? AND state = 'live'",
         (new_agent_id, old_agent_id),
     )
+
+
+def retarget_metadata_value(
+    connection: sqlite3.Connection, agent_id: str, key: str, old_value: str, new_value: str
+) -> int:
+    """Give one open metadata value of an Identity Agent's live Sessions a new value.
+
+    Only Sessions whose ``key`` still holds ``old_value`` change; returns their count.
+    """
+    if not key.isidentifier() or _store_values._is_reserved_prompt_key(key):
+        raise ChatSessionError(f"Session metadata {key} cannot be retargeted")
+    path = f"$.{key}"
+    cursor = connection.execute(
+        "UPDATE sessions SET metadata_json = json_set(metadata_json, ?, ?), "
+        "state_revision = state_revision + 1 WHERE project_id = '' AND agent_id = ? "
+        "AND state = 'live' AND json_extract(metadata_json, ?) = ?",
+        (path, new_value, agent_id, path, old_value),
+    )
+    return int(cursor.rowcount)
 
 
 def _write_subagent_parent(

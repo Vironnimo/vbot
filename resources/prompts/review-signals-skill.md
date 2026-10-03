@@ -1,0 +1,3 @@
+- The user corrected how you did a kind of task: the approach, the steps, or the format or style of the result.
+- A Skill used in this conversation was wrong, incomplete or outdated.
+- A non-trivial method, fix or workaround was found and verified, and a future Session would otherwise have to work it out again.

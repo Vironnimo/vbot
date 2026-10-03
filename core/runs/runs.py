@@ -47,6 +47,7 @@ from core.runs.run import (
     TOOL_CALL_STDERR_EVENT,
     TOOL_CALL_STDOUT_EVENT,
     TRANSIENT_EVENT_TYPES,
+    UNATTENDED_RUN_KINDS,
     USER_MESSAGE_EVENT,
     ActiveRunError,
     CancelCallback,
@@ -66,6 +67,7 @@ from core.runs.run import (
     RunStatus,
     WaitingWorkAdmission,
     WaitingWorkLimitError,
+    is_unattended_run_kind,
 )
 from core.utils.ids import new_id
 from core.utils.timestamps import format_canonical_timestamp
@@ -108,6 +110,7 @@ __all__ = [
     "TOOL_CALL_STDERR_EVENT",
     "TOOL_CALL_STDOUT_EVENT",
     "TRANSIENT_EVENT_TYPES",
+    "UNATTENDED_RUN_KINDS",
     "USER_MESSAGE_EVENT",
     "ActiveRunError",
     "CancelCallback",
@@ -128,6 +131,7 @@ __all__ = [
     "WaitingWorkAdmission",
     "WaitingWorkLimitError",
     "ChatRunManager",
+    "is_unattended_run_kind",
 ]
 
 _LOGGER = logging.getLogger("vbot.runs")
@@ -638,6 +642,11 @@ class ChatRunManager:
         if run is None or run.status != RunStatus.RUNNING:
             return None
         return run
+
+    def is_running(self, run_id: str) -> bool:
+        """Whether the Run *run_id* is still running; an unknown Run is not."""
+        run = self._runs.get(run_id)
+        return run is not None and run.status == RunStatus.RUNNING
 
     def active_runs(self) -> list[Run]:
         """Return a snapshot of every currently running run across all sessions.

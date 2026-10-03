@@ -407,7 +407,8 @@ async def test_fallback_keeps_the_consumed_tool_round_budget(tmp_path: Path) -> 
         if message.role == "tool" and message.tool_call_id == "second"
     )
     assert json.loads(str(rejected.content))["error"]["code"] == "tool_iteration_limit"
-    assert fallback.requests[-1]["kwargs"]["tools"] == []
+    # Finalization keeps the pinned Tools on the fallback route too.
+    assert fallback.requests[-1]["kwargs"]["tools"] == primary.requests[0]["kwargs"]["tools"]
 
 
 @pytest.mark.asyncio
@@ -444,7 +445,11 @@ async def test_identical_tool_failures_share_the_circuit_breaker_across_fallback
     await build_chat_loop(runtime).send("coder", "Work", session_id="s1")
 
     assert len(calls) == 8
-    assert fallback.requests[-1]["kwargs"]["tools"] == []
+    assert any(
+        message.role == "note" and "Tool execution is disabled" in str(message.content)
+        for message in history(runtime, "s1")
+    )
+    assert fallback.requests[-1]["kwargs"]["tools"] == primary.requests[0]["kwargs"]["tools"]
 
 
 @pytest.mark.asyncio

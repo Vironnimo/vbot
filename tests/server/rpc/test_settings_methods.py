@@ -375,6 +375,12 @@ async def test_settings_get_returns_normalized_settings_payload_without_secrets(
             "memory_turn_interval": 10,
             "skill_model_step_interval": 10,
         },
+        "librarian": {
+            "enabled": True,
+            "interval_days": 7,
+            "archive_after_days": 90,
+            "consolidate": True,
+        },
         "speech": {
             "transcription_audio": {
                 "profile": "compatibility",

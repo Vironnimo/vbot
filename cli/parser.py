@@ -27,6 +27,7 @@ from cli._parser_connections import (
 )
 from cli._parser_content import (
     _add_extensions_parsers,
+    _add_librarian_parsers,
     _add_log_parsers,
     _add_memory_parsers,
     _add_prompt_parsers,
@@ -190,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_task_model_parsers(subparsers)
     _add_skill_parsers(subparsers)
     _add_memory_parsers(subparsers)
+    _add_librarian_parsers(subparsers)
     _add_extensions_parsers(subparsers)
     _add_cron_parsers(subparsers)
     _add_bootstrap_parsers(subparsers)

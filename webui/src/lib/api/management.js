@@ -167,6 +167,114 @@ export function setSkillDisabled(name, disabled, options = {}) {
   return rpc('skill.set_disabled', { name, disabled }, options);
 }
 
+function requireSkillScope(scope, method) {
+  requireNonEmptyString(
+    scope,
+    'Skill scope must be a non-empty string',
+    method,
+  );
+}
+
+export function setSkillPinned(scope, name, pinned, options = {}) {
+  requireSkillScope(scope, 'skill.set_pinned');
+  requireNonEmptyString(
+    name,
+    'Skill name must be a non-empty string',
+    'skill.set_pinned',
+  );
+  if (typeof pinned !== 'boolean') {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Pinned flag must be a boolean',
+      { method: 'skill.set_pinned' },
+    );
+  }
+  return rpc('skill.set_pinned', { scope, name, pinned }, options);
+}
+
+// The newest `limit` recorded revisions of one Skill in an editable scope.
+export function skillHistory(scope, name, limit, options = {}) {
+  requireSkillScope(scope, 'skill.history');
+  requireNonEmptyString(
+    name,
+    'Skill name must be a non-empty string',
+    'skill.history',
+  );
+  if (!Number.isInteger(limit) || limit < 1) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'History limit must be a positive integer',
+      { method: 'skill.history' },
+    );
+  }
+  return rpc('skill.history', { scope, name, limit }, options);
+}
+
+// Takes back the named revisions of one scope, all or none.
+export function revertSkillRevisions(scope, revisions, options = {}) {
+  requireSkillScope(scope, 'skill.revert');
+  if (
+    !Array.isArray(revisions) ||
+    revisions.length === 0 ||
+    revisions.some((id) => !Number.isInteger(id) || id <= 0)
+  ) {
+    throw new ApiClientError(
+      RPC_ERROR_INVALID_CLIENT_REQUEST,
+      'Skill revisions must be a non-empty list of positive integers',
+      { method: 'skill.revert' },
+    );
+  }
+  return rpc('skill.revert', { scope, revisions }, options);
+}
+
+// An Identity Agent's Librarian settings, its last pass with the Skill
+// revisions that pass recorded, and the next scheduled pass.
+export function librarianStatus(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'librarian.status',
+  );
+  return rpc('librarian.status', { agent_id: agentId }, options);
+}
+
+// Whether the built-in Librarian Agent is available (`problem` says why not),
+// the Librarian settings and its recent passes over all Agents, each with the
+// curated Agent and the Librarian Session of its merge.
+export function librarianOverview(options = {}) {
+  return rpc('librarian.overview', {}, options);
+}
+
+// Starts a Librarian pass of an Agent now; returns its status.
+export function runLibrarian(agentId, options = {}) {
+  requireNonEmptyString(
+    agentId,
+    'Agent id must be a non-empty string',
+    'librarian.run',
+  );
+  return rpc('librarian.run', { agent_id: agentId }, options);
+}
+
+export function restoreSkill(scope, archiveId, options = {}) {
+  requireSkillScope(scope, 'skill.restore');
+  requireNonEmptyString(
+    archiveId,
+    'Skill archive id must be a non-empty string',
+    'skill.restore',
+  );
+  return rpc('skill.restore', { scope, archive_id: archiveId }, options);
+}
+
+export function purgeSkill(scope, archiveId, options = {}) {
+  requireSkillScope(scope, 'skill.purge');
+  requireNonEmptyString(
+    archiveId,
+    'Skill archive id must be a non-empty string',
+    'skill.purge',
+  );
+  return rpc('skill.purge', { scope, archive_id: archiveId }, options);
+}
+
 export function shareSkill(
   agentId,
   name,

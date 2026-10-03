@@ -6,6 +6,7 @@ service tests cover the persisted inputs (seen Skills, activation notes) and sco
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timedelta
@@ -13,13 +14,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from core.chat.messages import ChatMessage
-from core.sessions import ChatSessionManager, SeenSkillsUpdate
+from core.runs import RunKind
+from core.sessions import ChatSession, ChatSessionManager, SeenSkillsUpdate
 from core.sessions._types import SKILL_CONTEXT_NOTE_PREFIX
 from core.statistics import SkillInventorySource
 from core.statistics.skills import (
     SkillsSection,
     SkillUsageAccumulator,
     SkillUsageStat,
+    SkillUse,
     offered_skill_names,
     resolve_inventory,
 )
@@ -276,11 +279,26 @@ def _offer_session(
     notes: list[ChatMessage],
     *,
     project_id: str | None = None,
-) -> None:
+) -> ChatSession:
     session = manager.create(agent_id, project_id=project_id)
     for note in notes:
         session.append(note)
     manager.record_seen_skills(session.address, SeenSkillsUpdate(baseline=offered))
+    return session
+
+
+def _review_session(
+    manager: ChatSessionManager,
+    source: ChatSession,
+    offered: tuple[str, ...],
+    notes: list[ChatMessage],
+) -> ChatSession:
+    """A background reflection review: a fork whose only Run kind is unattended."""
+    review = asyncio.run(manager.fork(source.address, run_kind=RunKind.SKILL_REFLECTION))
+    for note in notes:
+        review.append(note)
+    manager.record_seen_skills(review.address, SeenSkillsUpdate(baseline=offered))
+    return review
 
 
 def test_report_joins_seen_skills_and_activation_notes_per_agent_key(
@@ -291,31 +309,40 @@ def test_report_joins_seen_skills_and_activation_notes_per_agent_key(
         manager, "builder", ("deploy",), [_skill_note("deploy", BASE)], project_id="vbot"
     )
     # A broken activation note neither fails the report nor counts.
-    _offer_session(
+    broken = _offer_session(
         manager,
         "main",
         ("teach",),
         [ChatMessage.note(SKILL_CONTEXT_NOTE_PREFIX + "{broken", timestamp=BASE)],
     )
+    # A background review offers and activates Skills without counting as use.
+    _review_session(manager, broken, ("deploy", "teach"), [_skill_note("teach", BASE)])
+    # So does a Librarian pass, whose Session is labelled when it is created.
+    librarian = manager.create("main", run_kind=RunKind.LIBRARIAN)
+    librarian.append(_skill_note("teach", BASE))
+    manager.record_seen_skills(librarian.address, SeenSkillsUpdate(baseline=("teach",)))
     inventory = _FakeInventory(global_skills=[("deploy", "bundled"), ("teach", "global")])
 
-    report = statistics(
-        ["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory
-    ).report()
+    skills = statistics(["main"], projects={"vbot": ["builder"]}, skill_inventory=inventory).report(
+        sections=["skills"]
+    )["skills"]
 
-    skills = report.skills
-    deploy = next(row for row in skills.skills if row.name == "deploy")
-    teach = next(row for row in skills.skills if row.name == "teach")
-    assert (deploy.offered_sessions, deploy.activated_sessions) == (2, 2)
-    assert deploy.usage_rate == 1.0
+    deploy = next(row for row in skills["skills"] if row["name"] == "deploy")
+    teach = next(row for row in skills["skills"] if row["name"] == "teach")
+    assert (deploy["offered_sessions"], deploy["activated_sessions"]) == (2, 2)
+    assert deploy["usage_rate"] == 1.0
     # A project Agent is keyed by its address form.
-    assert [(entry.key, entry.count) for entry in deploy.by_agent] == [
-        ("builder@vbot", 1),
-        ("main", 1),
+    assert deploy["by_agent"] == [
+        {"key": "builder@vbot", "count": 1},
+        {"key": "main", "count": 1},
     ]
-    assert (teach.offered_sessions, teach.activated_sessions) == (2, 0)
-    assert (skills.total_skills, skills.used_skills, skills.never_used_skills) == (2, 1, 1)
-    assert skills.offered_unactivated_skills == 1
+    assert (teach["offered_sessions"], teach["activated_sessions"]) == (2, 0)
+    assert (skills["total_skills"], skills["used_skills"], skills["never_used_skills"]) == (
+        2,
+        1,
+        1,
+    )
+    assert skills["offered_unactivated_skills"] == 1
 
 
 def test_report_window_filters_offers_by_session_start_and_activations_by_note_time(
@@ -326,12 +353,39 @@ def test_report_window_filters_offers_by_session_start_and_activations_by_note_t
     inventory = _FakeInventory(global_skills=[("deploy", "bundled")])
 
     report = statistics(skill_inventory=inventory).report(
-        since=BASE - timedelta(hours=1), until=BASE + timedelta(hours=1)
+        since=BASE - timedelta(hours=1), until=BASE + timedelta(hours=1), sections=["skills"]
     )
 
-    [deploy] = report.skills.skills
-    assert (deploy.offered_sessions, deploy.activated_sessions) == (0, 1)
-    assert deploy.usage_rate is None
+    [deploy] = report["skills"]["skills"]
+    assert (deploy["offered_sessions"], deploy["activated_sessions"]) == (0, 1)
+    assert deploy["usage_rate"] is None
+
+
+def test_skill_usage_returns_each_agents_last_activation_and_count(
+    manager: ChatSessionManager, statistics: StatisticsFactory
+) -> None:
+    later = BASE + timedelta(hours=1)
+    _offer_session(manager, "main", ("deploy",), [_skill_note("deploy", later)])
+    first = _offer_session(manager, "main", (), [_skill_note("deploy", BASE)])
+    _offer_session(manager, "builder", (), [_skill_note("deploy", BASE)], project_id="vbot")
+    # Background reviews are not use, even with the latest activation.
+    _review_session(manager, first, (), [_skill_note("deploy", later + timedelta(hours=1))])
+    _review_session(manager, first, (), [_skill_note("teach", later)])
+    # A review Session that also ran an attended Run counts.
+    mixed = _review_session(manager, first, (), [_skill_note("review", BASE)])
+    mixed.start_run("run-user")
+    service = statistics(["main", "builder"], projects={"vbot": ["builder"]})
+
+    usage = service.skill_usage()
+
+    assert usage == {
+        ("main", "deploy"): SkillUse(last_activated=format_canonical_timestamp(later), count=2),
+        ("main", "review"): SkillUse(last_activated=format_canonical_timestamp(BASE), count=1),
+        ("builder", "deploy"): SkillUse(last_activated=format_canonical_timestamp(BASE), count=1),
+    }
+    # A deleted Session no longer counts; the query refreshes the projection.
+    manager.delete(first.address)
+    assert asyncio.run(service.skill_usage_async())[("main", "deploy")].count == 1
 
 
 def test_service_without_an_inventory_reports_an_empty_skills_section(
@@ -339,10 +393,9 @@ def test_service_without_an_inventory_reports_an_empty_skills_section(
 ) -> None:
     _offer_session(manager, "main", ("deploy",), [_skill_note("deploy", BASE)])
 
-    report = statistics().report()
+    skills = statistics().report(sections=["skills"])["skills"]
 
-    assert report.skills.skills == []
-    assert report.skills.total_skills == 0
-    assert report.skills.offered_unactivated_skills == 0
-    assert report.skills.skills_without_offer_data == 0
-    assert json.loads(json.dumps(report.to_dict()))["skills"]["total_skills"] == 0
+    assert skills["skills"] == []
+    assert skills["total_skills"] == 0
+    assert skills["offered_unactivated_skills"] == 0
+    assert skills["skills_without_offer_data"] == 0

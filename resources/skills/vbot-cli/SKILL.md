@@ -30,14 +30,15 @@ For a focused question about a past conversation, use `session_search` and answe
 | Extended Session search, listing past conversations, full transcripts or exact Tool Results | `references/session-search.md` |
 | Provider keys/OAuth/limits, Models, voices and specialized Task Models | `references/providers.md` |
 | Settings, System Prompt blocks, Extension settings | `references/configuration.md` |
-| Create or change an Extension, its Tools, hooks, Commands or pages | `references/extensions.md` |
+| Create or change an Extension, its Tools, hooks or Commands | `references/extensions.md` |
+| Give an Extension a page or its own Sessions | `references/extensions.md`, then `references/extension-pages.md` |
 | Use bundled Swarm or Computer Use, or inspect Extension connection UI | `references/extension-usage.md` |
 | MCP installation, Tool access, discovery and application operations | `references/mcp.md` |
 | Channel setup (Telegram, Discord, Slack, Mattermost, WhatsApp), tokens and group access | `references/channels.md` |
 | First Telegram setup and chat-id discovery | `references/telegram-setup.md` |
 | Recurring or one-time scheduled Runs | `references/cron.md` |
 | Runs after startup, including restart continuation | `references/bootstrap.md` |
-| Install a Skill from a link, archive or folder; inspect, author, share or disable Skills | `references/skills.md` |
+| Install a Skill from a link, archive or folder; inspect, author, share, disable or pin Skills; review their history; restore deleted Skills; Librarian passes over an Agent's own Skills | `references/skills.md` |
 | Pinned Memory for an Identity Agent, its change history, restoring earlier entries | `references/memory.md` |
 | Logs, Provider traces, Session usage statistics and server performance | `references/diagnostics.md` |
 | Server start/stop/restart, update, uninstall, Autostart, Desktop, Doctor | `references/server.md` |

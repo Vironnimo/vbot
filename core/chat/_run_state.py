@@ -165,6 +165,8 @@ class _RunRequest:
     reply_surface: ReplySurface | None = None
     tool_restriction: tuple[str, ...] | None = None
     tool_denial_resolver: Callable[[str], str | None] | None = None
+    # Narrows the loop's dispatched Tool-iteration limit for this Run only.
+    max_tool_iterations: int | None = None
     input_persisted_hook: Callable[[], None] | None = None
     resume_process_restart: bool = False
     edit_message_id: str | None = None
@@ -181,6 +183,7 @@ class _RunRequest:
             and (self.reply_surface is None or self.reply_surface.kind == "webui")
             and self.tool_restriction is None
             and self.tool_denial_resolver is None
+            and self.max_tool_iterations is None
             and self.input_persisted_hook is None
             and self.temporary_binding is None
             and self.temporary_parent_binding is None
@@ -709,7 +712,7 @@ async def create_run_execution_context(
                 project_id,
             )
             skill_project_id, identity_agent_id = resolve_skill_scope(
-                project_id, prompt_project, run.agent_id
+                project_id, prompt_project, agent
             )
         else:
             soul_context = memory_files_context = None

@@ -203,7 +203,7 @@ describe('AgentsView behavior and access', () => {
     },
   );
 
-  it('sends memory prompt mode changes from the agent detail pane', async () => {
+  it('sends memory prompt mode and Librarian switch changes from the agent detail pane', async () => {
     rpcMock.mockImplementation(createAgentsRpcMock());
 
     mountedComponent = mount(AgentsView, { target: document.body });
@@ -217,12 +217,20 @@ describe('AgentsView behavior and access', () => {
     );
 
     selectSimpleOption('agent-memory-prompt-mode', modeLabel('agent'));
+    // An Agent saved before the switch existed has the Librarian on.
+    const librarianToggle = document.body.querySelector(
+      '.agents-view__librarian-toggle',
+    );
+    expect(librarianToggle.getAttribute('aria-checked')).toBe('true');
+    librarianToggle.click();
+    flushSync();
     submitAgentForm();
     await waitForCondition(() => getAgentUpdateCalls().length === 1, 100);
 
     expect(getAgentUpdateCalls()[0][1]).toEqual({
       id: 'alpha',
       memory_prompt_mode: 'agent',
+      librarian_enabled: false,
     });
   });
 

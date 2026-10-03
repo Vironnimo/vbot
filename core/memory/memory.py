@@ -6,7 +6,7 @@ import os
 import re
 import threading
 import unicodedata
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +19,7 @@ from core.memory._history import (
     MemoryRevision,
     MemoryRevisionKind,
     diff_entries,
+    later_touches,
     revert_revisions,
     state_at,
 )
@@ -95,26 +96,27 @@ _PROMPT_CUT_LIST_HINT = (
 # and the block is gated on "memory tool enabled" (not "memory files non-empty"),
 # it now appears whenever ``memory_prompt_mode != off`` — including before the first
 # entry, when the agent needs it most (this is the empty-memory fix from D5).
-# Complements the memory tool's WHEN/SKIP description with the writing-quality half:
-# what makes an entry worth its permanent prompt cost (it spares the user future
-# steering) and the one non-obvious rule (declarative facts round-trip safely,
-# imperative self-instructions do not). Two examples — a user fact and a project
-# fact — cover both scopes.
+# Complements the memory tool's description with routing and writing quality. It
+# states the same routing rule as the Skill guidance and the review briefs
+# (``learning-routing.md``): task lessons and task-specific preferences live in
+# the task's Skill, Memory keeps only what matters in every Session. The one
+# non-obvious writing rule (declarative facts round-trip safely, imperative
+# self-instructions do not) gets a user and a project example.
 _MEMORY_GUIDANCE = (
-    "Memory is shown in future Sessions, so keep only durable facts that reduce repeated "
-    "user steering or materially improve future decisions. General communication "
-    "preferences belong in user Memory when they express standing expectations; a one-off "
-    "request does not establish one. Stable environment or project facts belong in agent "
-    "Memory; name the project when needed to avoid applying them elsewhere. Procedures "
-    "belong in Skills. Skip routine knowledge, easily rediscovered facts, task progress, "
-    "completed-work logs, transient failures, guesses, and secrets. Leave equivalent facts "
-    "alone, replace superseded facts, and consolidate overlap; the entries below may be "
-    "older than the stored ones. Write declarative facts, not "
-    'instructions to yourself: "User prefers concise answers", not "Always answer '
-    'concisely"; "Project uses pytest with xdist", not "Run tests with pytest -n 4". Save '
-    "worthwhile changes in the same turn and check the Tool result before saying they were "
-    "saved. No change is needed when nothing qualifies; unavailable Memory is not a reason "
-    "to put the fact in a Skill."
+    "Memory holds facts that matter in every future Session, whatever the task. Lessons "
+    "about how to do one kind of task, including the user's preferences and corrections for "
+    "that work, belong in that task's Skill, not in Memory, even when you cannot change "
+    "Skills. User Memory holds who the user is and preferences that apply to all of their "
+    "work, such as the language to reply in. Agent Memory holds stable facts about the "
+    "environment and projects; name the project when a fact applies only there. Leave out "
+    "task progress, completed-work logs, facts that are easy to look up again, transient "
+    "failures, guesses and secrets. Write declarative facts, not instructions to yourself: "
+    '"User prefers concise answers", not "Always answer concisely"; "Project uses pytest '
+    'with xdist", not "Run tests with pytest -n 4". Leave an equivalent entry alone, replace '
+    "a superseded one and merge overlapping ones; the entries below can be older than the "
+    "stored ones. When you can change Memory, save a worthwhile fact in the same turn, and "
+    "say it was saved only after the Tool result confirms it. A fact that belongs in Memory "
+    "never goes into a Skill, even when you cannot change Memory."
 )
 # The ``memory:guidance`` block id and owner. The owner ``memory`` is gate 2's
 # input: the block renders only when the memory tool is enabled for the agent
@@ -190,6 +192,12 @@ class MemoryRevertError(MemoryError):
         for conflict in self.conflicts:
             later = ", ".join(str(revision) for revision in conflict.later)
             noun = "revisions" if len(conflict.later) > 1 else "revision"
+            if not conflict.missing:
+                lines.append(
+                    f"- Revision {conflict.revision}: {noun} {later} changed the entry "
+                    f'"{conflict.text}" since.'
+                )
+                continue
             reason = f"{noun} {later} changed it since" if later else "it was changed since"
             lines.append(
                 f'- Revision {conflict.revision}: no entry reads "{conflict.text}"; {reason}.'
@@ -204,12 +212,16 @@ class MemoryRevertIncompleteError(MemoryError):
     """A revert failed after writing some scopes, and restoring them failed too.
 
     ``changed`` names the scopes that keep their reverted entries; every other
-    scope is unchanged. The history has no record of the change and notices it
-    as ``external`` on a later operation.
+    scope is unchanged. The history records those scopes' reverted entries as
+    ``revert`` revisions (``revisions``; fewer when the history cannot record),
+    so a later revert of the same revisions takes back only the rest.
+    ``failure`` is the write error that stopped the revert.
     """
 
     def __init__(self, changed: Sequence[MemoryScope], failure: Exception) -> None:
         self.changed: tuple[MemoryScope, ...] = tuple(changed)
+        self.failure = failure
+        self.revisions: tuple[MemoryRevision, ...] = ()
         names = " and ".join(self.changed)
         super().__init__(
             f"The revert failed part-way ({failure}). The {names} Memory could not be "
@@ -231,17 +243,31 @@ class MemoryRevertResult:
 
 
 @dataclass(frozen=True)
+class _RevertPlan:
+    """A checked revert: each scope's file, content and entries before and after it."""
+
+    paths: dict[MemoryScope, Path]
+    originals: dict[MemoryScope, bytes | None]
+    current: dict[MemoryScope, list[str]]
+    reverted: dict[MemoryScope, list[str]]
+    targets: list[MemoryRevision]
+    changed: list[MemoryScope]
+
+
+@dataclass(frozen=True)
 class MemoryWriter:
     """Who changes Memory, recorded in the log line and the Memory history.
 
     ``actor`` is ``tool``, ``rpc`` or ``internal`` (direct in-process callers);
-    ``session_id``/``run_id`` name the Run of a Tool change.
+    ``session_id``/``run_id`` name the Run of a Tool change and ``run_kind``
+    its Run kind.
     """
 
     agent_id: str | None = None
     actor: str = "internal"
     session_id: str | None = None
     run_id: str | None = None
+    run_kind: str | None = None
 
 
 _INTERNAL_WRITER = MemoryWriter()
@@ -471,12 +497,52 @@ class FilePinnedMemoryBackend:
         after = state_at(revisions, to_id)
         return {scope: diff_entries(before[scope], after[scope]) for scope in MEMORY_SCOPES}
 
+    def recorded_revisions(self, agent_id: str) -> list[MemoryRevision]:
+        """Return the revisions the Agent's Memory history holds, oldest first.
+
+        Unlike :meth:`history`, this reads only the history: outside changes of
+        the files not noticed yet are not recorded first. An Agent without a
+        history has no revisions.
+        """
+        if self._history is None:
+            return []
+        return self._history.revisions(agent_id)
+
+    def check_revert(
+        self,
+        workspace: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: MemoryWriter,
+        strict: bool = False,
+        related: Collection[int] = (),
+    ) -> tuple[MemoryScope, ...]:
+        """Check that :meth:`revert` of *revision_ids* would succeed now; change no entry.
+
+        Returns the scopes the revert would change and raises what it would
+        raise before writing: :class:`MemoryRevertError`,
+        :class:`MemoryBudgetError` or :class:`MemoryError`. Outside changes of
+        the files are recorded first, as every history read does. *strict* and
+        *related* work as for :meth:`revert`.
+        """
+        agent_id = writer.agent_id or ""
+        history = self._require_history(agent_id)
+        if not revision_ids:
+            raise MemoryError("name at least one revision to revert")
+        with self._scope_locks(workspace):
+            plan = self._plan_revert(
+                history, agent_id, workspace, revision_ids, strict=strict, related=related
+            )
+            return tuple(plan.changed)
+
     def revert(
         self,
         workspace: Path,
         revision_ids: Sequence[int],
         *,
         writer: MemoryWriter,
+        strict: bool = False,
+        related: Collection[int] = (),
     ) -> MemoryRevertResult:
         """Take back the changes of *revision_ids*, all of them or none.
 
@@ -484,38 +550,28 @@ class FilePinnedMemoryBackend:
         the ``revert`` revisions that recorded them (fewer when the history could
         not record a change). Raises :class:`MemoryRevertError` when later changes built
         on a reverted one and :class:`MemoryBudgetError` when restored entries
-        would exceed a budget, both before writing anything. Every changed scope
-        is written before any is recorded: when a write fails, the scopes already
+        would exceed a budget, both before writing anything. With *strict*, any
+        later revision outside *revision_ids* and *related* that added, removed or
+        replaced an entry text one of them changed refuses the revert too, even
+        when the change could still be taken back. Every changed scope is
+        written before any is recorded: when a write fails, the scopes already
         written get their earlier content back and the failure is raised, or
-        :class:`MemoryRevertIncompleteError` when that restore fails too.
+        :class:`MemoryRevertIncompleteError` when that restore fails too; the
+        scopes it names are recorded as reverted.
         """
         agent_id = writer.agent_id or ""
         history = self._require_history(agent_id)
         if not revision_ids:
             raise MemoryError("name at least one revision to revert")
         with self._scope_locks(workspace):
-            paths = {scope: self._path(workspace, scope) for scope in MEMORY_SCOPES}
-            originals = {scope: _read_file(path) for scope, path in paths.items()}
-            current: dict[MemoryScope, list[str]] = {}
-            for scope, path in paths.items():
-                current[scope] = _decode_entries(path, originals[scope])
-                history.sync(agent_id, scope, current[scope], path)
-            revisions = history.revisions(agent_id)
-            targets = _require_revisions(revisions, revision_ids)
-            baselines = [target.id for target in targets if target.kind == "baseline"]
-            if baselines:
-                raise MemoryError(
-                    f"revision {baselines[0]} is where the history starts; it records the "
-                    "entries that already existed and cannot be reverted"
-                )
-            reverted, conflicts = revert_revisions(current, targets, revisions)
-            if conflicts:
-                raise MemoryRevertError(conflicts)
-            changed = [scope for scope in MEMORY_SCOPES if reverted[scope] != current[scope]]
-            for scope in changed:
-                _enforce_scope_budget(scope, reverted[scope], _total(current[scope]))
+            plan = self._plan_revert(
+                history, agent_id, workspace, revision_ids, strict=strict, related=related
+            )
+            changed = plan.changed
             try:
-                _write_scopes({scope: paths[scope] for scope in changed}, reverted, originals)
+                _write_scopes(
+                    {scope: plan.paths[scope] for scope in changed}, plan.reverted, plan.originals
+                )
             except MemoryRevertIncompleteError as error:
                 _LOGGER.warning(
                     "Memory revert failed part-way (agent=%s scopes=%s actor=%s)",
@@ -523,21 +579,72 @@ class FilePinnedMemoryBackend:
                     ",".join(error.changed),
                     writer.actor,
                 )
+                # The scopes left reverted keep their record, so a later revert
+                # of the same revisions only takes back the rest.
+                error.revisions = self._record_reverts(plan, error.changed, writer)
                 raise
-            recorded: list[MemoryRevision] = []
-            for scope in changed:
-                _log_mutation("reverted", scope, current[scope], reverted[scope], writer)
-                revision = self._record(
-                    scope,
-                    "revert",
-                    current[scope],
-                    reverted[scope],
-                    writer,
-                    reverts=[target.id for target in targets if target.scope == scope],
-                )
-                if revision is not None:
-                    recorded.append(revision)
-            return MemoryRevertResult(changed=tuple(changed), revisions=tuple(recorded))
+            recorded = self._record_reverts(plan, changed, writer)
+            return MemoryRevertResult(changed=tuple(changed), revisions=recorded)
+
+    def _record_reverts(
+        self, plan: _RevertPlan, scopes: Sequence[MemoryScope], writer: MemoryWriter
+    ) -> tuple[MemoryRevision, ...]:
+        """Log and record the reverted entries of *scopes*; return the recorded revisions."""
+        recorded: list[MemoryRevision] = []
+        for scope in scopes:
+            _log_mutation("reverted", scope, plan.current[scope], plan.reverted[scope], writer)
+            revision = self._record(
+                scope,
+                "revert",
+                plan.current[scope],
+                plan.reverted[scope],
+                writer,
+                reverts=[target.id for target in plan.targets if target.scope == scope],
+            )
+            if revision is not None:
+                recorded.append(revision)
+        return tuple(recorded)
+
+    def _plan_revert(
+        self,
+        history: MemoryHistory,
+        agent_id: str,
+        workspace: Path,
+        revision_ids: Sequence[int],
+        *,
+        strict: bool,
+        related: Collection[int],
+    ) -> _RevertPlan:
+        """Plan a revert under the scope locks: what each scope would read afterwards.
+
+        Raises :class:`MemoryRevertError`, :class:`MemoryBudgetError` or
+        :class:`MemoryError` when the revert cannot run.
+        """
+        paths = {scope: self._path(workspace, scope) for scope in MEMORY_SCOPES}
+        originals = {scope: _read_file(path) for scope, path in paths.items()}
+        current: dict[MemoryScope, list[str]] = {}
+        for scope, path in paths.items():
+            current[scope] = _decode_entries(path, originals[scope])
+            history.sync(agent_id, scope, current[scope], path)
+        revisions = history.revisions(agent_id)
+        targets = _require_revisions(revisions, revision_ids)
+        baselines = [target.id for target in targets if target.kind == "baseline"]
+        if baselines:
+            raise MemoryError(
+                f"revision {baselines[0]} is where the history starts; it records the "
+                "entries that already existed and cannot be reverted"
+            )
+        if strict:
+            touched = later_touches(targets, revisions, exempt={*revision_ids, *related})
+            if touched:
+                raise MemoryRevertError(touched)
+        reverted, conflicts = revert_revisions(current, targets, revisions)
+        if conflicts:
+            raise MemoryRevertError(conflicts)
+        changed = [scope for scope in MEMORY_SCOPES if reverted[scope] != current[scope]]
+        for scope in changed:
+            _enforce_scope_budget(scope, reverted[scope], _total(current[scope]))
+        return _RevertPlan(paths, originals, current, reverted, targets, changed)
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         """Return a scope's used characters and its budget."""
@@ -692,6 +799,7 @@ class FilePinnedMemoryBackend:
                 entries=after,
                 session_id=writer.session_id,
                 run_id=writer.run_id,
+                run_kind=writer.run_kind,
                 reverts=reverts,
             )
         except Exception as exc:  # never fail the change the history describes
@@ -788,10 +896,34 @@ class MemoryService:
     ) -> dict[MemoryScope, tuple[MemoryChange, ...]]:
         return self._backend.compare(workspace, agent_id, from_id, to_id)
 
+    def recorded_revisions(self, agent_id: str) -> list[MemoryRevision]:
+        return self._backend.recorded_revisions(agent_id)
+
+    def check_revert(
+        self,
+        workspace: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: MemoryWriter,
+        strict: bool = False,
+        related: Collection[int] = (),
+    ) -> tuple[MemoryScope, ...]:
+        return self._backend.check_revert(
+            workspace, revision_ids, writer=writer, strict=strict, related=related
+        )
+
     def revert(
-        self, workspace: Path, revision_ids: Sequence[int], *, writer: MemoryWriter
+        self,
+        workspace: Path,
+        revision_ids: Sequence[int],
+        *,
+        writer: MemoryWriter,
+        strict: bool = False,
+        related: Collection[int] = (),
     ) -> MemoryRevertResult:
-        return self._backend.revert(workspace, revision_ids, writer=writer)
+        return self._backend.revert(
+            workspace, revision_ids, writer=writer, strict=strict, related=related
+        )
 
     def scope_usage(self, workspace: Path, scope: MemoryScope) -> tuple[int, int]:
         return self._backend.scope_usage(workspace, scope)

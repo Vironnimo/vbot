@@ -101,8 +101,6 @@ async def evaluate_live_case(
     args: argparse.Namespace,
     case: LiveCase,
     repetition: int = 1,
-    *,
-    models: Any = None,
 ) -> JsonObject:
     """Run one delegation for *case* and judge its first Tool call."""
 
@@ -116,7 +114,7 @@ async def evaluate_live_case(
         )
 
     brain = LiveBrain(
-        SimpleNamespace(get_adapter=lambda _ref: borrowed, models=models),
+        SimpleNamespace(get_adapter=lambda _ref: borrowed),
         BrainTarget(
             provider_id=args.provider,
             connection_id=args.connection,
@@ -164,9 +162,7 @@ async def evaluate_live_case(
     }
 
 
-async def _probe_live_tools(
-    adapter: Any, args: argparse.Namespace, *, models: Any = None
-) -> JsonObject:
+async def _probe_live_tools(adapter: Any, args: argparse.Namespace) -> JsonObject:
     cases = live_cases()
     selected = args.live_case.split(",")
     if selected != ["all"]:
@@ -210,7 +206,7 @@ async def _probe_live_tools(
 
     async def evaluate(case: LiveCase, repetition: int) -> None:
         async with limit:
-            results.append(await evaluate_live_case(adapter, args, case, repetition, models=models))
+            results.append(await evaluate_live_case(adapter, args, case, repetition))
             if args.live_report:
                 path = Path(args.live_report)
                 path.parent.mkdir(parents=True, exist_ok=True)

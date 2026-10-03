@@ -2,10 +2,11 @@
 
 A Session's Model reads Tool Results as plain text: a ``content`` string renders
 verbatim below the other fields. A view turns MCP content blocks, Resource
-contents and Prompt messages into that body, drops protocol defaults and a
-``structuredContent`` that only repeats the text, and keeps every other field,
-so it loses nothing the payload holds. Views also word the argument problems of
-discovered targets without echoing supplied values.
+contents and Prompt messages into that body, drops protocol defaults, the keys
+MCP reserves in ``_meta`` and a ``structuredContent`` that only repeats the
+text, and keeps every other field, so it loses nothing the server meant for its
+reader. Views also word the argument problems of discovered targets without
+echoing supplied values.
 """
 
 from __future__ import annotations
@@ -21,6 +22,11 @@ _DEFAULTS: dict[str, Any] = {
     "ttlMs": 0,
     "cacheScope": "private",
 }
+
+# ``_meta`` key prefixes whose second label is one of these belong to MCP itself
+# (``io.modelcontextprotocol/serverInfo``, ``dev.mcp/...``): protocol metadata,
+# not the server's message to its reader.
+_RESERVED_META_LABELS = frozenset({"modelcontextprotocol", "mcp"})
 
 _SUMMARY_PROPERTIES = 12
 _SUMMARY_CHARACTERS = 400
@@ -72,8 +78,33 @@ def join_parts(parts: list[Part]) -> str:
     return separator.join(texts)
 
 
+def without_protocol_meta(item: dict[str, Any]) -> dict[str, Any]:
+    """*item* without the keys MCP reserves in its ``_meta``; an emptied ``_meta`` goes too.
+
+    Other ``_meta`` keys are the server's own and stay.
+    """
+    meta = item.get("_meta")
+    if not isinstance(meta, dict):
+        return item
+    kept = {key: value for key, value in meta.items() if not _reserved_meta_key(key)}
+    if len(kept) == len(meta):
+        return item
+    return {
+        key: kept if key == "_meta" else value
+        for key, value in item.items()
+        if key != "_meta" or kept
+    }
+
+
+def _reserved_meta_key(key: Any) -> bool:
+    prefix, slash, _name = str(key).partition("/")
+    labels = prefix.split(".")
+    return bool(slash) and len(labels) >= 2 and labels[1].lower() in _RESERVED_META_LABELS
+
+
 def payload_view(payload: dict[str, Any]) -> dict[str, Any]:
     """Return what the Model reads for one complete MCP payload."""
+    payload = without_protocol_meta(payload)
     rendered = body_parts(payload)
     if rendered is None:
         return dict(payload)
@@ -198,6 +229,7 @@ def _canonical(value: Any) -> str:
 def _block_part(block: Any, item: str) -> Part:
     if not isinstance(block, dict):
         return Part(f"[content] {compact(block)}", "", None, item)
+    block = without_protocol_meta(block)
     kind = block.get("type")
     if kind == "text" and isinstance(block.get("text"), str):
         rest = {key: value for key, value in block.items() if key not in {"type", "text"}}
@@ -213,6 +245,7 @@ def _block_part(block: Any, item: str) -> Part:
 def _resource_part(resource: Any, item: str, extra: dict[str, Any]) -> Part:
     if not isinstance(resource, dict):
         return Part(f"[resource] {compact(resource)}", "", None, item)
+    resource = without_protocol_meta(resource)
     header = {key: value for key, value in resource.items() if key != "text"} | extra
     if isinstance(resource.get("text"), str):
         return Part(f"[resource] {compact(header)}\n", resource["text"], f"{item}/text", item)
@@ -222,6 +255,7 @@ def _resource_part(resource: Any, item: str, extra: dict[str, Any]) -> Part:
 def _message_parts(message: Any, item: str) -> list[Part]:
     if not isinstance(message, dict):
         return [Part(f"[message] {compact(message)}", "", None, item)]
+    message = without_protocol_meta(message)
     role = message.get("role", "message")
     content = message.get("content")
     blocks = (

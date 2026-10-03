@@ -7,9 +7,10 @@
 
   const noop = () => {};
 
-  // `activities` is the server's background activity list, kept current by
-  // its `activity_status` pushes; `onOpen` shows the Settings section that
-  // manages an entry's work.
+  // `activities` is the server's list of downloads, installations and
+  // indexing passes, kept current by its `activity_status` pushes; SettingsView
+  // shows this panel only while the list has entries. `onOpen` shows the
+  // Settings section that manages an entry's work.
   let { activities = [], onOpen = noop, onError = noop } = $props();
 
   let rows = $derived(activities.map(describeBackgroundActivity));
@@ -30,65 +31,59 @@
   }
 </script>
 
-{#if rows.length === 0}
-  <p class="s-row-desc activity-empty">{t('settings.activity.empty')}</p>
-{:else}
-  <ul class="s-group activity-list">
-    {#each rows as row (row.id)}
-      <li class="s-row s-row--stacked activity-row" data-activity={row.id}>
-        <div class="activity-head">
-          <div class="s-row-info">
-            <div class="s-row-label">{row.title}</div>
+<ul class="s-group activity-list">
+  {#each rows as row (row.id)}
+    <li class="s-row s-row--stacked activity-row" data-activity={row.id}>
+      <div class="activity-head">
+        <div class="s-row-info">
+          <div class="s-row-label">{row.title}</div>
+          {#if row.detail}
             <div class="s-row-desc" class:activity-warn={row.warn}>
-              {row.status}
+              {row.detail}
             </div>
-          </div>
-          <div class="activity-actions">
-            {#if row.section}
-              <Button variant="tertiary" onClick={() => onOpen(row.section)}>
-                {t('settings.activity.open')}
-              </Button>
-            {/if}
-            {#if row.cancelTarget}
-              <Button
-                loading={pending.includes(row.id)}
-                onClick={() =>
-                  act(row.id, () => cancelLocalSetup(row.cancelTarget))}
-              >
-                {t('settings.activity.cancel')}
-              </Button>
-            {/if}
-            {#if row.dismissible}
-              <Button
-                variant="tertiary"
-                loading={pending.includes(row.id)}
-                onClick={() =>
-                  act(row.id, () => dismissBackgroundActivity(row.id))}
-              >
-                {t('settings.activity.dismiss')}
-              </Button>
-            {/if}
-          </div>
+          {/if}
         </div>
-        {#if row.progress}
-          <ProgressBar
-            label={t('settings.activity.progressLabel', { title: row.title })}
-            percent={row.progress.percent}
-            text={row.progress.text}
-          />
-        {/if}
-      </li>
-    {/each}
-  </ul>
-{/if}
+        <div class="activity-actions">
+          {#if row.section}
+            <Button variant="tertiary" onClick={() => onOpen(row.section)}>
+              {t('settings.activity.open')}
+            </Button>
+          {/if}
+          {#if row.cancelTarget}
+            <Button
+              loading={pending.includes(row.id)}
+              onClick={() =>
+                act(row.id, () => cancelLocalSetup(row.cancelTarget))}
+            >
+              {t('settings.activity.cancel')}
+            </Button>
+          {/if}
+          {#if row.dismissible}
+            <Button
+              variant="tertiary"
+              loading={pending.includes(row.id)}
+              onClick={() =>
+                act(row.id, () => dismissBackgroundActivity(row.id))}
+            >
+              {t('settings.activity.dismiss')}
+            </Button>
+          {/if}
+        </div>
+      </div>
+      {#if row.progress}
+        <ProgressBar
+          label={row.title}
+          percent={row.progress.percent}
+          text={row.progress.text}
+        />
+      {/if}
+    </li>
+  {/each}
+</ul>
 
 <style>
-  .activity-empty {
-    margin: 0;
-  }
-
   .activity-list {
-    margin: 0;
+    margin: 0 0 44px;
     padding: 0;
     list-style: none;
   }

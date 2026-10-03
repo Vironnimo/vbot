@@ -305,6 +305,32 @@ class SkillPolicyService:
                 target=f"{owner_id}/{name}",
             )
 
+    def move_shared(self, owner_id: str, name: str, target: str) -> SkillPolicy | None:
+        """Move the shares of an owner's Skill ``name`` to its Skill ``target``.
+
+        For a Skill merged into another one: ``target`` is then shared with every
+        receiver of either Skill, and ``name`` with none. Returns the new policy,
+        or ``None`` when ``name`` was not shared and nothing was written.
+        """
+        self._validate_skill_name(name)
+        self._validate_skill_name(target)
+        if name == target:
+            raise SkillPolicyError("A Skill's shares cannot move to the Skill itself")
+        with self._lock:
+            stored = self._read_stored()
+            owner_skills = dict(stored.shared.get(owner_id, {}))
+            moved = owner_skills.pop(name, None)
+            if moved is None:
+                return None
+            owner_skills[target] = tuple(sorted({*owner_skills.get(target, ()), *moved}))
+            per_owner = {owner: dict(skills) for owner, skills in stored.shared.items()}
+            per_owner[owner_id] = owner_skills
+            return self._write_policy(
+                _StoredPolicy(disabled=stored.disabled, shared=per_owner),
+                operation="move_shares",
+                target=f"{owner_id}/{name}->{target}",
+            )
+
     @staticmethod
     def _validate_skill_name(name: str) -> None:
         if not isinstance(name, str) or not SKILL_NAME_TRIGGER_PATTERN.fullmatch(name):

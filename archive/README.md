@@ -20,3 +20,10 @@ See [Archived Write Tool](../.vorch/domain-maps/tools/write.md) for replacement 
 tests and the integration files that invoked them, with source commit and SHA-256
 hashes. The tracked pre-commit hook, targeted test runs and CI on every push to
 `main` replace them (`.vorch/PROJECT.md` -> Testing). Restore only in a worktree.
+
+`computer-use.zip` preserves the first Computer Use Extension (one `computer` Tool
+with window targets, view ids, background delivery, element refs and the external
+Cua Driver), its focused tests, domain map and Provider probe cases, plus snapshots
+of the shared files it touched, with source commit and SHA-256 hashes. The rebuilt
+Extension at `resources/extensions/computer_use/` replaces it; see
+[Computer Use](../.vorch/domain-maps/extensions/computer-use.md). Restore only in a worktree.

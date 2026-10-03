@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import os
 import re
@@ -202,8 +203,8 @@ def test_posix_terminal_program_without_job_control_receives_ctrl_c(tmp_path: Pa
         pytest.skip("Linux PTY contract")
     program = (
         "import sys, time\n"
-        "print('<ready>', flush=True)\n"
-        "try:\n    time.sleep(10)\n"
+        # Ctrl+C can arrive while print is still returning under parallel load.
+        "try:\n    print('<ready>', flush=True)\n    time.sleep(10)\n"
         "except KeyboardInterrupt:\n    print('interrupted')\n    sys.exit(7)\n"
     )
     adapter = spawn_posix_terminal([sys.executable, "-c", program], tmp_path)
@@ -216,6 +217,39 @@ def test_posix_terminal_program_without_job_control_receives_ctrl_c(tmp_path: Pa
         assert adapter.exit_code() == 7
     finally:
         adapter.close()
+
+
+@pytest.mark.usefixtures("server_lifetime")
+def test_posix_terminal_starts_with_exactly_its_working_directory_and_environment(
+    tmp_path: Path,
+) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux PTY contract")
+    # A project whose own ``core`` package, also on its PYTHONPATH, would hide vBot's.
+    workdir = tmp_path / "project"
+    (workdir / "core").mkdir(parents=True)
+    (workdir / "core" / "__init__.py").write_text("raise SystemExit('shadowed')\n", "utf-8")
+    # Without a UTF-8 locale Python's startup sets LC_CTYPE (PEP 538).
+    environment = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "PYTHONPATH": str(workdir),
+        "PYTHONHOME": str(tmp_path / "missing"),
+    }
+    report = "import os; print(repr((os.getcwd(), open('/proc/self/environ', 'rb').read())))"
+    adapter = terminal_backend.spawn_terminal_adapter(
+        [sys.executable, "-I", "-S", "-c", report], workdir, environment, 24, 80
+    )
+    try:
+        output = read_to_end(adapter)
+        assert adapter.exit_code() == 0, output
+    finally:
+        adapter.close()
+
+    cwd, started_environment = ast.literal_eval(output.strip())
+    assert Path(cwd) == workdir.resolve()
+    assert dict(entry.split(b"=", 1) for entry in started_environment.split(b"\0") if entry) == {
+        os.fsencode(name): os.fsencode(value) for name, value in environment.items()
+    }
 
 
 @pytest.mark.usefixtures("server_lifetime")

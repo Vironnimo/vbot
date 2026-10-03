@@ -98,9 +98,7 @@ describe('AgentsView models', () => {
 
     expect(
       Array.from(
-        document.body.querySelectorAll(
-          '.agents-view__model-group .s-row-label',
-        ),
+        document.body.querySelectorAll('.agent-model-settings .s-row-label'),
         (label) => label.textContent.trim(),
       ),
     ).toEqual([
@@ -127,7 +125,7 @@ describe('AgentsView models', () => {
       document.querySelectorAll('[id^="agent-fallback-model-"]'),
     ).toHaveLength(0);
     expect(
-      document.querySelectorAll('.agents-view__fallback-add'),
+      document.querySelectorAll('.agent-model-settings__fallback-add'),
     ).toHaveLength(1);
     expect(document.querySelectorAll('#agent-thinking-effort')).toHaveLength(1);
     expect(document.querySelectorAll('#agent-temperature')).toHaveLength(1);
@@ -349,7 +347,7 @@ describe('AgentsView models', () => {
 
     // The chain starts empty: add a row, then pick the fallback model.
     document.body
-      .querySelector('.agents-view__fallback-add')
+      .querySelector('.agent-model-settings__fallback-add')
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
@@ -411,7 +409,7 @@ describe('AgentsView models', () => {
 
     // Removing the only chain row clears the fallback list.
     document.body
-      .querySelector('.agents-view__fallback-remove')
+      .querySelector('.agent-model-settings__fallback-remove')
       .dispatchEvent(new MouseEvent('click', { bubbles: true }));
     flushSync();
 
@@ -511,9 +509,9 @@ describe('AgentsView models', () => {
       () => modelTriggerLabel() === inherited('openai/gpt-5.2'),
       100,
     );
-    expect(document.querySelectorAll('.agents-view__fallback-row').length).toBe(
-      0,
-    );
+    expect(
+      document.querySelectorAll('.agent-model-settings__fallback-row').length,
+    ).toBe(0);
     expect(thinkingTriggerLabel()).toBe(inherited('high'));
   });
 

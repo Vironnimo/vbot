@@ -38,6 +38,7 @@ from cli.debug_management import (
     debug_trace_list,
     debug_trace_show,
 )
+from cli.librarian_management import librarian_overview, librarian_run, librarian_status
 from cli.log_management import log_read
 from cli.memory_management import (
     memory_add,
@@ -66,14 +67,20 @@ from cli.prompt_management import (
 )
 from cli.server_management import CommandResult, ServerInstance
 from cli.skill_management import (
+    skill_archived,
     skill_create,
     skill_delete,
+    skill_history,
     skill_inspect,
     skill_install,
     skill_inventory,
+    skill_purge,
     skill_read,
     skill_remove_file,
+    skill_restore,
+    skill_revert,
     skill_set_disabled,
+    skill_set_pinned,
     skill_share,
     skill_unshare,
     skill_update,
@@ -261,6 +268,18 @@ def dispatch_skill_command(
         return delete_skill_fn(instance, args.scope, args.name, args.yes)
     if args.command == "remove-file":
         return remove_skill_file_fn(instance, args.scope, args.name, args.path, args.yes)
+    if args.command == "history":
+        return skill_history(instance, args.scope, args.name, args.limit)
+    if args.command == "revert":
+        return skill_revert(instance, args.scope, args.revisions)
+    if args.command == "archived":
+        return skill_archived(instance, args.scope)
+    if args.command == "restore":
+        return skill_restore(instance, args.scope, args.archive_id)
+    if args.command == "purge":
+        return skill_purge(instance, args.scope, args.archive_id, args.yes)
+    if args.command in {"pin", "unpin"}:
+        return skill_set_pinned(instance, args.scope, args.name, args.command == "pin")
     raise ValueError(f"Unsupported skill command: {args.command}")
 
 
@@ -295,6 +314,21 @@ def dispatch_memory_command(
     if args.command == "revert":
         return memory_revert(instance, args.agent, args.revisions)
     raise ValueError(f"Unsupported memory command: {args.command}")
+
+
+def dispatch_librarian_command(
+    args: argparse.Namespace,
+    instance: ServerInstance,
+) -> CommandResult:
+    """Dispatch one parsed Librarian command against the server RPC client."""
+
+    if args.command == "status":
+        if args.agent is None:
+            return librarian_overview(instance)
+        return librarian_status(instance, args.agent)
+    if args.command == "run":
+        return librarian_run(instance, args.agent)
+    raise ValueError(f"Unsupported librarian command: {args.command}")
 
 
 def dispatch_cron_command(

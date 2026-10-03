@@ -16,6 +16,7 @@ import yaml
 
 from core.runtime.runtime import Runtime
 from core.skills.skills import SKILL_ORIGIN_AGENT, SkillRegistry, project_skills_dir
+from core.tools import ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
 from server.rpc import agent_methods, skill_methods
@@ -109,6 +110,9 @@ def test_shared_skill_reaches_only_its_receivers_as_their_own_skill(
 
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills("main")
+    # Librarian aging counts the receivers' use of the Skills the owner shares.
+    assert runtime.shared_skill_receivers("main") == {"deploy": frozenset({"two"})}
+    assert runtime.shared_skill_receivers("two") == {}
 
     registry = runtime.skills_for(None, "two")
     assert "deploy" in _names(registry)
@@ -169,6 +173,87 @@ def test_a_stale_shared_entry_warns_once_until_it_resolves_not_per_registry_buil
     assert "deploy" in again
 
 
+@pytest.mark.asyncio
+async def test_a_deleted_skills_shares_and_automations_follow_it_or_are_named(
+    config: Config, tmp_path: Path
+) -> None:
+    runtime = Runtime(config, safe_startup_mode="test")
+    runtime.start()
+    try:
+        runtime.agents.create("receiver", "Receiver")
+        data_dir = runtime.storage.data_dir
+        write_agent_skill(data_dir, "main", "deploy-web", "Deploy the web app.")
+        write_agent_skill(data_dir, "main", "deploy", "Deploy anything.")
+        runtime.skill_policy.set_shared("main", "deploy-web", shared=True, receivers=["receiver"])
+        job = await runtime.cron_service.create_job(
+            agent_id="main",
+            name="Nightly",
+            prompt="/deploy-web tonight",
+            schedule_type="interval",
+            interval_seconds=3600,
+        )
+        context = ToolContext(
+            agent_id="main",
+            session_id="session-one",
+            run_id="run-one",
+            tool_call_id="call-one",
+            tool_name="skill_manage",
+            tool_call_index=0,
+            workspace=tmp_path,
+            vbot_root=tmp_path,
+            data_root=data_dir,
+            cwd=tmp_path,
+        )
+
+        result = await runtime.tools.dispatch(
+            context,
+            {"action": "delete", "name": "deploy-web", "absorbed_into": "deploy"},
+            ["skill_manage"],
+        )
+
+        assert result["data"]["content"].endswith(
+            "\nNote: These now use Skill 'deploy' in place of 'deploy-web': the share with "
+            "Agent 'Receiver'; Cron job 'Nightly'."
+        )
+        assert runtime.skill_policy.load().shared == {"main": {"deploy": frozenset({"receiver"})}}
+        assert _names(runtime.skills_for(None, "receiver")) >= {"deploy"}
+        assert runtime.cron_service.get_job(job.id).prompt == "/deploy tonight"
+        home = runtime.agent_skills_dir("main")
+        [revision] = runtime.skill_authoring.history(home, "deploy-web", limit=1)
+        assert [reference.to_dict() for reference in revision.followed] == [
+            {"kind": "shared", "id": "receiver", "name": "Receiver"},
+            {"kind": "cron", "id": job.id, "name": "Nightly"},
+        ]
+
+        # Without absorbed_into nothing holds the instructions: nothing moves, and
+        # the result names what still points at the deleted Skill.
+        write_agent_skill(data_dir, "main", "deploy-old", "Deploy the old way.")
+        runtime.skill_policy.set_shared("main", "deploy-old", shared=True, receivers=["receiver"])
+        old_job = await runtime.cron_service.create_job(
+            agent_id="main",
+            name="Weekly",
+            prompt="/deploy-old now",
+            schedule_type="interval",
+            interval_seconds=3600,
+        )
+
+        result = await runtime.tools.dispatch(
+            context, {"action": "delete", "name": "deploy-old"}, ["skill_manage"]
+        )
+
+        assert result["data"]["content"].endswith(
+            "\nWarning: These still name 'deploy-old', which no longer exists: the share with "
+            "Agent 'Receiver'; Cron job 'Weekly'. Name them in your reply so the user can "
+            "change or remove them."
+        )
+        assert runtime.skill_policy.load().shared["main"]["deploy-old"] == {"receiver"}
+        assert runtime.cron_service.get_job(old_job.id).prompt == "/deploy-old now"
+        [revision] = runtime.skill_authoring.history(home, "deploy-old", limit=1)
+        assert revision.followed == ()
+    finally:
+        runtime.stop()
+
+
 def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(
     runtime: Runtime,
 ) -> None:
@@ -181,6 +266,7 @@ def test_unsharing_or_disabling_removes_a_shared_skill_from_receivers_live(
     runtime.skill_policy.set_shared("main", "deploy", shared=False)
     runtime.invalidate_agent_skills(None)
     assert "deploy" not in _names(runtime.skills_for(None, "two"))
+    assert runtime.shared_skill_receivers("main") == {}
 
     runtime.skill_policy.set_shared("main", "deploy", shared=True, receivers=["two"])
     runtime.invalidate_agent_skills(None)
@@ -232,6 +318,30 @@ def test_installed_private_and_global_skills_refresh_live_visibility(
     install({"source": str(source), "scope": "global"})
     assert runtime.skills_for(None, "main").get("global-import")
     assert "global-import" not in _allowed(runtime.skills_for(None, "main"), [])
+
+    # The inventory carries each writable package's history record.
+    [entry] = [
+        entry
+        for entry in runtime.skill_inventory()["skills"]
+        if entry["name"] == "imported" and entry["editable_scope"] == "agent:main"
+    ]
+    assert (entry["created_by"], entry["changed_by"], entry["pinned"]) == ("human", "human", False)
+
+    # Deleting archives the package: it leaves every registry, the inventory lists
+    # it under its home, and the skill Tool's archive lookup finds it.
+    asyncio.run(
+        call_rpc(handlers, "skill.delete", state, {"scope": "agent:main", "name": "imported"})
+    )
+    assert "imported" not in _names(runtime.skills_for(None, "receiver"))
+    [archived] = runtime.skill_inventory()["archived"]
+    assert (archived["scope"], archived["name"], archived["reason"]) == (
+        "agent:main",
+        "imported",
+        "deleted",
+    )
+    found = runtime.archived_skill("main", "imported")
+    assert found is not None and found.archive_id == archived["archive_id"]
+    assert runtime.archived_skill("receiver", "imported") is None
 
 
 def test_manager_lists_inspects_and_evaluates_each_same_name_package(

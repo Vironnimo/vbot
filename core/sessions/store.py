@@ -58,6 +58,7 @@ if TYPE_CHECKING:
         SessionReadCursor,
         SessionRunAdmission,
         SessionRunCompletion,
+        SessionRunRecord,
         TemporarySessionBinding,
         ToolResultFacts,
     )
@@ -154,11 +155,22 @@ class SessionStore:
     # -- Session lifecycle -------------------------------------------------------
 
     def create(
-        self, address: SessionAddress, created_at: str | None = None, *, generate_id: bool = False
+        self,
+        address: SessionAddress,
+        created_at: str | None = None,
+        *,
+        generate_id: bool = False,
+        run_kind: str | None = None,
+        metadata: JsonObject | None = None,
     ) -> SessionAddress:
         return self._execute_write(
             lambda connection: _store_mutations.create(
-                connection, address, created_at, generate_id=generate_id
+                connection,
+                address,
+                created_at,
+                generate_id=generate_id,
+                run_kind=run_kind,
+                metadata=metadata,
             )
         )
 
@@ -232,6 +244,15 @@ class SessionStore:
         return self._execute_write(
             lambda connection: _store_mutations.retarget_identity_agent_references(
                 connection, old_agent_id, new_agent_id
+            )
+        )
+
+    def retarget_metadata_value(
+        self, agent_id: str, key: str, old_value: str, new_value: str
+    ) -> int:
+        return self._execute_write(
+            lambda connection: _store_mutations.retarget_metadata_value(
+                connection, agent_id, key, old_value, new_value
             )
         )
 
@@ -852,6 +873,15 @@ class SessionStore:
                 before=before,
                 after=after,
                 excluded_tool_name=excluded_tool_name,
+            )
+        )
+
+    def run_records(
+        self, address: SessionAddress, expected_generation_id: str | None = None
+    ) -> tuple[SessionRunRecord, ...]:
+        return self._read(
+            lambda connection: _store_history.run_records(
+                connection, address, expected_generation_id
             )
         )
 

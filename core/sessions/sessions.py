@@ -141,20 +141,30 @@ class ChatSessionManager:
         project_id: str | None = None,
         *,
         actor: str | None = None,
+        run_kind: RunKind | None = None,
+        metadata: JsonObject | None = None,
     ) -> ChatSession:
         """Create a Session.
 
         ``actor`` names who asked for it (``rpc``, ``command``): that creation is a
         control-plane change and logs at INFO. A Session created as a side effect of
         other work (a triggered Run, a Sub-Agent) passes none and logs at DEBUG.
+        ``run_kind`` labels the new Session and ``metadata`` sets metadata facade
+        values (a title, open keys) in the same write, so no reader ever sees the
+        Session without them (a Librarian pass Session and its binding).
         """
         _validate_agent_id(agent_id)
         if project_id is not None and not is_valid_project_id(project_id):
             raise ChatSessionError("invalid project id")
         if session_id is not None:
             _validate_session_id(session_id)
+        if run_kind is not None and not isinstance(run_kind, RunKind):
+            raise ChatSessionError("run kind must be a RunKind")
         address = self._store.create(
-            SessionAddress(project_id, agent_id, session_id or ""), generate_id=session_id is None
+            SessionAddress(project_id, agent_id, session_id or ""),
+            generate_id=session_id is None,
+            run_kind=None if run_kind is None else run_kind.value,
+            metadata=metadata,
         )
         _LOGGER.log(
             logging.INFO if actor is not None else logging.DEBUG,
@@ -173,9 +183,18 @@ class ChatSessionManager:
         project_id: str | None = None,
         *,
         actor: str | None = None,
+        run_kind: RunKind | None = None,
+        metadata: JsonObject | None = None,
     ) -> ChatSession:
         return await self._store.run_async(
-            lambda: self.create(agent_id, session_id, project_id, actor=actor)
+            lambda: self.create(
+                agent_id,
+                session_id,
+                project_id,
+                actor=actor,
+                run_kind=run_kind,
+                metadata=metadata,
+            )
         )
 
     def exists(self, address: SessionAddress) -> bool:
@@ -756,6 +775,18 @@ class ChatSessionManager:
         repeated call after an interruption finishes the retarget.
         """
         return self._store.retarget_identity_agent_references(old_agent_id, new_agent_id)
+
+    def retarget_metadata_value(
+        self, agent_id: str, key: str, old_value: str, new_value: str
+    ) -> int:
+        """Point one open metadata value of an Identity Agent's live Sessions elsewhere.
+
+        Every live global Session of ``agent_id`` whose metadata ``key`` holds
+        ``old_value`` gets ``new_value``, such as the Librarian Sessions bound to a
+        renamed Agent. Returns how many changed; only values still naming
+        ``old_value`` change, so a repeated call after an interruption finishes it.
+        """
+        return self._store.retarget_metadata_value(agent_id, key, old_value, new_value)
 
     async def move(self, source: SessionAddress, target: SessionAddress) -> ChatSession:
         """Give a Session a new address; history, forks and relations stay attached.

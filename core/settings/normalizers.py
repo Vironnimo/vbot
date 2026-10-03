@@ -51,6 +51,10 @@ from core.settings.settings import (
     ARCHIVE_RETENTION_DAYS_RULE,
     DEFAULT_APPEARANCE_CHAT_WIDTH,
     DEFAULT_APPEARANCE_CHAT_WORKING_MODE,
+    LIBRARIAN_BOOLEAN_FIELDS,
+    LIBRARIAN_DAY_FIELDS,
+    LIBRARIAN_DAYS_RULE,
+    MAX_LIBRARIAN_DAYS,
     NOTIFICATION_FIELDS,
     SUPPORTED_APPEARANCE_CHAT_WIDTHS,
     SUPPORTED_APPEARANCE_CHAT_WORKING_MODES,
@@ -91,6 +95,15 @@ REFLECTION_SETTING_DEFAULTS: dict[str, Any] = {
     "enabled": True,
     "memory_turn_interval": 10,
     "skill_model_step_interval": 10,
+}
+
+# The Librarian's scheduled passes over each Agent's own Skills. The Librarian is
+# an Agent: its Model settings live in its Agent configuration, not here.
+LIBRARIAN_SETTING_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "interval_days": 7,
+    "archive_after_days": 90,
+    "consolidate": True,
 }
 
 
@@ -479,6 +492,41 @@ def _normalize_reflection_interval(key: str, value: Any) -> int:
     return value
 
 
+def normalize_librarian_settings(librarian: Any) -> dict[str, Any]:
+    """Return the normalized Librarian settings section.
+
+    Fields it does not know are left out, among them ``model`` of an earlier vBot,
+    so the next write of the section drops them.
+    """
+
+    if librarian is None:
+        section: dict[str, Any] = {}
+    elif isinstance(librarian, Mapping):
+        section = dict(librarian)
+    else:
+        raise StorageError("Expected settings.librarian to be an object")
+    normalized: dict[str, Any] = {}
+    for key in LIBRARIAN_BOOLEAN_FIELDS:
+        value = section.get(key)
+        if value is None:
+            value = LIBRARIAN_SETTING_DEFAULTS[key]
+        elif not isinstance(value, bool):
+            raise StorageError(f"Librarian setting {key} must be a boolean")
+        normalized[key] = value
+    for key in LIBRARIAN_DAY_FIELDS:
+        value = section.get(key)
+        if value is None:
+            value = LIBRARIAN_SETTING_DEFAULTS[key]
+        elif (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or not 1 <= value <= MAX_LIBRARIAN_DAYS
+        ):
+            raise StorageError(f"Librarian setting {key} {LIBRARIAN_DAYS_RULE}")
+        normalized[key] = value
+    return normalized
+
+
 def normalize_notification_settings(notifications: Any) -> dict[str, bool]:
     """Return all desktop-notification switches, filling absent ones with defaults."""
 
@@ -674,6 +722,7 @@ __all__ = [
     "DEFAULT_WEB_SEARCH_SETTINGS",
     "NOTIFICATION_SETTING_DEFAULTS",
     "REFLECTION_SETTING_DEFAULTS",
+    "LIBRARIAN_SETTING_DEFAULTS",
     "SUPPORTED_APPEARANCE_LANGUAGES",
     "coerce_defaults_section",
     "coerce_defaults_update",
@@ -698,6 +747,7 @@ __all__ = [
     "normalize_providers_settings",
     "normalize_recall_settings",
     "normalize_reflection_settings",
+    "normalize_librarian_settings",
     "normalize_session_title_settings",
     "normalize_skill_directories",
     "normalize_speech_settings",

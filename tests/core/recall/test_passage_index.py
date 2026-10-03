@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import closing
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -23,7 +23,6 @@ from core.recall import (
     HybridRecallBackend,
     PassageIndex,
     PassageIndexError,
-    RecallBackendContext,
     RecallSearchError,
     VectorHeader,
 )
@@ -37,7 +36,12 @@ from core.recall._passage_catalog import (
 )
 from core.recall.passages import Passage
 from core.sessions import ChatSession, ChatSessionManager
-from tests.core.recall.recall_test_support import connect_store, request, timestamp
+from tests.core.recall.recall_test_support import (
+    HybridBackendFactory,
+    connect_store,
+    request,
+    timestamp,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -686,11 +690,9 @@ async def test_same_session_uuid_in_two_scopes_stays_distinct(tmp_path: Path) ->
 
 
 @pytest.fixture
-def recall(tmp_path: Path, sessions: ChatSessionManager) -> Iterator[HybridRecallBackend]:
+def recall(hybrid_backend: HybridBackendFactory) -> HybridRecallBackend:
     """Hybrid without an embedding model: only its literal Passage arm ranks."""
-    backend = HybridRecallBackend(RecallBackendContext(data_dir=tmp_path, sessions=sessions))
-    yield backend
-    backend.close()
+    return hybrid_backend()
 
 
 async def test_literal_search_returns_multiple_source_faithful_passages(

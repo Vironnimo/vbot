@@ -72,15 +72,39 @@ export default Object.freeze({
   'mcp.nameHelp':
     'Lowercase letters, numbers and underscores; start with a letter.',
   'mcp.oauth': 'Sign in with OAuth',
+  'mcp.oauthClientId': 'OAuth client ID (optional)',
+  'mcp.oauthClientIdHelp':
+    "Only for a server that does not let vBot register itself. Register vBot with the server's sign-in service using the redirect URL shown in this connection's details, then enter the client ID it issues.",
+  'mcp.oauthClientSecret': 'Credential name for the client secret (optional)',
+  'mcp.oauthClientSecretHelp':
+    'Use a credential name, not the secret. After saving, open Credentials to set its value.',
+  'mcp.oauthScopes': 'OAuth scopes (optional)',
+  'mcp.oauthScopesHelp':
+    'Space-separated scopes vBot requests in addition to the ones the server asks for.',
   'mcp.program': 'Program',
   'mcp.programHelp':
     'Executable on the vBot host, for example uvx, npx or an absolute path.',
+  'mcp.reauthorize': 'Sign in again',
   'mcp.redirect': 'OAuth redirect URL (optional)',
+  'mcp.redirectHelp':
+    "Leave empty to use vBot's own address, where the browser completes the sign-in automatically.",
+  'mcp.redirectUri': 'Sign-in redirect URL: {uri}',
   'mcp.removeArgument': 'Remove argument {number}',
   'mcp.removeBody':
     'Agents will lose access to this connection. The external application and installed software will remain.',
   'mcp.removeEntry': 'Remove {group} entry {number}',
   'mcp.removeTitle': 'Remove {name}?',
+  'mcp.roots': 'Share the work directory',
+  'mcp.rootsHelp':
+    'Tells the server the work directory of the Agent it currently serves (MCP roots), for example so it can find project files.',
+  'mcp.rootsOff': 'Off',
+  'mcp.rootsWorkspace': "The Agent's work directory",
+  'mcp.sampling': 'Model requests from the server',
+  'mcp.samplingAllow': 'Allow',
+  'mcp.samplingAsk': 'Ask me each time',
+  'mcp.samplingHelp':
+    "Lets the server ask the Agent's Model for a reply while it serves that Agent (MCP sampling). Replies are limited in length and frequency and count toward the Agent's usage.",
+  'mcp.samplingOff': 'Off',
   'mcp.save': 'Save connection',
   'mcp.saveCredential': 'Save credential',
   'mcp.saveHelp':
@@ -91,6 +115,8 @@ export default Object.freeze({
   'mcp.secretValue': 'New secret value',
   'mcp.secretsHelp':
     'Use credential names here, not secret values. After saving, open Credentials to set their values.',
+  'mcp.signedIn': 'Signed in',
+  'mcp.signedOut': 'Not signed in',
   'mcp.sse': 'Server URL (legacy SSE)',
   'mcp.test': 'Test connection',
   'mcp.testCancelled': 'Connection test cancelled.',
@@ -102,6 +128,71 @@ export default Object.freeze({
   'mcp.title': 'MCP connections',
   'mcp.url': 'Server URL',
   'mcp.value': 'Value (non-secret)',
+  'mcp.import': 'Import',
+  'mcp.importTitle': 'Import MCP servers',
+  'mcp.importSource': 'Setup text',
+  'mcp.importSourceHelp':
+    'Paste the MCP setup a server gives for another app: an mcpServers or servers block (Claude Desktop, Cursor, VS Code, Windsurf and others), Codex TOML, a claude mcp add command, a command line or a server URL.',
+  'mcp.importFile': 'Open file…',
+  'mcp.importSafety':
+    'Only import setups from sources you trust: a local server runs its program on the machine hosting vBot.',
+  'mcp.importPreview': 'Preview',
+  'mcp.importReview':
+    'Check the program or URL of each server before importing it. Secrets in the setup are stored as vBot credentials, not in the connection.',
+  'mcp.importApply': 'Import {count}',
+  'mcp.importEdit': 'Edit setup text',
+  'mcp.importInvalid': 'Cannot import',
+  'mcp.importExists': 'Name in use',
+  'mcp.importConflict':
+    'A connection named {id} already exists. Enter another name to import this server.',
+  'mcp.importDisabled': 'Saved turned off',
+  'mcp.importCredentialProvided':
+    'Its value from the setup is stored as credential {name}.',
+  'mcp.importCredentialSet':
+    'Uses credential {name}, which already has a value.',
+  'mcp.importCredentialMissing':
+    'Stored as credential {name}. Enter the value now, or set it later under Credentials.',
+  'mcp.importCredentialValue': 'Value for {target} (optional)',
+  'mcp.imported': 'Imported {count} connections.',
+  'mcp.quickFill': 'Command line or URL (optional)',
+  'mcp.quickFillHelp':
+    'Paste the command or server URL from the server setup instructions to fill in the form.',
+  'mcp.quickFillPlaceholder': 'npx -y @scope/server-name or https://…',
+  'mcp.quickFillApply': 'Fill in',
+  'mcp.quickFillCredential':
+    'After saving, set credential {name} for {target} under Credentials.',
+  'mcp.reconnect': 'Reconnect',
+  'mcp.reconnectHelp':
+    'Close the connection and connect again. A local program is restarted.',
+  'mcp.sseDeprecated': 'Deprecated in MCP',
+  'mcp.sseHint':
+    'Legacy SSE is deprecated in MCP. Choose Server URL (HTTP) unless the server only offers SSE.',
+  'mcp.technicalDetails': 'Technical details',
+  'mcp.serverOutput': 'Server output (last {count} lines)',
+  'mcp.problemInstall':
+    "Program {command} was not found on the machine hosting vBot. Install {requirement}, then restart vBot so it finds the program, or enter the program's full path.",
+  'mcp.problem.command_not_found':
+    "Program {command} was not found on the machine hosting vBot. Install it, then restart vBot so it finds the program, or enter the program's full path.",
+  'mcp.problem.command_not_executable':
+    'Program {command} could not be started: permission denied. Choose a program file vBot may run.',
+  'mcp.problem.directory_not_found':
+    'Working directory {directory} does not exist on the machine hosting vBot. Create it or choose another one.',
+  'mcp.problem.credential_missing':
+    'Credential {credential} has no value. Set it under Credentials.',
+  'mcp.problem.process_exited':
+    'The local program ended or closed its connection. Its last output usually names the cause.',
+  'mcp.problem.server_unreachable':
+    'Could not reach {host}. Check that the server is running and the URL is correct.',
+  'mcp.problem.unauthorized':
+    'The server refused access (HTTP {status}). Set the credential it expects, or turn on OAuth sign-in if it offers one.',
+  'mcp.problem.endpoint_not_found':
+    'The server has no MCP endpoint at this URL (HTTP {status}). Check the full URL, including a path such as /mcp.',
+  'mcp.problem.method_not_allowed':
+    'The server does not accept Server URL (HTTP) connections at this URL (HTTP {status}). Check the URL; an older server may need Server URL (legacy SSE).',
+  'mcp.problem.server_error':
+    'The server failed with HTTP {status}. Try again later.',
+  'mcp.problem.timed_out':
+    'The server did not answer within {seconds} seconds.',
   'calendar.title': 'Calendar',
   'calendar.subtitle': 'Your appointments and the agent schedule in one view.',
   'calendar.view.month': 'Month',

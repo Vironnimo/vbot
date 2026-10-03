@@ -20,7 +20,9 @@ from core.memory import (
 )
 from core.memory._history import MemoryHistory
 
-_TOOL = MemoryWriter(agent_id="coder", actor="tool", session_id="s-1", run_id="r-1")
+_TOOL = MemoryWriter(
+    agent_id="coder", actor="tool", session_id="s-1", run_id="r-1", run_kind="user"
+)
 _RPC = MemoryWriter(agent_id="coder", actor="rpc")
 
 
@@ -63,7 +65,12 @@ def test_changes_are_recorded_with_their_writer_and_replay_to_every_state(
         (3, "agent", "edit", "tool"),
         (4, "user", "edit", "tool"),
     ]
-    assert (revisions[0].session_id, revisions[0].run_id) == ("s-1", "r-1")
+    assert (revisions[0].session_id, revisions[0].run_id, revisions[0].run_kind) == (
+        "s-1",
+        "r-1",
+        "user",
+    )
+    assert revisions[1].run_kind is None
     assert [_changes(r.to_dict()) for r in revisions] == [
         [("added", None, "Uses pytest.")],
         [("added", None, "Prefers German.")],
@@ -81,6 +88,12 @@ def test_changes_are_recorded_with_their_writer_and_replay_to_every_state(
     # One JSON object per revision beside the Agent's Workspace, outside it.
     lines = (agents_root / "coder" / "memory-history.jsonl").read_text(encoding="utf-8")
     assert [json.loads(line)["id"] for line in lines.splitlines()] == [1, 2, 3, 4]
+    assert [json.loads(line).get("run_kind") for line in lines.splitlines()] == [
+        "user",
+        None,
+        "user",
+        "user",
+    ]
 
 
 def test_edits_outside_the_service_are_recorded_when_next_noticed(
@@ -177,19 +190,24 @@ def test_revert_refuses_to_overwrite_later_changes_and_changes_nothing(
     service.replace_matching(workspace, "agent", "New wording", "Newest wording.", writer=_TOOL)
     before = (workspace / "MEMORY.md").read_text(encoding="utf-8")
 
-    with pytest.raises(MemoryRevertError) as conflict:
-        service.revert(workspace, [3, 4], writer=_RPC)
+    # The check refuses exactly like the revert would, before it writes.
+    for attempt in (service.check_revert, service.revert):
+        with pytest.raises(MemoryRevertError) as conflict:
+            attempt(workspace, [3, 4], writer=_RPC)
 
-    assert [(c.revision, c.text, c.later) for c in conflict.value.conflicts] == [
-        (4, "New wording.", (5,))
-    ]
-    assert "revision 5 changed it since" in str(conflict.value)
+        assert [(c.revision, c.text, c.later) for c in conflict.value.conflicts] == [
+            (4, "New wording.", (5,))
+        ]
+        assert "revision 5 changed it since" in str(conflict.value)
     assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == before
     with pytest.raises(MemoryError, match="where the history starts"):
         service.revert(workspace, [1], writer=_RPC)
     with pytest.raises(MemoryError, match="revision 9 does not exist; revisions run from 1 to 5"):
         service.revert(workspace, [9], writer=_RPC)
 
+    assert service.check_revert(workspace, [2, 4, 5], writer=_RPC) == ("agent",)
+    assert (workspace / "MEMORY.md").read_text(encoding="utf-8") == before
+    assert len(service.recorded_revisions("coder")) == 5
     service.revert(workspace, [2, 4, 5], writer=_RPC)
 
     assert service.entries_at(workspace, "coder", None)["agent"] == ["Baseline.", "Unrelated."]
@@ -216,7 +234,7 @@ def test_a_revert_whose_write_fails_changes_nothing(
     assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
 
 
-def test_a_revert_that_cannot_be_undone_names_the_scopes_it_changed(
+def test_a_revert_that_cannot_be_undone_names_and_records_the_scopes_it_changed(
     service: MemoryService, workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service.add_entry(workspace, "user", "Prefers German.", writer=_TOOL)
@@ -239,10 +257,17 @@ def test_a_revert_that_cannot_be_undone_names_the_scopes_it_changed(
         "user": [],
         "agent": ["Uses pytest."],
     }
-    # The history did not record the change and notices it as an external one.
-    assert [(r.id, r.scope, r.kind) for r in service.history(workspace, "coder")[2:]] == [
-        (3, "user", "external")
-    ]
+    # The scope left reverted is recorded, so reverting again takes back only the rest.
+    [recorded] = incomplete.value.revisions
+    assert service.history(workspace, "coder")[2:] == [recorded]
+    assert (recorded.id, recorded.scope, recorded.kind, recorded.reverts) == (
+        3,
+        "user",
+        "revert",
+        (1,),
+    )
+    assert service.revert(workspace, [2], writer=_RPC).changed == ("agent",)
+    assert service.entries_at(workspace, "coder", None) == {"user": [], "agent": []}
 
 
 def _memory_files(workspace: Path) -> dict[str, bytes]:

@@ -76,11 +76,9 @@ const COMPOSED_KEYS = {
     'group_title',
     'extension_sampling',
   ],
-  // statisticsView.js DAILY_GRANULARITIES
-  'statistics.overview.activityWindow.*': ['day', 'week', 'month'],
   // statisticsView.js STATISTICS_RANGES
-  'statistics.range.*': ['7d', '30d', '90d', 'all'],
-  'statistics.range.short.*': ['7d', '30d', '90d', 'all'],
+  'statistics.range.*': ['24h', '7d', '30d', '90d', 'all'],
+  'statistics.range.short.*': ['24h', '7d', '30d', '90d', 'all'],
   // statisticsView.js MODEL_CALL_STATUSES
   'statistics.requestStatus.*': [
     'started',
@@ -97,6 +95,7 @@ const COMPOSED_KEYS = {
   'chat.voice.progress.*': 'tOr', // speech job phase
   'live.tool.*': 'tOr', // Live Tool name in an action update
   'logs.level.*': 'tOr', // log record level
+  'mcp.problem.*': 'tOr', // MCP connection problem code
   'projects.report.group.*': 'tOr', // Project scan finding type
   'settings.language.*': 'tOr', // server language id
   'settings.localModel.error.*': 'tOr', // local setup error code
@@ -110,6 +109,8 @@ const COMPOSED_KEYS = {
   'settings.recall.backends.*': 'tOr', // Recall backend id
   'settings.recall.indexError.*': 'tOr', // Recall index failure code
   'settings.webSearch.providers.*': 'tOr', // web search or fetch provider
+  'statistics.errorKind.*': 'tOr', // recorded Run error kind
+  'statistics.origin.*': 'tOr', // Run origin
   'statistics.skills.origin.*': 'tOr', // Skill origin scope
   'statistics.status.*': 'tOr', // Run status
   'systemPrompt.blockTitle.*': 'tOr', // System Prompt block id

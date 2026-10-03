@@ -10,7 +10,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 import sqlite_vec  # type: ignore[import-untyped]
@@ -18,8 +18,8 @@ import sqlite_vec  # type: ignore[import-untyped]
 from core.database import Database
 from core.model_tasks import EmbeddingResult, EmbeddingSpaceIdentity
 from core.recall import (
+    HybridRecallBackend,
     PassageIndex,
-    RecallBackendContext,
     RecallSearchRequest,
     SemanticIndexer,
     VectorRecallBackend,
@@ -125,20 +125,22 @@ class StubEmbeddings:
         return slots + [0.0] * (self.dimension - 4)
 
 
-def vector_backend(
-    tmp_path: Path,
-    sessions: ChatSessionManager,
-    *,
-    embeddings: Any | None = None,
-    logger: Any | None = None,
-    on_waiting: Callable[[], None] | None = None,
-) -> VectorRecallBackend:
-    return VectorRecallBackend(
-        RecallBackendContext(
-            data_dir=tmp_path, sessions=sessions, embeddings=embeddings, logger=logger
-        ),
-        on_waiting=on_waiting,
-    )
+class VectorBackendFactory(Protocol):
+    """The ``vector_backend`` fixture: opens a ``vector`` backend over the test's Sessions."""
+
+    def __call__(
+        self,
+        *,
+        embeddings: Any | None = None,
+        logger: Any | None = None,
+        on_waiting: Callable[[], None] | None = None,
+    ) -> VectorRecallBackend: ...
+
+
+class HybridBackendFactory(Protocol):
+    """The ``hybrid_backend`` fixture: opens a ``hybrid`` backend over the test's Sessions."""
+
+    def __call__(self, *, embeddings: Any | None = None) -> HybridRecallBackend: ...
 
 
 async def embed_documents(

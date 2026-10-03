@@ -357,6 +357,35 @@
 .skills-page-description--empty {
   color: var(--text-lo);
 }
+/* Who created and last changed the package and its last use: quiet label and
+   value pairs under the description. */
+.skills-page-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 24px;
+  margin: 12px 0 0;
+  color: var(--text-med);
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+}
+.skills-page-fact {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+.skills-page-fact dt {
+  color: var(--text-lo);
+}
+.skills-page-fact dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+/* The pin toggle fills its pin while pressed. */
+.skills-pin[aria-pressed='true'] {
+  color: var(--accent);
+}
+.skills-pin[aria-pressed='true'] .skills-pin__head {
+  fill: currentColor;
+}
 .skills-page-note {
   margin: 6px 0 0;
   max-width: 72ch;
@@ -457,6 +486,99 @@
   max-width: 100%;
   overflow-x: auto;
 }
+/* A package's revisions, newest first: one head line (number, what, when and
+   who, Revert at the end) with the changed files below. */
+.skills-history {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.skills-history__item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.skills-history__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  font: 400 var(--fs-body-sm)/1.5 var(--font-ui);
+}
+.skills-history__id {
+  color: var(--text-lo);
+  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+}
+.skills-history__what {
+  color: var(--text-hi);
+  font-weight: 500;
+}
+.skills-history__meta {
+  color: var(--text-lo);
+}
+.skills-history__revert {
+  margin-left: auto;
+}
+.skills-history__files {
+  margin: 2px 0 0;
+  padding-left: 20px;
+  color: var(--text-med);
+  font: 400 var(--fs-mono-sm)/1.5 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+/* An Agent's Skill maintenance (the Librarian) above its Skill selection. */
+.skills-librarian {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.skills-librarian__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.skills-librarian__title {
+  margin: 0;
+  color: var(--text-hi);
+  font: 600 var(--fs-body-md)/1.4 var(--font-ui);
+}
+.skills-librarian__run {
+  margin-left: auto;
+}
+.skills-librarian .skills-page-facts {
+  margin-top: 8px;
+}
+.skills-librarian__changes {
+  margin-top: 8px;
+}
+.skills-librarian__changes .skills-history {
+  margin-bottom: 10px;
+}
+.skills-librarian__skill,
+.skills-librarian__link {
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-hi);
+  background: transparent;
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+button.skills-librarian__skill,
+.skills-librarian__link {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.skills-librarian__skill:focus-visible,
+.skills-librarian__link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.skills-librarian__changes summary,
 .skills-diagnostics summary,
 .skills-notice summary {
   cursor: pointer;

@@ -112,6 +112,11 @@ def normalize_tool_call_candidate(
     names or arguments are therefore represented with safe placeholder fields and
     an explicit rejection; Chat will return that rejection without dispatching the
     Tool or its Extension hooks.
+
+    Valid arguments become plain JSON values whose object keys are sorted
+    recursively, the same form Session storage persists. Every later request
+    (the in-Run follow-up, a reloaded or forked Session, a Compaction) then
+    serializes the call identically, so Provider prompt caches see one prefix.
     """
 
     resolved_id = tool_call_id if isinstance(tool_call_id, str) and tool_call_id else fallback_id
@@ -225,16 +230,17 @@ def _normalize_tool_call_arguments(arguments: Any) -> tuple[JsonObject, str | No
     if any(not isinstance(key, str) for key in normalized):
         return {}, "the arguments object contains a non-string property name"
     try:
-        json.dumps(
+        canonical_text = json.dumps(
             normalized,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
             allow_nan=False,
         )
+        canonical: JsonObject = json.loads(canonical_text)
     except (TypeError, ValueError, OverflowError, RecursionError) as error:
         return {}, f"the arguments object is not JSON-serializable: {error}"
-    return normalized, None
+    return canonical, None
 
 
 def _normalized_existing_tool_call_rejection(value: Any) -> JsonObject | None:

@@ -47,6 +47,47 @@ CALL_COLUMNS = (
     "cache_write_present, price_estimated, reported_cost_usd, retrospective, priced, "
     "cost_usd, cost_source, cost_json, purpose"
 )
+# The column definitions of every call table (Session calls and ledger calls),
+# in ``CALL_COLUMNS`` order and keyed by ``(session_key, seq)``.
+CALL_TABLE_DEFINITION = """(
+    session_key INTEGER NOT NULL,
+    seq INTEGER NOT NULL,
+    kind INTEGER NOT NULL,
+    instant INTEGER NOT NULL,
+    day INTEGER NOT NULL,
+    model_key TEXT NOT NULL,
+    has_model INTEGER NOT NULL,
+    visible INTEGER NOT NULL,
+    has_usage INTEGER NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    reasoning_tokens INTEGER,
+    cache_read_tokens INTEGER,
+    cache_write_tokens INTEGER,
+    input_estimated INTEGER NOT NULL,
+    output_estimated INTEGER NOT NULL,
+    has_cache INTEGER NOT NULL,
+    reasoning_present INTEGER NOT NULL,
+    cache_read_present INTEGER NOT NULL,
+    cache_write_present INTEGER NOT NULL,
+    price_estimated INTEGER NOT NULL,
+    reported_cost_usd REAL,
+    retrospective INTEGER NOT NULL,
+    priced INTEGER NOT NULL,
+    cost_usd REAL,
+    cost_source INTEGER NOT NULL,
+    cost_json TEXT,
+    purpose TEXT NOT NULL,
+    PRIMARY KEY (session_key, seq)
+) WITHOUT ROWID"""
+
+# Rules over call rows aliased ``c``: Reasoning counts only for a measured
+# output with a valid reported breakdown; cache fields count only for a
+# measured prompt that reported them.
+REASONING_SQL = (
+    "(c.output_estimated = 0 AND c.output_tokens IS NOT NULL AND c.reasoning_tokens IS NOT NULL)"
+)
+CACHE_SQL = "(c.input_estimated = 0 AND c.input_tokens IS NOT NULL AND c.has_cache = 1)"
 
 COST_UNPRICED = 0
 COST_PROVIDER = 1
@@ -66,6 +107,17 @@ def timestamp_instant(value: str) -> int:
     bad data and raises ``ValueError``.
     """
     return datetime_instant(parse_canonical_timestamp(value))
+
+
+def latency_bucket(duration_ms: int | None) -> int | None:
+    """Return ``floor(4 * log2(duration_ms + 1))`` exactly, in integers.
+
+    ``(d + 1) ** 4`` has ``floor(log2((d + 1) ** 4)) + 1`` bits, so no float
+    rounding can move a duration across a bucket edge.
+    """
+    if duration_ms is None:
+        return None
+    return ((duration_ms + 1) ** 4).bit_length() - 1
 
 
 def day_key(day: int) -> str:
@@ -194,6 +246,7 @@ class ProjectedRows:
             else:
                 outcome = 0
                 error_code = envelope["error"]["code"]
+        duration_ms = _duration_ms(message.timing)
         self.tools.append(
             (
                 self.session_key,
@@ -202,7 +255,9 @@ class ProjectedRows:
                 message.name or UNKNOWN_MODEL_KEY,
                 outcome,
                 error_code,
-                _duration_ms(message.timing),
+                duration_ms,
+                message.run_id,
+                latency_bucket(duration_ms),
             )
         )
 

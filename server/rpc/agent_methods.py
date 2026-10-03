@@ -377,6 +377,7 @@ def _agent_changes(params: JsonObject, *, blocked: set[str], for_create: bool) -
         "tools",
         "custom_system_prompt_enabled",
         "compaction_policy",
+        "librarian_enabled",
     }
     if not for_create:
         public_fields.add("current_session_id")
@@ -531,12 +532,9 @@ def _validate_agent_field(key: str, value: Any) -> Any:
                 subagent["allowed_agents"],
             )
         return dict(value)
-    if key == "custom_system_prompt_enabled":
+    if key in ("custom_system_prompt_enabled", "librarian_enabled"):
         if not isinstance(value, bool):
-            raise RpcError(
-                RPC_ERROR_INVALID_REQUEST,
-                "params.custom_system_prompt_enabled must be a boolean",
-            )
+            raise RpcError(RPC_ERROR_INVALID_REQUEST, f"params.{key} must be a boolean")
         return value
     if key == "compaction_policy":
         if value is None:

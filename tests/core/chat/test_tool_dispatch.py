@@ -10,7 +10,7 @@ import pytest
 
 from core.chat._skill_activation import _activate_triggered_skills
 from core.chat.messages import ChatMessage, JsonObject
-from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT
+from core.runs import TOOL_CALL_RESULT_EVENT, TOOL_CALL_STARTED_EVENT, RunKind
 from core.skills import SkillRegistry
 from core.tools import (
     ToolContext,
@@ -82,6 +82,8 @@ async def test_dispatch_builds_the_tool_context_from_the_run(
 ) -> None:
     tools, observed = _recording_tools("probe")
     harness = ToolDispatchHarness(tmp_path, tools)
+    if project_run:
+        harness.run.run_kind = RunKind.SKILL_REFLECTION
     harness.run.iteration_count = 3
     project_cwd = tmp_path / "repo"
     project_cwd.mkdir()
@@ -99,6 +101,7 @@ async def test_dispatch_builds_the_tool_context_from_the_run(
 
     [(_, context)] = observed
     assert context.iteration_number == 3
+    assert context.run_kind is (RunKind.SKILL_REFLECTION if project_run else RunKind.USER)
     if project_run:
         assert (context.effective_cwd, context.project_id) == (project_cwd, "acme")
         assert context.tool_restriction == ("probe",)

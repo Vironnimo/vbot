@@ -145,6 +145,33 @@ const texts = (selector, root = document) =>
   [...root.querySelectorAll(selector)].map((el) => el.textContent.trim());
 const calls = (method) =>
   rpcMock.mock.calls.filter(([name]) => name === method).map(([, p]) => p);
+const rightClick = (el) => {
+  el.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 40,
+    }),
+  );
+  flushSync();
+};
+// The open context menu's items in order, a separator as '|', a disabled
+// item with its hint.
+const menu = () =>
+  [...document.querySelector('.context-menu').children].map((el) =>
+    el.getAttribute('role') === 'separator'
+      ? '|'
+      : [el.textContent.trim(), el.disabled ? 'disabled' : '']
+          .filter(Boolean)
+          .join(' '),
+  );
+const pick = (label) =>
+  click(
+    [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
+      (el) => el.querySelector('.context-menu__label').textContent === label,
+    ),
+  );
 async function settle() {
   for (let i = 0; i < 5; i++) {
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -152,7 +179,7 @@ async function settle() {
   }
 }
 
-let component, inventory, agents, projects;
+let component, inventory, archived, agents, projects;
 const onToast = vi.fn();
 const refreshState = new SvelteMap();
 function notifySkillsChanged() {
@@ -160,6 +187,7 @@ function notifySkillsChanged() {
 }
 const snapshot = () => ({
   skills: inventory,
+  archived,
   agents,
   projects,
   stale_shared: [],
@@ -179,6 +207,7 @@ beforeEach(() => {
   refreshState.set('token', 0);
   document.body.innerHTML = '';
   inventory = base();
+  archived = [];
   agents = baseAgents();
   projects = baseProjects();
   onToast.mockReset();
@@ -388,6 +417,7 @@ describe('Skills manager', () => {
       ['Global', '1'],
       ['Bundled', '1'],
       ['Shared skills', '1'],
+      ['Archived', '0'],
       ['Main', '3'],
       ['Reviewer', '1'],
       ['Repo', '0'],
@@ -418,6 +448,7 @@ describe('Skills manager', () => {
       ['Global', '1'],
       ['Bundled', '1'],
       ['Shared skills', '1'],
+      ['Archived', '0'],
       ['Main', '3'],
       ['Reviewer', '1'],
       ['Repo', '0'],
@@ -427,7 +458,7 @@ describe('Skills manager', () => {
 
     // A collection's card says what its count counts.
     key(document.body, 'Tab');
-    [...document.querySelectorAll('.skills-collection')][4].focus();
+    [...document.querySelectorAll('.skills-collection')][5].focus();
     const card = document.getElementById('app-tooltip');
     expect(card.querySelector('.app-tooltip__title').textContent).toBe('Main');
     expect(card.querySelector('.app-tooltip__text').textContent).toBe(
@@ -677,33 +708,6 @@ describe('Skills manager', () => {
     });
     agents[1].root_project_id = 'repo';
     agents[1].skills[1] = grant('teach', 'bundled', 'project');
-    const rightClick = (el) => {
-      el.dispatchEvent(
-        new MouseEvent('contextmenu', {
-          bubbles: true,
-          cancelable: true,
-          clientX: 40,
-          clientY: 40,
-        }),
-      );
-      flushSync();
-    };
-    // Items in order, a separator as '|', a disabled item with its hint.
-    const menu = () =>
-      [...document.querySelector('.context-menu').children].map((el) =>
-        el.getAttribute('role') === 'separator'
-          ? '|'
-          : [el.textContent.trim(), el.disabled ? 'disabled' : '']
-              .filter(Boolean)
-              .join(' '),
-      );
-    const pick = (label) =>
-      click(
-        [...document.querySelectorAll('.context-menu [role="menuitem"]')].find(
-          (el) =>
-            el.querySelector('.context-menu__label').textContent === label,
-        ),
-      );
     await render();
 
     rightClick(document.querySelector('[data-skill-id="shared"]'));
@@ -932,12 +936,13 @@ describe('Skills manager', () => {
       'folder-sentinel',
     );
   });
-  it('confirms deletion from the page header', async () => {
+  it('confirms deletion into the archive from the page header', async () => {
     await render();
     choose('shared');
     await settle();
     click(button('Delete notes', document.querySelector('.skills-page')));
     const dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain('It moves to Archived');
     expect(calls('skill.delete')).toEqual([]);
     click(button('Delete', dialog));
     await settle();
@@ -945,6 +950,472 @@ describe('Skills manager', () => {
       { scope: 'agent:main', name: 'notes' },
     ]);
   });
+  it('shows who created a Skill, its last change and use, and pins it from its page', async () => {
+    inventory[1] = entry('private', 'deploy', {
+      created_by: 'reflection',
+      changed_by: 'human',
+      changed_at: '2026-09-30T08:00:00.000000Z',
+      pinned: false,
+      uses: 3,
+      last_used_at: '2026-10-01T08:00:00.000000Z',
+    });
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'skill.set_pinned')
+        inventory = inventory.map((item) =>
+          item.name === params.name ? { ...item, pinned: params.pinned } : item,
+        );
+      return defaultRpc(method, params);
+    });
+    await render();
+    choose('private');
+    await settle();
+    const detail = document.querySelector('.skills-page');
+    const facts = () =>
+      Object.fromEntries(
+        [...detail.querySelectorAll('.skills-page-fact')].map((el) => [
+          el.dataset.fact,
+          el.querySelector('dd').textContent,
+        ]),
+      );
+    expect(facts().created).toBe('A background Reflection');
+    expect(facts().changed).toContain('You');
+    expect(facts().used).toContain('3 sessions');
+    expect(button('Pin deploy', detail).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    expect(texts('.skills-page-meta .badge', detail)).toEqual([]);
+
+    click(button('Pin deploy', detail));
+    await settle();
+    expect(calls('skill.set_pinned')).toEqual([
+      { scope: 'agent:main', name: 'deploy', pinned: true },
+    ]);
+    expect(button('Pin deploy', detail).getAttribute('aria-pressed')).toBe(
+      'true',
+    );
+    expect(texts('.skills-page-meta .badge', detail)).toEqual(['Pinned']);
+
+    // A read-only package has no pin and no authoring facts.
+    click(button('Back to All skills'));
+    await settle();
+    choose('bundled');
+    await settle();
+    expect(button('Pin teach')).toBeUndefined();
+    expect(document.querySelector('.skills-page-facts')).toBeNull();
+  });
+
+  it('lists an editable Skill history and reverts a revision together with the later one it needs', async () => {
+    const revision = (id, kind, actor, files = []) => ({
+      id,
+      at: `2026-09-${27 + id}T08:00:00.000000Z`,
+      skill: 'deploy',
+      kind,
+      actor,
+      files,
+    });
+    const revisions = [
+      revision(3, 'change', 'reflection', [
+        { path: 'SKILL.md', change: 'updated' },
+      ]),
+      revision(2, 'change', 'human', [
+        { path: 'SKILL.md', change: 'updated' },
+        { path: 'notes.md', change: 'created' },
+      ]),
+      revision(1, 'baseline', 'external'),
+    ];
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'skill.history') return { scope: params.scope, revisions };
+      if (method === 'skill.revert' && params.revisions.length === 1)
+        throw Object.assign(new Error('conflict-sentinel'), {
+          code: 'domain_error',
+          details: { data: { revision: 2, later: 3, skill: 'deploy' } },
+        });
+      if (method === 'skill.revert') return { scope: params.scope };
+      return defaultRpc(method, params);
+    });
+    const tab = (label) =>
+      [...document.querySelectorAll('[role="tab"]')].find(
+        (el) => el.textContent.trim() === label,
+      );
+    await render();
+    // Only an editable package has a history.
+    choose('bundled');
+    await settle();
+    expect(tab('History')).toBeUndefined();
+    click(button('Back to All skills'));
+    await settle();
+    choose('private');
+    await settle();
+    click(tab('History'));
+    await settle();
+    expect(calls('skill.history')).toEqual([
+      { scope: 'agent:main', name: 'deploy', limit: 50 },
+    ]);
+    const items = [...document.querySelectorAll('.skills-history__item')];
+    expect(texts('.skills-history__what')).toEqual([
+      'Changed',
+      'Changed',
+      'Recorded as found',
+    ]);
+    expect(texts('.skills-history__meta', items[0])[0]).toContain(
+      'A background Reflection',
+    );
+    expect(texts('.skills-history__files li', items[1])).toEqual([
+      'Changed SKILL.md',
+      'Added notes.md',
+    ]);
+    // A baseline only records the package as found.
+    expect(button('Revert revision 1')).toBeUndefined();
+
+    click(button('Revert revision 2'));
+    let dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('skills.revert.confirm', { revision: 2, name: 'deploy' }),
+    );
+    click(button('Revert', dialog));
+    await settle();
+    // The server names the later revision; the dialog offers both together.
+    dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('skills.revert.together', {
+        later: 3,
+        name: 'deploy',
+        revisions: '2, 3',
+      }),
+    );
+    const historyReads = calls('skill.history').length;
+    click(button('Revert together', dialog));
+    await settle();
+    expect(calls('skill.revert')).toEqual([
+      { scope: 'agent:main', revisions: [2] },
+      { scope: 'agent:main', revisions: [2, 3] },
+    ]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Revisions 2, 3 reverted.',
+      variant: 'success',
+    });
+    expect(onToast).not.toHaveBeenCalledWith(
+      expect.objectContaining({ variant: 'error' }),
+    );
+    // The inventory reload after the revert reloads the history.
+    expect(calls('skill.history').length).toBeGreaterThan(historyReads);
+  });
+
+  it('shows an Agent’s last Librarian pass, links its changes and Session, reverts them together, starts a pass and names why another Agent gets none', async () => {
+    const change = (id, skill, kind, extra = {}) => ({
+      id,
+      at: `2026-09-30T10:0${id - 6}:00.000000Z`,
+      skill,
+      kind,
+      actor: 'librarian',
+      files: [],
+      ...extra,
+    });
+    archived = [
+      {
+        scope: 'agent:main',
+        archive_id: 'old-deploy_01',
+        name: 'old-deploy',
+        archived_at: '2026-09-30T10:03:00.000000Z',
+        reason: 'absorbed',
+        absorbed_into: 'deploy',
+        archived_by: 'librarian',
+        description: 'Purpose of old-deploy',
+      },
+    ];
+    const mainStatus = {
+      agent_id: 'main',
+      settings: {
+        enabled: true,
+        interval_days: 7,
+        archive_after_days: 90,
+        consolidate: true,
+      },
+      available: true,
+      unscheduled_reason: null,
+      running: false,
+      running_since: null,
+      last_pass: {
+        started_at: '2026-09-30T10:00:00.000000Z',
+        finished_at: '2026-09-30T10:04:00.000000Z',
+        trigger: 'schedule',
+        archived: 1,
+        candidates: 3,
+        consolidation: 'ran',
+        session_id: 'lib-1',
+        run_id: 'r-9',
+        created: 0,
+        changed: 1,
+        merged: 1,
+      },
+      next_due_at: '2999-10-07T10:04:00.000000Z',
+      changes: [
+        change(9, 'old-deploy', 'archive', {
+          reason: 'absorbed',
+          absorbed_into: 'deploy',
+          followed: [
+            { kind: 'shared', id: 'coder', name: 'Coder' },
+            { kind: 'cron', id: 'job-1', name: 'Nightly' },
+          ],
+        }),
+        change(8, 'deploy', 'change'),
+        change(7, 'stale', 'archive', { reason: 'inactive' }),
+      ],
+    };
+    let otherStatus = {};
+    rpcMock.mockImplementation(async (method, params) => {
+      if (method === 'librarian.status' && params.agent_id === 'main')
+        return mainStatus;
+      if (method === 'librarian.status')
+        return {
+          ...mainStatus,
+          agent_id: params.agent_id,
+          last_pass: null,
+          ...otherStatus,
+        };
+      if (method === 'librarian.run' && params.agent_id === 'main')
+        return {
+          ...mainStatus,
+          running: true,
+          running_since: '2026-10-01T09:00:00.000000Z',
+          running_session_id: 'lib-2',
+          last_pass: { ...mainStatus.last_pass, outcome: 'interrupted' },
+        };
+      if (method === 'librarian.run')
+        throw Object.assign(new Error('busy-sentinel'), {
+          code: 'agent_busy',
+        });
+      if (method === 'skill.history') return { revisions: [] };
+      return defaultRpc(method, params);
+    });
+    const section = () => document.querySelector('.skills-librarian');
+    const facts = () =>
+      [...section().querySelectorAll('.skills-page-fact')].map((fact) => [
+        fact.querySelector('dt').textContent.trim(),
+        fact.querySelector('dd').textContent.trim(),
+      ]);
+    const onOpenSession = vi.fn();
+    await render({ onOpenSession });
+    collection('Main');
+    await settle();
+    expect(calls('librarian.status')).toContainEqual({ agent_id: 'main' });
+    expect(facts()).toEqual([
+      ['Schedule', 'Every 7 days while the Agent is idle'],
+      ['Next pass', expect.stringContaining('2999')],
+      ['Last pass', expect.stringContaining('(scheduled)')],
+      ['Retired as unused', '1'],
+      ['Merging', '1 merged away, 1 changed, 0 created'],
+      ['Session', 'Open session'],
+    ]);
+    // The merge ran in a Session of the Librarian, which Chat opens.
+    click(button('Open session', section()));
+    expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-1');
+    expect(texts('.skills-librarian .skills-history__what')).toEqual([
+      'Merged into deploy · share with Coder, cron job “Nightly” moved along',
+      'Changed',
+      'Retired as unused',
+    ]);
+    // A purged Skill has neither a page nor an archive entry to link to.
+    expect(
+      section().querySelector('span.skills-librarian__skill').textContent,
+    ).toBe('stale');
+
+    click(button('Revert together', section()));
+    let dialog = document.querySelector('[role="dialog"]');
+    expect(dialog.textContent).toContain(
+      t('skills.revert.pass', { revisions: '7, 8, 9' }),
+    );
+    click(button('Revert together', dialog));
+    await settle();
+    expect(calls('skill.revert')).toEqual([
+      { scope: 'agent:main', revisions: [7, 8, 9] },
+    ]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Revisions 7, 8, 9 reverted.',
+      variant: 'success',
+    });
+
+    click(button('Open the history of deploy'));
+    await settle();
+    expect(document.querySelector('#skill-page-title').textContent.trim()).toBe(
+      'deploy',
+    );
+    expect(
+      document
+        .querySelector('[role="tab"][aria-selected="true"]')
+        .textContent.trim(),
+    ).toBe('History');
+    expect(calls('skill.history')).toEqual([
+      { scope: 'agent:main', name: 'deploy', limit: 50 },
+    ]);
+    click(button('Back to Main'));
+    await settle();
+
+    click(button('Show old-deploy in Archived'));
+    await settle();
+    expect(
+      [...document.querySelectorAll('[data-archive-key]')].map(
+        (row) => row.dataset.archiveKey,
+      ),
+    ).toEqual(['agent:main/old-deploy_01']);
+    expect(document.querySelector('input[type="search"]').value).toBe(
+      'old-deploy',
+    );
+    input(document.querySelector('input[type="search"]'), '');
+
+    collection('Main');
+    await settle();
+    click(button('Run now', section()));
+    await settle();
+    expect(calls('librarian.run')).toEqual([{ agent_id: 'main' }]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: t('skills.librarian.started', { name: 'Main' }),
+      variant: 'success',
+    });
+    expect(facts()).toContainEqual(['Now', expect.stringContaining('Running')]);
+    // The running pass's Session opens while the Librarian works in it.
+    const [nowIndex] = facts()
+      .map(([label], index) => (label === 'Now' ? index : -1))
+      .filter((index) => index >= 0);
+    expect(facts()[nowIndex + 1]).toEqual(['Session', 'Open session']);
+    onOpenSession.mockClear();
+    click(button('Open session', section()));
+    expect(onOpenSession).toHaveBeenCalledWith('librarian', 'lib-2');
+    // A pass that stopped early says so; a completed one shows no result row.
+    expect(facts()).toContainEqual([
+      'Result',
+      t('skills.librarian.resultInterrupted'),
+    ]);
+    expect(button('Run now', section()).disabled).toBe(true);
+
+    // Another Agent with no pass yet; its Run is refused while it works.
+    collection('Reviewer');
+    await settle();
+    expect(section().textContent).toContain('No pass has run yet.');
+    click(button('Run now', section()));
+    await settle();
+    expect(onToast).toHaveBeenCalledWith({
+      title: t('skills.librarian.busy'),
+      variant: 'warn',
+    });
+
+    // An Agent without scheduled passes shows the one reason the status
+    // names; all but the schedule switch also block Run now.
+    const offInSettings = [['Schedule', t('skills.librarian.scheduleOff')]];
+    for (const [reason, note, shownFacts] of [
+      ['agent_disabled', t('skills.librarian.agentOff'), []],
+      ['no_skills', t('skills.librarian.noSkills'), []],
+      [
+        'librarian_unavailable',
+        t('skills.librarian.unavailable', {
+          problem: t('librarian.problem.agentIdTaken'),
+        }),
+        [],
+      ],
+      ['schedule_disabled', null, offInSettings],
+    ]) {
+      otherStatus = {
+        settings: { ...mainStatus.settings, enabled: false },
+        available: reason === 'schedule_disabled',
+        unscheduled_reason: reason,
+        librarian_problem:
+          reason === 'librarian_unavailable' ? 'agent_id_taken' : null,
+        next_due_at: null,
+      };
+      collection('Main');
+      await settle();
+      collection('Reviewer');
+      await settle();
+      expect(texts('.skills-librarian .skills-page-note')).toEqual([
+        ...(note ? [note] : []),
+        t('skills.librarian.never'),
+      ]);
+      expect(facts()).toEqual(shownFacts);
+      expect(button('Run now', section()).disabled).toBe(note !== null);
+    }
+  });
+
+  it('lists archived Skills newest first and restores or permanently deletes them from their menu', async () => {
+    archived = [
+      {
+        scope: 'agent:main',
+        archive_id: 'old_01',
+        name: 'old',
+        archived_at: '2026-09-29T08:00:00.000000Z',
+        reason: 'deleted',
+        absorbed_into: null,
+        archived_by: 'human',
+        description: 'Purpose of old',
+      },
+      {
+        scope: 'global',
+        archive_id: 'merged_01',
+        name: 'merged',
+        archived_at: '2026-09-30T08:00:00.000000Z',
+        reason: 'absorbed',
+        absorbed_into: 'deploy',
+        archived_by: 'reflection',
+        description: 'Purpose of merged',
+      },
+    ];
+    const archivedRows = () => [
+      ...document.querySelectorAll('[data-archive-key]'),
+    ];
+    await render();
+    collection('Archived');
+    expect(
+      archivedRows().map((row) => [
+        row.dataset.archiveKey,
+        row.querySelector('.skills-row-source').textContent,
+        row.querySelector('.skills-row-summary').textContent,
+      ]),
+    ).toEqual([
+      [
+        'global/merged_01',
+        'Global',
+        expect.stringContaining('Merged into deploy on'),
+      ],
+      ['agent:main/old_01', 'Private', expect.stringContaining('Deleted on')],
+    ]);
+    // As in every Skill list, the description shows only in the tooltip.
+    expect(document.querySelector('.skills-list').textContent).not.toContain(
+      'Purpose of',
+    );
+    input(document.querySelector('input[type="search"]'), 'main');
+    expect(archivedRows().map((row) => row.dataset.archiveKey)).toEqual([
+      'agent:main/old_01',
+    ]);
+    input(document.querySelector('input[type="search"]'), '');
+
+    // A row opens its actions; an archived package has no page.
+    click(archivedRows()[0]);
+    expect(menu()).toEqual([
+      'Restore',
+      'Copy name',
+      '|',
+      'Delete permanently…',
+    ]);
+    pick('Restore');
+    await settle();
+    expect(calls('skill.restore')).toEqual([
+      { scope: 'global', archive_id: 'merged_01' },
+    ]);
+    expect(onToast).toHaveBeenCalledWith({
+      title: 'Skill “merged” restored.',
+      variant: 'success',
+    });
+
+    rightClick(archivedRows()[1]);
+    pick('Delete permanently…');
+    const dialog = document.querySelector('[role="dialog"]');
+    expect(calls('skill.purge')).toEqual([]);
+    click(button('Delete permanently', dialog));
+    await settle();
+    expect(calls('skill.purge')).toEqual([
+      { scope: 'agent:main', archive_id: 'old_01' },
+    ]);
+  });
+
   it('opens a Skill page with its source, description, keyboard content tabs, and focus return', async () => {
     await render();
     choose('private');

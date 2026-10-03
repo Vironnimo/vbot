@@ -24,7 +24,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,7 +75,8 @@ class MemoryRevision:
 
     ``actor`` names who changed it (``tool``, ``rpc``, ``internal``, or
     ``external`` for a change outside the service); ``session_id``/``run_id``
-    name the Run of a Tool change. ``entries`` holds the complete state of a
+    name the Run of a Tool change and ``run_kind`` its Run kind (such as
+    ``user`` or ``memory_reflection``). ``entries`` holds the complete state of a
     ``baseline`` or ``external`` revision; ``reverts`` the revisions a
     ``revert`` took back.
     """
@@ -90,6 +91,7 @@ class MemoryRevision:
     entries: tuple[str, ...] | None = None
     session_id: str | None = None
     run_id: str | None = None
+    run_kind: str | None = None
     reverts: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
@@ -107,6 +109,8 @@ class MemoryRevision:
             data["session_id"] = self.session_id
         if self.run_id is not None:
             data["run_id"] = self.run_id
+        if self.run_kind is not None:
+            data["run_kind"] = self.run_kind
         if self.reverts:
             data["reverts"] = list(self.reverts)
         return data
@@ -187,6 +191,7 @@ class MemoryHistory:
         entries: Sequence[str],
         session_id: str | None = None,
         run_id: str | None = None,
+        run_kind: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision | None:
         """Append one revision whose ``changes`` led to ``entries``."""
@@ -206,6 +211,7 @@ class MemoryHistory:
                 state=list(entries),
                 session_id=session_id,
                 run_id=run_id,
+                run_kind=run_kind,
                 reverts=list(reverts),
             )
 
@@ -279,6 +285,7 @@ class MemoryHistory:
         state: Sequence[str] | None = None,
         session_id: str | None = None,
         run_id: str | None = None,
+        run_kind: str | None = None,
         reverts: Sequence[int] = (),
     ) -> MemoryRevision:
         after = list(entries if entries is not None else state or ())
@@ -293,6 +300,7 @@ class MemoryHistory:
             entries=tuple(entries) if entries is not None else None,
             session_id=session_id,
             run_id=run_id,
+            run_kind=run_kind,
             reverts=tuple(reverts),
         )
         line = json.dumps(
@@ -377,14 +385,51 @@ def apply_changes(entries: list[str], changes: Iterable[MemoryChange]) -> None:
 class MemoryRevertConflict:
     """A change that cannot be taken back because a later change built on it.
 
-    ``text`` is the entry text the revert needs but no longer finds; ``later``
-    lists the revisions that changed or removed that text since.
+    ``text`` is the entry text of the change; ``later`` lists the revisions
+    that changed it since. ``missing`` says the revert needs that text but no
+    entry reads it anymore; a strict revert also refuses a change whose text a
+    later revision touched while the entry still reads it.
     """
 
     revision: int
     change: MemoryChange
     text: str
     later: tuple[int, ...]
+    missing: bool = True
+
+
+def later_touches(
+    targets: Sequence[MemoryRevision],
+    revisions: Sequence[MemoryRevision],
+    *,
+    exempt: Collection[int],
+) -> list[MemoryRevertConflict]:
+    """Return a conflict for each change of *targets* a later revision touched.
+
+    A later revision of the same scope touches a change when it adds, removes or
+    replaces an entry whose text is the change's text (for a removal, the
+    removed text), whether or not the change could still be taken back.
+    Revisions in *exempt* never touch. Conflicts follow *targets* order.
+    """
+    conflicts: list[MemoryRevertConflict] = []
+    for target in targets:
+        for change in target.changes:
+            later = tuple(
+                revision.id
+                for revision in revisions
+                if revision.id > target.id
+                and revision.scope == target.scope
+                and revision.id not in exempt
+                and any(
+                    item.text == change.text or item.previous == change.text
+                    for item in revision.changes
+                )
+            )
+            if later:
+                conflicts.append(
+                    MemoryRevertConflict(target.id, change, change.text, later, missing=False)
+                )
+    return conflicts
 
 
 def revert_revisions(
@@ -510,6 +555,7 @@ def _parse_revision(line: bytes) -> MemoryRevision | None:
             entries=None if entries is None else tuple(_text(item) for item in _array(entries)),
             session_id=_optional_text(data.get("session_id")),
             run_id=_optional_text(data.get("run_id")),
+            run_kind=_optional_text(data.get("run_kind")),
             reverts=tuple(_integer(item) for item in _array(data.get("reverts", []))),
         )
     # ValueError includes undecodable bytes and invalid JSON; RecursionError is

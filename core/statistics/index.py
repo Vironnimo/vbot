@@ -18,6 +18,11 @@ rebuild) computes the read from a transient in-memory projection with the same
 code, so Statistics stay available. After :meth:`StatisticsIndex.close` reads
 raise :class:`~core.database.DatabaseUnavailableError`.
 
+Reconcile also prices retrospective calls and maintains the aggregate tables
+(``core/statistics/_rollups.py``) in the same write transaction, recomputing
+only the units whose facts changed, so a consumer always reads aggregates that
+match the facts.
+
 Asynchronous callers run a read, with everything it touches, on the index
 database's bounded worker pool through :meth:`StatisticsIndex.run_async`.
 """
@@ -48,9 +53,17 @@ from core.sessions import (
     SessionNotFoundError,
     SessionReadBatch,
     SessionReadCursor,
+    SessionRunRecord,
 )
 from core.statistics._accounting import ACCOUNTING_SCHEMA, UsageSourceError, reconcile_usage
-from core.statistics._projection import CALL_COLUMNS, ProjectedRows
+from core.statistics._costs import PricingLookup, prune_pricing, refresh_retrospective_costs
+from core.statistics._projection import (
+    CALL_COLUMNS,
+    CALL_TABLE_DEFINITION,
+    ProjectedRows,
+    timestamp_instant,
+)
+from core.statistics._rollups import ROLLUP_SCHEMA, RollupChanges, maintain_rollups
 from core.utils.errors import VBotError
 from core.utils.logging import get_logger
 
@@ -65,8 +78,10 @@ _INDEX_DIRECTORY = "statistics"
 _INDEX_FILENAME = "session-statistics.sqlite"
 _GLOBAL_SCOPE = ""
 # The kernel discards and rebuilds an index built for another projection
-# version. Bump it when the fact tables or the meaning of their rows change.
-_PROJECTION_VERSION = 2
+# version. Bump it when the fact or aggregate tables or the meaning of their
+# rows change; the kernel adds a new table empty, so a new aggregate needs a
+# bump to be filled.
+_PROJECTION_VERSION = 5
 # A busy index fails the read quickly as retryable instead of queueing it.
 _WRITE_PATIENCE_S = 1.0
 
@@ -81,7 +96,7 @@ SESSION_FACT_TABLES = (
 )
 
 _SCHEMA = (
-    """
+    f"""
 CREATE TABLE stat_sessions (
     session_key INTEGER PRIMARY KEY,
     project_id TEXT NOT NULL,
@@ -93,6 +108,8 @@ CREATE TABLE stat_sessions (
     last_message_id TEXT,
     min_instant INTEGER,
     max_instant INTEGER,
+    owner_name TEXT NOT NULL,
+    is_subagent INTEGER NOT NULL,
     UNIQUE (project_id, agent_id, session_id)
 );
 CREATE TABLE stat_records (
@@ -107,37 +124,7 @@ CREATE TABLE stat_records (
 CREATE INDEX stat_records_run
     ON stat_records(session_key, run_id, seq, role, instant)
     WHERE run_id IS NOT NULL;
-CREATE TABLE stat_calls (
-    session_key INTEGER NOT NULL,
-    seq INTEGER NOT NULL,
-    kind INTEGER NOT NULL,
-    instant INTEGER NOT NULL,
-    day INTEGER NOT NULL,
-    model_key TEXT NOT NULL,
-    has_model INTEGER NOT NULL,
-    visible INTEGER NOT NULL,
-    has_usage INTEGER NOT NULL,
-    input_tokens INTEGER,
-    output_tokens INTEGER,
-    reasoning_tokens INTEGER,
-    cache_read_tokens INTEGER,
-    cache_write_tokens INTEGER,
-    input_estimated INTEGER NOT NULL,
-    output_estimated INTEGER NOT NULL,
-    has_cache INTEGER NOT NULL,
-    reasoning_present INTEGER NOT NULL,
-    cache_read_present INTEGER NOT NULL,
-    cache_write_present INTEGER NOT NULL,
-    price_estimated INTEGER NOT NULL,
-    reported_cost_usd REAL,
-    retrospective INTEGER NOT NULL,
-    priced INTEGER NOT NULL,
-    cost_usd REAL,
-    cost_source INTEGER NOT NULL,
-    cost_json TEXT,
-    purpose TEXT NOT NULL,
-    PRIMARY KEY (session_key, seq)
-) WITHOUT ROWID;
+CREATE TABLE stat_calls {CALL_TABLE_DEFINITION};
 CREATE INDEX stat_calls_retrospective
     ON stat_calls(model_key) WHERE retrospective = 1;
 CREATE INDEX stat_calls_unpriced
@@ -150,8 +137,11 @@ CREATE TABLE stat_tools (
     outcome INTEGER,
     error_code TEXT,
     duration_ms INTEGER,
+    run_id TEXT,
+    latency_bucket INTEGER,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+CREATE INDEX stat_tools_rejected ON stat_tools(instant) WHERE outcome = 0;
 CREATE TABLE stat_errors (
     session_key INTEGER NOT NULL,
     seq INTEGER NOT NULL,
@@ -194,12 +184,33 @@ CREATE TABLE stat_skills (
     name TEXT NOT NULL,
     PRIMARY KEY (session_key, seq)
 ) WITHOUT ROWID;
+-- The Session's own canonical Run records, replaced from Sessions on refresh.
+CREATE TABLE stat_run_records (
+    session_key INTEGER NOT NULL,
+    run_id TEXT NOT NULL,
+    run_kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    start_instant INTEGER NOT NULL,
+    end_instant INTEGER,
+    duration_ms INTEGER,
+    completion_reason TEXT,
+    iteration_count INTEGER,
+    changed_files INTEGER,
+    lines_added INTEGER,
+    lines_removed INTEGER,
+    PRIMARY KEY (session_key, run_id)
+) WITHOUT ROWID;
 CREATE TABLE stat_pricing (
     model_key TEXT PRIMARY KEY,
     fingerprint TEXT NOT NULL
 ) WITHOUT ROWID;
 """
     + ACCOUNTING_SCHEMA
+    + ROLLUP_SCHEMA
+)
+_RUN_RECORD_COLUMNS = (
+    "session_key, run_id, run_kind, status, start_instant, end_instant, duration_ms, "
+    "completion_reason, iteration_count, changed_files, lines_added, lines_removed"
 )
 
 _INSERT_COLUMNS = {
@@ -208,7 +219,10 @@ _INSERT_COLUMNS = {
         "stat_calls",
         CALL_COLUMNS,
     ),
-    "tools": ("stat_tools", "session_key, seq, instant, name, outcome, error_code, duration_ms"),
+    "tools": (
+        "stat_tools",
+        "session_key, seq, instant, name, outcome, error_code, duration_ms, run_id, latency_bucket",
+    ),
     "errors": ("stat_errors", "session_key, seq, instant, day, kind"),
     "checkpoints": (
         "stat_checkpoints",
@@ -267,12 +281,17 @@ class StatisticsSessionSource(Protocol):
 
 @dataclass(frozen=True)
 class StatisticsScope:
-    """One identity, Project or Extension-owned Session scope in report order."""
+    """One identity, Project or Extension-owned Session scope in report order.
+
+    ``owner_name`` names the Extension that owns the scope's Sessions; the
+    aggregates attribute their Runs and requests to that Extension.
+    """
 
     project_id: str | None
     agent_id: str
     display_key: str
     summaries: tuple[JsonObject, ...]
+    owner_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -311,6 +330,20 @@ class _StoredSession:
     last_message_id: str | None
     min_instant: int | None
     max_instant: int | None
+    flags: tuple[str, int]
+
+
+@dataclass(frozen=True)
+class _Listed:
+    """One listed Session: its address, last listed summary and stored flags.
+
+    ``flags`` are the owning Extension (``""`` for none) and whether it is a
+    Sub-Agent Session; they decide the origin of its Runs and requests.
+    """
+
+    address: SessionAddress
+    summary: JsonObject
+    flags: tuple[str, int]
 
 
 class _SourceFailureError(Exception):
@@ -338,24 +371,26 @@ class StatisticsIndex:
         *,
         prune: bool = True,
         usage_recorder: UsageRecorder | None = None,
+        pricing_lookup: PricingLookup | None = None,
     ) -> Result:
         """Reconcile ``scopes`` and run ``consume`` on one consistent index view.
 
         ``prune`` removes indexed Sessions outside ``scopes``; partial readers
         such as one Extension group pass ``False`` so they never shrink the
-        shared index. Recovery may retry ``consume`` after partial aggregation;
+        shared index. ``pricing_lookup`` prices calls without a cost snapshot;
+        readers of one index pass the same lookup, since a different one
+        reprices. Recovery may retry ``consume`` after partial aggregation;
         mutable result state must be local to each call. After :meth:`close` it raises
         :class:`~core.database.DatabaseUnavailableError`.
         """
+        sources = _Sources(sessions, scopes, prune, usage_recorder, pricing_lookup)
         with self._lock:
             if self._database.is_closed():
                 raise DatabaseUnavailableError(f"{self._database.spec.name} is closed")
             try:
                 for attempt in range(2):
                     try:
-                        return self._read_file(
-                            sessions, scopes, consume, prune=prune, usage_recorder=usage_recorder
-                        )
+                        return self._read_file(sources, consume)
                     except Exception as error:
                         failure = projection_failure(error)
                         if failure is None:
@@ -378,9 +413,7 @@ class StatisticsIndex:
                                 "Could not discard the Statistics index: %s", discard_error
                             )
                             break
-                return self._read_memory(
-                    sessions, scopes, consume, prune=prune, usage_recorder=usage_recorder
-                )
+                return self._read_memory(sources, consume)
             except (_SourceFailureError, UsageSourceError) as failure:
                 raise failure.error from failure.error.__cause__
 
@@ -409,19 +442,11 @@ class StatisticsIndex:
             await self._database.run_async(self.close)
 
     def _read_file[Result](
-        self,
-        sessions: StatisticsSessionSource,
-        scopes: Sequence[StatisticsScope],
-        consume: Callable[[IndexView], Result],
-        *,
-        prune: bool,
-        usage_recorder: UsageRecorder | None,
+        self, sources: _Sources, consume: Callable[[IndexView], Result]
     ) -> Result:
         database = self._database.get()
         indexed = database.write(
-            lambda connection: _reconcile_sources(
-                connection, sessions, scopes, prune=prune, usage_recorder=usage_recorder
-            ),
+            lambda connection: _reconcile_sources(connection, sources),
             patience_s=_WRITE_PATIENCE_S,
         )
         # Aggregation builds temporary tables, which read-only pooled readers
@@ -433,22 +458,14 @@ class StatisticsIndex:
         )
 
     def _read_memory[Result](
-        self,
-        sessions: StatisticsSessionSource,
-        scopes: Sequence[StatisticsScope],
-        consume: Callable[[IndexView], Result],
-        *,
-        prune: bool,
-        usage_recorder: UsageRecorder | None,
+        self, sources: _Sources, consume: Callable[[IndexView], Result]
     ) -> Result:
         with closing(sqlite3.connect(":memory:", isolation_level=None)) as connection:
             connection.row_factory = sqlite3.Row
             _prepare_connection(connection)
             connection.executescript(_SCHEMA)
             with _transaction(connection, immediate=True):
-                indexed = _reconcile_sources(
-                    connection, sessions, scopes, prune=prune, usage_recorder=usage_recorder
-                )
+                indexed = _reconcile_sources(connection, sources)
             with _transaction(connection):
                 return _consume(connection, indexed, consume)
 
@@ -491,17 +508,30 @@ def _transaction(connection: sqlite3.Connection, *, immediate: bool = False) -> 
     connection.execute("COMMIT")
 
 
+@dataclass(frozen=True)
+class _Sources:
+    """The canonical sources and options of one index read."""
+
+    sessions: StatisticsSessionSource
+    scopes: Sequence[StatisticsScope]
+    prune: bool
+    usage_recorder: UsageRecorder | None
+    pricing_lookup: PricingLookup | None
+
+
 def _reconcile_sources(
-    connection: sqlite3.Connection,
-    sessions: StatisticsSessionSource,
-    scopes: Sequence[StatisticsScope],
-    *,
-    prune: bool,
-    usage_recorder: UsageRecorder | None,
+    connection: sqlite3.Connection, sources: _Sources
 ) -> dict[tuple[str, str, str], IndexedSession]:
-    indexed = _reconcile(connection, sessions, scopes, prune=prune)
-    if usage_recorder is not None:
-        reconcile_usage(connection, usage_recorder)
+    """Reconcile facts, price new calls, then maintain the aggregates they changed."""
+    changes = RollupChanges()
+    indexed = _reconcile(
+        connection, sources.sessions, sources.scopes, prune=sources.prune, changes=changes
+    )
+    if sources.usage_recorder is not None:
+        reconcile_usage(connection, sources.usage_recorder, changes)
+    repriced = refresh_retrospective_costs(connection, sources.pricing_lookup)
+    changes.repriced(repriced["stat_calls"], repriced["stat_usage_calls"])
+    maintain_rollups(connection, changes)
     return indexed
 
 
@@ -511,36 +541,37 @@ def _reconcile(
     scopes: Sequence[StatisticsScope],
     *,
     prune: bool,
+    changes: RollupChanges,
 ) -> dict[tuple[str, str, str], IndexedSession]:
     """Bring the index up to date, touching canonical history only for changes.
 
-    Runs inside the caller's write transaction; an unchanged index writes nothing.
+    Runs inside the caller's write transaction; an unchanged index writes
+    nothing. ``changes`` learns every Session whose facts changed.
     """
     # A Session listed by several scopes keeps its first position and its last
-    # listed summary.
-    listed: dict[tuple[str, str, str], tuple[SessionAddress, JsonObject]] = {}
+    # listed summary; an Extension scope's owner sticks.
+    listed: dict[tuple[str, str, str], _Listed] = {}
     for scope in scopes:
         for summary in scope.summaries:
             session_id = str(summary["id"])
             key = statistics_session_key(scope.project_id, scope.agent_id, session_id)
-            listed[key] = (
+            prior = listed.get(key)
+            owner_name = scope.owner_name or (prior.flags[0] if prior is not None else "")
+            listed[key] = _Listed(
                 SessionAddress(
                     project_id=scope.project_id,
                     agent_id=scope.agent_id,
                     session_id=session_id,
                 ),
                 summary,
+                (owner_name, int(summary.get("is_subagent_session") is True)),
             )
-    versions = _source(sessions.list_history_versions, [address for address, _ in listed.values()])
+    versions = _source(sessions.list_history_versions, [entry.address for entry in listed.values()])
     stored = _stored_sessions(connection)
     current: dict[tuple[str, str, str], IndexedSession] = {}
-    changed: list[
-        tuple[
-            tuple[str, str, str], SessionAddress, JsonObject, tuple[str, int], _StoredSession | None
-        ]
-    ] = []
-    for key, (address, summary) in listed.items():
-        version = versions.get(address)
+    changed: list[tuple[tuple[str, str, str], _Listed, tuple[str, int], _StoredSession | None]] = []
+    for key, entry in listed.items():
+        version = versions.get(entry.address)
         if version is None:
             continue
         row = stored.get(key)
@@ -549,18 +580,21 @@ def _reconcile(
             and row.generation_id == version[0]
             and row.history_revision == version[1]
         ):
-            current[key] = IndexedSession(row.session_key, row.generation_id, summary)
+            current[key] = IndexedSession(row.session_key, row.generation_id, entry.summary)
+            if row.flags != entry.flags:
+                _write_flags(connection, row.session_key, entry.flags)
+                changes.session(row.session_key, key)
         else:
-            changed.append((key, address, summary, version, row))
+            changed.append((key, entry, version, row))
     stale = [row.session_key for key, row in stored.items() if key not in current] if prune else []
     if not changed and not stale:
         return current
 
     removed = False
-    for key, address, summary, version, row in changed:
+    for key, entry, version, row in changed:
         try:
-            handle = _source(sessions.get, address)
-            indexed = _refresh(connection, handle, key, summary, version, row)
+            handle = _source(sessions.get, entry.address)
+            indexed = _refresh(connection, handle, key, entry, version, row, changes)
         except SessionNotFoundError:
             # The live generation vanished after the batched version read;
             # a stale derived row is pruned below.
@@ -569,24 +603,18 @@ def _reconcile(
         removed = removed or row is not None
         current[key] = indexed
     if prune:
-        stale_keys = [row.session_key for key, row in stored.items() if key not in current]
-        if stale_keys:
-            _delete_facts(connection, stale_keys)
+        stale_rows = [(key, row) for key, row in stored.items() if key not in current]
+        if stale_rows:
+            _delete_facts(connection, [row.session_key for _key, row in stale_rows])
             connection.executemany(
                 "DELETE FROM stat_sessions WHERE session_key = ?",
-                [(session_key,) for session_key in stale_keys],
+                [(row.session_key,) for _key, row in stale_rows],
             )
+            for key, row in stale_rows:
+                changes.session(row.session_key, key)
             removed = True
     if removed:
-        connection.execute(
-            """
-            DELETE FROM stat_pricing
-            WHERE NOT EXISTS (
-                SELECT 1 FROM stat_calls
-                WHERE retrospective = 1 AND model_key = stat_pricing.model_key
-            )
-            """
-        )
+        prune_pricing(connection)
     return current
 
 
@@ -600,11 +628,13 @@ def _stored_sessions(connection: sqlite3.Connection) -> dict[tuple[str, str, str
             last_message_id=row[7],
             min_instant=row[8],
             max_instant=row[9],
+            flags=(str(row[10]), int(row[11])),
         )
         for row in connection.execute(
             """
             SELECT project_id, agent_id, session_id, session_key, generation_id,
-                history_revision, next_seq, last_message_id, min_instant, max_instant
+                history_revision, next_seq, last_message_id, min_instant, max_instant,
+                owner_name, is_subagent
             FROM stat_sessions
             """
         )
@@ -615,10 +645,13 @@ def _refresh(
     connection: sqlite3.Connection,
     session: ChatSession,
     key: tuple[str, str, str],
-    summary: JsonObject,
+    entry: _Listed,
     version: tuple[str, int],
     row: _StoredSession | None,
+    changes: RollupChanges,
 ) -> IndexedSession:
+    # Run records are read after the history they describe: a Run that
+    # finishes in between changes the revision, so the next read refreshes it.
     if row is not None and row.generation_id == version[0]:
         batch = _source(
             session.load_since,
@@ -630,28 +663,32 @@ def _refresh(
             ),
         )
         if batch is not None:
-            _append(connection, row, batch)
-            return IndexedSession(row.session_key, batch.cursor.generation_id, summary)
+            runs = _source(session.run_records, batch.cursor.generation_id)
+            _append(connection, key, entry, row, batch, runs, changes)
+            return IndexedSession(row.session_key, batch.cursor.generation_id, entry.summary)
     batch = _source(session.load_since)
     if batch is None:
         raise SessionNotFoundError(f"Session {key[2]} has no readable history")
-    return _replace(connection, key, summary, batch, row)
+    runs = _source(session.run_records, batch.cursor.generation_id)
+    return _replace(connection, key, entry, batch, runs, row, changes)
 
 
 def _replace(
     connection: sqlite3.Connection,
     key: tuple[str, str, str],
-    summary: JsonObject,
+    entry: _Listed,
     batch: SessionReadBatch,
+    runs: Sequence[SessionRunRecord],
     row: _StoredSession | None,
+    changes: RollupChanges,
 ) -> IndexedSession:
     if row is None:
         cursor = connection.execute(
             """
             INSERT INTO stat_sessions (
                 project_id, agent_id, session_id, generation_id, history_revision,
-                next_seq, last_message_id, min_instant, max_instant
-            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL)
+                next_seq, last_message_id, min_instant, max_instant, owner_name, is_subagent
+            ) VALUES (?, ?, ?, '', 0, 0, NULL, NULL, NULL, '', 0)
             """,
             key,
         )
@@ -661,6 +698,7 @@ def _replace(
         _delete_facts(connection, [session_key])
     rows = _project_batch(session_key, batch)
     _insert_rows(connection, rows)
+    _write_run_records(connection, session_key, runs, {})
     _write_session_state(
         connection,
         session_key,
@@ -668,19 +706,95 @@ def _replace(
         min_instant=rows.min_instant,
         max_instant=rows.max_instant,
     )
-    return IndexedSession(session_key, batch.cursor.generation_id, summary)
+    _write_flags(connection, session_key, entry.flags)
+    changes.session(session_key, key)
+    return IndexedSession(session_key, batch.cursor.generation_id, entry.summary)
 
 
-def _append(connection: sqlite3.Connection, row: _StoredSession, batch: SessionReadBatch) -> None:
-    rows = _project_batch(row.session_key, batch)
+def _append(
+    connection: sqlite3.Connection,
+    key: tuple[str, str, str],
+    entry: _Listed,
+    row: _StoredSession,
+    batch: SessionReadBatch,
+    runs: Sequence[SessionRunRecord],
+    changes: RollupChanges,
+) -> None:
+    session_key = row.session_key
+    rows = _project_batch(session_key, batch)
     _insert_rows(connection, rows)
+    stored = {
+        str(values[1]): tuple(values)
+        for values in connection.execute(
+            f"SELECT {_RUN_RECORD_COLUMNS} FROM stat_run_records WHERE session_key = ?",
+            (session_key,),
+        )
+    }
+    changed_runs = _write_run_records(connection, session_key, runs, stored)
     _write_session_state(
         connection,
-        row.session_key,
+        session_key,
         batch.cursor,
         min_instant=_bound(min, row.min_instant, rows.min_instant),
         max_instant=_bound(max, row.max_instant, rows.max_instant),
     )
+    if row.flags != entry.flags:
+        _write_flags(connection, session_key, entry.flags)
+        changes.session(session_key, key)
+        return
+    changes.session_runs(
+        session_key,
+        {str(record[5]) for record in rows.records if record[5]} | changed_runs,
+    )
+    if rows.records:
+        # New records extend the Session's per-Session cubes.
+        changes.fact_sessions.add(session_key)
+    if {record.run_id: record.run_kind for record in runs} != {
+        run_id: str(values[2]) for run_id, values in stored.items()
+    }:
+        # Run identities decide the origin of this Session's Tools and requests.
+        changes.fact_sessions.add(session_key)
+        changes.addresses.add(key)
+
+
+def _write_run_records(
+    connection: sqlite3.Connection,
+    session_key: int,
+    runs: Sequence[SessionRunRecord],
+    stored: Mapping[str, tuple[Any, ...]],
+) -> set[str]:
+    """Store the Session's Run records over ``stored``; return the changed Run ids."""
+    current = {
+        record.run_id: (
+            session_key,
+            record.run_id,
+            record.run_kind,
+            record.status,
+            timestamp_instant(record.timing_started_at or record.started_at),
+            None if record.completed_at is None else timestamp_instant(record.completed_at),
+            record.duration_ms,
+            record.completion_reason,
+            record.iteration_count,
+            record.changed_files,
+            record.lines_added,
+            record.lines_removed,
+        )
+        for record in runs
+    }
+    removed = [run_id for run_id in stored if run_id not in current]
+    written = [values for run_id, values in current.items() if stored.get(run_id) != values]
+    if removed:
+        connection.executemany(
+            "DELETE FROM stat_run_records WHERE session_key = ? AND run_id = ?",
+            [(session_key, run_id) for run_id in removed],
+        )
+    if written:
+        connection.executemany(
+            f"INSERT OR REPLACE INTO stat_run_records ({_RUN_RECORD_COLUMNS}) "
+            f"VALUES ({', '.join('?' for _column in _RUN_RECORD_COLUMNS.split(','))})",
+            written,
+        )
+    return {*removed, *(str(values[1]) for values in written)}
 
 
 def _bound(pick: Callable[[int, int], int], stored: int | None, added: int | None) -> int | None:
@@ -709,6 +823,13 @@ def _insert_rows(connection: sqlite3.Connection, rows: ProjectedRows) -> None:
         values = getattr(rows, name)
         if values:
             connection.executemany(statement, values)
+
+
+def _write_flags(connection: sqlite3.Connection, session_key: int, flags: tuple[str, int]) -> None:
+    connection.execute(
+        "UPDATE stat_sessions SET owner_name = ?, is_subagent = ? WHERE session_key = ?",
+        (*flags, session_key),
+    )
 
 
 def _write_session_state(
@@ -744,7 +865,7 @@ def _write_session_state(
 
 def _delete_facts(connection: sqlite3.Connection, session_keys: Sequence[int]) -> None:
     parameters = [(session_key,) for session_key in session_keys]
-    for table in SESSION_FACT_TABLES:
+    for table in (*SESSION_FACT_TABLES, "stat_run_records"):
         connection.executemany(f"DELETE FROM {table} WHERE session_key = ?", parameters)
 
 

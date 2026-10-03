@@ -43,6 +43,7 @@ from core.settings.normalizers import (
     normalize_debug_settings,
     normalize_defaults_settings,
     normalize_extensions_settings,
+    normalize_librarian_settings,
     normalize_local_models_settings,
     normalize_model_task_settings,
     normalize_notification_settings,
@@ -670,6 +671,12 @@ class StorageManager:
 
         settings = self.load_settings()
         return normalize_reflection_settings(settings.get("reflection"))
+
+    def load_librarian_settings(self) -> dict[str, Any]:
+        """Return normalized persisted Librarian settings."""
+
+        settings = self.load_settings()
+        return normalize_librarian_settings(settings.get("librarian"))
 
     def load_notification_settings(self) -> dict[str, bool]:
         """Return all persisted desktop-notification switches."""

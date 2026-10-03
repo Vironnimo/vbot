@@ -184,26 +184,25 @@ function createBridge(initialProfile = profile, detail = swarm) {
       const report = (participantId) => ({
         participant_id: participantId ?? null,
         participant_count: 2,
-        usage: {
+        activity: {
           totals: {
-            measured_input_tokens: 30,
-            measured_output_tokens: 20,
+            input_tokens: 40,
             estimated_input_tokens: 10,
+            output_tokens: 25,
             estimated_output_tokens: 5,
           },
           models: [
             {
-              provider: 'demo',
-              model: participantId === 'prt-b' ? 'fallback' : 'model',
+              model: participantId === 'prt-b' ? 'demo/fallback' : 'demo/model',
               runs: 1,
-              measured_input_tokens: 30,
-              measured_output_tokens: 20,
+              input_tokens: 40,
               estimated_input_tokens: 10,
+              output_tokens: 25,
               estimated_output_tokens: 5,
             },
           ],
+          tool_calls: participantId === 'prt-b' ? 0 : 4,
         },
-        tools: { total_calls: participantId === 'prt-b' ? 0 : 4 },
       });
       return Promise.resolve({
         usage: {

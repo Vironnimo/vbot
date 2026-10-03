@@ -1,0 +1,2 @@
+- The user stated a lasting fact about themselves, their environment or their projects, stated a preference for all of their work, or asked you to remember something.
+- A stored Memory entry turned out to be wrong or outdated.

@@ -5,6 +5,7 @@ Rename and delete live in ``test_agent_methods_lifecycle.py``.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -65,7 +66,9 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
 
     [listed] = (await rpc_result(state, "agent.list"))["agents"]
     created = await rpc_result(state, "agent.create", id="writer")
-    updated = await rpc_result(state, "agent.update", id="writer", name="Updated Writer")
+    updated = await rpc_result(
+        state, "agent.update", id="writer", name="Updated Writer", librarian_enabled=False
+    )
     deleted = await rpc_result(state, "agent.delete", id="writer")
 
     assert listed["current_session_id"] == "current-one"
@@ -75,10 +78,11 @@ async def test_agent_crud_round_trip(tmp_path: Path) -> None:
     assert created["id"] == "writer"
     assert created["name"] == "writer"
     assert created["custom_system_prompt_enabled"] is False
+    assert created["librarian_enabled"] is True
     assert created["memory_prompt_mode"] == "agent_user"
     assert created["tools"] == {}
     assert created["excluded_skills"] == []
-    assert updated["name"] == "Updated Writer"
+    assert (updated["name"], updated["librarian_enabled"]) == ("Updated Writer", False)
     assert deleted["agent_id"] == "writer"
     # The remaining Agents ride on the response; each change is a bare reload signal.
     assert [agent["id"] for agent in deleted["remaining_agents"]] == ["coder"]
@@ -221,6 +225,39 @@ async def test_agent_get_reports_raw_config_and_the_effective_source(
 
 
 @pytest.mark.asyncio
+async def test_the_builtin_librarian_is_hidden_and_only_its_model_settings_change(
+    tmp_path: Path,
+) -> None:
+    state = _real_agent_state(tmp_path, {})
+    # Agent mutations take the reference lock and announce the change.
+    state.agent_delete_lock = asyncio.Lock()
+    state.event_bus = SimpleNamespace(publish=lambda _event, _payload: None)
+    state.runtime.agents.create("coder", "Coder")
+    state.runtime.agents.ensure_librarian()
+
+    listed = (await rpc_result(state, "agent.list"))["agents"]
+    updated = await rpc_result(
+        state, "agent.update", id="librarian", thinking_effort="high", temperature=0.3
+    )
+    refusals = [
+        await rpc_error(state, "agent.update", id="librarian", name="Curator"),
+        await rpc_error(state, "agent.create", id="librarian"),
+    ]
+
+    assert [agent["id"] for agent in listed] == ["coder"]
+    assert listed[0]["builtin"] is None
+    assert (updated["builtin"], updated["thinking_effort"], updated["temperature"]) == (
+        "librarian",
+        "high",
+        0.3,
+    )
+    assert updated["tool_access"] == {"mode": "selected", "allowed": ["skill", "skill_manage"]}
+    assert [error["code"] for error in refusals] == ["domain_error"] * 2
+    assert "built into vBot" in refusals[0]["message"]
+    assert "reserved" in refusals[1]["message"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "window"),
     [
@@ -345,6 +382,7 @@ async def test_workspace_is_set_by_update_only(tmp_path: Path) -> None:
             {"id": "coder", "custom_system_prompt_enabled": "yes"},
             "custom_system_prompt_enabled",
         ),
+        ("agent.update", {"id": "coder", "librarian_enabled": None}, "librarian_enabled"),
         ("agent.reorder", {"agent_ids": ["coder", "coder"], "expected_revision": 1}, ""),
     ],
 )

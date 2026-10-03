@@ -19,6 +19,10 @@
     // { status: 'running' | 'unread' | 'idle', unreadCount, latestUnreadAt }.
     agentActivity = {},
     selectedAgentId = '',
+    // The name of a displayed Agent that is not in `agents` (the hidden
+    // Librarian, or an Agent deleted while its Session is shown): the picker
+    // shows it in place of its "Select an agent" placeholder.
+    displayedAgentName = '',
     loadingAgents = false,
     // Project context for the compact project picker that lives in the header
     // (left of the Sessions button). "No project" is Personal/identity chat.
@@ -97,12 +101,12 @@
       ? t('chat.agentPicker.label', {
           activity: selectedEntry.label,
         })
-      : t('chat.selectAgent'),
+      : displayedAgentName || t('chat.selectAgent'),
   );
   let pickerProps = $derived({
     value: selectedAgentId,
     options: agentOptions,
-    placeholder: t('chat.selectAgent'),
+    placeholder: displayedAgentName || t('chat.selectAgent'),
     ariaLabel: pickerLabel,
     triggerClass: 'chat-header__agent-picker',
     triggerTooltip: selectedEntry?.tooltip ?? '',

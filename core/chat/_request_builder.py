@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.agents import skill_subject_id
 from core.attachments.images import ImageConverter
 from core.chat._message_history import (
     finalize_checkpoint_history_guidance,
@@ -185,7 +186,7 @@ class RequestBuilder:
             registry = await _CHAT_TRANSFORM_WORKERS.run(
                 self._dependencies.resolve_skills,
                 project_id,
-                context.run.agent_id,
+                skill_subject_id(context.agent),
             )
         except (ProjectError, OSError) as error:
             _LOGGER.warning(

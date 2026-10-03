@@ -486,6 +486,13 @@
     untrack(() => chatController.syncAgentActivity(addresses, refreshKey));
   });
 
+  // A shown Session of an identity Agent outside the roster, such as the
+  // hidden Librarian, loads that Agent's payload like the roster has it.
+  $effect(() => {
+    const agentId = target.hiddenAgentToLoad;
+    if (agentId) untrack(() => void chatController.loadHiddenAgent(agentId));
+  });
+
   $effect(() => {
     const entries = sessionInvalidations;
     untrack(() =>
@@ -592,6 +599,9 @@
     isDisplayedSession: target.isDisplayedSession,
     updateSubAgentRunStatuses: (updates, options) =>
       chatController.applySubAgentStatusUpdates(updates, options),
+    // A finished review's row reports what it changed, displayed or not.
+    onReflectionFinished: (sourceState) =>
+      chatController.refreshReflections(sourceState),
   });
   chatController = createChatController({
     chatState,
@@ -649,6 +659,10 @@
     agents={chatState.agents}
     agentActivity={identityAgentActivity}
     selectedAgentId={target.displayedIdentityAgentId}
+    displayedAgentName={target.displayedIdentityAgentId &&
+    target.activeAgent?.__overrideAddress
+      ? target.activeAgent.name
+      : ''}
     loadingAgents={chatState.loadingAgents}
     {projects}
     {selectedProjectId}
@@ -1019,6 +1033,13 @@
         onNavigateToSubAgent={navigation.handleNavigateToSubAgentLink}
         onNavigateToParentSession={navigation.navigateToParentSession}
         onOpenReflection={navigation.handleOpenReflection}
+        onLoadReflectionChanges={(row) =>
+          chatController.loadReflectionChanges(
+            target.activeSessionState,
+            row.runId,
+          )}
+        onUndoReflection={(row) =>
+          chatController.undoReflection(target.activeSessionState, row.runId)}
         onCancelSubAgent={actions.handleCancelSubAgent}
         onCancelBackgroundProcess={actions.handleCancelBackgroundProcess}
       />

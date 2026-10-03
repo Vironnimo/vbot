@@ -133,6 +133,9 @@ def _steps(runtime: Runtime) -> Iterator[_Step]:
         yield _Step("triggers", None, triggers.aclose)
     if (reflection := runtime._reflection_service) is not None:
         yield _Step("reflection", None, reflection.aclose)
+    if (librarian := runtime._librarian_service) is not None:
+        # A pass in progress stops; its consolidation Run ends with the Runs below.
+        yield _Step("librarian", librarian.stop, librarian.aclose)
     if (titles := runtime._session_title_service) is not None:
         yield _Step("session_titles", None, titles.aclose)
     if (runs := runtime._chat_run_manager) is not None:

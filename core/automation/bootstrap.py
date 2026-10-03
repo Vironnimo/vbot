@@ -406,6 +406,35 @@ class BootstrapService:
         )
         return replace(candidate)
 
+    def rename_prompt_skill(
+        self, job_id: str, prompt: str, *, actor: str = _DEFAULT_ACTOR
+    ) -> BootstrapJob:
+        """Replace a job's prompt whose Skill triggers now name another Skill.
+
+        For a Skill merged into another one: the job runs the same work under the
+        new name, so, unlike ``update_job``, status and arming stay as they were and
+        a job that already ran this startup does not run again.
+        """
+        self._ensure_loaded()
+        current = self._jobs.get(job_id)
+        if current is None:
+            raise BootstrapJobNotFoundError(f"Bootstrap job not found: {job_id}")
+        if current.status == "completed":
+            raise BootstrapJobValidationError("Completed Bootstrap jobs are immutable history")
+        self._require_not_running(job_id)
+        if current.prompt == prompt:
+            return replace(current)
+        candidate = replace(current, prompt=prompt)
+        self._validate_job(candidate, validate_references=False)
+        self._replace_and_save(current, candidate)
+        _LOGGER.info(
+            "Bootstrap job prompt renamed a Skill (job=%s agent=%s actor=%s)",
+            job_id,
+            _agent_fields(candidate),
+            actor,
+        )
+        return replace(candidate)
+
     def delete_job(self, job_id: str, *, actor: str = _DEFAULT_ACTOR) -> None:
         self._ensure_loaded()
         self._require_not_running(job_id)

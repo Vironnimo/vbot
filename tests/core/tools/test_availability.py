@@ -163,6 +163,39 @@ def test_denials_win_over_memory_activation_and_session_grants() -> None:
     assert resolution.session_tool_grants == ()
 
 
+def test_a_fixed_selection_is_the_whole_tool_set() -> None:
+    # A built-in Agent's Tools: nothing activates by memory mode, Session grant or follow.
+    tools = _catalog(
+        ("skill", {}),
+        ("skill_manage", {**_IDENTITY}),
+        ("skill_audit", {"activation": "follows", "activation_source": "skill"}),
+        ("memory", {"activation": "memory_mode", **_IDENTITY}),
+        ("history", {"activation": "session_grant"}),
+    )
+    allowed = ("skill", "skill_manage")
+
+    def resolve(*, fixed: bool) -> tuple[tuple[str, ...], tuple[str, ...]]:
+        resolution = resolve_tool_access(
+            ToolAccess(mode="selected", allowed=allowed, fixed=fixed),
+            tools,
+            "agent_user",
+            workspace="workspace",
+            session_tool_grants=("history",),
+        )
+        return resolution.allowed_tools, resolution.session_tool_grants
+
+    assert resolve(fixed=True) == (allowed, ())
+    assert resolve(fixed=False) == (
+        ("history", "memory", "skill", "skill_audit", "skill_manage"),
+        ("history",),
+    )
+    # The mark is never persisted.
+    assert ToolAccess(mode="selected", allowed=allowed, fixed=True).to_dict() == {
+        "mode": "selected",
+        "allowed": list(allowed),
+    }
+
+
 def test_memory_activation_is_independent_of_selected_direct_tools() -> None:
     tools = _catalog(("read", {}), ("memory", {"activation": "memory_mode", **_IDENTITY}))
     policy = ToolAccess(mode="selected")

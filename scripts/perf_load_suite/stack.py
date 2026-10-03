@@ -164,7 +164,7 @@ def spawn(
     argv: list[str], *, log_path: Path, environment: dict[str, str]
 ) -> subprocess.Popen[bytes]:
     """Start a windowless child in its own process group, logging to ``log_path``."""
-    launch = guarded_process_launch(argv)
+    launch = guarded_process_launch(argv, env=environment)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log_file:
         return subprocess.Popen(

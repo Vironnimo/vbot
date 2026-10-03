@@ -3,11 +3,11 @@
 // SkillsView adds the anchor and supplies the actions:
 //
 //   open(entry), edit(entry), copyName(name), setDisabled(entry, disabled),
-//   remove(entry)
+//   remove(entry), restore(item), purge(item)
 //
-// `entry` is a skill.inventory package. Agent and Project rows pass the
-// package they list (null for a saved name without one) and a `toggle(on)`
-// that applies the row's own rule.
+// `entry` is a skill.inventory package, `item` one of its `archived`
+// packages. Agent and Project rows pass the package they list (null for a
+// saved name without one) and a `toggle(on)` that applies the row's own rule.
 import { t } from '$lib/i18n.js';
 
 function packageItems(entry, actions, openLabel) {
@@ -109,6 +109,29 @@ export function projectRowMenu(item, { projectName, entry, toggle }, actions) {
       },
       ...packageItems(entry, actions, t('skills.menu.openSkill')),
       copyItem(item.name, actions),
+    ],
+  };
+}
+
+/** An archived row: Restore, Copy name | Delete permanently... */
+export function archivedRowMenu(item, actions) {
+  return {
+    label: t('skills.menu.label', { name: item.name }),
+    items: [
+      {
+        id: 'restore',
+        label: t('skills.archived.restore'),
+        group: 'package',
+        onSelect: () => actions.restore(item),
+      },
+      copyItem(item.name, actions),
+      {
+        id: 'purge',
+        label: t('skills.archived.purge'),
+        danger: true,
+        group: 'delete',
+        onSelect: () => actions.purge(item),
+      },
     ],
   };
 }

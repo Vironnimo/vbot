@@ -321,7 +321,7 @@ class StubAgentResolver:
 
     def _with_overrides(self, agent: Any, address: SessionAddress) -> Any:
         overrides = self.session_overrides(address)
-        return agent if overrides.is_empty else replace(agent, **overrides.as_dict())
+        return agent if overrides.is_empty else replace(agent, **overrides.agent_changes())
 
 
 class StubProviders:

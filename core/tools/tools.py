@@ -225,6 +225,7 @@ class ToolRegistry:
         display: ToolDisplay | None = None,
         ready: ToolReadinessPredicate | None = None,
         readiness_hint: str | None = None,
+        readiness_retryable: bool = False,
         extension: str | None = None,
         result_schema: JsonObject | None = None,
         parallel_safe: bool = True,
@@ -243,7 +244,8 @@ class ToolRegistry:
         a not-ready tool stays registered but is filtered out of the model-facing
         surfaces and returns a failure envelope on a direct dispatch.
         ``readiness_hint`` is optional English text explaining the readiness
-        precondition (surfaced by ``tool.list``); ``extension`` names the owning
+        precondition (surfaced by ``tool.list``) and ``readiness_retryable``
+        whether the not-ready failure is transient; ``extension`` names the owning
         extension (``None`` for a built-in), set at extension-tool apply time.
         ``definition_change_note`` lets a Tool announce a change of its
         description to a Session that already knows it (see :class:`Tool`).
@@ -284,6 +286,7 @@ class ToolRegistry:
             display=display or ToolDisplay(),
             ready=ready,
             readiness_hint=readiness_hint,
+            readiness_retryable=readiness_retryable,
             extension=extension,
             parallel_safe=parallel_safe,
             execution_slot_required=execution_slot_required,
@@ -590,7 +593,7 @@ class ToolRegistry:
                 tool.readiness_hint
                 or f"tool '{model_tool_name(context.tool_name)}' is not available: "
                 "its extension is not configured",
-                retryable=False,
+                retryable=tool.readiness_retryable,
             )
         normalized_arguments = _checked_arguments(
             tool, context.input_contract or tool.contract, arguments
@@ -934,6 +937,8 @@ class ToolExecutor:
                 cwd=config.cwd,
                 project_id=config.project_id,
                 skill_project_id=config.skill_project_id,
+                skill_agent_id=config.skill_agent_id,
+                run_kind=config.run_kind,
                 emit_hook=config.emit_hook,
                 cancellation_hook=config.cancellation_hook,
                 cancel_registration_hook=cancel_registration_hook,

@@ -18,6 +18,7 @@ const REFLECTION_TERMINAL_STATUSES = {
 export function createRunActivityProjection({
   chatState,
   updateSubAgentRunStatuses,
+  onReflectionFinished = () => {},
 }) {
   function trackSubAgentRunStatus(event) {
     const updates = {};
@@ -176,7 +177,8 @@ export function createRunActivityProjection({
   // their lifecycle payloads with the reviewed source session so this tracking
   // can project them onto that source's Activity panel without any extra RPC.
   // Terminal events settle the entry in place; finished entries survive until
-  // the source session state is discarded.
+  // the source session state is discarded. A review that just finished is
+  // reported once, so its owner can read what it changed.
   function trackReflectionTask(event) {
     if (!isReflectionRunKind(event.run_kind) || !event.source_session_id) {
       return;
@@ -188,6 +190,9 @@ export function createRunActivityProjection({
     );
     const existing = sourceState.reflectionTasks[event.run_id] ?? {};
     const terminalStatus = REFLECTION_TERMINAL_STATUSES[event.type];
+    const finished =
+      Boolean(terminalStatus) &&
+      (!existing.status || existing.status === 'running');
     sourceState.reflectionTasks = {
       ...sourceState.reflectionTasks,
       [event.run_id]: {
@@ -199,8 +204,14 @@ export function createRunActivityProjection({
         startedAt: terminalStatus
           ? existing.startedAt || event.timestamp || ''
           : event.timestamp || existing.startedAt || '',
+        ...(terminalStatus && existing.outcome
+          ? { outcome: existing.outcome }
+          : {}),
       },
     };
+    if (finished) {
+      onReflectionFinished(sourceState);
+    }
   }
 
   function applySnapshot(activeRuns) {

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +22,8 @@ from core.automation import (
     AutomationReferences,
     BootstrapService,
     CronService,
+    LearningChanges,
+    LibrarianService,
     ReflectionService,
     TriggerService,
 )
@@ -36,6 +38,7 @@ from core.extensions import (
     InteractionEvent,
     InteractionResponder,
 )
+from core.extensions.oauth_redirects import OAuthRedirects
 from core.extensions.operations import ExtensionHost
 from core.extensions.runtime import ExtensionRuntime
 from core.memory import MemoryService
@@ -71,7 +74,7 @@ from core.providers.usage import ProviderUsageService
 from core.providers.wire_observations import ObservedFacts
 from core.providers.wire_profile import ProfileStatus, Verification, WireProfile
 from core.recall import RecallBackend
-from core.runs import ChatRunManager
+from core.runs import ChatRunManager, RunNotFoundError
 from core.runtime._agent_rename import (
     AgentRenameOutcome,
     AgentRenameServices,
@@ -85,6 +88,7 @@ from core.runtime._recall import RecallIntegration
 from core.runtime._service_access import _StartedService
 from core.runtime._settings import SettingsChangeEffects, apply_settings_change
 from core.runtime._shutdown import run_shutdown, run_shutdown_async
+from core.runtime._skill_merge import SkillMergeServices, follow_skill_merge
 from core.runtime._workers import _RUNTIME_WORKERS
 from core.runtime.interfaces import (
     ConfigProtocol,
@@ -96,7 +100,7 @@ from core.sessions import ChatSessionManager
 from core.sessions.titles import SessionTitleService
 from core.settings.paths import DEFAULT_SPEECH_UPLOAD_MAX_SIZE_BYTES
 from core.settings.settings import effective_timezone_name
-from core.skills.authoring import SkillAuthoringService
+from core.skills.authoring import ArchivedSkill, SkillAuthoringService, SkillReference
 from core.skills.policy import SkillPolicyService
 from core.skills.runtime import SkillRuntime
 from core.skills.skills import SkillMetadata, SkillRegistry
@@ -164,6 +168,8 @@ class Runtime:
         # Lives as long as the Runtime: a restart keeps coordinating with a
         # data snapshot that is still copying.
         self._snapshot_barrier = SnapshotBarrier()
+        # Lives as long as the Runtime: the server binds its callback URL once.
+        self.oauth_redirects = OAuthRedirects()
         self._clear_service_references()
 
     def _clear_service_references(self) -> None:
@@ -222,6 +228,8 @@ class Runtime:
         self._archive: ArchiveService | None = None
         self._trigger_service: TriggerService | None = None
         self._reflection_service: ReflectionService | None = None
+        self._learning_changes: LearningChanges | None = None
+        self._librarian_service: LibrarianService | None = None
         self._session_title_service: SessionTitleService | None = None
         self._subagent_coordinator: SubAgentCoordinator | None = None
         self._chat_loop: ChatLoop | None = None
@@ -265,6 +273,7 @@ class Runtime:
                     resolve_credential=self.resolve_environment_credential,
                     set_credential=self._set_extension_credential,
                     resolve_cwd=self._extension_cwd,
+                    oauth_redirects=self.oauth_redirects,
                 ),
                 ensure_started=self._ensure_started,
                 agent_resolver=self.agent_resolver,
@@ -342,10 +351,18 @@ class Runtime:
         self.reload_environment_credentials()
 
     def _extension_tool_agent(self, context: Any) -> Any:
-        from core.sessions import SessionAddress
+        from core.sessions import SessionAddress, SessionNotFoundError
 
         address = SessionAddress(context.project_id, context.agent_id, context.session_id)
-        binding = self.chat_sessions.temporary_binding(address)
+        try:
+            binding = self.chat_sessions.temporary_binding(address)
+        except SessionNotFoundError:
+            # A temporary invocation needs its live Session. A call outside any
+            # Session (Extension management such as MCP ``invoke``) runs as the
+            # addressed Agent, which no Session overrides.
+            if context.execution_owner is not None:
+                raise ValueError("Temporary Tool invocation no longer owns this Session") from None
+            return self.agent_resolver.resolve_agent(context.project_id, context.agent_id)
         if binding is not None:
             owner = context.execution_owner
             if owner is None or (
@@ -524,6 +541,9 @@ class Runtime:
     def _start_archive_retention(self) -> None:
         start_event_loop_service(self._archive, "Archive is not available")
 
+    def _start_librarian(self) -> None:
+        start_event_loop_service(self._librarian_service, "Librarian service not available")
+
     def _start_channel_service(self) -> None:
         start_event_loop_service(self._channel_service, "Channel service not available")
 
@@ -594,6 +614,51 @@ class Runtime:
 
     def project_own_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_own_skills(project_id)
+
+    def archived_skill(self, agent_id: str | None, name: str) -> ArchivedSkill | None:
+        return self._skill_operations().archived_skill(agent_id, name)
+
+    def background_skill_protection(self, agent_id: str, names: Iterable[str]) -> dict[str, str]:
+        return self._skill_operations().background_protection(agent_id, names)
+
+    def shared_skill_receivers(self, owner_id: str) -> dict[str, frozenset[str]]:
+        """Map each Skill the Identity Agent ``owner_id`` shares to its receiver Agents."""
+        return self._skill_operations().shared_skill_receivers(owner_id)
+
+    async def follow_skill_merge(
+        self,
+        owner_id: str,
+        name: str,
+        target: str | None,
+        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+    ) -> tuple[SkillReference, ...]:
+        """Delete an Identity Agent's Skill and move what named it to ``target``, if any.
+
+        ``delete(followed)`` deletes the Skill and records ``followed``; returns
+        what did not move (``core/runtime/_skill_merge.py``).
+        """
+        if self._skill_policy is None:
+            raise RuntimeError("Skill policy service not available")
+        services = SkillMergeServices(
+            policy=self._skill_policy,
+            automation=self.automation_references,
+            agent_name=self._agent_name,
+            shares_changed=lambda: self.invalidate_agent_skills(None),
+        )
+        return await follow_skill_merge(services, owner_id, name, target, delete)
+
+    def _agent_name(self, agent_id: str) -> str:
+        agent = self.agents.find(agent_id)
+        return agent.name if agent is not None and agent.name else agent_id
+
+    def run_started_at(self, run_id: str) -> str | None:
+        """When the Run ``run_id`` was created, while the Run manager still holds it."""
+        if self._chat_run_manager is None:
+            return None
+        try:
+            return self._chat_run_manager.get(run_id).created_at
+        except RunNotFoundError:
+            return None
 
     def project_context_skills(self, project_id: str) -> list[SkillMetadata]:
         return self._skill_operations().project_context_skills(project_id)
@@ -875,7 +940,13 @@ class Runtime:
                 )
         if self._tools is not None:
             self._tools.unregister("skill")
-            register_skill_tool(self._tools, self.skills_for, self.reload_skills_async)
+            register_skill_tool(
+                self._tools,
+                self.skills_for,
+                self.reload_skills_async,
+                self.archived_skill,
+                self.background_skill_protection,
+            )
             if self._skill_authoring is not None:
                 self._tools.unregister("skill_manage")
                 register_skill_manage_tool(
@@ -887,6 +958,8 @@ class Runtime:
                     self._resolve_external_skill_scope,
                     lifecycle_guard=self.agents.lifecycle_guard,
                     on_changed=self._notify_skills_changed,
+                    run_started_at=self.run_started_at,
+                    follow_merge=self.follow_skill_merge,
                 )
         if self._system_prompts is not None:
             self._system_prompts.update_skill_registry(cast(SkillPromptRegistry, self._skills))
@@ -1162,6 +1235,14 @@ class Runtime:
 
     reflection: _StartedService[ReflectionService] = _StartedService(
         lambda runtime: runtime._reflection_service, "Reflection service not available"
+    )
+
+    learning_changes: _StartedService[LearningChanges] = _StartedService(
+        lambda runtime: runtime._learning_changes, "Learning changes service not available"
+    )
+
+    librarian: _StartedService[LibrarianService] = _StartedService(
+        lambda runtime: runtime._librarian_service, "Librarian service not available"
     )
 
     streaming_chat_loop: _StartedService[ChatLoop] = _StartedService(

@@ -16,6 +16,7 @@ import re
 import sys
 from collections.abc import Sequence
 from difflib import get_close_matches
+from pathlib import Path
 from typing import Any
 
 from cli.formatting import string_or_default as _string_or_default
@@ -197,7 +198,7 @@ def _enabled_result(instance: ServerInstance, name: str) -> CommandResult:
 def extensions_show(instance: ServerInstance, name: str) -> CommandResult:
     """Show one extension's settings: schema fields, current values, secret state.
 
-    This is the read half of the settings surface (``vbot extensions <name>``): for
+    This is the read half of the settings surface (``vbot extensions show <name>``): for
     a schema'd extension it renders each field with its live value (a secret shows
     only ``set``/``not set``, never the value); a schema-less extension falls back to
     its raw persisted config.
@@ -471,7 +472,7 @@ def _format_waiting(extension: dict[str, object]) -> str:
     name = _string_or_default(extension.get("name"), "<name>")
     return (
         f"waiting for configuration{suffix}: "
-        f"run 'vbot extensions {name}' to see its settings, then "
+        f"run 'vbot extensions show {name}' to see its settings, then "
         f"'vbot extensions set {name} <field> <value>' (or Settings > Extensions)"
     )
 
@@ -553,7 +554,7 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
                 {
                     "operations": summary,
                     "next": (
-                        f"vbot extensions {name} <operation> --help for the complete argument "
+                        f"vbot extensions run {name} <operation> --help for the complete argument "
                         "schema; keep the same target options"
                     ),
                 },
@@ -600,13 +601,10 @@ def extensions_operation(instance: ServerInstance, name: str, tokens: list[str])
 def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[str, Any]:
     arguments: dict[str, Any] = {}
     remaining = list(tokens)
-    if "--stdin" in remaining:
+    stdin_used = "--stdin" in remaining
+    if stdin_used:
         remaining.remove("--stdin")
-        stream = getattr(sys.stdin, "buffer", None)
-        raw = (stream.read().decode("utf-8") if stream is not None else sys.stdin.read()).lstrip(
-            "\ufeff"
-        )
-        arguments = json.loads(raw)
+        arguments = json.loads(_read_stdin())
         if not isinstance(arguments, dict):
             raise ValueError("Extension input must be a JSON object")
     elif operation.get("secret"):
@@ -614,11 +612,24 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
             "This operation requires --stdin so credentials do not enter shell arguments"
         )
     properties = operation["parameters"].get("properties", {})
-    positional = next((key for key in ("id", "request_id", "job_id") if key in properties), None)
+    # A string property with ``contentMediaType`` is a document: its argument
+    # names a file, or ``-`` for standard input, so its text never enters the
+    # shell. Without an identifier it is the positional argument.
+    documents = [
+        key
+        for key, schema in properties.items()
+        if isinstance(schema, dict) and schema.get("contentMediaType")
+    ]
+    positional = next(
+        (key for key in ("id", "request_id", "job_id") if key in properties),
+        documents[0] if documents else None,
+    )
+    named: set[str] = set()
     if remaining and not remaining[0].startswith("--"):
         if positional is None or positional in arguments:
             raise ValueError("Unexpected or duplicate positional identifier")
         arguments[positional] = remaining.pop(0)
+        named.add(positional)
     while remaining:
         token = remaining.pop(0)
         key = token.removeprefix("--").replace("-", "_")
@@ -636,6 +647,7 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
                 f"Missing value for --{key.replace('_', '-')}; inspect operation --help"
             )
         raw = remaining.pop(0)
+        named.add(key)
         if properties[key].get("type") == "string" or (
             properties[key].get("enum")
             and all(isinstance(item, str) for item in properties[key]["enum"])
@@ -657,4 +669,33 @@ def _operation_arguments(operation: dict[str, Any], tokens: list[str]) -> dict[s
                 f"Invalid choice for --{key.replace('_', '-')}; "
                 f"choose from {', '.join(str(choice) for choice in choices)}.{hint}"
             )
+    for key in documents:
+        if key in named:
+            arguments[key] = _read_document(key, arguments[key], stdin_used=stdin_used)
     return arguments
+
+
+def _read_stdin() -> str:
+    stream = getattr(sys.stdin, "buffer", None)
+    raw = stream.read().decode("utf-8") if stream is not None else sys.stdin.read()
+    return raw.lstrip("﻿")
+
+
+def _read_document(key: str, source: str, *, stdin_used: bool) -> str:
+    """The text of document argument *key*: the named file, or standard input for ``-``.
+
+    Errors never repeat *source*: text pasted in place of a path can hold credentials.
+    """
+    flag = "--" + key.replace("_", "-")
+    if source == "-":
+        if stdin_used:
+            raise ValueError(f"--stdin already reads standard input; name a file for {flag}")
+        return _read_stdin()
+    try:
+        return Path(source).read_text(encoding="utf-8-sig")
+    except (OSError, ValueError) as error:
+        reason = error.strerror if isinstance(error, OSError) and error.strerror else "unreadable"
+        raise ValueError(
+            f"The file named for {flag} cannot be read ({reason}); "
+            "name a UTF-8 file, or - to read standard input"
+        ) from None

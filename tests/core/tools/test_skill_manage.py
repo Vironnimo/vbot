@@ -5,13 +5,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
 from core.providers.tool_schema import sanitize_anthropic_tool_input_schema
-from core.skills.authoring import SkillAuthoringService
+from core.runs import RunKind
+from core.skills import _history as skill_history_module
+from core.skills.authoring import (
+    HUMAN_WRITER,
+    SkillAuthoringService,
+    SkillReference,
+    SkillWriter,
+)
 from core.skills.skills import SkillRegistry
 from core.tools import (
     SKILL_MANAGE_TOOL_NAME,
@@ -32,9 +40,15 @@ def _skill_md(
     return f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
 
 
-def _context(agent_id: str, root: Path) -> ToolContext:
+def _context(
+    agent_id: str,
+    root: Path,
+    run_kind: RunKind | None = None,
+    skill_agent_id: str | None = None,
+) -> ToolContext:
     return ToolContext(
         agent_id=agent_id,
+        skill_agent_id=skill_agent_id,
         session_id="session-one",
         run_id="run-one",
         tool_call_id="call-one",
@@ -44,6 +58,7 @@ def _context(agent_id: str, root: Path) -> ToolContext:
         vbot_root=root,
         data_root=root,
         cwd=root,
+        run_kind=run_kind,
     )
 
 
@@ -57,10 +72,18 @@ class _Harness:
         self.changes: list[list[str | None]] = []
         # Names the Agent ``owner`` shares with every other Agent.
         self.shared: set[str] = set()
+        # When each Run started, by Run id.
+        self.run_started: dict[str, str] = {}
+        # What names a Skill a merge deletes, which of it cannot move, and each
+        # merge: owner, Skill, absorbing Skill and whether the delete succeeded.
+        self.references: tuple[SkillReference, ...] = ()
+        self.unmovable: set[SkillReference] = set()
+        self.merges: list[tuple[str, str, str | None, bool]] = []
         self.tools = ToolRegistry()
+        self.authoring = SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"])
         register_skill_manage_tool(
             self.tools,
-            SkillAuthoringService(protected_roots=[tmp_path / "resources" / "skills"]),
+            self.authoring,
             self.home,
             self.invalidated.append,
             lambda agent_id, name: (
@@ -68,7 +91,22 @@ class _Harness:
             ),
             lambda _agent_id, name, _project_id: (scopes or {}).get(name),
             on_changed=lambda: self.changes.append(list(self.invalidated)),
+            run_started_at=self.run_started.get,
+            follow_merge=self.follow_merge,
         )
+
+    async def follow_merge(
+        self,
+        owner_id: str,
+        name: str,
+        target: str | None,
+        delete: Callable[[tuple[SkillReference, ...]], Awaitable[bool]],
+    ) -> tuple[SkillReference, ...]:
+        deleted = await delete(self.references)
+        self.merges.append((owner_id, name, target, deleted))
+        if not deleted:
+            return ()
+        return tuple(reference for reference in self.references if reference in self.unmovable)
 
     def home(self, agent_id: str) -> Path:
         return self.root / "agents" / agent_id / "skills"
@@ -76,8 +114,15 @@ class _Harness:
     def document(self, name: str = "demo", agent_id: str = "main") -> Path:
         return self.home(agent_id) / name / "SKILL.md"
 
-    def run(self, arguments: dict[str, object], agent_id: str = "main") -> dict[str, Any]:
-        context = _context(agent_id, self.root)
+    def run(
+        self,
+        arguments: dict[str, object],
+        agent_id: str = "main",
+        run_kind: RunKind | None = None,
+        skill_agent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Call the Tool as ``agent_id``; ``skill_agent_id`` binds a Librarian Session."""
+        context = _context(agent_id, self.root, run_kind, skill_agent_id)
         try:
             result = cast(
                 dict[str, Any],
@@ -139,7 +184,8 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
         return create(*args, **kwargs)
 
     monkeypatch.setattr(service, "create", blocked_create)
-    register_skill_manage_tool(registry, service, lambda _: tmp_path, invalidated.append)
+    home = tmp_path / "skills"
+    register_skill_manage_tool(registry, service, lambda _: home, invalidated.append)
     task = asyncio.create_task(
         registry.dispatch(
             _context("main", tmp_path),
@@ -150,7 +196,7 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
     try:
         await asyncio.wait_for(entered.wait(), 5)
         assert not task.done()
-        assert not (tmp_path / "demo").exists()
+        assert not (home / "demo").exists()
         assert invalidated == []
         if cancel:
             task.cancel()
@@ -170,7 +216,7 @@ async def test_admitted_write_runs_off_loop_and_settles_before_cancellation(
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
 
-    assert SkillRegistry.load(tmp_path).get("demo") is not None
+    assert SkillRegistry.load(home).get("demo") is not None
     assert invalidated == ["main"]
 
 
@@ -300,6 +346,167 @@ def test_missing_description_is_refused_with_the_header(tmp_path: Path, content:
     assert not harness.home("main").exists()
     assert harness.invalidated == []
     assert harness.changes == []
+
+
+# --- Background reviews -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("setup", "arguments", "code", "message"),
+    [
+        pytest.param(
+            "pinned",
+            {"action": "edit", "name": "demo", "content": _skill_md(body="# New\n")},
+            "skill_protected",
+            "Skill 'demo' is pinned by the user, so you cannot change it; nothing changed. "
+            "Leave it as it is and name the needed change in your reply.",
+            id="pinned-skill",
+        ),
+        # Without its history, whether the user pinned the Skill is unknown.
+        pytest.param(
+            "unreadable",
+            {"action": "patch", "name": "demo", "old_string": "# Demo", "new_string": "# New"},
+            "skill_protected",
+            "The history of Skill 'demo' cannot be read, so whether the user pinned it is "
+            "unknown and you cannot change it; nothing changed. Leave it as it is and name "
+            "the needed change in your reply.",
+            id="unreadable-history",
+        ),
+    ],
+)
+def test_background_reviews_refuse_skills_they_may_not_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    setup: str,
+    arguments: dict[str, object],
+    code: str,
+    message: str,
+) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    harness.create()
+    if setup == "pinned":
+        harness.authoring.set_pinned(home, "demo", True, writer=HUMAN_WRITER)
+    if setup == "unreadable":
+
+        def unreadable(*_args: object, **_kwargs: object) -> None:
+            raise OSError("history locked")
+
+        monkeypatch.setattr(skill_history_module.SkillHistory, "observe", unreadable)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")}
+
+    result = harness.run(arguments, run_kind=RunKind.SKILL_REFLECTION)
+    # The Librarian too, also while the user talks with it in its Session.
+    in_librarian_session = harness.run(
+        arguments, agent_id="librarian", run_kind=RunKind.USER, skill_agent_id="main"
+    )
+
+    assert result == in_librarian_session == tool_failure(code, message, retryable=False)
+    assert {path: path.read_bytes() for path in tmp_path.rglob("SKILL.md")} == before
+    # An attended Run is not limited by pins.
+    if setup == "pinned":
+        assert harness.run(arguments)["ok"] is True
+
+
+# A Librarian writes under its own actor, in its passes and in every Session bound
+# to the Agent whose Skills it maintains (the caller ``librarian`` there works on
+# the Skills of ``main``); every other background kind is a review.
+@pytest.mark.parametrize(
+    ("caller", "review", "actor"),
+    [
+        pytest.param("main", RunKind.REFLECTION, "reflection", id="reflection"),
+        pytest.param("main", RunKind.LIBRARIAN, "librarian", id="librarian-pass"),
+        pytest.param("librarian", RunKind.LIBRARIAN, "librarian", id="librarian-session-pass"),
+        pytest.param("librarian", RunKind.USER, "librarian", id="librarian-session-user"),
+    ],
+)
+def test_background_reviews_change_and_merge_unpinned_skills(
+    tmp_path: Path, caller: str, review: RunKind, actor: str
+) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(name="old")
+    # Who created a Skill does not limit background writers, nor does sharing it.
+    harness.authoring.create(
+        harness.home("main"), "manual", _skill_md("manual"), writer=HUMAN_WRITER
+    )
+    harness.share()
+    subject = "main" if caller == "librarian" else None
+
+    def run(arguments: dict[str, object]) -> dict[str, Any]:
+        return harness.run(arguments, caller, review, skill_agent_id=subject)
+
+    created = run({"action": "create", "name": "new", "content": _skill_md("new")})
+    patched = run(
+        {"action": "patch", "name": "new", "old_string": "# Demo", "new_string": "# Merged"}
+    )
+    deleted = run({"action": "delete", "name": "old", "absorbed_into": "new"})
+    user_skill = run(
+        {"action": "patch", "name": "manual", "old_string": "# Demo", "new_string": "# Kept"}
+    )
+    # A Skill another Agent shares with this one is changed in its owner's package.
+    shared_skill = run(
+        {"action": "patch", "name": "deploy", "old_string": "# Shared", "new_string": "# Co"}
+    )
+
+    assert all(result["ok"] for result in (created, patched, deleted, user_skill, shared_skill))
+    assert "# Co" in harness.document("deploy", "owner").read_text(encoding="utf-8")
+    assert not harness.home("librarian").exists()
+    assert harness.invalidated[:2] == ["main", "main"]
+    assert harness.merges == [("main", "old", "new", True)]
+    home = harness.home("main")
+    record = harness.authoring.record(home, "new")
+    assert record is not None and record.origin == actor
+    [archived] = harness.authoring.archived(home)
+    assert (archived.reason, archived.absorbed_into, archived.archived_by) == (
+        "absorbed",
+        "new",
+        actor,
+    )
+    revision = harness.authoring.history(home, "new")[0]
+    assert (revision.actor, revision.run_kind, revision.session_id) == (
+        actor,
+        review.value,
+        "session-one",
+    )
+
+
+def test_a_librarian_pass_reads_a_skill_again_that_changed_after_it_started(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = _Harness(tmp_path)
+    home = harness.home("main")
+    clock = (f"2026-01-{day:02d}T00:00:00.000000Z" for day in range(1, 29))
+    monkeypatch.setattr(skill_history_module, "utc_now_timestamp", lambda: next(clock))
+    chat = SkillWriter(actor="agent", run_id="run-chat")
+    harness.authoring.create(home, "notes", _skill_md("notes"), writer=chat)
+    harness.authoring.create(home, "guide", _skill_md("guide"), writer=chat)
+    # The pass ("run-one") starts; then a review teaches "notes" a lesson.
+    harness.run_started["run-one"] = next(clock)
+    review = SkillWriter(actor="reflection", run_id="run-review", run_kind="reflection")
+    harness.authoring.edit(home, "notes", _skill_md("notes", body="# Lesson\n"), writer=review)
+    merge: dict[str, object] = {"action": "delete", "name": "notes", "absorbed_into": "guide"}
+
+    refused = harness.run(merge, run_kind=RunKind.LIBRARIAN)
+
+    assert refused == tool_failure(
+        "skill_changed",
+        "Skill 'notes' was changed outside this pass after the pass started; nothing "
+        "changed. Load 'notes' again with skill and build your change from that text, or "
+        "leave it as it is.",
+        retryable=False,
+    )
+    assert "notes" in harness.authoring.records(home)
+    # The pass's own changes and changes before it started are not refused.
+    for old, new in (("# Demo", "# All"), ("# All", "# Both")):
+        patch: dict[str, object] = {
+            "action": "patch",
+            "name": "guide",
+            "old_string": old,
+            "new_string": new,
+        }
+        assert harness.run(patch, run_kind=RunKind.LIBRARIAN)["ok"] is True
+    # Each outside change is reported once: the pass that read "notes" again goes on.
+    assert harness.run(merge, run_kind=RunKind.LIBRARIAN)["ok"] is True
 
 
 # --- Patch tolerance --------------------------------------------------------
@@ -581,7 +788,7 @@ def test_edit_replaces_complete_skill_document(tmp_path: Path) -> None:
     assert "New body." in text
 
 
-def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
+def test_delete_archives_complete_skill_and_invalidates(tmp_path: Path) -> None:
     harness, skill_file = _patch_harness(tmp_path)
     harness.run(
         {
@@ -595,13 +802,89 @@ def test_delete_removes_complete_skill_and_invalidates(tmp_path: Path) -> None:
 
     result = harness.run({"action": "delete", "name": "demo"})
 
-    assert result["data"] == {"content": "Deleted Skill 'demo' and its files."}
+    assert result["data"] == {
+        "content": "Deleted Skill 'demo'. Its files are kept in the archive, where the user "
+        "can restore it."
+    }
     assert [(path, change) for path, change, _added, _removed in harness.changed_files()] == [
         ("SKILL.md", "deleted"),
         ("references/notes.md", "deleted"),
     ]
     assert not skill_file.parent.exists()
     assert harness.invalidated == ["main"]
+    [archived] = harness.authoring.archived(harness.home("main"))
+    assert (archived.name, archived.reason, archived.archived_by) == ("demo", "deleted", "agent")
+    latest = harness.authoring.history(harness.home("main"), "demo")[0]
+    assert (latest.kind, latest.session_id, latest.run_id) == ("archive", "session-one", "run-one")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "code", "message"),
+    [
+        # What named the Skill moves to the one that absorbed it, or says it could not.
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "new"},
+            None,
+            "Deleted Skill 'old'; its instructions now live in Skill 'new'. Its files are "
+            "kept in the archive, where the user can restore it.\n"
+            "Note: These now use Skill 'new' in place of 'old': the share with Agent 'Coder'; "
+            "Bootstrap job 'Warm up'.\n"
+            "Warning: These could not be changed and still name 'old', which no longer "
+            "exists: Cron job 'Daily report'. Name them in your reply so the user can change "
+            "them to 'new'.",
+            id="absorbed",
+        ),
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "old"},
+            "invalid_arguments",
+            "absorbed_into names 'old' itself; nothing changed. Name the other Skill that now "
+            "holds its instructions.",
+            id="itself",
+        ),
+        pytest.param(
+            {"action": "delete", "name": "old", "absorbed_into": "missing"},
+            "invalid_arguments",
+            "absorbed_into names 'missing', which is not one of your own Skills; nothing "
+            "changed. Name one of your own Skills that now holds the instructions of 'old'.",
+            id="unknown-target",
+        ),
+        pytest.param(
+            {"action": "edit", "name": "old", "content": _skill_md("old"), "absorbed_into": "new"},
+            "invalid_arguments",
+            "absorbed_into is used only by delete; nothing changed. Omit absorbed_into for edit.",
+            id="other-action",
+        ),
+    ],
+)
+def test_delete_names_the_skill_that_absorbed_it(
+    tmp_path: Path, arguments: dict[str, object], code: str | None, message: str
+) -> None:
+    harness = _Harness(tmp_path)
+    harness.create(name="old")
+    harness.create(name="new")
+    unmovable = SkillReference("cron", "job-1", "Daily report")
+    harness.references = (
+        SkillReference("shared", "coder", "Coder"),
+        SkillReference("bootstrap", "boot-1", "Warm up"),
+        unmovable,
+    )
+    harness.unmovable = {unmovable}
+
+    result = harness.run(arguments)
+
+    if code is None:
+        assert result["data"] == {"content": message}
+        [archived] = harness.authoring.archived(harness.home("main"))
+        assert (archived.reason, archived.absorbed_into) == ("absorbed", "new")
+        # The archive revision records what was to move with the Skill.
+        [revision] = harness.authoring.history(harness.home("main"), "old", limit=1)
+        assert revision.followed == harness.references
+        assert harness.merges == [("main", "old", "new", True)]
+    else:
+        assert result == tool_failure(code, message, retryable=False)
+        assert harness.document("old").is_file()
+        # A refused delete moves nothing.
+        assert not any(deleted for *_, deleted in harness.merges)
 
 
 # --- Names and scopes -------------------------------------------------------

@@ -96,10 +96,18 @@ class _MoveSessions:
         return self.destination
 
 
+def _identity(agent_id: str) -> SimpleNamespace:
+    """An Identity Agent; ``librarian`` is the built-in Librarian."""
+    return SimpleNamespace(id=agent_id, builtin="librarian" if agent_id == "librarian" else None)
+
+
 class _MoveAgents:
     def __init__(self) -> None:
         self.reset_calls: list[tuple[str, str]] = []
         self.update_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def find(self, agent_id: str) -> SimpleNamespace:
+        return _identity(agent_id)
 
     def reset_current_after_session_removed(self, agent_id: str, removed_session_id: str) -> None:
         self.reset_calls.append((agent_id, removed_session_id))
@@ -133,7 +141,7 @@ class _Resolver:
     def resolve_agent(self, project_id: str | None, agent_id: str) -> Any:
         if self._error is not None:
             raise self._error
-        return SimpleNamespace(id=agent_id)
+        return _identity(agent_id) if project_id is None else SimpleNamespace(id=agent_id)
 
 
 class _References:
@@ -159,7 +167,9 @@ class _MoveHarness:
         runs: Any = None,
         resolver_error: Exception | None = None,
         pinned: tuple[AutomationReference, ...] = (),
+        source_agent: str = "builder",
     ) -> None:
+        self.source_agent = source_agent
         self.references = _References(pinned)
         self.sessions = _MoveSessions(metadata)
         self.agents = _MoveAgents()
@@ -193,7 +203,7 @@ class _MoveHarness:
         return await _execute(
             dispatcher,
             message,
-            agent_id="builder",
+            agent_id=self.source_agent,
             session_id="s1",
             project_id=project_id,
             on_change=self.changes.append,
@@ -302,6 +312,11 @@ async def test_move_directions_relocate_and_re_home_pointers(
             id="unknown-target",
         ),
         pytest.param(_MoveHarness, "/agent agent:planner", id="invalid-address"),
+        # The built-in Librarian keeps its own Sessions.
+        pytest.param(_MoveHarness, "/agent librarian", id="to-the-librarian"),
+        pytest.param(
+            lambda: _MoveHarness(source_agent="librarian"), "/agent planner", id="from-librarian"
+        ),
         pytest.param(
             lambda: _MoveHarness(metadata={"source_channel_id": "telegram-1"}),
             "/agent planner",

@@ -12,14 +12,17 @@ from typing import Any
 
 import pytest
 
+from core.automation import LearningChanges
 from core.chat import ChatMessage, ChatSessionManager, ToolCall
 from core.chat.continuation import CONTINUATION_RECORD_VERSION
 from core.chat.messages import ModelFallback
 from core.database import write_bootstrap_marker
+from core.memory import MemoryService, MemoryWriter
 from core.projects import AgentResolutionError
 from core.runs import ChatRunManager, RunAdmission, RunKind
 from core.sessions import ChatSession
 from core.settings.normalizers import normalize_compaction_settings
+from core.skills import SkillAuthoringService
 from core.tools.tools import tool_success
 from server.file_delivery import FileDelivery
 from server.rpc import chat_methods
@@ -70,6 +73,8 @@ def history(tmp_path: Path) -> Iterator[_History]:
     write_bootstrap_marker(tmp_path)
     sessions = ChatSessionManager(tmp_path)
     agents = _HistoryAgents()
+    (tmp_path / "agents" / "coder").mkdir(parents=True)
+    memory = MemoryService(history_root=tmp_path / "agents")
     state = SimpleNamespace(
         runtime=SimpleNamespace(
             agents=agents,
@@ -78,6 +83,13 @@ def history(tmp_path: Path) -> Iterator[_History]:
                 load_compaction_settings=lambda: normalize_compaction_settings(None)
             ),
             chat_sessions=sessions,
+            memory=memory,
+            learning_changes=LearningChanges(
+                memory=memory,
+                skills=SkillAuthoringService(),
+                skill_home=lambda agent_id: tmp_path / "agents" / agent_id / "skills",
+                run_active=lambda run_id: False,
+            ),
         ),
         chat_runs=ChatRunManager(persistence=sessions),
         file_delivery=FileDelivery(),
@@ -717,13 +729,22 @@ async def test_history_never_pairs_an_earlier_page_with_a_later_idle_state(
 
 
 @pytest.mark.asyncio
-async def test_reflection_runs_restore_running_and_durable_reviews(history: _History) -> None:
+async def test_reflection_runs_restore_running_and_durable_reviews(
+    history: _History, tmp_path: Path
+) -> None:
     source = history.session("source")
     fork = await history.sessions.fork(source.address, run_kind=RunKind.SKILL_REFLECTION)
     release = asyncio.Event()
 
-    async def execute(_run: Any) -> str:
+    async def execute(review: Any) -> str:
         await release.wait()
+        # What the review saved; its row reports it once it finished.
+        history.state.runtime.memory.add_entry(
+            tmp_path / "agents" / "coder" / "workspace",
+            "user",
+            "Prefers short answers.",
+            writer=MemoryWriter(agent_id="coder", actor="tool", run_id=review.id),
+        )
         return "done"
 
     run = await history.state.chat_runs.start(
@@ -752,8 +773,9 @@ async def test_reflection_runs_restore_running_and_durable_reviews(history: _His
 
     for method in ("chat.history", "chat.reflections"):
         durable = await call(history.state, method, agent_id="coder", session_id="source")
-        assert durable["result"]["reflection_runs"][0]["run_id"] == run.id
-        assert durable["result"]["reflection_runs"][0]["status"] == "completed"
+        [row] = durable["result"]["reflection_runs"]
+        assert (row["run_id"], row["status"]) == (run.id, "completed")
+        assert row["outcome"] == {"memory": 1, "skills": 0, "undone": False}
     history.session("unrelated")
     unrelated = await call(
         history.state, "chat.reflections", agent_id="coder", session_id="unrelated"

@@ -19,7 +19,7 @@ A Model's capability for internal reasoning before its final answer, represented
 Returning prior Model reasoning state in later requests of the same conversation. Opaque meta (`reasoning_details`, signatures/encrypted blocks) is contract state: replay byte-identically when the wire requires it. Visible reasoning text is display material: replay only when that wire's Model demonstrably benefits. Minimal replay, not everything by default; distinct from CoT content itself. Mechanics/policies: `providers/request-policy.md`.
 
 ## Archive Entry
-The restorable unit a delete creates: deleting an Identity Agent, Project or Session archives it with its Sessions and files instead of erasing it; an Extension's Session groups and archives from older vBot versions become entries too. An entry is restored or purged (deleted permanently) as a whole: by hand, through a permanent delete, or once its retention period ends. Not a hidden live resource or a compressed file. Kinds, states, purge and retention: `archive.md`.
+The restorable unit a delete creates: deleting an Identity Agent, Project or Session archives it with its Sessions and files instead of erasing it; an Extension's Session groups and archives from older vBot versions become entries too. An entry is restored or purged (deleted permanently) as a whole: by hand, through a permanent delete, or once its retention period ends. Not a hidden live resource, a compressed file, or a deleted Skill, which moves into its Skill home's own archive (`skills.md` -> Skill Archive). Kinds, states, purge and retention: `archive.md`.
 
 ## Session
 A system-owned persisted chat container belonging to exactly one Agent in its Identity or Project scope, with canonical Message history in `<data-dir>/sessions.db` (`sessions.md`: storage/generation rules). Distinct from its Agent, Workspace files, and active execution (Run).
@@ -65,6 +65,9 @@ Workspace-less Run configuration synthesized from a scanned Project Team profile
 
 ## Identity Agent
 A stored Agent at `<datadir>/agents/<id>/` with `agent.json`, Workspace, and durable identity/Memory across Sessions. `memory_prompt_mode` controls Memory prompt visibility; Tool Access Policy independently controls `memory` Tool access. Unlike a Config Agent, it owns a persistent Memory home, not a workspace-less Project profile synthesized for a Run.
+
+## Librarian
+vBot's built-in hidden Identity Agent (id `librarian`, marked `"builtin": "librarian"` in its `agent.json`) that maintains other Identity Agents' own Skills: each scheduled or manual pass for an Agent runs in a new Session of the Librarian bound to that Agent. It can call only `skill` and `skill_manage`, is left out of the roster, delegation and Channels, and is never reviewed by a Reflection. Not a Tool, a Reflection, or a user's Agent that happens to be named "librarian". The Agent: `agent.md`; passes: `automation.md` -> Librarian.
 
 ## Rooted Agent
 An Identity Agent whose nullable saved `Project` selection names a registered Project. Retains its Workspace, Memory, private Skills, Sessions, permissions, and bare addressing; relative file/shell work, Project Files, and Project Skills use that Project. Not a Project Agent or Config Agent. Rooting does not move Session ownership, apply Project Config-Agent ceilings, or automatically expose the Team; Workspace path equality does not imply Rooting.

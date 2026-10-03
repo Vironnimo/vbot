@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,18 +13,18 @@ from core.recall.vector import SEMANTIC_PARTIAL_REASON
 from core.sessions import ChatSessionManager, SessionAddress
 from tests.core.recall.recall_test_support import (
     StubEmbeddings,
+    VectorBackendFactory,
     embed_documents,
     passage_rows,
     request,
     timestamp,
-    vector_backend,
 )
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_indexing_embeds_documents_once_and_searches_embed_only_queries(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="carrots").append(
         ChatMessage.user("I bought some carrots", timestamp=timestamp(1))
@@ -34,7 +33,7 @@ async def test_indexing_embeds_documents_once_and_searches_embed_only_queries(
         ChatMessage.user("Bananas and other fruit are tasty", timestamp=timestamp(2))
     )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
 
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("carrot"))
@@ -52,13 +51,13 @@ async def test_indexing_embeds_documents_once_and_searches_embed_only_queries(
 
 
 async def test_append_embeds_only_new_passages_and_surfaces_them(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     session = sessions.create("coder", session_id="growing")
     for day in range(1, 8):
         session.append(ChatMessage.user(f"turn {day} lorem ipsum " * 150, timestamp=timestamp(day)))
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("lorem", limit=2))
     old_passages = build_session_passages(session.load_active())
@@ -89,7 +88,7 @@ async def test_append_embeds_only_new_passages_and_surfaces_them(
 
 
 async def test_history_edit_replaces_changed_and_vanished_passages(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     session = sessions.create("coder", session_id="edited")
     session.append(ChatMessage.user("I love bananas and fruit " * 80, timestamp=timestamp(1)))
@@ -97,7 +96,7 @@ async def test_history_edit_replaces_changed_and_vanished_passages(
     session.append(target)
     session.append(ChatMessage.user("car repair advice " * 150, timestamp=timestamp(3)))
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     old_passages = build_session_passages(session.load_active())
 
@@ -122,14 +121,14 @@ async def test_history_edit_replaces_changed_and_vanished_passages(
 
 
 async def test_filtered_search_keeps_other_sessions_and_prunes_the_whole_scope(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     for session_id, text in (("carrots", "I bought some carrots"), ("fruit", "Fruit is tasty")):
         sessions.create("coder", session_id=session_id).append(
             ChatMessage.user(text, timestamp=timestamp(1))
         )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
 
     filtered = await recall.search_page(request("fruit", session_id="fruit"))
@@ -147,13 +146,13 @@ async def test_filtered_search_keeps_other_sessions_and_prunes_the_whole_scope(
 
 
 async def test_fork_reuses_its_origins_stored_vectors(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     source = sessions.create("coder", session_id="source")
     for day in range(1, 4):
         source.append(ChatMessage.user(f"fruit story {day} " * 120, timestamp=timestamp(day)))
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit", limit=20))
     documents_before = len(embeddings.document_inputs)
@@ -173,7 +172,9 @@ async def test_fork_reuses_its_origins_stored_vectors(
 
 
 async def test_session_without_passages_is_stamped_and_not_reread(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    vector_backend: VectorBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Notes are not conversation text, so this Session yields no Passages; on a
     # brand-new index the search must still answer.
@@ -187,7 +188,7 @@ async def test_session_without_passages_is_stamped_and_not_reread(
         return build_session_passages(messages)
 
     monkeypatch.setattr(_passage_catalog, "build_session_passages", counting_build)
-    recall = vector_backend(tmp_path, sessions, embeddings=StubEmbeddings())
+    recall = vector_backend(embeddings=StubEmbeddings())
 
     first = await recall.search_page(request("carrot"))
     await recall.search_page(request("carrot"))
@@ -199,12 +200,14 @@ async def test_session_without_passages_is_stamped_and_not_reread(
 
 
 async def test_session_that_stops_yielding_passages_loses_its_rows(
-    tmp_path: Path, sessions: ChatSessionManager, monkeypatch: pytest.MonkeyPatch
+    sessions: ChatSessionManager,
+    vector_backend: VectorBackendFactory,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = sessions.create("coder", session_id="becomes-empty")
     session.append(ChatMessage.user("I love bananas and fruit", timestamp=timestamp(1)))
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     first = await recall.search_page(request("fruit"))
     assert [hit.session_id for hit in first.hits] == ["becomes-empty"]
@@ -219,19 +222,19 @@ async def test_session_that_stops_yielding_passages_loses_its_rows(
 
 
 async def test_corrupt_index_is_discarded_once_and_rebuilt(
-    tmp_path: Path, sessions: ChatSessionManager
+    sessions: ChatSessionManager, vector_backend: VectorBackendFactory
 ) -> None:
     sessions.create("coder", session_id="one").append(
         ChatMessage.user("banana fruit", timestamp=timestamp(1))
     )
     embeddings = StubEmbeddings()
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
     await embed_documents(recall.index, sessions, embeddings)
     await recall.search_page(request("fruit"))
     # Corrupt at rest: under WAL an open connection keeps reading its own pages.
     await recall.aclose()
     recall.index.path.write_bytes(b"not a sqlite database")
-    recall = vector_backend(tmp_path, sessions, embeddings=embeddings)
+    recall = vector_backend(embeddings=embeddings)
 
     rebuilt = await recall.search_page(request("fruit"))
 

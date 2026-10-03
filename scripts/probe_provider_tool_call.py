@@ -6,6 +6,9 @@ tool_first_use supplies natural tasks and competing production Tools, executes
 disposable effects, and retains full synthetic evidence in --first-use-report.
 live_tools runs the Live call backend model on voice-style requests against a
 scripted vBot and judges its first Tool call; transcripts go to --live-report.
+reflection_workflow evaluates Reflection reviews, /learn and Librarian passes in
+disposable vBot fixtures with repeated attempts; text packs and report
+comparison live in scripts/provider_probe/learning_eval.py.
 Credentials are never included in reports.
 
 Examples:
@@ -16,6 +19,11 @@ Examples:
         --connection openai:subscription --model gpt-5.6-luna --wire openai \
         --profile explicit_non_strict --scenario optional_booleans
     python scripts/probe_provider_tool_call.py --scenario large_arguments --lines 500
+    python scripts/probe_provider_tool_call.py --scenario reflection_workflow \
+        --reflection-case standing_preference --reflection-scope memory --repetitions 3 \
+        --reflection-report arm-a.json
+    python scripts/probe_provider_tool_call.py --scenario reflection_workflow \
+        --reflection-scope librarian --repetitions 3 --reflection-report librarian.json
 """
 
 from __future__ import annotations
@@ -76,7 +84,6 @@ from scripts.provider_probe.common import (  # noqa: E402
     ProbeScenario,
     _start_probe_runtime,
 )
-from scripts.provider_probe.computer_cases import COMPUTER_CASE_ARGUMENTS  # noqa: E402
 from scripts.provider_probe.measurements import _compile_probe_contracts  # noqa: E402
 from scripts.provider_probe.scenarios import _scenario  # noqa: E402
 from scripts.provider_probe.trace import (  # noqa: E402
@@ -124,7 +131,29 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--swarm-case", default="all")
     parser.add_argument("--swarm-instructions-file", type=Path)
     parser.add_argument("--swarm-report", type=Path)
-    parser.add_argument("--reflection-case", default="all")
+    parser.add_argument(
+        "--reflection-case", default="all", help="Reflection case ids, comma-separated, or all."
+    )
+    parser.add_argument(
+        "--reflection-report",
+        type=Path,
+        help="Write every reflection attempt with its transcript as a JSON report.",
+    )
+    parser.add_argument(
+        "--reflection-workers",
+        type=int,
+        default=3,
+        help="Disposable vBot fixtures running reflection attempts concurrently.",
+    )
+    parser.add_argument(
+        "--text-pack",
+        type=Path,
+        help=(
+            "Replace the learning texts (Memory and Skill prompt blocks, memory/skill/"
+            "skill_manage Tool descriptions, review and /learn brief fragments) with a "
+            "text pack."
+        ),
+    )
     parser.add_argument("--recall-case", default="all")
     parser.add_argument(
         "--live-case", default="all", help="Live case ids, comma-separated, or all."
@@ -140,15 +169,16 @@ def _parser() -> argparse.ArgumentParser:
         help="Write synthetic Recall interactions for independent review.",
     )
     parser.add_argument(
-        "--reflection-scope", choices=("all", "memory", "skill", "combined", "learn"), default="all"
+        "--reflection-scope",
+        nargs="+",
+        choices=("all", "memory", "skill", "combined", "learn", "librarian"),
+        default=["all"],
+        help="Learning evaluation scopes to run, or all.",
     )
     parser.add_argument(
         "--swarm-tool",
         choices=("swarm_board", "swarm_inbox", "swarm_state", "swarm_wiki"),
         default="swarm_board",
-    )
-    parser.add_argument(
-        "--computer-case", choices=tuple(COMPUTER_CASE_ARGUMENTS), default="windows"
     )
     parser.add_argument("--mcp-case", choices=tuple(MCP_CASE_ARGUMENTS), default="search")
     parser.add_argument(
@@ -374,10 +404,9 @@ async def _run(args: argparse.Namespace) -> int:
             adapter = runtime.get_adapter(ConnectionRef(args.provider, args.connection))
             try:
                 if args.scenario == "live_tools":
-                    # Live requests resolve the Model's recommended temperature like production.
-                    result = await _probe_live_tools(
-                        ModelFacingAdapter(adapter), args, models=runtime.models
-                    )
+                    result = await _probe_live_tools(ModelFacingAdapter(adapter), args)
+                elif args.scenario == "reflection_workflow":
+                    result = await _probe_reflection_workflow(ModelFacingAdapter(adapter), args)
                 else:
                     probe = (
                         _probe_first_use
@@ -392,8 +421,6 @@ async def _run(args: argparse.Namespace) -> int:
                         if args.scenario == "terminal"
                         else _probe_apply_patch
                         if args.scenario == "apply_patch"
-                        else _probe_reflection_workflow
-                        if args.scenario == "reflection_workflow"
                         else _probe_swarm_tool
                         if args.scenario == "swarm_tool"
                         else _probe_mcp_workflow

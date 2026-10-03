@@ -9,6 +9,7 @@ import {
 } from '../../../lib/chatState.js';
 import { formatAgentAddress, parseAgentAddress } from '$lib/agentAddress.js';
 import { t } from '$lib/i18n.js';
+import { LIBRARIAN_AGENT_ID, librarianName } from '$lib/librarian.js';
 import {
   projectTeam as normalizeProjectTeam,
   normalizeScanReport,
@@ -215,6 +216,7 @@ export function createChatViewTarget(context) {
       }
       return (
         agentById(context.navigation.viewingSessionAgentId) ??
+        hiddenAgent(context.navigation.viewingSessionAgentId) ??
         overrideAgentDisplayStandIn(context.navigation.viewingSessionAgentId)
       );
     }
@@ -224,17 +226,40 @@ export function createChatViewTarget(context) {
     return selectedAgent(context.chatState);
   }
 
+  // The identity Agent outside the roster whose Session is shown, such as the
+  // hidden Librarian, once its payload has loaded: the chat surface shows it
+  // like a roster Agent (context window included) and names it in the header.
+  function hiddenAgent(agentAddress) {
+    const { agentId, projectId } = parseAgentAddress(agentAddress);
+    const agent = projectId ? null : context.chatState.hiddenAgents?.[agentId];
+    return agent ? { ...agent, __overrideAddress: agentAddress } : null;
+  }
+
+  // The identity Agent outside the roster whose Session is shown and whose
+  // payload the chat controller still has to load, '' when there is none.
+  let hiddenAgentToLoad = $derived.by(() => {
+    const address = context.navigation.viewingSessionAgentId;
+    if (!context.navigation.viewingSessionId || !address) return '';
+    const { agentId, projectId } = parseAgentAddress(address);
+    if (projectId || !agentId || agentById(agentId)) return '';
+    return context.chatState.hiddenAgents?.[agentId] ? '' : agentId;
+  });
+
   // Minimal agent-like object for an overridden session whose owner is not an
   // identity-roster agent — a project team agent's session (or a project
-  // child), or an identity agent deleted while its session is still viewed.
-  // Keeps the chat surface (header, banner, return button) alive instead of
-  // dead-ending on "choose an agent". The bare id stays in `id` so queue and
-  // cancel-tool payloads keep the bare spelling (trap 2).
+  // child), a hidden Agent's session until its payload loads, or an identity
+  // agent deleted while its session is still viewed. Keeps the chat surface (header,
+  // banner, return button) alive instead of dead-ending on "choose an
+  // agent". The bare id stays in `id` so queue and cancel-tool payloads keep
+  // the bare spelling (trap 2).
   function overrideAgentDisplayStandIn(agentAddress) {
-    const { agentId } = parseAgentAddress(agentAddress);
+    const { agentId, projectId } = parseAgentAddress(agentAddress);
     return {
       id: agentId,
-      name: agentId || agentAddress,
+      name:
+        agentId === LIBRARIAN_AGENT_ID && !projectId
+          ? librarianName()
+          : agentId || agentAddress,
       current_session_id: '',
       context_window: null,
       __overrideAddress: agentAddress,
@@ -672,6 +697,9 @@ export function createChatViewTarget(context) {
     },
     get projectAgentStatuses() {
       return projectAgentStatuses;
+    },
+    get hiddenAgentToLoad() {
+      return hiddenAgentToLoad;
     },
     get activeAgentAddress() {
       return activeAgentAddress;

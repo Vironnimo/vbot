@@ -12,6 +12,7 @@ import pytest
 
 from core.runtime.runtime import Runtime
 from core.skills import authoring as authoring_module
+from core.skills.authoring import HUMAN_WRITER
 from core.tools import SKILL_MANAGE_TOOL_NAME, ToolContext
 from core.utils.config import Config
 from server.events import ServerEventBus
@@ -63,7 +64,7 @@ async def test_shared_write_serializes_with_owner_lifecycle(
             root,
             "demo",
             "---\nname: demo\ndescription: Shared fixture\n---\nBefore\n",
-            author="human",
+            writer=HUMAN_WRITER,
         )
         runtime.skill_policy.set_shared("main", "demo", shared=True, receivers=["receiver"])
         if reload_tools:
@@ -179,7 +180,7 @@ async def test_lifecycle_cancellation_preserves_admission_and_invalidation(
     try:
         runtime.agents.create("receiver")
         root = runtime.agent_skills_dir("main")
-        runtime.skill_authoring.create(root, "demo", "Before", author="human")
+        runtime.skill_authoring.create(root, "demo", "Before", writer=HUMAN_WRITER)
         runtime.skill_policy.set_shared("main", "demo", shared=True, receivers=["receiver"])
         before = runtime.skills_for(None, "receiver")
         state = SimpleNamespace(

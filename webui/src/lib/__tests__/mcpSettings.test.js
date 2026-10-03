@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { t } from '../i18n.js';
 import {
   createMcpSettings,
   mcpConfiguration,
+  mcpCredentialNames,
+  mcpCredentialSlot,
   mcpDraft,
-  MCP_REFRESH_MS,
+  mcpImportPlan,
+  mcpProblemText,
 } from '../mcpSettings.js';
 
 const configuration = {
@@ -15,15 +19,38 @@ const configuration = {
 
   enabled: true,
   timeout: 240,
+  sampling: 'ask',
+  roots: 'workspace',
   environment: { LANG: 'de' },
   credential_environment: { TOKEN: 'SHARED_KEY' },
   credential_headers: {},
 };
+const oauthConfiguration = {
+  id: 'remote',
+  transport: 'http',
+  url: 'https://mcp.example.com/mcp',
+  oauth: true,
+  oauth_client_id: 'vbot-client',
+  oauth_client_secret: 'REMOTE_CLIENT_SECRET',
+  oauth_scopes: ['files:read', 'files:write'],
+  enabled: true,
+  timeout: 120,
+  sampling: 'off',
+  roots: 'off',
+  environment: {},
+  credential_environment: {},
+  credential_headers: { Extra: 'EXTRA_KEY' },
+};
 const clone = (value) => structuredClone(value);
+const connectionsChange = {
+  resource: 'connections',
+  ids: ['example'],
+  revision: 1,
+};
+const jobChange = { resource: 'jobs', ids: ['test-job'], revision: 2 };
 let controller;
 afterEach(() => {
   controller?.dispose();
-  vi.useRealTimers();
 });
 
 function setup(operation) {
@@ -111,6 +138,26 @@ describe('MCP settings', () => {
     expect(result).not.toHaveProperty('command');
     expect(result).not.toHaveProperty('args');
   });
+  it('keeps a pre-registered OAuth client only while OAuth is on', () => {
+    const draft = mcpDraft(oauthConfiguration);
+    expect(mcpConfiguration(draft)).toEqual(oauthConfiguration);
+    expect(mcpCredentialNames(oauthConfiguration)).toEqual([
+      'EXTRA_KEY',
+      'REMOTE_CLIENT_SECRET',
+    ]);
+    draft.oauth_scopes = ' files:read  files:read admin ';
+    expect(mcpConfiguration(draft).oauth_scopes).toEqual([
+      'files:read',
+      'admin',
+    ]);
+    const signedOut = mcpConfiguration({ ...draft, oauth: false });
+    for (const field of [
+      'oauth_client_id',
+      'oauth_client_secret',
+      'oauth_scopes',
+    ])
+      expect(signedOut).not.toHaveProperty(field);
+  });
   it('rejects duplicate mapping keys instead of discarding an entry', () => {
     const draft = mcpDraft(configuration);
     draft.environment.push({ name: 'LANG', value: 'en' });
@@ -160,43 +207,49 @@ describe('MCP settings', () => {
     });
     expect(state().connections[0].configuration).toEqual(configuration);
   });
-  it('polls a pending test to completion without exposing its catalog', async () => {
-    vi.useFakeTimers();
-    let checks = 0;
+  it('finishes a pending test when its job change arrives, without exposing its catalog', async () => {
+    let finished = false;
     const operation = vi.fn(async (_extension, name) => {
       if (name === 'test') return { job_id: 'test-job', state: 'running' };
       if (name === 'job')
-        return ++checks === 1
-          ? { state: 'running' }
-          : {
+        return finished
+          ? {
               state: 'completed',
               result: {
                 verified: ['catalog'],
                 catalog: { secretSentinel: 'never-render' },
               },
-            };
+            }
+          : { state: 'running' };
       return { connections: [] };
     });
     const state = setup(operation);
     await controller.test('example');
     expect(state().job.job_id).toBe('test-job');
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS);
-    expect(state().job).toBeNull();
+    finished = true;
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    await vi.waitFor(() => expect(state().job).toBeNull());
     expect(JSON.stringify(state())).not.toContain('never-render');
-    expect(state().notice).toBeTruthy();
+    expect(state().notice).toBe(t('mcp.testPassed', { checks: 'catalog' }));
   });
-  it('reports test failure and stops background retries', async () => {
-    vi.useFakeTimers();
+  it('reports a failed test once and stops asking for its job', async () => {
     const operation = vi.fn(async (_extension, name) => {
       if (name === 'test') return { job_id: 'test-job', state: 'running' };
-      return { state: 'failed', error: 'test-owned-failure' };
+      if (name === 'job')
+        return { state: 'failed', error: 'test-owned-failure' };
+      return { connections: [] };
     });
     const state = setup(operation);
     await controller.test('example');
-    const calls = operation.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS * 3);
+    expect(operation).toHaveBeenCalledWith('mcp', 'job', {
+      job_id: 'test-job',
+    });
     expect(state().error).toBe('test-owned-failure');
-    expect(operation).toHaveBeenCalledTimes(calls);
+    const calls = operation.mock.calls.length;
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(calls + 1));
+    expect(operation.mock.calls.at(-1)[1]).toBe('list');
+    expect(state().error).toBe('test-owned-failure');
   });
   it('cancels a waiting job through the same backend contract', async () => {
     let cancelled = false;
@@ -225,8 +278,7 @@ describe('MCP settings', () => {
     });
     expect(JSON.stringify(state())).not.toContain('test-owned-secret');
   });
-  it('ignores stale refresh responses and releases timers on disposal', async () => {
-    vi.useFakeTimers();
+  it('ignores stale refresh responses and changes after disposal', async () => {
     let finish;
     const operation = vi
       .fn()
@@ -245,7 +297,170 @@ describe('MCP settings', () => {
     expect(state().connections).toEqual([]);
     controller.dispose();
     const count = operation.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(MCP_REFRESH_MS * 3);
+    controller.handleInvalidation({ owner: null, change: null });
+    await Promise.resolve();
     expect(operation).toHaveBeenCalledTimes(count);
+  });
+  it('reads again for its own connection and job changes, once after a burst', async () => {
+    const reads = [];
+    const operation = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          reads.push(resolve);
+        }),
+    );
+    setup(operation);
+    controller.handleInvalidation({
+      owner: 'calendar',
+      change: connectionsChange,
+    });
+    controller.handleInvalidation({
+      owner: 'mcp',
+      change: { resource: 'pending_inputs', ids: ['input'], revision: 3 },
+    });
+    expect(operation).not.toHaveBeenCalled();
+    controller.handleInvalidation({ owner: 'mcp', change: connectionsChange });
+    controller.handleInvalidation({ owner: 'mcp', change: jobChange });
+    controller.handleInvalidation({ owner: null, change: null });
+    expect(operation).toHaveBeenCalledTimes(1);
+    reads.shift()({ connections: [] });
+    await vi.waitFor(() => expect(operation).toHaveBeenCalledTimes(2));
+    reads.shift()({ connections: [] });
+    await Promise.resolve();
+    expect(operation).toHaveBeenCalledTimes(2);
+  });
+  it('clears a failed read on the next read but keeps an action error', async () => {
+    let failRead = true;
+    const operation = vi.fn(async (_extension, name) => {
+      if (name === 'reconnect') throw new Error('test-owned-action-error');
+      if (failRead) throw new Error('test-owned-read-error');
+      return { connections: [] };
+    });
+    const state = setup(operation);
+    await controller.refresh();
+    expect(state().error).toBe('test-owned-read-error');
+    failRead = false;
+    await controller.refresh();
+    expect(state().error).toBe('');
+    expect(await controller.mutate('reconnect', 'example')).toBe(false);
+    expect(operation).toHaveBeenCalledWith('mcp', 'reconnect', {
+      id: 'example',
+    });
+    await controller.refresh();
+    expect(state().error).toBe('test-owned-action-error');
+  });
+  it('words a diagnosed problem, preferring the install hint and the server advice for unknown codes', () => {
+    expect(mcpProblemText(null)).toBe('');
+    expect(
+      mcpProblemText({
+        code: 'command_not_found',
+        command: 'npx',
+        requirement: 'Node.js',
+        message: 'server-owned advice',
+      }),
+    ).toBe(t('mcp.problemInstall', { command: 'npx', requirement: 'Node.js' }));
+    expect(
+      mcpProblemText({ code: 'unauthorized', status: 401, message: 'x' }),
+    ).toBe(t('mcp.problem.unauthorized', { status: 401 }));
+    expect(
+      mcpProblemText({
+        code: 'future_problem',
+        message: 'server-owned advice',
+      }),
+    ).toBe('server-owned advice');
+  });
+  it('plans an import of the chosen servers with typed credentials', () => {
+    const credential = (name, target, state) => ({ name, target, state });
+    const servers = [
+      {
+        name: 'files',
+        id: 'files',
+        credentials: [
+          credential('FILES_TOKEN', 'TOKEN', 'missing'),
+          credential('FILES_KEY', 'Authorization', 'missing'),
+        ],
+      },
+      {
+        name: 'search',
+        id: 'search_web',
+        credentials: [credential('SEARCH_KEY', 'KEY', 'missing')],
+      },
+      {
+        name: 'paused',
+        id: 'paused',
+        disabled: true,
+        credentials: [credential('PAUSED_KEY', 'KEY', 'missing')],
+      },
+      { name: 'taken', id: 'taken', conflict: true, credentials: [] },
+      { name: 'broken', id: 'broken', error: 'invalid', credentials: [] },
+      { name: 'skipped', id: 'skipped', credentials: [] },
+    ];
+    const values = {
+      [mcpCredentialSlot(servers[0], servers[0].credentials[0])]: 'one',
+      [mcpCredentialSlot(servers[0], servers[0].credentials[1])]: 'two',
+      [mcpCredentialSlot(servers[2], servers[2].credentials[0])]: 'three',
+    };
+    const chosen = new Set(['files', 'search', 'paused', 'taken', 'broken']);
+    expect(mcpImportPlan(servers, chosen, values)).toEqual({
+      servers: ['files', 'search', 'paused'],
+      ids: { files: 'files', search: 'search_web', paused: 'paused' },
+      credentials: [
+        { id: 'files', key: 'FILES_TOKEN', value: 'one' },
+        { id: 'files', key: 'FILES_KEY', value: 'two' },
+        { id: 'paused', key: 'PAUSED_KEY', value: 'three' },
+      ],
+      enable: ['files'],
+    });
+  });
+  it('imports, stores typed credentials, then enables the completed connections', async () => {
+    const operation = vi.fn(async (_extension, name, args) => {
+      if (name === 'import' && !args.apply) return { servers: [] };
+      if (name === 'credential' && args.key === 'BAD')
+        throw new Error('test-owned-credential-error');
+      return { connections: [] };
+    });
+    const state = setup(operation);
+    await controller.previewImport('{"mcpServers": {}}', { files: 'docs' });
+    expect(operation).toHaveBeenLastCalledWith('mcp', 'import', {
+      source: '{"mcpServers": {}}',
+      ids: { files: 'docs' },
+    });
+    const plan = {
+      servers: ['files'],
+      ids: { files: 'docs' },
+      credentials: [{ id: 'docs', key: 'FILES_TOKEN', value: 'secret' }],
+      enable: ['docs'],
+    };
+    expect(await controller.importServers('setup', plan)).toEqual({
+      ok: true,
+      saved: true,
+    });
+    expect(operation.mock.calls.slice(-4).map((call) => call.slice(1))).toEqual(
+      [
+        [
+          'import',
+          {
+            source: 'setup',
+            apply: true,
+            servers: ['files'],
+            ids: { files: 'docs' },
+          },
+        ],
+        ['credential', { id: 'docs', key: 'FILES_TOKEN', value: 'secret' }],
+        ['enable', { id: 'docs' }],
+        ['list', {}],
+      ],
+    );
+    expect(state().notice).toBe(t('mcp.imported', { count: 1 }));
+    expect(JSON.stringify(state())).not.toContain('secret');
+    const failing = {
+      ...plan,
+      credentials: [{ id: 'docs', key: 'BAD', value: 'x' }],
+    };
+    expect(await controller.importServers('setup', failing)).toEqual({
+      ok: false,
+      saved: true,
+    });
+    expect(state().error).toBe('test-owned-credential-error');
   });
 });

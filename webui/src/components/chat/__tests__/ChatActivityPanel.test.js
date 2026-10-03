@@ -2,10 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
+import { reflectionTaskRows } from '../../../lib/chatTimelinePresentation.js';
 import { init, t } from '../../../lib/i18n.js';
 
 vi.mock('svelte', async () => {
   return import('../../../../node_modules/svelte/src/index-client.js');
+});
+
+vi.mock('svelte/reactivity', async () => {
+  return import('../../../../node_modules/svelte/src/reactivity/index-client.js');
 });
 
 const { default: ChatActivityPanel } =
@@ -105,6 +110,67 @@ function rowContaining(text) {
 }
 
 const status = (key) => t(`chat.activity.status.${key}`);
+
+// Panel rows of finished reviews, as Chat projects them from its Session
+// state: tracking entries with their outcome, and per-review details.
+function reviewRows(reviews) {
+  const reflectionTasks = {};
+  const reflectionDetails = {};
+  for (const [index, review] of reviews.entries()) {
+    reflectionTasks[review.runId] = {
+      sessionId: `fork-${review.runId}`,
+      runKind: 'reflection',
+      status: review.status ?? 'completed',
+      startedAt: `2026-10-02T10:0${index}:00.000Z`,
+      ...(review.outcome ? { outcome: review.outcome } : {}),
+    };
+    if (review.details) {
+      reflectionDetails[review.runId] = review.details;
+    }
+  }
+  return reflectionTaskRows({ reflectionTasks, reflectionDetails });
+}
+
+function outcomeToggle(row) {
+  return [...document.querySelectorAll('.chat-activity__outcome-toggle')].find(
+    (button) => button.id.endsWith(`-${row.runId}-outcome`),
+  );
+}
+
+function reviewChanges(row) {
+  return document.getElementById(
+    outcomeToggle(row).getAttribute('aria-controls'),
+  );
+}
+
+const SAVED_CHANGES = [
+  {
+    store: 'memory',
+    kind: 'added',
+    revisions: [4],
+    undone: false,
+    scope: 'user',
+    text: 'Prefers short answers.',
+  },
+  {
+    store: 'skill',
+    kind: 'created',
+    revisions: [7, 8],
+    undone: false,
+    skill: 'deploy',
+    files: ['SKILL.md', 'references/hosts.md'],
+  },
+  {
+    store: 'skill',
+    kind: 'archived',
+    revisions: [9],
+    undone: true,
+    skill: 'old-deploy',
+    files: [],
+    absorbed_into: 'deploy',
+    followed: [{ kind: 'calendar', id: 'act-1', name: 'Weekly review' }],
+  },
+];
 
 describe('ChatActivityPanel', () => {
   let mountedComponent;
@@ -535,6 +601,138 @@ describe('ChatActivityPanel', () => {
     finishedRow.querySelector('.chat-activity__task-link').click();
     await Promise.resolve();
     expect(onOpenReflection).toHaveBeenCalledWith(finishedReview);
+  });
+
+  it('summarizes what each finished review changed in one quiet line', () => {
+    openPanel({
+      timelineItems: [],
+      reflectionTasks: reviewRows([
+        { runId: 'running', status: 'running' },
+        { runId: 'nothing', outcome: { memory: 0, skills: 0, undone: false } },
+        { runId: 'saved', outcome: { memory: 2, skills: 1, undone: false } },
+        { runId: 'skills', outcome: { memory: 0, skills: 1, undone: false } },
+        { runId: 'undone', outcome: { memory: 1, skills: 0, undone: true } },
+        { runId: 'unknown' },
+      ]),
+    });
+
+    const lines = [
+      ...document.querySelectorAll(
+        '.chat-activity__group--reflections .chat-activity__outcome',
+      ),
+    ];
+    // Newest first; a running review and one without a reported outcome
+    // show no summary.
+    expect(lines.map((line) => line.textContent.trim())).toEqual([
+      t('chat.activity.outcome.undone'),
+      '1 Skill changed',
+      '2 Memory entries, 1 Skill changed',
+      t('chat.activity.outcome.nothing'),
+    ]);
+    // A review that saved nothing has nothing to open or undo.
+    expect(lines.at(-1).tagName).toBe('P');
+    expect(
+      lines.slice(0, -1).map((line) => line.getAttribute('aria-expanded')),
+    ).toEqual(['false', 'false', 'false']);
+    expect(document.querySelector('.chat-activity__changes')).toBeNull();
+  });
+
+  it('opens a review to its changes and undoes it after a confirmation', async () => {
+    const onLoadReflectionChanges = vi.fn();
+    const onUndoReflection = vi.fn().mockResolvedValue(true);
+    const rows = reviewRows([
+      {
+        runId: 'saved',
+        outcome: { memory: 1, skills: 2, undone: false },
+        details: { changes: SAVED_CHANGES },
+      },
+      {
+        runId: 'undone',
+        outcome: { memory: 1, skills: 2, undone: true },
+        details: { changes: SAVED_CHANGES },
+      },
+      {
+        runId: 'blocked',
+        outcome: { memory: 1, skills: 0, undone: false },
+        details: {
+          changes: SAVED_CHANGES.slice(0, 1),
+          undoError: {
+            conflict: {
+              store: 'memory',
+              revision: 4,
+              scope: 'user',
+              text: 'Prefers short answers.',
+              later: { revision: 6, at: '2026-10-02T10:30:00Z', actor: 'rpc' },
+            },
+            message: 'Nothing was undone.',
+          },
+        },
+      },
+    ]);
+    const [saved, undone, blocked] = ['saved', 'undone', 'blocked'].map(
+      (runId) => rows.find((row) => row.runId === runId),
+    );
+    openPanel({
+      timelineItems: [],
+      reflectionTasks: rows,
+      onLoadReflectionChanges,
+      onUndoReflection,
+    });
+
+    outcomeToggle(saved).click();
+    flushSync();
+
+    expect(outcomeToggle(saved).getAttribute('aria-expanded')).toBe('true');
+    expect(onLoadReflectionChanges).toHaveBeenCalledExactlyOnceWith(saved);
+    const changes = reviewChanges(saved);
+    expect(
+      [...changes.querySelectorAll('.chat-activity__change')].map((item) =>
+        item.textContent.replace(/\s+/g, ' ').trim(),
+      ),
+    ).toEqual([
+      'Added User Memory Prefers short answers.',
+      'Created deploy SKILL.md, references/hosts.md',
+      'Archived old-deploy Undone Merged into deploy · calendar event “Weekly review” moved along',
+    ]);
+
+    // The undo asks first; Keep returns to the summary without undoing.
+    const undoButton = () => changes.querySelector('.chat-activity__undo');
+    undoButton().click();
+    flushSync();
+    expect(undoButton()).toBeNull();
+    const confirmation = changes.querySelector('.chat-activity__undo-confirm');
+    expect(confirmation.getAttribute('aria-label')).toBe(
+      t('chat.activity.undoConfirm'),
+    );
+    const [, keep] = confirmation.querySelectorAll('button');
+    keep.click();
+    await vi.waitFor(() =>
+      expect(document.activeElement).toBe(outcomeToggle(saved)),
+    );
+    expect(onUndoReflection).not.toHaveBeenCalled();
+
+    undoButton().click();
+    flushSync();
+    changes.querySelector('.chat-activity__undo-confirm button').click();
+    await vi.waitFor(() =>
+      expect(changes.querySelector('.chat-activity__undo-confirm')).toBeNull(),
+    );
+    expect(onUndoReflection).toHaveBeenCalledExactlyOnceWith(saved);
+
+    // An undone review lists what it took back and offers no second undo.
+    outcomeToggle(undone).click();
+    flushSync();
+    expect(
+      reviewChanges(undone).querySelector('.chat-activity__undo'),
+    ).toBeNull();
+
+    // A refused undo says which later change blocks it, in place.
+    outcomeToggle(blocked).click();
+    flushSync();
+    const refusal = reviewChanges(blocked).querySelector('[role="alert"]');
+    expect(refusal.textContent).toContain(
+      'Nothing was undone: the User Memory entry “Prefers short answers.” was changed again later by you (',
+    );
   });
 
   it('shows Bash background runtimes from terminal data on panel rows', () => {

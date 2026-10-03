@@ -26,5 +26,5 @@ The Tool-owned normalizer (`normalize_call_arguments`) repairs action/scope form
 ## Constraints & Gotchas
 
 - The whole file is Tool-managed bullets; there is no freeform zone to preserve (`memory.md` -> Storage contract).
-- Writing policy (what deserves Memory) lives in the `memory:guidance` block; the Tool description only states mechanics and the two scopes.
+- Writing policy (what deserves Memory) lives in the `memory:guidance` block. The Tool description states mechanics, the two scopes and one routing sentence, `A lesson for one kind of task belongs in that task's Skill, not in Memory.`, because Agents without the guidance block (custom layouts) and background reviews decide at the Tool. The `content` description says replace takes `the complete replacement entry`: `replace_matching` replaces the whole entry, and Agents passed only the changed words.
 - Tests: `tests/core/tools/test_memory.py` (production executor), `tests/core/memory/test_memory.py`; probe cases in `scripts/tool_lab/cases/knowledge.json`.

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -20,7 +22,11 @@ import pytest
 
 from core.tools.process_manager import ProcessManager
 from core.utils import processes as process_utils
-from core.utils.processes import guarded_process_launch, subprocess_creation_flags
+from core.utils.processes import (
+    GuardedProcessLaunch,
+    guarded_process_launch,
+    subprocess_creation_flags,
+)
 from tests.core.tools.process_manager_test_support import AGENT_A, spawn
 from tests.core.tools.process_manager_test_support import (
     manager as manager,
@@ -162,12 +168,18 @@ def test_windows_breakaway_propagates_job_query_failure(
 
 
 @pytest.mark.parametrize(
-    ("lifetime_fd", "controlling_terminal", "options", "pass_fds"),
+    ("lifetime_fd", "controlling_terminal", "environment", "options", "pass_fds"),
     [
-        (41, False, ["--lifetime-fd", "41"], (41,)),
-        (41, True, ["--controlling-terminal", "--lifetime-fd", "41"], (41,)),
-        (None, True, ["--controlling-terminal"], ()),
-        (None, False, None, ()),
+        (41, False, {}, ["--lifetime-fd", "41"], (41,)),
+        (
+            41,
+            True,
+            {"LC_CTYPE": "C"},
+            ["--controlling-terminal", "--lifetime-fd", "41", "--lc-ctype=C"],
+            (41,),
+        ),
+        (None, True, {"LC_CTYPE": ""}, ["--controlling-terminal", "--lc-ctype="], ()),
+        (None, False, {"LC_CTYPE": "C"}, None, ()),
     ],
     ids=["contained", "contained-terminal", "terminal", "uncontained"],
 )
@@ -175,6 +187,7 @@ def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     monkeypatch: pytest.MonkeyPatch,
     lifetime_fd: int | None,
     controlling_terminal: bool,
+    environment: dict[str, str],
     options: list[str] | None,
     pass_fds: tuple[int, ...],
 ) -> None:
@@ -182,19 +195,49 @@ def test_guarded_posix_launch_wraps_exact_argv_and_lifetime_descriptor(
     argv = ["bash", "-c", "echo exact"]
 
     launch = guarded_process_launch(
-        argv, controlling_terminal=controlling_terminal, platform_name="posix"
+        argv, env=environment, controlling_terminal=controlling_terminal, platform_name="posix"
     )
 
     if options is None:
         assert launch.argv == tuple(argv)
     else:
-        guardian = (sys.executable, "-m", "core.utils.process_guardian")
-        assert launch.argv == (*guardian, *options, "--", *argv)
+        # Isolated and without site-packages or bytecode writes, run by absolute path.
+        assert launch.argv[:6] == (sys.executable, "-I", "-S", "-B", "-X", "utf8")
+        script = Path(launch.argv[6])
+        assert script.is_absolute()
+        assert script.samefile(Path(process_utils.__file__).with_name("process_guardian.py"))
+        assert launch.argv[7:] == (*options, "--", *argv)
     assert launch.pass_fds == pass_fds
 
 
+# Runs the guardian as a kernel without pidfd_open would (before Linux 5.3, or
+# under a seccomp filter that denies it): it then waits for its child through a
+# reaper thread instead of a pidfd.
+_WITHOUT_PIDFD = (
+    "import errno, os, runpy, sys\n"
+    "def pidfd_open(*_arguments):\n"
+    "    raise OSError(errno.ENOSYS, os.strerror(errno.ENOSYS))\n"
+    "os.pidfd_open = pidfd_open\n"
+    "sys.argv = sys.argv[1:]\n"
+    "runpy.run_path(sys.argv[0], run_name='__main__')\n"
+)
+CHILD_WAITS = pytest.mark.parametrize("child_wait", ["pidfd", "reaper-thread"])
+
+
+def guardian_argv(launch: GuardedProcessLaunch, child_wait: str) -> list[str]:
+    """The guardian's argv, waiting for its child the given way."""
+    argv = list(launch.argv)
+    if child_wait == "reaper-thread":
+        # Before the guardian script, after the interpreter options.
+        argv[6:6] = ["-c", _WITHOUT_PIDFD]
+    return argv
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
-def test_guardian_kills_child_group_when_server_pipe_closes(tmp_path: Path) -> None:
+@CHILD_WAITS
+def test_guardian_kills_child_group_when_server_pipe_closes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, child_wait: str
+) -> None:
     read_fd, write_fd = os.pipe()
     pid_path = tmp_path / "child.pid"
     child_code = (
@@ -204,20 +247,12 @@ def test_guardian_kills_child_group_when_server_pipe_closes(tmp_path: Path) -> N
     )
     environment = dict(os.environ)
     environment["CHILD_PID_PATH"] = str(pid_path)
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    launch = guarded_process_launch([sys.executable, "-c", child_code], env=environment)
     guardian = subprocess.Popen(
-        [
-            sys.executable,
-            "-m",
-            "core.utils.process_guardian",
-            "--lifetime-fd",
-            str(read_fd),
-            "--",
-            sys.executable,
-            "-c",
-            child_code,
-        ],
+        guardian_argv(launch, child_wait),
         env=environment,
-        pass_fds=(read_fd,),
+        pass_fds=launch.pass_fds,
         start_new_session=True,
     )
     os.close(read_fd)
@@ -239,6 +274,118 @@ def test_guardian_kills_child_group_when_server_pipe_closes(tmp_path: Path) -> N
             kill_process_group(guardian.pid, 9)
         with contextlib.suppress(OSError):
             os.close(write_fd)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX lifetime pipe contract")
+@CHILD_WAITS
+def test_guardian_reports_the_child_exit_as_it_happens(
+    monkeypatch: pytest.MonkeyPatch, child_wait: str
+) -> None:
+    read_fd, write_fd = os.pipe()
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    # The child prints when it ends, then dies of SIGTERM.
+    ending = (
+        "import os, signal, time; "
+        "os.write(1, repr(time.monotonic()).encode()); "
+        "os.kill(os.getpid(), signal.SIGTERM)"
+    )
+    launch = guarded_process_launch([sys.executable, "-I", "-S", "-c", ending], env=os.environ)
+    delays: list[float] = []
+    try:
+        # A short command must not wait for a later check of the child (a 0.2 s
+        # poll before). Up to three runs keep a load spike from failing the test.
+        for _attempt in range(3):
+            guardian = subprocess.Popen(
+                guardian_argv(launch, child_wait),
+                stdout=subprocess.PIPE,
+                pass_fds=launch.pass_fds,
+                start_new_session=True,
+            )
+            ended, _ = guardian.communicate(timeout=10)
+            delays.append(time.monotonic() - float(ended))
+            # A child killed by signal N exits as a shell reports it: 128 + N.
+            assert guardian.returncode == 128 + signal.SIGTERM
+            if delays[-1] < 0.1:
+                break
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert min(delays) < 0.1, delays
+
+
+# Prints the working directory and the environment the process was started with,
+# and what its open descriptors refer to.
+_REPORT_START = (
+    "import os, sys\n"
+    "def target(fd):\n"
+    "    try:\n"
+    "        return os.readlink('/proc/self/fd/' + fd)\n"
+    "    except OSError:\n"
+    "        return None\n"
+    "opened = [target(fd) for fd in os.listdir('/proc/self/fd')]\n"
+    "environ = open('/proc/self/environ', 'rb').read()\n"
+    "sys.stdout.write(repr((os.getcwd(), environ, opened)))"
+)
+
+
+@pytest.mark.parametrize("lc_ctype", [None, "C"], ids=["no-locale", "c-locale"])
+def test_guardian_is_isolated_from_the_command_it_runs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, lc_ctype: str | None
+) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux /proc contract")
+    # A project with its own ``core`` package and modules named like the standard
+    # library ones the guardian imports, also on the command's PYTHONPATH.
+    workdir = tmp_path / "project"
+    for module in ("core/__init__.py", "core/utils/__init__.py", "select.py", "subprocess.py"):
+        (workdir / module).parent.mkdir(parents=True, exist_ok=True)
+        (workdir / module).write_text("raise SystemExit('shadowed')\n", encoding="utf-8")
+    # An installed-like copy of the guardian, so bytecode written next to it shows.
+    application = tmp_path / "app"
+    guardian = application / "core" / "utils" / "process_guardian.py"
+    guardian.parent.mkdir(parents=True)
+    shutil.copyfile(Path(process_utils.__file__).with_name("process_guardian.py"), guardian)
+    monkeypatch.setattr(process_utils, "_GUARDIAN_SCRIPT", str(guardian))
+    # Without a UTF-8 locale Python's startup sets LC_CTYPE (PEP 538).
+    environment = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "PYTHONPATH": str(workdir),
+        "PYTHONHOME": str(tmp_path / "missing"),
+        "VBOT_TEST_TEXT": "grüße",
+    }
+    if lc_ctype is not None:
+        environment["LC_CTYPE"] = lc_ctype
+    read_fd, write_fd = os.pipe()
+    server_pipe = f"pipe:[{os.fstat(read_fd).st_ino}]"
+    monkeypatch.setattr(process_utils, "_POSIX_LIFETIME_READ_FD", read_fd)
+    launch = guarded_process_launch(
+        [sys.executable, "-I", "-S", "-c", _REPORT_START], env=environment
+    )
+    try:
+        completed = subprocess.run(
+            launch.argv,
+            cwd=workdir,
+            env=environment,
+            pass_fds=launch.pass_fds,
+            start_new_session=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+
+    assert completed.returncode == 0, completed.stderr
+    cwd, started_environment, opened = ast.literal_eval(completed.stdout.decode())
+    assert Path(cwd) == workdir.resolve()
+    # The guardian holds the server pipe; the command must not keep it open.
+    assert server_pipe not in opened
+    assert dict(entry.split(b"=", 1) for entry in started_environment.split(b"\0") if entry) == {
+        os.fsencode(name): os.fsencode(value) for name, value in environment.items()
+    }
+    assert list(application.rglob("__pycache__")) == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object contract")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -113,6 +114,10 @@ def test_catalog_is_bounded_and_operation_help_keeps_the_complete_schema(
     assert summary["operations"] == [
         {"name": "save", "description": "Replace the saved connection.", "secret": False}
     ]
+    assert summary["next"] == (
+        "vbot extensions run mcp <operation> --help for the complete argument schema; "
+        "keep the same target options"
+    )
     assert json.loads(detail[1]) == save
     assert _operation_calls(rpc) == ["describe", "describe"]
 
@@ -183,3 +188,44 @@ def test_secret_operation_reads_utf8_json_from_stdin_without_echo(
     assert code == 0
     assert rpc.calls[-1][1]["arguments"] == {"value": "ä-secret"}
     assert "ä-secret" not in out + err
+
+
+@pytest.mark.parametrize("source", ["file", "stdin"])
+def test_document_argument_is_read_from_a_file_or_standard_input(
+    rpc: FakeRpc,
+    run_cli: RunCli,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    source: str,
+) -> None:
+    text = '{"mcpServers": {"a": {"command": "ä"}}}'
+    document = {"type": "string", "contentMediaType": "text/plain"}
+    load = _operation("import", {"source": document, "apply": {"type": "boolean"}})
+    rpc.reply("extensions.operation", {"operations": [load]})
+    rpc.reply("extensions.operation", {"servers": []})
+    if source == "file":
+        path = tmp_path / "setup.json"
+        path.write_text(text, encoding="utf-8-sig")
+        tokens: tuple[str, ...] = (str(path),)
+    else:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(text))
+        tokens = ("--source", "-")
+
+    code, _out, _err = run_cli("extensions", "run", "mcp", "import", *tokens, "--apply", "true")
+
+    assert code == 0
+    # The text is read without a byte order mark and never passes the shell.
+    assert rpc.calls[-1][1]["arguments"] == {"source": text, "apply": True}
+
+
+def test_unreadable_document_argument_is_not_echoed(rpc: FakeRpc, run_cli: RunCli) -> None:
+    document = {"type": "string", "contentMediaType": "text/plain"}
+    rpc.reply("extensions.operation", {"operations": [_operation("import", {"source": document})]})
+
+    # Setup text pasted where a path belongs can hold credentials.
+    code, out, err = run_cli("extensions", "mcp", "import", "TOKEN=secret-sentinel npx server")
+
+    assert code == 1
+    assert _operation_calls(rpc) == ["describe"]
+    assert "- to read standard input" in out
+    assert "secret-sentinel" not in out + err

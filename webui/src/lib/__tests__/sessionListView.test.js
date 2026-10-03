@@ -396,6 +396,9 @@ describe('sessionListView helpers', () => {
         },
       },
       { id: 'mixed-session', run_kinds: ['cron', 'user'] },
+      // The server lists a Librarian Session only in the Librarian's own
+      // scope, where it is an ordinary conversation.
+      { id: 'librarian-session', run_kinds: ['librarian'] },
       {
         id: 'channel-session',
         run_kinds: ['cron'],
@@ -406,13 +409,13 @@ describe('sessionListView helpers', () => {
 
     expect(
       visibleSessionsForSelection(next.sessions).map((session) => session.id),
-    ).toEqual(['mixed-session', 'user-session']);
+    ).toEqual(['librarian-session', 'mixed-session', 'user-session']);
 
     expect(
       visibleSessionsForSelection(next.sessions, {
         filters: createSessionListFilters(),
       }).map((session) => session.id),
-    ).toEqual(['mixed-session', 'user-session']);
+    ).toEqual(['librarian-session', 'mixed-session', 'user-session']);
 
     expect(
       isSessionHiddenByDefault(

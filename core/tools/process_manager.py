@@ -25,6 +25,7 @@ from core.utils.processes import (
     kill_process_tree,
     kill_process_tree_async,
     subprocess_creation_flags,
+    wait_for_exit,
 )
 
 from ._process_output import ProcessOutputDecoder
@@ -115,6 +116,8 @@ class TrackedProcess:
     stderr_task: asyncio.Task[None] | None = field(default=None, repr=False)
     wait_task: asyncio.Task[None] | None = field(default=None, repr=False)
     completion_notification_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    # Called on the Event Loop after each change of output or lifecycle state.
+    change_callbacks: list[Callable[[], None]] = field(default_factory=list, repr=False)
     completion_acknowledged: bool = False
     cancelled_by_user: bool = False
     backgrounded: bool = False
@@ -169,6 +172,33 @@ class ProcessManager:
         def unsubscribe() -> None:
             with contextlib.suppress(ValueError):
                 self._terminal_callbacks.remove(callback)
+
+        return unsubscribe
+
+    def add_change_callback(
+        self,
+        process_id: str,
+        agent_id: str,
+        callback: Callable[[], None],
+        *,
+        project_id: str | None = None,
+    ) -> Callable[[], None]:
+        """Call ``callback`` whenever one process's output or lifecycle state changes.
+
+        A change is new output, the start of a kill, a failed kill, or the
+        finished process; the last is published once the manager's finalizer
+        (``wait_task``) is done, so the record it reports is settled. The
+        callback runs synchronously on the Event Loop and must stay fast, like
+        setting an ``asyncio.Event``; it receives no arguments, and the caller
+        reads what changed (``poll``, ``get_process``). A callback that raises is
+        logged and removed. Returns the unsubscribe function.
+        """
+        tracked = self._process_for_agent(process_id, agent_id, project_id=project_id)
+        tracked.change_callbacks.append(callback)
+
+        def unsubscribe() -> None:
+            with contextlib.suppress(ValueError):
+                tracked.change_callbacks.remove(callback)
 
         return unsubscribe
 
@@ -310,7 +340,7 @@ class ProcessManager:
             process_env.update(env)
         process_env["PYTHONIOENCODING"] = "utf-8"
 
-        launch = guarded_process_launch(argv)
+        launch = guarded_process_launch(argv, env=process_env)
         creationflags = subprocess_creation_flags(new_process_group=True)
         start_new_session = os.name != "nt"
         pass_fds = launch.pass_fds if os.name != "nt" else ()
@@ -381,6 +411,10 @@ class ProcessManager:
                 task, f"Process completion watcher failed for process={process_id}"
             )
         )
+        # Publish the finished process once its finalizer task is done: asyncio
+        # schedules every done callback together, so whoever this wakes runs
+        # after all of them (such as the shell Tool's update-handoff release).
+        tracked.wait_task.add_done_callback(lambda _task: self._notify_change(tracked))
         # Shutdown/cancellation may close admission while the OS creates the
         # subprocess. Publish it for cleanup, then settle it before exposing its id.
         owner_closed = (
@@ -632,6 +666,8 @@ class ProcessManager:
     ) -> None:
         async with tracked.lock:
             normalized = self._append_output(tracked, stream_name, chunk, final=final)
+        if normalized:
+            self._notify_change(tracked)
         # Do not hold the snapshot lock over file I/O. Both readers await each
         # chunk, bounding pending output and applying ordinary pipe backpressure.
         if normalized and tracked.spool is not None:
@@ -647,9 +683,7 @@ class ProcessManager:
         proc = tracked.proc
         if proc is None:
             return
-        while proc.returncode is None:
-            await asyncio.sleep(0.05)
-        return_code = proc.returncode
+        return_code = await wait_for_exit(proc)
         await self._await_reader_tasks(tracked)
         self._release_process_pipe_references(tracked)
         await self._close_log_file(tracked)
@@ -662,6 +696,21 @@ class ProcessManager:
             tracked.finished_at = _utc_now()
         self._notify_terminal(tracked)
         self._release_execution_resources(tracked)
+
+    @staticmethod
+    def _notify_change(tracked: TrackedProcess) -> None:
+        """Run the process's change callbacks; a failing one is logged and removed."""
+        for callback in list(tracked.change_callbacks):
+            try:
+                callback()
+            except Exception:
+                _LOGGER.error(
+                    "Process change callback failed for process=%s",
+                    tracked.process_id,
+                    exc_info=True,
+                )
+                with contextlib.suppress(ValueError):
+                    tracked.change_callbacks.remove(callback)
 
     def _notify_terminal(self, tracked: TrackedProcess) -> None:
         """Publish one terminal notification for a handed-off process."""
@@ -787,6 +836,7 @@ class ProcessManager:
             tracked.finished_at = _utc_now()
             self._notify_terminal(tracked)
             self._release_execution_resources(tracked)
+            self._notify_change(tracked)
 
     def _kill_process_now(
         self,
@@ -819,16 +869,18 @@ class ProcessManager:
             # A settled manager finalizer has already drained and closed its spool.
             self._notify_terminal(tracked)
             self._release_execution_resources(tracked)
+            self._notify_change(tracked)
 
     def _begin_kill(self, tracked: TrackedProcess, *, cancelled_by_user: bool) -> None:
         tracked.cancelled_by_user = cancelled_by_user
         tracked.termination_failed = False
         tracked.status = "killed"
+        self._notify_change(tracked)
 
-    @staticmethod
-    def _kill_failed(tracked: TrackedProcess, error: OSError) -> None:
+    def _kill_failed(self, tracked: TrackedProcess, error: OSError) -> None:
         tracked.termination_failed = True
         _LOGGER.warning("Process tree kill failed for process=%s: %s", tracked.process_id, error)
+        self._notify_change(tracked)
         raise ProcessTerminationError(tracked.process_id) from error
 
     def has_execution_work(self, owner: RunExecutionOwner) -> bool:

@@ -249,7 +249,7 @@ export default Object.freeze({
   'skills.copyContent': 'Copy original text',
   'skills.loadingContent': 'Loading instructions…',
   'skills.deletePackageConfirm':
-    'Permanently delete skill "{name}" and its package files? Any Agents sharing this original will lose access.',
+    'Delete skill "{name}"? It moves to Archived, where you can restore it. Agents lose access to it until then.',
   'skills.createGlobalHelp':
     'Stored in the global collection. Each Agent’s Skill selection decides whether it can use this skill.',
   'skills.createPrivateHelp':
@@ -257,6 +257,147 @@ export default Object.freeze({
   'skills.editSharedHelp':
     'You are editing the shared original. These changes also apply to its recipients.',
   'skills.policyAttention': 'Sharing & policy need attention ({count})',
+  'skills.library.archived': 'Archived',
+  'skills.subtitle.archived':
+    'Deleted skills, kept until you restore them or delete them permanently.',
+  'skills.empty.archived': 'No archived skills',
+  'skills.empty.archivedHelp':
+    'Deleted skills appear here, so you can restore them.',
+  'skills.collectionCount.archived': 'Archived skills: {count}',
+  'skills.archived.deleted': 'Deleted on {date}',
+  'skills.archived.absorbed': 'Merged into {target} on {date}',
+  'skills.archived.inactive': 'Retired as unused on {date}',
+  'skills.archived.restore': 'Restore',
+  'skills.archived.purge': 'Delete permanently…',
+  'skills.archived.purgeTitle': 'Delete permanently',
+  'skills.archived.purgeConfirm':
+    'Permanently delete the archived skill "{name}"? Its files cannot be restored afterwards.',
+  'skills.archived.purgeAction': 'Delete permanently',
+  'skills.archived.restored': 'Skill “{name}” restored.',
+  'skills.archived.restoreError': 'The skill could not be restored.',
+  'skills.archived.purged': 'Archived skill “{name}” deleted permanently.',
+  'skills.archived.purgeError': 'The archived skill could not be deleted.',
+  'skills.details.archived': 'Archived',
+  'skills.details.archivedBy': 'Archived by',
+  'skills.actor.human': 'You',
+  'skills.actor.agent': 'An Agent',
+  'skills.actor.reflection': 'A background Reflection',
+  'skills.actor.librarian': 'Skill maintenance',
+  'skills.actor.external': 'Outside vBot',
+  'skills.actor.unknown': 'Unknown',
+  'skills.facts.createdBy': 'Created by',
+  'skills.facts.changed': 'Last changed',
+  'skills.facts.changedValue': '{date} · {actor}',
+  'skills.facts.used': 'Last used',
+  'skills.facts.usedValue': '{date} · {count} sessions',
+  'skills.facts.usedOnce': '{date} · 1 session',
+  'skills.facts.neverUsed': 'Not used yet',
+  'skills.pinned': 'Pinned',
+  'skills.pin.label': 'Pin {name}',
+  'skills.pin.pinHint':
+    'Pin so Reflection and Skill maintenance leave this skill unchanged',
+  'skills.pin.unpinHint':
+    'Pinned: Reflection and Skill maintenance leave this skill unchanged. Select to unpin.',
+  'skills.pin.pinnedToast': 'Skill “{name}” pinned.',
+  'skills.pin.unpinnedToast': 'Skill “{name}” unpinned.',
+  'skills.pin.error': 'The pin could not be changed.',
+  'skills.history': 'History',
+  'skills.history.loading': 'Loading history…',
+  'skills.history.loadError': 'The history could not be loaded.',
+  'skills.history.empty': 'No recorded changes yet.',
+  'skills.history.limited': 'Showing the latest {count} changes.',
+  'skills.history.revert': 'Revert',
+  'skills.history.revertNamed': 'Revert revision {id}',
+  'skills.revision.create': 'Created',
+  'skills.revision.change': 'Changed',
+  'skills.revision.external': 'Changed outside vBot',
+  'skills.revision.deleted': 'Deleted',
+  'skills.revision.absorbed': 'Merged into {target}',
+  'skills.followed': '{items} moved along',
+  'skills.followed.shared': 'share with {name}',
+  'skills.followed.bootstrap': 'bootstrap job “{name}”',
+  'skills.followed.cron': 'cron job “{name}”',
+  'skills.followed.calendar': 'calendar event “{name}”',
+  'skills.revision.inactive': 'Retired as unused',
+  'skills.revision.restore': 'Restored',
+  'skills.revision.revert': 'Reverted revision {revisions}',
+  'skills.revision.pin': 'Pinned',
+  'skills.revision.unpin': 'Unpinned',
+  'skills.revision.baseline': 'Recorded as found',
+  'skills.revision.fileAdded': 'Added {path}',
+  'skills.revision.fileChanged': 'Changed {path}',
+  'skills.revision.fileRemoved': 'Removed {path}',
+  'skills.revert.title': 'Revert change',
+  'skills.revert.confirm':
+    'Take back revision {revision} of skill "{name}"? The revert is recorded as a new revision that you can revert in turn.',
+  'skills.revert.together':
+    'Revision {later} later changed the same part of skill "{name}", so revisions {revisions} can only be reverted together. Revert them together?',
+  'skills.revert.pass':
+    'Take back all changes of the last Skill maintenance pass, revisions {revisions}? Each revert is recorded as a new revision that you can revert in turn.',
+  'skills.revert.action': 'Revert',
+  'skills.revert.togetherAction': 'Revert together',
+  'skills.revert.doneOne': 'Revision {revision} reverted.',
+  'skills.revert.doneMany': 'Revisions {revisions} reverted.',
+  'skills.revert.error': 'The change could not be reverted.',
+  'skills.librarian.title': 'Skill maintenance',
+  'skills.librarian.help':
+    'The Librarian keeps this Agent’s own Skills small and current. A pass retires unpinned Skills that went unused for a long time. The Librarian then merges overlapping Skills, corrects hard-to-use instructions and deletes wrong or obsolete ones in a Session of its own, which Open session shows. Pinned Skills are never changed.\n\nEvery change is recorded in the Skill history, and Revert together takes back all changes of the last pass. Settings → Memory → Skill maintenance sets the schedule and the Librarian’s Model; the Librarian switch under Agents → Context & Memory turns it off for one Agent.',
+  'skills.librarian.run': 'Run now',
+  'skills.librarian.schedule': 'Schedule',
+  'skills.librarian.daily': 'Every day while the Agent is idle',
+  'skills.librarian.everyDays': 'Every {days} days while the Agent is idle',
+  'skills.librarian.scheduleOff': 'Off in Settings; Run now still works',
+  'skills.librarian.next': 'Next pass',
+  'skills.librarian.due': 'Due; starts once the Agent is idle',
+  'skills.librarian.now': 'Now',
+  'skills.librarian.runningSince': 'Running since {time}',
+  'skills.librarian.lastPass': 'Last pass',
+  'skills.librarian.passValue': '{time} ({trigger})',
+  'skills.librarian.triggerSchedule': 'scheduled',
+  'skills.librarian.triggerManual': 'started by hand',
+  'skills.librarian.result': 'Result',
+  'skills.librarian.resultFailed':
+    'Stopped early by an error; the next pass comes after the usual interval',
+  'skills.librarian.resultInterrupted':
+    'Stopped early because vBot stopped; the next pass comes after the usual interval',
+  'skills.librarian.retired': 'Retired as unused',
+  'skills.librarian.merging': 'Merging',
+  'skills.librarian.session': 'Session',
+  'skills.librarian.openSession': 'Open session',
+  'skills.librarian.mergeRan':
+    '{merged} merged away, {changed} changed, {created} created',
+  'skills.librarian.mergeFailed':
+    'Did not finish: {merged} merged away, {changed} changed, {created} created',
+  'skills.librarian.mergeUnchanged':
+    'Skipped; no Skill changed since the last merge',
+  'skills.librarian.mergeTooFew': 'Skipped; fewer than two Skills to compare',
+  'skills.librarian.mergeOff': 'Off',
+  'skills.librarian.never': 'No pass has run yet.',
+  'skills.librarian.noChanges': 'The last pass changed no Skill.',
+  'skills.librarian.changes': 'Changes of the last pass: {count}',
+  'skills.librarian.openHistory': 'Open the history of {name}',
+  'skills.librarian.openArchived': 'Show {name} in Archived',
+  'skills.librarian.noSkills':
+    'This Agent has no Skills of its own, so the Librarian has nothing to maintain.',
+  'skills.librarian.unavailable': 'The Librarian cannot run. {problem}',
+  'skills.librarian.agentOff':
+    'Skill maintenance is off for this Agent, so its Skills are not maintained. Its Librarian switch under Agents → Context & Memory turns it on.',
+  'skills.librarian.alreadyRunning': 'A pass is running.',
+  'skills.librarian.busy':
+    'Skill maintenance starts only while no other pass runs and neither this Agent nor the Librarian is busy. Try again later.',
+  'librarian.name': 'Librarian',
+  'librarian.problem.agentIdTaken':
+    'One of your Agents uses the ID librarian. Give that Agent another ID on its page under Agents, then restart vBot.',
+  'librarian.problem.invalidConfig':
+    'Its file agents/librarian/agent.json cannot be loaded. vbot doctor config names the problem; fix the file and restart vBot.',
+  'librarian.problem.missing':
+    'It does not exist yet. Restart vBot to create it.',
+  'librarian.problem.unknown':
+    'Restart vBot; vbot doctor config names any problem.',
+  'skills.librarian.started':
+    'Skill maintenance of {name} started. Its result appears here when the pass ends.',
+  'skills.librarian.runError': 'Skill maintenance could not start.',
+  'skills.librarian.loadError': 'Skill maintenance could not be loaded.',
   'inherit.option': 'Inherited: {value} (global default)',
   'inherit.optionNotConfigured': 'Inherit (not configured)',
   'inherit.optionProviderDefault': 'Inherit (provider default)',
@@ -304,6 +445,11 @@ export default Object.freeze({
   'agents.form.toolAccessHelp':
     'Choose which Tools this Agent may use. Automatic Tools become available when their condition is met; permission does not guarantee current availability.',
   'agents.form.customSystemPrompt': 'Custom system prompt',
+  'agents.form.librarian': 'Librarian',
+  'agents.form.librarianDescription':
+    'Lets the Librarian tidy up this Agent’s own Skills.',
+  'agents.form.librarianHelp':
+    'While this is on, Librarian passes retire this Agent’s unused Skills, and the Librarian merges this Agent’s overlapping Skills. Pinned Skills are never changed.\n\nTurning it off stops both scheduled passes and Run now for this Agent; Settings → Memory → Skill maintenance switches scheduled passes off for all Agents. This Agent’s conversations are not affected either way.',
   'agents.form.memoryPromptMode': 'Memory',
   'agents.form.memoryModeHelp':
     'Which memory files are pinned into the System Prompt. Off also removes the memory Tool; while Memory is on, turning the memory Tool off in Tool access keeps these notes visible but makes Memory read-only.',

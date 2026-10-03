@@ -1,6 +1,8 @@
 <script>
   // The Skills manager's dialogs: create a Skill, edit a package's SKILL.md,
-  // confirm a delete. State and requests live in actions.svelte.js.
+  // confirm a delete (into the archive), a revert of history revisions and
+  // the permanent delete of an archived package. State and requests live in
+  // actions.svelte.js.
   import { t } from '$lib/i18n.js';
   import Dropdown from '../Dropdown.svelte';
   import Banner from '../ui/Banner.svelte';
@@ -153,5 +155,42 @@
     confirmLabel={t('common.delete')}
     onConfirm={actions.confirmDelete}
     onCancel={actions.cancelDelete}
+  />
+{/if}
+
+{#if actions.revertTarget}
+  <ConfirmDialog
+    title={t('skills.revert.title')}
+    body={actions.revertTarget.later !== null
+      ? t('skills.revert.together', {
+          later: actions.revertTarget.later,
+          name: actions.revertTarget.name,
+          revisions: actions.revertTarget.revisions.join(', '),
+        })
+      : actions.revertTarget.pass
+        ? t('skills.revert.pass', {
+            revisions: actions.revertTarget.revisions.join(', '),
+          })
+        : t('skills.revert.confirm', {
+            revision: actions.revertTarget.revisions[0],
+            name: actions.revertTarget.name,
+          })}
+    confirmLabel={actions.revertTarget.later === null &&
+    !actions.revertTarget.pass
+      ? t('skills.revert.action')
+      : t('skills.revert.togetherAction')}
+    danger={false}
+    onConfirm={actions.confirmRevert}
+    onCancel={actions.cancelRevert}
+  />
+{/if}
+
+{#if actions.purgeTarget}
+  <ConfirmDialog
+    title={t('skills.archived.purgeTitle')}
+    body={t('skills.archived.purgeConfirm', { name: actions.purgeTarget.name })}
+    confirmLabel={t('skills.archived.purgeAction')}
+    onConfirm={actions.confirmPurge}
+    onCancel={actions.cancelPurge}
   />
 {/if}

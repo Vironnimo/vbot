@@ -3,7 +3,6 @@
 // semantic index status line.
 
 import { activeLocaleTag, t, tOr } from '../i18n.js';
-import { formatCost } from '../statisticsView.js';
 import { formatRelativeTime } from '../timeText.js';
 import {
   describeLocalModelDownload,
@@ -104,6 +103,24 @@ export function describeRecallMethod(backend) {
 // Whether the backend ranks by meaning, so it needs an embedding Model.
 export function recallSearchesByMeaning(backend) {
   return MEANING_BACKENDS.includes(backend);
+}
+
+// A USD price or cost: four decimals below $1 so per-million embedding
+// prices stay readable, `<$0.0001` for less, a dash when unknown.
+function formatCost(value, locale) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return '—';
+  }
+  const tiny = value > 0 && value < 0.0001;
+  return (
+    (tiny ? '<' : '') +
+    new Intl.NumberFormat(locale, {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: value < 1 && value > 0 ? 4 : 2,
+    }).format(tiny ? 0.0001 : value)
+  );
 }
 
 function finiteOrNull(value) {

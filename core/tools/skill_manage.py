@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Callable
+import threading
+from collections.abc import Awaitable, Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from core.runs import RunKind
 from core.skills.authoring import (
     SkillAuthoringError,
     SkillAuthoringService,
+    SkillProtectedError,
+    SkillReference,
+    SkillWriter,
     SkillWriteResult,
 )
 from core.skills.skill_validator import (
@@ -40,18 +46,24 @@ from core.tools.fuzzy_match import (
     preserve_typography,
     replace_fuzzy,
 )
-from core.tools.skill import clean_skill_file_path, similar_skill_names
+from core.tools.skill import (
+    LIBRARIAN_SKILL_ACTOR,
+    clean_skill_file_path,
+    similar_skill_names,
+    skill_writer,
+)
 from core.tools.tools import (
     JsonObject,
     ToolContext,
     ToolDisplay,
     ToolDisplayPart,
     ToolRegistry,
-    offload_tool_handler,
+    run_tool_worker,
     tool_failure,
     tool_success,
 )
 from core.utils.logging import get_logger
+from core.utils.timestamps import parse_timestamp
 
 SKILL_MANAGE_TOOL_DESCRIPTION = (
     'Create, change or delete one of your own Skills (listed under "Your own skills"), '
@@ -60,12 +72,87 @@ SKILL_MANAGE_TOOL_DESCRIPTION = (
     "patch replaces old_string with new_string in SKILL.md or in file_path."
 )
 
+# Results of a delete, which moves the Skill into the archive of its home.
+SKILL_MANAGE_DELETED = (
+    "Deleted Skill '{name}'. Its files are kept in the archive, where the user can restore it."
+)
+SKILL_MANAGE_ABSORBED = (
+    "Deleted Skill '{name}'; its instructions now live in Skill '{target}'. Its files are "
+    "kept in the archive, where the user can restore it."
+)
+# After a merge: the deleted Skill's shares and the automations that loaded it
+# now use the Skill that absorbed it, so nobody has to change them by hand. One
+# that could not be changed still names the deleted Skill and finds nothing, so
+# the Agent passes it on to the user.
+SKILL_MANAGE_FOLLOWED_NOTE = "These now use Skill '{target}' in place of '{name}': {items}."
+SKILL_MANAGE_NOT_FOLLOWED_WARNING = (
+    "These could not be changed and still name '{name}', which no longer exists: {items}. "
+    "Name them in your reply so the user can change them to '{target}'."
+)
+# After a delete without absorbed_into: nothing holds the instructions, so what
+# named the Skill now finds nothing, and the Agent passes it on to the user.
+SKILL_MANAGE_ORPHANED_WARNING = (
+    "These still name '{name}', which no longer exists: {items}. Name them in your reply so "
+    "the user can change or remove them."
+)
+_REFERENCE_LABELS = {
+    "shared": "the share with Agent '{name}'",
+    "bootstrap": "Bootstrap job '{name}'",
+    "cron": "Cron job '{name}'",
+    "calendar": "Calendar event '{name}'",
+}
+# Refusals of a background writer: a Reflection, or the Librarian, also while
+# the user talks with it in a Librarian Session. It never changes a Skill the
+# user pinned. The reply is where it reports what it could not change; the
+# briefs ask for the same.
+_LEAVE_IT = "Leave it as it is and name the needed change in your reply."
+SKILL_MANAGE_PINNED_REFUSAL = (
+    f"Skill '{{name}}' is pinned by the user, so you cannot change it; nothing changed. {_LEAVE_IT}"
+)
+SKILL_MANAGE_HISTORY_UNREADABLE_REFUSAL = (
+    "The history of Skill '{name}' cannot be read, so whether the user pinned it is unknown "
+    f"and you cannot change it; nothing changed. {_LEAVE_IT}"
+)
+# A Librarian pass builds its changes from what it read; a Skill that someone else
+# changed after the pass started is read again first.
+SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL = (
+    "Skill '{name}' was changed outside this pass after the pass started; nothing changed. "
+    "Load '{name}' again with skill and build your change from that text, or leave it as "
+    "it is."
+)
+# ``absorbed_into`` names the Skill that now holds a deleted Skill's instructions.
+SKILL_MANAGE_ABSORBED_INTO_ACTION = (
+    "absorbed_into is used only by delete; nothing changed. Omit absorbed_into for {action}."
+)
+SKILL_MANAGE_ABSORBED_INTO_SELF = (
+    "absorbed_into names '{name}' itself; nothing changed. Name the other Skill that now holds "
+    "its instructions."
+)
+SKILL_MANAGE_ABSORBED_INTO_UNKNOWN = (
+    "absorbed_into names '{target}', which is not one of your own Skills; nothing changed. "
+    "Name one of your own Skills that now holds the instructions of '{name}'."
+)
+
 _ACTIONS = ("create", "edit", "patch", "write_file", "remove_file", "delete")
+# follow_merge(owner_id, name, target, delete) -> the references that could not move.
+SkillMergeFollower = Callable[
+    [str, str, str | None, Callable[[tuple[SkillReference, ...]], Awaitable[bool]]],
+    Awaitable[tuple[SkillReference, ...]],
+]
 # Actions that may operate on a Skill shared into the caller (maintained in the
-# owner's package). ``create`` is own-home-only by definition; ``delete`` stays
-# owner/human-only so a receiver cannot remove someone else's playbook.
+# owner's package), by every writer. ``create`` is own-home-only by definition;
+# ``delete`` stays owner/human-only so a receiver cannot remove someone else's
+# playbook.
 _SHARED_TARGET_ACTIONS = frozenset({"edit", "patch", "write_file", "remove_file"})
+_PROTECTED_MESSAGES = {
+    "pinned": SKILL_MANAGE_PINNED_REFUSAL,
+    "unknown": SKILL_MANAGE_HISTORY_UNREADABLE_REFUSAL,
+}
 _LOGGER = get_logger("tools.skill_manage")
+# How many (Run, Skill) pairs remember the outside change they were told about.
+_REPORTED_CHANGES_LIMIT = 1024
+# Revisions read back to find an outside change; a pass writes far fewer per Skill.
+_CHANGE_CHECK_REVISIONS = 100
 
 SKILL_MANAGE_TOOL_PARAMETERS: JsonObject = {
     "type": "object",
@@ -122,6 +209,8 @@ _UNADVERTISED_PARAMETERS: JsonObject = {
     "description": {"type": "string"},
     "scope": {"type": "string"},
     "category": {"type": "string"},
+    # Named in the Librarian and Reflection briefs: the Skill that absorbed a deleted one.
+    "absorbed_into": {"type": "string"},
 }
 _FIELD_ALIASES = {
     "match": "old_string",
@@ -196,6 +285,7 @@ class _Call:
     replace_all: bool = False
     file_path: str | None = None
     description: str | None = None
+    absorbed_into: str | None = None
     notes: list[str] = field(default_factory=list)
 
 
@@ -207,8 +297,19 @@ def make_skill_manage_handler(
     resolve_external_skill_scope: (Callable[[str, str, str | None], str | None] | None) = None,
     *,
     on_changed: Callable[[], None] | None = None,
-) -> Callable[[ToolContext, JsonObject], JsonObject]:
+) -> Callable[[ToolContext, JsonObject, str | None, tuple[SkillReference, ...]], JsonObject]:
     """Return the direct Skill-management handler.
+
+    A background writer (a Reflection or the Librarian) never changes a Skill
+    the user pinned.
+
+    The handler's third argument is when the calling Run started, given for a
+    Librarian Run. Such a Run builds its changes from Skills it read during the Run, so a
+    change to an existing Skill that someone else changed after the Run started
+    is refused once per outside change; the Run reads the Skill again and
+    retries, or leaves it. The fourth is what a delete with ``absorbed_into``
+    moves to the absorbing Skill (``register_skill_manage_tool``); the archive
+    revision records it.
 
     ``resolve_shared_skills_dir(agent_id, name)`` optionally maps a name that is
     not one of the caller's own Skills to the owning home of the effective shared
@@ -226,17 +327,53 @@ def make_skill_manage_handler(
     affected scoped caches were invalidated, so open Skill views can refresh.
     """
 
-    def skill_manage_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    # (Run id, Skill name) -> the newest outside revision the Run was told about.
+    reported_changes: dict[tuple[str, str], int] = {}
+    reported_lock = threading.Lock()
+
+    def check_unchanged_since(root: Path, name: str, writer: SkillWriter, started: str) -> None:
+        """Refuse once per outside change to ``name`` after the Run started."""
+        try:
+            since = parse_timestamp(started)
+        except ValueError:
+            return
+        outside = [
+            revision.id
+            for revision in authoring.history(root, name, limit=_CHANGE_CHECK_REVISIONS)
+            if revision.run_id != writer.run_id and _after(revision.at, since)
+        ]
+        if not outside:
+            return
+        key = (writer.run_id or "", name)
+        with reported_lock:
+            if reported_changes.get(key, 0) >= max(outside):
+                return
+            reported_changes[key] = max(outside)
+            while len(reported_changes) > _REPORTED_CHANGES_LIMIT:
+                del reported_changes[next(iter(reported_changes))]
+        raise _RefusalError(
+            "skill_changed", SKILL_MANAGE_CHANGED_DURING_PASS_REFUSAL.format(name=name)
+        )
+
+    def skill_manage_handler(
+        context: ToolContext,
+        arguments: JsonObject,
+        run_started_at: str | None = None,
+        followed: tuple[SkillReference, ...] = (),
+    ) -> JsonObject:
+        writer = skill_writer(context)
+        # The Skills of the calling Agent, or of the Agent a Librarian Session maintains.
+        owner_id = context.skill_subject_id
         try:
             call = _read_call(arguments)
-            own_root = resolve_agent_skills_dir(context.agent_id)
+            own_root = resolve_agent_skills_dir(owner_id)
             target_root = own_root
             shared_target = False
             if call.action in _SHARED_TARGET_ACTIONS and (
                 find_skill_package_dir(own_root, call.name) is None
             ):
                 shared_root = (
-                    resolve_shared_skills_dir(context.agent_id, call.name)
+                    resolve_shared_skills_dir(owner_id, call.name)
                     if resolve_shared_skills_dir is not None
                     else None
                 )
@@ -250,9 +387,7 @@ def make_skill_manage_handler(
             # name, which is the established override path.
             if call.action != "create" and find_skill_package_dir(target_root, call.name) is None:
                 scope = (
-                    resolve_external_skill_scope(
-                        context.agent_id, call.name, context.skill_project_id
-                    )
+                    resolve_external_skill_scope(owner_id, call.name, context.skill_project_id)
                     if resolve_external_skill_scope is not None
                     else None
                 )
@@ -263,9 +398,25 @@ def make_skill_manage_handler(
                         retryable=False,
                     )
                 raise _RefusalError("skill_not_found", _unknown_skill_message(call.name, own_root))
-            result, summary = _apply(authoring, target_root, call)
+            if writer.background and call.action != "create":
+                authoring.check_writable(target_root, call.name, writer=writer)
+            if (
+                writer.actor == LIBRARIAN_SKILL_ACTOR
+                and run_started_at is not None
+                and call.action != "create"
+            ):
+                check_unchanged_since(target_root, call.name, writer, run_started_at)
+            if call.action == "delete":
+                _check_absorbed_into(call, own_root)
+            result, summary = _apply(authoring, target_root, call, writer, followed)
         except _RefusalError as refusal:
             return tool_failure(refusal.code, refusal.message, retryable=False)
+        except SkillProtectedError as error:
+            return tool_failure(
+                "skill_protected",
+                _PROTECTED_MESSAGES[error.reason].format(name=error.skill_name),
+                retryable=False,
+            )
         except SkillAuthoringError as error:
             return tool_failure(
                 "skill_write_rejected",
@@ -277,14 +428,14 @@ def make_skill_manage_handler(
 
         # An own-home invalidation also reaches its shared receivers. Receiver
         # edits conservatively invalidate all Agent scopes through the same owner.
-        invalidate_agent_skills(None if shared_target else context.agent_id)
+        invalidate_agent_skills(None if shared_target else owner_id)
         if on_changed is not None:
             on_changed()
         _LOGGER.info(
             "Skill mutated (skill=%s scope=%s owner=%s action=%s actor_agent=%s)",
             result.name,
             "shared" if shared_target else "own",
-            target_root.parent.name if shared_target else context.agent_id,
+            target_root.parent.name if shared_target else owner_id,
             call.action,
             context.agent_id,
         )
@@ -297,6 +448,30 @@ def make_skill_manage_handler(
         return tool_success({"content": "\n".join(lines)})
 
     return skill_manage_handler
+
+
+def _after(timestamp: str, moment: datetime) -> bool:
+    """Whether ``timestamp`` is later than ``moment``; an unreadable one is not."""
+    try:
+        return parse_timestamp(timestamp) > moment
+    except ValueError:
+        return False
+
+
+def _check_absorbed_into(call: _Call, own_root: Path) -> None:
+    """A delete's ``absorbed_into``, when given, names another own Skill."""
+    target = call.absorbed_into
+    if target is None:
+        return
+    if target == call.name:
+        raise _RefusalError(
+            "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_SELF.format(name=call.name)
+        )
+    if find_skill_package_dir(own_root, target) is None:
+        raise _RefusalError(
+            "invalid_arguments",
+            SKILL_MANAGE_ABSORBED_INTO_UNKNOWN.format(target=target, name=call.name),
+        )
 
 
 def _record_display_details(context: ToolContext, result: SkillWriteResult) -> None:
@@ -325,7 +500,12 @@ def _read_call(arguments: JsonObject) -> _Call:
         replace_all=arguments.get("replace_all") is True,
         file_path=_text(arguments, "file_path"),
         description=_text(arguments, "description"),
+        absorbed_into=_text(arguments, "absorbed_into"),
     )
+    if call.absorbed_into is not None and call.action != "delete":
+        raise _RefusalError(
+            "invalid_arguments", SKILL_MANAGE_ABSORBED_INTO_ACTION.format(action=call.action)
+        )
     _check_scope(arguments.get("scope"))
     if arguments.get("category"):
         call.notes.append("category is not used; Skills have no categories.")
@@ -591,30 +771,41 @@ def _read_hint(name: str, file_path: str) -> str:
 
 
 def _apply(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call
+    authoring: SkillAuthoringService,
+    target_root: Path,
+    call: _Call,
+    writer: SkillWriter,
+    followed: tuple[SkillReference, ...] = (),
 ) -> tuple[SkillWriteResult, str]:
     name = call.name
     if call.action == "create":
-        result = authoring.create(target_root, name, call.content or "", author="agent")
+        result = authoring.create(target_root, name, call.content or "", writer=writer)
         return result, f"Created Skill '{name}'."
     if call.action == "edit":
-        result = authoring.edit(target_root, name, call.content or "", author="agent")
+        result = authoring.edit(target_root, name, call.content or "", writer=writer)
         return result, f"Replaced SKILL.md of Skill '{name}'."
     if call.action == "patch":
-        return _patch(authoring, target_root, call)
+        return _patch(authoring, target_root, call, writer)
     file_path = call.file_path or ""
     if call.action == "write_file":
-        result = authoring.write_file(target_root, name, file_path, call.content or "")
+        result = authoring.write_file(
+            target_root, name, file_path, call.content or "", writer=writer
+        )
         return result, f"Wrote {file_path} of Skill '{name}'."
     if call.action == "remove_file":
-        result = authoring.remove_file(target_root, name, file_path)
+        result = authoring.remove_file(target_root, name, file_path, writer=writer)
         return result, f"Removed {file_path} from Skill '{name}'."
-    result = authoring.delete(target_root, name)
-    return result, f"Deleted Skill '{name}' and its files."
+    if call.absorbed_into is not None:
+        result = authoring.delete(
+            target_root, name, writer=writer, absorbed_into=call.absorbed_into, followed=followed
+        )
+        return result, SKILL_MANAGE_ABSORBED.format(name=name, target=call.absorbed_into)
+    result = authoring.delete(target_root, name, writer=writer)
+    return result, SKILL_MANAGE_DELETED.format(name=name)
 
 
 def _patch(
-    authoring: SkillAuthoringService, target_root: Path, call: _Call
+    authoring: SkillAuthoringService, target_root: Path, call: _Call, writer: SkillWriter
 ) -> tuple[SkillWriteResult, str]:
     file_path = call.file_path or SKILL_FILENAME
     found: list[FuzzyReplacement] = []
@@ -628,7 +819,7 @@ def _patch(
         return replacement.new_content
 
     try:
-        result = authoring.rewrite(target_root, call.name, file_path, edit, author="agent")
+        result = authoring.rewrite(target_root, call.name, file_path, edit, writer=writer)
     except _RefusalError as refusal:
         if refusal.code == "text_not_found" and call.file_path == SKILL_FILENAME:
             hint = _support_file_hint(authoring, target_root, call)
@@ -812,7 +1003,15 @@ def _normalize_skill_manage_arguments(arguments: Any) -> Any:
                 _ACTION_SYNONYMS.get(spelling(value), value) if isinstance(value, str) else value
             )
         },
-        empty_as_omitted=("name", "file_path", "old_string", "scope", "category", "description"),
+        empty_as_omitted=(
+            "name",
+            "file_path",
+            "old_string",
+            "scope",
+            "category",
+            "description",
+            "absorbed_into",
+        ),
     )
     if not isinstance(repaired, dict):
         return repaired
@@ -891,8 +1090,22 @@ def register_skill_manage_tool(
     *,
     lifecycle_guard: Callable[[], AbstractContextManager[object]] = nullcontext,
     on_changed: Callable[[], None] | None = None,
+    run_started_at: Callable[[str], str | None] | None = None,
+    follow_merge: SkillMergeFollower | None = None,
 ) -> None:
-    """Register identity-only direct Skill management."""
+    """Register identity-only direct Skill management.
+
+    ``run_started_at(run_id)`` returns when a Run started (``None`` when
+    unknown). It reads Event Loop state, so it runs on the Loop, before the
+    write moves to a worker.
+
+    ``follow_merge(owner_id, name, target, delete)`` runs every delete. With
+    ``absorbed_into`` as ``target`` it calls ``delete(followed)`` with what
+    names the Skill (its shares, the automations that trigger it), and once that
+    delete succeeded moves each of them to ``target``, returning those it could
+    not move. Without, ``target`` is ``None``: nothing moves and it returns what
+    still names the Skill. The result then notes them.
+    """
     handler = make_skill_manage_handler(
         authoring,
         resolve_agent_skills_dir,
@@ -902,15 +1115,45 @@ def register_skill_manage_tool(
         on_changed=on_changed,
     )
 
-    def guarded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+    def guarded_handler(
+        context: ToolContext,
+        arguments: JsonObject,
+        started: str | None,
+        followed: tuple[SkillReference, ...],
+    ) -> JsonObject:
         with lifecycle_guard():
-            return handler(context, arguments)
+            return handler(context, arguments, started, followed)
+
+    async def offloaded_handler(context: ToolContext, arguments: JsonObject) -> JsonObject:
+        started = None
+        if run_started_at is not None and context.run_kind is RunKind.LIBRARIAN:
+            started = run_started_at(context.run_id)
+        merge = _merge(arguments)
+        if follow_merge is None or merge is None:
+            return await run_tool_worker(guarded_handler, context, arguments, started, ())
+        name, target = merge
+        results: list[JsonObject] = []
+        planned: list[SkillReference] = []
+
+        async def delete(followed: tuple[SkillReference, ...]) -> bool:
+            result = await run_tool_worker(guarded_handler, context, arguments, started, followed)
+            results.append(result)
+            planned.extend(followed)
+            return result.get("ok") is True
+
+        failed = await follow_merge(context.skill_subject_id, name, target, delete)
+        result = results[0]
+        if result.get("ok") is True and target is None and failed:
+            _note_orphaned(result, name, failed)
+        elif result.get("ok") is True and planned:
+            _note_followed(result, name, target or name, planned, failed)
+        return result
 
     registry.register(
         SKILL_MANAGE_TOOL_NAME,
         SKILL_MANAGE_TOOL_DESCRIPTION,
         SKILL_MANAGE_TOOL_PARAMETERS,
-        offload_tool_handler(guarded_handler),
+        offloaded_handler,
         family="skills",
         constraints=("identity_agent",),
         open_input_schema=True,
@@ -923,6 +1166,54 @@ def register_skill_manage_tool(
             details=True,
         ),
     )
+
+
+def _merge(arguments: JsonObject) -> tuple[str, str | None] | None:
+    """The Skill name and the absorbing Skill (``None`` without one) of a delete.
+
+    ``None`` for another action, and for a delete the handler refuses anyway
+    because ``absorbed_into`` names the Skill itself.
+    """
+    name, target = arguments.get("name"), arguments.get("absorbed_into")
+    if arguments.get("action") != "delete" or not isinstance(name, str):
+        return None
+    if not isinstance(target, str) or not target:
+        return name, None
+    if target == name:
+        return None
+    return name, target
+
+
+def _note_orphaned(result: JsonObject, name: str, references: tuple[SkillReference, ...]) -> None:
+    """Add what still names the deleted Skill ``name`` (a warning)."""
+    items = "; ".join(_reference_label(reference) for reference in references)
+    warning = SKILL_MANAGE_ORPHANED_WARNING.format(name=name, items=items)
+    result["data"]["content"] = "\n".join((result["data"]["content"], f"Warning: {warning}"))
+
+
+def _note_followed(
+    result: JsonObject,
+    name: str,
+    target: str,
+    planned: list[SkillReference],
+    failed: tuple[SkillReference, ...],
+) -> None:
+    """Add what now uses ``target`` (a note), and what still names ``name`` (a warning)."""
+    lines = [result["data"]["content"]]
+    moved = [reference for reference in planned if reference not in failed]
+    if moved:
+        items = "; ".join(_reference_label(reference) for reference in moved)
+        note = SKILL_MANAGE_FOLLOWED_NOTE.format(target=target, name=name, items=items)
+        lines.append(f"Note: {note}")
+    if failed:
+        items = "; ".join(_reference_label(reference) for reference in failed)
+        warning = SKILL_MANAGE_NOT_FOLLOWED_WARNING.format(name=name, target=target, items=items)
+        lines.append(f"Warning: {warning}")
+    result["data"]["content"] = "\n".join(lines)
+
+
+def _reference_label(reference: SkillReference) -> str:
+    return _REFERENCE_LABELS[reference.kind].format(name=reference.name)
 
 
 def _skill_manage_display_parts(arguments: JsonObject) -> tuple[ToolDisplayPart, ...]:

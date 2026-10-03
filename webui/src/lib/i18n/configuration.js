@@ -1,14 +1,56 @@
 export default Object.freeze({
   'extensions.pageUnavailable': 'This Extension page is unavailable.',
   'extensions.inputWaiting': '{count} Extension requests need your response.',
+  'extensions.inputWaitingOne': 'An Extension request needs your response.',
   'extensions.reviewInput': 'Review request',
   'extensions.inputTitle': 'Request from {name}',
   'extensions.signInHelp':
-    'Open the sign-in page. After signing in, paste the complete redirected address below.',
-  'extensions.openRequest': 'Open requested page',
+    'Open the sign-in page and sign in. vBot completes the sign-in when the browser returns to it. If the browser shows an error page instead, paste its complete address below.',
   'extensions.redirectUrl': 'Redirected address',
   'extensions.sendResponse': 'Send response',
   'extensions.declineInput': 'Decline',
+  'extensions.declineHelp': 'Refuse the request.',
+  'extensions.cancelInput': 'Cancel request',
+  'extensions.cancelHelp': 'End the request without an answer.',
+  'extensions.noChoice': 'No choice',
+  'extensions.inputTimeZone': 'Time in {zone}.',
+  'extensions.inputExpires':
+    'Answer by {time} ({distance}); then the request ends unanswered.',
+  'extensions.inputRequired': 'Enter a value.',
+  'extensions.inputChoicesMin': 'Choose at least {count}.',
+  'extensions.inputChoicesMax': 'Choose at most {count}.',
+  'extensions.inputJson': 'Enter a valid JSON value.',
+  'extensions.inputNumber': 'Enter a number.',
+  'extensions.inputInteger': 'Enter a whole number.',
+  'extensions.inputMinimum': 'Enter {minimum} or more.',
+  'extensions.inputMaximum': 'Enter {maximum} or less.',
+  'extensions.inputMinLength': 'Enter at least {count} characters.',
+  'extensions.inputMaxLength': 'Enter at most {count} characters.',
+  'extensions.inputEmail': 'Enter an email address.',
+  'extensions.inputUri':
+    'Enter a complete address, such as https://example.com.',
+  'extensions.inputDate': 'Enter a valid date.',
+  'extensions.inputDateTime': 'Enter a valid date and time.',
+  'extensions.urlRequest':
+    '{name} asks you to open a page in your browser. Check where the address leads before you open it.',
+  'extensions.urlConsent':
+    'Opening the page accepts the request. Decline refuses it.',
+  'extensions.urlAddress': 'Full address',
+  'extensions.urlOpensOn': 'Opens on',
+  'extensions.urlInsecure':
+    'This address does not use HTTPS: others on the network can read or change the page.',
+  'extensions.urlInternational':
+    'This address contains international characters (xn--), which can imitate the name of another site.',
+  'extensions.urlCredentials':
+    'This address has text before an @ sign, which can look like a site name. The page opens on the site named under Opens on.',
+  'extensions.urlIpAddress':
+    'This address names a numeric IP address instead of a site name.',
+  'extensions.urlInvalid':
+    'The requested address is not a web address and cannot be opened.',
+  'extensions.openPage': 'Open page',
+  'extensions.openSignIn': 'Open sign-in page',
+  'extensions.openFailed':
+    'The page could not be opened. Copy the address into your browser instead.',
   'settings.providers.opencode.sharedKey':
     'This Account key is shared by OpenCode Go and Zen. Replacing or removing it affects both. Each connection can be enabled separately.',
   'settings.providers.opencode.sharedKeyShort':
@@ -27,7 +69,7 @@ export default Object.freeze({
     'Speaking, listening, live conversations, and voice activation.',
   'settings.pages.memory': 'Memory',
   'settings.pages.memoryDescription':
-    'How Agents learn from conversations and find past ones.',
+    'How Agents learn from conversations, tidy up their Skills, and find past conversations.',
   'settings.pages.tools': 'Tools',
   'settings.pages.toolsDescription':
     'How Agents search and read the web, create media, and delegate work.',
@@ -195,7 +237,7 @@ export default Object.freeze({
   'settings.skills.createError': 'Skill could not be created.',
   'settings.skills.saved': 'Skill saved.',
   'settings.skills.contentSaveError': 'Skill could not be saved.',
-  'settings.skills.deleted': 'Skill deleted.',
+  'settings.skills.deleted': 'Skill moved to Archived.',
   'settings.skills.deleteError': 'Skill could not be deleted.',
   'settings.skills.deleteConfirmTitle': 'Delete skill',
   'settings.subagents.maxDepth': 'Maximum nesting depth',
@@ -212,19 +254,56 @@ export default Object.freeze({
   'settings.reflection.title': 'Reflection',
   'settings.reflection.enabled': 'Background reflection',
   'settings.reflection.enabledDescription':
-    'Agents review finished conversations to update Memory and Skills.',
+    'Agents reflect on finished conversations to update Memory and Skills.',
   'settings.reflection.enabledHelp':
-    'From time to time after a Run, the Agent reviews the conversation in a separate copy and saves lasting facts to Memory and reusable procedures as Skills. The original conversation is never changed.\n\nReviews are ordinary Runs with the Agent’s own Model, so they use tokens. Only Agents that can use the memory Tool are reviewed; Sub-Agent conversations are skipped.\n\nEach review is kept as its own Session, so you can see what it changed. Type /reflect in a chat to start a review yourself.',
-  'settings.reflection.memoryInterval': 'Memory review interval',
+    'From time to time after a Run, the Agent reflects on the conversation in a separate copy and saves lasting facts to Memory and reusable procedures as Skills. The original conversation is never changed.\n\nA Reflection is an ordinary Run with the Agent’s own Model, so it uses tokens. An Agent reflects on Memory only if its Tool access allows the memory Tool, and on Skills only if it allows the skill and skill_manage Tools. Sub-Agent conversations are skipped.\n\nEach Reflection is kept as its own Session, so you can see what it changed. Type /reflect in a chat to start a Reflection yourself.',
+  'settings.reflection.memoryInterval': 'Memory reflection interval',
   'settings.reflection.memoryIntervalDescription':
-    'Your messages per conversation between Memory reviews.',
+    'Your messages per conversation between Memory reflections.',
   'settings.reflection.memoryIntervalHelp':
-    'A Memory review becomes due after this many completed Runs in one conversation, usually one per message you send. When the Agent saves to Memory on its own, the count starts over. Default: 10.',
-  'settings.reflection.skillInterval': 'Skill review interval',
+    'A Memory reflection becomes due after this many completed Runs in one conversation, usually one per message you send. When the Agent saves to Memory on its own, the count starts over. Default: 10.',
+  'settings.reflection.skillInterval': 'Skill reflection interval',
   'settings.reflection.skillIntervalDescription':
-    'Agent steps per conversation between Skill reviews.',
+    'Agent steps per conversation between Skill reflections.',
   'settings.reflection.skillIntervalHelp':
-    'A Skill review becomes due after this many Agent steps in one conversation. Every Model response is one step, including each round of Tool calls, so one message can add several steps. When the Agent edits a Skill on its own, the count starts over. Default: 10.',
+    'A Skill reflection becomes due after this many Agent steps in one conversation. Every Model response is one step, including each round of Tool calls, so one message can add several steps. When the Agent edits a Skill on its own, the count starts over. Default: 10.',
+  'settings.librarian.title': 'Skill maintenance',
+  'settings.librarian.enabled': 'Scheduled Skill maintenance',
+  'settings.librarian.enabledDescription':
+    'The Librarian tidies up each Agent’s own Skills.',
+  'settings.librarian.enabledHelp':
+    'From time to time, the Librarian goes through one Agent’s own Skills. It retires Skills that went unused for a long time, and it merges overlapping Skills. Pinned Skills are never changed.\n\nPasses run one at a time. A pass starts only while neither the Agent nor the Librarian has an active or queued Run, and only for Agents that have Skills of their own and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
+  'settings.librarian.interval': 'Maintenance interval',
+  'settings.librarian.intervalDescription':
+    'Days between scheduled passes of one Agent.',
+  'settings.librarian.intervalHelp':
+    'A pass becomes due this many days after the Agent’s last pass and starts once the Agent is idle. An Agent’s first pass becomes due this many days after the Librarian first saw it. From 1 to 3650 days. Default: 7.',
+  'settings.librarian.archiveAfter': 'Retire unused Skills after',
+  'settings.librarian.archiveAfterDescription':
+    'Days without use or change before an unpinned Skill is retired.',
+  'settings.librarian.archiveAfterHelp':
+    'A pass retires an unpinned Skill, whoever created it, once it was neither used nor changed in a conversation or by you for this many days. Use by the Agents a Skill is shared with counts too; changes by Reflection and earlier passes do not. Retired Skills move to the archive, where you can restore them. A Skill named in one of the Agent’s Schedules or Calendar actions stays, because those use it only when they run. From 1 to 3650 days. Default: 90.',
+  'settings.librarian.consolidate': 'Merge overlapping Skills',
+  'settings.librarian.consolidateDescription':
+    'Each pass lets the Librarian merge and correct the Agent’s Skills.',
+  'settings.librarian.consolidateHelp':
+    'After retiring unused Skills, the Librarian reads the Agent’s unpinned Skills, merges overlapping ones into one Skill, corrects hard-to-use instructions and deletes wrong or obsolete ones. Merged Skills move to the archive; the Agents they were shared with and the Schedules and Calendar actions that named them move to the Skill that absorbed them.\n\nThis step runs only when there are at least two such Skills and one of them changed since the last merge. It is a Run of the Librarian in a new Session of its own, with the Librarian’s Model, so it uses tokens. Default: on.',
+  'settings.librarian.agent': 'The Librarian',
+  'settings.librarian.agentDescription':
+    'The Librarian is an Agent of its own that works only on Skills. Its Model decides how well it merges; the settings and conversations of the curated Agents are not affected.',
+  'settings.librarian.agentLoadError': 'The Librarian could not be loaded.',
+  'settings.librarian.passes': 'Recent passes',
+  'settings.librarian.passesDescription':
+    'Each merge runs in a Session of the Librarian that stays. Open it to read what the Librarian did, or to ask it about the pass and have it change more.',
+  'settings.librarian.passesLoading': 'Loading passes…',
+  'settings.librarian.passesError': 'The passes could not be loaded.',
+  'settings.librarian.passesEmpty': 'No pass has run yet.',
+  'settings.librarian.running': 'A pass of {name} is running.',
+  'settings.librarian.openSession': 'Open session',
+  'settings.librarian.openRunningSessionLabel':
+    'Open the Session of the running pass of {name}',
+  'settings.librarian.openSessionLabel':
+    'Open the Session of the pass of {name} on {time}',
   'settings.notifications.title': 'Desktop notifications',
   'settings.notifications.intro': 'Shown by the vBot tray app on Windows.',
   'settings.notifications.help':
@@ -343,21 +422,23 @@ export default Object.freeze({
   'settings.localModel.license': '{license} license',
   'settings.localModel.progress': '{completed} of {total}',
   'settings.localModel.progressLabel': 'Download progress',
-  'settings.activity.title': 'Background activity',
-  'settings.activity.empty': 'No background activity.',
-  'settings.activity.task.speech_to_text': 'Speech to text: {model}',
-  'settings.activity.task.text_to_speech': 'Text to speech: {model}',
-  'settings.activity.task.text_embedding': 'Conversation search: {model}',
-  'settings.activity.whatsapp': 'WhatsApp support: {channel}',
+  'settings.activity.downloading': 'Downloading {model}',
+  'settings.activity.installing': 'Installing {model}',
+  'settings.activity.installFailed': '{model} could not be installed',
+  'settings.activity.installed': '{model} is installed',
+  'settings.activity.restartToUse': 'Restart the vBot server to use it.',
+  'settings.activity.whatsappInstalling':
+    'Installing WhatsApp support for {channel}',
   'settings.activity.whatsappFailed':
-    'WhatsApp support could not be installed. Open the Channel to try again.',
-  'settings.activity.recallIndex': 'Conversation search index',
-  'settings.activity.indexing': 'Indexing conversations…',
-  'settings.activity.retrying':
-    'Indexing paused after a problem; it retries automatically.',
-  'settings.activity.downloadingModel': 'Downloading the model…',
-  'settings.activity.completed': 'Finished.',
-  'settings.activity.progressLabel': 'Progress of {title}',
+    'WhatsApp support for {channel} could not be installed',
+  'settings.activity.whatsappRetry': 'Open the Channel to try again.',
+  'settings.activity.whatsappInstalled':
+    'WhatsApp support for {channel} is installed',
+  'settings.activity.indexing': 'Indexing conversations for search',
+  'settings.activity.indexRetrying':
+    'Paused after a problem; it continues automatically.',
+  'settings.activity.indexFailed': 'Indexing conversations for search failed',
+  'settings.activity.indexed': 'All conversations are indexed for search',
   'settings.activity.open': 'Open',
   'settings.activity.cancel': 'Cancel',
   'settings.activity.dismiss': 'Dismiss',

@@ -180,6 +180,45 @@ describe('SettingsView', () => {
       expect(isSectionHidden('providers')).toBe(true);
     });
 
+    it('shows running background work at the top of General only while there is some', async () => {
+      const props = reactiveProps({ backgroundActivity: [] });
+      await mountSettings({}, props);
+      const general = () =>
+        document.querySelector('[data-settings-page="general"]');
+      expect(general().querySelector('[data-activity]')).toBeNull();
+
+      props.backgroundActivity = [
+        {
+          id: 'local_setup:local/parakeet',
+          kind: 'local_model_install',
+          label: 'Parakeet',
+          state: 'running',
+          phase: 'downloading',
+          error: '',
+          message: '',
+          target: 'local/parakeet',
+          task_type: 'speech_to_text',
+          progress: { completed: 1e8, total: 4e8, unit: 'bytes' },
+        },
+      ];
+      flushSync();
+      const row = general().querySelector('[data-activity]');
+      expect(row.querySelector('.s-row-label').textContent.trim()).toBe(
+        'Downloading Parakeet',
+      );
+      // Above the first section, without a section or heading of its own.
+      const firstSection = general().querySelector('[data-settings-section]');
+      expect(firstSection.dataset.settingsSection).toBe('appearance');
+      expect(
+        row.compareDocumentPosition(firstSection) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      props.backgroundActivity = [];
+      flushSync();
+      expect(general().querySelector('[data-activity]')).toBeNull();
+    });
+
     it('groups settings by purpose and keeps small controls out of page navigation', async () => {
       const navigate = vi.fn();
       const navigation = createStandaloneNavigation();
@@ -209,7 +248,6 @@ describe('SettingsView', () => {
       ]);
       const expectedSections = {
         general: [
-          'activity',
           'appearance',
           'session_titles',
           'notifications',
@@ -221,7 +259,7 @@ describe('SettingsView', () => {
           'voice_controls',
           'transcription_audio',
         ],
-        memory: ['reflection', 'recall'],
+        memory: ['reflection', 'librarian', 'recall'],
         tools: [
           'web_search',
           'web_fetch',

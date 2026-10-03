@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING, Any
 
 from core.sessions import ChatSession
 from core.skills.requirements import SkillRequirements, environment_requirement_names
-from core.skills.skill_validator import SKILL_NAME_CHARSET_FRAGMENT
+from core.skills.skill_validator import triggered_skill_names
 from core.tools.skill import load_skill_content
 from core.utils.logging import get_logger
 
@@ -16,12 +15,6 @@ if TYPE_CHECKING:
 
 
 _LOGGER = get_logger("chat")
-
-# Trigger names use the same grammar enforced by Skill authoring.
-SKILL_SLASH_TRIGGER_PATTERN = re.compile(rf"^/({SKILL_NAME_CHARSET_FRAGMENT})(?=\s|$)")
-
-
-SKILL_INLINE_TRIGGER_PATTERN = re.compile(rf"\$({SKILL_NAME_CHARSET_FRAGMENT})")
 
 
 def _active_skill_env_keys(
@@ -47,14 +40,14 @@ def _activate_triggered_skills(
     content: str,
     skill_registry: SkillRegistry,
 ) -> None:
-    if not _triggered_skill_names(content):
+    if not triggered_skill_names(content):
         return
 
     allowed_skills = getattr(agent, "allowed_skills", None)
     if allowed_skills is None:
         allowed_skills = ["*"]
     allowed_by_name = _allowed_loadable_skills(skill_registry, allowed_skills)
-    for skill_name in _triggered_skill_names(content):
+    for skill_name in triggered_skill_names(content):
         skill = allowed_by_name.get(skill_name)
         if skill is None:
             _LOGGER.warning(
@@ -144,16 +137,3 @@ def _unavailable_skill_reason(
         return None
     missing = list(availability.missing)
     return "; ".join(missing) if missing else str(availability.state)
-
-
-def _triggered_skill_names(content: str) -> list[str]:
-    names: list[str] = []
-    slash_match = SKILL_SLASH_TRIGGER_PATTERN.search(content)
-    if slash_match:
-        names.append(slash_match.group(1))
-
-    for inline_match in SKILL_INLINE_TRIGGER_PATTERN.finditer(content):
-        name = inline_match.group(1)
-        if name not in names:
-            names.append(name)
-    return names

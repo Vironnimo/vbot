@@ -189,21 +189,14 @@
   padding: 4px 10px;
 }
 
-/* The fallback chain grows downward; its label stays at the top. */
-.agents-view .s-group > .agents-view__fallback-models {
-  align-items: start;
-}
-
-/* Fallback chains (the Agent's and the Shared defaults) stack their entries in
-   the control column. */
-.agents-view .agents-view__fallback-list,
+/* Fallback chains of the Shared defaults stack their entries in the control
+   column, like an Agent's own (below). */
 .agents-view .agent-defaults-fallbacks {
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
 }
 
-.agents-view .agents-view__fallback-row,
 .agents-view .agent-defaults-fallbacks .settings-view__fallback-row {
   display: flex;
   align-items: center;
@@ -211,13 +204,52 @@
   margin: 0;
 }
 
-.agents-view .agents-view__fallback-row > .searchable-dropdown {
+.agents-view .agent-defaults-fallbacks .settings-view__fallback-add {
+  align-self: flex-end;
+  padding: 5px 10px;
+  font-size: var(--fs-body-sm);
+  white-space: nowrap;
+}
+
+/* ── Model settings (an Agent's page, Settings → Skill maintenance) ─────── */
+
+.agent-model-settings .agent-model-settings__dropdown {
+  width: 100%;
+}
+
+.agent-model-settings__thinking-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* The fallback chain grows downward; its label stays at the top. */
+.agent-model-settings > .agent-model-settings__fallbacks {
+  align-items: start;
+}
+
+/* The fallback chain stacks its entries in the control column. */
+.agent-model-settings .agent-model-settings__fallback-list {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.agent-model-settings .agent-model-settings__fallback-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.agent-model-settings
+  .agent-model-settings__fallback-row
+  > .searchable-dropdown {
   min-width: 0;
   flex: 1;
 }
 
-.agents-view .agents-view__fallback-remove,
-.agents-view .agents-view__fallback-add {
+.agent-model-settings .agent-model-settings__fallback-remove,
+.agent-model-settings .agent-model-settings__fallback-add {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   color: var(--text-med);
@@ -226,7 +258,7 @@
 }
 
 /* The remove button carries only the × glyph, so its size stays literal. */
-.agents-view .agents-view__fallback-remove {
+.agent-model-settings .agent-model-settings__fallback-remove {
   flex: none;
   width: 28px;
   height: 28px;
@@ -234,20 +266,19 @@
   line-height: 1;
 }
 
-.agents-view .agents-view__fallback-remove:hover {
+.agent-model-settings .agent-model-settings__fallback-remove:hover {
   border-color: var(--red);
   color: var(--red);
 }
 
-.agents-view .agents-view__fallback-add,
-.agents-view .agent-defaults-fallbacks .settings-view__fallback-add {
+.agent-model-settings .agent-model-settings__fallback-add {
   align-self: flex-end;
   padding: 5px 10px;
   font-size: var(--fs-body-sm);
   white-space: nowrap;
 }
 
-.agents-view .agents-view__fallback-add:hover {
+.agent-model-settings .agent-model-settings__fallback-add:hover {
   border-color: var(--border-2);
   color: var(--text-hi);
   background: var(--surface-3);
@@ -544,7 +575,7 @@
     max-height: min(220px, 32vh);
   }
 
-  .agents-view .agents-view__fallback-add,
+  .agent-model-settings .agent-model-settings__fallback-add,
   .agents-view .agent-defaults-fallbacks .settings-view__fallback-add {
     align-self: flex-start;
   }

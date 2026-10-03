@@ -13,6 +13,7 @@
   import SettingsArchivePanel from './settings/SettingsArchivePanel.svelte';
   import SettingsExtensionsPanel from './settings/SettingsExtensionsPanel.svelte';
   import SettingsGeneralPanel from './settings/SettingsGeneralPanel.svelte';
+  import SettingsLibrarianPanel from './settings/SettingsLibrarianPanel.svelte';
   import SettingsNotificationsPanel from './settings/SettingsNotificationsPanel.svelte';
   import SettingsProvidersPanel from './settings/SettingsProvidersPanel.svelte';
   import SettingsRecallPanel from './settings/SettingsRecallPanel.svelte';
@@ -76,7 +77,8 @@
     // The latest pushed Recall index status, applied by the Conversation
     // search panel.
     recallIndexStatus = null,
-    // The server's background activity list, kept current by its pushes.
+    // The server's running downloads, installations and indexing passes,
+    // kept current by its pushes; General shows them at the top.
     backgroundActivity = [],
     clientsRefreshToken = 0,
     channelsRefreshToken = 0,
@@ -84,8 +86,14 @@
     agentsRefreshToken = 0,
     projectsRefreshToken = 0,
     sessionsRefreshToken = 0,
+    // A Librarian pass starts and ends as a Skills change.
+    skillsRefreshToken = 0,
+    // Opens a Session in Chat (Skill maintenance opens the Librarian's).
+    onOpenSession = noop,
     initialScrollPosition = null,
     onScrollPositionChange = noop,
+    // The App's Extension invalidations (see app/extensions.svelte.js).
+    subscribeExtensionInvalidations = null,
   } = $props();
 
   export function handleProviderAuthCompleted(event) {
@@ -98,10 +106,6 @@
 
   // Navigation follows user tasks; editor components do not define pages.
   const sections = [
-    {
-      id: 'activity',
-      label: () => t('settings.activity.title'),
-    },
     {
       id: 'appearance',
       label: () => t('settings.appearance.title'),
@@ -149,6 +153,10 @@
     {
       id: 'reflection',
       label: () => t('settings.reflection.title'),
+    },
+    {
+      id: 'librarian',
+      label: () => t('settings.librarian.title'),
     },
     {
       id: 'web_search',
@@ -201,11 +209,9 @@
       id: 'general',
       label: () => t('settings.pages.general'),
       description: () => t('settings.pages.generalDescription'),
-      // Running work first, so opening Settings shows every installation and
-      // large indexing pass at once; then everyday display. The time zone and
-      // the setup guide are rarely revisited.
+      // Everyday display first; the time zone and the setup guide are
+      // rarely revisited.
       sections: [
-        'activity',
         'appearance',
         'session_titles',
         'notifications',
@@ -236,7 +242,7 @@
       id: 'memory',
       label: () => t('settings.pages.memory'),
       description: () => t('settings.pages.memoryDescription'),
-      sections: ['reflection', 'recall'],
+      sections: ['reflection', 'librarian', 'recall'],
     },
     {
       id: 'tools',
@@ -874,13 +880,7 @@
 </script>
 
 {#snippet panelContent(panelId)}
-  {#if panelId === 'activity'}
-    <SettingsActivityPanel
-      activities={backgroundActivity}
-      onOpen={openDestination}
-      onError={(message) => reportSettingsError(message)}
-    />
-  {:else if panelId === 'preferences'}
+  {#if panelId === 'preferences'}
     <SettingsGeneralPanel
       page="preferences"
       {settings}
@@ -911,6 +911,7 @@
   {:else if panelId === 'extensions'}
     <SettingsExtensionsPanel
       {onToast}
+      {subscribeExtensionInvalidations}
       onError={(message) => reportSettingsError(message)}
     />
   {:else if modelTasksBySection[panelId]}
@@ -975,6 +976,17 @@
       {settings}
       onCommit={commitSettings}
       onError={(message) => reportSettingsError(message)}
+    />
+  {:else if panelId === 'librarian'}
+    <SettingsLibrarianPanel
+      {settings}
+      {agents}
+      onCommit={commitSettings}
+      onError={(message) => reportSettingsError(message)}
+      {onOpenSession}
+      {modelsRefreshToken}
+      {agentsRefreshToken}
+      {skillsRefreshToken}
     />
   {:else if panelId === 'notifications'}
     <SettingsNotificationsPanel
@@ -1152,6 +1164,15 @@
                     {t('agents.shared.title')}<span aria-hidden="true">↗</span>
                   </button>
                 </p>
+              {/if}
+              <!-- Only while something runs or needs attention; not a section,
+                   so search and navigation never lead to it. -->
+              {#if page.id === 'general' && backgroundActivity.length > 0}
+                <SettingsActivityPanel
+                  activities={backgroundActivity}
+                  onOpen={openDestination}
+                  onError={(message) => reportSettingsError(message)}
+                />
               {/if}
               {#each page.sections as panelId (panelId)}
                 {@const panel = panelById.get(panelId)}

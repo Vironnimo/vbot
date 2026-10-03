@@ -7,6 +7,7 @@ import json
 import weakref
 from typing import TYPE_CHECKING, Any, cast
 
+from core.agents import is_librarian
 from core.chat import ChatSessionError
 from core.projects import (
     AgentResolutionError,
@@ -930,8 +931,9 @@ async def _validate_target_agent(
     Routes through the one resolver seam: ``project_id=None`` resolves the store
     identity agent, while a set ``project_id`` requires the target to be on that
     project's Team with a usable model. Every resolver failure becomes a failure
-    envelope instead of escaping the tool boundary: only a missing Agent (unknown
-    or off-Team) or Project reports ``agent_not_found`` / ``project_not_found``;
+    envelope instead of escaping the tool boundary: only a missing Agent (unknown,
+    off-Team or the built-in Librarian) or Project reports ``agent_not_found`` /
+    ``project_not_found``;
     a target that cannot run (for example, a model chain that fell through)
     reports ``agent_unavailable`` with the resolver's reason. A requested *model*
     that cannot run reports ``invalid_arguments`` before any Session work.
@@ -948,7 +950,10 @@ async def _validate_target_agent(
                 generation_id=temporary_parent_binding.generation_id,
             )
         else:
-            await runtime.agent_resolver.resolve_agent_async(project_id, target_agent_id)
+            target = await runtime.agent_resolver.resolve_agent_async(project_id, target_agent_id)
+            if is_librarian(target):
+                # The Librarian is no delegation target: it looks like no Agent at all.
+                raise ResolutionAgentNotFoundError(f"Agent not found: {target_agent_id}")
         if model is not None:
             await runtime.agent_resolver.require_model_configured_async(model)
     except ResolutionProjectNotFoundError as error:

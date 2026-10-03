@@ -1,4 +1,4 @@
-"""HTTP edge of the server app: browser-origin guard, RPC body guard and WebUI serving."""
+"""HTTP edge of the server app: origin guard, RPC body guard, OAuth callback and WebUI serving."""
 
 from __future__ import annotations
 
@@ -70,6 +70,59 @@ def test_wildcard_bind_admits_same_origin_ip_requests_only(
     assert [(host, origin, response.status_code) for host, origin, response in observed] == (
         requests
     )
+
+
+class _Redirects:
+    """Records what the server binds and delivers; only ``pending`` is awaited."""
+
+    def __init__(self) -> None:
+        self.callback_url: str | None = "unbound"
+        self.delivered: list[dict[str, str]] = []
+
+    def bind(self, callback_url: str | None) -> None:
+        self.callback_url = callback_url
+
+    def deliver(self, params: dict[str, str]) -> bool:
+        self.delivered.append(params)
+        return params.get("state") == "pending"
+
+
+@pytest.mark.parametrize(
+    ("listen_host", "callback_url"),
+    [
+        ("0.0.0.0", "http://127.0.0.1:8421/api/oauth/callback"),
+        ("::", "http://[::1]:8421/api/oauth/callback"),
+        ("192.168.1.5", None),
+    ],
+)
+def test_oauth_callback_completes_only_the_awaited_sign_in(
+    tmp_path: Path, listen_host: str, callback_url: str | None
+) -> None:
+    redirects = _Redirects()
+    app = create_app(
+        runtime=ServerStubRuntime(tmp_path, oauth_redirects=redirects),
+        server_bind={"listen_host": listen_host, "listen_port": 8421, "port_source": "cli"},
+    )
+
+    with TestClient(app) as client:
+        received = client.get("/api/oauth/callback?code=abc&state=pending")
+        unknown = client.get("/api/oauth/callback?code=abc&state=other")
+        # A repeated parameter is ambiguous and never reaches a sign-in.
+        repeated = client.get("/api/oauth/callback?code=abc&state=pending&state=other")
+
+    assert redirects.callback_url == callback_url
+    assert received.status_code == 200
+    assert "You can close this tab" in received.text
+    assert [unknown.status_code, repeated.status_code] == [400, 400]
+    assert "Start the sign-in again" in unknown.text
+    assert redirects.delivered == [
+        {"code": "abc", "state": "pending"},
+        {"code": "abc", "state": "other"},
+    ]
+    # The page's address carries the code: it is never cached, framed or referred onward.
+    assert received.headers["cache-control"] == "no-store"
+    assert received.headers["referrer-policy"] == "no-referrer"
+    assert received.headers["content-security-policy"].startswith("default-src 'none'")
 
 
 def test_rpc_endpoint_rejects_unsafe_bodies_before_dispatch(

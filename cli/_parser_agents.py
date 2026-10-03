@@ -173,6 +173,14 @@ def _add_agent_change_arguments(
         help="Enable or disable the agent's own editable prompt fragments",
     )
     parser.add_argument(
+        "--librarian",
+        choices=("true", "false"),
+        help=(
+            "Whether Librarian passes curate the agent's own skills (default true); "
+            "librarian.enabled still switches scheduled passes off for every agent"
+        ),
+    )
+    parser.add_argument(
         "--tool-access-mode",
         choices=("all", "selected", "none"),
         help="Replace the complete Tool policy; repeat selections and denials to preserve them",

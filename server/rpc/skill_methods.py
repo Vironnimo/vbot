@@ -3,25 +3,41 @@
 Write data-dir skill scopes for the UI/accessors: ``global`` (the user-curated
 ``<data_dir>/skills``) or ``agent:<agent_id>`` (a chosen agent's private home).
 Never the project/repo scope — those are repo files authored with the ordinary
-file tools. All writes go through the one validated authoring service, then scoped
-invalidation so the change is live without a restart. Authored documents use
-``author="human"`` provenance; package imports preserve the source document.
+file tools. All writes go through the one validated authoring service as a person
+(``HUMAN_WRITER``: ``metadata.vbot.author: human`` and a ``human`` history revision),
+then scoped invalidation so the change is live without a restart; package imports
+preserve the source document. ``skill.delete`` moves the package into the home's
+archive.
 Validation failures surface authoring diagnostics as an ``invalid_request`` error.
+
+The same scopes expose the Skill history and archive: ``skill.history`` lists
+revisions, ``skill.revert`` undoes some (a conflict is a ``domain_error`` whose
+``data`` names the later revision), ``skill.archived`` / ``skill.restore`` /
+``skill.purge`` manage archived packages and ``skill.set_pinned`` pins a Skill
+against background changes.
 
 The manager surface (``skill.inventory`` / ``skill.set_disabled`` / ``skill.share``)
 reads every source without exclusions and mutates the Skills domain's policy file;
 both mutations invalidate live and publish the generic resource-changed event with
-the ``skills`` kind.
+the ``skills`` kind. The inventory adds each package's Skill use from Statistics.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from core.settings import is_valid_agent_id
-from core.skills import SkillAuthoringError, SkillPolicyError, SkillRegistry, SkillWriteResult
+from core.skills import (
+    HUMAN_WRITER,
+    SkillAuthoringError,
+    SkillPolicyError,
+    SkillRegistry,
+    SkillRevertConflictError,
+    SkillWriteResult,
+)
+from core.statistics import SkillUse
 from core.utils.logging import get_logger
 from core.utils.workers import BoundedWorkerPool
 from server.events import RESOURCE_KIND_SKILLS
@@ -36,15 +52,17 @@ from server.rpc.errors import (
     RpcError,
 )
 from server.rpc.event_bridge import publish_resource_changed
+from server.rpc.statistics_methods import statistics_service
 from server.rpc.validation import _optional_string, _required_string
 
 JsonObject = dict[str, Any]
 
 _GLOBAL_SCOPE = "global"
 _AGENT_SCOPE_PREFIX = "agent:"
-_HUMAN_AUTHOR = "human"
 _LOGGER = get_logger("server.rpc.skills")
 _SKILL_READ_WORKERS = BoundedWorkerPool(name="skill-manager", max_workers=1)
+_DEFAULT_HISTORY_LIMIT = 50
+_MAX_HISTORY_LIMIT = 500
 
 
 def _validated_scope(state: Any, params: JsonObject) -> str:
@@ -91,11 +109,18 @@ async def _invalidate_scope(state: Any, scope: str) -> None:
         state.runtime.invalidate_agent_skills(scope[len(_AGENT_SCOPE_PREFIX) :])
 
 
-async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResult]) -> JsonObject:
+async def _write(
+    state: Any,
+    scope: str,
+    write: Callable[[Path], SkillWriteResult],
+    *,
+    refresh: bool = True,
+) -> JsonObject:
     """Run one authoring write, map its diagnostics to an RpcError, then invalidate.
 
-    Every authoring operation changes the scope's packages, so each success also
-    publishes one Skills invalidation for open views.
+    Every authoring operation changes the scope's packages or their history, so
+    each success publishes one Skills invalidation for open views. ``refresh``
+    false skips the registry invalidation for writes no registry sees (pins).
     """
     try:
         result = await _SKILL_READ_WORKERS.run(write, _scope_root(state, scope))
@@ -103,7 +128,8 @@ async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResul
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "; ".join(exc.diagnostics)) from exc
     except OSError as exc:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
-    await _invalidate_scope(state, scope)
+    if refresh:
+        await _invalidate_scope(state, scope)
     _LOGGER.info(
         "Skill mutated (skill=%s scope=%s operation=%s)",
         result.name,
@@ -111,7 +137,15 @@ async def _write(state: Any, scope: str, write: Callable[[Path], SkillWriteResul
         result.operation,
     )
     publish_resource_changed(state, RESOURCE_KIND_SKILLS)
-    return {"name": result.name, "operation": result.operation, "warnings": list(result.warnings)}
+    response: JsonObject = {
+        "name": result.name,
+        "operation": result.operation,
+        "warnings": list(result.warnings),
+        "revision": result.revision,
+    }
+    if result.archive_id is not None:
+        response["archive_id"] = result.archive_id
+    return response
 
 
 async def _skill_read(state: Any, params: JsonObject) -> JsonObject:
@@ -146,7 +180,7 @@ async def _skill_create(state: Any, params: JsonObject) -> JsonObject:
         state,
         scope,
         lambda root: state.runtime.skill_authoring.create(
-            root, name, content, author=_HUMAN_AUTHOR, source=source
+            root, name, content, writer=HUMAN_WRITER, source=source
         ),
     )
 
@@ -226,7 +260,7 @@ async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
         state,
         scope,
         lambda root: state.runtime.skill_authoring.edit(
-            root, name, content, author=_HUMAN_AUTHOR, source=source
+            root, name, content, writer=HUMAN_WRITER, source=source
         ),
     )
 
@@ -234,7 +268,141 @@ async def _skill_update(state: Any, params: JsonObject) -> JsonObject:
 async def _skill_delete(state: Any, params: JsonObject) -> JsonObject:
     scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
     name = _required_string(params, "name")
-    return await _write(state, scope, lambda root: state.runtime.skill_authoring.delete(root, name))
+    return await _write(
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.delete(root, name, writer=HUMAN_WRITER),
+    )
+
+
+async def _skill_set_pinned(state: Any, params: JsonObject) -> JsonObject:
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
+    name = _required_string(params, "name")
+    pinned = _required_bool(params, "pinned")
+    return await _write(
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.set_pinned(
+            root, name, pinned, writer=HUMAN_WRITER
+        ),
+        refresh=False,
+    )
+
+
+async def _skill_history(state: Any, params: JsonObject) -> JsonObject:
+    return await _SKILL_READ_WORKERS.run(_read_history, state, params)
+
+
+def _read_history(state: Any, params: JsonObject) -> JsonObject:
+    """Return a writable home's revisions, or one Skill's, newest first."""
+    _reject_unknown(params, {"scope", "name", "limit"}, "skill.history")
+    scope = _validated_scope(state, params)
+    name = _optional_string(params, "name")
+    limit = params.get("limit", _DEFAULT_HISTORY_LIMIT)
+    if (
+        isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= _MAX_HISTORY_LIMIT
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"params.limit must be an integer from 1 to {_MAX_HISTORY_LIMIT}",
+        )
+    try:
+        revisions = state.runtime.skill_authoring.history(
+            _scope_root(state, scope), name, limit=limit
+        )
+    except (SkillAuthoringError, OSError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    return {"scope": scope, "revisions": [revision.to_dict() for revision in revisions]}
+
+
+async def _skill_revert(state: Any, params: JsonObject) -> JsonObject:
+    """Undo revisions of one home, all or none, as a person."""
+    _reject_unknown(params, {"scope", "revisions"}, "skill.revert")
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
+    revision_ids = params.get("revisions")
+    if (
+        not isinstance(revision_ids, list)
+        or not revision_ids
+        or any(
+            isinstance(item, bool) or not isinstance(item, int) or item <= 0
+            for item in revision_ids
+        )
+    ):
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            "params.revisions must be a non-empty list of positive integers",
+        )
+    try:
+        revisions = await _SKILL_READ_WORKERS.run(
+            state.runtime.skill_authoring.revert,
+            _scope_root(state, scope),
+            revision_ids,
+            writer=HUMAN_WRITER,
+        )
+    except SkillRevertConflictError as exc:
+        raise RpcError(
+            RPC_ERROR_DOMAIN,
+            str(exc),
+            data={"revision": exc.revision, "later": exc.later, "skill": exc.skill_name},
+        ) from exc
+    except (SkillAuthoringError, OSError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    await _invalidate_scope(state, scope)
+    _LOGGER.info("Skill revisions reverted (scope=%s revisions=%s)", scope, revision_ids)
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return {"scope": scope, "revisions": [revision.to_dict() for revision in revisions]}
+
+
+async def _skill_archived(state: Any, params: JsonObject) -> JsonObject:
+    return await _SKILL_READ_WORKERS.run(_read_archived, state, params)
+
+
+def _read_archived(state: Any, params: JsonObject) -> JsonObject:
+    """Return the archived packages of one writable home, newest first."""
+    _reject_unknown(params, {"scope"}, "skill.archived")
+    scope = _validated_scope(state, params)
+    try:
+        archived = state.runtime.skill_authoring.archived(_scope_root(state, scope))
+    except (SkillAuthoringError, OSError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    return {"scope": scope, "archived": [entry.to_dict() for entry in archived]}
+
+
+async def _skill_restore(state: Any, params: JsonObject) -> JsonObject:
+    _reject_unknown(params, {"scope", "archive_id"}, "skill.restore")
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
+    archive_id = _required_string(params, "archive_id")
+    return await _write(
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.restore(root, archive_id, writer=HUMAN_WRITER),
+    )
+
+
+async def _skill_purge(state: Any, params: JsonObject) -> JsonObject:
+    """Permanently delete one archived package; no registry sees the archive."""
+    _reject_unknown(params, {"scope", "archive_id"}, "skill.purge")
+    scope = await _SKILL_READ_WORKERS.run(_validated_scope, state, params)
+    archive_id = _required_string(params, "archive_id")
+    try:
+        purged = await _SKILL_READ_WORKERS.run(
+            state.runtime.skill_authoring.purge, _scope_root(state, scope), archive_id
+        )
+    except (SkillAuthoringError, OSError) as exc:
+        raise RpcError(RPC_ERROR_INVALID_REQUEST, str(exc)) from exc
+    publish_resource_changed(state, RESOURCE_KIND_SKILLS)
+    return {"scope": scope, "purged": purged.to_dict()}
+
+
+def _reject_unknown(params: JsonObject, allowed: set[str], method: str) -> None:
+    unknown = set(params) - allowed
+    if unknown:
+        raise RpcError(
+            RPC_ERROR_INVALID_REQUEST,
+            f"{method} does not accept: {', '.join(sorted(unknown))}",
+        )
 
 
 async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
@@ -247,7 +415,9 @@ async def _skill_write_file(state: Any, params: JsonObject) -> JsonObject:
     return await _write(
         state,
         scope,
-        lambda root: state.runtime.skill_authoring.write_file(root, name, path, content),
+        lambda root: state.runtime.skill_authoring.write_file(
+            root, name, path, content, writer=HUMAN_WRITER
+        ),
     )
 
 
@@ -256,7 +426,11 @@ async def _skill_remove_file(state: Any, params: JsonObject) -> JsonObject:
     name = _required_string(params, "name")
     path = _required_string(params, "path")
     return await _write(
-        state, scope, lambda root: state.runtime.skill_authoring.remove_file(root, name, path)
+        state,
+        scope,
+        lambda root: state.runtime.skill_authoring.remove_file(
+            root, name, path, writer=HUMAN_WRITER
+        ),
     )
 
 
@@ -271,10 +445,56 @@ async def _skill_inspect(state: Any, params: JsonObject) -> JsonObject:
 
 
 async def _skill_inventory(state: Any, params: JsonObject) -> JsonObject:
-    """Return every Skill from every source with status/share/owner annotations."""
+    """Return every Skill from every source with status/share/owner annotations.
+
+    Each entry also carries ``uses`` and ``last_used_at`` from Statistics; when
+    Statistics cannot answer, the entries carry neither.
+    """
     if params:
         raise RpcError(RPC_ERROR_INVALID_REQUEST, "skill.inventory does not accept params")
-    return cast(JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory))
+    inventory = cast(JsonObject, await _SKILL_READ_WORKERS.run(state.runtime.skill_inventory))
+    try:
+        usage = await statistics_service(state).skill_usage_async()
+    except Exception as exc:  # Skill use only annotates the inventory.
+        _LOGGER.warning("Skill use is unavailable for the Skill inventory: %s", exc)
+    else:
+        _annotate_usage(inventory, usage)
+    return inventory
+
+
+def _annotate_usage(inventory: JsonObject, usage: Mapping[tuple[str, str], SkillUse]) -> None:
+    """Add each entry's ``uses`` and ``last_used_at`` from per-Agent Skill use.
+
+    Use is keyed by Agent and bare Skill name, like the Statistics report. A
+    private package counts its owner and the Agents it is shared with (unless
+    they own a package of that name); any other package counts every Agent that
+    neither owns nor receives a private package of that name.
+    """
+    entries: list[JsonObject] = inventory["skills"]
+    private_owners: dict[str, set[str]] = {}
+    private_users: dict[str, set[str]] = {}
+    for entry in entries:
+        owner = entry.get("owner_id")
+        if owner:
+            private_owners.setdefault(entry["name"], set()).add(owner)
+            private_users.setdefault(entry["name"], set()).update(
+                {owner, *(entry.get("shared_with") or ())}
+            )
+    by_name: dict[str, list[tuple[str, SkillUse]]] = {}
+    for (agent_id, name), use in usage.items():
+        by_name.setdefault(name, []).append((agent_id, use))
+    for entry in entries:
+        name = entry["name"]
+        owner = entry.get("owner_id")
+        if owner:
+            users = {owner} | (set(entry.get("shared_with") or ()) - private_owners[name])
+            uses = [use for agent_id, use in by_name.get(name, ()) if agent_id in users]
+        else:
+            excluded = private_users.get(name, set())
+            uses = [use for agent_id, use in by_name.get(name, ()) if agent_id not in excluded]
+        entry["uses"] = sum(use.count for use in uses)
+        # Canonical UTC timestamps order as text.
+        entry["last_used_at"] = max((use.last_activated for use in uses), default=None)
 
 
 def _required_bool(params: JsonObject, key: str) -> bool:
@@ -391,6 +611,12 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "skill.delete": _serialized_skill_mutation(_skill_delete),
         "skill.write_file": _serialized_skill_mutation(_skill_write_file),
         "skill.remove_file": _serialized_skill_mutation(_skill_remove_file),
+        "skill.set_pinned": _serialized_skill_mutation(_skill_set_pinned),
+        "skill.history": _skill_history,
+        "skill.revert": _serialized_skill_mutation(_skill_revert),
+        "skill.archived": _skill_archived,
+        "skill.restore": _serialized_skill_mutation(_skill_restore),
+        "skill.purge": _serialized_skill_mutation(_skill_purge),
         "skill.inventory": _skill_inventory,
         "skill.inspect": _skill_inspect,
         "skill.set_disabled": serialized_mutation(
