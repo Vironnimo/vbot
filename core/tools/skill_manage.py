@@ -209,7 +209,7 @@ _UNADVERTISED_PARAMETERS: JsonObject = {
     "description": {"type": "string"},
     "scope": {"type": "string"},
     "category": {"type": "string"},
-    # Named in the Librarian brief: the Skill that absorbed a deleted one.
+    # Named in the Librarian and Reflection briefs: the Skill that absorbed a deleted one.
     "absorbed_into": {"type": "string"},
 }
 _FIELD_ALIASES = {
