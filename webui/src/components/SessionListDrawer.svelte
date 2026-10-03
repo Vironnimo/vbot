@@ -15,6 +15,7 @@
     reflectionBadgeKinds,
   } from './sessions/presentation.js';
   import { tooltip } from '$lib/tooltip.js';
+  import { changeStatsLabel } from '$lib/chatTimelinePresentation.js';
   import {
     sessionDisplayName,
     applySessionList,
@@ -722,6 +723,22 @@
                   {session.display_name || sessionDisplayName(session)}
                 </p>
                 <span class="session-row__markers">
+                  {#if session.change_stats}
+                    <!-- The row's details card adds how many files changed. -->
+                    <span
+                      class="session-row__changes"
+                      aria-label={changeStatsLabel(session.change_stats)}
+                    >
+                      <span
+                        class="session-row__changes-added"
+                        aria-hidden="true">+{session.change_stats.added}</span
+                      >
+                      <span
+                        class="session-row__changes-removed"
+                        aria-hidden="true">-{session.change_stats.removed}</span
+                      >
+                    </span>
+                  {/if}
                   {#if session.has_unread_completion && session.id !== currentSessionId}
                     <span
                       class="session-row__unread"

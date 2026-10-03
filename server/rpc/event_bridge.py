@@ -304,6 +304,8 @@ def _server_event_from_run_event(
             payload["context_usage"] = remove_opaque_provider_metadata(
                 event.payload["context_usage"]
             )
+        if "change_stats" in event.payload:
+            payload["change_stats"] = event.payload["change_stats"]
     if event.type == RUN_COMPLETED_EVENT and "usage" in event.payload:
         payload["usage"] = remove_opaque_provider_metadata(event.payload["usage"])
     if event.type == RUN_FAILED_EVENT and "error" in event.payload:

@@ -441,6 +441,25 @@ async def _get_session(state: Any, params: JsonObject) -> JsonObject:
     return {"session": session}
 
 
+async def _session_change_stats(state: Any, params: JsonObject) -> JsonObject:
+    """Return the lines one live Session's own Runs changed, with its changed files.
+
+    ``change_stats`` is ``{files, added, removed, file_stats}`` or ``None``
+    when the Session changed no file; ``session.list`` rows carry the totals.
+    """
+    _reject_unsupported(params, {"agent_id", "session_id"}, "session.change_stats")
+    agent_id, project_id = _required_agent_address(params, "agent_id")
+    session_id = _required_string(params, "session_id")
+    try:
+        chat_sessions = state.runtime.chat_sessions
+        change_stats = await chat_sessions.run_async(
+            chat_sessions.change_stats, _session_address(agent_id, session_id, project_id)
+        )
+    except Exception as exc:
+        raise _map_expected_error(exc) from exc
+    return {"change_stats": change_stats}
+
+
 def _session_list_cursor(value: Any) -> SessionListCursor | None:
     if value is None:
         return None
@@ -784,6 +803,7 @@ def method_handlers() -> dict[str, RpcMethodHandler]:
         "session.activity_list": _list_session_activity,
         "session.list": _list_sessions,
         "session.get": _get_session,
+        "session.change_stats": _session_change_stats,
         "session.mark_read": _mark_session_read,
         "session.fork": _fork_session,
         "session.delete": _delete_session,

@@ -259,52 +259,9 @@ describe('runFooterNotice', () => {
 describe('change statistics', () => {
   const lines = (path, added, removed) => ({ path, added, removed });
 
-  it('sums line changes per file and counts distinct files, new files included', () => {
-    expect(
-      runChangeStats({
-        type: 'assistant_run',
-        items: [
-          editTool({ path: 'a.txt', added: 3, removed: 2 }),
-          editTool({ path: 'a.txt', added: 1, removed: 0 }),
-          editTool({ path: 'b.txt', added: 5, removed: 0, name: 'write' }),
-        ],
-      }),
-    ).toEqual({
-      files: 2,
-      added: 9,
-      removed: 2,
-      fileStats: [lines('a.txt', 4, 2), lines('b.txt', 5, 0)],
-    });
-  });
-
-  it('ignores tools without line-change facts and Runs without changes', () => {
-    const plainTool = (id, name, args) => ({
-      type: 'tool_call',
-      id,
-      name,
-      status: 'success',
-      arguments: args,
-      startedEvent: {
-        type: 'tool_call_started',
-        payload: { tool_call: { id, name } },
-      },
-    });
-
-    expect(
-      runChangeStats({
-        type: 'assistant_run',
-        items: [
-          plainTool('read', 'read', { path: 'a.txt' }),
-          plainTool('bash', 'bash', { command: 'ls' }),
-        ],
-      }),
-    ).toBeNull();
-    expect(runChangeStats({ type: 'assistant_run', items: [] })).toBeNull();
-  });
-
   it.each([
     [
-      'prefers valid server-computed git stats over the tool-fact sum',
+      'presents valid server-computed statistics',
       {
         files: 1,
         added: 1,
@@ -331,15 +288,17 @@ describe('change statistics', () => {
       },
     ],
     [
-      'falls back to the tool-fact sum for malformed server stats',
+      'ignores malformed statistics',
       { files: 'x', added: 1, removed: 1, paths: [] },
-      { files: 1, added: 3, removed: 2, fileStats: [lines('a.txt', 3, 2)] },
+      null,
     ],
     [
       'treats a server-reported zero as no changes',
       { files: 0, added: 0, removed: 0, paths: [], file_stats: [] },
       null,
     ],
+    // Tool calls never count on their own: the server owns the statistics.
+    ['shows nothing without server statistics', undefined, null],
   ])('%s', (_label, changeStats, expected) => {
     expect(
       runChangeStats({
@@ -350,46 +309,20 @@ describe('change statistics', () => {
     ).toEqual(expected);
   });
 
-  it('sums Session statistics per file across Runs', () => {
+  it('presents Session statistics from the server', () => {
     expect(
-      sessionChangeStats([
-        {
-          type: 'assistant_run',
-          items: [editTool({ path: 'a.txt', added: 3, removed: 2 })],
-        },
-        {
-          type: 'assistant_run',
-          items: [
-            editTool({ path: 'a.txt', added: 1, removed: 0 }),
-            editTool({ path: 'b.txt', added: 5, removed: 0, name: 'write' }),
-          ],
-        },
-      ]),
-    ).toEqual({
-      files: 2,
-      added: 9,
-      removed: 2,
-      fileStats: [lines('a.txt', 4, 2), lines('b.txt', 5, 0)],
-    });
-    const serverRun = (fileStats, withCounts = true) => ({
-      type: 'assistant_run',
-      changeStats: {
-        files: fileStats.length,
-        added: fileStats.reduce((sum, entry) => sum + entry.added, 0),
-        removed: fileStats.reduce((sum, entry) => sum + entry.removed, 0),
-        paths: fileStats.map((entry) => entry.path),
-        ...(withCounts ? { file_stats: fileStats } : {}),
-      },
-      items: [],
-    });
-    // A Run without per-file counts makes the sums of its files unknown.
-    expect(
-      sessionChangeStats([
-        serverRun([lines('a.txt', 1, 1)]),
-        serverRun([lines('a.txt', 2, 0), lines('b.txt', 3, 0)]),
-        serverRun([lines('c.txt', 1, 0)]),
-        serverRun([lines('c.txt', 1, 1)], false),
-      ]),
+      sessionChangeStats({
+        files: 3,
+        added: 8,
+        removed: 2,
+        file_stats: [
+          lines('a.txt', 3, 1),
+          lines('b.txt', 3, 0),
+          lines('c.txt', null, null),
+          { path: '', added: 1, removed: 0 },
+          { path: 'd.txt', added: -1, removed: 0 },
+        ],
+      }),
     ).toEqual({
       files: 3,
       added: 8,
@@ -400,7 +333,11 @@ describe('change statistics', () => {
         lines('c.txt', null, null),
       ],
     });
-    expect(sessionChangeStats([])).toBeNull();
+    expect(
+      sessionChangeStats({ files: 0, added: 0, removed: 0, file_stats: [] }),
+    ).toBeNull();
+    expect(sessionChangeStats({ files: 1, added: 'x', removed: 0 })).toBeNull();
+    expect(sessionChangeStats(null)).toBeNull();
   });
 
   it.each([
