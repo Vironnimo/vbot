@@ -10,7 +10,7 @@ from the Model's wire profile.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.providers._chat_completions_wire import _selected_thinking_effort
@@ -31,6 +31,7 @@ from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 from core.providers.reasoning_dialects import dialect_request_fields, render_reasoning
 from core.providers.tool_schema import render_tool_definitions
 from core.providers.wire_profile import WireProfile
+from core.utils.tokens import estimate_structured_tokens
 
 TEXT_BLOCK_TYPE = "text"
 IMAGE_BLOCK_TYPE = "image"
@@ -85,25 +86,13 @@ def build_copilot_messages_payload(
     effort = _selected_thinking_effort(request_kwargs)
     for name in REASONING_PARAMETER_NAMES:
         request_kwargs.pop(name, None)
-    system_parts: list[str] = []
-    conversation_messages: list[dict[str, Any]] = []
-
-    for message in messages:
-        role = message.get("role")
-        if role == "system":
-            system_text = _text_from_content(message.get("content"))
-            if system_text:
-                system_parts.append(system_text)
-            continue
-        if role in {"user", "assistant", "tool"}:
-            conversation_messages.append(message)
-
+    system, conversation_messages = _split_system(messages)
     payload: dict[str, Any] = {
         "model": model_id,
         "messages": _to_copilot_messages(conversation_messages),
     }
-    if system_parts:
-        payload["system"] = "\n\n".join(system_parts)
+    if system is not None:
+        payload["system"] = system
 
     _apply_safe_messages_tools(payload, request_kwargs)
     # A thinking budget is part of the Messages output allowance, so the plan
@@ -133,6 +122,33 @@ def build_copilot_messages_payload(
     return payload
 
 
+def estimate_copilot_messages_input_tokens(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    model_id: str,
+    tools: Sequence[Mapping[str, Any]] | None = None,
+) -> int:
+    """Estimate one ``/v1/messages`` request's input as it is rendered.
+
+    Counts the system text, the history with its signed thinking blocks and the
+    rendered Tool definitions exactly as :func:`build_copilot_messages_payload`
+    builds them, so readable reasoning the Messages wire never sends is not
+    counted.
+    """
+
+    system, conversation_messages = _split_system([dict(message) for message in messages])
+    payload: dict[str, Any] = {}
+    if system is not None:
+        payload["system"] = system
+    _apply_safe_messages_tools(payload, {"tools": list(tools)} if tools else {})
+    # Count the growing history apart from the stable System Prompt and Tools so
+    # the shared per-item count cache also serves this wire.
+    history_tokens = estimate_structured_tokens(
+        _to_copilot_messages(conversation_messages), model_id=model_id
+    )[0]
+    return history_tokens + estimate_structured_tokens(payload, model_id=model_id)[0]
+
+
 def normalize_copilot_messages_response(response: dict[str, Any]) -> dict[str, Any]:
     """Normalize a Copilot Messages response, whose ``content`` is a list, to canonical fields."""
 
@@ -157,6 +173,25 @@ def normalize_copilot_messages_stream_event(
     """Normalize one parsed Copilot Messages stream event."""
 
     return state.normalize(event)
+
+
+def _split_system(
+    messages: list[dict[str, Any]],
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Return the joined system text and the conversation the Messages wire carries."""
+
+    system_parts: list[str] = []
+    conversation_messages: list[dict[str, Any]] = []
+    for message in messages:
+        role = message.get("role")
+        if role == "system":
+            system_text = _text_from_content(message.get("content"))
+            if system_text:
+                system_parts.append(system_text)
+            continue
+        if role in {"user", "assistant", "tool"}:
+            conversation_messages.append(message)
+    return ("\n\n".join(system_parts) if system_parts else None), conversation_messages
 
 
 def _to_copilot_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -34,6 +34,8 @@ from core.providers.reasoning import (
 from core.utils.tokens import estimate_structured_tokens
 
 from .adapter_test_support import bind_connection
+from .github_copilot_test_support import copilot_metadata
+from .github_copilot_test_support import make_adapter as make_copilot_adapter
 
 API_KEY = "test-api-key-12345"
 CHAT_RESPONSE = {
@@ -102,6 +104,15 @@ def _config(provider_id: str) -> ProviderConfig:
             "MiniMax-M2.7",
             REASONING_REPLAY_FIDELITY_META_ONLY,
             id="minimax-subscription-messages-meta-only",
+        ),
+        # Copilot's Messages wire carries only signed thinking blocks.
+        pytest.param(
+            lambda: make_copilot_adapter(
+                metadata=copilot_metadata("Anthropic", "claude-sonnet-4.6", ["/v1/messages"])
+            ),
+            "claude-sonnet-4.6",
+            REASONING_REPLAY_FIDELITY_META_ONLY,
+            id="github-copilot-messages-meta-only",
         ),
         pytest.param(
             lambda: KimiAdapter(_config("kimi"), API_KEY),

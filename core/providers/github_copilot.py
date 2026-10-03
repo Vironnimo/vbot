@@ -50,6 +50,7 @@ from core.providers.errors import CatalogEntrySkipped, NetworkError, ProviderErr
 from core.providers.github_copilot_messages import (
     CopilotMessagesStreamState,
     build_copilot_messages_payload,
+    estimate_copilot_messages_input_tokens,
     normalize_copilot_messages_response,
     normalize_copilot_messages_stream_event,
 )
@@ -381,10 +382,13 @@ class GitHubCopilotAdapter(OpenAICompatibleAdapter):
     ) -> int:
         """Estimate the selected GitHub Copilot wire's rendered request footprint."""
 
-        if self.wire_profile(model_id).protocol == "responses":
+        protocol = self.wire_profile(model_id).protocol
+        if protocol == "responses":
             return estimate_responses_input_tokens(
                 [dict(message) for message in messages], model_id=model_id, tools=tools
             )
+        if protocol == "messages":
+            return estimate_copilot_messages_input_tokens(messages, model_id=model_id, tools=tools)
         return super().estimate_request_input_tokens(
             messages,
             model_id=model_id,

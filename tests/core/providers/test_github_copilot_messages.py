@@ -18,6 +18,7 @@ from core.providers.errors import ProviderError
 from core.providers.github_copilot import CHAT_COMPLETIONS_ENDPOINT, MESSAGES_ENDPOINT
 from core.providers.openai_compatible import DEFAULT_MAX_OUTPUT_TOKENS
 from core.tools import HISTORY_TOOL_DESCRIPTION, HISTORY_TOOL_NAME, HISTORY_TOOL_PARAMETERS
+from core.utils.tokens import estimate_structured_tokens
 from tests.core.providers.github_copilot_test_support import (
     COPILOT_CONFIG,
     NO_DEFAULTS_CONFIG,
@@ -57,37 +58,42 @@ _BUDGET_ONLY = _claude_metadata("claude-budget", reasoning_efforts=[], adaptive_
 
 @pytest.mark.asyncio
 async def test_send_translates_conversation_and_tools_and_drops_unsafe_fields() -> None:
+    adapter = make_adapter(metadata=_claude_metadata())
+    tools = [
+        {
+            "name": "search",
+            "description": "Search docs",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        # The history Tool maps like any other Tool, without a special case.
+        {
+            "name": HISTORY_TOOL_NAME,
+            "description": HISTORY_TOOL_DESCRIPTION,
+            "parameters": HISTORY_TOOL_PARAMETERS,
+        },
+    ]
+    history: list[dict[str, Any]] = [
+        {"role": "system", "content": "Be precise."},
+        {"role": "user", "content": "Search."},
+        {
+            "role": "assistant",
+            # Readable reasoning never reaches this wire, so it is not budgeted.
+            "reasoning": "Readable accounting sentinel. " * 200,
+            "reasoning_meta": {
+                "content_blocks": [
+                    {"type": "thinking", "thinking": "Need a lookup.", "signature": "sig-1"}
+                ]
+            },
+            "content": "I will search.",
+            "tool_calls": [{"id": "toolu_1", "name": "search", "arguments": {"query": "vBot"}}],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "Found result."},
+    ]
     exchange = await send_exchange(
-        make_adapter(metadata=_claude_metadata()),
-        [
-            {"role": "system", "content": "Be precise."},
-            {"role": "user", "content": "Search."},
-            {
-                "role": "assistant",
-                "reasoning_meta": {
-                    "content_blocks": [
-                        {"type": "thinking", "thinking": "Need a lookup.", "signature": "sig-1"}
-                    ]
-                },
-                "content": "I will search.",
-                "tool_calls": [{"id": "toolu_1", "name": "search", "arguments": {"query": "vBot"}}],
-            },
-            {"role": "tool", "tool_call_id": "toolu_1", "content": "Found result."},
-        ],
+        adapter,
+        history,
         model_id="claude-sonnet-4.6",
-        tools=[
-            {
-                "name": "search",
-                "description": "Search docs",
-                "parameters": {"type": "object", "properties": {}},
-            },
-            # The history Tool maps like any other Tool, without a special case.
-            {
-                "name": HISTORY_TOOL_NAME,
-                "description": HISTORY_TOOL_DESCRIPTION,
-                "parameters": HISTORY_TOOL_PARAMETERS,
-            },
-        ],
+        tools=tools,
         tool_choice={"type": "tool", "name": "search"},
         parallel_tool_calls=True,
         max_tokens=512,
@@ -138,6 +144,13 @@ async def test_send_translates_conversation_and_tools_and_drops_unsafe_fields() 
         "tool_choice": {"type": "tool", "name": "search"},
         "max_tokens": 512,
     }
+    rendered = exchange.payload
+    assert adapter.estimate_request_input_tokens(
+        history, model_id="claude-sonnet-4.6", tools=tools
+    ) == (
+        estimate_structured_tokens(rendered["messages"])[0]
+        + estimate_structured_tokens({"system": rendered["system"], "tools": rendered["tools"]})[0]
+    )
 
 
 def _image_block(data: str) -> dict[str, Any]:

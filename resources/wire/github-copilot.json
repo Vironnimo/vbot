@@ -26,12 +26,7 @@
           "top_k": {"mode": "send"}
         }
       },
-      "replay": {
-        "fidelity": "meta_preferred",
-        "history_field": "reasoning_content",
-        "strip_when_off": false
-      },
-      "_replay_note": "The Messages output allowance is budgeted against the Chat Completions rendering of the history, so the Chat Completions replay declaration stays."
+      "replay": {"strip_when_off": false}
     },
     "responses": {
       "request": {"allowed_parameters": ["max_tokens", "max_output_tokens", "top_p"]},
