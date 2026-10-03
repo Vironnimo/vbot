@@ -80,7 +80,12 @@
     "gpt-6.1-sol": {
       "set": {"reasoning": {"off": "low"}},
       "connections": {"api-key": {"protocol": "responses"}},
-      "note": "The ladder is low..max; Codex rejected none and minimal with HTTP 400 on 2026-10-02, so off is low on both Connections."
+      "note": "The ladder is low..max; Codex rejected none and minimal with HTTP 400 on 2026-10-02, so off is low on both Connections.",
+      "verified": {
+        "date": "2026-10-03",
+        "connections": ["subscription"],
+        "evidence": "scripts/verify_wire_profile.py: send, stream, effort:low, effort:medium, effort:high, effort:xhigh, effort:max, effort:none, sampling, tool_replay, replay, image"
+      }
     }
   }
 }
