@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib
 import json
 import random
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -267,10 +268,32 @@ def test_compress_reencodes_large_images(pdf: Run, tmp_path: Path) -> None:
     assert image is not None and max(image.size) == 600
 
 
-def test_html_document_is_printed_and_checked(pdf: Run, tmp_path: Path) -> None:
+def test_html_document_is_printed_and_checked(
+    pdf: Run, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The only test that starts a browser (about 2 s): it guards the main creation engine."""
-    if PDF_TOOLS["env"].find_browser(None).path is None:
+    browser = PDF_TOOLS["env"].find_browser(None).path
+    if browser is None:
         pytest.skip("no Chromium-based browser on this host")
+    # A desktop browser can exit successfully without printing. Automatic
+    # selection tries another browser; an explicit selection stays authoritative.
+    silent_browser = tmp_path / "silent-browser.exe"
+    silent_browser.touch()
+    monkeypatch.setattr(
+        PDF_TOOLS["env"], "_browser_candidates", lambda: [str(silent_browser), browser]
+    )
+    run_browser: Callable[[list[str], float], subprocess.CompletedProcess[str]] = PDF_TOOLS[
+        "create"
+    ]._run
+    attempted: list[str] = []
+
+    def run(arguments: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        attempted.append(arguments[0])
+        if arguments[0] == str(silent_browser):
+            return subprocess.CompletedProcess(arguments, 0, "", "")
+        return run_browser(arguments, timeout)
+
+    monkeypatch.setattr(PDF_TOOLS["create"], "_run", run)
     source = tmp_path / "letter.html"
     source.write_text(
         '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><title>Brief</title>'
@@ -281,9 +304,17 @@ def test_html_document_is_printed_and_checked(pdf: Run, tmp_path: Path) -> None:
 
     code, lines = pdf("create", source, tmp_path / "letter.pdf")
 
-    assert code == 0 and lines[0].startswith("Created letter.pdf: 1 page, A5 portrait")
+    assert code == 0 and lines[0].startswith("Created letter.pdf: 1 page, A5 portrait"), lines
+    assert list(dict.fromkeys(attempted)) == [str(silent_browser), browser]
     reader = PdfReader(tmp_path / "letter.pdf")
     assert reader.metadata is not None and reader.metadata.title == "Brief"
     problems = lines[lines.index("Problems:") + 1 :]
     assert any("{{Name}}" in line for line in problems)
     assert any(line.startswith("- Page 1: 1 character") for line in problems)
+
+    original = (tmp_path / "letter.pdf").read_bytes()
+    attempted.clear()
+    code, lines = pdf("create", source, tmp_path / "letter.pdf", "--browser", silent_browser)
+    assert code == 1 and lines[0].startswith("Failed:"), lines
+    assert set(attempted) == {str(silent_browser)}
+    assert (tmp_path / "letter.pdf").read_bytes() == original

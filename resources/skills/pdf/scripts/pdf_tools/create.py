@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 
@@ -54,14 +55,29 @@ def create(
             "installed, build the document from Markdown as described in the Skill's "
             "references/without-browser.md."
         )
-    _print_with_browser(found.path, source, target, wait, timeout)
+    deadline = time.monotonic() + timeout
+    attempted: set[str] = set()
+    selected = found.path
+    while True:
+        attempted.add(selected)
+        try:
+            _print_with_browser(selected, source, target, wait, max(0, deadline - time.monotonic()))
+            break
+        except CommandError:
+            if browser or time.monotonic() >= deadline:
+                raise
+            alternative = find_browser(None, excluded=attempted)
+            if alternative.path is None:
+                raise
+            selected = alternative.path
     text = _visible_text(source)
-    return _summary(target, Path(found.path).name, [], text, replaced)
+    return _summary(target, Path(selected).name, [], text, replaced)
 
 
 def _print_with_browser(
     browser: str, source: Path, target: Path, wait: float, timeout: float
 ) -> None:
+    deadline = time.monotonic() + timeout
     profile = tempfile.mkdtemp(prefix="vbot-pdf-browser-")
     try:
         with AtomicOutput(target) as output:
@@ -74,7 +90,7 @@ def _print_with_browser(
                 and "--no-sandbox" not in arguments
             ):
                 arguments.insert(1, "--no-sandbox")
-                completed = _run(arguments, timeout)
+                completed = _run(arguments, max(0, deadline - time.monotonic()))
             if not output.path.is_file() or output.path.stat().st_size == 0:
                 detail = _relevant_output(completed.stdout + completed.stderr)
                 hint = ""
