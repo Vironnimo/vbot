@@ -77,9 +77,9 @@ def build_copilot_messages_payload(
 
     ``kwargs`` carry only the request features the Model takes. The caller's
     thinking effort is planned on ``profile`` against the resolved output
-    allowance and spelled in its reasoning dialect; the profile's parameter
-    rules then shape the sampling parameters (for example, a parameter dropped
-    while thinking).
+    allowance and spelled in its reasoning dialect; the profile's body rules are
+    added and its parameter rules then shape the sampling parameters (for
+    example, a parameter dropped while thinking).
     """
 
     request_kwargs = dict(kwargs)
@@ -110,6 +110,7 @@ def build_copilot_messages_payload(
         if parameter_name in request_kwargs:
             payload[parameter_name] = request_kwargs[parameter_name]
     rules = profile.request
+    rules.apply_body(payload)
     if rules.parameters:
         thinking = payload.get("thinking")
         rules.shape_parameters(

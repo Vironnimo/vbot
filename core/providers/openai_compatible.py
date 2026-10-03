@@ -82,7 +82,6 @@ from core.providers._wire_learning import (
     execute_learning_from_rejections,
     stream_learning_from_rejections,
 )
-from core.providers._wire_profile_files import thaw_json
 from core.providers.adapter import (
     ModelLookup,
     ProviderAdapter,
@@ -444,12 +443,9 @@ class OpenAICompatibleAdapter(ProviderAdapter):
                 ):
                     continue
                 payload.setdefault(key, value)
-        for key, value in rules.body_defaults.items():
-            payload.setdefault(key, thaw_json(value))
         # Apply caller overrides (highest priority)
         payload.update(request_kwargs)
-        for key, value in rules.extra_body.items():
-            payload[key] = thaw_json(value)
+        rules.apply_body(payload)
         if rules.output_limit_collapse and rules.output_limit_field is not None:
             _collapse_output_limit(payload, rules.output_limit_field)
         described = self.describe_reasoning_render(model_id, selected_effort or None)
@@ -457,7 +453,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             rules.shape_parameters(
                 payload,
                 reasoning_active=described.requests_reasoning,
-                protected=rendered - set(request_kwargs) - set(rules.extra_body),
+                protected=rendered - set(request_kwargs),
                 provider_label=self._config.name,
             )
         replay = profile.replay
@@ -679,8 +675,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors.
         """
 
-        request_headers = self._request_headers_from_kwargs(kwargs)
-        request_headers.update(self.wire_profile(model_id).request.extra_headers)
+        request_headers = self._stable_request_headers(model_id, kwargs)
         # Capture the agent-selected effort before ``_build_payload`` consumes the
         # reasoning kwargs, so the observability signals below can name it.
         selected_effort = _selected_thinking_effort(kwargs)
@@ -819,8 +814,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             ProviderError: Other HTTP errors and in-band stream/provider
                 error payloads.
         """
-        request_headers = self._request_headers_from_kwargs(kwargs)
-        request_headers.update(self.wire_profile(model_id).request.extra_headers)
+        request_headers = self._stable_request_headers(model_id, kwargs)
 
         def build_stream_payload() -> dict[str, Any]:
             built = self._build_payload(messages, model_id, **kwargs)

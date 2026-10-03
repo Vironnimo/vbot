@@ -319,9 +319,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             response_headers=response_headers,
         )
 
-    async def _gemini_headers(self) -> dict[str, str]:
+    async def _gemini_headers(self, request_headers: Mapping[str, str]) -> dict[str, str]:
         token = await self._token_getter()
-        return {**(self._config.extra_headers or {}), "x-goog-api-key": token}
+        return {**(self._config.extra_headers or {}), "x-goog-api-key": token, **request_headers}
 
     async def _send_gemini(
         self,
@@ -330,11 +330,12 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_gemini_payload(messages, model_id, kwargs)
         auth_recovery = self._gemini_auth_recovery()
 
         async def _request() -> dict[str, Any]:
-            headers = await self._gemini_headers()
+            headers = await self._gemini_headers(request_headers)
             try:
                 response = await self._client.post(
                     f"/models/{model_id}:generateContent",
@@ -372,11 +373,14 @@ class OpenCodeZenAdapter(OpenAIAdapter):
         model_id: str,
         **kwargs: Any,
     ) -> AsyncGenerator[dict[str, Any]]:
+        request_headers = self._stable_request_headers(model_id, kwargs)
         payload = self._build_gemini_payload(messages, model_id, kwargs)
         auth_recovery = self._gemini_auth_recovery()
         async with aclosing(
             stream_learning_from_rejections(
-                lambda: self._gemini_stream_deltas(payload, model_id, auth_recovery),
+                lambda: self._gemini_stream_deltas(
+                    payload, model_id, auth_recovery, request_headers
+                ),
                 payload,
                 rebuild=lambda: self._build_gemini_payload(messages, model_id, kwargs),
                 wire=self.wire,
@@ -388,7 +392,11 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 yield delta
 
     async def _gemini_stream_deltas(
-        self, payload: dict[str, Any], model_id: str, auth_recovery: OAuthRequestRecovery
+        self,
+        payload: dict[str, Any],
+        model_id: str,
+        auth_recovery: OAuthRequestRecovery,
+        request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
         def _handle_error_status(status: int, body: str, headers: httpx.Headers) -> None:
             self._classify_http_status(
@@ -401,7 +409,7 @@ class OpenCodeZenAdapter(OpenAIAdapter):
             self._client,
             f"/models/{model_id}:streamGenerateContent?alt=sse",
             payload,
-            build_headers=self._gemini_headers,
+            build_headers=lambda: self._gemini_headers(request_headers),
             handle_error_status=_handle_error_status,
             auth_recovery=auth_recovery,
         )
@@ -563,6 +571,9 @@ class OpenCodeZenAdapter(OpenAIAdapter):
                 f"OpenCode Zen Gemini does not support request parameters: {unsupported}",
                 retryable=False,
             )
+        # Body rules name top-level request keys, so a ``generationConfig``
+        # entry replaces or fills the whole object.
+        profile.request.apply_body(payload)
 
         limit = self.request_body_limit(model_id)
         if limit is not None:

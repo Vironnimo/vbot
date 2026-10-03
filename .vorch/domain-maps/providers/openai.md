@@ -98,6 +98,8 @@ CODEX_EXTRA_HEADERS = {"OpenAI-Beta": "responses=experimental", "originator": "v
 
 `OpenAIAdapter._build_headers()` (and `discovery_headers()`) merge `CODEX_EXTRA_HEADERS` **only** on the `codex_responses` path. SSE and discovery use `OpenAI-Beta: responses=experimental`; WebSocket upgrade replaces that value with `OpenAI-Beta: responses_websockets=2026-02-06`, carries `session-id` plus `x-client-request-id`, and omits the SSE-only `session_id` spelling. Provider-visible prompt-cache affinity values are clamped to OpenAI's 64-character limit before either transport sends them; the full Session-unique conversation id remains the local WebSocket route key. The chat-completions path uses the inherited `OpenAICompatibleAdapter._build_headers()` and must never include Codex headers.
 
+Provider-level `extra_headers` are never merged on the Codex path, so a stray config entry cannot leak onto it. A wire profile's per-Model `request.extra_headers` is a deliberate declaration: the Codex SSE requests and the WebSocket handshake add it after the headers above (`providers/request-policy.md` -> Wire request extras).
+
 ## Codex Continuation And Prompt Caching
 
 The ChatGPT Codex backend routes its prompt cache by **per-request transport headers scoped to the conversation** - SSE uses `session_id` plus `x-client-request-id`; WebSocket uses `session-id` plus `x-client-request-id` - **not** by the body-level `prompt_cache_key` field. Live-verified 2026-07-09 on SSE: sending `prompt_cache_key` in the body has no measurable effect (~1/6 hit rate, same as sending nothing), while a stable conversation scope on the two routing headers lifts hits to ~5/6 (only the cold first request misses). Mirrors the Codex CLI and the `hermes-agent` `codex_responses` transport.

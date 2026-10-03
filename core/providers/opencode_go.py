@@ -300,7 +300,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 **request_kwargs,
             )
         if protocol == "responses":
-            request_headers = self._request_headers_from_kwargs(request_kwargs)
+            request_headers = self._stable_request_headers(model_id, request_kwargs)
 
             def build() -> dict[str, Any]:
                 return self._build_responses_payload(
@@ -340,7 +340,7 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
                 **request_kwargs,
             )
         if protocol == "responses":
-            request_headers = self._request_headers_from_kwargs(request_kwargs)
+            request_headers = self._stable_request_headers(model_id, request_kwargs)
 
             def build() -> dict[str, Any]:
                 return self._build_responses_payload(
@@ -442,16 +442,18 @@ class OpenCodeGoAdapter(OpenAICompatibleAdapter):
             reasoning_renderer=reasoning_renderer,
             **kwargs,
         )
-        if profile.request.parameters:
+        payload["store"] = False
+        rules = profile.request
+        rules.apply_body(payload)
+        if rules.parameters:
             # Configured or learned parameter rules; the reasoning fields are
             # the dialect's own output.
-            profile.request.shape_parameters(
+            rules.shape_parameters(
                 payload,
                 reasoning_active="reasoning" in payload,
                 protected=RESPONSES_REASONING_FIELDS,
                 provider_label=self._config.name,
             )
-        payload["store"] = False
         return payload
 
     def _catalog_model(self, model_id: str) -> Model | None:

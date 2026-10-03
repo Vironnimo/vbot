@@ -376,16 +376,6 @@ def _freeze_json(value: Any) -> Any:
     return value
 
 
-def thaw_json(value: Any) -> Any:
-    """Return a mutable deep copy of a frozen JSON value (for payload building)."""
-
-    if isinstance(value, Mapping):
-        return {key: thaw_json(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [thaw_json(item) for item in value]
-    return value
-
-
 # ---------------------------------------------------------------------------
 # Rules and Model entries
 # ---------------------------------------------------------------------------

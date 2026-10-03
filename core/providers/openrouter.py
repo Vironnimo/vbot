@@ -153,6 +153,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
         if not self._uses_responses(model_id):
             return await super().send(messages, model_id=model_id, **kwargs)
+        request_headers = self._stable_request_headers(model_id, kwargs)
 
         def build() -> dict[str, Any]:
             return self._build_openrouter_responses_payload(
@@ -163,7 +164,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
 
         payload = build()
         response = await execute_learning_from_rejections(
-            lambda: self._post_responses_json(payload),
+            lambda: self._post_responses_json(payload, request_headers=request_headers),
             payload,
             rebuild=build,
             wire=self.wire,
@@ -194,6 +195,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
                 async for delta in deltas:
                     yield delta
             return
+        request_headers = self._stable_request_headers(model_id, kwargs)
 
         def build() -> dict[str, Any]:
             return self._build_openrouter_responses_payload(
@@ -206,7 +208,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
         payload = build()
         async with aclosing(
             stream_learning_from_rejections(
-                lambda: self._stream_responses(payload),
+                lambda: self._stream_responses(payload, request_headers=request_headers),
                 payload,
                 rebuild=build,
                 wire=self.wire,
@@ -342,18 +344,20 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             reasoning_renderer=reasoning_renderer,
             **kwargs,
         )
-        if profile.request.parameters:
+        payload["store"] = False
+        if isinstance(session_id, str) and session_id:
+            payload["session_id"] = session_id
+        rules = profile.request
+        rules.apply_body(payload)
+        if rules.parameters:
             # Configured or learned parameter rules; the reasoning fields are
             # the dialect's own output.
-            profile.request.shape_parameters(
+            rules.shape_parameters(
                 payload,
                 reasoning_active="reasoning" in payload,
                 protected=RESPONSES_REASONING_FIELDS,
                 provider_label=self._config.name,
             )
-        payload["store"] = False
-        if isinstance(session_id, str) and session_id:
-            payload["session_id"] = session_id
         provider_preferences = _openrouter_provider_preferences(self._routing, model_id)
         if provider_preferences:
             payload["provider"] = provider_preferences
@@ -364,9 +368,15 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             return None
         return self._model_lookup(model_id.split("::", 1)[0])
 
-    async def _post_responses_json(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _post_responses_json(
+        self,
+        payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
+    ) -> dict[str, Any]:
         async def _do_request() -> dict[str, Any]:
             headers = await self._build_headers()
+            headers.update(request_headers)
             try:
                 response = await self._client.post(
                     OPENROUTER_RESPONSES_ENDPOINT,
@@ -387,8 +397,10 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _stream_responses(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> AsyncGenerator[dict[str, Any]]:
-        response = await self._connect_responses_stream(payload)
+        response = await self._connect_responses_stream(payload, request_headers=request_headers)
         state = ResponsesStreamState(lenient_unknown_errors=True)
         newline_state: dict[str, Any] = {}
         event_lines: list[str] = []
@@ -434,7 +446,14 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
     async def _connect_responses_stream(
         self,
         payload: dict[str, Any],
+        *,
+        request_headers: Mapping[str, str],
     ) -> httpx.Response:
+        async def _build_headers() -> dict[str, str]:
+            headers = await self._build_headers()
+            headers.update(request_headers)
+            return headers
+
         def _handle_error_status(
             status_code: int,
             error_body: str,
@@ -450,7 +469,7 @@ class OpenRouterAdapter(OpenAICompatibleAdapter):
             self._client,
             OPENROUTER_RESPONSES_ENDPOINT,
             payload,
-            build_headers=self._build_headers,
+            build_headers=_build_headers,
             handle_error_status=_handle_error_status,
         )
 

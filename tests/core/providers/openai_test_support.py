@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import base64
 import json
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -287,3 +289,51 @@ async def platform_payload(
         await adapter.send(messages, model_id=model_id, **kwargs)
     payload: dict[str, Any] = json.loads(route.calls.last.request.content)
     return payload
+
+
+class FakeCodexWebSocket:
+    """An in-memory Codex socket replaying one scripted event batch per ``response.create``."""
+
+    def __init__(self, event_batches: Sequence[Sequence[dict[str, Any] | BaseException]]) -> None:
+        self._event_batches = deque(deque(batch) for batch in event_batches)
+        self._active_events: deque[dict[str, Any] | BaseException] = deque()
+        self.sent_payloads: list[dict[str, Any]] = []
+        self.closed = False
+        self.response = SimpleNamespace(status_code=101, headers={"x-test-transport": "ws"})
+
+    async def send(self, data: str) -> None:
+        self.sent_payloads.append(json.loads(data))
+        if not self._event_batches:
+            raise AssertionError("unexpected WebSocket request")
+        self._active_events = self._event_batches.popleft()
+
+    async def recv(self) -> str:
+        if not self._active_events:
+            raise AssertionError("WebSocket response ended without a terminal event")
+        event = self._active_events.popleft()
+        if isinstance(event, BaseException):
+            raise event
+        return json.dumps(event)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeCodexWebSocketConnector:
+    """A ``codex_websocket_connect`` double handing out scripted sockets in order."""
+
+    def __init__(self, connections: list[FakeCodexWebSocket | BaseException]) -> None:
+        self._connections = deque(connections)
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def __call__(self, url: str, **kwargs: Any) -> FakeCodexWebSocket:
+        self.calls.append((url, kwargs))
+        if not self._connections:
+            raise AssertionError("unexpected WebSocket connection")
+        connection = self._connections.popleft()
+        if isinstance(connection, BaseException):
+            raise connection
+        return connection
+
+    def headers(self, name: str) -> list[str]:
+        return [kwargs["additional_headers"][name] for _url, kwargs in self.calls]
