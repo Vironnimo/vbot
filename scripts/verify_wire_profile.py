@@ -42,6 +42,7 @@ if sys.path[:1] != [str(PROJECT_ROOT)]:
 
 from cli._server_target import probe_health, resolve_instance  # noqa: E402
 from cli.rpc_client import rpc_call  # noqa: E402
+from core.utils.config import Config  # noqa: E402
 from core.utils.errors import StorageError  # noqa: E402
 from scripts._wire_verify.checks import CHECKS, CheckResult, run_checks  # noqa: E402
 from scripts._wire_verify.environment import RESOURCES_DIR, open_target  # noqa: E402
@@ -64,8 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--data-dir",
         type=Path,
-        default=Path.home() / ".vbot",
-        help="Data directory with Settings, .env and OAuth logins (default: ~/.vbot).",
+        default=None,
+        help=(
+            "Data directory with Settings, .env and OAuth logins (default: this "
+            "checkout's instance, ~/.vbot-dev in the main checkout)."
+        ),
     )
     parser.add_argument(
         "--check",
@@ -86,7 +90,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 async def _run(args: argparse.Namespace) -> int:
-    target = open_target(args.data_dir.expanduser(), args.provider, args.model, args.connection)
+    data_dir = Config(data_dir=args.data_dir).data_dir.expanduser()
+    target = open_target(data_dir, args.provider, args.model, args.connection)
     profile = target.adapter.wire_profile(target.model_id)
     print(
         f"{target.provider_id}:{target.connection_id} {target.model_id} "
@@ -110,7 +115,7 @@ async def _run(args: argparse.Namespace) -> int:
     print("proposed entry:", json.dumps(entry, indent=2, sort_keys=True))
     if args.write and entry:
         if target.custom:
-            call = _server_call(args.data_dir.expanduser())
+            call = _server_call(data_dir)
             if call is not None:
                 written = save_custom_provider_entry(
                     call, target.provider_id, target.model_id, entry
