@@ -45,8 +45,6 @@ _REPLY = {
     "usage": _USAGE,
 }
 
-_QUESTION = "What is the weather in Paris? Use the tool."
-
 
 def _tool_call_reply(prompt_tokens: int) -> dict[str, object]:
     call = {
@@ -79,7 +77,8 @@ async def test_a_clean_run_proposes_a_verified_entry_that_parses_as_a_wire_file(
 
     def reply(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if body["messages"][-1]["content"] == _QUESTION:
+        # The opening question of a Tool turn gets the Tool Call.
+        if len(body["messages"]) == 1 and body.get("tools"):
             return httpx.Response(200, json=_tool_call_reply(len(request.content)))
         if body.get("stream"):
             return sse_response(

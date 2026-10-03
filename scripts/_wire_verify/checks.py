@@ -11,7 +11,9 @@ full responses.
 from __future__ import annotations
 
 import base64
+import struct
 import time
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -48,14 +50,30 @@ _WEATHER_TOOL = {
         "required": ["city"],
     },
 }
-# A 2x2 red PNG; small enough for every image wire.
-_RED_PNG = base64.b64encode(
-    bytes.fromhex(
-        "89504e470d0a1a0a0000000d49484452000000020000000208020000"
-        "00fdd49a730000001649444154789c63f8cfc0c0f09f81818181010014"
-        "06017f8e3b6c2c0000000049454e44ae426082"
+
+
+def _solid_png(size: int, rgb: tuple[int, int, int]) -> bytes:
+    """Return a valid ``size`` x ``size`` single-color RGB PNG."""
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + kind
+            + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    rows = (b"\x00" + bytes(rgb) * size) * size
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
     )
-).decode("ascii")
+
+
+# A small red PNG; small enough for every image wire.
+_RED_PNG = base64.b64encode(_solid_png(64, (255, 0, 0))).decode("ascii")
 
 
 @dataclass
@@ -338,7 +356,15 @@ async def _check_tool_replay(adapter: ProviderAdapter, model_id: str, vision: bo
     return CheckResult("tool_replay", "warn" if detail else "ok", detail, facts)
 
 
-_QUESTION = {"role": "user", "content": "What is the weather in Paris? Use the tool."}
+# The city takes a reasoning step, so even a Model that reasons on demand fills
+# its reasoning state before the Tool Call.
+_QUESTION = {
+    "role": "user",
+    "content": (
+        "I am in the capital of the country that won the 2018 FIFA World Cup. "
+        "What is the weather here? Use the tool."
+    ),
+}
 _FOLLOW_UP = {"role": "user", "content": "Should I take an umbrella? Answer in one sentence."}
 
 
@@ -376,6 +402,13 @@ async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -
         if warning:
             return CheckResult("replay", "warn", warning, _reply_facts(first))
         return CheckResult("replay", "skipped", "the Tool Call turn returned no reasoning")
+    if not first.reasoning and first.reasoning_tokens == 0:
+        return CheckResult(
+            "replay",
+            "skipped",
+            "the Tool Call turn spent no reasoning tokens, so its reasoning state is empty",
+            _reply_facts(first),
+        )
 
     in_run = [_QUESTION, first.normalized, _tool_result(first)]
     in_run_tokens, answer = await _measure(adapter, model_id, in_run, options)
@@ -389,6 +422,7 @@ async def _check_replay(adapter: ProviderAdapter, model_id: str, vision: bool) -
     scope = profile.replay.scope
     facts = {
         "effort": effort,
+        "first_reasoning_tokens": first.reasoning_tokens,
         "profile_scope": scope,
         "in_run": _scope_facts(in_run_tokens, in_run_result),
         "cross_run": _scope_facts(cross_run_tokens, cross_run_result),
@@ -500,7 +534,7 @@ async def _check_image(adapter: ProviderAdapter, model_id: str, vision: bool) ->
     }
     reply = await _send(adapter, model_id, [message])
     status = "ok" if "red" in reply.content.lower() else "warn"
-    detail = "" if status == "ok" else "the answer did not name the image color"
+    detail = "" if status == "ok" else f"the answer did not name red: {reply.content[:60]!r}"
     return CheckResult("image", status, detail, _reply_facts(reply))
 
 
