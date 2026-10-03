@@ -136,11 +136,6 @@ def _dialect(name: ReasoningDialect) -> _Dialect:
     return dialect
 
 
-def _describe_as_planned(wire: ReasoningWire, intent: ReasoningIntent) -> ReasoningIntent:
-    del wire
-    return intent
-
-
 # -- none ---------------------------------------------------------------------
 
 

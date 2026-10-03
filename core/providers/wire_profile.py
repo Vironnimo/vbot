@@ -142,7 +142,6 @@ REASONING_DIALECTS: tuple[ReasoningDialect, ...] = (
 )
 
 ProfileStatus = Literal["verified", "configured", "inferred"]
-PROFILE_STATUSES: tuple[ProfileStatus, ...] = ("verified", "configured", "inferred")
 
 AdmissionState = Literal["available", "restricted", "retired"]
 """Whether vBot may send requests for the Model on this Connection.

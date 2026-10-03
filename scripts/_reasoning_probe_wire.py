@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -70,46 +69,6 @@ def _extract_openai_message(message: dict[str, Any]) -> TurnResult:
         tool_calls=message.get("tool_calls") or [],
         input_tokens=input_tokens if isinstance(input_tokens, int) else None,
     )
-
-
-def _find_secret(reasoning: str) -> str | None:
-    numbers = re.findall(r"\b\d{5}\b", reasoning)
-    return numbers[0] if numbers else None
-
-
-def _replay_tool_calls(tool_calls: list[dict[str, Any]], wire: str) -> list[dict[str, Any]]:
-    replayed: list[dict[str, Any]] = []
-    for position, call in enumerate(tool_calls):
-        if not isinstance(call, dict):
-            continue
-        function = call.get("function", {})
-        if not isinstance(function, dict):
-            function = {}
-        name = function.get("name") or ""
-        arguments = function.get("arguments") or {}
-        if wire == "openai":
-            if isinstance(arguments, dict):
-                arguments = json.dumps(arguments, separators=(",", ":"))
-            replayed.append(
-                {
-                    "id": call.get("id") or f"call_{position}",
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-        else:
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {}
-            replayed.append(
-                {
-                    "id": call.get("id") or f"call_{position}",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-    return replayed
 
 
 async def _run_turn(

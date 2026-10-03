@@ -262,22 +262,6 @@ PROFILE_SCHEMA: dict[str, Any] = {
 _EFFORT_MAP_KEYS = frozenset(_EFFORT_LEVELS)
 
 
-def schema_node(path: str) -> Any:
-    """Return the schema node for a dotted ``path`` (``None`` when unknown)."""
-
-    node: Any = PROFILE_SCHEMA
-    for part in path.split("."):
-        if isinstance(node, dict):
-            node = node.get(part)
-        elif isinstance(node, _MapOf):
-            node = node.value
-        else:
-            return None
-        if node is None:
-            return None
-    return node
-
-
 def is_opaque(node: Any) -> bool:
     """Whether a merged value at this schema node is replaced as a whole."""
 
