@@ -1,59 +1,99 @@
-# Change Tracker (git-style change statistics)
+# Change Tracker (Run change statistics)
 
 Task-gated depth for `core/tools/change_tracker.py` - the Run-scoped
-file-content tracker that powers the WebUI's git-style change statistics.
+tracker behind the WebUI's git-style change statistics (`N files changed,
++A -R` per Run and Session).
 
-## What it does
+## What it counts
 
-Tracks, per Run, one real content delta per mutated file so the chat loop
-can compute git-style before/after line diffs - streamed live after each
-dispatched Tool round and consumed once at Run end. Every mutation is recorded
-against the file's **actual on-disk content immediately before the mutation**,
-so external changes between tool calls (formatters, shell commands, other
-sessions) stay outside the run's delta instead of being attributed to it.
-Repeated mutations of one file within a Run count once against the first
-mutation's pre-state, matching how `git diff --stat` reports a working-tree
-delta. No git repository or external process is involved; the diff uses
-`difflib.SequenceMatcher` with **autojunk disabled** (the default heuristic
-treats frequently repeated lines in long files as junk and inflates replace
-blocks where git reports a minimal diff).
+A Run's statistics cover only the lines the Run itself changed through
+`apply_patch`, the only file-editing Tool. Shell commands (`bash`, `terminal`,
+`process`), `skill_manage`, Memory and media Tools are not counted: with
+several Sessions working in one directory, a change seen on disk cannot be
+attributed to the Run that caused it.
+
+- **Segments.** Consecutive writes of one file by one Run form a segment that
+  counts once, as the minimal line diff from the content before its first write
+  to the content after its last (repeated edits of one line count once, a
+  reverted edit counts zero, like `git diff --numstat` of a working tree).
+- **Attribution.** `apply_patch` reports each committed write with the file's
+  actual content right before and after it, captured inside its mutation lock
+  before the atomic write (reading afterwards would record the new content as
+  its own baseline). When a write's `before` differs from the Run's last
+  written content, the file changed in between (another Session, a formatter,
+  a shell command): the open segment closes and a new one starts from the
+  changed content, so the change in between is never the Run's. A file's
+  counts are the sum of its segments, so a Run that edits a line, lets
+  something else touch the file, and reverts its edit counts both edits.
+- **Every write counts.** Retained contents are only what lets a segment net
+  repeated edits. A file with more than `MAX_RETAINED_FILE_CHARS` (512 Ki
+  characters) on either side, and the oldest segments once all retained
+  contents exceed `MAX_RETAINED_CHARS` (64 Mi characters across Runs), are
+  counted right away and drop their contents; the next write of that file
+  starts a new segment. There is no eviction that loses counts and no
+  "incomplete" state.
+- **Diff.** `core/tools/_line_diff.py` (minimal Myers diff, shared with the
+  Tool diff details, so per-call and per-Run counts agree). Line endings are
+  content: a changed trailing newline or CRLF counts as a changed line, like
+  git. A change too large to search within `MAX_EDIT_DISTANCE` counts its
+  searched region as replaced.
+- Moves count as the source deleted plus the destination created. Binary
+  moves and deletions, symlinks and undecodable files are not counted.
+
+## Interface
+
+- `record_write((session_address, run_id), resolved, before, after)` - from
+  `apply_patch._commit` for each committed text write (a new file records
+  `before=""`, a deletion `after=""`). Validation-only plans and verified no-ops
+  record nothing; a partial write records only completed paths.
+- `peek_run_stats(run_key)` - current statistics without consuming them.
+  Counts are cached per segment; only segments written since the last peek
+  are diffed again.
+- `take_run_stats(run_key)` - final statistics; detaches the Run first, so a
+  failing diff cannot leak its entries to a later Run.
+- Both return `None` when the Run recorded no write, and otherwise
+  `{files, added, removed, paths, file_stats}`: `paths` lists the changed files
+  (absolute paths) in path order and `file_stats` the same files as
+  `{path, added, removed}`; a file whose counts are zero is in neither, and a
+  Run whose writes net to nothing reports explicit zeros so a reverted change
+  retires an earlier total. `paths`/`file_stats` stop at `MAX_REPORTED_PATHS`
+  (200) while `files`, `added` and `removed` count every changed file.
+- Every operation uses the complete Session address plus Run id: neither id
+  alone distinguishes all Agent/Project scopes, and consuming one Run must
+  leave concurrent scopes and successor Runs intact.
+- Diffs run outside the tracker lock on the caller's worker thread; a segment
+  written or taken meanwhile keeps its newer state.
 
 ## Data flow
 
-1. `apply_patch` -> capture the pre-mutation on-disk content, then `ChangeTracker.record_write((session_address, run_id), resolved, before, after)` stores the pair per `(SessionAddress, run_id, path)`. The capture must happen **inside the mutation lock before the atomic write** - reading afterwards would record the new content as its own baseline (past failure mode: every write netted to zero). `apply_patch` already has the decoded old text in hand. A brand-new file records `before=""`.
-2. Chat loop after each dispatched Tool round -> `ChangeTracker.peek_run_stats((session_address, run_id))` computes the same totals **without consuming** them on a chat worker thread (the line diffs stay off the Event Loop) and emits them as the transient `run_change_stats` Run event (`{change_stats: {files, added, removed, paths, file_stats}}`) whenever they differ from the previously emitted value. An all-zero object (edits reverted within the run) retires an earlier nonzero total; `None` (nothing tracked) emits nothing. This is what the WebUI displays while the Run is still executing.
-3. Chat loop run end (`core/chat/_run_execution.py`, `_execute_run_impl` finally block) -> `take_run_stats((session_address, run_id))` detaches that Run's entries under the tracker lock and computes its final diff once on a Chat worker, including explicit all-zero totals for reverted edits. The existing visible-boundary cancellation guard protects worker admission and result delivery, so Stop cannot skip cleanup or lose those totals. Stats land in `run.terminal_payload_extras["change_stats"]` and the persisted `run_summary`; outcome/Continuation finalization observes any cancellation received during the worker call.
+1. `apply_patch` -> `record_write` (Tool worker thread).
+2. Chat loop after each dispatched Tool round
+   (`core/chat/_agentic_progression.py`) -> `peek_run_stats` on a Chat worker
+   -> when the value changed, first stored on the running Run
+   (`ChatSession.record_change_stats_async`, best-effort with a warning), then
+   the transient `run_change_stats` Run event (`{change_stats}`) that the WebUI
+   shows while the Run executes. An all-zero object retires an earlier nonzero
+   total; `None` (nothing written yet) is neither stored nor emitted.
+3. Run end (`core/chat/_run_execution.py`, `_execute_run_impl` finally block)
+   -> `take_run_stats` on a Chat worker inside the visible-boundary guard, so
+   Stop cannot skip it or lose the totals -> `run.terminal_payload_extras
+   ["change_stats"]` -> every terminal Run event and the persisted
+   `run_summary` (`runs` columns `changed_files`/`lines_added`/`lines_removed`
+   plus `run_change_paths`, `sessions.md`).
 
-Every tracker operation uses the complete Session address plus Run id. Neither the Session id nor the Run id alone distinguishes all Agent/Project scopes; consuming one Run's entries must leave concurrent scopes and successor Runs intact.
+The tracker itself is in memory only. A process restart loses what a Run
+wrote after its last Tool round; the Run recovered as `interrupted` keeps the
+statistics stored up to then. Session totals are sums over the stored Run
+statistics (`sessions.md` -> Interfaces, `summary`).
 
-`read` takes no part in change statistics (no baselines are stored anymore); it only stamps `FileReadState` for the read-before-write guard.
-
-`apply_patch` uses the same `record_write` seam for each actually committed
-text-file delta, including source deletion and destination creation for moves.
-Validation-only plans and verified no-ops record no changes; a partial write
-records only completed paths. Binary moves/deletions remain untracked.
-
-`paths` lists the changed files in path order; `file_stats` lists the same files in the same order as `{path, added, removed}`, each file's own net line diff, whose sums are the Run totals. Files whose diff nets to zero appear in neither.
+`read` takes no part in change statistics; it only stamps `FileReadState` for
+the read-before-write guard.
 
 ## Wiring
 
-- One runtime-owned instance (`Runtime._change_tracker`), exposed as `Runtime.change_tracker`, injected into `ChatLoopDependencies.change_tracker`.
-- The chat loop threads it through `ToolDispatchContext.change_tracker` -> `ToolExecutionConfig.change_tracker` -> `ToolContext.change_tracker`.
-- `ToolContext.change_tracker` is `None` for direct/legacy callers that do not execute inside Chat - those simply skip tracking. The apply_patch handler reads it from the context; no tool registration signature carries the tracker.
-
-## Best-effort semantics
-
-Untracked changes mean the run falls back to the client-side per-tool-call
-counts (the `line_change` display facts summed in the WebUI). The fallback
-only applies when no server value exists at all; a server-reported zero is
-authoritative and suppresses the fallback. Specifically not tracked:
-
-- Non-UTF-8 content and files whose before- or after-content exceeds `MAX_TRACKED_BYTES` (512 KiB).
-- What the agent changes purely via `bash`/`terminal` (e.g. `npm install` rewriting `package-lock.json`, formatter runs in a run with no tracked file-tool touch) - no tool-based tracker can see that. Changes that happen between two tracked mutations of the same file in one run are absorbed into that run's net disk delta, which matches git.
-- Formatter/shell churn after a run's last tracked mutation is invisible until the next run touches the file; it lands in the commit but not in any run's stats.
-
-## Limits
-
-- `_MAX_TRACKED_FILES` (4096) `(SessionAddress, run_id, path)` entries across all Runs, oldest insertion evicted first. A Run that lost an entry reports no statistics (`peek`/`take` return `None`) until its stats are taken, so the UI uses its per-call fallback instead of an undercount (`test_tracked_file_cap_*`).
-- `_MAX_REPORTED_PATHS` (200) paths and `file_stats` entries per run payload; `files`, `added` and `removed` still count every changed file.
-- Per-run deltas are in-memory only: a server restart loses them (the UI falls back to the tool-fact sum for that run).
+- One runtime-owned instance (`Runtime._change_tracker`), exposed as
+  `Runtime.change_tracker`, injected into `ChatLoopDependencies.change_tracker`.
+- The chat loop threads it through `ToolDispatchContext.change_tracker` ->
+  `ToolExecutionConfig.change_tracker` -> `ToolContext.change_tracker`.
+- `ToolContext.change_tracker` is `None` for callers outside Chat; those skip
+  tracking. No Tool registration signature carries the tracker.

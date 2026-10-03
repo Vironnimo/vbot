@@ -2,63 +2,55 @@
 // presentation: the compact summary ("3 files changed, +151 -15") and the
 // changed-files card listing every file with its own line counts.
 //
-// Statistics are `{ files, added, removed, fileStats }`, where `fileStats`
-// lists `{ path, added, removed }` in path order. A file's counts are null
-// when they are unknown (Runs recorded before the server reported per-file
-// counts); `files` may exceed `fileStats.length` when the server capped the
-// reported paths.
+// The server computes every value: a Run's `change_stats` (streamed while it
+// runs, carried by its terminal event and History summary) and a Session's
+// totals over its own Runs (`session.change_stats`). This module only
+// validates and presents them. Statistics are `{ files, added, removed,
+// fileStats }`, where `fileStats` lists `{ path, added, removed }` in path
+// order. A file's counts are null when they are unknown (Runs recorded before
+// the server reported per-file counts); `files` may exceed `fileStats.length`
+// when the server listed only part of the files.
 
 import { t } from '$lib/i18n.js';
 import { isPlainObject } from '$lib/values.js';
-import { visibleRunChildren } from './activity.js';
-import { toolArguments, toolDisplay, toolNameForRunTool } from './toolFacts.js';
-import { trimmedString } from './values.js';
 
-// Aggregated file-change statistics for one assistant run. Prefers the
-// server-computed git-style values (real before/after line diffs — streamed
-// live during the run and persisted on the run summary); a server-reported
-// zero means genuinely no net changes and must NOT fall back to the per-call
-// sum. The fallback covers runs from before the server tracker existed and
-// sessions after a server restart. Returns null when the run contains no file
-// changes.
+// A Run's change statistics, or null when it changed no files (a reported
+// zero means its edits netted to nothing).
 export const runChangeStats = (assistantRun) => {
-  const serverStats = serverChangeStats(assistantRun);
-  if (serverStats) {
-    return serverStats.files > 0 ? serverStats : null;
-  }
-  const { byPath, added, removed } = collectRunChanges(assistantRun);
-  if (byPath.size === 0 && added === 0 && removed === 0) {
-    return null;
-  }
-  return { files: byPath.size, added, removed, fileStats: sortedStats(byPath) };
+  const stats = serverRunStats(assistantRun?.changeStats);
+  return stats && stats.files > 0 ? stats : null;
 };
 
-// Session-wide file-change statistics: the sum over every assistant run in the
-// loaded timeline, with files deduplicated across runs and each file's counts
-// summed over the runs that changed it. Returns null when the session
-// contains no file changes.
-export const sessionChangeStats = (timelineItems) => {
-  const byPath = new Map();
-  let added = 0;
-  let removed = 0;
-  for (const item of timelineItems ?? []) {
-    if (item?.type !== 'assistant_run') {
-      continue;
-    }
-    const stats = runChangeStats(item);
-    if (!stats) {
-      continue;
-    }
-    for (const entry of stats.fileStats) {
-      addFileLines(byPath, entry.path, entry.added, entry.removed);
-    }
-    added += stats.added;
-    removed += stats.removed;
-  }
-  if (byPath.size === 0 && added === 0 && removed === 0) {
+// A Session's change statistics from its `session.change_stats` value, or
+// null when it changed no files or the value is malformed.
+export const sessionChangeStats = (changeStats) => {
+  if (!isPlainObject(changeStats)) {
     return null;
   }
-  return { files: byPath.size, added, removed, fileStats: sortedStats(byPath) };
+  const { files, added, removed } = changeStats;
+  if (![files, added, removed].every(isLineCount) || files === 0) {
+    return null;
+  }
+  const fileStats = Array.isArray(changeStats.file_stats)
+    ? changeStats.file_stats.filter(
+        (entry) =>
+          isPlainObject(entry) &&
+          typeof entry.path === 'string' &&
+          entry.path &&
+          isCountOrUnknown(entry.added) &&
+          isCountOrUnknown(entry.removed),
+      )
+    : [];
+  return {
+    files,
+    added,
+    removed,
+    fileStats: fileStats.map(({ path, added, removed }) => ({
+      path,
+      added,
+      removed,
+    })),
+  };
 };
 
 // Compact one-line label for change statistics, e.g. "3 files changed, +151 -15".
@@ -159,11 +151,10 @@ function filesChangedLabel(files) {
     : t('chat.changeStats.filesMany', { count: files });
 }
 
-// Validated server-computed change statistics carried by the run summary or
-// the terminal run event. Returns null when absent or malformed. Per-file
-// counts are used only when they describe exactly the reported paths.
-function serverChangeStats(assistantRun) {
-  const candidate = assistantRun?.changeStats;
+// Validated Run statistics carried by the live event, the terminal event or
+// the History summary. Returns null when absent or malformed. Per-file counts
+// are used only when they describe exactly the reported paths.
+function serverRunStats(candidate) {
   if (!isPlainObject(candidate)) {
     return null;
   }
@@ -198,83 +189,12 @@ function serverChangeStats(assistantRun) {
   };
 }
 
+function isCountOrUnknown(value) {
+  return value === null || isLineCount(value);
+}
+
 function isLineCount(value) {
   return Number.isInteger(value) && value >= 0;
-}
-
-// Adds one file's line counts to a path-keyed map; an unknown count makes the
-// file's sum unknown.
-function addFileLines(byPath, path, added, removed) {
-  const known = byPath.get(path);
-  if (!known) {
-    byPath.set(path, { path, added, removed });
-    return;
-  }
-  known.added = sumOrUnknown(known.added, added);
-  known.removed = sumOrUnknown(known.removed, removed);
-}
-
-function sortedStats(byPath) {
-  return [...byPath.values()].sort((left, right) =>
-    compareText(left.path, right.path),
-  );
-}
-
-function collectRunChanges(assistantRun) {
-  const byPath = new Map();
-  let added = 0;
-  let removed = 0;
-  for (const child of visibleRunChildren(assistantRun)) {
-    if (child?.type !== 'tool_call') {
-      continue;
-    }
-    const name = toolNameForRunTool(child);
-    if (name !== 'edit' && name !== 'write') {
-      continue;
-    }
-    let childAdded = 0;
-    let childRemoved = 0;
-    for (const fact of toolDisplayFacts(child)) {
-      if (fact.kind === 'line_change' && fact.change === 'added') {
-        childAdded += fact.value;
-      } else if (fact.kind === 'line_change' && fact.change === 'removed') {
-        childRemoved += fact.value;
-      }
-    }
-    if (childAdded === 0 && childRemoved === 0) {
-      continue;
-    }
-    const path = toolChangePath(child);
-    if (path) {
-      addFileLines(byPath, path, childAdded, childRemoved);
-    }
-    added += childAdded;
-    removed += childRemoved;
-  }
-  return { byPath, added, removed };
-}
-
-function toolDisplayFacts(tool) {
-  const display = toolDisplay(tool);
-  return Array.isArray(display?.facts) ? display.facts : [];
-}
-
-function toolChangePath(tool) {
-  const args = toolArguments(tool);
-  if (isPlainObject(args) && typeof args.path === 'string' && args.path) {
-    return args.path;
-  }
-  const display = toolDisplay(tool);
-  const primary = Array.isArray(display?.primary) ? display.primary : [];
-  for (const part of primary) {
-    if (isPlainObject(part) && part.kind === 'path') {
-      const value = trimmedString(part.full_value) || trimmedString(part.value);
-      if (value) {
-        return value;
-      }
-    }
-  }
-  return '';
 }
 
 // A path's segments and the separator it uses ('\' for Windows paths).

@@ -395,6 +395,43 @@ async def test_session_get_reports_an_absent_session_as_none(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
+async def test_session_change_stats_and_rows_report_the_sessions_changed_lines(
+    tmp_path: Path,
+) -> None:
+    state = make_state(tmp_path, StubAdapter())
+    sessions = state.runtime.chat_sessions
+    session = sessions.create("coder", session_id="work")
+    await session.start_run("run-one").record_change_stats_async(
+        {
+            "files": 1,
+            "added": 3,
+            "removed": 1,
+            "paths": ["/repo/a.py"],
+            "file_stats": [{"path": "/repo/a.py", "added": 3, "removed": 1}],
+        }
+    )
+    sessions.create("coder", session_id="idle")
+
+    stats = await rpc_result(state, "session.change_stats", agent_id="coder", session_id="work")
+    idle = await rpc_result(state, "session.change_stats", agent_id="coder", session_id="idle")
+    row = await rpc_result(state, "session.get", agent_id="coder", session_id="work")
+    listed = await rpc_result(state, "session.list", agent_id="coder")
+
+    totals = {"files": 1, "added": 3, "removed": 1}
+    assert stats == {
+        "change_stats": {**totals, "file_stats": [{"path": "/repo/a.py", "added": 3, "removed": 1}]}
+    }
+    assert idle == {"change_stats": None}
+    assert row["session"]["change_stats"] == totals
+    assert {item["id"]: item.get("change_stats") for item in listed["sessions"]} == {
+        "work": totals,
+        "idle": None,
+    }
+    missing = await rpc_error(state, "session.change_stats", agent_id="coder", session_id="gone")
+    assert missing["code"] == RPC_ERROR_DOMAIN
+
+
+@pytest.mark.asyncio
 async def test_activity_list_returns_only_completed_sessions_per_address(tmp_path: Path) -> None:
     state = make_state(tmp_path, StubAdapter())
     sessions = state.runtime.chat_sessions

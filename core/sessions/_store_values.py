@@ -63,6 +63,7 @@ _DERIVED_METADATA_JOIN = (
     "LEFT JOIN sessions AS fork_parent ON fork_parent.session_key = s.fork_parent_key"
 )
 _SESSION_LIST_COLUMNS = f"""
+    s.session_key,
     s.project_id,
     s.agent_id,
     s.session_id,
