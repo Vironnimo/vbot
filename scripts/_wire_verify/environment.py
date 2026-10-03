@@ -95,6 +95,13 @@ def open_target(
         except KeyError:
             return None
 
+    model = resolve_model(provider_id, bare_model)
+    if model is not None and not model.allows_connection(connection):
+        raise SystemExit(
+            f"{provider_id!r} Model {bare_model!r} does not allow Connection {connection!r}; "
+            f"it allows: {', '.join(model.connections)}"
+        )
+
     observations = WireObservations(None, save_delay=None)
     profiles = WireProfiles(
         files=wire_profile_files(custom_providers),
@@ -108,7 +115,7 @@ def open_target(
         provider_id=provider_id,
         connection_id=connection,
         model_id=model_id,
-        model=resolve_model(provider_id, bare_model),
+        model=model,
         adapter=adapter,
         observations=observations,
         storage=storage,
