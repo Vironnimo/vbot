@@ -84,9 +84,10 @@ async def test_batch_coordinates_keep_the_frame_from_before_the_call(computer: H
     ]
     result = await computer.call("computer_batch", {"actions": actions})
     assert result["ok"], result
-    # The inner screenshot followed Paint to the wide display; the click still used Main.
+    # The inner screenshot followed Paint to the wide display; the click still used the
+    # half-size image of Main, where pixel [150, 100] covers physical [300-301, 200-201].
     assert '2. Screenshot of display 2 of 2 "Wide"' in model_text(result)
-    assert computer.target.inputs[-1] == ("click", 300, 200, "left", 1, [])
+    assert computer.target.inputs[-1] == ("click", 301, 201, "left", 1, [])
 
 
 async def test_batch_stops_at_the_first_failure_and_names_what_ran(computer: Harness) -> None:

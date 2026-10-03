@@ -17,14 +17,17 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from core.storage.layout import DataDirectoryLayout
 from core.tools import ToolContext
 from core.utils.ids import write_id_file
 
-from .target import Display, WindowInfo
+from .target import AppInfo, Display, WindowInfo
 
 MAX_LONG_EDGE = 1568
 MAX_AREA = 1_150_000
 MASK_FILL = (128, 128, 128)
+# Temporary-file category of published images (``TEMPORARY_FILE_RETENTION``).
+IMAGE_CATEGORY = "computer_use"
 
 type Area = tuple[int, int, int, int]
 
@@ -53,6 +56,8 @@ class Frame:
     screenshot_id: str = ""
     displays: tuple[Display, ...] = ()
     window: WindowInfo | None = None
+    # The app whose window was in front when the image was taken.
+    front: AppInfo | None = None
 
     @classmethod
     def of(cls, display: Display) -> Frame:
@@ -65,18 +70,28 @@ class Frame:
     def contains(self, x: int, y: int) -> bool:
         return 0 <= x < self.width and 0 <= y < self.height
 
+    @property
+    def screen_pixels(self) -> float:
+        """How many screen pixels one image pixel spans, on the coarser axis."""
+        left, top, right, bottom = self.area
+        return max((right - left) / self.width, (bottom - top) / self.height)
+
     def to_physical(self, x: int, y: int) -> tuple[int, int]:
+        """The screen pixel under the centre of image pixel (x, y)."""
         left, top, right, bottom = self.area
         return (
-            left + min(right - left - 1, round(x * (right - left) / self.width)),
-            top + min(bottom - top - 1, round(y * (bottom - top) / self.height)),
+            left + min(right - left - 1, math.floor((x + 0.5) * (right - left) / self.width)),
+            top + min(bottom - top - 1, math.floor((y + 0.5) * (bottom - top) / self.height)),
         )
 
     def to_frame(self, x: int, y: int) -> tuple[int, int]:
+        """The image pixel that shows screen pixel (x, y)."""
         left, top, right, bottom = self.area
         return (
-            min(self.width - 1, max(0, round((x - left) * self.width / (right - left)))),
-            min(self.height - 1, max(0, round((y - top) * self.height / (bottom - top)))),
+            min(self.width - 1, max(0, math.floor((x - left + 0.5) * self.width / (right - left)))),
+            min(
+                self.height - 1, max(0, math.floor((y - top + 0.5) * self.height / (bottom - top)))
+            ),
         )
 
     def region(self, x0: int, y0: int, x1: int, y1: int) -> Area:
@@ -223,7 +238,7 @@ def publish_image(context: ToolContext, image: Image.Image) -> Path:
     stream = io.BytesIO()
     image.save(stream, format="PNG", compress_level=1)
     raw = stream.getvalue()
-    directory = context.data_root / "tmp" / "computer-use"
+    directory = DataDirectoryLayout(context.data_root).temporary / IMAGE_CATEGORY
     path = write_id_file(directory, "shot", ".png", raw)
     context.result_media.append(
         {
@@ -238,6 +253,7 @@ def publish_image(context: ToolContext, image: Image.Image) -> Path:
 
 
 __all__ = [
+    "IMAGE_CATEGORY",
     "MASK_FILL",
     "MAX_AREA",
     "MAX_LONG_EDGE",

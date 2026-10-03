@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
@@ -16,6 +17,7 @@ from core.tools.availability import ToolAccess
 from resources.extensions.computer_use import extension as computer_use
 from resources.extensions.computer_use.extension import _new_target as platform_target
 from tests.resources.extensions.computer_use.computer_use_test_support import (
+    CHROME,
     PAINT,
     TOOLS,
     Harness,
@@ -128,28 +130,35 @@ async def test_screenshot_coordinates_use_returned_pixels_and_keep_the_display(
     result = await computer.call("computer", {"action": "screenshot", "view": "display"}, context)
     assert "1280x720 pixels" in model_text(result)
     assert f'screenshot_id="{screenshot_id(context)}"' in model_text(result)
+    assert "Coordinates are this image's pixels, 1:1 with the screen." in model_text(result)
     assert [image.size for image in images(context)] == [(1280, 720)]
+    # Images are temporary files that the storage retention sweep removes.
+    saved = Path(context.result_media[0]["path"])
+    assert saved.parent == computer.context.data_root / "artifacts" / "temp" / "computer_use"
+    assert saved.is_file()
 
     context = computer.context_for("computer")
     result = await computer.call(
         "computer", {"action": "screenshot", "display": "2", "scale": 0.5}, context
     )
     assert model_text(result).startswith('Screenshot of display 2 of 2 "Wide": 784x250 pixels')
+    assert "one covers 4.0 screen pixels, so zoom in where an exact pixel" in model_text(result)
     assert [image.size for image in images(context)] == [(784, 250)]
     scaled_id = screenshot_id(context)
+    # One pixel of the 784x250 image covers 4x4 physical pixels; input hits the centre.
     computer.target.pointer = (-2736, 400)
     result = await computer.computer(action="cursor_position")
     assert model_text(result).startswith("The pointer is at [100, 100]")
     result = await computer.computer(action="left_click", coordinate=[100, 100])
     assert result["ok"], result
-    assert computer.target.inputs[-1] == ("click", -2736, 400, "left", 1, [])
+    assert computer.target.inputs[-1] == ("click", -2734, 402, "left", 1, [])
     # Input returned a full-sized image, but the explicit scaled-image reference still works.
     for alias in ["screenshotId", "image_id"]:
         result = await computer.computer(
             action="mouse_move", coordinate=[100, 100], **{alias: scaled_id}
         )
         assert result["ok"]
-        assert computer.target.inputs[-1] == ("move", -2736, 400)
+        assert computer.target.inputs[-1] == ("move", -2734, 402)
     before = list(computer.target.inputs)
     result = await computer.computer(
         action="left_click", coordinate=[100, 100], screenshot_id=scaled_id, image_id="shot_unknown"
@@ -192,9 +201,10 @@ async def test_zoom_coordinates_are_local_to_the_returned_crop(
         context,
     )
     assert result["ok"] and images(context)[0].size == (50, 25)
+    # The half-size zoom shows physical [-2886, 250] onward at 2x2 pixels per image pixel.
     result = await computer.computer(action="left_click", coordinate=[25, 10])
     assert result["ok"]
-    assert computer.target.inputs[-1] == ("click", -2836, 270, "left", 1, [])
+    assert computer.target.inputs[-1] == ("click", -2835, 271, "left", 1, [])
     result = await computer.computer(
         action="zoom", screenshot_id=crop_id, region=[350, 0, 450, 100]
     )
@@ -291,28 +301,29 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
     computer.sleeps.clear()
 
 
-# Wide display: frame 1568x500 at x=-3136, so frame [x, y] is physical [-3136 + 2x, 2y].
+# Wide display: frame 1568x500 at x=-3136. Image pixel [x, y] covers physical
+# [-3136 + 2x, 2y] to [-3135 + 2x, 2y + 1]; input lands on [-3135 + 2x, 2y + 1].
 @pytest.mark.parametrize(
     ("arguments", "inputs"),
     [
         (
             {"action": "left_click", "coordinate": [100, 200]},
-            [("click", -2936, 400, "left", 1, [])],
+            [("click", -2935, 401, "left", 1, [])],
         ),
         (
             {"action": "right_click", "coordinate": [100, 200], "text": "shift"},
-            [("click", -2936, 400, "right", 1, ["shift"])],
+            [("click", -2935, 401, "right", 1, ["shift"])],
         ),
         ({"action": "middle_click"}, [("click", -2000, 500, "middle", 1, [])]),
         (
             {"action": "double_click", "coordinate": [100, 200]},
-            [("click", -2936, 400, "left", 2, [])],
+            [("click", -2935, 401, "left", 2, [])],
         ),
         (
             {"action": "triple_click", "coordinate": [100, 200]},
-            [("click", -2936, 400, "left", 3, [])],
+            [("click", -2935, 401, "left", 3, [])],
         ),
-        ({"action": "mouse_move", "coordinate": [500, 250]}, [("move", -2136, 500)]),
+        ({"action": "mouse_move", "coordinate": [500, 250]}, [("move", -2135, 501)]),
         (
             {
                 "action": "left_click_drag",
@@ -320,15 +331,15 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
                 "coordinate": [200, 150],
                 "text": "alt",
             },
-            [("drag", (-2936, 200), (-2736, 300), ["alt"])],
+            [("drag", (-2935, 201), (-2735, 301), ["alt"])],
         ),
         (
             {"action": "left_click_drag", "coordinate": [200, 150]},
-            [("drag", (-2000, 500), (-2736, 300), [])],
+            [("drag", (-2000, 500), (-2735, 301), [])],
         ),
         (
             {"action": "left_mouse_up", "coordinate": [300, 300]},
-            [("move", -2536, 600), ("button", "left", False)],
+            [("move", -2535, 601), ("button", "left", False)],
         ),
         (
             {
@@ -338,7 +349,7 @@ async def paint_on_the_wide_display(computer: Harness) -> None:
                 "scroll_amount": 5,
                 "text": "ctrl",
             },
-            [("scroll", -2336, 400, "down", 5, ["ctrl"])],
+            [("scroll", -2335, 401, "down", 5, ["ctrl"])],
         ),
         ({"action": "scroll", "scroll_direction": "left"}, [("scroll", -2000, 500, "left", 3, [])]),
         ({"action": "type", "text": "héllo\nwörld"}, [("type", "héllo\nwörld")]),
@@ -388,6 +399,45 @@ async def test_wait_pauses_then_shows_the_screen(computer: Harness) -> None:
     assert model_text(result).endswith(
         "duration 1500 was read as milliseconds (1.5 s); duration is in seconds."
     )
+    result = await computer.computer(action="wait", duration=1, screenshot_id="shot_unknown")
+    assert result["ok"]
+    assert model_text(result).endswith("Ignored screenshot_id: wait does not use it.")
+
+
+async def test_keys_are_refused_when_another_app_came_to_the_front(computer: Harness) -> None:
+    context = computer.context_for("computer")
+    await computer.call("computer", {"action": "screenshot"}, context)
+    notepad = screenshot_id(context)
+    computer.target.front(CHROME)  # for example, the user clicked into another app
+    computer.target.inputs.clear()
+    for tool, arguments in [
+        ("computer", {"action": "type", "text": "x"}),
+        ("computer_batch", {"actions": [{"action": "key", "text": "enter"}]}),
+    ]:
+        result = await computer.call(tool, arguments)
+        message = result["error"]["message"]
+        assert result["error"]["code"] == "focus_changed"
+        assert f'Notepad was in front in image "{notepad}", but the foreground window' in message
+        assert "now belongs to Google Chrome, so" in message
+    assert computer.target.inputs == []
+    # A click before the keys in the same call decides where they go.
+    result = await computer.call(
+        "computer_batch",
+        {
+            "actions": [
+                {"action": "left_click", "coordinate": [50, 50]},
+                {"action": "type", "text": "x"},
+            ]
+        },
+    )
+    assert result["ok"], result
+    assert computer.target.inputs == [("click", 150, 150, "left", 1, []), ("type", "x")]
+    # After a screenshot of Chrome, keys go through, unless they name the Notepad image.
+    await computer.computer(action="screenshot")
+    result = await computer.computer(action="key", text="enter")
+    assert result["ok"] and computer.target.inputs[-1] == ("keys", ["enter"], 1)
+    result = await computer.computer(action="key", text="enter", screenshot_id=notepad)
+    assert result["error"]["code"] == "focus_changed"
 
 
 @pytest.mark.parametrize(
@@ -395,10 +445,6 @@ async def test_wait_pauses_then_shows_the_screen(computer: Harness) -> None:
     [
         ({"action": "left_click", "coordinate": [1300, 100]}, "outside image"),
         ({"action": "screenshot", "view": "window", "display": "1"}, "Omit display"),
-        (
-            {"action": "key", "text": "enter", "screenshot_id": "shot_unknown"},
-            "does not change keyboard focus",
-        ),
         ({"action": "type", "text": "x", "coordinate": [200, 150]}, "computer_batch"),
         ({"action": "mouse_move"}, '"coordinate": [x, y]'),
         ({"action": "scroll", "coordinate": [200, 150]}, '"scroll_direction"'),
