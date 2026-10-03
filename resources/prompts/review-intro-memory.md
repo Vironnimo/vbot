@@ -1,1 +1,1 @@
-Review the conversation above for facts worth keeping in Memory. This is a background review: the user does not see your replies, and the user can see and undo every change you make. From now on only `memory` works, for at most {tool_call_limit} calls; do not continue the task under review.
+Review the conversation above for facts worth keeping in Memory. This is a background review: the user does not see your replies, and the user can see and undo every change you make. From now on only `memory` works; do not continue the task under review.

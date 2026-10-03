@@ -96,10 +96,6 @@ _LEARN_RECIPE: _Recipe = (
     (_PROSE, (_LEARN_METHOD,)),
 )
 
-REVIEW_TOOL_CALL_LIMIT = 16
-"""Tool calls one review Run can dispatch; its brief states the same number."""
-_TOOL_CALL_LIMIT_MARK = "{tool_call_limit}"
-
 BRIEF_FRAGMENT_NAMES: frozenset[str] = frozenset(
     {
         *(
@@ -174,9 +170,7 @@ def reflection_brief(
     focus: str | None = None,
 ) -> str:
     """Return the review brief for ``scope``, with an optional user focus appended."""
-    brief = _assemble(fragments, _REFLECTION_RECIPES[scope]).replace(
-        _TOOL_CALL_LIMIT_MARK, str(REVIEW_TOOL_CALL_LIMIT)
-    )
+    brief = _assemble(fragments, _REFLECTION_RECIPES[scope])
     cleaned = (focus or "").strip()
     if not cleaned:
         return brief

@@ -25,9 +25,9 @@ from scripts.provider_probe.learning_fixture import EvalWorker, tool_message_con
 from scripts.provider_probe.learning_scoring import CallObserver, score_attempt
 from scripts.provider_probe.learning_texts import TextPack, load_text_pack
 
-# Review Runs use production's REFLECTION_TOOL_ITERATION_LIMIT and Librarian passes
-# Chat's loop limit. /learn runs under Chat's loop limit in production too; the
-# harness bounds its cost here instead.
+# Review Runs and Librarian passes use Chat's loop limit, as in production. /learn
+# runs under Chat's loop limit in production too; the harness bounds its cost here
+# instead.
 LEARN_TOOL_ITERATION_LIMIT = 30
 MAX_REPETITIONS = 50
 
@@ -72,14 +72,11 @@ def _add_usage(total: dict[str, Any], usage: Any) -> None:
 
 
 def _tool_iteration_limit(scope: str) -> int:
-    from core.automation.reflection import REFLECTION_TOOL_ITERATION_LIMIT
     from core.chat import MAX_TOOL_ITERATIONS
 
     if scope == "learn":
         return LEARN_TOOL_ITERATION_LIMIT
-    if scope == "librarian":
-        return MAX_TOOL_ITERATIONS
-    return REFLECTION_TOOL_ITERATION_LIMIT
+    return MAX_TOOL_ITERATIONS
 
 
 def _sampling_kwargs(

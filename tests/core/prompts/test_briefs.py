@@ -8,7 +8,6 @@ from pathlib import Path
 from core.agents import LIBRARIAN_TOOLS
 from core.prompts.briefs import (
     BRIEF_FRAGMENT_NAMES,
-    REVIEW_TOOL_CALL_LIMIT,
     LibrarianCandidate,
     learn_brief,
     librarian_brief,
@@ -24,9 +23,6 @@ def test_briefs_compose_per_fragment_overrides_and_share_each_fragment(tmp_path:
     # fragment reaches every brief that uses it.
     for name in BRIEF_FRAGMENT_NAMES:
         (storage.prompts_dir / name).write_text(f"[{name}]\n", encoding="utf-8")
-    (storage.prompts_dir / "review-intro-memory.md").write_text(
-        "[review-intro-memory.md {tool_call_limit}]\n", encoding="utf-8"
-    )
 
     # Groups are paragraphs; list fragments continue their lead line by line.
     signals_end = "[review-signals-end.md]"
@@ -34,7 +30,7 @@ def test_briefs_compose_per_fragment_overrides_and_share_each_fragment(tmp_path:
         "[skill-shape.md]\n\n[skill-ladder.md]\n\n[skill-read-current.md] [review-skill-limits.md]"
     )
     assert reflection_brief(storage, "memory") == (
-        f"[review-intro-memory.md {REVIEW_TOOL_CALL_LIMIT}]"
+        "[review-intro-memory.md]"
         "\n\n[review-signals-lead.md]\n[review-signals-memory.md]"
         f"\n\n{signals_end}"
         "\n\n[learning-routing.md] [review-routing-memory-only.md]"

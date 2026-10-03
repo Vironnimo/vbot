@@ -15,7 +15,6 @@ from core.automation.reflection import (
     COUNTER_GENERATION_KEY,
     MEMORY_REFLECTION_TOOL_RESTRICTION,
     REFLECTION_COUNTERS_META_KEY,
-    REFLECTION_TOOL_ITERATION_LIMIT,
     REFLECTION_TOOL_RESTRICTION,
     SKILL_REFLECTION_TOOL_RESTRICTION,
     ReflectionService,
@@ -856,7 +855,8 @@ async def test_run_review_reports_fork_before_run_and_returns_summary() -> None:
     )
     assert loop.started[0]["reply_surface"] is None
     assert "tool_grants" not in loop.started[0]
-    assert loop.started[0]["max_tool_iterations"] == REFLECTION_TOOL_ITERATION_LIMIT
+    # Like every Run of the Agent, a review runs under Chat's own iteration limit.
+    assert "max_tool_iterations" not in loop.started[0]
     assert loop.started[0]["run_kind"] is RunKind.REFLECTION
     assert loop.started[0]["contributes_to_agent_activity"] is False
     # The review Run carries the Session it examines for accessor attribution.
@@ -925,9 +925,7 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
 
     [review] = loop.started
     tools = _REVIEWS[scope][0]
-    limit = REFLECTION_TOOL_ITERATION_LIMIT
     assert review["tool_restriction"] == tools
-    assert review["max_tool_iterations"] == limit
     # A review that can write Skills learns that the list marks the ones it cannot change.
     assert ("does not mark as read-only; all other Skills are read-only" in review["message"]) == (
         "skill_manage" in tools
@@ -948,8 +946,6 @@ async def test_review_run_names_and_reaches_only_the_tools_of_its_scope(
     values = {value for _name, schema in properties for value in schema.get("enum", ())}
     identifiers = {token for token in review["message"].split("`")[1::2] if token.isidentifier()}
     assert identifiers - parameters - values == set(tools)
-    # The brief states the Tool-call limit the Run enforces.
-    assert f"at most {limit} calls" in review["message"]
     # Any other Tool is refused before it runs, naming what the review can call.
     deny = review["tool_denial_resolver"]
     assert [deny(tool) for tool in tools] == [None] * len(tools)

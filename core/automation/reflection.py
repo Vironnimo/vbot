@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.agents import is_librarian
 from core.chat.content_blocks import ContentBlock, TextBlock
-from core.prompts.briefs import REVIEW_TOOL_CALL_LIMIT, ReflectionScope, reflection_brief
+from core.prompts.briefs import ReflectionScope, reflection_brief
 from core.runs import RunKind
 from core.sessions import SessionAddress
 from core.subagents.subagents import SUBAGENT_SESSION_METADATA_FLAG
@@ -68,9 +68,6 @@ REFLECTION_TOOL_RESTRICTIONS: dict[ReflectionScope, tuple[str, ...]] = {
     "skill": SKILL_REFLECTION_TOOL_RESTRICTION,
     "combined": REFLECTION_TOOL_RESTRICTION,
 }
-# Cost bound for one review Run: dispatched Tool iterations before the Run must
-# answer without Tools. A review lists, reads and writes a handful of entries.
-REFLECTION_TOOL_ITERATION_LIMIT = REVIEW_TOOL_CALL_LIMIT
 # Tool result for a review's call outside its scope. ``tool`` is the called Tool
 # and ``tools`` the scope's Tools, both as the Model names them.
 REVIEW_TOOL_DENIAL_MESSAGE = (
@@ -475,7 +472,6 @@ class ReflectionService:
             project_id=project_id,
             tool_restriction=REFLECTION_TOOL_RESTRICTIONS[scope],
             tool_denial_resolver=_review_tool_denial_resolver(scope),
-            max_tool_iterations=REFLECTION_TOOL_ITERATION_LIMIT,
             run_kind=run_kind,
             contributes_to_agent_activity=False,
             source_session_id=session_id,
