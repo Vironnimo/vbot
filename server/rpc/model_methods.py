@@ -751,13 +751,13 @@ async def _refresh_provider_model_db(
     )
     if not successes:
         # An explicit single-provider refresh that produced nothing useful
-        # still reports why: a discovery failure surfaces its message, an
-        # absent credential keeps the existing "not found" wording.
+        # still reports why: a discovery failure surfaces its message, a
+        # disabled catalog Connection is named, an absent credential keeps the
+        # "not found" wording.
         if errors:
             raise RpcError(RPC_ERROR_DOMAIN, str(errors[0]["error"]))
         raise RpcError(
-            RPC_ERROR_DOMAIN,
-            f"Provider credentials not found for provider '{provider_id}'",
+            RPC_ERROR_DOMAIN, _no_refreshable_connection_message(runtime, provider_id, provider)
         )
     canonical_result = await _refresh_canonical_layer_if_possible(
         catalog,
@@ -789,6 +789,26 @@ def _provider_supports_refresh(provider: Any) -> bool:
     return any(
         getattr(connection, "models_endpoint", None)
         for connection in getattr(provider, "connections", [])
+    )
+
+
+def _no_refreshable_connection_message(runtime: Any, provider_id: str, provider: Any) -> str:
+    """Explain why no catalog Connection of *provider* could be refreshed."""
+
+    disabled = [
+        f"{provider_id}:{connection.id}"
+        for connection in getattr(provider, "connections", [])
+        if _connection_models_endpoint(connection, provider)
+        and not runtime.provider_credentials.is_connection_enabled(
+            provider_id, f"{provider_id}:{connection.id}"
+        )
+    ]
+    if not disabled:
+        return f"Provider credentials not found for provider '{provider_id}'"
+    verb = "is" if len(disabled) == 1 else "are"
+    return (
+        f"Provider '{provider_id}' has no enabled Connection to refresh: "
+        f"{', '.join(disabled)} {verb} disabled; enable it to refresh its Models"
     )
 
 

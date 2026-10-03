@@ -750,6 +750,28 @@ async def test_refused_model_refreshes_change_nothing(
     assert resource_changes(state) == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_discovery")
+async def test_refreshing_a_provider_whose_catalog_connection_is_disabled_names_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A disabled Connection is skipped even with a credential; the refusal must
+    # say so instead of reporting missing credentials.
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    state = make_state(tmp_path, StubAdapter())
+    state.runtime.providers.add(openrouter_provider())
+    state.runtime.disabled_connections.add("openrouter:api-key")
+
+    error = await rpc_error(state, "model.refresh_db", provider_id="openrouter")
+
+    assert (error["code"], error["message"]) == (
+        "domain_error",
+        "Provider 'openrouter' has no enabled Connection to refresh: "
+        "openrouter:api-key is disabled; enable it to refresh its Models",
+    )
+    assert FAKE_REFRESH_MODEL_CALLS == []
+
+
 # ---------------------------------------------------------------------------
 # OAuth credentials
 # ---------------------------------------------------------------------------

@@ -444,6 +444,8 @@ class StubRecall:
 class StubRuntime:
     def __init__(self, tmp_path: Path, adapter: StubAdapter) -> None:
         self._model_database_refresh_lock = asyncio.Lock()
+        # Connection ids the stub's credential resolver reports as disabled.
+        self.disabled_connections: set[str] = set()
         self.storage = StorageManager(tmp_path)
         self.build = BuildIdentity("0.4.4", "a" * 40, branch="main")
         self.agents = StubAgents(
@@ -729,10 +731,12 @@ class StubRuntime:
             def is_connection_enabled(
                 self, provider_id: str, connection_id: str | None = None
             ) -> bool:
-                return True
+                return connection_id not in runtime.disabled_connections
 
             def is_usable(self, provider_id: str, connection_id: str | None = None) -> bool:
-                return self.has_credentials(provider_id, connection_id)
+                return self.is_connection_enabled(
+                    provider_id, connection_id
+                ) and self.has_credentials(provider_id, connection_id)
 
             def resolve_account_id(
                 self,
