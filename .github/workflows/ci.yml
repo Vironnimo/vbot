@@ -119,6 +119,15 @@ jobs:
             sed 's/^/- `/; s/$/`/' failed.txt
           } >> "$GITHUB_STEP_SUMMARY"
 
+  authorship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Refuse AI tool attribution in the history
+        run: python3 scripts/commit_authorship.py history
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
