@@ -342,8 +342,10 @@ reasoning off); more, or any returned Reasoning, means the Model reasoned."""
 
 
 def _judge_effort(effort: str, decision: ReasoningIntent, reply: _Reply) -> tuple[str, str]:
-    returned = bool(reply.reasoning) or reply.reasoning_meta
     tokens = reply.reasoning_tokens
+    # Opaque reasoning state alone proves nothing when the Provider counts zero
+    # reasoning tokens (a Responses reasoning item survives with reasoning off).
+    returned = bool(reply.reasoning) or (reply.reasoning_meta and tokens != 0)
     if normalize_thinking_effort(effort) == "none":
         if decision.kind == "off" and (returned or (tokens or 0) > _EMPTY_REASONING_TOKENS):
             return "warn", "reasoning was disabled but the Model still reasoned"
@@ -357,9 +359,12 @@ async def _check_sampling(adapter: ProviderAdapter, model_id: str, vision: bool)
     del vision
     sampling = {"temperature": 0.3, "top_p": 0.9}
     reply = await _send(adapter, model_id, _PROMPT, **sampling)
-    # What the profile left out: dropped parameters and exclusive group members.
-    shaped = dict(sampling)
-    adapter.wire_profile(model_id).request.shape_parameters(shaped, reasoning_active=False)
+    # What the profile left out: parameters outside an allowlist, dropped
+    # parameters and exclusive group members.
+    rules = adapter.wire_profile(model_id).request
+    allowed = rules.allowed_parameters
+    shaped = {name: value for name, value in sampling.items() if allowed is None or name in allowed}
+    rules.shape_parameters(shaped, reasoning_active=False)
     facts = {"dropped": sorted(set(sampling) - set(shaped)), **_reply_facts(reply)}
     return CheckResult("sampling", "ok", "", facts)
 
