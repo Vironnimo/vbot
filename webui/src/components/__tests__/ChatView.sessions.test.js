@@ -71,6 +71,44 @@ async function openSessionInfoLink(selector, text) {
 describe('ChatView Sessions', () => {
   const chat = setupChatViewTestSuite();
 
+  describe('Session information', () => {
+    it('reads the Session change statistics from the server while it is open', async () => {
+      const answers = [
+        { files: 1, added: 3, removed: 1, file_stats: [] },
+        { files: 2, added: 5, removed: 1, file_stats: [] },
+      ];
+      const fallback = createChatRpcMock();
+      rpcMock.mockImplementation(async (method, params) =>
+        method === 'session.change_stats'
+          ? {
+              change_stats:
+                answers[rpcCalls('session.change_stats').length - 1] ?? null,
+            }
+          : fallback(method, params),
+      );
+      const props = reactiveProps({ sessionsRefreshToken: 0 });
+      await chat.mountChat(props);
+      const statsText = () =>
+        document.querySelector('.chat-activity__stats-value')?.textContent ??
+        '';
+
+      // Closed, the panel asks for nothing.
+      expect(rpcCalls('session.change_stats')).toEqual([]);
+      document.querySelector('.chat-activity__rail').click();
+      flushSync();
+      await waitForCondition(() => statsText().includes('+3'));
+      expect(rpcCalls('session.change_stats')).toEqual([
+        { agent_id: 'alpha', session_id: 'session-1' },
+      ]);
+
+      // A Sessions refresh (a Run ended somewhere) reads them again.
+      props.sessionsRefreshToken = 1;
+      flushSync();
+      await waitForCondition(() => statsText().includes('+5'));
+      expect(rpcCalls('session.change_stats')).toHaveLength(2);
+    });
+  });
+
   describe('New session', () => {
     it.each([
       ['reuses an already empty Session', { 'session-1': [] }, 0],

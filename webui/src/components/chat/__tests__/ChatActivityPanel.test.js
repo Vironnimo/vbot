@@ -63,36 +63,6 @@ function backgroundBashTask({ id, command, ...fields }) {
   };
 }
 
-function lineChangeTool(name, path, added, removed) {
-  return {
-    type: 'tool_call',
-    id: `tool-${name}`,
-    name,
-    status: 'success',
-    arguments: { path },
-    startedEvent: {
-      type: 'tool_call_started',
-      payload: { tool_call: { id: `call-${name}`, name } },
-    },
-    resultEvent: {
-      type: 'tool_call_result',
-      payload: {
-        tool_call: { id: `call-${name}`, name },
-        display: {
-          version: 1,
-          summary: path,
-          hidden_argument_keys: [],
-          primary: [],
-          facts: [
-            { kind: 'line_change', change: 'added', value: added },
-            { kind: 'line_change', change: 'removed', value: removed },
-          ],
-        },
-      },
-    },
-  };
-}
-
 function runItem(items, id = 'assistant-run') {
   return { id, type: 'assistant_run', items };
 }
@@ -450,7 +420,7 @@ describe('ChatActivityPanel', () => {
   });
 
   it('shows calm empty states when the Session has no work or changes', () => {
-    openPanel({ timelineItems: [], reflectionTasks: [] });
+    openPanel({ timelineItems: [], reflectionTasks: [], sessionStats: null });
 
     expect(
       document.querySelector('.chat-activity__empty').textContent,
@@ -523,12 +493,34 @@ describe('ChatActivityPanel', () => {
     expect(onNavigateToParentSession).toHaveBeenCalledWith(target);
   });
 
-  it('shows the aggregated Session change stats above the tasks', () => {
+  it('asks for the Session change stats while open and shows them', () => {
+    const onSessionStatsWanted = vi.fn();
+    mountPanel({ onSessionStatsWanted });
+    flushSync();
+    expect(onSessionStatsWanted).toHaveBeenLastCalledWith(false);
+
+    rail().click();
+    flushSync();
+    expect(onSessionStatsWanted).toHaveBeenLastCalledWith(true);
+    // Until the first read answers, the section claims neither changes nor none.
+    expect(document.querySelector('.chat-activity__stats-value')).toBeNull();
+    expect(document.querySelector('.chat-activity__stats-empty')).toBeNull();
+    rail().click();
+    flushSync();
+    expect(onSessionStatsWanted).toHaveBeenLastCalledWith(false);
+  });
+
+  it('shows the Session change stats above the tasks', () => {
     openPanel({
-      timelineItems: [
-        runItem([lineChangeTool('edit', 'a.txt', 3, 2)]),
-        runItem([lineChangeTool('write', 'b.txt', 5, 0)], 'assistant-run-2'),
-      ],
+      sessionStats: {
+        files: 2,
+        added: 8,
+        removed: 2,
+        fileStats: [
+          { path: 'a.txt', added: 3, removed: 2 },
+          { path: 'b.txt', added: 5, removed: 0 },
+        ],
+      },
     });
 
     const filesChanged = `${t('chat.changeStats.filesMany', { count: 2 })},`;

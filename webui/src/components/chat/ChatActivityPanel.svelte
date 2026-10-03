@@ -5,7 +5,6 @@
   import {
     backgroundBashStatusDetails,
     backgroundTasks,
-    sessionChangeStats,
     reflectionChangeItems,
     reflectionElapsedLabel,
     reflectionHasChanges,
@@ -26,6 +25,10 @@
     backgroundBashStatuses = {},
     backgroundBashProcesses = {},
     reflectionTasks = [],
+    // The displayed Session's change statistics: undefined until read, null
+    // when it changed no files. The panel asks for them while it is open.
+    sessionStats = undefined,
+    onSessionStatsWanted = () => {},
     parentSession = null,
     onNavigateToSubAgent = () => {},
     onNavigateToParentSession = () => {},
@@ -77,7 +80,9 @@
   let runningTaskCount = $derived(
     activeTasks.length + activeReflections.length,
   );
-  let sessionStats = $derived(sessionChangeStats(timelineItems));
+  $effect(() => {
+    onSessionStatsWanted(open);
+  });
 
   const panelId = $props.id();
   const runningLabel = (count) => t('chat.activity.runningCount', { count });
@@ -640,7 +645,7 @@
             <p class="chat-activity__stats-value">
               <ChangeStats stats={sessionStats} placement="left" />
             </p>
-          {:else}
+          {:else if sessionStats === null}
             <p class="chat-activity__stats-empty">
               {t('chat.activity.statsEmpty')}
             </p>
