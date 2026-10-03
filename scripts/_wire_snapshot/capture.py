@@ -11,8 +11,10 @@ Record kinds (one JSONL file per Provider, see ``records.py``):
   (reasoning replay policy and fidelity, wire media, size limits, the reasoning
   render description per effort, the request input estimate, the effective
   context window, the output limit on the wire and the detected wire protocol).
-* ``render`` - per effort and mode (plus one image attachment variant): every
-  request the Adapter put on the wire up to and including the chat request.
+* ``render`` - per effort and mode (plus one image attachment variant and two
+  sampling variants carrying temperature and top_p, without and with
+  reasoning): every request the Adapter put on the wire up to and including the
+  chat request.
 * ``response`` - per mode: canned protocol responses run through
   ``send`` + ``normalize_response`` and through ``stream``.
 """
@@ -57,6 +59,11 @@ MODES = ("send", "stream")
 UNKNOWN_MODEL_ID = "snapshot-unknown-model"
 _IMAGE_VARIANT_EFFORT: str | None = None
 _IMAGE_VARIANT_MODE = "send"
+# An Agent temperature with a top_p, once without and once with reasoning, so
+# allowlists, drop rules and exclusive parameter groups show in the snapshot.
+_SAMPLING = {"temperature": 0.7, "top_p": 0.95}
+_SAMPLING_VARIANT_EFFORTS: tuple[str | None, ...] = (None, "high")
+_SAMPLING_VARIANT_MODE = "send"
 _OUTPUT_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
 
 
@@ -298,6 +305,18 @@ class _ModelCapture:
                     budget=budget,
                 )
                 self._add_render("text", effort, mode, render)
+        for effort in _SAMPLING_VARIANT_EFFORTS:
+            render = await self._render(
+                render_adapter,
+                messages,
+                tools,
+                context,
+                effort=effort,
+                mode=_SAMPLING_VARIANT_MODE,
+                budget=budget,
+                sampling=_SAMPLING,
+            )
+            self._add_render("sampling", effort, _SAMPLING_VARIANT_MODE, render)
 
         wire_media = declarations.get("wire_media_support")
         input_modalities = self._model.capabilities.input_modalities if self._model else ()
@@ -408,13 +427,14 @@ class _ModelCapture:
         effort: str | None,
         mode: str,
         budget: int | None = None,
+        sampling: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         """Send one request in capture mode; the sentinel ends it after the chat request."""
 
         self._recorder.begin("capture", self._model_id)
         render: dict[str, Any] = {}
         try:
-            await self._call(adapter, messages, tools, context, effort, mode, budget)
+            await self._call(adapter, messages, tools, context, effort, mode, budget, sampling)
             render["outcome"] = "returned_without_chat_request"
             if self._recorder.chat_requests:
                 render["outcome"] = "sentinel_swallowed"
@@ -436,6 +456,7 @@ class _ModelCapture:
         effort: str | None,
         mode: str,
         budget: int | None,
+        sampling: dict[str, float] | None = None,
     ) -> Any:
         """Call the Adapter the way Chat does; return the response or the stream deltas."""
 
@@ -443,6 +464,7 @@ class _ModelCapture:
             "model_id": self._model_id,
             "temperature": self._temperature,
             "top_p": self._top_p,
+            **(sampling or {}),
             "thinking_effort": effort,
             "tools": tools,
             **context,
