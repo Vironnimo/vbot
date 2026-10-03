@@ -275,9 +275,9 @@ export default Object.freeze({
   'settings.librarian.title': 'Skill maintenance',
   'settings.librarian.enabled': 'Scheduled Skill maintenance',
   'settings.librarian.enabledDescription':
-    'The Librarian tidies up the own Skills of each Agent.',
+    'The Librarian tidies up each Agent’s own Skills.',
   'settings.librarian.enabledHelp':
-    'From time to time, the Librarian goes through the own Skills of one Agent. It retires Skills that Reflection or an earlier pass made and that went unused for a long time, and it merges overlapping Skills. Pinned Skills are never changed.\n\nPasses run one at a time. A pass starts only while neither the Agent nor the Librarian has an active or queued Run, and only for Agents that have Skills of their own and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
+    'From time to time, the Librarian goes through one Agent’s own Skills. It retires Skills that Reflection or an earlier pass made and that went unused for a long time, and it merges overlapping Skills. Pinned Skills are never changed.\n\nPasses run one at a time. A pass starts only while neither the Agent nor the Librarian has an active or queued Run, and only for Agents that have Skills of their own and whose Librarian switch is on (Agents → Context & Memory). Sub-Agents are skipped.\n\nEvery change is recorded in the Skill history and can be reverted. An Agent’s page in the Skills manager shows the last pass and starts a pass on request, also while scheduled maintenance is off.',
   'settings.librarian.interval': 'Maintenance interval',
   'settings.librarian.intervalDescription':
     'Days between scheduled passes of one Agent.',
